@@ -477,7 +477,15 @@ review-on-change request, the stage gate and the stage advance, the arm gates):
    listener die on its first read while the limit was spent, and a decision read before a 35-minute
    wait could re-run a pull request that had since closed, moved its head or been re-run. The
    listener reads `pulls/{n}`, so the lane and every caller grant `pull-requests: read` (a called
-   workflow cannot widen its caller's grant; the self-test asserts the three grants). The in-run budget, the listener's wait and the re-run's own budget
+   workflow cannot widen its caller's grant; the self-test asserts the three grants). 🚨 It re-runs
+   EVERY outage-failed run of the check on the pull request's current head, from ANY event — not only
+   the run that woke it: branch protection kept reading the FAILED check-runs of
+   `pull_request_review` and `pull_request_review_comment` runs that met the limit (12:48–12:52Z on two
+   plugin-repository pull requests) after newer runs had succeeded (13:53Z, 14:27Z), and the merge API
+   answered *"Required status check … is failing"*. So any FAILED run of the lane — a verdict red
+   included — wakes a listener that lists the head's failed runs and applies the same decision (outage
+   marker, streak bound, fresh read) to each; a run whose own listener died is recovered by the next
+   failure on that head. The in-run budget, the listener's wait and the re-run's own budget
    together cover the hour a primary limit can last, so ONE listener pass suffices for a primary
    limit. Whether GitHub raises `workflow_run` again for a run the workflow token re-ran was **not
    measured**; nothing depends on it, and the attempt bound holds if it does. The review-on-change lane and the stage advance
@@ -498,7 +506,8 @@ a `ReadError` and the carry reader turns the outage into *"the head owes a revie
 in-flight read run again and the #7198 case posts nothing; wait for a not-started read run again and
 the four `pending`/`queued` cases answer `wait`; read before the listener's capacity wait again and
 the spent-limit cases raise `ApiOutage` while the low-limit one re-runs a pull request whose head moved
-during the wait; bound on `run_attempt` again and a first outage on attempt 3 is called three in a row; restore the full re-read and the wait case
+during the wait; bound on `run_attempt` again and a first outage on attempt 3 is called three in a row; re-run only the
+waking run again and the three `retry sweep` cases leave a review or review-comment outage run red; restore the full re-read and the wait case
 counts 30 full reads instead of 2; let the listener treat any red as an outage and it re-runs a
 verdict.
 

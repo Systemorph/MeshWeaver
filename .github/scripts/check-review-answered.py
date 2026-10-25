@@ -2316,14 +2316,24 @@ def wait_for_capacity(gh, deadline: float) -> None:
 
 
 def run_retry_outage(repo: str, run_id: str, attempt: int, gh=None, wait_s: float = RETRY_WAIT_SECONDS) -> int:
-    """The retry listener: exit 0 when it re-ran an outage run or had nothing to do (both printed), 1 when
-    it could not read, could not re-run, or the outage outlasted MAX_OUTAGE_ATTEMPTS (named).
+    """The retry listener: exit 0 when every outage run it judged was re-run or needed nothing (each
+    printed), 1 when it could not read, could not re-run, or an outage outlasted MAX_OUTAGE_ATTEMPTS
+    (named).
 
     🚨 ORDER (MeshWeaver#7203 review). It FIRST waits for capacity — through the free `GET /rate_limit`
     only — and only THEN makes its metered reads, decides, and posts at once. Reading first failed both
     ways: with the limit spent the very first read raised ApiOutage under the five-minute budget, so the
     listener died and nothing ever re-ran the run; and a decision read BEFORE a wait of up to 35 minutes
-    re-ran a run whose pull request had since closed, moved its head or been re-run by a newer attempt."""
+    re-ran a run whose pull request had since closed, moved its head or been re-run by a newer attempt.
+
+    🚨 SCOPE: EVERY outage-failed run of this check on the head, from ANY event — not only the run that
+    woke it. Branch protection keeps reading a FAILED check-run of a `pull_request_review` or
+    `pull_request_review_comment` run that met the limit, and a newer success from another run does not
+    clear it (measured on two plugin-repository pull requests: reds taken 12:48–12:52Z still blocked the
+    merge after successes at 13:53Z and 14:27Z). So the listener lists this workflow's FAILED runs for
+    the pull request's current head and applies `retry_outage_action` — the same per-run outage streak
+    bound and the same fresh read — to each. A listener that died, or a run whose listener never ran,
+    is recovered by the next failure on that head."""
     try:
         gh = gh if gh is not None else Gh(repo)
         wait_for_capacity(gh, gh.now() + wait_s)
@@ -2331,31 +2341,52 @@ def run_retry_outage(repo: str, run_id: str, attempt: int, gh=None, wait_s: floa
         if not isinstance(run, dict) or str(run.get("id")) != str(run_id):
             raise ReadError(f"actions/runs/{run_id} did not return that run")
 
-        def attempt_jobs(n: int) -> list:
-            listing = gh.api(f"actions/runs/{run_id}/attempts/{n}/jobs?per_page=100")
+        def attempt_jobs(rid, n: int) -> list:
+            listing = gh.api(f"actions/runs/{rid}/attempts/{n}/jobs?per_page=100")
             jobs_ = listing.get("jobs") if isinstance(listing, dict) else None
             if not isinstance(jobs_, list):
-                raise ReadError(f"actions/runs/{run_id}/attempts/{n}/jobs did not return a job listing")
+                raise ReadError(f"actions/runs/{rid}/attempts/{n}/jobs did not return a job listing")
             return jobs_
-        jobs = attempt_jobs(attempt)
+
+        def judge(run_: dict, n: int, pr_: dict | None) -> tuple[str, str]:
+            rid = run_.get("id")
+            jobs = attempt_jobs(rid, n)
+            streak = 1
+            if outage_marked(jobs):
+                # The earlier attempts, newest first, only as far as the bound needs and only while
+                # they were outages too: a verdict attempt ends the streak.
+                marks = [True]
+                for k in range(n - 1, max(0, n - MAX_OUTAGE_ATTEMPTS), -1):
+                    marks.append(bool(outage_marked(attempt_jobs(rid, k))))
+                    if not marks[-1]:
+                        break
+                streak = outage_streak(marks)
+            action_, why_ = retry_outage_action(run_, n, jobs, pr_, streak)
+            if action_ == "rerun" and not post_rerun(gh, rid, RERUN_WHOLE_RUN):
+                action_, why_ = "none", f"run {rid} was already re-run by another invocation"
+            return action_, why_
+
         numbers = [p.get("number") for p in run.get("pull_requests") or () if isinstance(p, dict) and p.get("number")]
-        pr, streak = None, 1
-        if outage_marked(jobs):
-            # The earlier attempts, newest first, only as far as the bound needs and only while they
-            # were outages too: a verdict attempt ends the streak.
-            marks = [True]
-            for n in range(attempt - 1, max(0, attempt - MAX_OUTAGE_ATTEMPTS), -1):
-                marks.append(bool(outage_marked(attempt_jobs(n))))
-                if not marks[-1]:
-                    break
-            streak = outage_streak(marks)
-            if numbers:
-                pr = gh.api(f"pulls/{numbers[0]}")
-                if not isinstance(pr, dict) or pr.get("number") != numbers[0]:
-                    raise ReadError(f"pulls/{numbers[0]} did not return pull request #{numbers[0]}")
-        action, why = retry_outage_action(run, attempt, jobs, pr, streak)
-        if action == "rerun" and not post_rerun(gh, run_id, RERUN_WHOLE_RUN):
-            action, why = "none", f"run {run_id} was already re-run by another invocation"
+        pr = None
+        if numbers:
+            pr = gh.api(f"pulls/{numbers[0]}")
+            if not isinstance(pr, dict) or pr.get("number") != numbers[0]:
+                raise ReadError(f"pulls/{numbers[0]} did not return pull request #{numbers[0]}")
+        results = [(run_id, attempt) + judge(run, attempt, pr)]
+        head = str(((pr or {}).get("head") or {}).get("sha") or "")
+        workflow_id = run.get("workflow_id")
+        if pr is not None and pr.get("state") == "open" and re.fullmatch(r"[0-9a-f]{40}", head) and workflow_id:
+            listing = gh.api(f"actions/workflows/{workflow_id}/runs?head_sha={head}&status=failure&per_page=100")
+            others = listing.get("workflow_runs") if isinstance(listing, dict) else None
+            if not isinstance(others, list):
+                raise ReadError(f"actions/workflows/{workflow_id}/runs?head_sha={head[:10]} did not return a run listing")
+            for other in sorted(others, key=lambda r: (r.get("created_at") or "", r.get("id") or 0), reverse=True):
+                if not isinstance(other, dict) or str(other.get("id")) == str(run_id) or other.get("head_sha") != head:
+                    continue
+                if other.get("status") != "completed" or other.get("conclusion") != "failure":
+                    continue
+                n = int(other.get("run_attempt") or 1)
+                results.append((other.get("id"), n) + judge(other, n, pr))
     except ApiOutage as e:
         print(f"::error::the outage retry of run {run_id} could not read even after waiting up to {int(wait_s)}s "
               f"for the limit to reset: {e} — re-run run {run_id} by hand once the API answers")
@@ -2363,12 +2394,15 @@ def run_retry_outage(repo: str, run_id: str, attempt: int, gh=None, wait_s: floa
     except (ReadError, KeyError, TypeError, ValueError) as e:
         print(f"::error::the outage retry of run {run_id} could not complete: {e}")
         return 1
-    if action == "fail":
-        print(f"::error::{why}")
-        return 1
-    print(f"::notice::{why}" if action == "rerun" else (f"::warning::{why}" if action == "manual" else f"  {why}"))
-    _append("GITHUB_STEP_SUMMARY", f"Outage retry of run {run_id} attempt {attempt}: {action} — {why}\n")
-    return 0
+    failed = False
+    for rid, n, action, why in results:
+        if action == "fail":
+            failed = True
+            print(f"::error::{why}")
+        else:
+            print(f"::notice::{why}" if action == "rerun" else (f"::warning::{why}" if action == "manual" else f"  {why}"))
+        _append("GITHUB_STEP_SUMMARY", f"Outage retry of run {rid} attempt {n}: {action} — {why}\n")
+    return 1 if failed else 0
 
 
 def run_request_review(repo: str, number: int, before: str | None, gh=None, sweep: bool = False) -> int:
@@ -4101,18 +4135,24 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
     verdict_job = {"name": "Automatic review answered", "conclusion": "failure", "steps": [
         {"name": "Judge the pull request's automatic review", "conclusion": "failure"},
         {"name": OUTAGE_STEP_NAME, "conclusion": "skipped"}]}
-    failed_run = {"id": 40187547005, "status": "completed", "conclusion": "failure", "run_attempt": 1,
+    failed_run = {"id": 40187547005, "workflow_id": 55, "status": "completed", "conclusion": "failure", "run_attempt": 1,
                   "head_sha": HEAD, "pull_requests": [{"number": 7173}]}
     open_pr = {"number": 7173, "state": "open", "head": {"sha": HEAD}}
 
     class _RetryGh:
         """A fake adapter. While the primary limit is spent (`remaining` 0 and no wait has happened
         yet) every METERED read raises ApiOutage, as `Gh._call` does past its five-minute budget; a low
-        but non-zero `remaining` still answers. `rate_limit` is free. `after_wait` replaces the run / pull request once the
-        listener has slept — the world moving on during the wait."""
-        def __init__(self, run_, jobs, pr=open_pr, remaining=0, after_wait=None, refuse_after_wait=False):
+        but non-zero `remaining` still answers. `rate_limit` is free. `after_wait` replaces the run / pull
+        request once the listener has slept — the world moving on during the wait. `others` are further
+        runs of the workflow on the head, as (run, jobs by attempt); the failed-run listing returns the
+        waking run and those, as GitHub does."""
+        def __init__(self, run_, jobs, pr=open_pr, remaining=0, after_wait=None, refuse_after_wait=False, others=()):
             self.run_, self.pr, self.remaining, self.posted, self.clock = run_, pr, remaining, [], _Clock()
-            self.jobs = jobs if isinstance(jobs, dict) else {int(run_.get("run_attempt") or 1): jobs}
+            self.jobs = {(run_["id"], k): v for k, v in
+                         (jobs if isinstance(jobs, dict) else {int(run_.get("run_attempt") or 1): jobs}).items()}
+            self.others = [o for o, _ in others]
+            for o, by_attempt in others:
+                self.jobs.update({(o["id"], k): v for k, v in by_attempt.items()})
             self.after_wait, self.refuse_after_wait, self.reads = after_wait or {}, refuse_after_wait, []
         def sleep(self, s):
             self.clock.sleep(s)
@@ -4126,11 +4166,17 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
             self.reads.append(path)
             if self.refuse_after_wait or (self.remaining == 0 and not self.clock.slept):
                 raise ApiOutage(f"GET {path}: API rate limit exceeded (HTTP 403)", "rate-limit", self.clock.t + 600)
-            if path == f"actions/runs/{self.run_['id']}":
-                return self.run_
-            prefix = f"actions/runs/{self.run_['id']}/attempts/"
-            if path.startswith(prefix):
-                return {"jobs": self.jobs[int(path[len(prefix):].split("/")[0])]}
+            runs = {r["id"]: r for r in [self.run_] + self.others}
+            m = re.fullmatch(r"actions/runs/(\d+)", path)
+            if m and int(m.group(1)) in runs:
+                return runs[int(m.group(1))]
+            m = re.fullmatch(r"actions/runs/(\d+)/attempts/(\d+)/jobs\?per_page=100", path)
+            if m:
+                return {"jobs": self.jobs[(int(m.group(1)), int(m.group(2)))]}
+            if path.startswith(f"actions/workflows/{self.run_.get('workflow_id')}/runs?head_sha="):
+                head = path.split("head_sha=")[1].split("&")[0]
+                return {"workflow_runs": [r for r in runs.values() if r.get("head_sha") == head
+                                          and r.get("conclusion") == "failure"]}
             if path == "pulls/7173":
                 return self.pr
             raise ReadError(f"unexpected GET {path}")
@@ -4175,6 +4221,41 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
             rc = f"raised {type(e).__name__}"
         check(f"retry: {name}", rc == expect_rc and stub.posted == expect_posted and stub.clock.slept == expect_slept,
               f"rc={rc} posted={stub.posted} slept={stub.clock.slept}")
+    # ── the listener re-runs EVERY outage-failed run of the check on the head, from any event: branch
+    # protection kept reading the failed check-runs of review and review-comment runs that met the limit
+    # although newer runs had succeeded (measured on two plugin-repository pull requests).
+    review_run = dict(failed_run, id=501, event="pull_request_review", created_at="2026-10-25T12:48:00Z")
+    comment_run = dict(failed_run, id=502, event="pull_request_review_comment", created_at="2026-10-25T12:52:00Z")
+    verdict_pr_run = dict(failed_run, id=503, event="pull_request", created_at="2026-10-25T12:40:00Z")
+    green_run = dict(failed_run, id=504, conclusion="success", created_at="2026-10-25T13:53:00Z")
+    for name, stub, expect_rc, expect_posted in [
+        ("#7203: woken by one outage run, a SECOND outage run of another event on the head -> both re-run",
+         _RetryGh(review_run, [outage_job], remaining=900, others=[(comment_run, {1: [outage_job]}),
+                                                                    (verdict_pr_run, {1: [verdict_job]}),
+                                                                    (green_run, {1: []})]),
+         0, ["actions/runs/501/rerun", "actions/runs/502/rerun"]),
+        ("#7203: woken by a VERDICT red, two stranded outage runs on the head -> both re-run, the verdict never",
+         _RetryGh(verdict_pr_run, [verdict_job], remaining=900, others=[(review_run, {1: [outage_job]}),
+                                                                         (comment_run, {1: [outage_job]})]),
+         0, ["actions/runs/502/rerun", "actions/runs/501/rerun"]),
+        ("#7203: a stranded run at its 3rd outage in a row -> RED, named; the others are still re-run",
+         _RetryGh(review_run, [outage_job], remaining=900,
+                  others=[(dict(comment_run, run_attempt=3), {3: [outage_job], 2: [outage_job], 1: [outage_job]})]),
+         1, ["actions/runs/501/rerun"]),
+        ("NEG: the head moved -> the waking run is not re-run and no other run is swept",
+         _RetryGh(review_run, [outage_job], remaining=900, pr=dict(open_pr, head={"sha": "c" * 40}),
+                  others=[(comment_run, {1: [outage_job]})]), 0, []),
+        ("NEG: closed pull request -> nothing swept",
+         _RetryGh(review_run, [outage_job], remaining=900, pr=dict(open_pr, state="closed"),
+                  others=[(comment_run, {1: [outage_job]})]), 0, []),
+    ]:
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = run_retry_outage("Systemorph/MeshWeaver", str(stub.run_["id"]), 1, gh=stub)
+        except Exception as e:
+            rc = f"raised {type(e).__name__}"
+        check(f"retry sweep: {name}", rc == expect_rc and stub.posted == expect_posted,
+              f"rc={rc} posted={stub.posted}")
     for marks, want in [([True], 1), ([True, True, False, True], 2), ([False, True], 0), ([], 0)]:
         check(f"outage_streak({marks}) = {want}", outage_streak(marks) == want, f"got {outage_streak(marks)}")
 

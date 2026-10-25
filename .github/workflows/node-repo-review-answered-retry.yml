@@ -17,7 +17,10 @@ name: Node repo review answered — outage retry (reusable)
 # "API outage: no verdict was taken (retried automatically)" (check-review-answered.py
 # OUTAGE_STEP_NAME). THIS lane hears the run complete, finds that step failed in the completed
 # attempt, waits for the primary limit to reset (GET /rate_limit — free of the limit it reports),
-# and re-runs the WHOLE run. A run red for any other step — a verdict — is never touched; a head that
+# and re-runs the WHOLE run — and so every other outage-failed run of this check on the pull request's
+# current head, from any event (branch protection reads a failed `pull_request_review` /
+# `pull_request_review_comment` run of it too, and a newer success does not clear it). A run red for
+# any other step — a verdict — is never touched; a head that
 # moved or a closed pull request is left alone; an outage that survives MAX_OUTAGE_ATTEMPTS (3)
 # attempts is RED here, named. The decision is `retry_outage_action` (pure, self-tested with a fake
 # adapter).
