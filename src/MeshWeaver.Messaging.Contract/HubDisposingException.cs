@@ -137,4 +137,10 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// <param name="exception">The exception to classify; may be null.</param>
     public static bool IsDisposedContainer(Exception? exception)
         => FaultClassifier.IsDisposedContainer(exception);
+
+    /// <summary>As <see cref="IsDisposedContainer(Exception?)"/>, for a REASON string — an outcome that
+    /// carries the failure as text. Forwards to <see cref="FaultClassifier.IsDisposedContainerReason"/>.</summary>
+    /// <param name="reason">The reason text; may be null.</param>
+    public static bool IsDisposedContainerReason(string? reason)
+        => FaultClassifier.IsDisposedContainerReason(reason);
 }
