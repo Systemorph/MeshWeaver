@@ -77,8 +77,10 @@ def load_resolver(path: str):
         raise Red(f"the resolver at {path} cannot be loaded")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    for name in ("read_package_bounds", "HttpBuildHosts", "set_run", "highest_in_range", "canonical_set_name",
-                 "ResolutionError"):
+    # `floor_admits` marks a resolver whose `highest_in_range` takes the floor TEXT (release floors
+    # such as `3.1.0` included); an older one took a run number and would misread it.
+    for name in ("read_package_bounds", "HttpBuildHosts", "set_run", "highest_in_range", "floor_admits",
+                 "canonical_set_name", "ResolutionError"):
         if not hasattr(module, name):
             raise Red(f"the resolver at {path} predates the package caps (no `{name}`) — fetch it at a "
                       "scripts ref that carries Doc/Architecture/DeployTestSwitchLatest phase P5")
@@ -86,16 +88,28 @@ def load_resolver(path: str):
 
 
 def slug(text: str) -> str:
+    """Lower-case `[a-z0-9-]`, dash runs collapsed — so a slug NEVER contains `--`. Pure."""
     return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", text.lower())).strip("-")
 
 
+def digest(*parts: str) -> str:
+    """12 hex chars of SHA-256 over the EXACT parts, NUL-separated — what tells apart tuples whose
+    slugs coincide (`Foo.Bar` / `Foo-Bar`, `O/R` / `o.r`). Pure."""
+    import hashlib
+    return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
 def repo_prefix(repo: str) -> str:
-    return f"mesh-cap-{slug(repo)}-"
+    """This repository's id prefix. It ends in `--<digest of the exact repo name>--`, and since a
+    slug never contains `--`, no other repository's prefix (`O/R-Tools` beside `O/R`) can start with
+    it. Pure."""
+    return f"mesh-cap-{slug(repo)}--{digest(repo)}--"
 
 
 def item_id(repo: str, package: str, cap: str) -> str:
-    """The item's identity: (repository, package, cap). Pure."""
-    return repo_prefix(repo) + slug(f"{package}-{cap}")
+    """The item's identity: (repository, package, cap) — readable slugs plus a digest of the exact
+    (package, cap) pair, so two packages whose names slug alike never share one item. Pure."""
+    return repo_prefix(repo) + f"{slug(package)}-{slug(cap)}-{digest(package, cap)}"
 
 
 def cap_age(root: str, package: str, cap: str) -> str:
@@ -255,7 +269,7 @@ def cap_rows(resolver, capped: list, deployed: list) -> list[dict]:
     which, so the intake can ask for that deployment (BuildHostDeploy, reason `cap:<package>`). Pure."""
     rows = []
     for b in capped:
-        fit = resolver.highest_in_range(resolver.set_run(b.floor), resolver.set_run(b.cap), deployed)
+        fit = resolver.highest_in_range(b.floor, resolver.set_run(b.cap), deployed)
         rows.append({"package": b.package, "floor": b.floor, "cap": b.cap,
                      "version": fit.version if fit else resolver.canonical_set_name(b.cap) or b.cap,
                      "deployed": fit is not None, "reason": b.reason})
@@ -469,6 +483,7 @@ class _FakeControl:
 
 
 def self_test() -> int:
+    import shutil
     import tempfile
     resolver_path = os.environ.get("MW_RESOLVER") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                                    "resolve-platform.py")
@@ -559,6 +574,22 @@ def self_test() -> int:
             go(fake, root)
             check("NEGATIVE: another repository's item is never touched",
                   fake.nodes[f"{ns}/mesh-cap-systemorph-other-x-3-1-1"]["content"] == {}, fake.nodes)
+            # A repository whose name EXTENDS this one's (`Example` → `Example-Tools`): its open item
+            # must survive this repository's cleanup (#7192 review — a bare slug prefix matched it).
+            sibling = f"{ns}/{item_id('Systemorph/Example-Tools', 'Capped', '3.1.10400')}"
+            fake.nodes[sibling] = {"content": {}}
+            go(fake, root)
+            check("a repository whose name extends this one's keeps its items (prefix is collision-safe)",
+                  fake.nodes[sibling]["content"] == {}, fake.nodes[sibling])
+        with _FakeControl() as fake:
+            package(root, "Foo.Bar", capped)
+            package(root, "Foo-Bar", capped)
+            red = go(fake, root)
+            filed = sorted(p for p in fake.nodes if "foo-bar" in p)
+            check("two packages whose names slug alike (Foo.Bar, Foo-Bar) file TWO items, never one",
+                  red == "" and len(filed) == 2, (red, filed))
+            shutil.rmtree(os.path.join(root, "Foo.Bar"))
+            shutil.rmtree(os.path.join(root, "Foo-Bar"))
         package(root, "Capped", capped)
         with _FakeControl(versions=[("3.1.10412", True), ("3.1.10399", False), ("3.1.10200", True)]) as fake:
             go(fake, root)
@@ -599,6 +630,12 @@ def self_test() -> int:
             check("a truncated listing is RED (a removed cap's item would stay open)", "truncated" in red, red)
     check("the item id is keyed by (repository, package, cap)",
           item_id("O/R", "P", "3.1.1") != item_id("O/R", "P", "3.1.2") != item_id("O/S", "P", "3.1.2"))
+    check("slug-alike packages and repositories get distinct ids",
+          item_id("O/R", "Foo.Bar", "3.1.1") != item_id("O/R", "Foo-Bar", "3.1.1")
+          and item_id("O/R", "P", "3.1.1") != item_id("o.r", "P", "3.1.1"))
+    check("no repository's prefix is a prefix of another's whose name extends it",
+          not item_id("O/R-Tools", "P", "3.1.1").startswith(repo_prefix("O/R"))
+          and item_id("O/R", "P", "3.1.1").startswith(repo_prefix("O/R")))
 
     if failures:
         print(f"✗ cap-debt-triage self-test: {len(failures)} failure(s)")
