@@ -440,7 +440,8 @@ public partial class MeshQuery : IMeshQueryCore
 
     /// <summary>
     /// The progressive snapshot fan-out behind <see cref="Query"/> and <see cref="Autocomplete"/>:
-    /// every provider's latest answer combined with <c>CombineLatest</c>, so a fast provider's rows
+    /// every provider's latest answer combined under the fan-out's gate (never <c>CombineLatest</c>, which runs
+    /// its subscriber under its own lock — see <see cref="GateFreeEmitter{TItem}"/>), so a fast provider's rows
     /// render without waiting for a slow one — but <b>every frame it emits is an ANSWER</b>.
     ///
     /// <para>🚨 MeshWeaver#6827 ("autocomplete shows up and disappears"). Each provider used to be
@@ -497,52 +498,52 @@ public partial class MeshQuery : IMeshQueryCore
             }
             var emitted = false;
             var terminated = false;
-            var legs = matched.Select((p, i) => leg(p)
-                .Select(rows => new ProviderAnswer(true, rows))
-                .DefaultIfEmpty(new ProviderAnswer(true, empty))
-                .Do(_ => probe.MarkSeen(i))
-                // The not-yet-answered seed keeps CombineLatest progressive (it emits as soon as ANY
-                // provider produces); the subscriber below keeps the seed itself from being emitted.
-                .StartWith(new ProviderAnswer(false, empty)))
-                .ToList();
-            var subscription = Observable.CombineLatest(legs)
-                .Select(answers => (
-                    Complete: answers.All(a => a.Answered),
-                    Rows: merge(answers.Select(a => a.Rows).ToList())))
-                .Subscribe(
-                    frame =>
-                    {
-                        UnderGate(() =>
-                        {
-                            if (terminated) return;
-                            // Only a LEADING empty frame is withheld — one from before anything was
-                            // published, which is "not yet", not an answer. Once rows have been
-                            // published, an empty frame is an UPDATE that clears them (a provider
-                            // removed its last row) and must reach the consumer even while a peer is
-                            // still silent, or the removed rows would stay on screen for ever.
-                            if (!emitted && !frame.Complete && frame.Rows.Count == 0) return;
-                            emitted = true;
-                            emitter.OnNext(frame.Rows);
-                        });
-                    },
-                    ex =>
-                    {
-                        UnderGate(() =>
+            // 🚨 The providers' latest answers are combined HERE, under `gate`, not with
+            // CombineLatest: CombineLatest calls its subscriber under its OWN serializing lock, so
+            // the consumer would still run under a lock a second provider's delivery needs — the
+            // same lock-order deadlock GateFreeEmitter removes (review of #7149). Every provider
+            // starts unanswered; a frame is emitted on each answer.
+            var answers = matched.Select(_ => new ProviderAnswer(false, empty)).ToArray();
+            var completedLegs = 0;
+            void OnAnswer(int i, ProviderAnswer answer)
+            {
+                UnderGate(() =>
+                {
+                    if (terminated) return;
+                    answers[i] = answer;
+                    var complete = answers.All(a => a.Answered);
+                    var rows = merge(answers.Select(a => a.Rows).ToList());
+                    // Only a LEADING empty frame is withheld — one from before anything was
+                    // published, which is "not yet", not an answer. Once rows have been published,
+                    // an empty frame is an UPDATE that clears them (a provider removed its last row)
+                    // and must reach the consumer even while a peer is still silent, or the removed
+                    // rows would stay on screen for ever.
+                    if (!emitted && !complete && rows.Count == 0) return;
+                    emitted = true;
+                    emitter.OnNext(rows);
+                });
+            }
+            var subscription = new System.Reactive.Disposables.CompositeDisposable(
+                matched.Select((p, i) => leg(p)
+                    .Select(rows => new ProviderAnswer(true, rows))
+                    .DefaultIfEmpty(new ProviderAnswer(true, empty))
+                    .Do(_ => probe.MarkSeen(i))
+                    .Subscribe(
+                        answer => OnAnswer(i, answer),
+                        ex => UnderGate(() =>
                         {
                             if (terminated) return;
                             terminated = true;
                             emitter.OnError(ex);
-                        });
-                    },
-                    () =>
-                    {
-                        UnderGate(() =>
+                        }),
+                        () => UnderGate(() =>
                         {
-                            if (terminated) return;
+                            // The fan-out completes once every provider has (as CombineLatest did).
+                            if (terminated || ++completedLegs < answers.Length) return;
                             terminated = true;
                             emitter.OnCompleted();
-                        });
-                    });
+                        })))
+                    .ToList());
             var arm = probe.Arm(budget, logger, query, userId, (stalled, reportTermination) =>
             {
                 UnderGate(() =>

@@ -678,6 +678,14 @@ live delta from another thread. That delivery must return while the consumer is 
 delta must arrive after the Initial, exactly once. Without the emitter the delivery stays blocked for
 the whole 5 s bound and the test is red.
 
+Releasing the merge's own gate is not enough when an Rx operator between the providers and the
+consumer holds a lock of its own. The snapshot fan-out combined its providers with `CombineLatest`,
+which calls its subscriber under its own serializing lock. So the consumer still ran under a lock a
+second provider's delivery needed, and the same cycle stayed open on the snapshot `Query` and on
+`Autocomplete`. The fan-out now keeps each provider's latest answer itself, under its gate, and
+emits through the same emitter. `ASnapshotFanOutNeverHoldsALockWhileItsConsumerRunsTest` pins both
+surfaces the same way. With `CombineLatest` the delivery stays blocked for the whole bound.
+
 **Not established.** This rig pins the merge's half only. Two things were not measured: that no other
 lock held across a callback closes a similar cycle somewhere else on the write path, and how often
 the production `PersistenceService` feed actually meets this interleaving. The CI failures were the

@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -133,5 +134,113 @@ public class AQueryMergeNeverHoldsItsGateWhileItsConsumerRunsTest
         Volatile.Read(ref frames).Should().Equal(
             [QueryChangeType.Initial, QueryChangeType.Added],
             "the Initial first, then the delta, each exactly once");
+    }
+}
+
+/// <summary>
+/// 🚨 The snapshot fan-out (<see cref="MeshQuery.Query(MeshQueryRequest)"/> and
+/// <see cref="MeshQuery.Autocomplete"/>) must never run its consumer under a lock a provider's
+/// delivery needs — the same lock-order deadlock as <see cref="AQueryMergeNeverHoldsItsGateWhileItsConsumerRunsTest"/>
+/// (review of #7149). It combined its providers with <c>CombineLatest</c>, which calls its subscriber
+/// under its OWN serializing lock: releasing the merge's gate before the consumer ran was not enough,
+/// because a second provider's delivery still blocked on CombineLatest's lock for as long as the
+/// consumer ran.
+/// </summary>
+public class ASnapshotFanOutNeverHoldsALockWhileItsConsumerRunsTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private static readonly TimeSpan DeliveryBound = TimeSpan.FromSeconds(5);
+
+    private sealed class SnapshotProvider(string name, IObservable<IReadOnlyCollection<QueryResult>> snapshots)
+        : IMeshQueryProvider
+    {
+        public string Name => name;
+        public bool Matches(IReadOnlyList<string> queryNamespaces) => true;
+        public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
+            => Observable.Never<QueryResultChange<T>>();
+        public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+            => snapshots;
+        public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
+            string basePath, string prefix, JsonSerializerOptions options,
+            AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
+            string? contextPath = null, string? context = null)
+            => snapshots;
+        public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
+            => Observable.Return<T?>(default);
+    }
+
+    private static IReadOnlyCollection<QueryResult> Rows(params string[] paths)
+        => paths.Select(p => new QueryResult
+        {
+            Path = p,
+            Name = p.Split('/').Last(),
+            NodeType = "Markdown",
+            Score = 1,
+        }).ToList();
+
+    /// <summary>A second provider's newer snapshot, delivered from another thread while the consumer
+    /// is still handling the first frame, must return at once and reach the consumer afterwards.</summary>
+    [Theory]
+    [InlineData("query")]
+    [InlineData("autocomplete")]
+    public void ASnapshotFromAnotherThread_IsNotBlocked_WhileTheConsumerHandlesTheFirstFrame(string surface)
+    {
+        var early = new Subject<IReadOnlyCollection<QueryResult>>();
+        var late = new Subject<IReadOnlyCollection<QueryResult>>();
+        var mesh = new MeshQuery([new SnapshotProvider("early", early), new SnapshotProvider("late", late)], Mesh);
+        var source = surface == "query"
+            ? mesh.Query(new MeshQueryRequest { Query = "*alpha* scope:descendants partitions:all", UserId = "reader" })
+            : mesh.Autocomplete("", "alpha");
+
+        var frameSizes = ImmutableList<int>.Empty;
+        var deliveryReturned = 0;
+        var otherThreadStarted = 0;
+        var returnedWhileConsumerBusy = false;
+
+        using var subscription = source.Subscribe(rows =>
+        {
+            var isFirst = Volatile.Read(ref frameSizes).IsEmpty;
+            ImmutableInterlocked.Update(ref frameSizes, f => f.Add(rows.Count));
+            if (!isFirst)
+                return;
+            // The consumer is busy with the first frame — as a create's validator was, on its way
+            // into a storage write — while another thread delivers the early provider's newer answer.
+            var other = new Thread(() =>
+            {
+                try
+                {
+                    Volatile.Write(ref otherThreadStarted, 1);
+                    early.OnNext(Rows("Docs/alpha-1", "Docs/alpha-2"));
+                }
+                finally
+                {
+                    // Never strand the consumer, whatever the delivery did.
+                    Volatile.Write(ref deliveryReturned, 1);
+                }
+            }) { IsBackground = true, Name = "snapshot-delivery" };
+            other.Start();
+            returnedWhileConsumerBusy = SpinWait.SpinUntil(
+                () => Volatile.Read(ref deliveryReturned) == 1, DeliveryBound);
+        });
+
+        SpinWait.SpinUntil(() => early.HasObservers && late.HasObservers, DeliveryBound)
+            .Should().BeTrue("the fan-out subscribes both providers");
+
+        early.OnNext(Rows("Docs/alpha-1"));
+        late.OnNext(Rows());
+
+        SpinWait.SpinUntil(() => Volatile.Read(ref deliveryReturned) == 1, DeliveryBound * 3)
+            .Should().BeTrue("the other thread's delivery returns in the end, fix or no fix");
+        Volatile.Read(ref otherThreadStarted).Should().Be(1, "the consumer started the other thread");
+
+        returnedWhileConsumerBusy.Should().BeTrue(
+            "a provider delivering a newer snapshot must never wait for the consumer to finish the "
+            + "previous frame: CombineLatest called the consumer under its own lock, so the delivery "
+            + "blocked on it for as long as the consumer ran");
+        SpinWait.SpinUntil(() => Volatile.Read(ref frameSizes).Count >= 3, DeliveryBound)
+            .Should().BeTrue("the newer snapshot reaches the consumer once it is done with the first frame");
+        Volatile.Read(ref frameSizes).Should().Equal(
+            [1, 2, 2],
+            "the early provider's first answer (progressive: the late one is still silent), then its newer "
+            + "answer queued by the other thread, then the late provider's empty answer — in that order");
     }
 }
