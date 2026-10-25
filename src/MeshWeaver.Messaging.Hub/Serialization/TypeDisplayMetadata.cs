@@ -3,7 +3,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Domain;
 using MeshWeaver.Utils;
-using Namotion.Reflection;
 
 namespace MeshWeaver.Messaging.Serialization;
 
@@ -21,9 +20,10 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public sealed class TypeDisplayMetadata
 {
-    internal TypeDisplayMetadata(Type type)
+    internal TypeDisplayMetadata(Type type, XmlDocsReader docs)
     {
         this.type = type;
+        Docs = docs;
         Display = type.GetCustomAttribute<DisplayAttribute>();
         FallbackName = type.Name.Wordify();
         var iconAttribute = type.GetCustomAttribute<IconAttribute>();
@@ -31,7 +31,7 @@ public sealed class TypeDisplayMetadata
             Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
         // 🚨 LAZY, and it must stay lazy — see the note in TypeDefinition's constructor
         // (FutuRe.Test teardown SIGSEGV): the XML-docs read must never run on the hub-construction path.
-        Description = new(() => XmlDocs.Summary(type));
+        Description = new(() => docs.Summary(type));
     }
 
     /// <summary>
@@ -49,6 +49,12 @@ public sealed class TypeDisplayMetadata
 
     /// <summary>The type's XML-doc summary, resolved on FIRST READ only.</summary>
     internal Lazy<string> Description { get; }
+
+    /// <summary>
+    /// The XML-docs reader this description reads from: the mesh's, or — for a definition built
+    /// outside any registry — one owned by that definition alone.
+    /// </summary>
+    internal XmlDocsReader Docs { get; }
 
     private readonly Type type;
     // 0 = not yet read, 1 = no, 2 = yes. A reflection read of the type alone, so racing readers
@@ -91,9 +97,20 @@ internal sealed class TypeDisplayMetadataCache
 {
     private readonly ConditionalWeakTable<Type, TypeDisplayMetadata> descriptions = new();
 
+    /// <summary>
+    /// The mesh's XML-documentation reader — owned here for the same reason as the descriptions:
+    /// one per mesh, handed down the registry chain, never <c>static</c>.
+    /// </summary>
+    public XmlDocsReader Docs { get; } = new();
+
+    private readonly ConditionalWeakTable<Type, TypeDisplayMetadata>.CreateValueCallback create;
+
+    /// <summary>Creates the store; the factory delegate is allocated once, not per lookup.</summary>
+    public TypeDisplayMetadataCache() => create = t => new TypeDisplayMetadata(t, Docs);
+
     /// <summary>Returns the one description of <paramref name="type"/> in this mesh, creating it on first use.</summary>
     /// <param name="type">The CLR type being described.</param>
     /// <returns>The shared description.</returns>
     public TypeDisplayMetadata For(Type type)
-        => descriptions.GetValue(type, static t => new TypeDisplayMetadata(t));
+        => descriptions.GetValue(type, create);
 }
