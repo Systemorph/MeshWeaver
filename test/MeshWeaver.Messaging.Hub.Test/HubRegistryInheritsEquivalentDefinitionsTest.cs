@@ -17,11 +17,12 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// registers most of the types the mesh registry already holds under the same name; measured on a node
 /// hub with the standard data-source setup, 344 own definitions against 427 resolvable. A copy is
 /// redundant exactly when it would be indistinguishable from the parent's definition, and then the hub
-/// registry serves the parent's instead of holding one.
+/// registry serves the parent's instead of holding one — since the overlay
+/// (<c>Doc/Architecture/TypeRegistryLayers</c>) by holding nothing at all for it.
 ///
-/// <para>The negative controls pin the boundary: a type whose key would come from the hub registry's
-/// OWN key-function providers, a type registered under a different name, and a parent definition with an
-/// explicit key all still get a definition of the hub's own.</para>
+/// <para>The negative controls pin the boundary: a type the hub registry's OWN key-function providers
+/// key, a type registered under a different name, and an explicit key set on the hub all get a
+/// definition of the hub's own.</para>
 /// </summary>
 public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -69,16 +70,42 @@ public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper outp
         definitions[0]!.DisplayName.Should().Be("Keyed content");
     }
 
-    /// <summary>Negative control: a type the conventions do not key keeps a definition per hub.</summary>
+    /// <summary>
+    /// A type with no key is shared too: "only overrides are re-registered" (Doc/Architecture/TypeRegistryLayers).
+    /// Before the overlay every hub held a copy, because a registry's own key-function providers might
+    /// have keyed it; the only such provider in core (the [Dimension] tuple) is now a convention of
+    /// every builder, so the parent's definition is the one each hub would build.
+    /// </summary>
     [Fact]
-    public void HubsRegisteringAKeylessType_KeepTheirOwnDefinitions()
+    public void HubsRegisteringAKeylessType_HoldNoCopy()
     {
-        var definitions = HostedHubs(c => c.WithType(typeof(KeylessContent), nameof(KeylessContent)))
+        var hubs = HostedHubs(c => c.WithType(typeof(KeylessContent), nameof(KeylessContent)));
+        var definitions = hubs
             .Select(h => h.TypeRegistry.GetTypeDefinition(typeof(KeylessContent), create: false))
             .ToArray();
 
-        definitions.Distinct(ReferenceEqualityComparer.Instance).Should().HaveCount(HubCount,
-            "its key would come from each registry's own key-function providers");
+        definitions.Distinct(ReferenceEqualityComparer.Instance).Should().ContainSingle();
+        definitions[0].Should().BeSameAs(Mesh.TypeRegistry.GetTypeDefinition(typeof(KeylessContent), create: false));
+        hubs.Should().AllSatisfy(h => h.TypeRegistry.OwnTypes.Should().BeEmpty());
+    }
+
+    /// <summary>
+    /// Negative control: a key-function provider registered on a hub's own registry is an override for
+    /// a type the parent leaves keyless — the hub binds a keyed definition of its own, the parent's
+    /// stays keyless.
+    /// </summary>
+    [Fact]
+    public void AHubsOwnKeyProvider_OverridesAKeylessParentDefinition()
+    {
+        var content = new KeylessContent("label");
+        var mesh = MessageHubExtensions.CreateTypeRegistry().WithType(typeof(KeylessContent), nameof(KeylessContent));
+        var hub = MessageHubExtensions.CreateTypeRegistry(mesh)
+            .WithKeyFunctionProvider(t => t == typeof(KeylessContent) ? new KeyFunction(o => ((KeylessContent)o).Label, typeof(string)) : null);
+
+        hub.GetKeyFunction(typeof(KeylessContent))!.Function(content).Should().Be("label");
+        hub.GetTypeDefinition(nameof(KeylessContent))!.GetKey(content).Should().Be("label");
+        hub.OwnTypes.Should().ContainSingle("the keyed definition is the hub's override");
+        mesh.GetKeyFunction(typeof(KeylessContent)).Should().BeNull("the parent's definition is untouched");
     }
 
     /// <summary>Negative control: a different name is a registration of the hub's own.</summary>
@@ -95,9 +122,10 @@ public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper outp
     }
 
     /// <summary>
-    /// Negative control: a parent definition with an EXPLICIT key is not the one the hub would build, so
-    /// the hub keeps its own, conventionally keyed definition — and an explicit key set on a hub for an
-    /// inherited type is the hub's, found by type and by name, never written into the parent.
+    /// An explicit key on the parent is part of the parent's definition, and a hub's identical
+    /// <c>WithType</c> (same type, same name) re-registers nothing, so the hub resolves the parent's keyed
+    /// definition. An explicit key set on a hub for an inherited type is the hub's override, found by type
+    /// and by name, never written into the parent.
     /// </summary>
     [Fact]
     public void ExplicitKeys_StayWithTheRegistryThatSetThem()
@@ -107,8 +135,9 @@ public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper outp
         mesh.WithKeyFunction(nameof(KeyedContent), new KeyFunction(_ => "mesh-key", typeof(string)));
 
         var hub = MessageHubExtensions.CreateTypeRegistry(mesh).WithType(typeof(KeyedContent), nameof(KeyedContent));
-        hub.GetTypeDefinition(typeof(KeyedContent), create: false)!.GetKey(content).Should().Be("k1",
-            "the hub registered the type itself, and its own definition is keyed by the conventions");
+        hub.GetTypeDefinition(typeof(KeyedContent), create: false)!.GetKey(content).Should().Be("mesh-key",
+            "an identical re-registration is a no-op: the hub resolves the parent's definition, key and all");
+        hub.OwnTypes.Should().BeEmpty();
         mesh.GetTypeDefinition(typeof(KeyedContent), create: false)!.GetKey(content).Should().Be("mesh-key");
 
         var plainMesh = MessageHubExtensions.CreateTypeRegistry().WithType(typeof(KeyedContent), nameof(KeyedContent));
@@ -129,26 +158,33 @@ public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper outp
     public record GenericKeyed<T>(string Id, T Value);
 
     /// <summary>
-    /// A shared definition is bound LOCALLY: a later change to the parent — a key function, or a module
-    /// replacing the name's type while the mesh runs — never changes what the hub registered.
+    /// The hub holds nothing for an inherited type, so a later change to the parent — a key function, a
+    /// module replacing the name's type while the mesh runs — shows through: the hub resolves what the
+    /// parent holds now. What the hub OVERRODE is its own and stays.
     /// </summary>
     [Fact]
-    public void AParentChangedAfterTheHubRegistered_DoesNotChangeTheHubsBinding()
+    public void AParentChangedAfterTheHubRegistered_ShowsThroughExceptForTheHubsOverrides()
     {
         var content = new KeyedContent("k1", "label");
-        var mesh = MessageHubExtensions.CreateTypeRegistry().WithType(typeof(KeyedContent), nameof(KeyedContent));
-        var hub = MessageHubExtensions.CreateTypeRegistry(mesh).WithType(typeof(KeyedContent), nameof(KeyedContent));
+        var mesh = MessageHubExtensions.CreateTypeRegistry()
+            .WithType(typeof(KeyedContent), nameof(KeyedContent))
+            .WithType(typeof(KeylessContent), nameof(KeylessContent));
+        var hub = MessageHubExtensions.CreateTypeRegistry(mesh)
+            .WithType(typeof(KeyedContent), nameof(KeyedContent))
+            .WithType(typeof(KeylessContent), "HubKeyless");
         hub.GetTypeDefinition(typeof(KeyedContent), create: false)
             .Should().BeSameAs(mesh.GetTypeDefinition(typeof(KeyedContent), create: false), "the precondition: shared");
 
         mesh.WithKeyFunction(nameof(KeyedContent), new KeyFunction(_ => "mesh-key", typeof(string)));
-        hub.GetTypeDefinition(typeof(KeyedContent), create: false)!.GetKey(content).Should().Be("k1",
-            "the hub registered the conventionally keyed type; a later parent key is the parent's");
-        hub.GetKeyFunction(nameof(KeyedContent))!.Function(content).Should().Be("k1");
+        hub.GetTypeDefinition(typeof(KeyedContent), create: false)!.GetKey(content).Should().Be("mesh-key",
+            "the hub re-registered nothing, so it resolves the parent's current definition");
+        hub.GetKeyFunction(nameof(KeyedContent))!.Function(content).Should().Be("mesh-key");
 
         mesh.WithType(typeof(OtherKeyedContent), nameof(KeyedContent));
-        hub.GetType(nameof(KeyedContent)).Should().Be(typeof(KeyedContent),
-            "a replacement on the parent must not rebind the name the hub registered");
+        hub.GetType(nameof(KeyedContent)).Should().Be(typeof(OtherKeyedContent), "the parent's rebinding shows through");
+
+        mesh.WithType(typeof(KeylessContent), "MeshKeyless");
+        hub.GetCollectionName(typeof(KeylessContent)).Should().Be("HubKeyless", "the hub's override is its own");
     }
 
     /// <summary>
@@ -182,9 +218,9 @@ public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper outp
     }
 
     /// <summary>
-    /// The full-name alias of a shared definition is bound on the hub too: a newer collectible build
-    /// registered on the parent (same full name — the alias is newest-wins there) must move neither the
-    /// hub's canonical name nor its full-name alias off the build the hub registered.
+    /// A collectible build the hub registered itself (new to the chain) is held by the hub, canonical
+    /// name and full-name alias: a newer build registered on the parent later (same full name — the
+    /// alias is newest-wins there) moves neither of the hub's names off the build the hub registered.
     /// </summary>
     [Fact]
     public void AParentRegisteringANewerBuild_MovesNeitherOfTheHubsNames()
@@ -200,10 +236,9 @@ public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper outp
             var newBuild = second.LoadFromAssemblyPath(location).GetType(fullName)!;
             oldBuild.Should().NotBe(newBuild, "the precondition: two builds with one full name");
 
-            var mesh = MessageHubExtensions.CreateTypeRegistry().WithType(oldBuild, nameof(KeyedContent));
+            var mesh = MessageHubExtensions.CreateTypeRegistry();
             var hub = MessageHubExtensions.CreateTypeRegistry(mesh).WithType(oldBuild, nameof(KeyedContent));
-            hub.GetTypeDefinition(oldBuild, create: false)
-                .Should().BeSameAs(mesh.GetTypeDefinition(oldBuild, create: false), "the precondition: shared");
+            hub.OwnTypes.Should().ContainSingle("the precondition: the hub holds the build it added");
 
             mesh.WithType(newBuild, nameof(KeyedContent));
             mesh.GetType(aliasName).Should().Be(newBuild, "the precondition: the parent's alias moved");
