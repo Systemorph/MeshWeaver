@@ -252,7 +252,8 @@ still carry it:
 | `SuspendedAt` | the `Suspend` / `Reactivate` actions |
 | `SuspensionReason` | the `Suspend` action |
 | `WebhookInboxTargets` | legacy of `WebhookInbox` — read when the typed list is empty, never written |
-| `BuildHosts` | the operations record's author (`Enabled`, a channel's `MaxReplicas`) and core CD's signed `build-host-update-available` event through the operations instance (a channel's set — `PlatformVersion`, `TesterDigest`, `PortalDigest`, `RunnerDigest`); renders the claim barrier `Hosting__Builds__Channels__<channel>__PlatformVersion` for every channel with a version while `Enabled`; `Doc/Architecture/BuildHosts` |
+| `BuildHosts` | the operations record's author only — `Enabled` and each channel's `MaxReplicas` (a set field written here is not read); `Doc/Architecture/BuildHosts` |
+| `BuildHostSets` | core CD's signed `build-host-update-available` event through the operations instance — each channel's set (`PlatformVersion`, `TesterDigest`, `PortalDigest`, `RunnerDigest`), MESH-OWNED: GitSync strips it on export and keeps the live value on import, so git never names a build; renders the claim barrier `Hosting__Builds__Channels__<channel>__PlatformVersion` for every channel `BuildHosts` runs while `Enabled`; `Doc/Architecture/BuildHosts` |
 
 ## Retired: generating the Helm chart from Aspire
 
