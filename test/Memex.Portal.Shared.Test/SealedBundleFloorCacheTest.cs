@@ -203,6 +203,55 @@ public class SealedBundleFloorCacheTest : IDisposable
     }
 
     [Fact]
+    public void ARepublicationInsideTheSameStampTickIsPickedUp()
+    {
+        // 🚨 A directory stamp is COARSE — the Linux kernel's coarse clock ticks in milliseconds — so
+        // a republication that lands in the SAME tick as the read before it leaves the stamp EQUAL.
+        // Measured on a Linux CI leg: ARepublishedSourceThatAddsAPackageIsPickedUp read
+        // `Set: [Documentation]` four milliseconds after Northwind was added. This test pins both
+        // writes to ONE stamp explicitly, so it does not depend on how coarse this machine's clock is.
+
+        // ── the CONTROL, executed: an equal stamp really does hide the republication ────────────
+        // With the stamp SETTLED (an hour old), the cache trusts it and recalls — the stale answer.
+        // That is sound in production, because a real change after a settled stamp lands in a later
+        // tick and moves it; here the test forges the equality to prove the fixture produces it. If
+        // this ever starts seeing Northwind, the assertions below measure nothing.
+        var (settledCache, settledRoot) = RepublishedUnderOneStamp(DateTime.UtcNow - TimeSpan.FromHours(1));
+        Assert.DoesNotContain("Northwind", settledCache.Read(settledRoot).Bundles);
+        Assert.Equal(3L, settledCache.SourcesRead);
+        Assert.Equal(3L, settledCache.SourcesRecalled);
+
+        // ── the fix: a stamp too recent to trust is never remembered ────────────────────────────
+        var (cache, root) = RepublishedUnderOneStamp(DateTime.UtcNow);
+        var after = cache.Read(root);
+
+        Assert.Contains("Northwind", after.Bundles);
+        Assert.Contains(Platform, after.Bundles);
+        Assert.Equal(3, after.Identities);
+        Assert.Equal(2L, cache.SourcesUnsettled);
+    }
+
+    /// <summary>A settled three-identity root read once, with its first source then republished to
+    /// add Northwind — both the first and the second publication stamped <paramref name="stamp"/>.
+    /// Returns the cache that took the first reading, ready for the second.</summary>
+    private (SealedBundleFloorCache Cache, string Root) RepublishedUnderOneStamp(DateTime stamp)
+    {
+        var root = RootWithIdentities(3);
+        var source = Path.Combine(FirstIdentityOf(root), PlatformSource);
+        Directory.SetLastWriteTimeUtc(source, stamp);
+        var first = Directory.GetLastWriteTimeUtc(source);
+        var cache = new SealedBundleFloorCache();
+
+        Assert.DoesNotContain("Northwind", cache.Read(root).Bundles);
+
+        Seal(FirstIdentityOf(root), PlatformSource, [Platform, "Northwind"]);
+        Directory.SetLastWriteTimeUtc(source, stamp);
+        // The premise, said out loud: the second publication carries the first one's stamp exactly.
+        Assert.Equal(first, Directory.GetLastWriteTimeUtc(source));
+        return (cache, root);
+    }
+
+    [Fact]
     public void APrunedIdentityIsForgotten_AndAFailedReadEvictsNothing()
     {
         var root = RootWithIdentities(4);
@@ -503,7 +552,21 @@ public class SealedBundleFloorCacheTest : IDisposable
         Directory.CreateDirectory(Path.Combine(root, PublishedBundleCatalogue.ReleaseMarkerDirectoryName));
         for (var i = 0; i < count; i++)
             SealIdentity(root, $"s4742{i:D27}", PlatformSource, [Platform]);
+        Settle(root);
         return root;
+    }
+
+    /// <summary>Back-dates every directory under <paramref name="root"/> by an hour — what a store
+    /// published before this tick looks like. The cache remembers a source only once its stamp is
+    /// older than <see cref="SealedBundleFloorCache.SettleWindow"/>, so a fixture stamped "just now"
+    /// would be re-read on every tick and every recall below would be vacuous. Explicit, so a
+    /// later write into a directory moves its stamp by an hour, never by one clock tick.</summary>
+    private static void Settle(string root)
+    {
+        var settled = DateTime.UtcNow - TimeSpan.FromHours(1);
+        foreach (var directory in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+            Directory.SetLastWriteTimeUtc(directory, settled);
+        Directory.SetLastWriteTimeUtc(root, settled);
     }
 
     private static void SealIdentity(

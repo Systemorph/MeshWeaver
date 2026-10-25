@@ -228,6 +228,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
 - [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
 - [Protected Segments on a Public Partition](ProtectedSegmentsOnAPublicPartition) — a partition that is public except for one inbox cannot be expressed with `PublicRead`: the C# evaluator and the SQL projection resolve a deeper deny under it differently, so the segment reads by exact path and is absent from every listing. The grant shape both folds agree on, why a read cap is a blackout rather than a gate, and why the boot heal may never retire a deny it could not have written
+- [Secret Sealing](SecretSealing) — how an installation hands a secret to its control instance as ciphertext only: an ECDH P-256 + HKDF-SHA256 + AES-256-GCM envelope sealed to the control instance's published key, bound to the deployment and object, hostile input refused before decoding, and rotation that keeps every outgoing key for its own window
 - [Secure Development Framework](SecureDevelopmentFramework) — how production and development are separated when the platform is delivered into a client's own environment: a ringfenced client estate, a narrow interface, a consultant environment that never touches production data, and who approves what
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
 - [OWASP ZAP Scan — Every Release](SecurityScanning)
@@ -261,6 +262,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Python Code Nodes](PythonCodeNodes)
 - [Script Execution — Try It](ScriptExecutionDemo)
 - [Sending Email](SendingEmail)
+- [The Opt-In Mail Copy](MailCopy) — the provider-neutral copy of a mailbox that lives in core: stored shapes, engine, attachment rules, and the per-installation, per-account switch
 
 ### UI
 
@@ -330,6 +332,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Build Process — compile and test as a dependency cascade](BuildProcess)
 - [What a Pull Request Rebuilds](BuildScopeNarrowing)
 - [The Build Server](BuildServer)
+- [Build Hosts](BuildHosts) — one warm host per release channel (`build-latest`, `build-stable`): the follow lane that streams a stage's log into the Actions log, the host runner, the build-host chart, and how core's CD hands build-latest each set it arms
 - [The Compile Program — State of Record](CompileProgramStateOfRecord)
 - [Content-Type Registration](ContentTypeRegistration)
 - [Import-Side Content Degradation](ImportSideContentDegradation) — the OTHER half: content degraded at IMPORT rather than at read. The `/health` `content-types` census cannot see it, because an import-degraded node holds a plain `MarkdownContent` whose `$type` resolves perfectly on every replica

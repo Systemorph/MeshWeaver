@@ -157,7 +157,8 @@ public static class PartitionSourceFingerprint
         // this token exists to capture. Changing the token semantics re-hashes every stored
         // NodeType entry ONCE (the next import re-upserts them); the import-side operational
         // preserve makes that pass a structural no-op.
-        if (NodeTypeOperationalContent.IsNodeTypeNode(node))
+        // The same holds for a deployment record's CD-owned build-host sets.
+        if (NodeTypeOperationalContent.HasOperationalMembers(node))
             node = NodeTypeOperationalContent.StripOperational(node, options ?? DefaultContentOptions);
         var contentJson = node.Content is null
             ? string.Empty
