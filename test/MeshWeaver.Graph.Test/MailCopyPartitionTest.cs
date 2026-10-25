@@ -476,6 +476,65 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
+    /// An old-image replica switches the copy off and on again while the retirement runs — the legacy source is REPLACED
+    /// by a new generation. The retirement's confirmation at the owning hub refuses: the new legacy source is not deleted,
+    /// and nothing is switched on from the stale one (the next sync retires the new one).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ALegacySourceReplacedDuringTheRetirement_IsNotDeleted_AndNothingIsSwitchedOn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var files = new RecordingAttachments
+        {
+            OnDelete = () => Observable.Defer(() =>
+            {
+                using var _ = AsSystem();
+                return mesh.DeleteNode(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"))
+                    .SelectMany(_ => mesh.CreateNode(new MeshNode("outlook", MailCopyNodeTypes.LegacyNamespaceFor(owner))
+                    {
+                        NodeType = MailCopyNodeTypes.SourceNodeType, State = MeshNodeState.Active,
+                        Content = new MailCopySource { Provider = "outlook", Generation = "g2", MailboxId = "other" },
+                    }));
+            }).Select(_ => Unit.Default),
+        };
+        var store = new MeshMailCopyStore(() => Mesh, attachments: files);
+        await SeedLegacy(owner, new MailCopySource { Provider = "outlook", Generation = "g1", Backfilled = true, MailboxId = "acct" },
+            [new MailMessageCopy { Provider = "outlook", Generation = "g1", MessageId = "m1", HasAttachments = true }], ct);
+
+        // Refused (the confirmation saw the replacement) or a no-op (the index did not show it yet, so the source read as
+        // gone): either way nothing of the replacing source is touched and nothing is switched on.
+        var failure = await Record.ExceptionAsync(() => AsOwner(owner, () => store.RetireLegacy(owner, "outlook"), ct));
+        if (failure is not null)
+            failure.Should().BeOfType<InvalidOperationException>("the source this attempt fenced was replaced");
+
+        (await SourceWhere(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), _ => true, ct)).Generation
+            .Should().Be("g2", "the replacing source is not deleted");
+        (await Listed(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).Should().BeNull("nothing is switched on from the stale source");
+    }
+
+    /// <summary>A legacy copy whose content cannot be read is treated as HOLDING files: they are deleted before its node.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnreadableLegacyCopy_HasItsFilesDeleted_BeforeItsNode()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var files = new RecordingAttachments();
+        var store = new MeshMailCopyStore(() => Mesh, attachments: files);
+        await SeedLegacy(owner, new MailCopySource { Provider = "outlook", Generation = "g1" }, [], ct);
+        var unreadable = $"{MailCopyNodeTypes.LegacySourcePath(owner, "outlook")}/0123456789abcdef0123456789abcdef";
+        using (AsSystem())
+            await Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(new MeshNode("0123456789abcdef0123456789abcdef", MailCopyNodeTypes.LegacySourcePath(owner, "outlook"))
+            { NodeType = MailCopyNodeTypes.MessageNodeType, State = MeshNodeState.Active, Content = "not a copy" }).Timeout(Bound).Await(ct);
+
+        (await AsOwner(owner, () => store.RetireLegacy(owner, "outlook"), ct)).Should().BeTrue();
+
+        files.Calls.Should().Equal([$"delete {unreadable}"], "unknown content may hold files, so its files go first");
+        await Absent(unreadable, ct);
+    }
+
+    /// <summary>
     /// Overlapping retirements on ONE store — a switch-on, a switch-off's and a background sync's at once — never both pass
     /// the fence: each attempt is its own lease holder. Whatever the interleaving, the legacy copy is gone and exactly one
     /// fresh copy is on.

@@ -297,10 +297,12 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     /// lease for this attempt (<c>retire:{guid}</c>) and marks it not backfilled, so a sync of the legacy place — of
     /// either image — stands down and a reader of either image reads the inbox live. A lease held already refuses the
     /// attempt; the next sync repeats it. Then every legacy copy goes the switch-off way — its attachment files and
-    /// index first, then its node — and the legacy source last. Only when THIS attempt's delete removed the legacy
-    /// source, and <paramref name="reopen"/> asks for it, is a FRESH copy switched on in the copy partition: a new
-    /// generation with the legacy copy's window and account, no cursor, not backfilled — the next sync downloads it.
-    /// A legacy source that vanished meanwhile was switched off (by an old-image replica), and nothing is switched on.
+    /// index first, then its node. Before the legacy source goes, the fence is CONFIRMED at the owning hub (a lease
+    /// renewal on the very generation fenced): a source replaced or taken over meanwhile stops the retirement. When
+    /// <paramref name="reopen"/> asks for it, a FRESH copy is then switched on in the copy partition — a new generation
+    /// with the fenced copy's window and account, no cursor, not backfilled, which the next sync downloads — BEFORE the
+    /// legacy source is deleted, so no failure leaves neither. A legacy source gone before this attempt's delete was
+    /// switched off by an old-image replica: the fresh copy this attempt created goes again.
     /// However the attempt ends, a fence it still holds on a legacy source that still exists is released.
     /// </summary>
     private IObservable<bool> RetireLegacyCore(string owner, string provider, bool reopen)
@@ -321,16 +323,46 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                                 return Observable.Throw<bool>(new InvalidOperationException(
                                     $"The legacy mail copy '{legacyPath}' is being synced or retired elsewhere; the next sync repeats the retirement."));
                             fencedGeneration = fenced.Generation;
+                            var fresh = Fresh(fenced);
+                            var created = false;
                             return RetirePasses(owner, provider, 1)
-                                .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(legacyPath)))
-                                .Do(deleted => { if (deleted) fencedGeneration = null; })
-                                .SelectMany(deleted => deleted && reopen
-                                    ? EnsurePartition(owner)
-                                        .SelectMany(_ => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, Fresh(legacy)))))
-                                        .Select(_ => true)
-                                        // Already on in the copy partition (switched on anew): kept as it is.
-                                        .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex) ? Observable.Return(true) : Observable.Throw<bool>(ex))
-                                    : Observable.Return(deleted));
+                                // 🚨 Still THIS attempt's fence on THIS generation, confirmed at the owning hub by a real
+                                // write (a lease renewal): a legacy source an old-image replica replaced (switched off
+                                // and on anew) or another attempt took over is not deleted, and nothing is switched on.
+                                .SelectMany(_ => LegacyExists(owner, legacyPath))
+                                .SelectMany(exists => !exists
+                                    // Gone: an old-image replica switched the copy off — nothing is switched on.
+                                    ? Observable.Return<bool?>(null)
+                                    : CommitAt(owner, legacyPath, fenced.Generation, current => current.LeaseHolder == attempt
+                                            ? current with { LeaseUntil = DateTimeOffset.UtcNow + RetireLease }
+                                            : null)
+                                        .Select(still => (bool?)(still is not null)))
+                                .SelectMany(still => still is null
+                                    // 🚨 Gone (or not yet indexed as replaced): NOTHING is deleted or switched on — the delete
+                                    // below runs only on the confirmed fence, never over a source this attempt did not fence.
+                                    ? Observable.Return(false).Do(_ => fencedGeneration = null)
+                                    : still == false
+                                    ? Observable.Throw<bool>(new InvalidOperationException(
+                                        $"The legacy mail copy '{legacyPath}' was replaced or taken over while it was retired; the next sync repeats the retirement."))
+                                    // 🚨 The fresh copy is switched on BEFORE the legacy source goes, so no failure in
+                                    // between can leave neither source — and a later sync still finds the copy that is on.
+                                    : (!reopen
+                                        ? Observable.Return(false)
+                                        : EnsurePartition(owner)
+                                            .SelectMany(_ => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, fresh))))
+                                            .Do(_ => created = true)
+                                            .Select(_ => true)
+                                            // Already on in the copy partition (switched on anew, or an earlier attempt): kept as it is.
+                                            .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex) ? Observable.Return(true) : Observable.Throw<bool>(ex)))
+                                        .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(legacyPath)))
+                                        .Do(deleted => { if (deleted) fencedGeneration = null; })
+                                        .SelectMany(deleted => deleted
+                                            ? Observable.Return(true)
+                                            // Gone before this attempt's delete: an old-image replica switched the copy off in
+                                            // the last moment — the fresh copy THIS attempt just created goes again (it holds nothing).
+                                            : created
+                                                ? Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.SourcePath(owner, provider))).Select(_ => false)
+                                                : Observable.Return(false)));
                         }))
                 .Do(retired => { if (retired) logger?.LogInformation(
                     "Mail copy: retired the legacy {Provider} copy of {Owner}; a fresh one is switched on in {Partition}",
@@ -390,8 +422,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     // One legacy copy: its files and index first (read from its stream whether it may hold any), then its node. A
     // failure to delete the files stops here, and the node keeps the only handle on them.
     private IObservable<bool> RetireCopy(string owner, MeshNode node, System.Text.Json.JsonSerializerOptions options)
+        // 🚨 Content that cannot be read is treated as HOLDING files: deleting the node would drop the only handle on them.
         => Live(owner, node.Path).SelectMany(live =>
-            !MailAttachments.MayHoldFiles(live.ContentAs<MailMessageCopy>(options, logger))
+            live.ContentAs<MailMessageCopy>(options, logger) is { } copy && !MailAttachments.MayHoldFiles(copy)
                 ? Observable.Return(System.Reactive.Unit.Default)
                 : attachments is null
                     ? Observable.Throw<System.Reactive.Unit>(new InvalidOperationException(
