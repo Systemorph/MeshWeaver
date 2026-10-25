@@ -406,7 +406,52 @@ platform delivery, not on a build host): job `build-host-report` files or commen
 `build-host-latest` issue when either fails or is cancelled, and closes it only after a run that actually HANDED
 build-latest a set. `build-host-stable.yml` reports on its own `build-host` issue, the same way.
 
-## 5. Not done here
+## 5. Every repository on the hosts (H7) — dormant until the instance says so
+
+**Who runs a run's heavy legs is decided ONCE, where the run is admitted** —
+`.github/scripts/build-executor.py`, called from MeshWeaver.Plugins' `admission` job and, for a
+repository with no admission job of its own, from the `node-repo-build-executor.yml` lane. It answers
+`executor=host` only when all three hold:
+
+1. the repository **declares** its stages (`.github/build-stages.json`, at least one);
+2. the operations instance **says** host for it: `GET /api/builds/queue?channel=<c>&repo=<name>`
+   answers `"executor":"host"` (the instance's `Hosting:Builds:Executor`, narrowed per repository by
+   `Hosting:Builds:HostRepos`);
+3. the run is **queued**: one signed `build-request` — the same inbox and HMAC pair as the CI queue's
+   `ci-enqueue` (`BUILD_WEBHOOK_URL` / `BUILD_WEBHOOK_SECRET`) — is answered 2xx with its signature
+   `verified`. The request carries the run id the follower's OIDC token binds to, and the admission's
+   base tip as `ref.baseSha`, so the host merges onto the same main the Actions legs would.
+
+🚨 **Every failure answers `actions`** — today's behaviour — and says why (a `::warning::` for a
+failure, a summary line for a deliberate `actions`). The build API base is `vars.MW_BUILD_API` when
+set, else the inbox's origin + `/api/builds`; https only (plain http only to localhost), never with
+credentials in the URL.
+
+**The required contexts do not change name.** A heavy leg is not replaced by a differently named
+job; the caller runs a SIBLING follow job (`build-follow.yml`, `if: executor == 'host'`) and passes
+its result into the shared lane as `host-verdict`:
+
+| lane | input | with `executor: host` |
+|---|---|---|
+| `node-repo-compile-check.yml` | `executor`, `host-verdict` | every heavy step is skipped; the job (the required `… / Compile every NodeType (vs core)`) is green only for `host-verdict == success` |
+| `node-repo-gate.yml` | `executor`, `host-verdict` | `plan` and the shards do not run; `verify` (the required `… / Compile + render node repos (MeshWeaver from ACR)`) is green only for `host-verdict == success`, and refuses a plan or shard that ran anyway; output `executed-on: host`, no gate log — a caller's ratchet over that log takes the followed verdict (the host's gate stage runs the ratchet itself) |
+
+A follow job that did not run, was cancelled or failed is RED in the lane — a skipped need is never
+a pass. Any `executor` other than `actions` / `host` is RED. With the defaults (`actions`, no
+verdict) every lane behaves exactly as before, so a caller that passes nothing is unchanged.
+
+**The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
+credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`
+demands `contents: read` only. The arriving callers are recorded as `pending:` rows in
+`.github/lane-caller-grants.yml` before any repository wires them (MeshWeaver#3878's ordering).
+
+**Not covered by this switch:** a gate lane's `upload-bake` (the merged `bake-<sha>`
+MeshWeaver.Education's install legs download) — a host run hands its artifacts over through H9
+receipts instead, so a repository that consumes the bake stays on `actions` until its consumers read
+receipts. A re-run of a failed FOLLOW job re-reads the same run's verdict; to rebuild, re-run the
+whole workflow (the admission queues a new attempt).
+
+## 6. Not done here
 
 - **The receiver of `build-host-update-available`** (the record write) and the **`POST /token`
   route** (minting `GetScopedInstallationToken(owner, [repo], {"contents":"read"})` for the ONE
