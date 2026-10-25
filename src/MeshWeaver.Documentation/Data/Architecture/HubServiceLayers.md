@@ -130,9 +130,12 @@ Measured against Autofac with the same stopwatch harness on both sides (MeshWeav
 - **Concurrent resolves scale**: eight threads resolving from one hub run 5–16× faster than before,
   where the old scope-wide lock serialised them.
 - **A closed open generic** (`ILogger<T>`, `IOptions<T>`) is closed ONCE per closed type: the open
-  registration caches each closure with its collectible check and its constructor plan, so a cached
-  resolve re-runs no `MakeGenericType` and allocates nothing — 220–225 ns and 256 B per resolve before,
-  49–52 ns and 0 B after, with a hub level's build and dispose unchanged (`MeshServiceProviderTest`).
+  registration caches each closure with its collectible check, so resolving a closed type again re-runs
+  no `MakeGenericType` and builds no new registration. Measured on a warmed singleton lookup: 220–225 ns
+  and 256 B per resolve before, 49–52 ns and 0 B after, with a hub level's build and dispose unchanged
+  (`MeshServiceProviderTest`). The constructor plan is NOT cached per closure: a closure's identity is
+  its open registration, and `PlanFor` builds a fresh plan for any registration that is not its own
+  identity, so a scoped or transient activation of a closed generic still computes its plan.
   The cache is instance-owned, on the open registration, and split by what it closes over: a closure
   over a collectible type (a NodeType's compiled type, a module's) is keyed WEAKLY in a
   `ConditionalWeakTable`, so it never pins its load context (`ACollectibleTypeIsNeverHeldByTheRootTest`;
