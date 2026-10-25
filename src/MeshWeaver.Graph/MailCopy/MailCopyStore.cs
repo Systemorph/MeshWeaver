@@ -620,6 +620,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                 // An ENUMERATION: a key clipped off this list is a copy the owner can no longer see or delete.
                 .Complete())
             .Take(1)
+            .SelectMany(change => RejectIncompleteListing(change, nameof(SourceKeys)))
             .Select(change => change.Items
                 .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
                                && string.Equals(node.Namespace, MailCopyNodeTypes.NamespaceFor(owner), StringComparison.Ordinal))
@@ -637,12 +638,31 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                         // An ENUMERATION: a source clipped off this list is a copy the keeper never resumes.
                         .Complete())
                     .Take(1)
+                    .SelectMany(change => RejectIncompleteListing(change, nameof(EnabledSources)))
                     .Select(change => change.Items
                         .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
                                        && node.Namespace is { } ns && ns.EndsWith("/" + MailCopyNodeTypes.Segment, StringComparison.Ordinal))
                         .Select(node => new MailCopySourceRef(node.Namespace![..^(MailCopyNodeTypes.Segment.Length + 1)], node.Id))
                         .Where(r => !string.IsNullOrWhiteSpace(r.Owner) && !r.Owner.Contains('/'))
                         .ToImmutableList()))));
+
+    /// <summary>
+    /// 🚨 An ENUMERATION that is only a FLOOR is a fault, never a listing: a frame whose fan-in names silent
+    /// providers, or that a provider marked incomplete, may be MISSING sources — read as the whole list it would hide
+    /// a disconnected account's copy from Settings, or leave an enabled copy out of restart recovery. It goes down the
+    /// error channel instead. <see cref="MeshQueryRequest.Complete"/> only lifts the page bound; it says nothing about
+    /// whether every provider answered (review of #7154). Pure.
+    /// </summary>
+    internal static IObservable<QueryResultChange<MeshNode>> RejectIncompleteListing(QueryResultChange<MeshNode> change, string listing)
+    {
+        if (change.SilentProviders is { Count: > 0 } silent)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"The mail copy listing '{listing}' is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] did not answer."));
+        if (change.SnapshotIncomplete)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"The mail copy listing '{listing}' is INCOMPLETE: a provider dropped part of its read."));
+        return Observable.Return(change);
+    }
 
     private IObservable<T> Gated<T>(Assembly caller, string surface, string owner, Permission permission, Func<IObservable<T>> work)
         => MailCopyAuthority.Gated(hub(), caller, $"{nameof(MeshMailCopyStore)}.{surface}", owner, permission, work);

@@ -92,4 +92,38 @@ public class MailCopySourceListingTest(ITestOutputHelper output) : MonolithMeshT
             (await store.SourceKeys(owner).Timeout(Bound).Await(ct)).Order().Should().Equal(
                 keys, "every persisted copy is listed — the listing was clipped at 50 with no way to page on");
     }
+    /// <summary>
+    /// A listing frame that is only a FLOOR — a provider silent, or one that dropped part of its read — is a fault,
+    /// never the list: read as complete it hides copies from Settings and from restart recovery (review of #7154).
+    /// </summary>
+    [Theory]
+    [InlineData("silent")]
+    [InlineData("incomplete")]
+    [InlineData("complete")]
+    public void AListingFrameThatIsOnlyAFloor_IsRejected_NeverReadAsTheWholeList(string shape)
+    {
+        var change = new QueryResultChange<MeshNode>
+        {
+            ChangeType = QueryChangeType.Initial,
+            Items = [MeshNode.FromPath("owner/_MailCopy/outlook")],
+            Timestamp = DateTimeOffset.UtcNow,
+            SilentProviders = shape == "silent" ? ["postgres"] : null,
+            SnapshotIncomplete = shape == "incomplete",
+        };
+        Exception? fault = null;
+        QueryResultChange<MeshNode>? passed = null;
+        using var _ = MeshMailCopyStore.RejectIncompleteListing(change, "SourceKeys")
+            .Subscribe(c => passed = c, ex => fault = ex);
+
+        if (shape == "complete")
+        {
+            fault.Should().BeNull("a frame every provider answered in full is the listing");
+            passed.Should().BeSameAs(change);
+        }
+        else
+        {
+            passed.Should().BeNull($"a {shape} frame is a floor, and a floor must never be read as the whole list");
+            fault.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Contain("INCOMPLETE");
+        }
+    }
 }
