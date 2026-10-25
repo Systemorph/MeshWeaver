@@ -1,7 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -45,7 +45,7 @@ public class CatalogLoadedSignalLockOrderTest(ITestOutputHelper output) : Monoli
             {
                 services.AddGitHubSyncServices();
                 return services.AddSingleton<IConfiguration>(
-                    new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
+                    new ConfigurationBuilder().AddInMemoryCollection(ImmutableDictionary<string, string?>.Empty).Build());
             });
 
     [Fact]
