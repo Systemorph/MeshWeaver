@@ -348,7 +348,7 @@ invariant in `check-chart-invariants.sh`.
 
 Besides the channel hosts, the chart renders one **versioned build server** per entry in
 `buildHosts.versions` (the chart half lands in MeshWeaver.Deploy). The entries come from the record's mesh-owned `buildHostSets`, never typed by
-hand. The design is [Deploy, Test the Deploy, Switch Latest](../DeployTestSwitchLatest) §3.
+hand. The design is Deploy, Test the Deploy, Switch Latest (the design page in core PR #7182; linked once it lands) §3.
 
 - **Keys.** `v/<version>` holds that version's set token. `alias/<name>` holds the VERSION an alias
   names (`latest`, `candidate`, `previous`; one scalar leaf). `BuildHostSetKeys` parses both;

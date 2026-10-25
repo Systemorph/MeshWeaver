@@ -29,6 +29,8 @@ public class BuildHostVersionsTest
     [Fact]
     public void TheFifthPart_IsOptional_AndAFourPartTokenReadsBackUnchanged()
     {
+        Assert.NotNull(typeof(BuildHostChannel).GetProperty(nameof(BuildHostChannel.CoreTestsDigest))!
+            .GetCustomAttributes(typeof(System.ComponentModel.BrowsableAttribute), false).OfType<System.ComponentModel.BrowsableAttribute>().SingleOrDefault(b => !b.Browsable));
         var four = Token("3.1.10500");
         Assert.Equal($"3.1.10500;{Tester};{Portal};{Runner}", four);
         Assert.Equal(four, BuildHostChannel.FromSetToken(four)!.ToSetToken());
@@ -54,6 +56,9 @@ public class BuildHostVersionsTest
     [InlineData(" 3.1.1", false)]
     [InlineData("3.1.1-", false)]
     [InlineData("3.1.1-bad_char", false)]
+    [InlineData("3.1.1-alpha.", false)]
+    [InlineData("3.1.1-alpha-", false)]
+    [InlineData("3.1.1-alpha.1", true)]
     [InlineData("", false)]
     [InlineData(null, false)]
     public void AVersion_IsMajorMinorPatch_WithAnOptionalPrerelease(string? version, bool valid) =>
@@ -72,6 +77,11 @@ public class BuildHostVersionsTest
         Assert.Null(BuildHostSetKeys.AliasName("v/3.1.1"));
         Assert.Equal("build-3-1-10412", BuildHostSetKeys.DeploymentName("3.1.10412"));
         Assert.Equal("build-3-0-0-ci-9898", BuildHostSetKeys.DeploymentName("3.0.0-ci.9898"));
+        // The name is not injective, so a second version with the same name is a COLLISION, never a second deployment.
+        var sets = Sets(("v/3.1.1-alpha.1", Token("3.1.1-alpha.1")));
+        Assert.Equal("3.1.1-alpha.1", BuildHostSetKeys.NameCollision(sets, "3.1.1-alpha-1"));
+        Assert.Null(BuildHostSetKeys.NameCollision(sets, "3.1.1-alpha.1"));
+        Assert.Null(BuildHostSetKeys.NameCollision(sets, "3.1.2"));
     }
 
     [Fact]

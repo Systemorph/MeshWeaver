@@ -136,7 +136,8 @@ public static class BuildHostSetKeys
     public static string? AliasName(string key) =>
         key.StartsWith(AliasPrefix, StringComparison.Ordinal) && key.Length > AliasPrefix.Length ? key[AliasPrefix.Length..] : null;
 
-    /// <summary>A platform version: <c>MAJOR.MINOR.PATCH</c> with an optional <c>-pre.release</c> of [0-9A-Za-z.-], at most 48 characters.</summary>
+    /// <summary>A platform version: <c>MAJOR.MINOR.PATCH</c> with an optional <c>-pre.release</c> of [0-9A-Za-z.-] that ENDS in a
+    /// letter or digit (a trailing <c>.</c> or <c>-</c> would make a Kubernetes name or label that ends in punctuation), at most 48 characters.</summary>
     public static bool IsVersion(string? version)
     {
         if (string.IsNullOrWhiteSpace(version) || version.Length > 48 || version != version.Trim())
@@ -147,12 +148,19 @@ public static class BuildHostSetKeys
         var parts = core.Split('.');
         if (parts.Length != 3 || parts.Any(p => p.Length == 0 || p.AsSpan().IndexOfAnyExcept("0123456789") >= 0))
             return false;
-        return pre is null || (pre.Length > 0 && pre.AsSpan().IndexOfAnyExcept("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-") < 0);
+        return pre is null || (pre.Length > 0 && char.IsAsciiLetterOrDigit(pre[^1])
+            && pre.AsSpan().IndexOfAnyExcept("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-") < 0);
     }
 
     /// <summary>The Kubernetes name of version <paramref name="version"/>'s deployment: <c>build-</c> + the version
-    /// lower-cased with dots as dashes (<c>3.1.10412</c> → <c>build-3-1-10412</c>), a valid DNS label.</summary>
+    /// lower-cased with dots as dashes (<c>3.1.10412</c> → <c>build-3-1-10412</c>), a valid DNS label. NOT injective —
+    /// <c>3.1.1-alpha.1</c> and <c>3.1.1-alpha-1</c> share one name — so whatever adds a version refuses one whose name
+    /// another deployed version already has (<see cref="NameCollision"/>).</summary>
     public static string DeploymentName(string version) => "build-" + version.Trim().ToLowerInvariant().Replace('.', '-');
+
+    /// <summary>The deployed version whose <see cref="DeploymentName"/> equals <paramref name="version"/>'s, other than itself; null when none. Pure.</summary>
+    public static string? NameCollision(ImmutableSortedDictionary<string, string>? sets, string version) =>
+        Versions(sets).Keys.FirstOrDefault(v => v != version && DeploymentName(v) == DeploymentName(version));
 
     /// <summary>Every versioned entry, by version, whose token parses. Pure.</summary>
     public static ImmutableSortedDictionary<string, BuildHostChannel> Versions(ImmutableSortedDictionary<string, string>? sets) =>
@@ -190,7 +198,7 @@ public sealed record BuildHostChannel
     /// <summary>The set's core TEST image digest (<c>mw-core-tests</c>, <c>sha256:…</c>) — core's test projects built
     /// from the set's commit in the same CD run; a candidate's core suites run from it (Doc/Architecture/DeployTestSwitchLatest §2).
     /// Optional: a set without it serves module builds, and only a candidate test needs it.</summary>
-    [Description("The set's core test image digest (sha256:…)")]
+    [Browsable(false)]
     public string? CoreTestsDigest { get; init; }
 
     /// <summary>The set's build-host RUNNER image digest (<c>mw-build-host</c>, <c>sha256:…</c>) — bash,
