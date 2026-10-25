@@ -5,6 +5,11 @@
 {{- if not .Values.image.tag }}
 {{- fail "image.tag is required — name the immutable tesseract-5.5-<short sha> tag, never the moving line" }}
 {{- end }}
+{{- /* Only the SHA-suffixed tag CI publishes is immutable; `tesseract-5.5`, `latest` or any other moving
+       tag under pullPolicy IfNotPresent lets two nodes run two different cached builds. */}}
+{{- if not (regexMatch "^tesseract-[0-9]+\\.[0-9]+-[0-9a-f]{7,40}$" (toString .Values.image.tag)) }}
+{{- fail (printf "image.tag %q is not an immutable tesseract-<line>-<short sha> tag (e.g. tesseract-5.5-0a81895) — a moving tag runs whatever build a node cached" (toString .Values.image.tag)) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,6 +58,8 @@ spec:
               value: {{ .Values.limits.timeoutSeconds | int64 | quote }}
             - name: OCR_CONCURRENCY
               value: {{ .Values.limits.concurrency | int64 | quote }}
+            - name: OCR_MAX_ADMITTED
+              value: {{ .Values.limits.maxAdmitted | int64 | quote }}
             {{- if .Values.defaultLanguages }}
             - name: OCR_DEFAULT_LANGUAGES
               value: {{ .Values.defaultLanguages | quote }}

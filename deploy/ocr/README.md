@@ -33,7 +33,7 @@ comma-separated and may be repeated. The answer always uses ISO 639-1 codes, mos
 | 413 | body over `limits.maxBytes`, refused without reading it; or pixel count over `limits.maxPixels`, refused before decoding |
 | 415 | not an image, or a non-image `Content-Type` |
 | 422 | a hint with no baked pack; the error names the installed ones |
-| 503 | every slot (`limits.concurrency`) stayed busy for the whole deadline |
+| 503 | every admission place (`limits.maxAdmitted`) is taken, refused before the body is read; or every slot (`limits.concurrency`) stayed busy for the whole deadline |
 | 504 | the read did not finish within `limits.timeoutSeconds`; the Tesseract process is killed |
 
 Every refusal is JSON `{"error": "…"}`. The client treats any non-200 as `Failed`.
@@ -64,7 +64,8 @@ The build is the test. In the stage that ships it runs:
   identification, and the 401/413/422/504 bounds.
 - `app/smoke.py`: the real engine and packs, through the real HTTP contract, on
   `fixtures/de-id.png` (German above Indonesian). It asserts six words, umlaut included, and the
-  languages `{de, id}`, with no hints, with `languages=de,id`, and with the page rotated 90°.
+  languages `{de, id}`, with no hints, with `languages=de,id`, with the page rotated 90°, and with
+  the page as black ink on a transparent background (composited onto white before reading).
 
 It carries its own **negative controls**. The same German+Indonesian assertion must fail on
 `fixtures/en.png`. A blank page must return no text and no languages. `languages=en` must report
@@ -99,10 +100,10 @@ Turning it on for an instance is a deployment-record change the owner approves. 
 | Value | What |
 |---|---|
 | `enabled` | `true` to render anything at all |
-| `image.repository`, `image.tag` | `meshweaver.azurecr.io/ocr` and the **immutable** `tesseract-5.5-<sha>`. The chart fails without either |
+| `image.repository`, `image.tag` | `meshweaver.azurecr.io/ocr` and the **immutable** `tesseract-5.5-<sha>`. The chart fails without either, and refuses a tag that is not `tesseract-<line>-<hex sha>` (`tesseract-5.5`, `latest`) |
 | `networkPolicy.allowedNamespaces` | the callers' namespaces (the portal's). Empty means nothing is admitted |
 | `auth.existingSecret` / `auth.secretKey` | optional bearer key from an existing Secret, the client's `Ocr:HttpService:ApiKey` |
 | `defaultLanguages` | the no-hint set, e.g. `de,en`. Empty means all five |
-| `limits.*` | `maxBytes` 20 MiB, `maxPixels` 40 MP, `timeoutSeconds` 150, `concurrency` 2 |
+| `limits.*` | `maxBytes` 20 MiB, `maxPixels` 40 MP, `timeoutSeconds` 150, `concurrency` 2, `maxAdmitted` 8 (bodies held at once; buffered memory ≤ `maxAdmitted` × `maxBytes`) |
 
 With release name `ocr`, the portal's endpoint is `http://ocr:8080/ocr`.

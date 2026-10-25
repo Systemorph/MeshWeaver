@@ -97,6 +97,28 @@ class Decisions(unittest.TestCase):
         tsv = "h\n5\t1\t1\t1\t1\t1\t0\t0\t1\t1\t9\tA\n5\t1\t1\t1\t1\t2\t0\t0\t1\t1\t9\tB\n5\t1\t2\t1\t1\t1\t0\t0\t1\t1\t9\tC\n"
         self.assertEqual(ocr.paragraphs_from_tsv(tsv), ["A B", "C"])
 
+    def test_transparency_is_composited_onto_white(self):
+        # Black ink on a transparent background whose hidden colour is ALSO black: only alpha carries the
+        # text. Dropping alpha (convert("RGB")) yields one black page and erases the text.
+        def encoded(img):
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+
+        rgba = Image.new("RGBA", (60, 40), (0, 0, 0, 0))
+        rgba.paste((0, 0, 0, 255), (20, 10, 40, 30))
+        la = Image.new("LA", (60, 40), (0, 0))
+        la.paste((0, 255), (20, 10, 40, 30))
+        pal = Image.new("P", (60, 40), 0)
+        pal.putpalette([0, 0, 0, 0, 0, 0])   # both indexes are black; index 0 is the transparent one
+        pal.paste(1, (20, 10, 40, 30))
+        pal.info["transparency"] = 0
+        for name, img in (("RGBA", rgba), ("LA", la), ("P+tRNS", pal)):
+            with self.subTest(name):
+                out = ocr.decode(encoded(img), max_pixels=1_000_000).convert("L")
+                self.assertEqual(out.getpixel((2, 2)), 255, "the transparent background must read WHITE")
+                self.assertEqual(out.getpixel((30, 20)), 0, "the opaque ink must stay black")
+
     def test_pixel_bomb_is_refused_before_decoding(self):
         with self.assertRaises(ocr.Refused) as ctx:
             ocr.decode(png(3000, 3000), max_pixels=1_000_000)
@@ -160,6 +182,35 @@ class Http(unittest.TestCase):
         base = self.start(fake_runner(" ".join(words), [(1, 1, w) for w in words]), OCR_DEFAULT_LANGUAGES="de,en")
         self.assertEqual(self.post(base, png())[1]["languages"], [])          # id is not in the default set
         self.assertEqual(self.post(base, png(), "?languages=de,id")[1]["languages"], ["id"])  # the hint extends it
+
+    def test_admission_refuses_beyond_the_bound_without_reading_the_body(self):
+        # One slot, one admission place. While request A holds both, request B must be refused at once
+        # with 503 and its body never buffered — not queued behind the slot with its upload in memory.
+        started = threading.Event()
+        inner = fake_runner(sleep=3.0)
+
+        def runner(args, timeout):
+            if args not in (["--version"], ["--list-langs"]) and "osd" in args:
+                started.set()
+            return inner(args, timeout)
+
+        base = self.start(runner, OCR_CONCURRENCY=1, OCR_MAX_ADMITTED=1)
+        first = {}
+        worker = threading.Thread(target=lambda: first.update(answer=self.post(base, png())))
+        worker.start()
+        self.addCleanup(worker.join)
+        self.assertTrue(started.wait(10), "request A never reached the engine")
+        t0 = time.monotonic()
+        status, body = self.post(base, png())
+        self.assertEqual(status, 503, body)
+        self.assertIn("admission", body["error"])
+        self.assertLess(time.monotonic() - t0, 2.0, "B was refused only after waiting — it was queued, not refused")
+        worker.join(30)
+        self.assertEqual(first["answer"][0], 200)
+
+    def test_admission_below_concurrency_refuses_to_start(self):
+        with self.assertRaises(SystemExit):
+            self.start(fake_runner(), OCR_CONCURRENCY=2, OCR_MAX_ADMITTED=1)
 
     def test_unknown_default_language_refuses_to_start(self):
         with self.assertRaises(SystemExit):

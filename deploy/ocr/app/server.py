@@ -11,7 +11,14 @@ The contract is the one MeshWeaver.Plugins' ``MeshWeaver.Ocr`` HttpService engin
 
 Refusals answer JSON ``{"error": "…"}``: 401 (a key is configured and the bearer is not it), 404, 411
 (no Content-Length), 413 (body or pixel count over the limit), 415 (not an image), 422 (a hint with no
-installed pack), 503 (every slot busy for the whole deadline), 504 (the deadline passed mid-read).
+installed pack), 503 (every admission place taken — refused before the body is read — or every OCR
+slot busy for the whole deadline), 504 (the deadline passed mid-read).
+
+Memory is bounded by ADMISSION, not by the OCR slots: a request takes one of ``OCR_MAX_ADMITTED``
+places BEFORE its body is read and holds it until it is answered, so at most that many bodies are ever
+buffered (``OCR_MAX_ADMITTED`` x ``OCR_MAX_BYTES``). A request that finds no free place is answered 503
+and its body is never read. The ``OCR_CONCURRENCY`` slots then bound how many of the admitted run
+Tesseract at once.
 
 Nothing is stored and no text is logged — only sizes, timings and the languages found. The service
 needs no network beyond its listening socket; the chart's NetworkPolicy denies all egress.
@@ -45,6 +52,11 @@ class Config:
         self.timeout = float(_int_env("OCR_TIMEOUT_SECONDS", 150))
         self.concurrency = _int_env("OCR_CONCURRENCY", 2)
         self.read_timeout = float(_int_env("OCR_READ_TIMEOUT_SECONDS", 30))
+        # Bodies held at once (being read, waiting for a slot, or being read by Tesseract).
+        self.max_admitted = _int_env("OCR_MAX_ADMITTED", 4 * self.concurrency)
+        if self.max_admitted < self.concurrency:
+            raise SystemExit(f"OCR_MAX_ADMITTED ({self.max_admitted}) is below OCR_CONCURRENCY ({self.concurrency})"
+                             " — slots could never all be used")
         self.api_key = os.environ.get("OCR_API_KEY", "").strip() or None
         packs = ocr.installed_packs(run)
         if "osd" not in packs:
@@ -60,6 +72,7 @@ class Config:
         self.settings = ocr.Settings(installed=installed, default=default, max_pixels=self.max_pixels,
                                      engine=ocr.tesseract_version(run))
         self.slots = threading.BoundedSemaphore(self.concurrency)
+        self.admission = threading.BoundedSemaphore(self.max_admitted)
 
 
 def make_handler(cfg: Config, run: ocr.Runner = ocr.run_tesseract):
@@ -111,6 +124,16 @@ def make_handler(cfg: Config, run: ocr.Runner = ocr.run_tesseract):
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype and not (ctype.startswith("image/") or ctype == "application/octet-stream"):
                 return self._send(415, {"error": f"Content-Type {ctype} is not an image"}, close=True)
+            # Take an admission place BEFORE buffering the body; none free ⇒ refuse it unread.
+            if not cfg.admission.acquire(blocking=False):
+                return self._send(503, {"error": f"every admission place ({cfg.max_admitted}) is taken — retry later"},
+                                  close=True)
+            try:
+                return self._read_admitted(url, size)
+            finally:
+                cfg.admission.release()
+
+        def _read_admitted(self, url, size: int):
             data = self.rfile.read(size)
             if len(data) != size:
                 return self._send(400, {"error": "the body ended before Content-Length"}, close=True)

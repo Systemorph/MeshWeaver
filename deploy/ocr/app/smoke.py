@@ -109,6 +109,17 @@ def main(base: str) -> int:
     problems = de_id_problems(upright) if status == 200 else [f"status {status}"]
     check("page rotated 90°: osd turns it upright and it reads the same", not problems, "; ".join(problems))
 
+    # Transparency: the same page as black ink on a TRANSPARENT background whose hidden colour is also
+    # black (every pixel RGB 0, the text only in alpha) — a logo/screenshot export. Dropping alpha would
+    # hand Tesseract one black rectangle; it must be composited onto white and read the same.
+    gray = Image.open(io.BytesIO(de_id)).convert("L")
+    clear = Image.new("RGBA", gray.size, (0, 0, 0, 0))
+    clear.putalpha(gray.point(lambda v: 255 - v))
+    status, see_through = post(base, png(clear))
+    problems = de_id_problems(see_through) if status == 200 else [f"status {status}"]
+    check("transparent page (text only in alpha): composited onto white, reads the same", not problems,
+          "; ".join(problems))
+
     # Refusals.
     status, _ = post(base, de_id, "?languages=xx")
     check("hint with no installed pack → 422", status == 422, str(status))

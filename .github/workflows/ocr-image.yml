@@ -61,13 +61,24 @@ jobs:
         run: docker build --progress=plain -t ocr:ci deploy/ocr
       # The same smoke with German taken out of the default set MUST fail — a smoke that cannot go
       # red proves nothing. --network none: the service needs no network at all.
+      # Actions runs this with `bash -e`, so the expected non-zero exit is captured through `||` (a bare
+      # command would abort the step before `$?` is read). The red must be the ASSERTION going red — the
+      # smoke's exit code is its failure count, and the German check's FAIL line must be printed — never
+      # a container that did not start (docker's own 125/126/127) or a smoke that crashed.
       - name: Negative control — the smoke goes RED without the German pack in the default set
         run: |
-          set -uo pipefail
-          docker run --rm --network none --read-only --tmpfs /tmp -e OCR_DEFAULT_LANGUAGES=en,id ocr:ci python3 smoke.py
-          code=$?
+          set -euo pipefail
+          code=0
+          docker run --rm --network none --read-only --tmpfs /tmp -e OCR_DEFAULT_LANGUAGES=en,id ocr:ci python3 smoke.py \
+            > negative.log 2>&1 || code=$?
+          cat negative.log
           [ "$code" -ne 0 ] || { echo "::error::smoke.py PASSED with German removed — its assertions cannot fail"; exit 1; }
-          echo "negative control: smoke.py exited $code with German removed, as it must"
+          [ "$code" -lt 125 ] || { echo "::error::the negative-control container failed to run (exit $code), not the assertion"; exit 1; }
+          grep -q '^FAIL German+Indonesian page: text and both languages detected (no hints)' negative.log \
+            || { echo "::error::smoke.py exited $code, but not on the German assertion — the control proves nothing"; exit 1; }
+          grep -q "^$code failure(s)$" negative.log \
+            || { echo "::error::smoke.py exited $code without reporting that many assertion failures — it crashed"; exit 1; }
+          echo "negative control: smoke.py exited $code (assertion failures) with German removed, as it must"
       # The image's OWN CMD (server.py as uid 10001, read-only root), called over the network from a
       # sibling container exactly as the portal calls the Service.
       - name: Smoke the running service over HTTP
@@ -104,7 +115,14 @@ jobs:
           if helm template ocr deploy/ocr/helm --set enabled=true --set image.repository=$ACR/ocr >/dev/null 2>&1; then
             echo "::error::enabled without image.tag rendered — the immutable-tag refusal is gone"; exit 1
           fi
-          echo "chart: nothing by default; enabled → $kinds; egress denied; no tag → refused"
+          # A MOVING tag is refused too: under IfNotPresent it lets two nodes run two cached builds.
+          for moving in "$LINE" latest "$LINE-main" "$LINE-0a8189"; do
+            if helm template ocr deploy/ocr/helm --set enabled=true --set image.repository=$ACR/ocr \
+                 --set "image.tag=$moving" >/dev/null 2>&1; then
+              echo "::error::enabled with the moving tag '$moving' rendered — the immutable-tag refusal is gone"; exit 1
+            fi
+          done
+          echo "chart: nothing by default; enabled → $kinds; egress denied; no tag or a moving tag → refused"
 
   # main (push or dispatch): build the same way, push both tags, read them back.
   publish:

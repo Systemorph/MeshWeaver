@@ -72,7 +72,8 @@ assign reports that pack's language. A blank page reports none.
 | body size | 20 MiB (the client's `Ocr:MaxImageBytes`) | from `Content-Length`, before the body is read |
 | pixels | 40 MP (an A4 page at 600 dpi is about 35 MP) | from the image header, before decoding, so a decompression bomb never reaches Tesseract |
 | time | 150 s per image, slot wait included | the Tesseract process is killed at the deadline, and the answer is 504. That is under the client's 180 s `Ocr:TimeoutSeconds`, so the service, not the client, names the cause |
-| concurrency | 2 Tesseract processes per pod, one thread each | the rest wait inside their own deadline |
+| admission | 8 requests per pod whose body is held at once (`limits.maxAdmitted`, at least `concurrency`) | a place is taken **before** the body is read and released on every exit; with none free the answer is 503 and the body is never read. So buffered uploads stay under `maxAdmitted` × `maxBytes` (160 MiB by default), well inside the 2 GiB memory limit, however many callers arrive at once |
+| concurrency | 2 Tesseract processes per pod, one thread each | the admitted rest wait inside their own deadline |
 | network | ingress from the named namespaces only, **no egress** | the chart's NetworkPolicy. The pod mounts no ServiceAccount token |
 
 ## Proof it works, and that the proof can fail
@@ -82,7 +83,9 @@ The image build **is** the test, as for s1-extract. The stage that ships runs tw
 through the real HTTP contract on `deploy/ocr/fixtures/de-id.png`, a German paragraph above an
 Indonesian one. The smoke asserts six words, including the umlaut in `Gebäude`, which `eng` alone
 reads as `Gebaude`. It also asserts the languages `{de, id}`, three times: with no hints, with
-`languages=de,id`, and with the page rotated 90°.
+`languages=de,id`, with the page rotated 90°, and with the page as black ink on a **transparent**
+background whose hidden colour is also black — the text then lives only in the alpha channel, and the
+service composites it onto white before reading (dropping alpha would hand Tesseract one black page).
 
 Its negative controls are part of the same run:
 
@@ -93,10 +96,12 @@ Its negative controls are part of the same run:
 `.github/workflows/ocr-image.yml` adds checks a build cannot show:
 
 - it re-runs the smoke with German removed from the default set and is red unless the smoke
-  **fails**;
+  **fails on the German assertion** — the exit code must be the smoke's own failure count, never a
+  container that did not start or a smoke that crashed;
 - it runs the image's own `CMD` (uid 10001, read-only root) and calls it from a sibling container;
 - it renders the chart three ways: nothing with `enabled: false`, exactly Deployment + Service +
-  NetworkPolicy with `egress: []` when enabled, and a refusal when enabled without an immutable tag.
+  NetworkPolicy with `egress: []` when enabled, and a refusal when enabled without a tag or with a
+  moving one (`tesseract-5.5`, `latest`): the chart accepts only `tesseract-<line>-<hex sha>`.
 
 On `main` the workflow pushes `meshweaver.azurecr.io/ocr:tesseract-5.5-<short sha>`. That tag is
 immutable, and it is the one an estate overlay names. It also pushes `:tesseract-5.5`, the moving

@@ -12,7 +12,7 @@ image:
   #   meshweaver.azurecr.io/ocr:tesseract-5.5-<short sha>   immutable — what an estate overlay names
   #   meshweaver.azurecr.io/ocr:tesseract-5.5               moving — a laptop `docker pull` only
   repository: ""        # required: <registry>/ocr
-  tag: ""               # required: the immutable tesseract-5.5-<short sha> tag
+  tag: ""               # required: the immutable tesseract-5.5-<short sha> tag (the chart refuses any other shape)
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -39,6 +39,8 @@ limits:
   maxPixels: 40000000       # an A4 page at 600 dpi is ~35 MP
   timeoutSeconds: 150       # slot wait + read, per image; under the client's 180 s Ocr:TimeoutSeconds
   concurrency: 2            # Tesseract processes at once per pod; the rest wait inside the deadline
+  maxAdmitted: 8            # requests whose body is held at once (≥ concurrency); the next is 503, unread.
+                            # Bounds buffered bodies to maxAdmitted × maxBytes (8 × 20 MiB) under the memory limit
 
 service:
   type: ClusterIP

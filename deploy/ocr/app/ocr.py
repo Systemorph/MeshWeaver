@@ -208,7 +208,12 @@ def decode(data: bytes, max_pixels: int) -> Image.Image:
         img.load()
     except Exception as exc:
         raise Refused(415, f"the image could not be decoded ({type(exc).__name__})") from None
-    if img.mode not in ("L", "RGB"):
+    if img.mode in ("RGBA", "LA", "PA", "La", "RGBa") or "transparency" in img.info:
+        # Composite onto WHITE: a plain convert("RGB") drops alpha and keeps the hidden colour, so black
+        # text on a transparent background whose hidden pixels are also black becomes one black page.
+        rgba = img.convert("RGBA")
+        img = Image.alpha_composite(Image.new("RGBA", rgba.size, (255, 255, 255, 255)), rgba).convert("RGB")
+    elif img.mode not in ("L", "RGB"):
         img = img.convert("RGB")
     return img
 
