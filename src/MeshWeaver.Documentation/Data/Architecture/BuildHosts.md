@@ -427,7 +427,10 @@ failure, a summary line for a deliberate `actions`). The build API base is `vars
 set, else the inbox's origin + `/api/builds`; it AND the inbox are https only (plain http only to
 localhost), never with credentials in the URL — an http inbox would let an on-path party answer
 `verified` and turn the Actions legs off with no host build. Only channel `latest` is queued: a
-`build-request` carries no channel yet, so any other channel answers `actions`.
+`build-request` carries no channel yet, so any other channel answers `actions`. Only a pull request or a trunk run
+(push / schedule / dispatch on the default branch) may go to a host: the host merges a non-trunk run
+onto a base, while Actions tests every other event's commit unmerged, so a branch push or a manual
+run on a branch stays on `actions`.
 
 **The required contexts do not change name.** A heavy leg is not replaced by a differently named
 job; the caller runs a SIBLING follow job (`build-follow.yml`, `if: executor == 'host'`) and passes

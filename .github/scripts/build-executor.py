@@ -181,6 +181,11 @@ def decide(i: Inputs, get: Get, post: Post) -> Decision:
     # channel is `actions` — said — until the request and the receiver route a channel.
     if i.channel != "latest":
         return actions(f"channel '{i.channel}' cannot be queued by a build-request yet (only latest is) — a follower would wait on a run of another channel")
+    # 🚨 ONLY A PULL REQUEST OR A TRUNK RUN (review of #7153): the host merges a non-trunk run onto a
+    # base, while Actions tests every other event's commit unmerged — so a branch push or a manual
+    # run on a branch would be judged on a different tree. Those stay on actions, said.
+    if not (i.event == "pull_request" and i.pr) and not is_trunk(i):
+        return actions(f"a {i.event or 'unknown'} run on {i.ref_name or '?'} is neither a pull request nor trunk — the host would test a merged tree Actions never builds", warn=False)
     stages, no_stages = declared_stages(i.stages_file)
     if not stages:
         return actions(no_stages, warn=False)
@@ -348,6 +353,13 @@ def self_test() -> int:
     check("host/a PR request names the PR and the ADMISSION's main as its base (one merged tree)",
           body["ref"] == {"kind": "pullRequest", "name": "feat/x", "number": 7, "baseRef": "main", "baseSha": "b" * 40} and body["isTrunk"] is False, body)
     # 2. trunk: a push to main is trunk; a push elsewhere is not
+    for ev, ref in (("workflow_dispatch", "feat/y"), ("push", "feat/y"), ("merge_group", "main"), ("schedule", "release")):
+        calls.clear()
+        d = decide(with_(event=ev, ref_name=ref, pr=None), host_q, ok_post)
+        check(f"event/{ev} on {ref} stays on actions and asks nothing", d.executor == ACTIONS and "neither a pull request nor trunk" in d.why and calls == [], (d, calls))
+    for ev in ("push", "schedule", "workflow_dispatch"):
+        d = decide(with_(event=ev, ref_name="main", pr=None), host_q, ok_post)
+        check(f"event/{ev} on main (trunk) may run on the host", d.executor == HOST, d)
     tb = request_body(with_(event="push", ref_name="main", pr=None))
     check("trunk/a push to main", tb["isTrunk"] is True and tb["ref"] == {"kind": "branch", "name": "main"}, tb)
     check("trunk/a push to a branch is not trunk", request_body(with_(event="push", ref_name="feat/y", pr=None))["isTrunk"] is False)
