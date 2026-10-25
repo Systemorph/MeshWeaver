@@ -87,14 +87,23 @@ lose mail or bring a switched-off copy back. Every sync, switch-on and switch-of
 2. **Delete the switch-off way.** Every legacy copy, from complete listing frames only: its attachment files and
    index first (`IMailAttachmentStore.DeleteLegacy`), then its node; the legacy source last. A file that cannot be
    deleted stops the retirement, and the node keeps the only handle on it.
-3. **Switch a fresh copy on** — only when THIS attempt's delete removed the legacy source, and not for a switch-off:
-   a new generation in `{owner}_MailCopy/{key}` with the legacy copy's window and account, no cursor, not backfilled.
-   The next sync downloads it; with the generation rebuild (#7166) the inbox reads live meanwhile, never blank. A
-   legacy source that vanished before this attempt's delete was switched off by an old-image replica, and nothing is
-   switched on.
+3. **Confirm, prepare the fresh copy, then delete.** The fence is confirmed at the owning hub by a lease renewal on
+   the generation fenced — a source replaced or taken over meanwhile stops the retirement, and one gone meanwhile
+   deletes and switches on nothing. Then (not for a switch-off) the FRESH copy is prepared in `{owner}_MailCopy/{key}`
+   — a new generation with the fenced copy's window and account, no cursor, not backfilled — **leased to this
+   attempt**, so nothing syncs it yet. An existing destination is adopted (rotated to a fresh generation, leased) only
+   when it is the retirement's own leftover: the legacy generation (an interrupted #7161 move) or a lapsed retirement
+   lease (a retry); a copy switched on independently is kept as it is. Only THEN is the legacy source deleted, so no
+   failure leaves neither source.
+4. **Settle.** When this attempt's delete removed the legacy source, the fresh copy is released and the next sync
+   downloads it (with the generation rebuild of #7166 the inbox reads live meanwhile, never blank). When the delete
+   found it already gone — an old-image switch-off in the last moment — the fresh copy is ROLLED BACK: rotated off in
+   one commit that applies only while it still carries this attempt's lease, cleaned the switch-off way (files first)
+   with the lease kept throughout, and deleted.
 
-However an attempt ends — an error, the sync's bound, a disposal — it releases a fence it still holds, so the next
-sync need not wait out the lease. `Disable` retires without switching a fresh copy on. The residual: an Undo or
+However an attempt ends — an error, the sync's bound, a disposal — it releases a fence it still holds, and it
+RECONCILES a fresh copy it still holds: released when the legacy source is still there (the retirement did not finish
+and the next sync repeats it), rolled back when the legacy source is gone (a switch-off overtook it). `Disable` retires without switching a fresh copy on. The residual: an Undo or
 Delete applied by an old-image replica (which takes no lease) between the last complete pass and the legacy
 source's delete leaves that one copy's files, if it had any, under the home folder.
 
