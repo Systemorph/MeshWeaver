@@ -26,8 +26,14 @@ installs and tests the formula from every PR that touches `deploy/homebrew/**` o
 commits the formula with its `sha256`. The version is `0.2.<main commit count>`, so
 **`brew upgrade memex-local` follows main**. The formula declares the **exact brew
 toolchain `LocalColimaMac.md` §1 installs** — `colima`, `kubernetes-cli` (kubectl),
-`helm`, `mkcert`, `ollama`, `socket_vmnet` — plus `azure-cli` for the registry-mode
-image pull. It vendors a snapshot of `deploy/helm` so the install works standalone.
+`helm`, `mkcert`, `ollama`, `socket_vmnet`. It vendors a snapshot of `deploy/helm` so the
+install works standalone.
+
+The **Azure CLI** (for the registry-mode image pull's `az acr login`) is *not* a dependency
+either: Homebrew moved `azure-cli` from homebrew/core to a cask, a formula cannot depend on
+a cask, and `depends_on "azure-cli"` made every install fail with *No available formula
+with the name "azure-cli"*. Install it separately (`brew install --cask azure-cli`);
+`memex-local` refuses at runtime, naming that command, when `az` is missing.
 
 The **.NET SDK** (10.0) is *not* a dependency: only the local-build image path (Option B,
 §3) needs it, `depends_on cask:` is rejected by current Homebrew, and the registry-mode
