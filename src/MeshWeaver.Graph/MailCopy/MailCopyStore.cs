@@ -274,6 +274,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
         LeaseUntil = null,
         Cursor = null,
         Backfilled = false,
+        // A rebuild in flight is abandoned: its copies go with the switch-off's own pass.
+        PendingGeneration = null,
+        PendingCursor = null,
     };
 
     private IObservable<int> DisablePasses(string owner, string provider, int pass, int removed)
@@ -561,7 +564,25 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             Indexed(owner, MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId))
                 .SelectMany(found => found is null
                     ? Observable.Return<MailMessageCopy?>(null)
-                    : Live(owner, found.Path).Select(live => Copies([live], provider, generation, m.Options).FirstOrDefault()))));
+                    : Live(owner, found.Path).Select(live => Copies([live], provider, generation, m.Options).FirstOrDefault())
+                        // Deleted between the index answer and the stream (a retired generation, a removal): gone, not a failure.
+                        .Catch((Exception ex) => IsGone(ex, found.Path)
+                            ? Observable.Return<MailMessageCopy?>(null)
+                            : Observable.Throw<MailMessageCopy?>(ex)))));
+
+    /// <summary>
+    /// Whether <paramref name="error"/> establishes that the node at <paramref name="path"/> is ABSENT: the stream cache
+    /// ended the read with that path's delete, or the router stamped the failure <c>NodeAbsent</c>. Any other delivery
+    /// failure proves nothing about the node and is never read as "gone". Pure.
+    /// </summary>
+    public static bool IsGone(Exception error, string path)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+            if (current is MeshNodeReadEndedWithDeleteException deleted && string.Equals(deleted.NodePath, path, StringComparison.Ordinal)
+                || current is DeliveryFailureException { Failure.NodeAbsent: true })
+                return true;
+        return false;
+    }
 
     /// <inheritdoc />
     [ImpersonationSurface]

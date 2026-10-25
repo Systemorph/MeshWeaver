@@ -71,6 +71,21 @@ public sealed record MailCopySource
     public string? Cursor { get; init; }
 
     /// <summary>
+    /// The generation a REBUILD is filling ALONGSIDE the served one, or null when none is. A rebuild of a copy
+    /// that is already <see cref="Backfilled"/> (a projection upgrade, a refused or expired cursor) never
+    /// touches <see cref="Generation"/>: it mints this id, backfills it from <see cref="PendingCursor"/>, and only
+    /// when that backfill is done flips <see cref="Generation"/> to it in ONE commit and retires the old
+    /// generation's copies. A crash mid-rebuild resumes THIS generation rather than minting another. Null and
+    /// the type default, so it round-trips.
+    /// </summary>
+    [Editable(false), Browsable(false)]
+    public string? PendingGeneration { get; init; }
+
+    /// <summary>Where the pending generation's backfill resumes (<see cref="Cursor"/>'s role for <see cref="PendingGeneration"/>); null before its first step.</summary>
+    [Editable(false), Browsable(false)]
+    public string? PendingCursor { get; init; }
+
+    /// <summary>
     /// Whether the backfill finished. Until it has, the inbox keeps reading the source LIVE — a half-made
     /// copy must not stand in for the mailbox.
     /// </summary>
