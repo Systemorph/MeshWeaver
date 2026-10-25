@@ -481,6 +481,16 @@ what the Actions legs they replace check — each item is a reason a host green 
   ratchet RE-RUNS the check on it. Until then every caller's `tests-ratchet` is RED on a host run —
   command text is not execution evidence.
 
+**Status (2026-10-25).** Wired, dormant, in MeshWeaver.Plugins (#4180) and the four satellites
+(SocialMedia #254, Reinsurance #273, Manufacturing #136, Education #411): every run answers `actions`
+until a declaration claims `ciEquivalent` AND the instance says `host` for that repository. No
+declaration claims it yet: MeshWeaver.Plugins' owes the seven items in its `Hosting/StandingBuildHosts`
+(H7), and the satellites declare no stages. **This repository's own CI is NOT wired**, and must not be
+until its heavy legs can be stated as stages: they build the platform from source and test it
+(`dotnet-test.yml`'s build and shards), while a host composes an already-built platform image and
+runs a repository's checks against it — a different workload, not a missing switch. Core declares
+no `.github/build-stages.json`, so `build-executor.py` would answer `actions` for it regardless.
+
 **The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
 credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`
 demands `contents: read` only. The arriving callers are recorded as `pending:` rows in
