@@ -24,7 +24,7 @@ namespace MeshWeaver.GitSync;
 ///   <item>returns the <b>activity path</b> (subscribe to <c>GetMeshNodeStream(path)</c> for live
 ///     progress; cancel via <c>hub.CancelActivity(path)</c>);</item>
 ///   <item>delegates the actual GitHub I/O to <see cref="GitHubSyncService"/> /
-///     <see cref="PullRequestService"/> — which bridge Octokit through <c>IIoPool</c> — so the
+///     <see cref="PullRequestService"/> — which bridge GitHub's REST API through <c>IIoPool</c> — so the
 ///     operation never replicates GitHub state and never blocks the action block.</item>
 /// </list>
 ///

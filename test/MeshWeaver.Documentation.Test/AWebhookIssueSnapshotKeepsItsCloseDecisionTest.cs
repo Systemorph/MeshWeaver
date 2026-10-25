@@ -1,8 +1,6 @@
 using System.Text.Json;
 using MeshWeaver.GitSync;
-using Octokit;
 using Xunit;
-using GitHubIssue = MeshWeaver.GitSync.GitHubIssue;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -86,12 +84,9 @@ public class AWebhookIssueSnapshotKeepsItsCloseDecisionTest
     /// GitHub's <c>issue</c> object, which the webhook and the REST answer share — is driven through
     /// BOTH, and they must agree.
     ///
-    /// <para>The REST side goes through Octokit's own deserializer rather than its constructor, and
-    /// that is not a convenience: <b>Octokit's <c>Issue</c> constructor takes
-    /// <c>ItemStateReason?</c> — the three-member enum — so it cannot express <c>duplicate</c> at
-    /// all</b> (`CS1503`, measured while writing this). Deserializing is the path a real REST answer
-    /// takes and the only one that can carry the value, which is the same fact that makes
-    /// <c>.StringValue</c> the required read.</para>
+    /// <para>The REST side goes through the REST transport's own deserializer (its snake_case wire
+    /// options), not a hand-built wire record: deserializing is the path a real REST answer takes,
+    /// so a field the wire model misnames is caught here rather than in production.</para>
     /// </summary>
     [Theory]
     [InlineData("duplicate", GitHubIssueStateReason.Duplicate)]
@@ -104,7 +99,7 @@ public class AWebhookIssueSnapshotKeepsItsCloseDecisionTest
         var fromWebhook = GitHubWebhookProcessor.MapIssue(
             JsonDocument.Parse(body).RootElement);
         var fromRest = OctokitGitHubRepoClient.ToIssue(
-            new Octokit.Internal.SimpleJsonSerializer().Deserialize<Issue>(body));
+            GitHubRestApi.Deserialize<GitHubWireIssue>(body, GitHubRestApi.CreateJsonOptions()));
 
         Assert.Equal(expected, fromWebhook.StateReason);
         Assert.Equal(fromWebhook.StateReason, fromRest.StateReason);
