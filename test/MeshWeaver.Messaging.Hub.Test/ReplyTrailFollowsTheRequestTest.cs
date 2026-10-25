@@ -46,7 +46,19 @@ public class ReplyTrailFollowsTheRequestTest(ITestOutputHelper output) : HubTest
             .Await(ct);
         (await response).Message.Should().BeOfType<ProbeAck>();
 
-        var trail = client.DescribeRequestFate(requestId);
+        // The response reaches the test from INSIDE the requester's callback rule, and the ledger
+        // stamps that rule's HANDLER_EXIT only after the callback returns — so a trail read the
+        // moment the response arrives can predate its last stage. Wait for that stage on the trail
+        // itself; on the bound, fall through with the trail as it stands so the assertions below
+        // name what is missing.
+        var handlerExit = $"HANDLER_EXIT state=Processed@{client.Address}";
+        var trail = await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Select(_ => client.DescribeRequestFate(requestId))
+            .Where(t => t.IndexOf("↩ reply#1:", StringComparison.Ordinal) is var at and >= 0
+                        && t.IndexOf(handlerExit, at, StringComparison.Ordinal) >= 0)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence, Observable.Defer(() => Observable.Return(client.DescribeRequestFate(requestId))))
+            .Await(ct);
         Output.WriteLine($"fate trail: {trail}");
 
         trail.Should().Contain("RESPONSE_POSTED type=ProbeAck", "the responder's post is on the request's trail");
@@ -56,7 +68,7 @@ public class ReplyTrailFollowsTheRequestTest(ITestOutputHelper output) : HubTest
             "the reply enters the responder's own intake first");
         replyTrail.Should().Contain($"RECEIVED runLevel=Started@{client.Address}",
             "…and the requester's intake last");
-        replyTrail.Should().Contain($"HANDLER_EXIT state=Processed@{client.Address}",
+        replyTrail.Should().Contain(handlerExit,
             "the requester's callback rule ran on it");
         trail.Should().NotContain("chase the response delivery",
             "a trail that carries the reply's journey no longer has to ask the reader to chase it");
