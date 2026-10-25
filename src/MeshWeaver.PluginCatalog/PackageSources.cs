@@ -212,11 +212,10 @@ public static class PackageSources
             }
             // The registry HOLDS the credential: resolve the GitHub App INSTALLATION token FRESH
             // before each fetch — the same machine identity GitSync's ResolveAuth uses (its 1h token
-            // is re-minted transparently). Passing token:"" (the old behavior) made
-            // OctokitGitHubRepoClient.Client("") throw ArgumentException on Octokit's empty
-            // Credentials, so any configured URL source 500'd the /api/plugins endpoint. When the App
-            // is unconfigured (or absent) the provider yields an empty token → anonymous access to a
-            // public repo (no throw, thanks to the Client("") anonymous fallback).
+            // is re-minted transparently). Passing token:"" once threw inside the old Octokit-based
+            // client (its empty Credentials), so any configured URL source 500'd the /api/plugins
+            // endpoint. When the App is unconfigured (or absent) the provider yields an empty token →
+            // anonymous access to a public repo (the REST client sends no Authorization header).
             //
             // 🚨 A source that DECLARED its own credential (PluginCatalog:Sources:N:TokenKey — a
             // vault-delivered token — or :InstallationOwner — the App installation on another

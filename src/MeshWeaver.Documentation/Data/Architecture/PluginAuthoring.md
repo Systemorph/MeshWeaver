@@ -234,5 +234,5 @@ Trigger it from the Space's GitHub Sync settings (Sync back) or
 | `The GitHub App has no installations` | The App exists but isn't installed on the org — App page → Install App, grant the repo. |
 | Import succeeds but the type doesn't render | Compile failed — check the NodeType's diagnostics (`get_diagnostics`/the node's Configuration tab); usual causes are the runtime-compile rules in §2.5. |
 | Push-back 403 | The App's Contents permission is Read-only — set Read & Write and re-approve the installation. |
-| `Octokit.NotFoundException` (404) on a repo that exists | The installation can't SEE the repo — repo missing from the installation's *Repository access*, or the token was minted before the grant (restart the portal to drop the cached token). |
+| `GitHubNotFoundException` (404; `Octokit.NotFoundException` on older images) on a repo that exists | The installation can't SEE the repo — repo missing from the installation's *Repository access*, or the token was minted before the grant (restart the portal to drop the cached token). |
 | `Node already exists: {space}` on import | `ImportFromGitHub` is create-only. For an existing Space use `SaveConfig` + `ReimportAtCommit` (§4). If the existing node is an empty orphan from a previously failed import, delete it and retry. |

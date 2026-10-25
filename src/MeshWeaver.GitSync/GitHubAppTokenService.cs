@@ -27,8 +27,8 @@ namespace MeshWeaver.GitSync;
 /// <see cref="GitHubAppTokenMintException"/></b> (only a cancellation passes as itself). A caller
 /// therefore never has to read a message to know it is looking at a credential that was NEVER
 /// OBTAINED rather than one GitHub REJECTED — the two look identical once a mint failure has
-/// degraded to an anonymous fetch and surfaced, one layer later, as Octokit's
-/// <c>AuthorizationException: Bad credentials</c> (#4736).</para>
+/// degraded to an anonymous fetch and surfaced, one layer later, as a
+/// <see cref="GitHubAuthorizationException"/>: <c>Bad credentials</c> (#4736).</para>
 /// </summary>
 public sealed class GitHubAppTokenService
 {
@@ -224,7 +224,7 @@ public sealed class GitHubAppTokenService
         // or let it through, never half. A caller degrading to an anonymous fetch (the Store's
         // package feed does, so a public source keeps working) must be able to say WHICH failure it
         // is degrading over, and the only thing that survives every layer between here and its log
-        // is the TYPE. Without it the degraded fetch is reported one layer later as Octokit's
+        // is the TYPE. Without it the degraded fetch is reported one layer later as GitHub's
         // "Bad credentials", and a mint that never happened reads as a credential GitHub rejected
         // (#4736). Cancellation is deliberately NOT translated: a cancelled mint is not a failed one.
         .Catch((Exception exception) => Observable.Throw<string>(AsMintFailure(exception)));

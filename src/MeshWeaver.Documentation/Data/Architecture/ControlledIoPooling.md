@@ -411,8 +411,10 @@ a loud teardown residual for a silent one, which is the same defect with better 
 
 **Some entry points already do this projection for you, and knowing which is the whole rule.**
 `InvokeObservable` composes `source(ct).LastAsync().ObserveCompletion(report, ct)`, and
-`ObserveCompletion` cancels its task on that token — so every Octokit.Reactive call in
-`OctokitGitHubRepoClient` is safe however its lambda treats `ct`. `InvokeStream` (and `RunStream`,
+`ObserveCompletion` cancels its task on that token — so a reactive-SDK leaf is safe however its
+lambda treats `ct`. (`OctokitGitHubRepoClient` no longer has such leaves: since it moved off
+Octokit onto a plain `HttpClient` it calls `Invoke`, and every request hands `ct` to
+`HttpClient.SendAsync` and to the body read.) `InvokeStream` (and `RunStream`,
 which forwards to it) enumerates as `source(ct).WithCancellation(ct)`, handing the token to the
 enumerator itself. **`Invoke` has no projection, and `IoPoolExtensions.Run` composes straight
 onto it**, so those two are where a discarded token is unrecoverable. **`InvokeBlocking` and
