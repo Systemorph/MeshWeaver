@@ -6,7 +6,8 @@ Description: The target build shape. Each platform set is deployed as its own ve
 
 # Deploy, Test the Deploy, Switch Latest
 
-> **Status: DECIDED DESIGN — nothing on this page is wired yet.** It is the target shape for
+> **Status: DECIDED DESIGN — nothing on this page is wired yet, except the readiness contract
+> (§2a).** It is the target shape for
 > policy `deploy-test-switch-latest` and policy `package-mesh-version-cap`. Both are DECIDED and
 > both stay `proposed` in [Policy Not Prose](../PolicyNotProse) until their wiring (§8) lands,
 > because the register marks a row `in force` only once its mechanism exists. The
@@ -25,7 +26,7 @@ green, switch `latest` to it. A set is available to modules only once `latest` p
                                     │
                                     ├─▶ build-host-deploy ──▶ InstanceAction BuildHostDeploy(v)
                                     │                           └─▶ record: buildHostSets["v/<v>"]
-                                    │                                 └─▶ Deployment build-<v> Ready
+                                    │                                 └─▶ build-<v> complete, pinned probe CLAIMED
                                     ├─▶ build-host-test ─────▶ follow lane ◀── core suites + dependents'
                                     │                                          affected gates run here
                                     └─▶ build-host-switch ───▶ green: alias latest := <v>
@@ -67,14 +68,39 @@ skipped on missing input (§6).
    receiver turns the event into a **governed `Hosting/InstanceAction`**, `BuildHostDeploy`, on
    control. The in-cluster operator executes it. Never `kubectl`, never a hand-edited Deployment,
    never `helm` by hand. The action writes the version's entry in the mesh-owned set (§3). The
-   record change applies itself (policy `record-change-applies-itself`). The action completes when
-   the new Deployment reports Ready, and Ready already means the plugins layer is staged
-   (`BuildHosts.md` §3). 🚨 **A deploy carries its own warm-up demand.** Scaling demand comes only
-   from attempts (§3) and an idle version scales to zero (§9), so before any test attempt exists
-   nothing would keep a replica up for the readiness wait. The `v/<version>` entry the action
-   writes is therefore marked `warming`, and the chart renders a `warming` version's ScaledObject
-   with `minReplicaCount: 1`. Step 3 admits the test attempts BEFORE the action clears `warming`,
-   so the floor drops back to zero only once the attempts' own demand holds the replica.
+   record change applies itself (policy `record-change-applies-itself`). 🚨 **Readiness is
+   `complete` plus a CLAIMED probe — there is no `ready` field** (the contract below, §2a). The
+   deploy step waits until `GET /api/builds/hosts` lists the version with `complete: true`, then
+   submits a probe pinned to that version (`POST /probes` with `version`) and waits for a host to
+   CLAIM it. A claim proves a host of that version is up and serving; no claim inside the deploy
+   window is a deploy FAILURE (§7). The probe's verdict is a test like any other. 🚨 **A deploy
+   carries its own warm-up demand.** Scaling demand comes only from attempts (§3) and an idle
+   version scales to zero (§9), so before any test attempt exists nothing would keep a replica up
+   while the deploy step waits for the claim. The `v/<version>` entry the action writes is
+   therefore marked `warming`, and the chart renders a `warming` version's ScaledObject with
+   `minReplicaCount: 1`. Step 3 admits the test attempts BEFORE the action clears `warming`, so
+   the floor drops back to zero only once the attempts' own demand holds the replica.
+
+### 2a. The readiness contract
+
+Implemented in MeshWeaver.Deploy#8 and core #7200; the design of record is MeshWeaver.Plugins
+`Hosting/StandingBuildHosts.md` §7b.
+
+```text
+GET /api/builds/hosts
+{ "aliases":  { "latest": "<v>", "candidate": "<v>", "previous": "<v>" },
+  "versions": [ { "version": "<v>", "deploymentName": "build-<v>", "maxReplicas": N,
+                  "aliases": ["latest", …], "pinned": N, "complete": true|false } ] }
+```
+
+- **A version is deployable once it is `complete`** — its set is whole and its Deployment and
+  ScaledObject are rendered. `complete` says nothing about a running replica: a complete version
+  scaled to zero is a valid target, and a pinned attempt scales it up.
+- **There is NO `ready` field.** What proves a ready host is a CLAIM: a probe pinned to the version
+  (`POST /probes` with `version`) that a host of that version claimed. Nothing reads a readiness
+  flag, so nothing can trust a stale one.
+- `pinned` counts the attempts recorded against the version (the retention rule 4 input, §6);
+  `aliases` lists every alias that names it.
 3. **Test the deployment.** Job `build-host-test` queues a run whose claim names the CANDIDATE
    version, never a channel. It follows each stage through the existing follow lane
    (`build-follow.yml`: only `succeeded` is green, a timeout is red, an unreadable endpoint is
@@ -127,19 +153,20 @@ whose authored upper cap (§5) forbids `latest` builds against the **highest ret
 cap allows**.
 
 - **The source of `latest` is the control record's alias**, read through a public read endpoint
-  on the build API (`GET /api/builds/hosts` → `{latest, versions:[{version, digests, ready}]}`).
+  on the build API (`GET /api/builds/hosts`, the §2a shape: `aliases.latest` plus `versions[]`).
   It is no longer "the newest sealed main-cd run". `resolve-platform.py` (core-owned, fetched by
   every satellite at core `main`) gains `--from-build-hosts <api>`, which resolves the alias to
-  its set and takes the digests from the record, not from a tag lookup. A missing, unreadable or
-  not-Ready alias is a RED job naming what was looked for. It never falls back to "newest sealed",
+  its set and takes the digests from the record, not from a tag lookup. A missing or unreadable
+  alias, or one naming a version that is not `complete`, is a RED job naming what was looked for. It never falls back to "newest sealed",
   because that set may be untested (resolve-platform.py's own rule: *"never a fallback to a moving
   tag nobody named"*).
 - **With a cap**, the resolver takes the highest version in `versions` that satisfies BOTH bounds:
   at or above the package's `minMeshVersion` and at or below its cap, compared by the one
-  comparator `PlatformFloor`. If no retained, Ready deployment lies in that range, the result is
+  comparator `PlatformFloor`, among versions that are `complete` (an incomplete version is skipped;
+  a complete one scaled to zero is a valid target). If no such version lies in that range, the result is
   RED, naming the floor, the cap and the retained versions, and never a silent pick of `latest` or
   of a version below the floor. Once a cap is admitted (§5) retention holds its deployment (§6),
-  so a red after admission is a retention defect; a red before the cap's deployment is Ready is
+  so a red after admission is a retention defect; a red before the cap's deployment is `complete` is
   the admission still in progress, and says so.
 - **Per package, not per repository.** A repository's run partitions its modules by the version
   each one resolves to. Uncapped modules run on `latest`. Capped modules run on their cap's
@@ -172,11 +199,11 @@ case. A cap carries two companion fields, both required when the cap is present:
 - a cap cannot be added without `capReason` and `capTracking`;
 - **admission reserves the deployment.** A new cap usually names a version that `latest` has just
   left, so its deployment may already be gone. The validator reads `GET /api/builds/hosts`: if the
-  highest version in the cap's range is retained and Ready, the cap is admitted and rule 5 of §6
+  highest version in the cap's range is retained and `complete`, the cap is admitted and rule 5 of §6
   holds it from the moment the cap is on a default branch. If it is not deployed, the cap's
   admission requests `BuildHostDeploy(<v>)` for that SEALED set, followed by the same test run a
   candidate gets (§2 step 3) and NO switch; capped builds of the package are red, naming the
-  pending deployment, until it is Ready and green. If the set's images are no longer in the
+  pending deployment, until it is `complete`, its pinned probe has been claimed, and its run is green. If the set's images are no longer in the
   registry, the cap cannot be admitted, and the validator says so by name.
 
 **Runtime.** This design gives the cap BUILD-and-TEST meaning only: it selects the deployment a
@@ -242,8 +269,8 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
   reported on ONE open `build-host-candidate` issue, which is closed only by a run that switched
   `latest`, the same pattern as today's `build-host-report` (`main-cd.yml:4184`). The next set
   that passes supersedes.
-- **A deploy that fails** (the action fails, is refused, or the Deployment is not Ready inside the
-  job's window) is RED. It is never "skipped" and never a pass that the next run repairs. The
+- **A deploy that fails** (the action fails, is refused, the version is not `complete`, or no
+  host CLAIMS the version-pinned probe inside the job's window, §2a) is RED. It is never "skipped" and never a pass that the next run repairs. The
   candidate's partial record entry is torn down.
 - **No skip-trapdoors.** Once the hosts are declared on (`.github/build-hosts.json`), a `preflight`
   job asserts the webhook URL and secret and the build API. The deploy, test and switch jobs
