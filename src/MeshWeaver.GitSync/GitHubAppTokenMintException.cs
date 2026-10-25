@@ -48,10 +48,10 @@ public enum GitHubAppTokenMintStage
 /// <para>🚨 It exists as a TYPE so a caller can tell a FAILED MINT from a REJECTED CREDENTIAL
 /// without matching on message text (#4736). Those are the two halves of "GitHub said no" and they
 /// look identical from a log: a mint failure that degrades to an anonymous fetch surfaces one layer
-/// later as Octokit's <c>AuthorizationException: Bad credentials</c> — a sentence that describes a
+/// later as a <see cref="GitHubAuthorizationException"/>: <c>Bad credentials</c> — a sentence that describes a
 /// credential GitHub REJECTED and therefore sends the reader to the App's permissions, when the
 /// real event was upstream and one layer earlier. A rejected credential is an
-/// <c>Octokit.AuthorizationException</c>; a credential that never existed is this.</para>
+/// <see cref="GitHubAuthorizationException"/>; a credential that never existed is this.</para>
 ///
 /// <para>Derived from <see cref="InvalidOperationException"/>, which is what every one of these
 /// paths threw before, so each existing catch behaves identically.</para>

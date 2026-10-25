@@ -199,6 +199,12 @@ public static class DataExtensions
                         );
                 })).WithTypes(
                 typeof(EntityStore),
+                // Every sync/ stream hub registers these (ConfigureSynchronizationHub and its stream
+                // handlers). Held here, on the hub that adds data, the stream hubs below resolve them
+                // through their parent instead of each holding its own (Doc/Architecture/TypeRegistryLayers).
+                typeof(JsonElement),
+                typeof(SynchronizationStream<>.UpdateStreamRequest),
+                typeof(SynchronizationStream<>.SetCurrentRequest),
                 typeof(InstanceCollection),
                 typeof(WorkspaceReference),
                 typeof(EntityReference),

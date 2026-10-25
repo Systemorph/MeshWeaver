@@ -5,13 +5,13 @@ namespace MeshWeaver.GitSync;
 /// <summary>
 /// The seam over the GitHub repository API used by <see cref="GitHubSyncService"/>.
 /// The production implementation (<see cref="OctokitGitHubRepoClient"/>) talks to
-/// GitHub via the Octokit Git Data API with every call routed through
+/// GitHub's REST API (a thin <see cref="HttpClient"/> transport) with every call routed through
 /// <see cref="MeshWeaver.Mesh.Threading.IIoPool"/>; tests substitute an in-memory
 /// fake so the full export/import loop runs offline and deterministically.
 ///
 /// <para>Every method returns a cold <see cref="IObservable{T}"/> — the work runs on
 /// Subscribe, never on call. No <c>async</c>/<c>await</c>/<c>Task</c> escapes this
-/// boundary: the implementation bridges every Octokit <c>…Async</c> leaf through
+/// boundary: the implementation bridges every HTTP <c>…Async</c> leaf through
 /// the I/O pool.</para>
 /// </summary>
 public interface IGitHubRepoClient
@@ -185,7 +185,7 @@ public interface IGitHubRepoClient
     ///
     /// <para>The default implementation delegates to <see cref="GetIssue"/>, so no implementer is
     /// obliged to do anything: a client that cannot distinguish the two reads keeps its old
-    /// behaviour, and only the Octokit client overrides it with the cheaper, redirect-tolerant
+    /// behaviour, and only the GitHub REST client overrides it with the cheaper, redirect-tolerant
     /// call.</para>
     /// </remarks>
     IObservable<GitHubIssue?> FindIssueState(string repositoryUrl, int number, string accessToken)

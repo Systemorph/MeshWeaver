@@ -454,6 +454,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Pod-Hub Delivery — the Transport Swap and its Roll Plan](PodHubDeliveryRollPlan)
 - [Hub Service Layers](HubServiceLayers) — MeshWeaver's own DI container, `MeshServiceProvider`: a hub level holds only its own descriptors and the instances it built; a parent's scoped service resolved in a hub gets the hub's dependencies; module types answered by a registration source; per-instance locks, no process-static cache (replaced Autofac, MeshWeaver#7145)
 - [The Portal Heap Is Hubs](PortalHeapIsHubs)
+- [Type Registry Layers](TypeRegistryLayers) — a hub's `ITypeRegistry` holds only the types it adds or overrides and resolves the rest through its parent, the same shape as the hub's service layer (MeshWeaver#7167)
 - [Per-Process Infrastructure Hubs](PerProcessInfrastructureHubs) — a hub that exists once per process is addressed `portal/{role}-{meshId}`, under a type the router carries to that process; why the activity-tracking hub left `activity/_tracking`
 - [SignalR Mesh Participant — joining the mesh over a WebSocket](SignalRMeshParticipant)
 - [Teardown Layers — work finishes, nothing is forced](TeardownLayers)

@@ -56,8 +56,8 @@ public static class MessageHubExtensions
     /// <returns>The constructed hub.</returns>
     public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, Address address, Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = null)
     {
-        var hubSetup = new MessageHubConfiguration(serviceProvider, address)
-            .WithTypes(address.GetType());
+        // The configuration's constructor registers the address type already.
+        var hubSetup = new MessageHubConfiguration(serviceProvider, address);
         configuration ??= x => x;
         return configuration(hubSetup).Build(serviceProvider, address);
     }

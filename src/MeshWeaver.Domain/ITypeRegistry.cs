@@ -137,6 +137,15 @@ public interface ITypeRegistry
     /// All registered type definitions, keyed by their collection name.
     /// </summary>
     IEnumerable<KeyValuePair<string, ITypeDefinition>> Types { get; }
+
+    /// <summary>
+    /// The definitions this registry holds ITSELF: its own layer, never what it resolves through its
+    /// parent. A hub registry chained to the mesh registry holds only what it adds or overrides, so a
+    /// hub that adds nothing new holds nothing. Diagnostic: the per-hub census of
+    /// <c>Doc/Architecture/PortalHeapIsHubs</c> reads it. An implementation without layers returns
+    /// <see cref="Types"/>.
+    /// </summary>
+    IEnumerable<KeyValuePair<string, ITypeDefinition>> OwnTypes => Types;
 }
 /// <summary>
 /// A function that extracts an identity key from an instance, together with the key's CLR type.

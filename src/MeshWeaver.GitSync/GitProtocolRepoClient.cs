@@ -18,7 +18,7 @@ namespace MeshWeaver.GitSync;
 /// installation token) does not count against the REST rate limit at all; what remains on REST is
 /// repo creation, ref lookups and the PR/issue surface — a handful of calls per operation.</para>
 ///
-/// <para>Semantics are byte-identical to the Octokit implementation and pinned by the shared
+/// <para>Semantics are byte-identical to the REST implementation and pinned by the shared
 /// contract tests: mirror-within-subdirectory (files outside the prefix untouched, removed files
 /// deleted), a missing branch on a non-empty repo based on the default-branch head (never an
 /// orphan), an empty repo initialized by the first pushed commit (the Contents-API
@@ -48,7 +48,7 @@ public sealed class GitProtocolRepoClient(
     /// Mirrors the request's files into the repo as a single commit over the git protocol:
     /// shallow-clone, materialize the mirror in the worktree, commit as the requested author,
     /// push. Repo auto-create (a GitHub REST call — the one thing git cannot do) stays on the
-    /// Octokit client.
+    /// REST client.
     /// </summary>
     public IObservable<GitHubPushResult> Push(GitHubPushRequest request)
     {
@@ -399,7 +399,7 @@ public sealed class GitProtocolRepoClient(
         => path.AsSpan().IndexOfAny(PatternMetacharacters) >= 0;
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  Everything else — cheap single REST calls, delegated to Octokit
+    //  Everything else — cheap single REST calls, delegated to the REST client
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <inheritdoc />
@@ -422,7 +422,7 @@ public sealed class GitProtocolRepoClient(
 
     /// <inheritdoc />
     /// <remarks>A single REST lookup that follows GitHub's rename redirect — the git wire protocol
-    /// cannot answer "what is this repository called now", so this one stays on Octokit.</remarks>
+    /// cannot answer "what is this repository called now", so this one stays on REST.</remarks>
     public IObservable<RepoIdentity?> GetCanonicalRepository(string repositoryUrl, string accessToken)
         => octokit.GetCanonicalRepository(repositoryUrl, accessToken);
 
