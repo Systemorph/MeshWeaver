@@ -441,7 +441,8 @@ public static class MailCopyNodeTypes
         new($"{owner}_Access", $"{NamespaceFor(owner)}/_Access")
         {
             NodeType = "AccessAssignment",
-            Name = $"{owner} Access",
+            // The assignment's id, not a label: a stored name is read by every viewer, so it carries no language.
+            Name = $"{owner}_Access",
             MainNode = NamespaceFor(owner),
             Content = new MeshWeaver.Mesh.Security.AccessAssignment
             {

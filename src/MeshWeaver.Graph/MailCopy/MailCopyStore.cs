@@ -378,9 +378,15 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     // Where the legacy fence stands at the end of a move: still this attempt's, taken over (the legacy source exists
     // and carries another lease), or gone (the legacy source was deleted — a switch-off). Read by a no-op commit at
     // its owning hub, after an existence read (an absent node's stream never answers).
+    // 🚨 The check RENEWS the lease: an unchanged update is completed against the local mirror without asking the
+    // owning hub, so a stale mirror could report a fence another attempt has since taken. A renewal is a real write,
+    // re-decided at the owner against the node as it is there — and it pushes the lease out, so no takeover can
+    // happen between this check and the delete that follows it.
     private IObservable<FenceState> Fence(string owner, string legacyPath, string generation, string attempt)
         => LegacyExists(owner, legacyPath).SelectMany(exists => exists
-            ? CommitAt(owner, legacyPath, generation, current => current.LeaseHolder == attempt ? current : null)
+            ? CommitAt(owner, legacyPath, generation, current => current.LeaseHolder == attempt
+                    ? current with { LeaseUntil = DateTimeOffset.UtcNow + MoveLease }
+                    : null)
                 .Select(applied => applied is not null ? FenceState.Held : FenceState.TakenOver)
             : Observable.Return(FenceState.Gone));
 
@@ -411,23 +417,37 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                         .Select(_ => 0));
 
     // Releases what the attempt still holds, through the node it took it on (each commit applies only while the lease
-    // is this attempt's). Fire and forget: a release that cannot be made is logged, and the lease lapses.
+    // is this attempt's). 🚨 It RECONCILES first: an attempt that ends (fails, times out, is disposed) while the legacy
+    // source it fenced is GONE ended inside a switch-off — so a destination it still holds is cleaned exactly as in
+    // Cancelled, never released for the next sync to resume. Fire and forget: what cannot be done is logged, and the
+    // lease lapses.
     private void Release(string owner, string legacyPath, string sourcePath, string attempt, MoveHold held)
     {
-        MailCopySource? Release(MailCopySource current) => current.LeaseHolder == attempt ? current with { LeaseHolder = null, LeaseUntil = null } : null;
-        var releases = new List<IObservable<MailCopySource?>>();
-        if (held.Legacy is { } legacyGeneration)
-            releases.Add(CommitAt(owner, legacyPath, legacyGeneration, Release));
-        if (held.Destination is { } destinationGeneration)
-            releases.Add(CommitAt(owner, sourcePath, destinationGeneration, Release));
-        if (releases.Count == 0)
+        if (held.Legacy is null && held.Destination is null)
             return;
-        releases.Select(r => r.Catch((Exception ex) =>
+        var provider = sourcePath[(sourcePath.LastIndexOf('/') + 1)..];
+        MailCopySource? Release(MailCopySource current) => current.LeaseHolder == attempt ? current with { LeaseHolder = null, LeaseUntil = null } : null;
+        var legacyGeneration = held.Legacy;
+        var destinationGeneration = held.Destination;
+        (legacyGeneration is null ? Observable.Return(false) : LegacyExists(owner, legacyPath))
+            .SelectMany(legacyThere =>
             {
-                logger?.LogWarning(ex, "Mail copy: releasing a move lease of {Owner} failed; it lapses after {Lease}", owner, MoveLease);
-                return Observable.Return<MailCopySource?>(null);
-            }))
-            .Concat()
+                var legacy = legacyGeneration is not null && legacyThere
+                    ? CommitAt(owner, legacyPath, legacyGeneration, Release).Select(_ => System.Reactive.Unit.Default)
+                    : Observable.Return(System.Reactive.Unit.Default);
+                var destination = destinationGeneration is null
+                    ? Observable.Return(System.Reactive.Unit.Default)
+                    : legacyGeneration is not null && !legacyThere
+                        // Switched off while this attempt held the destination: clean it, if still this attempt's.
+                        ? Cancelled(owner, provider, destinationGeneration, attempt, owns: true, held).Select(_ => System.Reactive.Unit.Default)
+                        : CommitAt(owner, sourcePath, destinationGeneration, Release).Select(_ => System.Reactive.Unit.Default);
+                return legacy.Concat(destination);
+            })
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "Mail copy: releasing the move leases of {Owner} failed; they lapse after {Lease}", owner, MoveLease);
+                return Observable.Return(System.Reactive.Unit.Default);
+            })
             .Subscribe(_ => { }, _ => { });
     }
 

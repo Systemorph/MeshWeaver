@@ -248,8 +248,13 @@ public sealed partial class MailCopyEngine(
     // partition FIRST (MeshMailCopyStore.MoveLegacy), and a move that fails FAILS the sync: no provider work runs
     // over a copy that is half moved (the cursor would advance, the sweep would judge generations mid-move). The
     // next sync repeats the move — every step of it is an overwrite or a no-op when repeated.
+    // 🚨 A sync that MOVED copies stops there: the sweep would judge the just-moved copies against a source read from
+    // the index, which may not show the moved source yet — and an absent source makes every copy a leftover. The next
+    // sync (the keeper's, or the next inbox read's) runs the sweep once the index has caught up.
     private IObservable<MailCopySource?> SyncCore(string owner)
-        => copies.MoveLegacy(owner, Provider).SelectMany(_ => SyncSource(owner));
+        => copies.MoveLegacy(owner, Provider).SelectMany(moved => moved > 0
+            ? Observable.Return<MailCopySource?>(null)
+            : SyncSource(owner));
 
     private IObservable<MailCopySource?> SyncSource(string owner)
         => copies.Source(owner, Provider).Take(1).Timeout(ReadBudget).SelectMany(source => source is null

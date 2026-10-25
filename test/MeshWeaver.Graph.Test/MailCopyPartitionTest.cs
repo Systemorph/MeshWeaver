@@ -629,6 +629,46 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         await Absent(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
     }
 
+    /// <summary>
+    /// A switch-off by a replica on the PREVIOUS image (which deletes the legacy source directly) lands while the move is
+    /// copying files, and the copy then fails. The attempt ends outside its fence check — and still reconciles: the
+    /// legacy source is gone, so the destination it holds is cleaned, never released for the next sync to resume.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ASwitchOffDuringAFailedFileCopy_LeavesNoCopyToResume()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var files = new RecordingAttachments
+        {
+            OnCopy = () => Observable.Defer(() =>
+            {
+                using var _ = AsSystem();
+                return mesh.DeleteNode(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"));
+            }).SelectMany(_ => Observable.Throw<int>(new InvalidOperationException("the file share went away"))),
+        };
+        var store = new MeshMailCopyStore(() => Mesh, attachments: files);
+        using (AsSystem())
+        {
+            await mesh.CreateNode(new MeshNode("outlook", MailCopyNodeTypes.LegacyNamespaceFor(owner))
+            { NodeType = MailCopyNodeTypes.SourceNodeType, State = MeshNodeState.Active, Content = new MailCopySource { Provider = "outlook", Generation = "g1", Backfilled = true } }).Timeout(Bound).Await(ct);
+            await mesh.CreateNode(new MeshNode(MailCopyNodeTypes.IdFor("outlook", "g1", "m1"), MailCopyNodeTypes.LegacySourcePath(owner, "outlook"))
+            {
+                NodeType = MailCopyNodeTypes.MessageNodeType, State = MeshNodeState.Active,
+                Content = new MailMessageCopy { Provider = "outlook", Generation = "g1", MessageId = "m1", HasAttachments = true },
+            }).Timeout(Bound).Await(ct);
+        }
+
+        Task<int> move;
+        using (Mesh.ServiceProvider.GetRequiredService<AccessService>().SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            move = store.MoveLegacy(owner, "outlook").Timeout(Bound).Await(ct);
+        (await Record.ExceptionAsync(() => move)).Should().NotBeNull();
+
+        await Absent(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct);
+        await Absent(MailCopyNodeTypes.CopyPath(owner, "outlook", "g1", "m1"), ct);
+    }
+
     private sealed class OneAccountFeed : IMailCopyFeed
     {
         public string Provider => "outlook";
@@ -642,6 +682,7 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         public bool FailCopy { get; init; }
         public bool HangCopy { get; init; }
+        public Func<IObservable<int>>? OnCopy { get; init; }
         private ImmutableList<string> calls = [];
         public IReadOnlyList<string> Calls => calls;
 
@@ -652,7 +693,9 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
             => Observable.Return(Unit.Default);
 
         public IObservable<int> CopyLegacy(string owner, string legacyCopyPath, string copyPath)
-            => HangCopy
+            => OnCopy is { } onCopy
+                ? onCopy()
+                : HangCopy
                 ? Observable.Never<int>()
                 : FailCopy
                 ? Observable.Throw<int>(new InvalidOperationException("the file share is not reachable"))
