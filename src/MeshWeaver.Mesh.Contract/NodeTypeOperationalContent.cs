@@ -56,16 +56,16 @@ public static class NodeTypeOperationalContent
     /// ever named in git — the estate's NO PINS rule), an import keeps the LIVE value (a later authored
     /// change to the record can neither roll the hosts back nor blank them), and a create starts without it.
     /// </summary>
-    public static readonly IReadOnlySet<string> DeploymentMemberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        "buildHostSets",
-    };
+    public static readonly IReadOnlySet<string> DeploymentMemberNames =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "buildHostSets");
 
     /// <summary>Whether <paramref name="node"/>'s type carries mesh-owned members at all.</summary>
     public static bool HasOperationalMembers(MeshNode? node) => PreservedFor(node) is not null;
 
+    // Case-INSENSITIVE, as node-type paths are everywhere they are resolved (NodeTypeResolution,
+    // FindStaticNode): a record spelled `hosting/deployment` must not slip past the ownership rule.
     private static bool IsDeploymentNode(MeshNode? node) =>
-        string.Equals(node?.NodeType, DeploymentNodeType, StringComparison.Ordinal);
+        string.Equals(node?.NodeType, DeploymentNodeType, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The members an import keeps LIVE for this node's type; null for a type with none.</summary>
     private static IReadOnlySet<string>? PreservedFor(MeshNode? node) =>

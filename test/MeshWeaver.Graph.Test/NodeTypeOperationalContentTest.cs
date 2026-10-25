@@ -518,6 +518,28 @@ public class NodeTypeOperationalContentTest
         Assert.DoesNotContain("3.1.10100", forgedJson);
     }
 
+    [Theory]
+    [InlineData("Hosting/Deployment")]
+    [InlineData("hosting/deployment")]
+    [InlineData("HOSTING/DEPLOYMENT")]
+    public void TheOwnershipRule_HoldsForEverySpellingOfTheDeploymentType(string nodeType)
+    {
+        MeshNode Node(string json) => new("control", "Deployments") { NodeType = nodeType, Name = "control", Content = Parse(json) };
+        Assert.True(NodeTypeOperationalContent.HasOperationalMembers(Node(Authored)));
+        Assert.DoesNotContain("buildHostSets", JsonSerializer.Serialize(NodeTypeOperationalContent.StripOperational(Node(WithSets), CamelCase).Content, CamelCase));
+        var kept = NodeTypeOperationalContent.PreserveLiveOperational(Node(WithSets.Replace("3.1.10500", "3.1.10100")), Node(WithSets), CamelCase);
+        var json = JsonSerializer.Serialize(kept.Content, CamelCase);
+        Assert.Contains("3.1.10500", json);
+        Assert.DoesNotContain("3.1.10100", json);
+    }
+
+    [Fact]
+    public void TheDeploymentMemberSet_CannotBeChangedByACaller()
+    {
+        Assert.IsAssignableFrom<System.Collections.Immutable.IImmutableSet<string>>(NodeTypeOperationalContent.DeploymentMemberNames);
+        Assert.False(NodeTypeOperationalContent.DeploymentMemberNames is HashSet<string>);
+    }
+
     [Fact]
     public void ADeploymentCreate_StartsWithoutSets()
     {
