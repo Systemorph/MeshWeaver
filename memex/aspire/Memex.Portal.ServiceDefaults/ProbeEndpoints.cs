@@ -50,7 +50,7 @@ namespace Memex.Portal.ServiceDefaults;
 /// Service must say so in exactly those words.</para>
 ///
 /// <para><b>Where the paths are consumed.</b> The chart
-/// (<c>deploy/helm/templates/memex-portal/deployment.yaml</c>) names them in its three probes; the
+/// (MeshWeaver.Deploy <c>deploy/helm/templates/memex-portal/deployment.yaml</c>) names them in its three probes; the
 /// setup-only host answers all of them while an instance awaits configuration
 /// (<c>SetupOnlyHost.ProbePaths</c>). <c>ProbeSemanticsGuard</c> holds the chart and this file to
 /// each other, and <c>ProbeSeparationTest</c> drives both post-startup paths over real HTTP with a

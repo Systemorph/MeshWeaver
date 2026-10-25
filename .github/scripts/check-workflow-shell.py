@@ -64,8 +64,9 @@ from pathlib import Path
 WORKFLOW_GLOBS = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 SHELL_GLOBS = [".github/scripts/*.sh"]
 
-# shellcheck severity. Matches the level memex-local.yml runs at (and the operator scripts' gate, which
-# moved to MeshWeaver.Plugins), so one repo does not carry two different bars for the same tool.
+# shellcheck severity. Matches the level memex-local's Linux gate runs at (MeshWeaver.Deploy
+# homebrew.yml) and the operator scripts' gate (MeshWeaver.Plugins), so the fleet does not carry two
+# different bars for the same tool.
 SHELLCHECK_SEVERITY = "warning"
 
 # A `${{ … }}` expression is not shell. Substituting a LITERAL for it makes shellcheck
