@@ -1,0 +1,26 @@
+{{- /*
+The build hosts' shared cache claim (git mirrors, NuGet, the content-addressed plugins layer and
+compile outputs) — rendered ONLY with `buildHosts.cache.create: true`, so an estate whose claim was
+made by something else renders byte-identically. `helm.sh/resource-policy: keep`, as for the
+portal's claims: an uninstall or a flipped `create` leaves the cache in place.
+*/ -}}
+{{- $b := include "memex.buildHosts" . | fromYaml }}
+{{- if and $b.enabled $b.cache.create }}
+---
+apiVersion: "v1"
+kind: "PersistentVolumeClaim"
+metadata:
+  name: {{ $b.cacheClaim | quote }}
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "build-host"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    helm.sh/resource-policy: "keep"
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: {{ $b.cache.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ $b.cache.size | quote }}
+{{- end }}

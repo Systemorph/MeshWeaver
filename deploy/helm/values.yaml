@@ -1118,6 +1118,12 @@ buildHosts:
   # The shared RWX cache (git mirrors, NuGet, the content-addressed plugins layer and compile
   # outputs). An EXISTING claim — the chart never creates or deletes it.
   cacheClaimName: "build-cache"
+  # Create that claim here (opt-in; absent = the claim is made by something else). Both keys are
+  # REQUIRED with create: true — a ReadWriteMany class (every replica shares it) and a size.
+  cache:
+    create: false
+    storageClass: ""
+    size: ""
   # The images, by REPOSITORY; each channel names the DIGEST it runs (written by core's CD).
   testerRepository: ""            # e.g. cr.example.com/mw-plugin-test
   portalRepository: ""            # e.g. cr.example.com/memex-portal-ai
@@ -1164,6 +1170,8 @@ buildHosts:
     seccompLocalhostProfile: ""   # with Localhost: the profile file on the node (e.g. profiles/bwrap.json)
     appArmorProfile: ""           # RuntimeDefault | Unconfined | Localhost — on a kernel with
     appArmorLocalhostProfile: ""  #   apparmor_restrict_unprivileged_userns=1, a Localhost profile granting userns
+    appArmorLoader: false         # true: the chart LOADS its own profile (mw-build-host, grants userns only)
+                                  #   on the hosts' pools and the pods run under it (Localhost/mw-build-host)
   # Egress: the cluster DNS resolver, the build API's pods on their port, and 80/443 to anything
   # OUTSIDE the excluded ranges (GitHub, the registries, NuGet, Entra). Ingress: none. The runner's
   # start-up boundary self-check refuses to run where this policy does not hold.
