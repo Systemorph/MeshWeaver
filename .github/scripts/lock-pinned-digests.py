@@ -4507,8 +4507,10 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
     acl_rules_checked = 0
     # Registries whose chart lives in another repository and was NOT re-derived on this run.
     charts_elsewhere: list[str] = []
-    swept_files = swept_skipped = 0
     declaring_nothing_deletes: list[str] = []
+    # The `chartRepository` whose chart this run re-derived from `chart_root` — its executable
+    # files are swept for a deleter too (below).
+    external_chart_swept = ""
     out_of_estate: list[tuple[str, str]] = []
     unverified_by_host: dict[str, list[str]] = {}
     for host, entry in sorted(registries.items()):
@@ -4722,6 +4724,8 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
                             + ". A record pointing at a moved chart checks nothing.")
             continue
         charts_checked += 1
+        if chart_repo:
+            external_chart_swept = chart_repo
 
         # (a) no Job or CronJob — a blob GC would be one, and it is the deletion that never returns.
         for rendered in sorted(chart_dir.rglob("*.yaml")) + sorted(chart_dir.rglob("*.yml")):
@@ -4790,8 +4794,28 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
     # (c) Nothing anywhere executes a deletion against a registry. ONE sweep, after the loop: it
     # reads the whole repository, so running it per host would re-read every file and — worse —
     # leave the printed denominator describing whichever host happened to be last.
+    #
+    # 🚨 AND THE CHART'S HOME TOO. When a record names a `chartRepository` and this run re-derived
+    # that chart from `chart_root`, a `registry garbage-collect` in THAT repository's scripts or
+    # workflows invalidates `nothing-deletes` exactly as one here would. Sweeping core alone would
+    # re-derive the templates there and stay blind to everything executable beside them (#7127
+    # review). Each root's denominator is printed on its own line.
+    swept_files = swept_skipped = 0
+    sweep_coverage: list[str] = []
     if declaring_nothing_deletes:
-        hits, swept_files, swept_skipped = sweep_for_deleters(root)
+        sweep_roots: list[tuple[str, str]] = [(root, "")]
+        if external_chart_swept and chart_root is not None \
+                and Path(chart_root).resolve() != Path(root).resolve():
+            sweep_roots.append((chart_root, f"{external_chart_swept}:"))
+        hits = []
+        for sweep_root, prefix in sweep_roots:
+            root_hits, root_files, root_skipped = sweep_for_deleters(sweep_root)
+            hits.extend((prefix + hit_path, number, description, line)
+                        for hit_path, number, description, line in root_hits)
+            swept_files += root_files
+            swept_skipped += root_skipped
+            sweep_coverage.append(f"{prefix.rstrip(':') or 'this repository'} "
+                                  f"({root_files} swept, {root_skipped} skipped)")
         for hit_path, number, description, line in hits:
             problems.append(
                 f"{hit_path}:{number} executes {description} — `{line}` — while "
@@ -4809,6 +4833,8 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
           f"{swept_files} executable file(s) swept for a deleter, {swept_skipped} skipped "
           "(this script, which carries every pattern as a literal, and the ACR record, whose job "
           "is to name deleters).")
+    if sweep_coverage:
+        print(f"  deleter sweep per checkout: {'; '.join(sweep_coverage)}")
     # 🚨 PRINTED WHATEVER THE VERDICT, and NOT only when the list is empty. A green run over an
     # enumeration with an open row must not read as a fully measured one — that is the same
     # not-checked-spelled-as-clean confusion one level down (#4315 review).
@@ -6369,6 +6395,34 @@ ingress:
         check(code == 1 and "renders a CronJob" in output,
               f"ARM 33h: a CronJob beside the registry in the chart's NEW home passed — the move "
               f"would have taken the arm that matters most out of the gate: {output}")
+        (Path(charts) / _CHART / "gc.yaml").unlink()
+        # The chart's home is SWEPT as well as re-derived: a deleter in its scripts or workflows
+        # invalidates `nothing-deletes` exactly as one in core would (#7127 review). Both shapes,
+        # each with the clean run beside it as the control.
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = check_registry_retention(root, charts)
+        output = stdout.getvalue()
+        check(code == 0 and "deleter sweep per checkout:" in output
+              and "Systemorph/Example.Charts (" in output,
+              f"ARM 33h: with the CronJob gone, the chart's home did not pass, or the run did not "
+              f"name the chart's home in its sweep coverage: {output}")
+        for planted, body in (
+                (Path(charts) / "deploy" / "aks" / "scripts" / "gc.sh",
+                 "#!/bin/sh\nregistry garbage-collect /etc/docker/registry/config.yml\n"),
+                (Path(charts) / ".github" / "workflows" / "gc.yml",
+                 "jobs:\n  gc:\n    steps:\n      - run: registry garbage-collect --delete-untagged\n")):
+            planted.parent.mkdir(parents=True, exist_ok=True)
+            planted.write_text(body, encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = check_registry_retention(root, charts)
+            output = stdout.getvalue()
+            check(code == 1 and "Systemorph/Example.Charts:" in output
+                  and "a blob garbage collection" in output,
+                  f"ARM 33h: a `garbage-collect` in the chart's home ({planted.name}) passed — "
+                  f"the sweep read core alone while the record says nothing deletes: {output}")
+            planted.unlink()
     code, output = _verdict(_fleet(retention={"chartRepository": "not a repo"}))
     check(code == 1 and "is not an `owner/name`" in output,
           f"ARM 33h: a `chartRepository` that names no repository passed: {output}")
