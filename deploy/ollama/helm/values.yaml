@@ -1,0 +1,87 @@
+# Values for ollama (deploy/ollama/Dockerfile). ClusterIP only, never an Ingress, and no egress at all.
+
+# 🚨 DISABLED BY DEFAULT: the chart renders nothing until an estate's values file sets this. Turning the
+# model service on for an instance is a deployment-record change the owner approves
+# (Doc/Architecture/LocalModelService → "Enabling it on an instance"), never a default.
+enabled: false
+
+replicaCount: 1
+
+image:
+  # Built and pushed by CI (.github/workflows/ollama-image.yml):
+  #   meshweaver.azurecr.io/ollama:0.33.2-qwen3.6-bge-m3-<short sha>   immutable — what an estate overlay names
+  #   meshweaver.azurecr.io/ollama:0.33.2-qwen3.6-bge-m3               moving — a laptop `docker pull` only
+  repository: ""        # required: <registry>/ollama
+  tag: ""               # required: the immutable <line>-<short sha> tag (the chart refuses any other shape)
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# The NetworkPolicy admits TCP 11434 only from these namespaces (matched by the kubernetes.io/metadata.name
+# label every namespace carries), and denies ALL egress: the models are baked, so the service calls nothing.
+# Empty allowedNamespaces ⇒ nothing is admitted.
+networkPolicy:
+  enabled: true
+  allowedNamespaces: []
+
+# The model names the portal configures (Ocr__OllamaVision__Model, Embedding__Model, OpenAICompatible__Models__N).
+# They must match the aliases the image was BUILT with (Dockerfile VISION_ALIAS / EMBED_ALIAS); the
+# readiness gate preloads exactly these, so a mismatch leaves the pod NOT READY rather than half-serving.
+models:
+  vision: qwen3.6
+  embedding: bge-m3
+  embeddingDimensions: 1024
+
+# Ollama's own knobs (Dockerfile ENV defaults; set here per instance).
+ollama:
+  # Default context per request. qwen3.6's own maximum is 262,144 tokens, whose KV cache alone exceeds a
+  # CPU node; 8192 holds a page image (~1–2k tokens) plus a long answer. A request may still ask for more.
+  contextLength: 8192
+  # Generations per model at a time. On CPU a second parallel generation halves each one's speed and
+  # doubles the KV cache, so 1 keeps latency predictable; the rest queue (maxQueue) inside their deadlines.
+  numParallel: 1
+  maxQueue: 64
+
+service:
+  type: ClusterIP
+  port: 11434
+
+# 🚨 SIZED FOR THE BAKED MODELS ON A CPU NODE. qwen3.6 Q4_K_M is 21.7 GB of weights + a 0.9 GB vision
+# projector, bge-m3 1.2 GB, plus the KV cache at contextLength and the compute buffers: ~26 GiB resident.
+# The memory request is what the scheduler must find on ONE node — read the pool's free allocatable
+# before raising it (the doc's "Capacity" section has the 2026-10-25 reading).
+# CPU: generation is memory-bandwidth-bound and Ollama runs one thread per core it sees; the limit caps
+# what one image read can take from the node's other tenants. Measured figures: the doc's "Latency".
+resources:
+  requests:
+    cpu: "4"
+    memory: 28Gi
+  limits:
+    cpu: "12"
+    memory: 32Gi
+
+# The 23 GB model load from the image layer dominates start-up: the startup probe waits for the server,
+# readiness waits for the PRELOAD (entrypoint.sh writes /tmp/ready only when every model is resident).
+startupProbe:
+  failureThreshold: 30
+  periodSeconds: 10
+readinessProbe:
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+livenessProbe:
+  periodSeconds: 30
+  # /api/version is answered by the server loop; a CPU-saturated node can still be slow to answer it.
+  timeoutSeconds: 10
+  failureThreshold: 5
+
+# The in-cluster proof (`helm test <release>`): smoke.sh --vision against the Service, i.e. the real vision
+# model on the real node pool — the one place its ~26 GiB working set exists. See templates/tests/.
+test:
+  # Per chat call (image read, translation, summary). The first CPU image read is the slow one.
+  chatTimeoutSeconds: 900
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
