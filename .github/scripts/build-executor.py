@@ -123,7 +123,11 @@ def api_url_of(i: Inputs) -> str:
 
 
 def declared_stages(path: str) -> tuple[list[str], str]:
-    """The stage names the repository declares, or ([], why not)."""
+    """The stage names the repository declares, or ([], why not). 🚨 A declaration is host-runnable
+    only when it CLAIMS CI equivalence — `"ciEquivalent": true` (review of MeshWeaver.Plugins#4180): a
+    reviewed statement that its stages check everything the Actions legs they replace check (this
+    run's module bundles as references, Code nodes, the warning ratchets, the affected selection, the
+    Tests-area evidence handed back). Without the claim the stages may be PROBED, never routed."""
     try:
         with open(path) as fh:
             doc = json.load(fh)
@@ -134,7 +138,12 @@ def declared_stages(path: str) -> tuple[list[str], str]:
     stages = doc.get("stages") if isinstance(doc, dict) else None
     names = [s.get("name") for s in stages if isinstance(s, dict)] if isinstance(stages, list) else []
     names = [n for n in names if isinstance(n, str) and n]
-    return (names, "") if names else ([], f"{path} declares no stage")
+    if not names:
+        return [], f"{path} declares no stage"
+    if doc.get("ciEquivalent") is not True:
+        return [], (f"{path} does not claim CI equivalence (\"ciEquivalent\": true) — its stages can be probed on a "
+                    f"host but do not yet check everything the Actions legs check, so CI is not routed there")
+    return names, ""
 
 
 def is_trunk(i: Inputs) -> bool:
@@ -314,6 +323,9 @@ def self_test() -> int:
     tmp = tempfile.mkdtemp(prefix="build-executor-")
     stages = os.path.join(tmp, "build-stages.json")
     with open(stages, "w") as fh:
+        json.dump({"ciEquivalent": True, "stages": [{"name": "compile-check"}, {"name": "gate"}]}, fh)
+    not_equivalent = os.path.join(tmp, "probe-only.json")
+    with open(not_equivalent, "w") as fh:
         json.dump({"stages": [{"name": "compile-check"}, {"name": "gate"}]}, fh)
     base = Inputs(queue_url="https://control.example.com/api/hooks/Hosting/PlatformBuilds", secret="s3cret",
                   repo="Systemorph/MeshWeaver.Plugins", sha="a" * 40, event="pull_request", ref_name="feat/x", pr=7,
@@ -367,6 +379,7 @@ def self_test() -> int:
     # 3. every failure answers actions, said
     cases = [
         ("no stages declared", with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post, "declares no stages", False),
+        ("stages that do not claim CI equivalence", with_(stages_file=not_equivalent), host_q, ok_post, "does not claim CI equivalence", False),
         ("no build API", with_(queue_url="", build_api=""), host_q, ok_post, "no build API", False),
         ("plain-http API refused", with_(build_api="http://control.example.com/api/builds", queue_url=""), host_q, ok_post, "no build API", False),
         ("credentials in the URL refused", with_(build_api="https://user@control.example.com/api/builds"), host_q, ok_post, "no build API", False),
