@@ -785,7 +785,9 @@ deliberate, for one cycle, so the platform image keeps carrying `Octokit.dll`:
 - **MeshWeaver.Plugins compiles against Octokit transitively** until it is ported to
   `GitHubApiException` (MeshWeaver.Plugins#4206).
 
-**Remove the reference and the `PackageVersion` line in one core PR, and only when BOTH hold:**
+One transitional internal overload rides with the reference: `OctokitGitHubRepoClient.IsMissingOrEmptyRepo(Octokit.ApiException)` serves Plugins' `EmptyRepoToleranceTest` (an `InternalsVisibleTo` caller) until #4206 ports it.
+
+**Remove the reference, the overload and the `PackageVersion` line in one core PR, and only when BOTH hold:**
 
 1. MeshWeaver.Plugins#4206 has merged, so nothing in Plugins names an Octokit type, and
 2. the Observability bundle has been rebuilt from that code, against a platform set built after

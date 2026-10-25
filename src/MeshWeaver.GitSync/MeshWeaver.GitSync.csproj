@@ -13,7 +13,9 @@
          (MeshWeaver.Plugins' Observability names Octokit.ApiException, and its bundle does not
          carry Octokit itself) keep loading — the module link gate reports such a missing assembly
          as unchecked rather than holding a roll; (b) MeshWeaver.Plugins keeps compiling until
-         MeshWeaver.Plugins#4206 ports it. Remove (with the Octokit PackageVersion) per
+         MeshWeaver.Plugins#4206 ports it (one transitional internal overload,
+         OctokitGitHubRepoClient.IsMissingOrEmptyRepo(Octokit.ApiException), serves a Plugins test
+         until then). Remove both (with the Octokit PackageVersion) per
          Doc/Architecture/GitHubSync → "Removing the transitional Octokit reference". -->
     <PackageReference Include="Octokit" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />

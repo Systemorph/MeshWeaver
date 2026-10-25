@@ -800,6 +800,16 @@ public sealed class OctokitGitHubRepoClient(
         => ex.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Conflict;
 
     /// <summary>
+    /// TRANSITIONAL — the same verdict over Octokit's exception, for MeshWeaver.Plugins'
+    /// <c>EmptyRepoToleranceTest</c> (an <c>InternalsVisibleTo</c> caller) until
+    /// MeshWeaver.Plugins#4206 ports it. Nothing in core calls it. It goes with the transitional
+    /// Octokit package reference (Doc/Architecture/GitHubSync → "Removing the transitional Octokit
+    /// reference").
+    /// </summary>
+    internal static bool IsMissingOrEmptyRepo(Octokit.ApiException ex)
+        => ex.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Conflict;
+
+    /// <summary>
     /// Resolves the head the mirror builds on when the target branch is missing. Two cases:
     /// <list type="bullet">
     ///   <item>A brand-new EMPTY repo (zero commits) rejects the Git Data API (409 "Git Repository
