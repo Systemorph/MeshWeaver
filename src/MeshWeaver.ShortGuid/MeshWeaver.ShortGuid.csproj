@@ -2,7 +2,4 @@
   <PropertyGroup>
     <ProjectGuid>{f400a952-01dd-450e-bc1e-bc855f5b9341}</ProjectGuid>
   </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="CSharpVitamins.ShortGuid" />
-  </ItemGroup>
 </Project>
