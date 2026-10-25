@@ -487,9 +487,10 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             if (!leftover)
                 return Observable.Return<string?>(null);
             var rotated = MailCopyNodeTypes.NewGeneration();
+            // 🚨 Taken only when its lease is free, this attempt's or lapsed — whatever its generation: a live lease is a sync
+            // (or another retirement) writing into it right now, and rotating under it would race those writes.
             return CommitAt(owner, sourcePath, existing.Generation, current => current.LeaseHolder is null || current.LeaseHolder == attempt
-                        || current.LeaseHolder.StartsWith("retire:", StringComparison.Ordinal) && (current.LeaseUntil is not { } lapse || lapse <= DateTimeOffset.UtcNow)
-                        || current.Generation == legacyGeneration
+                        || current.LeaseUntil is not { } lapse || lapse <= DateTimeOffset.UtcNow
                     ? current with
                     {
                         Generation = rotated, Projection = MailCopySource.CurrentProjection, Cursor = null, Backfilled = false,
@@ -497,7 +498,11 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                         LeaseHolder = attempt, LeaseUntil = DateTimeOffset.UtcNow + RetireLease,
                     }
                     : null)
-                .Select(taken => taken is null ? null : (string?)rotated);
+                // A leftover that cannot be taken now FAILS the retirement — before anything of the legacy copy is deleted.
+                .SelectMany(taken => taken is null
+                    ? Observable.Throw<string?>(new InvalidOperationException(
+                        $"The mail copy '{sourcePath}' is in use (a live lease); the next sync repeats the retirement."))
+                    : Observable.Return<string?>(rotated));
         });
 
     // The fresh copy that replaces a retired one: a new generation with the legacy copy's window and account — so the
@@ -520,15 +525,18 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     private IObservable<int> RetirePasses(string owner, string provider, int pass, string generation, string attempt)
         => LegacyExists(owner, MailCopyNodeTypes.LegacySourcePath(owner, provider))
             .SelectMany(exists => !exists
-                ? Observable.Return(true)
+                // Gone: no fence to confirm — the passes END here, listing and deleting nothing more.
+                ? Observable.Return<bool?>(null)
                 : CommitAt(owner, MailCopyNodeTypes.LegacySourcePath(owner, provider), generation, current => current.LeaseHolder == attempt
                         ? current with { LeaseUntil = DateTimeOffset.UtcNow + RetireLease }
                         : null)
-                    .Select(still => still is not null)
+                    .Select(still => (bool?)(still is not null))
                     .Catch((Exception ex) => IsGone(ex, MailCopyNodeTypes.LegacySourcePath(owner, provider))
-                        ? Observable.Return(true)
-                        : Observable.Throw<bool>(ex)))
-            .SelectMany(held => !held
+                        ? Observable.Return<bool?>(null)
+                        : Observable.Throw<bool?>(ex)))
+            .SelectMany(held => held is null
+                ? Observable.Return(pass)
+                : held == false
                 ? Observable.Throw<int>(new InvalidOperationException(
                     $"The legacy mail copy '{MailCopyNodeTypes.LegacySourcePath(owner, provider)}' was replaced or taken over while it was retired; the next sync repeats the retirement."))
                 : RetirePass(owner, provider, pass, generation, attempt));

@@ -555,6 +555,33 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
+    /// An interrupted move's destination (the legacy generation) that a sync is writing into right now — a LIVE lease — is
+    /// not adopted under it: the retirement fails before anything of the legacy copy is deleted, and the next sync repeats it.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnInterruptedMovesDestinationUnderALiveSync_IsNotAdopted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh, attachments: new RecordingAttachments());
+        await SeedDestination(owner, new MailCopySource
+        {
+            Provider = "outlook", Generation = "g1", Cursor = "https://graph.example/delta?x=5",
+            LeaseHolder = "a-running-sync", LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(10),
+        }, [], ct);
+        await SeedLegacy(owner, new MailCopySource { Provider = "outlook", Generation = "g1", Backfilled = true },
+            [new MailMessageCopy { Provider = "outlook", Generation = "g1", MessageId = "m1" }], ct);
+
+        (await Record.ExceptionAsync(() => AsOwner(owner, () => store.RetireLegacy(owner, "outlook"), ct)))
+            .Should().BeOfType<InvalidOperationException>();
+
+        await Present(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
+        var destination = await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), _ => true, ct);
+        destination.Generation.Should().Be("g1", "not rotated under the running sync");
+        destination.LeaseHolder.Should().Be("a-running-sync");
+    }
+
+    /// <summary>
     /// A retry after an attempt that created the fresh source and then failed ADOPTS that source (its retirement lease
     /// lapsed) — rotated and held by the retry, so the retry's own rollback or release governs it.
     /// </summary>
