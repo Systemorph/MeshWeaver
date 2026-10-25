@@ -13,6 +13,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -89,85 +90,21 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
 
     /// <summary>
     /// 🚨 The durable read of <c>Admin/Build</c> fails, exactly as it does when the hub transport is
-    /// the thing that is broken. Registered by <see cref="ConfigureMesh"/> over the REAL adapter, so
-    /// every other read and every write in this mesh behaves normally — including the writes these
-    /// tests use to stage the build root.
+    /// the thing that is broken: the READ leg of that one path (<c>Read</c>, and a <c>ReadMany</c>
+    /// naming it) throws the incident's own budget timeout. Armed by <see cref="ConfigureMesh"/> on a
+    /// <see cref="FaultInjectingStorageAdapter"/> over the REAL adapter chain, so every other read and
+    /// every write in this mesh behaves normally — including the writes these tests use to stage the
+    /// build root. The fault is decided on SUBSCRIBE, not on composition — the door reads the witness
+    /// lazily, and a count taken at composition would count a read that never happened.
     /// </summary>
-    private sealed class TheDurableReadFailsLikeTheTransportDid(IStorageAdapter inner) : IStorageAdapter
-    {
-        /// <summary>Set once the injected fault has actually been served — the positive signal that
-        /// the decorator is live rather than shadowed by a later registration.</summary>
-        private int served;
+    private static Exception TheTransportsTimeout(string path) => new TimeoutException(
+        "No response received in hub cache/UE4Wtq7CgkiAqGLfYRiJPQ within 00:01:00 for "
+        + "request ReadNodeRequest (id=ASCknHcTgkSMVRR-dy6F3Q) → target Admin. The "
+        + "request may have been undeliverable or the target hub was not found.");
 
-        /// <summary>Whether the injected fault was actually served at least once.</summary>
-        public bool Served => Volatile.Read(ref served) > 0;
-
-        public IObservable<DataChangeNotification> Changes => inner.Changes;
-
-        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        {
-            if (!string.Equals(path, BuildNodeType.RootPath, StringComparison.OrdinalIgnoreCase))
-                return inner.Read(path, options);
-
-            // Deferred so the counter moves on SUBSCRIBE, not on composition — the door reads the
-            // witness lazily and a test that counted at composition time would count a read that
-            // never happened.
-            return Observable.Defer(() =>
-            {
-                Interlocked.Increment(ref served);
-                return Observable.Throw<MeshNode?>(new TimeoutException(
-                    "No response received in hub cache/UE4Wtq7CgkiAqGLfYRiJPQ within 00:01:00 for "
-                    + "request ReadNodeRequest (id=ASCknHcTgkSMVRR-dy6F3Q) → target Admin. The "
-                    + "request may have been undeliverable or the target hub was not found."));
-            });
-        }
-
-        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-            => inner.Write(node, options);
-
-        public IObservable<string> Delete(string path) => inner.Delete(path);
-
-        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
-            ListChildPaths(string? parentPath) => inner.ListChildPaths(parentPath);
-
-        public IObservable<bool> Exists(string path) => inner.Exists(path);
-
-        public IObservable<bool> ExistsInWritableStorage(string path)
-            => inner.ExistsInWritableStorage(path);
-
-        public IObservable<string?> FindDeleteBlockingProvider(string path)
-            => inner.FindDeleteBlockingProvider(path);
-
-        public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-            => inner.ListDescendantPaths(rootPath);
-
-        public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
-            string fullPath, JsonSerializerOptions options)
-            => inner.FindBestPrefixMatch(fullPath, options);
-
-        public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
-            string fullPath, JsonSerializerOptions options)
-            => inner.ResolvePath(fullPath, options);
-
-        public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-            => inner.ListPartitionSubPaths(nodePath);
-
-        public IObservable<object> GetPartitionObjects(
-            string nodePath, string? subPath, JsonSerializerOptions options)
-            => inner.GetPartitionObjects(nodePath, subPath, options);
-
-        public IObservable<Unit> SavePartitionObjects(
-            string nodePath, string? subPath, IReadOnlyCollection<object> objects,
-            JsonSerializerOptions options)
-            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
-
-        public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-            => inner.DeletePartitionObjects(nodePath, subPath);
-
-        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(
-            string nodePath, string? subPath = null)
-            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
-    }
+    /// <summary>The injected fault, armed as the adapter is constructed; its arrival count is the
+    /// positive signal that the fault was actually served.</summary>
+    private FaultSwitch? durableReadFault;
 
     /// <summary>
     /// The base mesh, with the durable read of the build root wrapped in the injected fault.
@@ -178,24 +115,16 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
     /// </summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .ConfigureServices(services =>
-            {
-                var existing = services.Last(d => d.ServiceType == typeof(IStorageAdapter));
-                services.Remove(existing);
-                services.AddSingleton<IStorageAdapter>(sp =>
-                    new TheDurableReadFailsLikeTheTransportDid(Materialize(existing, sp)));
-                return services;
-            });
+            .AddFaultInjectingStorageOverTheChain(store => durableReadFault =
+                store.FailOperations(BuildNodeType.RootPath, StorageLegs.Read, TheTransportsTimeout));
 
-    /// <summary>Builds the adapter the removed descriptor described, whichever form it took.</summary>
-    private static IStorageAdapter Materialize(ServiceDescriptor descriptor, IServiceProvider sp)
-        => (IStorageAdapter)(descriptor.ImplementationInstance
-            ?? descriptor.ImplementationFactory?.Invoke(sp)
-            ?? ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType!));
+    /// <summary>The mesh's store, resolved back out as the injector — a cast that fails loudly if a
+    /// later registration shadowed it.</summary>
+    private FaultInjectingStorageAdapter Witness =>
+        (FaultInjectingStorageAdapter)Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
-    private TheDurableReadFailsLikeTheTransportDid Witness =>
-        (TheDurableReadFailsLikeTheTransportDid)Mesh.ServiceProvider
-            .GetRequiredService<IStorageAdapter>();
+    /// <summary>Whether the injected fault was actually served at least once.</summary>
+    private bool Served => Witness is not null && durableReadFault is { ArrivalCount: > 0 };
 
     private IAssemblyStore Store => Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
 
@@ -311,7 +240,7 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
                 .Add(BakedType, RecordedAgainstThisFramework()),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Witness.Served.Should().BeTrue(
+        Served.Should().BeTrue(
             "the fault must actually have been served — a decorator shadowed by a later "
             + "registration would make every case here pass having staged nothing");
         outcomes.Should().NotBeEmpty(
@@ -407,7 +336,7 @@ public class UndeterminedWitnessIsNotNoGoTest(ITestOutputHelper output) : Monoli
 
         var reading = await Mesh.ReadBuildGoReading(MyFingerprint).Await(TestContext.Current.CancellationToken);
 
-        Witness.Served.Should().BeTrue("the injected fault must actually have been served");
+        Served.Should().BeTrue("the injected fault must actually have been served");
         reading.Witness.Should().Be(BuildGoWitness.Undetermined,
             "a read that timed out established NOTHING — reporting it as NoGo is the defect");
         reading.Go.Should().BeNull("an undetermined reading carries no GO");

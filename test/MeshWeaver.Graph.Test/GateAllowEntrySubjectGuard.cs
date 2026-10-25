@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -35,8 +36,8 @@ namespace MeshWeaver.Graph.Test;
 /// <para><b>Why a repo-local guard rather than making <c>unverifiable</c> fail.</b> The tester is
 /// shared: satellite repos stage a SUBSET of their tree (one package, the changed packages), so
 /// "listed but absent" is legitimately unknowable there and failing it would break them. This repo
-/// stages its whole content tree unconditionally — <c>stage-samples-gate.sh</c> copies all eight
-/// packages, <c>stage-doc-gate.sh</c> copies the whole Doc tree — so here "absent" means RETIRED,
+/// stages its whole content tree unconditionally — <c>stage-samples-gate.sh</c> copies every
+/// package it names, <c>stage-doc-gate.sh</c> copies the whole Doc tree — so here "absent" means RETIRED,
 /// and it can be decided statically, in milliseconds, off the files themselves.</para>
 ///
 /// <para><b>Scope, stated honestly.</b> This decides whether an entry's SUBJECT exists and is still
@@ -78,7 +79,7 @@ public class GateAllowEntrySubjectGuard
     [Fact]
     public void EveryAllowEntryNamesASubjectThisRepoStillShips()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = new List<string>();
 
         foreach (var lane in Lanes(root))
@@ -141,14 +142,15 @@ public class GateAllowEntrySubjectGuard
     /// <summary>
     /// The guard is only as good as its resolver: if that silently answered "found" (or "not a
     /// NodeType") for everything, the check above would be worthless in one direction or noise in
-    /// the other. Pins both answers, and pins the retired-FutuRe shape specifically — those six
-    /// files are still in the tree as Markdown, so they are a permanent, self-maintaining witness
-    /// that "the file exists" is NOT what this guard accepts.
+    /// the other. Pins both answers: a live NodeType resolves AS one, and an INSTANCE of that type —
+    /// a node file that exists but is not a NodeType — is the witness that "the file exists" is NOT
+    /// what this guard accepts. (The six retired FutuRe regional copies played that part until the
+    /// product demos left core for MeshWeaver.Plugins' test/samples tree.)
     /// </summary>
     [Fact]
     public void TheResolverIsNotVacuous()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var lanes = Lanes(root).ToList();
         Assert.Equal(2, lanes.Count);
 
@@ -156,44 +158,40 @@ public class GateAllowEntrySubjectGuard
         // The floor is a NON-VACUITY check on the parse, not an inventory: it catches
         // StagedPackagesPattern reading its own input as empty or near-empty. It therefore tracks
         // the staged list and drops when a tree legitimately leaves — Cornerstone moved to
-        // MeshWeaver.Plugins with MeshWeaver.Maps, taking the list from 8 to 7. Lowering it in step
-        // with a deliberate removal is maintenance; lowering it to silence a parse that broke would
-        // be the opposite, which is what the message below is for.
-        Assert.True(samples.StagedPackages.Count >= 7,
+        // MeshWeaver.Plugins with MeshWeaver.Maps, taking the list from 8 to 7, and the four product
+        // demos (ACME, FutuRe, Northwind, PensionFund) followed it into MeshWeaver.Plugins'
+        // test/samples, taking it to 3. Lowering it in step with a deliberate removal is
+        // maintenance; lowering it to silence a parse that broke would be the opposite, which is
+        // what the message below is for.
+        Assert.True(samples.StagedPackages.Count >= 3,
             "expected stage-samples-gate.sh to name every staged package; parsed "
             + $"{samples.StagedPackages.Count}. If that script's `for name in …; do` line changed "
             + "shape, teach StagedPackagesPattern rather than letting the parse yield nothing — a "
             + "guard that reads its own input as empty is a guard that passes on no evidence.");
-        Assert.Contains("FutuRe", samples.StagedPackages);
-        Assert.Contains("Northwind", samples.StagedPackages);
+        Assert.Contains("MathDemo", samples.StagedPackages);
+        Assert.Contains("Systemorph", samples.StagedPackages);
         Assert.DoesNotContain("Doc", samples.StagedPackages);
         // Witnesses that the parse reflects the CURRENT script rather than a remembered one: Doc was
-        // never staged, and Cornerstone was until it moved out. A parse that answered from a stale
-        // copy would still contain it.
+        // never staged, and Cornerstone and the four product demos were until they moved out. A
+        // parse that answered from a stale copy would still contain them.
         Assert.DoesNotContain("Cornerstone", samples.StagedPackages);
+        Assert.DoesNotContain("FutuRe", samples.StagedPackages);
+        Assert.DoesNotContain("Northwind", samples.StagedPackages);
 
         var tree = Path.Combine(root, samples.TreeRoot);
 
         // A live NodeType resolves, and resolves AS a NodeType …
-        var live = ResolveNodeFile(tree, "FutuRe/LineOfBusiness");
+        var live = ResolveNodeFile(tree, "MathDemo/Matrix");
         Assert.NotNull(live);
         Assert.Equal(nameof(NodeTypeDefinition), NodeContentDiscriminator(live!));
 
-        // … the six retired regional copies still have files, and must NOT read as NodeTypes …
-        foreach (var retired in new[]
-                 {
-                     "FutuRe/AmericasIns/LineOfBusiness", "FutuRe/AmericasIns/TransactionMapping",
-                     "FutuRe/AsiaRe/LineOfBusiness", "FutuRe/AsiaRe/TransactionMapping",
-                     "FutuRe/EuropeRe/LineOfBusiness", "FutuRe/EuropeRe/TransactionMapping",
-                 })
-        {
-            var file = ResolveNodeFile(tree, retired);
-            Assert.True(file is not null, $"{retired} should still exist as a node file");
-            Assert.NotEqual(nameof(NodeTypeDefinition), NodeContentDiscriminator(file!));
-        }
+        // … an instance of it has a node file, and must NOT read as a NodeType …
+        var instance = ResolveNodeFile(tree, "MathDemo/Matrix/Example");
+        Assert.True(instance is not null, "MathDemo/Matrix/Example should exist as a node file");
+        Assert.NotEqual(nameof(NodeTypeDefinition), NodeContentDiscriminator(instance!));
 
         // … and a scope naming nothing resolves to nothing.
-        Assert.Null(ResolveNodeFile(tree, "FutuRe/NoSuchNode"));
+        Assert.Null(ResolveNodeFile(tree, "MathDemo/NoSuchNode"));
 
         // The Doc lane's prefix is real: `Doc/X` addresses `X` inside the documentation tree.
         var doc = lanes.Single(l => l.AllowFile.EndsWith("doc-gate.allow", StringComparison.Ordinal));
@@ -326,13 +324,4 @@ public class GateAllowEntrySubjectGuard
     private static string SourceScanRelative(string root, string path) =>
         Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

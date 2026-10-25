@@ -865,7 +865,7 @@ internal class MeshNodeCompilationService(
                     // 🚨 Defer per LEG — this lambda runs inside CombineLatest's SUBSCRIPTION, and
                     // the probe's subscription is SCHEDULED (DelaySubscription → a ThreadPool tick).
                     // When the mesh is disposed between scheduling and firing, mesh.Query →
-                    // CaptureContext → GetService throws SYNCHRONOUSLY on the disposed Autofac
+                    // CaptureContext → GetService throws SYNCHRONOUSLY on the disposed DI container
                     // scope — and Rx routes a synchronous throw during a Producer's subscribe to
                     // the SUBSCRIBE CALLER, not to OnError, so neither this leg's .Catch nor the
                     // probe's outer .Catch ever sees it. The caller is the scheduler → unhandled on
@@ -1539,6 +1539,7 @@ internal class MeshNodeCompilationService(
         if (recorded.Count == 0)
             return Observable.Return(LoadExistingAssembly(localPath, nodeTypePath));
         return ArmPackageProbing(localPath, recorded)
+            // atomic-blocking-leaf: one assembly load and the reflection read of its configurations
             .SelectMany(_ => _fileSystemPool.InvokeBlocking(_ => LoadExistingAssembly(localPath, nodeTypePath)));
     }
 
@@ -1687,8 +1688,10 @@ internal class MeshNodeCompilationService(
                     // on the subscriber's thread, so the composition is its own blocking leaf on the
                     // file-system lane — taken only AFTER the resolution emits, so no slot is held
                     // while waiting for it.
-                    .SelectMany(resolved => _fileSystemPool.InvokeBlocking(_ => CompileReferences
-                        .WithPackageAssemblies(References, resolved.AssemblyPaths)
+                    // One reference per package assembly, each a file read: the token is checked
+                    // before every path, so a drain ends the composition between files.
+                    .SelectMany(resolved => _fileSystemPool.InvokeBlocking(ct => CompileReferences
+                        .WithPackageAssemblies(References, CheckingEach(resolved.AssemblyPaths, ct))
                         .ToImmutableArray()))
                 : Observable.Return(References.ToImmutableArray());
 
@@ -2027,15 +2030,31 @@ internal class MeshNodeCompilationService(
     /// <para>ONE function, called by the compile that STAMPS the key and by the re-evaluation lane
     /// that READS it (#1976) — see <see cref="PrepareGeneratedSource"/>.</para>
     /// </summary>
+    /// <remarks>The digest reads one MVID per generator assembly; <paramref name="ct"/> is checked
+    /// before each read, so a drain ends it between files. It never changes WHICH files are read.</remarks>
     private static string GeneratedInputDigestOf(
-        string assemblyName, string source, IReadOnlyList<string> nugetAssemblyPaths)
+        string assemblyName, string source, IReadOnlyList<string> nugetAssemblyPaths, CancellationToken ct)
         => GeneratedInputIdentity.OfGeneratedInput(
             assemblyName,
             source,
             EmitPipeline.OptionsFingerprint,
             GeneratedInputIdentity.CompilerIdentity,
             GeneratedInputIdentity.AssemblyFileIdentities(
-                GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths)));
+                CheckingEach(GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths, ct), ct)));
+
+    /// <summary>
+    /// <paramref name="source"/>, checking <paramref name="ct"/> before each element is handed out —
+    /// how a consumer that does one file read per element (a reference set, an MVID digest) stops
+    /// between files on the pool's cancel without a token parameter of its own.
+    /// </summary>
+    private static IEnumerable<string> CheckingEach(IEnumerable<string> source, CancellationToken ct)
+    {
+        foreach (var item in source)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return item;
+        }
+    }
 
     /// <summary>
     /// 🚨 THE RE-EVALUATION LANE's regeneration entry point (#1976): the stage-1 CONTENT-KEY
@@ -2103,15 +2122,15 @@ internal class MeshNodeCompilationService(
                         ntDef.Configuration, ntDef.ContentCollections))
                     .SelectMany(prepared => prepared.NuGetReferences.Length == 0
                         ? Observable.Return(
-                            GeneratedInputDigestOf(assemblyName, prepared.Source, []))
+                            GeneratedInputDigestOf(assemblyName, prepared.Source, [], CancellationToken.None))
                         : nugetResolver
                             .Resolve(prepared.NuGetReferences)
                             // The digest reads the generator assemblies (their MVIDs); a warm
                             // resolution replays on the subscriber's thread, so the read is a
                             // blocking leaf on the file-system lane, entered only once the
                             // resolution has emitted.
-                            .SelectMany(resolved => _fileSystemPool.InvokeBlocking(_ => GeneratedInputDigestOf(
-                                assemblyName, prepared.Source, resolved.AssemblyPaths))))
+                            .SelectMany(resolved => _fileSystemPool.InvokeBlocking(ct => GeneratedInputDigestOf(
+                                assemblyName, prepared.Source, resolved.AssemblyPaths, ct))))
                     .Take(1),
                 _cacheOptions.RoslynCompileTimeout, "regenerate-content-key", node.Path)
             .Select(digest => (string?)digest)
@@ -2255,7 +2274,7 @@ internal class MeshNodeCompilationService(
 
         // The content key's first stage, taken HERE — see GeneratedInputDigestOf.
         var generatedInputDigest =
-            GeneratedInputDigestOf(assemblyName, source, nugetAssemblyPaths);
+            GeneratedInputDigestOf(assemblyName, source, nugetAssemblyPaths, ct);
         var authored = EmitPipeline.CreateEmitCompilation(
             source,
             assemblyName,

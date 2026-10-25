@@ -28,7 +28,7 @@ public record ContentCollectionReference(params IReadOnlyCollection<string>? Col
     // string[] is REFERENCE equality — so two `new ContentCollectionReference(["content"])` are
     // never Equals and never share a hash. `Workspace._localStreamCache` is keyed on the reference,
     // so every read MISSED the cache, and every miss constructs a SynchronizationStream, hence a
-    // hosted `sync/{id}` sub-hub with its own Autofac scope, TypeRegistry and JsonSerializerOptions
+    // hosted `sync/{id}` sub-hub with its own service scope, TypeRegistry and JsonSerializerOptions
     // (~390 KB), registered for disposal on the HUB-LIFETIME node hub. One permanent hub per read.
     //
     // Measured on memex.systemorph.com 2026-09-16 (pod …-ztqz8, pid 1, uptime 870 min, image

@@ -229,7 +229,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// <see cref="IServiceProvider"/> + <see cref="IMessageHub"/> are built once
     /// for the whole test class and reused for every <c>[Fact]</c>. This avoids
     /// the ~190 MiB native-heap leak per test method that otherwise piles up
-    /// from Autofac's per-container Reflection.Emit-compiled service factories.
+    /// from the per-container compiled service factories of the container this replaced.
     ///
     /// <para><strong>Trade-off:</strong> tests in a class that opts in see
     /// shared mesh state — nodes/threads created in one test are visible in the
@@ -277,7 +277,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // path's `ServiceProvider = null!` (Plugins#1605). The drain waits for contexts this mesh retired,
         // so the holder must not keep the disposed mesh reachable across it. Like the per-test release it
         // is not observable when the provider disposes cleanly (TeardownWaitsForCollectibleUnloadsTest:
-        // Autofac clears what it built); it costs nothing.
+        // The DI container clears what it built); it costs nothing.
         private IServiceProvider? serviceProvider = serviceProvider;
 
         /// <summary>The provider every test of the class shares.</summary>
@@ -341,7 +341,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
         /// <summary>
         /// 🚨 <b>The mesh goes down BEFORE its container, exactly as on the per-test path (Plugins#2362).</b>
-        /// This holder used to dispose the provider with the shared mesh still LIVE. Autofac marks a
+        /// This holder used to dispose the provider with the shared mesh still LIVE. The DI container marks a
         /// scope disposed before it disposes anything in it, so from that first instant every resolve
         /// throws — while every hub in the mesh (the mesh itself, and each hosted hub under it) still
         /// read <c>IsShuttingDown == false</c>, because nothing had told any of them. Their callbacks
@@ -397,7 +397,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Opt-in: when overridden to <c>true</c>, <see cref="DisposeAsync"/> disposes
     /// this test's <see cref="MeshWeaver.Fixture.ServiceSetup.ServiceProvider"/> at the
     /// very END of teardown — after the mesh and every hosted hub have disposed. That
-    /// tears down the Autofac container and every <see cref="IDisposable"/> singleton
+    /// tears down the service container and every <see cref="IDisposable"/> singleton
     /// (the compilation cache, Roslyn metadata/workspaces, the TypeRegistry, the whole
     /// per-<c>[Fact]</c> DI graph) instead of letting it survive for the entire testhost
     /// process. For compile-heavy classes that is the dominant per-test managed retention.
@@ -461,7 +461,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// here — DisposeAsync runs after the test's logging scope has been torn down.
     /// <para>
     /// <c>rssAnon</c> = anonymous resident pages (native heap + JIT code + stacks)
-    /// — Linux only, from <c>/proc/self/status</c>. This is where Autofac's
+    /// — Linux only, from <c>/proc/self/status</c>. This is where the container's
     /// Reflection.Emit factories pin memory that managed-heap GC can't touch and
     /// is the leak metric the user actually cares about.
     /// </para>
@@ -667,7 +667,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                     try { File.AppendAllText(MemoryDeltaLogPath, string.Empty); } catch { }
 
                     // 🚨 The message states what was MEASURED and where to read the cause — it does
-                    // not name one. It used to assert "the cumulative Autofac Reflection.Emit factory
+                    // not name one. It used to assert "the cumulative compiled-factory
                     // leak from non-shared MonolithMeshTestBase classes", and on #4127 its own trace
                     // refuted that: every mesh class on the shard sat flat at the same RSS, and the
                     // growth was two STEPS with no MonolithMeshTestBase class active — plain xUnit
@@ -793,7 +793,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// the post-cycle delta and write a single DELTA line per test instance
     /// to <see cref="MemoryDeltaLogPath"/>. Tracks managed heap, full RSS,
     /// AND unmanaged-as-anonymous (rssAnon on Linux) — the last is where
-    /// the Autofac Reflection.Emit factory pin lives, plus any unmanaged
+    /// a compiled-factory pin would live, plus any unmanaged
     /// allocations from native libraries the test pulls in.
     /// </summary>
     private long _instanceInitManagedBytes;
@@ -1584,7 +1584,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         }
 
         // Shared-mesh classes never dispose the Mesh per-test — that's the entire
-        // point of opting in (avoid rebuilding the Autofac container's compiled
+        // point of opting in (avoid rebuilding the service container's compiled
         // factories for every [Fact]). It is torn down when the COLLECTION ends:
         // TestCollectionScope disposes the SharedMeshProvider it cached, which is the
         // lifetime the old static dictionary never had (it leaked to process exit and
@@ -1708,7 +1708,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // DisposalCompleted only drains the action blocks + message round-trips.
             // Offloaded I/O (IIoPool) runs on the ThreadPool independently and is NOT
             // covered — CANCEL + JOIN it here, BEFORE base.DisposeAsync tears down the
-            // service scope, so no continuation resolves a disposed Autofac scope AND no
+            // service scope, so no continuation resolves a disposed service scope AND no
             // ThreadPool leaf dereferences a collectible node ALC's freed metadata after
             // unload (the teardown use-after-unload SIGSEGV). A live change-feed leaf never
             // completes on its own, so a WAIT-only drain would time out and let the scope
@@ -1832,7 +1832,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             await base.DisposeAsync();
 
             // Opt-in (non-shared path only): release the per-[Fact] ServiceProvider so
-            // its Autofac container + every IDisposable singleton (compilation cache,
+            // its service container + every IDisposable singleton (compilation cache,
             // Roslyn workspaces, TypeRegistry, the whole mesh DI graph) is torn down now
             // instead of surviving for the whole testhost process. The mesh + all hubs
             // have already disposed at this point (base.DisposeAsync above), so the ALC
@@ -1858,7 +1858,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // The fixture must not itself hold the mesh it is waiting to see unloaded. An in-drain gcroot
             // of a FutuRe teardown (#1605) showed this provider on the chain to the content-type
             // registry's claims on collectible types. With the provider disposed cleanly that chain does
-            // not reproduce (TeardownWaitsForCollectibleUnloadsTest: Autofac clears the singletons it
+            // not reproduce (TeardownWaitsForCollectibleUnloadsTest: the DI container clears the singletons it
             // built), so this is a release that costs nothing, not a measured fix.
             ServiceProvider = null!;
             var unloadOutcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(collectibleUnloads);

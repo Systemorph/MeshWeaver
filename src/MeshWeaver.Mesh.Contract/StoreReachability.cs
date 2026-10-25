@@ -134,7 +134,7 @@ public static class StoreReachability
     /// a commit can be shown not to count for one particular write, a reconnect cannot — so a caller
     /// that weighs them must be able to tell which fired.
     /// </summary>
-    private static IObservable<bool> EvidenceBySource(IMeshInvalidationFeed? feed, string? partition)
+    internal static IObservable<bool> EvidenceBySource(IMeshInvalidationFeed? feed, string? partition)
     {
         if (feed is null)
             return Observable.Never<bool>();

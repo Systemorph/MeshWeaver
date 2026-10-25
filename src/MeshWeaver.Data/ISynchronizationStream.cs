@@ -63,7 +63,7 @@ public interface ISynchronizationStream : IDisposable
     /// every call, and <c>WorkspaceStreams.CreateReducedStream</c> registers each one for disposal
     /// on its PARENT. When the parent is a hub-lifetime stream (a data source's primary
     /// <c>EntityStore</c>), a reduce on a hot path therefore mints a <c>sync/{id}</c> sub-hub — its
-    /// own Autofac scope, <c>TypeRegistry</c> and <c>JsonSerializerOptions</c>, about 140 KB — that
+    /// own service scope, <c>TypeRegistry</c> and <c>JsonSerializerOptions</c>, about 140 KB — that
     /// is reclaimed only when the whole hub dies. That is the #1345 defect (an unmemoized
     /// <c>Workspace.GetStream</c>) one layer down, and it is what
     /// <c>MeshDataSource</c>'s own-node factory was paying once per inbound

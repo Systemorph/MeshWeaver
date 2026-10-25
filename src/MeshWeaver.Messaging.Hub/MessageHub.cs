@@ -430,12 +430,10 @@ public sealed class MessageHub : IMessageHub
     /// <c>SynchronizationStream.IsObjectDisposed</c>.
     /// </summary>
     private static bool IsTeardownDisposal(Exception? error)
-    {
-        for (var e = error; e != null; e = e.InnerException)
-            if (e is ObjectDisposedException)
-                return true;
-        return false;
-    }
+        // FaultClassifier with DisposedIsOwnTeardown: the only disposed-object fault that reaches a
+        // sync hub's startup gate is its own teardown (CancelCallbacks), so any one of them, at any
+        // depth and through any aggregate branch, is that teardown.
+        => FaultClassifier.Classify(error, TeardownContext.DisposedIsOwnTeardown).Kind == FaultKind.ScopeTeardown;
 
     /// <summary>
     /// Cancels the currently-executing handler's cancellation token and rolls a fresh one for
@@ -626,8 +624,10 @@ public sealed class MessageHub : IMessageHub
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions(parentHub);
 
-        TypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
-        TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
+        // No explicit WithType for PingRequest / PingResponse here: Register<PingRequest> below registers
+        // the request and its IRequest<PingResponse> response, and the mesh registry already holds both.
+        // Registering them twice built two definitions per type per hub (1,215 PingRequest definitions
+        // for 608 hubs, Doc/Architecture/PortalHeapIsHubs).
         Register<DisposeRequest>(HandleDispose);
         // Disposal is fully SYNCHRONOUS + reactive — the handler returns immediately, kicks off
         // the Quiescing poll / hosted-hub drain as Rx subscriptions (Observable.Interval/Timer,
@@ -782,8 +782,8 @@ public sealed class MessageHub : IMessageHub
                 //
                 // 🚨 IsShuttingDown alone does NOT see every teardown (issue #2444). When the hub's
                 // DI scope is disposed OUT-OF-BAND — the host's root container torn down on a
-                // Host.StartAsync abort or pod shutdown, or an ancestor's Autofac scope disposing
-                // this hub's child scope — Autofac flips the scope's disposed flag BEFORE its
+                // Host.StartAsync abort or pod shutdown, or an ancestor's service scope disposing
+                // this hub's child scope — the DI container flips the scope's disposed flag BEFORE its
                 // disposer reaches the tracked hub instance (Disposable.Dispose sets the flag,
                 // THEN runs Dispose(true)). A BuildupAction resolving in that window observes
                 // ObjectDisposedException while IsShuttingDown is still false: no ancestor HUB
@@ -2559,7 +2559,7 @@ public sealed class MessageHub : IMessageHub
     /// <c>StartActivityControlPlane</c> (→ <c>WatchControlPlane</c> → <c>AcquireStream</c> →
     /// <c>Workspace.GetStream</c>) — and <c>SynchronizationStream</c>'s constructor ALWAYS calls
     /// <c>GetHostedHub(…, HostedHubCreation.Always)</c>. So every data-enabled hub built at least
-    /// one <c>sync/{clientId}</c> sub-hub, and a second Autofac container, inside its own
+    /// one <c>sync/{clientId}</c> sub-hub, and a second service container, inside its own
     /// <c>Build</c>. Measured with a depth counter on a GREEN run of
     /// <c>MeshWeaver.FutuRe.Test</c>: <b>1,350 nested Builds</b>, all depth=2.</para>
     ///

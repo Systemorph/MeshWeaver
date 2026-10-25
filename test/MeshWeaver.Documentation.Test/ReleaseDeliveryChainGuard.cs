@@ -5,6 +5,7 @@ using System.Linq;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -120,7 +121,7 @@ public class ReleaseDeliveryChainGuard
     [Fact]
     public void EveryConfigKeyTheReleaseChainReads_IsRenderedByTheChart()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var configMap = File.ReadAllText(Path.Combine(root, ConfigMap.Replace('/', Path.DirectorySeparatorChar)));
         var values = File.ReadAllText(Path.Combine(root, ValuesAks.Replace('/', Path.DirectorySeparatorChar)));
 
@@ -156,7 +157,7 @@ public class ReleaseDeliveryChainGuard
     [Fact]
     public void TheDocumentedSubscriberSource_IsTheOneThatExists()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         foreach (var file in new[] { Workflow, ContractDoc })
         {

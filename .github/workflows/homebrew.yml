@@ -1,7 +1,7 @@
 name: Homebrew (memex-local)
 
 # memex-local is delivered through Homebrew — the tap Systemorph/homebrew-memex — and until this
-# workflow existed nothing ever INSTALLED the formula: the Linux gate in hosting-operator.yml
+# workflow existed nothing ever INSTALLED the formula: the Linux gate in memex-local.yml
 # parses the CLI, shellchecks it and runs its behaviour tests against stub tools, which is exactly
 # the layer where most of its defects lived, but `brew install` itself, the vendored chart layout,
 # the wrapper's MEMEX_LOCAL_SHARE/MEMEX_CHART_DIR plumbing and macOS's bash 3.2 were all asserted by

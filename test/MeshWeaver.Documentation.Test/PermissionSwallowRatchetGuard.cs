@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -50,7 +51,7 @@ public class PermissionSwallowRatchetGuard
     [Fact]
     public void No_permission_check_is_swallowed_into_a_verdict()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var violations = new List<string>();
         var checkedCalls = 0;
 

@@ -6,7 +6,7 @@ namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
 /// Surfaces every <see cref="PartitionInclusion"/> registered via
-/// <c>IncludePartition</c> / <c>AddAcme</c> / <c>AddSystemorph</c> / etc.
+/// <c>IncludePartition</c> / <c>AddSystemorph</c> / etc.
 /// as a discoverable <c>Partition</c> MeshNode under <c>Admin/Partition/</c>.
 ///
 /// <para>Without this, the chat-completion orchestrator's

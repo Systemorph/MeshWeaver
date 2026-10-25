@@ -53,30 +53,8 @@ public static class InfrastructureFault
     /// <param name="exception">The fault to classify; may be null.</param>
     /// <returns><c>true</c> for a fault a fresh attempt could reasonably not meet again.</returns>
     public static bool IsTransient(Exception? exception)
-    {
-        // Bounded like ExceptionChain: a caller-supplied graph can be cyclic or shared.
-        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
-        return IsTransient(exception, seen);
-    }
-
-    private const int MaxNodes = 256;
-
-    private static bool IsTransient(Exception? exception, HashSet<Exception> seen)
-    {
-        for (var current = exception; current is not null; current = current.InnerException)
-        {
-            if (!seen.Add(current) || seen.Count > MaxNodes)
-                return false;
-            if (current is AggregateException aggregate)
-            {
-                // Every branch, not any: see the type remarks. Flatten first so a nested aggregate
-                // (WhenAll inside WhenAll) contributes its leaves, not itself.
-                var branches = aggregate.Flatten().InnerExceptions;
-                return branches.Count > 0 && branches.All(branch => IsTransient(branch, seen));
-            }
-            if (current is DbException { IsTransient: true } || current is SocketException)
-                return true;
-        }
-        return false;
-    }
+        // A forwarder onto FaultClassifier, which owns the walk (graph, bounded, cycle-safe) and the
+        // every-branch rule for aggregates; this predicate is the typed store/network slice of it.
+        => FaultClassifier.Classify(exception).EveryBranchTypedTransientIn(
+            FaultLayer.Store, FaultLayer.StoreContention, FaultLayer.Network);
 }

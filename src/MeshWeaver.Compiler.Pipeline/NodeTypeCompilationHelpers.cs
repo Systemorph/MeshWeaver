@@ -975,7 +975,7 @@ internal static class NodeTypeCompilationHelpers
                 // This emission can arrive on a TIMER thread — the adoption wait above is
                 // `.Timeout(ReservationWaitBudget)`, so a slow or leaked reservation delivers here
                 // seconds later, by which time the hub may be tearing down. `GetService` then
-                // throws ObjectDisposedException out of a closed Autofac scope, on a NON-TEST
+                // throws ObjectDisposedException out of a closed service scope, on a NON-TEST
                 // thread, inside a single-argument Subscribe — which Rx RETHROWS rather than
                 // routing to onError. It reaches AppDomain.UnhandledException and takes the
                 // process down: xUnit v3 reports an anonymous "Catastrophic failure … exit code

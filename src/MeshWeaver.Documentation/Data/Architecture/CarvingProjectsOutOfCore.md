@@ -73,26 +73,61 @@ could not be built:
 Together those convert `MeshWeaver.GitSync` and `MeshWeaver.ContentCollections.Indexing` from
 "cannot be a module" (their third-party closure had nowhere to live) into "can be".
 
-🚨 **What the lane did NOT change is what pins most of the remaining projects.** They are held by
+🚨 **What the lane did NOT change is what pins most of the remaining projects.** They were held by
 consumers inside core — above all by `memex/Memex.Portal.Shared` — and no build change can release
 those. Only deleting the reference can.
 
-## The keystone: `memex/Memex.Portal.Shared`
+## The keystone: `Memex.Portal.Shared` — moved to plugins
 
 78 files, ~17.3k lines — `Api`, `Authentication`, `Email`, `Pages`, `SelfUpdate`, `Seo`, `Settings`,
-`Social`, `Storage` — and it is still in **core**, while all four hosts that consume it
-(`Memex.Portal.Gui`, `.Distributed`, `.Monolith`, `Memex.LocalMesh`) live in **plugins**.
+`Social`, `Storage` — that sat in **core** while all four hosts that consume it
+(`Memex.Portal.Gui`, `.Distributed`, `.Monolith`, `Memex.LocalMesh`) lived in **plugins**. It is now
+a SOURCE move to `MeshWeaver.Plugins/src/Memex.Portal.Shared`, with its suite at
+`src/Memex.Portal.Shared.Test`; the assembly name is unchanged and it still ships in the portal image.
 
 It alone holds 13 core `ProjectReference`s — but **most of them are not real**. Measured: it builds
 clean without `Observability.Contract`, `Maps`, `ContentCollections.Indexing` and `.Indexing.Graph`.
 The one candidate it genuinely couples to is **`GitSync`**, through four files —
 `MemexConfiguration` plus the GitHub login, connect and webhook endpoints. That is authentication,
 which is precisely why an earlier attempt to move Portal.Shared wholesale was split instead: doing
-it exiles sign-in from the platform repo. **That contradiction is still open and is a maintainer
-call, not an implementation detail.**
+it exiles sign-in from the platform repo.
 
-So the keystone is narrower than it looks: it gates `GitSync`, and it does not gate `Maps` or
+**Decided (core slimming): GitHub sign-in moves WITH Portal.Shared.** `MemexConfiguration` and
+`Social/GitHub*Endpoints` live in plugins now and still call core's `MeshWeaver.GitSync` library
+through a `$(MeshWeaverRoot)` project reference; `GitSync` itself stays in core for now and moves in
+a later step. So sign-in is no longer the platform repo's: the platform keeps the library the
+endpoints call, and plugins owns the portal surface that signs a person in.
+
+So the keystone was narrower than it looked: it gated `GitSync`, and it never gated `Maps` or
 `Indexing`.
+
+### What the move carried with it, and what it left unguarded
+
+- 🚨 **The `InternalsVisibleTo` grants stay in core.** `MeshWeaver.Graph`, `.Hosting`,
+  `.Hosting.AspNetCore`, `.Compiler`, `.Mesh.Operations`, `.PluginCatalog` and `.Testcontainers`
+  name `Memex.Portal.Shared` / `Memex.Portal.Shared.Test`, which are now assemblies of ANOTHER
+  repository. That is the #2689 shape — a refactor of one of those internals can red the plugins
+  trunk with no local signal — and what catches it is the required
+  `Dependent suites (MeshWeaver.Plugins)` verdict, which selects the moved suite by compiled reach.
+- **Two guards moved with their subject.** `IdentityReadsRunAsSystemGuard` (its whole subject was
+  Portal.Shared's onboarding reads) and the `SeoResolver` half of `InlineSvgEmissionBackplateGuard`
+  now run in `Memex.Portal.Shared.Test`. The platform's svg guard keeps its platform files.
+- **Three core ratchets lost inventory, not coverage they could keep.**
+  `ImpersonationScopeSites.allow` (16 sites in 10 files), `AwaitedMeshReadSites.allow` (its last 2)
+  and `LayoutAreaDataBakeSites.allow` (1) dropped their Portal.Shared lines and budgets. The plugins
+  repo runs the layout-area ratchet over `src/` already (core's script, through
+  `node-repo-validate.yml`); it has **no** compiled-code impersonation-latch or awaited-mesh-read
+  ratchet over `src/` (its `check-impersonation.py` scans in-mesh `Source/` only), so those 18 sites
+  are now guarded by nothing until one is ported.
+- **Plugins' stricter `src/` gates applied on arrival.** Every one-shot `.Subscribe` in the settings
+  tabs gained an error arm (`check-subscribe-error-arm.py` is zero-tolerance there; core never
+  scanned `memex/`), and `check-register-before-post.py` learned that a lone `hub` argument is the
+  IMessageHub a static reader is handed, never a delivery.
+- **Many of the suite's tests are about PLATFORM subjects** (PluginCatalog landing, module
+  activation, search refusal, token validation) and use Portal.Shared only as the host that composes
+  them. They moved whole, as the suite did; by the rule in *Splitting a test that spans the
+  boundary* below they belong where their subject lives, and splitting them back into a core suite
+  is the follow-up. Until then the dependent-suites verdict is what runs them on a core change.
 
 The second-order pin behind it is `tools/MeshWeaver.PluginTester` — core-owned, shipped as the gate
 image — which directly references `Indexing.Graph`, `GitSync`, `Maps`, `Mesh.Operations` and
@@ -133,10 +168,10 @@ delivery event, not a refactor, and it is why these do not get done casually or 
 | `Maps` | 116 | **yes** | in-mesh sample content (`Cornerstone/Pricing`), 5 test meshes, PluginTester | module + identity flip |
 | `ContentCollections.Indexing` | 1 851 | **yes** | one `using` in `Mesh.Operations`; in-mesh content | module + identity flip |
 | `ContentCollections.Indexing.Graph` | 2 253 | **yes** | PluginTester; in-mesh content | with the above |
-| `GitSync` | 9 649 | **yes** | `PluginCatalog`, 4 real files in Portal.Shared (**GitHub login = authentication**) | module + identity flip; auth ⇒ `Modules:Required` |
-| `PluginCatalog` | 21 245 | **yes** | Portal.Shared, PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
+| `GitSync` | 9 649 | **yes** | `PluginCatalog` (Portal.Shared's GitHub sign-in now calls it from plugins) | module + identity flip; auth ⇒ `Modules:Required` |
+| `PluginCatalog` | 21 245 | **yes** | PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
 | `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
-| `Mesh.Operations` | 4 726 | **yes** | Portal.Shared, LocalMesh, PluginTester | **stays** |
+| `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
 and NuGet resolution, packaging.
@@ -302,7 +337,7 @@ deleted in core until the receiving half has merged.
 | `deploy/aspire/Memex.Deploy.AppHost` | MeshWeaver.Plugins `src/Memex.Deploy.AppHost` | It builds only against the integration, so it goes where the integration goes. |
 | `deploy/aks/envs/example` | Systemorph/Memex `deployments/aks/example/` | It is the template for the environment folders, and every real one already lives in `deployments/aks/<env>/` there. The secret-template guard became Memex's `scripts/check-example-secret-template.py`, in its required Build (Release). |
 | `deploy/aks/infra` (AKS platform Bicep) | Systemorph/Memex `infra/platform/` | Estate provisioning already lives there (`infra/estate.bicep`, the client-estate Bicep and bootstrap). |
-| `deploy/helm`, `deploy/aks/manifests`, `deploy/aks/scripts`, `deploy/aks/values.aks.yaml` | **not moved yet**, pending an owner decision | See [Chart Ownership and the Runner Pool](../ChartOwnershipAndRunnerPool), "Moving the chart into a private repository". |
+| `deploy/helm`, `deploy/aks/manifests`, `deploy/aks/scripts`, `deploy/aks/values.aks.yaml` | **not moved by this change** — the chart is frozen in core and moves to Systemorph/MeshWeaver.Deploy in its own change | The operator image already takes the chart from MeshWeaver.Deploy (see the hosting-operator section below). For the trade-offs, see [Chart Ownership and the Runner Pool](../ChartOwnershipAndRunnerPool), "Moving the chart into a private repository". |
 
 🚨 **Survivors packed in another repository must be DECLARED to the retirement sweep.**
 `scripts/orphaned-nuget-packages.py` derives "orphaned" as *published minus packed in this tree*.
@@ -316,6 +351,95 @@ policies name a repository **and a workflow file**. The policy for core's `publi
 not cover MeshWeaver.Plugins' `publish-aspire-package.yml`. The package owner has to add the new
 policy, and set `vars.NUGET_TRUSTED_USER` there, before the next Aspire package release. Until then
 that lane's `preflight` is red by name.
+
+## The product demo samples
+
+ACME, FutuRe, Northwind and PensionFund were product demos sitting in the framework's
+`samples/Graph` (with their `content/` and `attachments/` folders). They left as **test content**,
+not as packages: MeshWeaver.Plugins carries them at `test/samples/Graph/{Data,content,attachments}`,
+laid out exactly as here. Core keeps the minimal samples its own tests and docs use — `Systemorph`,
+`MathDemo`, `PythonDemo`, `TestSpace`, the users, `Type`, `Doc` and the infrastructure partitions.
+
+**Why test content and not a package.** Every compiled consumer of these trees was already in the
+plugins repo — the suites that stage `samples/Graph` into their output, and the `dotnet new` template
+generator that seeds ACME — so that is where they went. A package would publish them, because a
+merge to a satellite's `main` lists the package in the registry. Turning FutuRe or PensionFund into a
+MeshWeaver.Reinsurance package is a decision for the owner. It also cannot be the vehicle for the
+compiled suites: MeshWeaver.Plugins does not check out MeshWeaver.Reinsurance, and pointing it at
+that repo would make a platform-side repo depend on a satellite. `test/` is in every package
+enumerator's skip set, so nothing there is published.
+
+**"Plugins already has Northwind" was only half true.** The plugins repo's `Northwind` Store package
+is the compiled analytics application (`MeshWeaver.Northwind.Application`): the dashboard, the data
+cube and the sales areas. Core's tree was a different demo. It had node-per-entity NodeTypes
+(`Northwind/{Customer,Product,Supplier,Employee}`) with 91 customers, 77 products and 29 suppliers as
+nodes, their data-bound views and in-mesh `Test/` areas, the reports catalog, the articles and the
+documentation pages. Of all that, only the `AnalyticsCatalog` overlapped the package. So the tree
+moved whole instead of being deleted as a duplicate.
+
+**How a suite stages both trees.** `src/Directory.Build.props` defines `PluginsDemoSamplesGraph`
+and `CoreDemoSamplesExclude`. A suite stages
+`$(MeshWeaverRoot)/samples/Graph/**;$(PluginsDemoSamplesGraph)/**` under one `Link`, and excludes the
+four trees from the platform's root. Each output file therefore has exactly one source, whether or
+not the pinned platform checkout still carries its old copy. FutuRe.Test's `Compile Include`s of the
+FutuRe sources point at the plugins copy too.
+
+**What the move surfaced.** The plugins repo holds content to three ratchets that core's samples tree
+never met:
+
+- `check-data-plane-messages.py` flagged ACME's Todo status menu. It posted a `DataChangeRequest`
+  with the `Todo` record to its own hub, and that write never reached the node. Driving the card's
+  "Update" action in `TodoStatusChangeTest` leaves the stored status at `Pending` (measured: the
+  wait for `Active` times out at 30 s). The menu now writes through
+  `GetMeshNodeStream().Update(...)`, and the same test sees `Active`.
+- `check-node-page-provenance.py` flagged seven landing pages registered with a bare `WithView`.
+  They now use `WithNodePage`. FutuRe's group analysis lands on the framework's area catalogue, which
+  is recorded as an expected unresolved area.
+- `check-node-path-collisions.py --root .` refused `ACME.json` + `ACME/index.md`. Here
+  `--filesystem-layout` admits that pair because the FileSystem adapter merges it; there it is
+  refused. The root is now `ACME/index.md` alone, with the same name, description, category and icon.
+
+**What CI stops compiling here.** The samples stage of core's content gate used to compile these
+trees and run their in-mesh `Test/` areas. The node-repo gate reads top-level packages only, so in
+the plugins repo the trees are compiled only by the suites that load them. Running core's tester over
+the moved trees with the same `bake-then-gate.sh` gives `[PASS]` for all four packages: 24 of 24
+types compiled, the Northwind tests passed, and there were 0 warnings. A CI lane that does the same
+thing there is still owed.
+
+The `PensionFund idempotence intermittent` entry left `.github/samples-gate.allow` with its subject.
+The defect it named is not fixed. Re-installing PensionFund rewrites `Currency/{CHF,EUR,USD}` without
+`decimalPlaces`, because default-suppression drops a value equal to the C# initializer. That defect is
+now only reachable through the moved tree.
+
+## Moving a tool whose IMAGE carries core bytes — the hosting operator
+
+`deploy/aks/operator` (the `hosting-*` scripts, their behaviour suite and the Dockerfile) moved to
+MeshWeaver.Plugins `deploy/hosting-operator`, beside `Hosting/InstanceAction`, the plan that emits
+the commands. Three things made it different from a source move:
+
+1. **The image is two repositories' bytes.** It bakes core's chart, db chart and drift scripts beside
+   the scripts, because `hosting-deploy` installs the chart it carries. The chart stays in core. The
+   new lane stages core's `deploy/` at the declared platform ref with the scripts overlaid where
+   core's own build had them, so the Dockerfile's `COPY` lines are unchanged. A core chart change
+   reaches `:main` through an hourly rebuild that runs only when the input fingerprint moved.
+2. **The tag is a consumer contract.** `hosting-operator:main` keeps its meaning. The old immutable
+   tag (`<core sha7>`) was read as a core COMMIT by the estate's aks-ops lane, which checks the
+   scripts out of core at that commit. The new tag is `<plugins sha7>-<core sha7>`, and
+   `<plugins sha7>-<core sha7>-<deploy sha7>` once the chart came from MeshWeaver.Deploy. So core's
+   copy may only be deleted after that lane checks the scripts out of the new home. The deleting
+   half waits for the estate repository as well as for the adding half. The trap was the MOVING
+   tag: every record pins `:main`, which the lane had always resolved in core, so supporting the
+   new immutable tags was not enough — `main` itself had to resolve to the new homes (Memex#819).
+3. **The equivalence was measured, not argued.** The two images were built from the same core
+   commit and compared. The `/opt/hosting` tree and `/usr/local/bin` were byte-identical, and the
+   entrypoint, user and env were identical. The new lane asserts the entrypoint, the user and the
+   command set on every run. Moving also exposed drift: core's hand-copied list of planned commands
+   had fallen out of step with the plan. The lane in the plan's repository reads the plan instead.
+
+The guards that covered these files moved with them: the `secrets-write-only-entry` allow entries,
+and the `.gitignore` re-include for `bin/`. Their release-channel writer is now declared across
+repositories (`"repo"` on a binding in `.github/release-channels.json`), which keeps
+`hosting-operator:main` protected. MeshWeaver.Plugins `Hosting/HostingOperator` is the manual.
 
 ## Related
 

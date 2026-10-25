@@ -1,5 +1,7 @@
 using System;
 using System.Reflection;
+using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Messaging.Hub.Test;
@@ -7,7 +9,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// <summary>
 /// 🚨 <b>A closed DI scope is a teardown fact, and every layer must classify it the same way.</b>
 ///
-/// <para>A hub whose Autofac <c>LifetimeScope</c> has been closed cannot serve anything, so a
+/// <para>A hub whose service scope has been closed cannot serve anything, so a
 /// delivery that faults on it must be answered as RETRYABLE — the address reactivates — never as a
 /// result. <see cref="HubDisposingException.IsHubDisposal"/> does not cover it: that is the case
 /// where a hub ANNOUNCED its own disposal, and a scope closed underneath a live delivery announces
@@ -16,17 +18,35 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// <para>Measured 2026-08-30 (flake-repro, 40 iterations on the 4-vCPU runner): the fault behind
 /// <c>SilentReadNackTest.OwnerDisposedWithReadOutstanding</c>'s bulk-only failure is exactly this
 /// shape, reflection-wrapped —
-/// <c>TargetInvocationException → ObjectDisposedException("… LifetimeScope …")</c>. Because it was
+/// <c>TargetInvocationException → ObjectDisposedException</c> naming the closed scope. Because it was
 /// not recognised, the read path fabricated a <c>GetDataResponse{Error}</c>, claimed the once-only
 /// answer slot, and reported "this node does not exist" for a node that exists (#1362/#1470's
 /// shape, reached by a different cause; #2727).</para>
 /// </summary>
 public class DisposedContainerIsATeardownFactTest
 {
-    private static ObjectDisposedException DisposedScope() =>
-        new("LifetimeScope",
-            "Instances cannot be resolved and nested lifetimes cannot be created from this "
-            + "LifetimeScope as it (or one of its parent scopes) has already been disposed.");
+    // A REAL closed scope's exception — never a hand-written copy of its text, which would keep passing
+    // after the container changed what it throws.
+    private static ObjectDisposedException DisposedScope()
+    {
+        var root = new ServiceCollection().AddSingleton("registered").CreateMeshWeaverServiceProvider();
+        var scope = root.CreateScope();
+        scope.Dispose();
+        var thrown = Record.Exception(() => scope.ServiceProvider.GetService(typeof(string)));
+        return thrown.Should().BeOfType<ObjectDisposedException>("a closed scope refuses every resolve").Subject;
+    }
+
+    [Fact]
+    public void AClosedScopesOwnException_IsRecognised_AsExceptionAndAsReasonText()
+    {
+        var disposed = DisposedScope();
+        HubDisposingException.IsDisposedContainer(disposed).Should().BeTrue(
+            "the container's own exception for a closed scope is the teardown fact");
+        HubDisposingException.IsDisposedContainerReason(disposed.Message).Should().BeTrue(
+            "an outcome that carries the failure as TEXT must classify it the same way");
+        HubDisposingException.IsDisposedContainerReason("the node was not found").Should().BeFalse(
+            "an ordinary reason is not a teardown");
+    }
 
     [Fact]
     public void TheReflectionWrappedDisposedScope_IsRecognised()

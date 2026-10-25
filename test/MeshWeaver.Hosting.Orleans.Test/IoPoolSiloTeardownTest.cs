@@ -29,7 +29,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// <para>These tests use a REAL MS DI <c>ServiceProvider</c> and dispose it, because a disposed
 /// DI provider throws the same <see cref="ObjectDisposedException"/> from <c>GetService</c> that
-/// Autofac's <c>LifetimeScope</c> threw in production. Every wait is bounded — the defect class
+/// the service scope threw in production. Every wait is bounded — the defect class
 /// here is shutdown HANGS, so an unbounded wait would fail the way the bug does.</para>
 /// </summary>
 public class IoPoolSiloTeardownTest

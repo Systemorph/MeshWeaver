@@ -117,6 +117,9 @@ import textwrap as _textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ghrest  # noqa: E402 — the shared GitHub REST client beside this file
+
 REGISTRY_DEFAULT = "meshweaver"
 REGISTRY_HOST_RE = r"(?P<host>[a-z0-9]+)\.azurecr\.io"
 
@@ -252,14 +255,7 @@ class RepoScan:
 #    SECONDARY one, which takes GitHub access away from every concurrent session. ───────────────
 
 
-def gh_api(path: str, paginate: bool = False, jq: str | None = None) -> tuple[int, str, str]:
-    cmd = ["gh", "api", "-H", "X-GitHub-Api-Version: 2022-11-28", path]
-    if jq:
-        cmd += ["--jq", jq]
-    if paginate:
-        cmd.insert(2, "--paginate")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    return proc.returncode, proc.stdout, proc.stderr
+gh_api = ghrest.gh_cli
 
 
 def discover_repos() -> list[str]:
@@ -280,8 +276,8 @@ def discover_repos() -> list[str]:
     # `--jq` makes gh apply the filter to each page and print one name per line, so pagination
     # stops being this script's problem. It is also character-for-character what the caller's
     # preflight asserts with, so the two can never disagree about who is in the fleet.
-    rc, out, err = gh_api("/installation/repositories", paginate=True,
-                          jq=".repositories[].full_name")
+    # (ghrest.installation_repo_names — the one copy of that call, shared with the set check.)
+    rc, names, err = ghrest.installation_repo_names()
     if rc != 0:
         die(
             "could not enumerate the App installation's repositories.",
@@ -292,7 +288,6 @@ def discover_repos() -> list[str]:
                 f"gh said: {err.strip()[:400]}",
             ],
         )
-    names = sorted({line.strip() for line in out.splitlines() if line.strip()})
     if not names:
         die(
             "the App installation reaches ZERO repositories.",
@@ -776,11 +771,7 @@ def last_touched(gh_repo: str, path: str) -> tuple[dt.datetime | None, str]:
 # ── Reporting ──────────────────────────────────────────────────────────────────────────────────
 
 
-def die(headline: str, lines: list[str]) -> None:
-    print(f"::error::{headline}")
-    for line in lines:
-        print(f"  {line}")
-    sys.exit(1)
+die = ghrest.die
 
 
 def emit(text: str) -> None:

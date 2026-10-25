@@ -18,7 +18,7 @@ namespace MeshWeaver.GitSync;
 /// installation token) does not count against the REST rate limit at all; what remains on REST is
 /// repo creation, ref lookups and the PR/issue surface — a handful of calls per operation.</para>
 ///
-/// <para>Semantics are byte-identical to the Octokit implementation and pinned by the shared
+/// <para>Semantics are byte-identical to the REST implementation and pinned by the shared
 /// contract tests: mirror-within-subdirectory (files outside the prefix untouched, removed files
 /// deleted), a missing branch on a non-empty repo based on the default-branch head (never an
 /// orphan), an empty repo initialized by the first pushed commit (the Contents-API
@@ -48,7 +48,7 @@ public sealed class GitProtocolRepoClient(
     /// Mirrors the request's files into the repo as a single commit over the git protocol:
     /// shallow-clone, materialize the mirror in the worktree, commit as the requested author,
     /// push. Repo auto-create (a GitHub REST call — the one thing git cannot do) stays on the
-    /// Octokit client.
+    /// REST client.
     /// </summary>
     public IObservable<GitHubPushResult> Push(GitHubPushRequest request)
     {
@@ -399,7 +399,7 @@ public sealed class GitProtocolRepoClient(
         => path.AsSpan().IndexOfAny(PatternMetacharacters) >= 0;
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  Everything else — cheap single REST calls, delegated to Octokit
+    //  Everything else — cheap single REST calls, delegated to the REST client
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <inheritdoc />
@@ -422,7 +422,7 @@ public sealed class GitProtocolRepoClient(
 
     /// <inheritdoc />
     /// <remarks>A single REST lookup that follows GitHub's rename redirect — the git wire protocol
-    /// cannot answer "what is this repository called now", so this one stays on Octokit.</remarks>
+    /// cannot answer "what is this repository called now", so this one stays on REST.</remarks>
     public IObservable<RepoIdentity?> GetCanonicalRepository(string repositoryUrl, string accessToken)
         => octokit.GetCanonicalRepository(repositoryUrl, accessToken);
 
@@ -564,8 +564,11 @@ public sealed class GitProtocolRepoClient(
     /// </summary>
     private IObservable<System.Reactive.Unit> MirrorWorktree(
         string tmp, string prefix, IReadOnlyList<RepoFile> files)
-        => FileSystem.InvokeBlocking<System.Reactive.Unit>(_ =>
+        => FileSystem.InvokeBlocking<System.Reactive.Unit>(ct =>
         {
+            // A walk of the temp clone, one round trip per entry and per file, so the pool's token is
+            // checked between them. The clone is this call's own: stopping part-way leaves only a
+            // directory the caller's cleanup removes, and nothing is committed from it.
             var root = Path.GetFullPath(tmp);
             var target = prefix.Length == 0 ? root : Path.Combine(root, prefix.TrimEnd('/'));
             if (Directory.Exists(target))
@@ -574,6 +577,7 @@ public sealed class GitProtocolRepoClient(
                 {
                     foreach (var entry in Directory.EnumerateFileSystemEntries(root))
                     {
+                        ct.ThrowIfCancellationRequested();
                         if (string.Equals(Path.GetFileName(entry), ".git", StringComparison.Ordinal))
                             continue;
                         if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true);
@@ -587,6 +591,7 @@ public sealed class GitProtocolRepoClient(
             }
             foreach (var file in files)
             {
+                ct.ThrowIfCancellationRequested();
                 var full = Path.GetFullPath(Path.Combine(root, prefix + file.Path));
                 if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                     throw new InvalidOperationException($"Path '{file.Path}' escapes the repository.");
@@ -614,12 +619,14 @@ public sealed class GitProtocolRepoClient(
     /// classifying text vs binary exactly like the blob decode (<see cref="RepoFileCodec"/>).</summary>
     private IObservable<IReadOnlyList<RepoFile>> ReadWorktree(
         string tmp, string prefix, Func<string, bool> pathFilter)
-        => FileSystem.InvokeBlocking(_ =>
+        // The worktree walk is one read per file, so the pool's token is checked before each one.
+        => FileSystem.InvokeBlocking(ct =>
         {
             var root = Path.GetFullPath(tmp);
             var files = new List<RepoFile>();
             foreach (var full in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
+                ct.ThrowIfCancellationRequested();
                 var rel = Path.GetRelativePath(root, full).Replace('\\', '/');
                 if (rel.StartsWith(".git/", StringComparison.Ordinal))
                     continue;
@@ -645,12 +652,14 @@ public sealed class GitProtocolRepoClient(
         => Observable.Defer(() =>
         {
             var tmp = Path.Combine(Path.GetTempPath(), "mw-gitsync-" + Guid.NewGuid().ToString("N"));
+            // atomic-blocking-leaf: one Directory.CreateDirectory of a fresh temp path, no step boundary
             return FileSystem.InvokeBlocking(_ =>
                 {
                     Directory.CreateDirectory(tmp);
                     return tmp;
                 })
                 .SelectMany(work)
+                // atomic-blocking-leaf: one recursive Directory.Delete of this call's own temp clone
                 .Finally(() => FileSystem.InvokeBlocking<System.Reactive.Unit>(_ =>
                     {
                         if (Directory.Exists(tmp))

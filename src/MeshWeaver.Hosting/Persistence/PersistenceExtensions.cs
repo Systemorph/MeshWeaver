@@ -169,7 +169,7 @@ public static class PersistenceExtensions
     /// <see cref="MeshWeaver.Graph.SyncedQueryMeshNodes"/> and other infrastructure paths
     /// (NavigationService, VUserHelper, etc.).
     ///
-    /// <para>Per-node hubs inherit the registration through Autofac child-scope
+    /// <para>Per-node hubs inherit the registration through child-level
     /// resolution, so <c>hub.ServiceProvider.GetRequiredService&lt;IMeshQueryCore&gt;()</c>
     /// works at every hub depth without walking the parent chain.</para>
     ///
@@ -650,7 +650,7 @@ public static class PersistenceExtensions
     /// stack from <c>UseOrleansMeshServer</c>, the host typically calls another
     /// <c>Add…Persistence</c> right after, both of which funnel here) bail on a
     /// sentinel marker. Otherwise the duplicate <c>IStorageAdapter</c> +
-    /// <c>IMeshQueryProvider</c> factory registrations stack and Autofac cycles
+    /// <c>IMeshQueryProvider</c> factory registrations stack and the DI container cycles
     /// through the IEnumerable fan-in.</para>
     /// </summary>
     /// <param name="services">The service collection</param>

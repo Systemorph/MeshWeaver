@@ -7,6 +7,14 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Keeping the Platform Source Pin Current
 
+> 🚨 **Retired.** Node repositories no longer carry a platform pin: they resolve the newest SEALED
+> platform set at run time (MeshWeaver#3842). MeshWeaver.Plugins deleted the last caller of the
+> lane in `b5414edf7`, and core's `node-repo-platform-ref-bump.yml` and the guards that pinned its
+> credential and alerting shape have since been deleted. This page is kept as the incident record —
+> the default-token suppression and the "red in an empty room" failure apply to any scheduled lane,
+> and `ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowOpensAPullRequestWithTheDefaultToken`
+> still holds the first one for every workflow in core.
+
 A satellite repository reaches the platform under **three** identities, and they answer three
 different questions:
 
@@ -255,10 +263,9 @@ every satellite must match; moving it is a release decision, made once for the f
 schedule. See [The Continuous Delivery Contract](../ContinuousDeliveryContract) and
 [Bake Identity Mismatch](../BakeIdentityMismatch).
 
-**The bump PR is still the integration test — for every dependent but MeshWeaver.Plugins.** Core's
-required `Dependent suites (MeshWeaver.Plugins)` check (policy `dependent-suites-affected-gate`)
-runs the Plugins suites a core diff can reach against the candidate before it merges; for every
-other dependent a core PR being green still does not mean it builds, and for a dependent that *pins*
+**The bump PR is still the integration test — for every dependent.** Core runs no dependent's
+suites before it merges (policy `dependents-verify-on-their-side`), so a core PR being green does
+not mean any dependent builds, and for a dependent that *pins*
 core, even the release-event rebake does not close that gap — the event moves what is BAKED, not what
 `src/` compiles against. The pin bump PR is where the dependent's suite meets the
 candidate core commit, which is precisely why it must be a PR that CI actually runs on. See

@@ -10,9 +10,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > 🚨 **THE QUEUE IS OFF on `main`.** Measured 2026-09-27: `enqueuePullRequest` answers *"No merge
 > queue found for branch 'main'"*, and the ruleset `main pr protection` (id 2128472) carries no
 > `merge_queue` rule — `main` merges on its required checks plus auto-merge. The same day the
-> dependent-suites wait left the merge path (policy `core-merge-never-blocked`), and it came back on
-> the PULL REQUEST, bounded to what the diff can reach (policy `dependent-suites-affected-gate`,
-> [Cross-Repo Pair Gate](../CrossRepoPairGate)) — a core merge waits on exactly that one verdict. What follows is the queue's design and history, kept for the day it is re-enabled; the
+> dependent-suites wait left the merge path (policy `core-merge-never-blocked`), it later came back on
+> the pull request (policy `dependent-suites-affected-gate`) and was then removed altogether (policy
+> `dependents-verify-on-their-side`) — a core merge waits on no other repository. What follows is the queue's design and history, kept for the day it is re-enabled; the
 > steward acts only on `dequeued` events, so it is dormant while no queue exists.
 
 **A merge queue builds the combination that is about to land, before it lands.** With
@@ -312,8 +312,8 @@ base-is-the-default-branch condition. What still holds the property in core is
 `ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge`: no workflow in the directory arms
 auto-merge at all, so a stacked pull request can no longer be armed by a workflow here. The other
 lanes were checked structurally, not by luck: `arm-credential.yml` mints and inspects a token and arms
-nothing; the steward acts only on a `dequeued` event; `release.yml` and
-`node-repo-platform-ref-bump.yml` OPEN pull requests (`--base main`) without arming them.
+nothing; the steward acts only on a `dequeued` event; `release.yml` OPENS
+pull requests (`--base main`) without arming them (the retired `node-repo-platform-ref-bump.yml` did the same).
 
 ## Working with the queue
 

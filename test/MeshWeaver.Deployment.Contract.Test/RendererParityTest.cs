@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using MeshWeaver.Deployment;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Deployment.Contract.Test;
 
@@ -26,7 +27,7 @@ public class RendererParityTest
     /// <summary>The "Fields no method sets" table: record fields the operator writes, exempt from fluent reachability.</summary>
     private static HashSet<string> ReadStateFields()
     {
-        var root = RepoRoot()!;
+        var root = RepoPaths.TryFindRoot()!;
         var page = Path.Combine(root, "src", "MeshWeaver.Documentation", "Data", "Architecture", "ConfiguringAnInstanceFromAspire.md");
         var fields = new HashSet<string>(StringComparer.Ordinal);
         var inTable = false;
@@ -42,17 +43,9 @@ public class RendererParityTest
         return fields;
     }
 
-    private static string? RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName;
-    }
-
     private static List<TableRow> ReadTable()
     {
-        var root = RepoRoot();
+        var root = RepoPaths.TryFindRoot();
         Assert.SkipWhen(root is null, "repository tree not reachable from the test bin — the parity table lives in the doc tree");
         var page = Path.Combine(root!, "src", "MeshWeaver.Documentation", "Data", "Architecture", "ConfiguringAnInstanceFromAspire.md");
         Assert.True(File.Exists(page), $"the parity page is not at {page}");

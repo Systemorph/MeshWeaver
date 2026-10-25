@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -90,7 +91,7 @@ public class CdImageVersionsShareOneSourceGuard
     /// </summary>
     private static IReadOnlyList<string> VersionSources()
     {
-        var body = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+        var body = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
 
         // `dotnet msbuild <project> \` … `-getProperty:Version` — the project is the first argument,
         // and the flag may sit on a continuation line, so the two are matched together.
@@ -206,7 +207,7 @@ public class CdImageVersionsShareOneSourceGuard
         // satellite's daily run would bake. A sha here would be one this run resolved for itself,
         // which is precisely the shape the rule above forbids for a set member; for a non-member it
         // would merely be a stale measurement wearing a pin's name.
-        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var lines = File.ReadAllLines(Path.Combine(RepoPaths.Root, Workflow));
         var (start, end) = SatelliteCompatRange(lines);
         var contentRef = lines[start..end]
             .Where(l => !Regex.IsMatch(l, @"^\s*#"))
@@ -229,7 +230,7 @@ public class CdImageVersionsShareOneSourceGuard
     /// </summary>
     private static IReadOnlyList<(int Line, string Repo, string Ref, bool InSatelliteCompat)> PluginRefs()
     {
-        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var lines = File.ReadAllLines(Path.Combine(RepoPaths.Root, Workflow));
         var found = new List<(int, string, string, bool)>();
         var (compatStart, compatEnd) = SatelliteCompatRange(lines);
 
@@ -265,14 +266,5 @@ public class CdImageVersionsShareOneSourceGuard
             l.Length > 3 && l.StartsWith("  ", StringComparison.Ordinal) && l[2] != ' ' && l[^1] == ':'
             && l[2..^1].All(c => char.IsLetterOrDigit(c) || c == '-' || c == '_'));
         return (start, end < 0 ? lines.Length : end);
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException("Could not locate the repository root (no MeshWeaver.slnx above the test binary).");
     }
 }

@@ -28,7 +28,9 @@ namespace MeshWeaver.Hosting;
 /// <para><b>What makes it typed rather than a blanket retry.</b> Only <see cref="IsTransient"/>
 /// faults re-open: a database connect/IO fault (<see cref="StorageFaults.IsTransientConnectFault"/>,
 /// <see cref="InfrastructureFault.IsTransient"/>) or the fan-in's own availability terminal
-/// (<see cref="QueryProviderStalledException"/>, "no answer in time", never a verdict). A query or
+/// (<see cref="QueryProviderStalledException"/>, "no answer in time", never a verdict), or a store
+/// fault an OWNER met and classified before answering across the hub boundary
+/// (<see cref="MeshNodeError.Transient"/> on a <see cref="MeshNodeStreamException"/>, #7066). A query or
 /// schema error, a deserialization defect, a disposed mesh — anything else — terminates the watch
 /// on the first occurrence exactly as before, because re-reading it would only repeat the same
 /// defect on a timer.</para>
@@ -68,43 +70,14 @@ public static class StandingWatchRecovery
     /// </summary>
     /// <param name="fault">The fault that terminated the watch; may be null.</param>
     public static bool IsTransient(Exception? fault)
-    {
-        // Bounded and reference-deduplicated, like InfrastructureFault's walk: a caller-supplied
-        // fault graph can be cyclic or shared.
-        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
-        return IsTransientWalk(fault, seen);
-    }
-
-    private const int MaxNodes = 256;
-
-    private static bool IsTransientWalk(Exception? fault, HashSet<Exception> seen)
-    {
-        if (fault is null)
-            return false;
-        for (var e = fault; e is not null; e = e.InnerException)
-        {
-            if (!seen.Add(e) || seen.Count > MaxNodes)
-                return false;
-            // 🚨 An aggregate is transient only when EVERY branch is — the rule InfrastructureFault
-            // states for the same reason: `Aggregate(transient DB fault, JsonException)` carries a
-            // real defect, and re-opening on it would trade a latch for a loop. The shared
-            // classifiers below walk only `InnerException` (branch 0 of an aggregate), so the
-            // aggregate is decided HERE, before they are asked.
-            if (e is AggregateException aggregate)
-            {
-                var branches = aggregate.Flatten().InnerExceptions;
-                return branches.Count > 0 && branches.All(branch => IsTransientWalk(branch, seen));
-            }
-            // The fan-in's stall terminal: the availability fault a standing read meets on a pod in
-            // a GC or thread-pool stall, where every query misses its Initial bound together.
-            if (e is QueryProviderStalledException)
-                return true;
-        }
-        // A chain with no aggregate in it: a database read that died mid-stream surfaces as the
-        // driver's DbException wrapping the transport fault (IOException → SocketException 104),
-        // which both shared predicates match by walking exactly this chain.
-        return StorageFaults.IsTransientConnectFault(fault) || InfrastructureFault.IsTransient(fault);
-    }
+        // A forwarder onto the ONE classifier: every branch a TYPED transient fault of the store
+        // (unreachable, contention, a stalled provider, or a store fault the OWNER classified before
+        // answering across the hub boundary — MeshNodeError.Transient, #7066) or the network. An
+        // aggregate carrying a real defect alongside is not transient — re-opening on it would trade
+        // a latch for a loop.
+        => FaultClassifier.Classify(fault).EveryBranchTypedTransientIn(
+            FaultLayer.Store, FaultLayer.StoreContention, FaultLayer.StoreStall, FaultLayer.OwnerStore,
+            FaultLayer.Network);
 
     /// <summary>
     /// Opens <paramref name="open"/>, and re-opens it after a <see cref="IsTransient"/> fault, at

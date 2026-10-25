@@ -202,9 +202,10 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _logger?.LogDebug("MeshNodeTypeSource: Created for hubPath={HubPath} (routingSuppliedStream={Supplied})",
             hubPath, ownNodeStream != null);
 
-        TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
-            TypeDefinition.CollectionName,
-            new KeyFunction(o => ((MeshNode)o).Id, typeof(string)));
+        // No WithKeyFunction here: MeshNode's key is its [Key] Id, which the key-function conventions
+        // already give the mesh's definition. Re-stating it as an explicit key made an override of
+        // MeshNode on every node hub — the one entry a node hub's registry held after the registry
+        // became a parent-chained overlay (Doc/Architecture/TypeRegistryLayers).
 
         // Race guard: when a node is deleted via HandleDeleteNodeRequest's
         // direct storage.Delete (recursive subtree fan-out, not via the

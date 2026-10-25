@@ -2795,7 +2795,7 @@ public class MessageService : IMessageService
                         // 🚨 The NACK's text must carry this OWNER's refusal banner, not the raw
                         // exception. A HubDisposingException already reads as one (its message IS
                         // ShutdownNack.RetryForTheAuthoritativeAnswer); a disposed-container
-                        // ObjectDisposedException does not — its text names an Autofac scope — and
+                        // ObjectDisposedException does not — its text names a service scope — and
                         // ShutdownNack.IsAnsweredByOwner is how a caller tells "the owner refused
                         // me, ask the fresh activation" from "the routing layer lost me".
                         var reason = HubDisposingException.IsHubDisposal(e)
@@ -3123,7 +3123,7 @@ public class MessageService : IMessageService
             // while this hub is in DisposeHostedHubs BY CONSTRUCTION: that phase is what disposes
             // the child whose ShutDown runs it. It was refused right here, the owner was never
             // told, and the portal accumulated one RunLevel=Started hub per subscription — each
-            // holding its own Autofac lifetime scope and TypeRegistry — until the process ended.
+            // holding its own service scope and TypeRegistry — until the process ended.
             // (SubscriberTeardownReleasesTheOwnerSyncHubTest pins both directions.)
             //
             // A nested subtree can be disposing while the receiver is in another, LIVE subtree.

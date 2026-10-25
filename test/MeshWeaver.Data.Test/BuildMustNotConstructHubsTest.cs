@@ -22,7 +22,7 @@ namespace MeshWeaver.Data.Test;
 /// <c>StartActivityControlPlane</c> the same way (→ <c>WatchControlPlane</c> →
 /// <c>AcquireStream</c> → <c>Workspace.GetStream</c>). <c>SynchronizationStream</c>'s constructor
 /// ALWAYS calls <c>Host.GetHostedHub(sync/…, HostedHubCreation.Always)</c>, so every data-enabled
-/// hub built at least one sub-hub — and a second Autofac container — inside its own <c>Build</c>.
+/// hub built at least one sub-hub — and a second service container — inside its own <c>Build</c>.
 /// Measured with a depth counter on a GREEN <c>MeshWeaver.FutuRe.Test</c> run: <b>1,350 nested
 /// Builds</b>, all depth=2, top outers <c>FutuRe/Analysis</c> ×156, <c>FutuRe/EuropeRe/Analysis</c>
 /// ×150, <c>FutuRe</c> ×132, <c>mesh</c> ×92.</para>

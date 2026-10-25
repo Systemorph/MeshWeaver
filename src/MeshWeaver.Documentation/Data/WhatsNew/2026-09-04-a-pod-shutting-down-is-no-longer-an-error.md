@@ -27,7 +27,7 @@ because one of the two really is a defect.
 
 The one that kept happening was the other one. A node hub activates, the pod it lives on is
 stopping, and the container the hub would be built from is torn down *underneath* the construction:
-Autofac answers every resolution with `ObjectDisposedException`. Nothing failed. Nothing was
+the DI container answers every resolution with `ObjectDisposedException`. Nothing failed. Nothing was
 written. The next request re-activates the node on a live host — which is precisely what the design
 intends, and the message even said so, in the half nobody could confirm.
 

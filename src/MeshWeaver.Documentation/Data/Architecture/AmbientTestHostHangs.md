@@ -152,6 +152,102 @@ They are a **clock, not a cause** — and they arrive in bursts at a handful of 
 is the shape of successive test classes disposing their meshes, i.e. progress. On one captured run the
 last straggler landed **7 m 53 s before** the kill.
 
+## A host that deadlocks on its own stdout
+
+This one is solved. Its signature is worth knowing because it reads as a teardown stall.
+
+**What it looked like.** Core PR #7128, shard 0 (run 40102602726, attempt 1): the
+`MeshWeaver.Hosting.Orleans.Test` host's console output **stopped in the middle of one test's
+captured-output block** at 14:39:26, and it printed nothing more. There was no `[PASS]` line for
+tests that the trace log shows finishing later, and no `[Long Running Test]` line, although
+`-longRunning 60` prints one every minute while any test runs. Meanwhile
+`collected-logs/_meshweaver-test-trace.log` went on recording until 14:42:58. The host was killed
+at the 8-minute cap (`exit=137 TIMEOUT`).
+
+The discriminator is **the trace log still advancing while the job log has stopped, and the
+`[Long Running Test]` reporter silent too.** A test that is merely slow keeps the reporter printing.
+Only a blocked console stops it.
+
+**What it was.** A local loop of the host with a 90-second output-silence detector caught it on the
+9th run. `dotnet-dump analyze <core> -c syncblk` named two `SyncTextWriter`s, each owned by one
+thread and wanted by the other:
+
+- xUnit's reporter thread had captured `Console.Out` at startup. It held that original writer and,
+  inside its flush, entered `ConsolePal.WriteFromConsoleStream`. On Unix that method takes
+  `lock (Console.Out)`.
+- By then a kernel cell had installed `CapturingTextWriter` with `Console.SetOut`, so
+  `Console.Out` was the hook's synchronized wrapper. The Microsoft console-logger thread held that
+  wrapper, and its write fell through the hook to the fallback, which was the ORIGINAL writer.
+
+After that, every other console writer queued behind the two: the long-running reporter, the
+end-of-run summary, and `OrleansMeshPool`'s receipt line. So the host could never exit. The same
+inversion is reachable in a portal, where any component that kept the startup `Console.Out` plays
+the reporter's part.
+
+**The fix.** The hook's fallback is a writer over the raw standard stream, never the writer it
+replaced. A write through the hook then holds only the wrapper's lock, and `ConsolePal` re-enters
+that same lock. `ConsoleHookTakesNoLockOfTheWriterItReplacedTest` holds the replaced writer's lock
+the way the reporter does and requires a write through the hooked console to finish anyway. Against
+the old fallback both of its cases fail after their 10-second bound, and the host exits normally.
+The test asserts the property and never builds the cycle, so its negative control cannot wedge the
+host. With the fix, 25 consecutive local runs of the whole host finished with no stall.
+
+**The "3 minutes after the last test" was not teardown.** The triage that led here read main's shard
+0 (run 40105736575) as a host that idled 3 min 19 s after its last test. The last test was still
+running: `CrossGenerationManifestExchangeTest.WithoutTheLegacyPath_…` waits through a full
+`TestTimeouts.CrossSilo` window of silence by design. That is (30 s + 1 s + 5 s) × 3 × 2 = 216 s on CI.
+It has no `TEST START` marker because it does not derive from a mesh test base, so it does not show
+up in a `TEST_START`/`TEST_END` census. Its own `[Long Running Test]` lines name it. Across 35
+recent CI runs the host took 261–279 s every time except the one deadlock, and it exits the moment
+that test reports.
+
+## A module suite that wedges: ended below the job cap, with a dump
+
+Core's shards always bounded each host below the job cap (`timeout 8m` in `dotnet-test.yml`). The
+satellites' module lane (`node-repo-module-pack.yml`) did not. Its `dotnet test` ran unbounded, so a
+wedged suite ran into the job's 45-minute cap. A job the cap cancels runs no further step, so it kept
+no trx, no phase trace and no dump. The leg read `cancelled`, which looks like infra.
+
+That is what happened on MeshWeaver.Plugins PR #4155 (run 40115238778, `Module tests
+(MeshWeaver.AI)`, platform `c784cdb0e`, which predates the stdout fix above). The AI host printed its
+last skip about 70 s in and then nothing for 35 minutes. That silence does **not** carry the
+stdout-deadlock signature by itself: under Microsoft.Testing.Platform the console prints only skips,
+failures and the summary. A green run of the same suite (run 40120811982) is silent from that same
+skip until its summary 3.5 minutes later, and xunit's long-running notices do not reach the MTP
+console even with `--long-running` and `--xunit-diagnostics on` (measured locally). So nothing in
+that log separates the #7137 deadlock, a test that blocks synchronously, and a run-teardown wedge.
+Each of them withholds the summary too. 20 local runs of the suite on that platform did not stall.
+
+Each suite now runs under `.github/scripts/run-bounded-suite.sh`. Its deadline is whatever the job
+has left, less a reserve for the steps after it: a stuck detector derived from the cap, not a budget.
+On the deadline it:
+
+1. names every phase in `/tmp/meshweaver-test-trace.log` that opened and never closed
+   (`TEST_START` without `TEST_END`, `INIT_START` without `INIT_DONE`, `DISPOSE_START` without
+   `DISPOSE_DONE`). If every phase closed, it says the host is stuck outside a test.
+2. asks each .NET process in the tree to dump **itself**, through its diagnostics socket
+   (`.github/scripts/diag-dump.py`). This needs no ptrace and no tool installed at the moment of the
+   wedge. The runtime spawns its own `createdump`, and its diagnostics server answers from its own
+   native thread while managed threads are deadlocked. The dumps are mini dumps: every managed stack,
+   about 100 MB for the AI host. A heap dump of the same host is 1.7 GB, which would cost the
+   artifact store a lot per wedge. The stacks name a lock-order deadlock's two threads. `syncblk`
+   needs the heap, so a lock-owner question is answered from a local heap dump.
+   The whole dump phase shares **one** budget (`--dump-budget`, 180 s by default) that sits inside
+   the caller's reserve. Each request gets only what is left of it (`diag-dump.py --timeout` is one
+   deadline over connect, send and every read), and a process still unasked when the budget is
+   spent is skipped and said. So a runtime that accepts the request and then stalls cannot push the
+   job past its cap before the evidence is uploaded.
+3. ends the process tree and exits 124. The lane then records the suite as a TIMEOUT, not as
+   "the suite failed", and the existing evidence step keeps the dumps and the trace under
+   `test-evidence/<module>`.
+
+A suite whose turn comes after the window is spent (less than 60 s left before the reserve) is
+**not started**. Starting it would put it inside the reserve, where it could run into the cap. It
+is recorded as a failure, never a pass, and the step names every unstarted suite in one annotation.
+
+Measured end to end on the AI suite with a 75 s deadline: exit 124, the four tests and two class
+inits in flight named by pid, a 94 MB host dump with 78 readable managed stacks, and no process left.
+
 ## What is still open
 
 **What ends a live node's synchronization streams roughly five seconds into an operation that is

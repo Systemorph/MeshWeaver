@@ -55,6 +55,9 @@
     <PackageReference Include="MailKit" />
     <!-- MeshWeaver.Blazor.Radzen -->
     <PackageReference Include="Radzen.Blazor" />
+    <!-- MeshWeaver.ContentCollections.Indexing (Excel text extraction, MeshWeaver.Plugins#3826;
+         pinned centrally by #7134; MIT, no dependencies on net8.0+) -->
+    <PackageReference Include="ExcelDataReader" />
   </ItemGroup>
 
 </Project>

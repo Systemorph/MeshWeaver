@@ -7,6 +7,10 @@ Icon: Bug
 
 # Debugging native crashes (core dumps)
 
+> **History note (MeshWeaver#7145).** The DI container named in the readings on this page — Autofac,
+> its `LifetimeScope`, child-scope registries and type names — has since been removed and replaced by
+> MeshWeaver's own [MeshServiceProvider](../HubServiceLayers). The readings are kept as measured.
+
 A test host that dies on a **signal** does not fail a test — it fails the *shard*. There is no
 assertion, no stack in the trx, often no trx at all. CI reds it via the exit-marker gate:
 
@@ -169,8 +173,8 @@ to the dump root), `dumpPod` (that pod's newest dump, parked directories include
 dump whose file-name epoch is nearest that UTC instant, within 30 minutes). With none it reads the
 newest dump on the volume. It is read-only: no confirmation, no approval.
 
-Its one step is core's `hosting-dump-analyze --namespace <ns> [selector]`
-(`deploy/aks/operator/bin/hosting-dump-analyze`, with its in-pod half `_dump_analyze_pod.sh`). It:
+Its one step is the operator's `hosting-dump-analyze --namespace <ns> [selector]`
+(`MeshWeaver.Plugins/deploy/hosting-operator/bin/hosting-dump-analyze`, with its in-pod half `_dump_analyze_pod.sh`). It:
 
 1. Reads where the pods write dumps **off the portal Deployment**: its `MEMEX_CRASHDUMP_ROOT` env and
    the claim mounted over it. That is the dedicated dump claim mounted whole, or `memex-data` at the

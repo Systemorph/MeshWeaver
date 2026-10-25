@@ -9,7 +9,7 @@ namespace MeshWeaver.Hosting;
 /// <summary>
 /// Drains the mesh root hub during host shutdown — AFTER every other hosted service has
 /// stopped feeding it, and BEFORE the host disposes the root <see cref="IServiceProvider"/>
-/// (which IS the hub's Autofac container, via <c>MessageHubServiceProviderFactory</c>).
+/// (which IS the hub's service container, via <c>MessageHubServiceProviderFactory</c>).
 ///
 /// <para>Disposing a hub is reactive and returns immediately; the action blocks, offloaded
 /// <c>IIoPool</c> work, and the <c>AsyncDisposeQueue</c> drain asynchronously afterwards (see

@@ -39,8 +39,25 @@ public record InboxPreferences
     public string Account { get; init; } = string.Empty;
 
     /// <summary>
-    /// The state groups ticked (<c>open</c>, <c>done</c>). A person who never chose sees only what is
-    /// still open: an approval awaiting a decision, never one already decided.
+    /// The approvals / activities filter: <c>open</c> and <c>done</c> ticked. A person who never chose sees only
+    /// what is still open — an approval awaiting a decision, never one already decided. Empty = not stored yet
+    /// (the inbox migrates <see cref="States"/> or applies the default).
+    /// </summary>
+    public ImmutableDictionary<string, bool> ActivityStates { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>
+    /// The mail filter: <c>unread</c> and <c>read</c> ticked. A person who never chose sees both — a read mail
+    /// has no "open" or "done" state, and is still listed.
+    /// </summary>
+    public ImmutableDictionary<string, bool> MailStates { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>The chat filter (Teams, WhatsApp, iMessage, portal conversations): <c>unread</c> and <c>read</c> ticked; both by default.</summary>
+    public ImmutableDictionary<string, bool> ChatStates { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>
+    /// LEGACY, read only to migrate: the one global state filter (<c>open</c>/<c>done</c>) stored before the filters
+    /// became per kind. It now means the approvals / activities filter ONLY — it never narrows mail — and is emptied
+    /// once <see cref="ActivityStates"/> has taken it over. Nothing writes it any more.
     /// </summary>
     public ImmutableDictionary<string, bool> States { get; init; } = ImmutableDictionary<string, bool>.Empty;
 

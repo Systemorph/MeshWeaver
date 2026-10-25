@@ -239,6 +239,9 @@ public static class AssemblyCacheGenerations
     /// <summary>Directory under the cache root that holds the per-generation claim files.</summary>
     public const string ClaimsDirectoryName = ".generations";
 
+    /// <summary>The pass's name on its one <c>pass outcome</c> line (<see cref="PassLedger"/>).</summary>
+    public const string PassName = "AssemblyCacheRetention";
+
     /// <summary>
     /// The framework generation a cache filename belongs to, or <c>null</c> when the name is not one
     /// this store wrote. Strict on purpose — everything this refuses is something the sweep will
@@ -258,24 +261,34 @@ public static class AssemblyCacheGenerations
     /// <see cref="ClaimsDirectoryName"/> — the layout is flat by construction
     /// (<c>{root}/{sanitized-nodeTypePath}/…</c>), so recursion could only ever reach something that
     /// is not ours.
+    ///
+    /// <para>🚨 <paramref name="cancellationToken"/> is REQUIRED and checked per directory and per file
+    /// (the MeshWeaver#7049 shape, on this sibling walk): the listing is a stat per file on a network
+    /// share, and a walk that never looks at the pool's token holds the silo's teardown join for as
+    /// long as the share takes.</para>
     /// </summary>
     public static (ImmutableList<AssemblyCacheGeneration> Generations, int UnrecognisedFiles, long UnrecognisedBytes)
-        Scan(string rootDirectory)
+        Scan(string rootDirectory, CancellationToken cancellationToken)
     {
         var files = new Dictionary<string, List<FileInfo>>(StringComparer.OrdinalIgnoreCase);
         var unrecognised = 0;
         var unrecognisedBytes = 0L;
 
+        // Before the first round trip, too: a token cancelled before entry starts no share IO
+        // (review on #7115).
+        cancellationToken.ThrowIfCancellationRequested();
         var root = new DirectoryInfo(rootDirectory);
         if (!root.Exists)
             return (ImmutableList<AssemblyCacheGeneration>.Empty, 0, 0);
 
         foreach (var typeDirectory in root.EnumerateDirectories())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.Equals(typeDirectory.Name, ClaimsDirectoryName, StringComparison.Ordinal))
                 continue;
             foreach (var file in typeDirectory.EnumerateFiles("*", SearchOption.TopDirectoryOnly))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var tag = TagOf(file.Name);
                 if (tag is null)
                 {
@@ -305,17 +318,26 @@ public static class AssemblyCacheGenerations
     /// Read every generation claim under the cache root. A claim file that exists but cannot be read
     /// or parsed comes back with a <c>null</c> instant, which PROTECTS its generation — see
     /// <see cref="AssemblyCacheClaim.AtUtc"/>.
+    ///
+    /// <para><paramref name="cancellationToken"/> is checked before every claim read, one round trip
+    /// each.</para>
     /// </summary>
-    public static ImmutableList<AssemblyCacheClaim> ReadClaims(string rootDirectory)
+    public static ImmutableList<AssemblyCacheClaim> ReadClaims(string rootDirectory, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var claimsRoot = new DirectoryInfo(Path.Combine(rootDirectory, ClaimsDirectoryName));
         if (!claimsRoot.Exists)
             return ImmutableList<AssemblyCacheClaim>.Empty;
 
         var claims = ImmutableList.CreateBuilder<AssemblyCacheClaim>();
         foreach (var tagDirectory in claimsRoot.EnumerateDirectories())
+        {
+            // Per tag directory too: an EMPTY one yields no file, and its listing is still a round
+            // trip (review on #7115).
+            cancellationToken.ThrowIfCancellationRequested();
             foreach (var file in tagDirectory.EnumerateFiles("*", SearchOption.TopDirectoryOnly))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 DateTimeOffset? at;
                 try
                 {
@@ -334,6 +356,7 @@ public static class AssemblyCacheGenerations
                 claims.Add(new AssemblyCacheClaim(
                     tagDirectory.Name.ToLowerInvariant(), file.Name, at));
             }
+        }
         return claims.ToImmutable();
     }
 
@@ -414,43 +437,95 @@ public static class AssemblyCacheGenerations
         AssemblyCacheRetention retention,
         IIoPool pool,
         ILogger? logger = null)
-        => pool.InvokeBlocking(_ =>
-            SweepCore(rootDirectory, liveTag, retention, DateTimeOffset.UtcNow, logger));
+        => Sweep(rootDirectory, liveTag, retention, pool, logger, deleteFile: null);
 
     /// <summary>
-    /// The sweep itself, with the clock passed in. Separated from <see cref="Sweep"/> so the
-    /// behaviour that deletes files is exercised at an exact instant rather than against the wall
-    /// clock.
+    /// <see cref="Sweep(string, string, AssemblyCacheRetention, IIoPool, ILogger?)"/> with a removal
+    /// seam and the clock passed in, so a test can park the pass INSIDE one removal while the pool
+    /// drains.
     /// </summary>
+    internal static IObservable<AssemblyCacheSweepResult> Sweep(
+        string rootDirectory,
+        string liveTag,
+        AssemblyCacheRetention retention,
+        IIoPool pool,
+        ILogger? logger,
+        Action<string, CancellationToken>? deleteFile,
+        DateTimeOffset? nowUtc = null)
+        // 🚨 `ct`, never `_` (the MeshWeaver#7049 shape): the pool's token is what Drain cancels at
+        // silo teardown, and SweepCore checks it between every step of the walk and before every
+        // removal. With `_` here the pass listed the whole cache and, armed, deleted every collectable
+        // file one share round trip at a time, while IoPoolSiloTeardown waited out its budget and
+        // released the silo over it.
+        => pool.InvokeBlocking(ct =>
+            SweepCore(rootDirectory, liveTag, retention, nowUtc ?? DateTimeOffset.UtcNow, ct, logger,
+                deleteFile is null ? null : path => deleteFile(path, ct)));
+
+    /// <summary>
+    /// The sweep itself, with the clock passed in. Separated from
+    /// <see cref="Sweep(string, string, AssemblyCacheRetention, IIoPool, ILogger?)"/> so the behaviour
+    /// that deletes files is exercised at an exact instant rather than against the wall clock.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 <paramref name="cancellationToken"/> is REQUIRED, so no caller can drop the pool's token by
+    /// omission. It is checked per directory and per file of the listing, per claim, and before every
+    /// removal. A cancel ends the pass with <see cref="OperationCanceledException"/> at the next step
+    /// boundary, never folded into "cache could not be read". It never changes WHAT is collectable
+    /// (the plan is the same plan), only how much of it this pass gets through: what it had not
+    /// reached stays, and the next pass re-plans it. An armed pass that is interrupted logs one
+    /// <c>pass outcome — INTERRUPTED</c> Warning carrying what it DID remove.
+    /// </remarks>
     public static AssemblyCacheSweepResult SweepCore(
         string rootDirectory,
         string liveTag,
         AssemblyCacheRetention retention,
         DateTimeOffset nowUtc,
+        CancellationToken cancellationToken,
         ILogger? logger = null)
+        => SweepCore(rootDirectory, liveTag, retention, nowUtc, cancellationToken, logger, deleteFile: null);
+
+    /// <summary><see cref="SweepCore(string, string, AssemblyCacheRetention, DateTimeOffset, CancellationToken, ILogger?)"/> through a removal seam.</summary>
+    internal static AssemblyCacheSweepResult SweepCore(
+        string rootDirectory,
+        string liveTag,
+        AssemblyCacheRetention retention,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken,
+        ILogger? logger,
+        Action<string>? deleteFile)
     {
+        // 🚨 The pass's one outcome line and its step boundary (#6991, #7049): see PassLedger.
+        var ledger = new PassLedger(PassName, logger);
         ImmutableList<AssemblyCacheGeneration> generations;
         ImmutableList<AssemblyCacheClaim> claims;
         int unrecognised;
         long unrecognisedBytes;
         try
         {
-            (generations, unrecognised, unrecognisedBytes) = Scan(rootDirectory);
-            claims = ReadClaims(rootDirectory);
+            (generations, unrecognised, unrecognisedBytes) = Scan(rootDirectory, cancellationToken);
+            claims = ReadClaims(rootDirectory, cancellationToken);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The pool's cancel during the walk: an interruption before anything was planned, never
+            // "cache could not be read".
+            ledger.Interrupt(cancellationToken);
+            throw;
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // 🚨 FAIL CLOSED. Every other coordination path around the bake fails OPEN because the
             // cost of being wrong is duplicated work; here the cost of being wrong is deleting an
             // assembly a live pod is about to load. A partial listing is not a picture of the cache,
             // so it licenses nothing.
-            logger?.LogWarning(ex,
-                "AssemblyCacheRetention: pass outcome — ABORTED: could not read {Root} — NOTHING collected. A cache we cannot "
+            ledger.Record(PassOutcome.Aborted, ex,
+                ": could not read {Root} — NOTHING collected. A cache we cannot "
                 + "enumerate completely can never be pruned safely",
                 rootDirectory);
             return new AssemblyCacheSweepResult(null, false, 0, 0, 0, $"cache could not be read: {ex.Message}");
         }
 
+        ledger.Step(cancellationToken);
         var plan = Plan(liveTag, generations, claims, retention, nowUtc, unrecognised, unrecognisedBytes);
 
         if (!retention.Delete)
@@ -459,8 +534,8 @@ public static class AssemblyCacheGenerations
             // the cluster ships only Warning+ to Loki and this is the one line that says whether the
             // sweep ran and what it decided. It carries counts and the per-rule tally only; the
             // itemized lists below stay Information.
-            logger?.LogWarning(
-                "AssemblyCacheRetention: pass outcome — REPORT ONLY (collection is not armed), nothing deleted. "
+            ledger.Record(PassOutcome.ReportOnly,
+                " (collection is not armed), nothing deleted. "
                 + "{Summary}. Kept {KeptCount} generation(s) by rule: {KeptTally}",
                 plan.Summary, plan.Protected.Count, plan.KeptTally);
             logger?.LogInformation(
@@ -474,18 +549,38 @@ public static class AssemblyCacheGenerations
             return new AssemblyCacheSweepResult(plan, false, 0, 0, 0, null);
         }
 
+        var delete = deleteFile ?? File.Delete;
         var deletedFiles = 0;
         var deletedBytes = 0L;
         var failed = 0;
+
+        // A cancel at a removal's step boundary ends the pass; what it already removed is still
+        // reported (one INTERRUPTED outcome) before the cancel is thrown, never folded into a result
+        // that reads as a finished pass.
+        ledger.OnInterrupted = () => ledger.Record(PassOutcome.Interrupted,
+            ": the pool cancelled the pass (teardown) after deleting "
+            + "{DeletedFiles} file(s) reclaiming {DeletedMb:N1} MB, {Failed} file(s) could not be deleted. The rest of "
+            + "the plan stays and the next pass re-plans it. {Summary}",
+            deletedFiles, deletedBytes / (1024d * 1024d), failed, plan.Summary);
+
         foreach (var generation in plan.Collectable)
             foreach (var path in generation.Files)
             {
+                ledger.Step(cancellationToken);
                 try
                 {
+                    // Two round trips (a stat, then the unlink), so the token is checked between them.
                     var length = new FileInfo(path).Length;
-                    File.Delete(path);
+                    ledger.Step(cancellationToken);
+                    delete(path);
                     deletedFiles++;
                     deletedBytes += length;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // The pool's cancel, not a failed delete: the interrupted path, never `failed`.
+                    ledger.Interrupt(cancellationToken);
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -501,8 +596,8 @@ public static class AssemblyCacheGenerations
             }
 
         // 🚨 #6991: the once-per-pass outcome at Warning (see the report-only branch for why).
-        logger?.LogWarning(
-            "AssemblyCacheRetention: pass outcome — COLLECTED {DeletedFiles} file(s) across {Generations} "
+        ledger.Record(PassOutcome.Collected,
+            " {DeletedFiles} file(s) across {Generations} "
             + "generation(s), reclaiming {DeletedMb:N1} MB, {Failed} file(s) could not be deleted. {Summary}. "
             + "Kept {KeptCount} generation(s) by rule: {KeptTally}",
             deletedFiles, plan.Collectable.Count, deletedBytes / (1024d * 1024d), failed,
@@ -541,6 +636,7 @@ public static class AssemblyCacheGenerations
         => Observable
             .Timer(TimeSpan.Zero, retention.ClaimRefreshInterval)
             .SelectMany(_ => pool
+                // atomic-blocking-leaf: one CreateDirectory plus one small WriteAllText of the claim file
                 .InvokeBlocking(_ => AssertClaim(rootDirectory, tag, holder))
                 .Catch<Unit, Exception>(ex =>
                 {

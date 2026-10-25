@@ -1,27 +1,14 @@
 
-# ── PensionFund: revealed by #2063, NOT caused by it ────────────────────────────────────────────
-# PensionFund shipped 72 files then, 62 of them BOM'd, including all 5 of its NodeTypes (now 65 files,
-# 60 BOM'd, 4 NodeTypes, since BalanceSheet and its Statement instance left). Until #2063 the
-# gate's own discovery parsed package bytes raw and dropped every BOM'd file, so this package
-# gated `0 type(s)` and reported [PASS] over nothing. The entry below is pre-existing debt that
-# was simply never looked at — diagnosed, not bulk-added. (Its sibling, `PensionFund/BalanceSheet
-# compile`, left with the sample itself: that NodeType's legacy `#r "nuget:MeshWeaver.BusinessRules.Generator"`
-# could not resolve on any gate host once BusinessRules moved to MeshWeaver.Plugins.)
-
-# PensionFund idempotence — INTERMITTENT known debt. Do not remove on a single green run.
-# Removed once tonight because the gate reported it STALE ("now passing"); the very next run
-# reported it as a NEW failure. Both readings are correct — the check is nondeterministic,
-# because whether it fires depends on whether the Currency NodeType has COMPILED yet.
+# The samples gate's known-debt ratchet: `<scope> <check> [intermittent]`, one entry per line.
+# EMPTY by design today. Its only entry, `PensionFund idempotence intermittent`, left with its
+# subject when the product demos (ACME, FutuRe, Northwind, PensionFund) moved to MeshWeaver.Plugins'
+# test/samples tree; the defect it named (the second install re-serialises Currency/{CHF,EUR,USD}
+# without `decimalPlaces`, because default-suppression drops a value equal to the C# initializer)
+# travels with that content. GateAllowEntrySubjectGuard fails any entry whose subject is gone.
 #
-# The underlying defect is real and is tracked separately: the second install rewrites
-# Currency/{CHF,EUR,USD}. `Currency.DecimalPlaces` carries a C# initializer `= 2` and all
-# three instance files author `"decimalPlaces": 2`. Once the NodeType compiles, its content
-# type is registered, the installer materialises a typed `Currency` and re-serialises it, and
-# default-suppression drops the property whose value equals the type's default. The stored
-# node then differs from the authored file and the unchanged-skip misses.
-PensionFund idempotence intermittent
+# The paragraph below is the standing rule for the `intermittent` token, kept for the next entry.
 
-# 🚨 The `intermittent` token above is a REAL WEAKENING, and its failure mode is social rather than
+# 🚨 The `intermittent` token is a REAL WEAKENING, and its failure mode is social rather than
 # technical: the next person with a deterministic red they cannot fix will find this token and reach
 # for it. It is legitimate for exactly one thing — a check that FLAPS, where a single green run does
 # not prove the debt is paid. It is NOT for a failure that is merely inconvenient, hard, or someone
@@ -32,5 +19,5 @@ PensionFund idempotence intermittent
 # scope/check it names, and a failure it does not name is still a new failure.
 #
 # Before adding one, prove the flap — two runs of the same commit disagreeing, or the git history of
-# this file showing an entry dropped as stale and restored. That is what justified this one:
+# this file showing an entry dropped as stale and restored. That is what justified the PensionFund one:
 # 768f9ba0b dropped it, f32047e0e restored it one commit later.

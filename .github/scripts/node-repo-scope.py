@@ -145,6 +145,26 @@ NOOP_FILES = {
     ".gitignore", ".gitattributes", ".editorconfig",
 }
 
+# 🎯 CI PATHS OWE NO MODULE LEG — policy `ci-paths-owe-no-module-leg` (Doc/Architecture/
+# BuildScopeNarrowing → "CI paths owe no module leg"). A pull request whose diff is limited to
+# `.github/` and `scripts/` runs the CI checks and their self-tests; it owes no module compile-check,
+# no bundle and no realm-gate leg, because main's push run (full, or narrowed only by its own
+# publication — where a CI path stays EVERYTHING) and the daily full run cover those. Until this rule these paths took the global branch below BEFORE the caller's selector
+# was asked, so no caller could narrow them: MeshWeaver.Plugins#4187 taught its selector the policy
+# and this lane still packed every module (review thread 4370061382).
+#
+# 🚨 THE SHAPE IS "RESPECT THE CALLER'S SELECTOR", NEVER "THESE PATHS ARE INERT". A CI path is
+# handed to the caller's `affected-modules.py` beside the node-package paths, and the CALLER answers
+# whether it reaches a module. That keeps every satellite safe without a co-ordinated change:
+#   * a caller with no selector already runs the full set (checked before classification);
+#   * a selector that predates the policy answers `runAll` for a CI path, which is a FULL run here;
+#   * a selector that knows the policy answers `affected: []` for it — the narrowing.
+# A caller that keeps `.github/workflows/ci.yml` loud (it carries the matrix and the pin) says so in
+# its own selector. `tools/` is deliberately NOT a prefix: MeshWeaver.Plugins' build reads it
+# (`src/Directory.Build.targets`, two test projects), so it stays on the global branch — EVERYTHING —
+# whatever any selector would answer.
+CI_PATH_PREFIXES = (".github/", "scripts/")
+
 SELECTOR = "scripts/affected-modules.py"        # the caller's NODE graph
 PROJECTS = "scripts/project-closure.py"          # the caller's PROJECT graph
 
@@ -339,7 +359,8 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
            override: list[str] | None, say, publishing: bool = False,
-           always: frozenset[str] = frozenset(), publication_base: str = "") -> dict:
+           always: frozenset[str] = frozenset(), publication_base: str = "",
+           publication_reach: bool = False) -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -420,6 +441,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
 
     packages = node_packages(root)
     node_files: list[str] = []
+    ci_files: list[str] = []
     src_files: list[str] = []
     global_files: list[str] = []
     report: list[str] = []
@@ -436,6 +458,19 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         # every gate `*.allow`, Directory.Build.props and global.json on the loud path.
         elif "/" not in f and f in NOOP_FILES:
             report.append(f"  {f}  → (reaches nothing any lane builds — a repo-root no-op file)")
+        # 🎯 policy `ci-paths-owe-no-module-leg`: a CI path is the CALLER's call (see
+        # CI_PATH_PREFIXES) — deferred to its selector, never ruled inert here.
+        # 🚨 ONLY on a pull request / merge group. A main push narrowed by `--publication-base`
+        # IS "main's push run" the policy relies on to cover the modules: the caller's workflow
+        # carries the platform pin and the image digests, so there a CI path stays EVERYTHING.
+        # 🚨 And NEVER for a PUBLICATION-REACH question (`--publication-reach`): the
+        # newest-wins supersession check asks whether a newer trunk commit reaches a module, and
+        # a newer CI-only commit changes the workflow and build inputs that commit's own run packs
+        # with. Answering "nothing" there lets an older, slower run publish over the newer one.
+        elif f.startswith(CI_PATH_PREFIXES) and not publication_diff and not publication_reach:
+            ci_files.append(f)
+            report.append(f"  {f}  → a CI path — the caller's selector decides "
+                          "(policy ci-paths-owe-no-module-leg)")
         elif f.startswith("src/") and f.count("/") >= 2 and lane == "modules":
             src_files.append(f)
             report.append(f"  {f}  → src/ (which project decides, below)")
@@ -450,11 +485,16 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
                     f"{global_files[0]}. Running the full set.")
 
     affected: set[str] = set()
-    if node_files:
-        answer = affected_packages(root, node_files, say)
+    if node_files or ci_files:
+        answer = affected_packages(root, node_files + ci_files, say)
         if answer is None:
+            # 🚨 For a CI path this is the EXPECTED answer from a selector that predates policy
+            # ci-paths-owe-no-module-leg — it answers ALL — and the full set is the safe reading.
+            ci_note = (f" A selector that predates policy ci-paths-owe-no-module-leg answers ALL "
+                       f"for a CI path ({len(ci_files)} here, first: {ci_files[0]}); teach it the "
+                       "policy to narrow them.") if ci_files else ""
             return full(f"{SELECTOR} could not narrow the node-package closure (it refused, "
-                        "answered ALL, or could not be parsed) — running the full set.")
+                        f"answered ALL, or could not be parsed) — running the full set.{ci_note}")
         affected = answer
 
     # ── the modules lane also needs the COMPILED half ──
@@ -590,10 +630,23 @@ _STUB_SELECTOR = (
     'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees", "devtools"}\n'
     "import json,sys\n"
     "paths=[l for l in open(sys.argv[sys.argv.index('--changed')+1]).read().splitlines() if l]\n"
+    # policy ci-paths-owe-no-module-leg, as MeshWeaver.Plugins#4187's selector answers it: a CI
+    # path reaches no package. Any OTHER non-package path (e.g. `tools/`) would also reach none in
+    # this stub — which is what makes "tools/ ⇒ ALL" prove the CORE classifier keeps it loud.
+    "paths=[p for p in paths if not p.startswith(('.github/','scripts/'))]\n"
     "pk=sorted({p.split('/')[0] for p in paths})\n"
     # Alpha is Beta's dependent in the fixture graph, exactly as a `requires` edge would make it.
     "aff=sorted(set(pk)|({'Alpha'} if 'Beta' in pk else set()))\n"
     "json.dump({'runAll':False,'affected':aff,'mount':aff,'skipped':[],'support':[]},sys.stdout)\n")
+
+
+# A selector that PREDATES policy ci-paths-owe-no-module-leg — every satellite's until it adopts
+# the policy: a CI path is ALL to it, exactly as MeshWeaver.Plugins' main answered before #4187.
+_STUB_SELECTOR_PRE_POLICY = _STUB_SELECTOR.replace(
+    "paths=[p for p in paths if not p.startswith(('.github/','scripts/'))]\n",
+    "_ci=[p for p in paths if p.startswith(('.github/','scripts/'))]\n"
+    "_ci and (json.dump({'runAll':True,'affected':[]},sys.stdout) or sys.exit(0))\n")
+assert _STUB_SELECTOR_PRE_POLICY != _STUB_SELECTOR, "the pre-policy stub must differ from the stub"
 
 
 def _csproj(refs: list[str]) -> str:
@@ -685,6 +738,20 @@ def self_test() -> int:
         result = _run(root, "modules", "push", None,
                       extra=["--publication-base", base, "--publishing"])
         check("a reverted partial publication is repaired", result["selected"] == ["Acme.Alpha"])
+        # 🚨 policy ci-paths-owe-no-module-leg lets a PULL REQUEST skip module legs for a CI path
+        # because main's push run covers them — so that push run must never take the same shortcut.
+        # The history also carries the Alpha change above, so deferring the CI path to the selector
+        # would answer `narrowed [Acme.Alpha]` here, not `full`.
+        wf = root / ".github" / "workflows" / "ci.yml"
+        wf.parent.mkdir(parents=True, exist_ok=True)
+        wf.write_text("on: push\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-qm", "move the platform pin")
+        result = _run(root, "modules", "push", None,
+                      extra=["--publication-base", base, "--publishing"])
+        check("a CI path on a main push narrowed by its publication is still FULL",
+              result["scope"] == "full" and result["count"] == 2,
+              f"scope={result['scope']} selected={result['selected']}")
         for event in ("schedule", "repository_dispatch", "workflow_dispatch"):
             result = _run(root, "modules", event, None, extra=["--publication-base", base])
             check(f"{event} ignores publication baseline", result["scope"] == "full")
@@ -717,8 +784,9 @@ def self_test() -> int:
                     ("a repo-ROOT global.json ⇒ ALL", ["global.json"]),
                     ("a repo-ROOT gate ALLOW file ⇒ ALL", ["plugin-gate.allow"]),
                     ("a repo-ROOT file nobody has classified yet ⇒ ALL", ["brand-new-thing.toml"]),
-                    (".github/ (the workflow itself) ⇒ ALL", [".github/workflows/ci.yml"]),
-                    ("scripts/ (the gates) ⇒ ALL", ["scripts/gen-manifests.py"]),
+                    # 🚨 `tools/` is build input in MeshWeaver.Plugins — never a CI path, and the
+                    # fixture's selector would call it inert, so only core's classifier keeps it here.
+                    ("tools/ (read by the build) ⇒ ALL", ["tools/monaco/build.js"]),
                     ("an UNKNOWN top-level dir (a deleted package) ⇒ ALL", ["Gone/index.json"]),
                     ("an EMPTY diff is a broken range, never 'nothing to do'", [])):
                 got = _run(root, lane, "pull_request", changed)
@@ -790,6 +858,64 @@ def self_test() -> int:
             check(f"[{lane}] a diff reaching nothing selects ZERO, and says so",
                   got["scope"] == "narrowed" and got["count"] == 0 and got["skipped"],
                   f"scope={got['scope']} count={got['count']}")
+
+        print("CI paths owe no module leg (policy ci-paths-owe-no-module-leg) — the caller's call:")
+        ci_only = [".github/workflows/ci.yml", ".github/scripts/helper.py",
+                   "scripts/gen-manifests.py"]
+        got = _run(root, "modules", "pull_request", ci_only)
+        check("[modules] a CI-only diff packs ZERO bundles and tests nothing",
+              got["scope"] == "narrowed" and got["count"] == 0 and got["tested"] == []
+              and got["skipped"] == ["Acme.Alpha", "Acme.Beta"],
+              f"scope={got['scope']} count={got['count']} — {got['reason'][:90]}")
+        got = _run(root, "modules", "pull_request", [".github/workflows/ci.yml", "Alpha/index.json"])
+        check("[modules] a CI path beside a node package selects exactly that module",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha"]
+              and got["tested"] == ["Acme.Alpha"], f"{got['scope']} {got['selected']}")
+        got = _run(root, "modules", "pull_request", ["scripts/gen-manifests.py", "src/Acme.Beta/T.cs"])
+        check("[modules] a CI path beside a module's project selects exactly that module",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+        got = _run(root, "modules", "pull_request", ci_only, extra=["--always", "Acme.Alpha"])
+        check("[modules] a CI-only diff with a floor builds only the floor and TESTS NOTHING",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha"]
+              and got["tested"] == [], f"{got['selected']} tested={got.get('tested')}")
+        got = _run(root, "modules", "pull_request", [".github/workflows/ci.yml", "tools/x/y.json"])
+        check("[modules] tools/ beside a CI path still runs the full set, naming tools/",
+              got["scope"] == "full" and got["count"] == 2 and "tools/x/y.json" in got["reason"],
+              f"scope={got['scope']} — {got['reason'][:90]}")
+        got = _run(root, "modules", "push", ci_only)
+        check("[modules] a CI-only PUSH is still FULL (main's push run covers the modules)",
+              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        # 🚨 The newest-wins supersession check (node-repo-module-pack.yml, `publish-newest-only`)
+        # calls this script with `--event pull_request` over the trunk tip's diff. A newer CI-only
+        # commit must REACH every module there, or an older run publishes over the newer one.
+        got = _run(root, "modules", "pull_request", ci_only, extra=["--publication-reach"])
+        check("[modules] PUBLICATION REACH: a newer CI-only commit reaches every module",
+              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+        got = _run(root, "modules", "pull_request", ["Alpha/index.json"], extra=["--publication-reach"])
+        check("[modules] …while publication reach still narrows a diff with no CI path",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha"],
+              f"{got['scope']} {got['selected']}")
+        selector = root / "scripts" / "affected-modules.py"
+        selector.write_text(_STUB_SELECTOR_PRE_POLICY, encoding="utf-8")
+        try:
+            got = _run(root, "modules", "pull_request", ci_only)
+            check("[modules] a selector that PREDATES the policy keeps a CI-only diff FULL",
+                  got["scope"] == "full" and got["count"] == 2
+                  and "ci-paths-owe-no-module-leg" in got["reason"],
+                  f"scope={got['scope']} — {got['reason'][:90]}")
+            got = _run(root, "modules", "pull_request", ["Alpha/index.json"])
+            check("[modules] …while that selector still narrows a diff with no CI path",
+                  got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha"],
+                  f"{got['scope']} {got['selected']}")
+        finally:
+            selector.write_text(_STUB_SELECTOR, encoding="utf-8")
+        selector.unlink()
+        try:
+            got = _run(root, "modules", "pull_request", ci_only)
+            check("[modules] a caller with NO selector keeps a CI-only diff FULL",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        finally:
+            selector.write_text(_STUB_SELECTOR, encoding="utf-8")
 
         print("renames are DECOMPOSED — the module a file LEFT is selected too:")
         # A real git fixture, because this case is about what `git diff` prints: with git's
@@ -941,8 +1067,8 @@ def self_test() -> int:
         check("devtools/ is a NOOP dir — a local dev tool builds NOTHING, not everything",
               got["scope"] == "narrowed" and got["count"] == 0,
               f"scope={got['scope']} count={got['count']}")
-        got = _run(root, "modules", "pull_request", ["scripts/run-node-tests.py"])
-        check("…while the same script under scripts/ (the gates) is still EVERYTHING",
+        got = _run(root, "modules", "pull_request", ["tools/run-node-tests.py"])
+        check("…while the same script under tools/ (build input) is still EVERYTHING",
               got["scope"] == "full" and got["count"] == 2,
               f"scope={got['scope']} count={got['count']}")
 
@@ -988,7 +1114,8 @@ def self_test() -> int:
           "narrowing assertions (one over a REAL git range: a rename must select the end it "
           "LEFT), two explicit-empty answers, the two REFUSALS that must never render as "
           "'full, count 0', the stale-matrix-entry guard, the NOOP_DIRS drift guard, the "
-          "publishing guard, and every caller-graph failure mode.")
+          "publishing guard, CI paths deferred to the caller's selector (policy "
+          "ci-paths-owe-no-module-leg), and every caller-graph failure mode.")
     return 0
 
 
@@ -1008,6 +1135,10 @@ def main() -> int:
                    help="this run hands its output to a registry or feed — never narrow. The "
                         "publish path's change detector is the derived version, and a diff that "
                         "misses a unit means that unit silently never ships.")
+    p.add_argument("--publication-reach", action="store_true", dest="publication_reach",
+                   help="the question is PUBLICATION reachability (does a newer trunk commit reach "
+                        "this module?), not a pull request's build selection: a CI path stays "
+                        "EVERYTHING (policy ci-paths-owe-no-module-leg covers PR selection only)")
     p.add_argument("--always", default="",
                    help="comma-separated module names the caller's gates compose on EVERY run — "
                         "a floor the narrowing always keeps (--for modules)")
@@ -1037,7 +1168,8 @@ def main() -> int:
     always = frozenset(a.strip() for a in args.always.split(",") if a.strip())
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
-                    publishing=args.publishing, always=always, publication_base=args.publication_base)
+                    publishing=args.publishing, always=always, publication_base=args.publication_base,
+                    publication_reach=args.publication_reach)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"

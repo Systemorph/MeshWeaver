@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -149,7 +150,9 @@ public class InlineSvgEmissionBackplateGuard
             "src/MeshWeaver.Graph/IconBackplate.cs",
             "src/MeshWeaver.Domain/Icon.cs",
             "src/MeshWeaver.Hosting/Persistence/Parsers/MarkdownFileParser.cs",
-            "memex/Memex.Portal.Shared/Seo/SeoResolver.cs",
+            // memex/Memex.Portal.Shared/Seo/SeoResolver.cs left with Memex.Portal.Shared for
+            // MeshWeaver.Plugins (core slimming); its half of this guard went with it
+            // (Memex.Portal.Shared.Test.InlineSvgEmissionBackplateGuard).
         ];
         var missing = expected.Where(e => !files.Contains(e)).ToImmutableArray();
 
@@ -175,7 +178,7 @@ public class InlineSvgEmissionBackplateGuard
     [Fact]
     public void TheTypedClassification_StaysInTheFilesThatPlateIt()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         string[] mayUseIt =
         [
             "src/MeshWeaver.Domain/Icon.cs",              // defines the provider constant and parses to it
@@ -258,7 +261,7 @@ public class InlineSvgEmissionBackplateGuard
 
     private static ImmutableArray<Classified> Scan()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // 🚨 Every scanned root must EXIST. Skipping a missing one would leave the guard green over
         // a tree it never opened — the same shape as a CI gate whose input step is allowed to fail.
@@ -446,13 +449,4 @@ public class InlineSvgEmissionBackplateGuard
             .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             .Any(segment => ExcludedSegments.Contains(segment, StringComparer.OrdinalIgnoreCase));
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

@@ -92,6 +92,74 @@ public class InjectorExamplesTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
+    /// <b>Operation fault.</b> The selected legs of the selected path throw the named exception — a
+    /// batch naming the path faults as a whole — and other legs and other paths are untouched. With
+    /// <c>times</c> the fault spends itself: the switch releases with its last application, so the
+    /// re-attempt lands, and <see cref="FaultSwitch.ArrivalCount"/> says exactly how often it fired.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task FailOperations_FaultsTheSelectedLegs_AndAOneShotSpendsItself()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = $"faulted-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+        await NodeFactory.CreateNode(Page(id, "stored")).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var stored = (await Storage.Read(path, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
+            .Emit(cancellationToken: ct))!;
+
+        using (var reads = Storage.FailOperations(path, StorageLegs.Read))
+        {
+            (await Storage.Read(path, Mesh.JsonSerializerOptions).Materialize().Should().Within(TestTimeouts.Convergence)
+                .Emit(cancellationToken: ct)).Exception.Should().BeOfType<TimeoutException>("a faulted read throws the driver's timeout");
+            (await Storage.ReadMany([path, $"{TestPartition}/other"], Mesh.JsonSerializerOptions).Materialize()
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct))
+                .Exception.Should().BeOfType<TimeoutException>("a batch naming the path faults as a whole");
+            (await Storage.Exists(path).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct))
+                .Should().BeTrue("only the Read leg was selected");
+            reads.ArrivalCount.Should().Be(2, "the point read and the batch each met the fault once");
+        }
+
+        var once = Storage.FailOperations(path, StorageLegs.Write,
+            p => new InvalidOperationException($"refused {p}"), times: 1);
+        (await Storage.Write(stored with { Name = "first" }, Mesh.JsonSerializerOptions).Materialize()
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct))
+            .Exception.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Contain(path);
+        once.IsClosed.Should().BeFalse("the one application spent the fault and released the switch");
+        (await Storage.Write(stored with { Name = "second" }, Mesh.JsonSerializerOptions)
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct))
+            !.Name.Should().Be("second", "the re-attempt reaches the store");
+        once.ArrivalCount.Should().Be(1);
+    }
+
+    /// <summary>
+    /// <b>Read-only fallback.</b> A path the store holds no row for reads as the shipped row, while
+    /// existence answers from writable storage alone; a stored row wins over the fallback.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ServeReadOnlyFallback_AnAbsentRowReadsAsTheShippedOne_ExistenceStaysWritable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = $"{TestPartition}/shipped-{Guid.NewGuid():N}";
+        var shipped = new MeshNode(path.Split('/')[1], TestPartition) { Name = "shipped", NodeType = "Markdown" };
+
+        using (var fallback = Storage.ServeReadOnlyFallback(shipped))
+        {
+            (await Storage.Read(path, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
+                .Emit(cancellationToken: ct))!.Name.Should().Be("shipped");
+            (await Storage.ReadMany([path], Mesh.JsonSerializerOptions).ToList().Should().Within(TestTimeouts.Convergence)
+                .Emit(cancellationToken: ct)).Should().ContainSingle().Which.Name.Should().Be("shipped");
+            (await Storage.ExistsInWritableStorage(path).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct))
+                .Should().BeFalse("the fallback is not a writable row");
+            fallback.ArrivalCount.Should().Be(2, "both reads were answered by the fallback");
+
+            await Storage.Write(shipped with { Name = "override" }, Mesh.JsonSerializerOptions)
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+            (await Storage.Read(path, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
+                .Emit(cancellationToken: ct))!.Name.Should().Be("override", "a writable row wins over the fallback");
+        }
+    }
+
+    /// <summary>
     /// <b>Change-feed hold.</b> Notifications queue in order while held and are delivered on release.
     /// </summary>
     [Fact(Timeout = 120_000)]

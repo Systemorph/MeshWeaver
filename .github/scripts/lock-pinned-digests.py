@@ -80,8 +80,8 @@ reddens rather than silently splitting the fleet's idea of a pin in two.
 Axis 2 is a different subject with a different shape (a TAG, in a helm overlay, not a digest in a
 workflow) and it necessarily has its own reader. Its scope is deliberately narrow, and the boundary
 is measured rather than guessed: `values*.yml` / `values*.yaml` under a `deploy/` or `deployments/`
-path segment. Widening it to every YAML/JSON under `deploy/` was tried and rejected — core's
-`deploy/aks/operator/test/fixtures/**` carry image references to tags that never existed
+path segment. Widening it to every YAML/JSON under `deploy/` was tried and rejected — the hosting
+operator's `deploy/hosting-operator/test/fixtures/**` (MeshWeaver.Plugins; core's `deploy/aks/operator` until it moved) carry image references to tags that never existed
 (`memex-portal-ai:3.0.0-rc8.ci.5000`), which would red this job nightly over test fixtures, and
 `deploy/aks/manifests/observability/log-watcher.yaml` names the FLOATING tag `:latest`, which has
 no fixed manifest to protect.
@@ -5490,7 +5490,7 @@ def self_test() -> int:
           "ARM 13: Memex's real overlay path was rejected")
     check(is_overlay_path("deploy/whisper/helm/values.yaml"),
           "ARM 13: this repository's whisper chart values file was rejected")
-    check(not is_overlay_path("deploy/aks/operator/test/fixtures/audit/clean/manifest.json"),
+    check(not is_overlay_path("deploy/hosting-operator/test/fixtures/audit/clean/manifest.json"),
           "ARM 13: a TEST FIXTURE was accepted as a deployment overlay — those name tags that "
           "never existed and would red this job nightly")
     check(not is_overlay_path("deploy/aks/manifests/observability/log-watcher.yaml"),
@@ -6524,10 +6524,13 @@ ingress:
     # `memex-control` is the dedicated control instance's image (Memex docs/control-instance.md,
     # Route A): `control-promote` mirrors the accepted image here, and — like `mw-plugin-test` — its
     # destinations sit on CONTINUATION lines, so it is a second repository the join must not drop.
+    # `mw-build-host` is the standing build hosts' runner image (Doc/Architecture/BuildHosts):
+    # `build-host-image` mirrors each versioned build here inside a FOLDED scalar, so it is a fifth
+    # repository the derivation must see.
     check(_targets.get("cr.meshweaver.cloud") == {"memex-portal-ai", "memex-migration",
-                                                  "mw-plugin-test", "memex-control"},
+                                                  "mw-plugin-test", "memex-control", "mw-build-host"},
           f"ARM 34: the fleet's own registry was derived with "
-          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all four repositories. "
+          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all five repositories. "
           f"`mw-plugin-test` and `memex-control` reach it through mirror calls whose destinations "
           f"are on the CONTINUATION line, and they are the repositories that vanish when the join "
           f"stops")

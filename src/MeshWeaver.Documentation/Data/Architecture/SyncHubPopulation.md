@@ -50,7 +50,7 @@ SynchronizationStream total                =  8 461     (0.5 % apart)
 ```
 
 So there is no separate "sync hub leak" to explain. **The question is entirely "why are there 8 461
-live `SynchronizationStream`s"**, and each one costs its own Autofac `ILifetimeScope` and
+live `SynchronizationStream`s"**, and each one costs its own service scope and
 `TypeRegistry` (~390 KB, of which ~173 KB is framework metadata duplicated per hub).
 
 ## 2. What retires one — three paths, and only one of them applies here
@@ -355,8 +355,8 @@ ninety seconds later and serving the same instance, holds 101 node hubs. The two
 by 958 node hubs and 4 260 MiB of last-GC heap, about 4.4 MiB per node hub (its own scope, type
 registry, workspace and its three or four `sync/` hubs would be in that figure). That fan-out is the candidate for the multi-GiB
 `[HEAPSTEP]` series every roll prints in its first minutes: the sampled allocation of those steps
-is `System.String`, `System.Byte[]`, `Entry[System.String][]` and Autofac's
-`IResolvePipelineBuilder` handlers and `MiddlewareDeclaration`, which is what hub construction
+is `System.String`, `System.Byte[]`, `Entry[System.String][]` and the resolve-pipeline
+handlers and middleware declarations of the DI container then in use (Autofac, since removed in MeshWeaver#7145), which is what hub construction
 allocates. `[HEAPSTEP]` names allocated types, not retained roots, and this section has neither a
 quiet-process root attribution nor a before/after on one process, so the per-hub figure and the
 link to the heap step are to be confirmed, not cited.
@@ -486,6 +486,75 @@ What the reading settles:
 the `[HEAPSTEP]` steps of #5555 print; this reading is from 45 minutes in, when the standing populations
 were much smaller. It also does not separate "never built" from "built and retired" for the
 classes that are gone.
+
+### 10.2 Why a boot-built hub stayed, and what now ends it (#6623)
+
+§9 left open whether boot-activated hubs retire once idle. Read from the code and pinned in a
+cluster test, the answer is **yes, but only about 25 minutes after the pass**. Nothing pins them
+for ever. They simply had no owner of their lifetime once their reader had gone:
+
+| step | what holds the activation | how long |
+|---|---|---|
+| the pass reads `GetMeshNodeStream(path).Take(1)` as System | the reading process's mesh-node cache keeps a **mirror** subscribed to the owner, heart-beating it every 45 s | until the cache's idle sweep releases it: 10 subscriber-free minutes |
+| the mirror is released | nothing at all: the owner's last server-side stream has ended | Orleans' idle collection, `CollectionAge` 15 minutes since the last grain call |
+
+So every node a boot pass touched stayed resident for about 10 + 15 minutes, and on the first
+replica of a generation, where the boot passes run, they were all resident at once.
+
+**What ends it now.** A grain-hosted activation counts the server-side streams it serves. Each
+stream holds one `GrainSubscriberLeases` lease from its registration until it is disposed, and every
+route out of the client-subscription registry ends in that disposal. When the **last** lease is
+released, `MessageHubGrain` deactivates the activation through Orleans (`DeactivateOnIdle`), provided:
+
+- **no delivery to it ever carried a person's identity** (`AccessService.ReaderOf`). This flag is
+  sticky for the activation's life. A reader who navigates away and back closes and reopens its
+  streams, and retiring the hub between the two would rebuild it on every navigation. An
+  activation a person has used keeps Orleans' idle collection, exactly as before;
+- nothing holds it: not its build, and not a long-running operation (`HoldActivation`);
+- it is not an instance singleton (`RelocateOnDrain`), which lives for its own work and not for
+  subscribers;
+- it is not already tearing down.
+
+A last subscriber that leaves while a hold is up does not lose the decision: it is kept pending and
+taken again when the last hold ends. Holds, leases and the decision share one short synchronous
+critical section (`_lifetimeGate`, plain counters, nothing awaited inside). A hold or lease is
+therefore counted either before the decision, which it blocks, or after it. "After" is the case
+every Orleans idle collection already presents: a subscriber rides it out through its re-ask.
+A person is recognised at three seams: the grain's `DeliverMessage`, the hub's own delivery
+pipeline (a same-silo delivery can reach a hosted hub without passing the grain), and the
+subscribe that takes a lease (a hosted child's stream belongs to the same activation). A person
+reading through the shared mesh-node cache does NOT mark the owner, because the cache subscribes as
+itself. That reuse is the cache's: its mirror holds the lease while the person reads, and for its
+10-minute window after.
+
+It runs on the release that brings a count to zero, so there is no timer and no sweep. The
+Monolith hosts no grain, registers no lease callback, and is unchanged.
+
+**What this does and does not shorten.** A platform-only activation now ends when its last
+mirror goes. For a boot read that is the cache's idle release, 10 minutes after the pass, instead
+of 25 minutes. It ends at once for a pass that releases its reads when it finishes
+(`IMeshNodeStreamCache.ReleaseIfUnwatched`, the event `ActivityLogAppender` already fires for a
+terminal activity). The cache's 10-minute window is unchanged on purpose: it is the reuse heuristic
+for the reading process.
+
+**Pinned by** `AnInfrastructureActivationEndsWithItsLastSubscriberTest`
+(MeshWeaver.Hosting.Orleans.Test). Four System reads through the silo's cache activate four hubs,
+the pass's mirrors are released, and each hub must reach `DisposalCompleted`. On the unfixed grain
+none does within the 36 s convergence bound. A second fact covers the conservative half: a node
+`TestUser` opened a view of from another process must keep its activation after that view and every
+mirror of it have gone. The person is recognised on the view's own subscribe.
+
+That fact first read the node through the client process's mesh-node cache, which by the rule above
+never marks the owner. It passed only when the cache's later **teardown** message happened to be
+stamped with the test host's standing identity (`SetHostIdentity`, a single-identity host) and reached
+the grain before the owner's last lease dropped. A teardown stamped any other way retired the hub, and
+main went red intermittently. Released under System, the same teardown retires it every time. A
+person fact must put the person on the read itself, never on whatever identity a later message
+inherits.
+
+**Not established:** the before/after on a live replica. The reading to take is the per-address
+census of §10.1 inside the first 30 minutes of a generation, compared with the same window on a
+generation running this change.
 
 ## Related
 

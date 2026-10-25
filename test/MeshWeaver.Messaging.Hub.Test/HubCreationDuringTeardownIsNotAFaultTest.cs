@@ -15,13 +15,13 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// <para>The production shape (incident <c>e2028eb86d6a85a6</c> plus its sibling
 /// <c>8bd7c9c44c12e40b</c>, recurring across four deployments since mid-August): a
 /// <c>MessageHubGrain</c> activated while its pod was stopping, the creation passed the collection's
-/// <c>IsDisposing</c> check, and the Autofac scope then died UNDER the build —
+/// <c>IsDisposing</c> check, and the service scope then died UNDER the build —
 /// <c>LifetimeScope.ThrowDisposedException</c>. <c>CreateHub</c> logged that as
 /// <c>Failed to create hosted hub</c> at fail level and returned null; the grain, unable to tell
 /// which of the two conditions it was, logged its own fail-level line naming BOTH. Two tickets per
 /// pod rollout for a race nothing failed in.</para>
 ///
-/// <para>All three cases below run against a REAL Autofac container built by the framework's own
+/// <para>All three cases below run against a REAL service container built by the framework's own
 /// <c>SetupModules</c> — the same call <c>MessageHubConfiguration.CreateServiceProvider</c> makes —
 /// so the disposed-container case reproduces the incident's exact frame rather than simulating it.
 /// No mocks: <see cref="HostedHubsCollection"/> is exercised through its own public surface.</para>

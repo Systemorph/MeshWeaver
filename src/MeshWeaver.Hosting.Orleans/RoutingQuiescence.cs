@@ -30,7 +30,7 @@ namespace MeshWeaver.Hosting.Orleans;
 /// closes for activities). And the per-node grain delivery used to be DETACHED from the leg
 /// entirely — subscribed inside a <c>Select</c> with its subscription discarded — so its retry
 /// timers and its NACK ran under no drain at all. The prod incident is exactly that tail
-/// executing after the host had disposed its Autofac root: <c>GetGrain</c> resolving a codec
+/// executing after the host had disposed its root container: <c>GetGrain</c> resolving a codec
 /// provider from a dead <c>LifetimeScope</c>.</para>
 ///
 /// <para><b>Hold, do not cancel.</b> A message already accepted for routing must still land

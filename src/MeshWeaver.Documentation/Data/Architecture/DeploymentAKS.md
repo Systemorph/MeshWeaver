@@ -232,7 +232,7 @@ is `volumes[].size` on the instance's `Hosting/Deployment` record, and the opera
 | a bigger share (`/data` full, content growing) | edit `volumes[].size` on the record (`128Gi`), then `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` — or a `Provision`, which carries the same step | `hosting-pv-resize --namespace <ns> --claim <claimName> --size <size>` once per declared claim, ordered FIRST in a Reconcile: a full `/data` blocks the rollout the re-apply then waits on |
 | to know whether the cluster has caught up | `{ "requestedAction": "Audit" }` | the report's `volumeCapacityBelowRecord` — the claim, the declared size and the live capacity |
 
-What the command does, and refuses, is the whole contract (`deploy/aks/operator/bin/hosting-pv-resize`):
+What the command does, and refuses, is the whole contract (`MeshWeaver.Plugins/deploy/hosting-operator/bin/hosting-pv-resize`):
 
 - it **grows** one claim to the declared size and reports the capacity it **read back** from the
   claim's `status`, never the request (`::hosting:: pv_capacity=<quantity>`, `pv_resized=0|1`);
@@ -329,8 +329,8 @@ in the mesh, executed on the `aks-ops` lane. `az aks upgrade`, `az aks nodepool 
   template. Measured 2026-09-25: the control instance's template named `3.0.0-ci.9260` (deadlocks at bake) while
   its serving pods were `3.0.0-ci.9218`, alive only because nothing had evicted them.
 
-The operator half is `deploy/aks/operator/bin/hosting-aks-upgrade` (behaviour-tested in
-`deploy/aks/operator/test/run-tests.sh`); the plan, the approval binding and the continuation are the
+The operator half is `MeshWeaver.Plugins/deploy/hosting-operator/bin/hosting-aks-upgrade` (behaviour-tested in
+`MeshWeaver.Plugins/deploy/hosting-operator/test/run-tests.sh`); the plan, the approval binding and the continuation are the
 Hosting plugin's — the full manual, with the exact action JSON, is `Hosting/ClusterUpgrade` in
 MeshWeaver.Plugins (`get Hosting/ClusterUpgrade` on the control instance's MCP).
 

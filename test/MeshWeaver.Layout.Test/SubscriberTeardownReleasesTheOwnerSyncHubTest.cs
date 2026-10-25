@@ -28,7 +28,7 @@ namespace MeshWeaver.Layout.Test;
 /// release. Its own <c>Post</c> is then refused by the teardown guard in
 /// <c>MessageService.PostImplGeneric</c> (everything but <c>ShutdownRequest</c>/<c>DisposeRequest</c>
 /// and a correlated reply), so the farewell never leaves, the owner is never told, and its twin
-/// stays at <c>RunLevel=Started</c> for the life of the process holding its Autofac scope and its
+/// stays at <c>RunLevel=Started</c> for the life of the process holding its service scope and its
 /// TypeRegistry (~390 KB each).</para>
 ///
 /// <para><b>Both directions are asserted.</b> <see cref="DisposingTheSubscribingHubDrainsTheOwnerSidePopulation"/>

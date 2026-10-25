@@ -1,6 +1,8 @@
 using System.Text;
 using Xunit;
-using YamlDotNet.Serialization;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -21,6 +23,11 @@ namespace MeshWeaver.Documentation.Test;
 ///     parses cleanly, so nothing anywhere complains.</item>
 /// </list>
 ///
+/// <para>🚨 The parser runs in STRICT mode (<see cref="YamlParseOptions.StrictSpec"/>): these files
+/// are read by the coding harnesses, whose YAML readers follow the grammar, so the platform's own
+/// tolerance for a <c>": "</c> inside a value must not make this guard go green over a skill the
+/// harness would drop.</para>
+///
 /// <para>The guard runs the real parser rather than pattern-matching the two known shapes, so a
 /// third way of breaking the document is caught the first time rather than after it ships. Quoting
 /// the scalar fixes every one of them.</para>
@@ -34,7 +41,7 @@ public class SkillFrontMatterGuard
     [Fact]
     public void CodexSkillsResolveToTheMaintainedDirectory()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var alias = new DirectoryInfo(Path.Combine(root, CodexSkillsPath));
         Assert.True(alias.LinkTarget == CodexSkillsTarget,
             $"{CodexSkillsPath} must be the relative symlink to {CodexSkillsTarget}, not a copied "
@@ -48,11 +55,11 @@ public class SkillFrontMatterGuard
     /// <summary>Every shipped skill file, as (relative path, text).</summary>
     private static (string Path, string Text)[] SkillFiles()
     {
-        var dir = Path.Combine(SourceScan.FindRepoRoot(), SkillsRoot);
+        var dir = Path.Combine(RepoPaths.Root, SkillsRoot);
         return Directory.Exists(dir)
             ? Directory.EnumerateFiles(dir, "SKILL.md", SearchOption.AllDirectories)
                 .OrderBy(p => p, StringComparer.Ordinal)
-                .Select(p => (Path.GetRelativePath(SourceScan.FindRepoRoot(), p), File.ReadAllText(p)))
+                .Select(p => (Path.GetRelativePath(RepoPaths.Root, p), File.ReadAllText(p)))
                 .ToArray()
             : [];
     }
@@ -93,8 +100,7 @@ public class SkillFrontMatterGuard
 
             try
             {
-                var parsed = new DeserializerBuilder().Build()
-                    .Deserialize<Dictionary<string, object>>(frontMatter);
+                var parsed = TolerantYaml.Parse(frontMatter, YamlParseOptions.StrictSpec) as JsonObject;
                 if (parsed is null || !parsed.ContainsKey("name"))
                     offenders.AppendLine($"  {path}: front matter parsed but has no 'name'.");
             }

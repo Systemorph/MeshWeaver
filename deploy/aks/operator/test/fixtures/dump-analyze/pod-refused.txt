@@ -1,2 +1,0 @@
-@@MW-DUMP listing
-@@MW-DUMP refused	pod memex-portal-deployment-x left no dump on the volume

@@ -6,8 +6,8 @@ namespace MeshWeaver.Mesh.Threading;
 
 /// <summary>
 /// The mesh's <see cref="IHubScopeDisposalSequencer"/>: a hosted hub's lifetime scope closes NOW
-/// while the mesh is live (a recycle frees its scope promptly — an Autofac parent tracks every child
-/// scope until it is closed), and AFTER the teardown drains while the mesh is tearing down.
+/// while the mesh is live (a recycle frees its scope promptly — an unclosed scope keeps everything it
+/// built), and AFTER the teardown drains while the mesh is tearing down.
 ///
 /// <para>🚨 The deferral target is <see cref="MeshTeardownSignal.Completed"/>, NOT the
 /// <see cref="AsyncDisposeQueue"/>: the queue's consumer runs in the background the moment an item
@@ -28,9 +28,9 @@ namespace MeshWeaver.Mesh.Threading;
 ///
 /// <para>Limit, stated: a teardown that disposes the mesh hub without running the drain
 /// orchestration (a run-boundary tool that block-joins <c>DisposalCompleted</c> and exits) never
-/// fires the signal, so its child scopes stay open until the process ends — the same lifetime they
-/// had before scopes were closed at all, and one the root container's own disposal still reclaims
-/// because Autofac disposes the child scopes it tracks.</para>
+/// fires the signal, so its child scopes stay open until nothing holds them — a parent does not track
+/// its children (<c>MeshServiceProvider</c>), so an unclosed scope is garbage with its hub, though what
+/// it built is then never disposed.</para>
 /// </summary>
 public sealed class TeardownOrderedScopeDisposal(
     IServiceProvider rootProvider,

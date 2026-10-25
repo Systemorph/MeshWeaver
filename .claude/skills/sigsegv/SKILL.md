@@ -118,7 +118,8 @@ The second one is the FutuRe family. 🚨 **And the family has a second form, so
 word ⇒ not this family" is not a verdict.** Sighting #18 (2026-09-21, `10.0.12`) faulted in
 `ReplaySubject<__Canon>…Subscription.Dispose()+0x3ac` — managed code, on the hub's own
 `MessageService.DrainLoop` thread, inside the current instance's teardown — because a GC-reference
-static held `0x7fea1704ccf8`, the MethodTable of `Autofac…MiddlewareDeclaration`, which is in no GC
+static held `0x7fea1704ccf8`, the MethodTable of the then-DI-container's `MiddlewareDeclaration`
+(Autofac, since removed — MeshWeaver#7145), which is in no GC
 segment. **Three collectible contexts were resident and none was unloading** (the first reading said
 *none at all* — a roots census), so the 2026-09-11 overlap diagnosis and the fixes built on it could
 not have prevented it: the static base was dangling while its context lived (fact 6, read twice —
@@ -130,7 +131,7 @@ ALC) exclude only a freed collectible *MethodTable* being dereferenced — the z
 of an ordinary default-context object — and its `alc=1` support counts `AssemblyLoadContext.All`, which
 drops a context the moment `Unload()` is called. Read for the MANAGED state (ClrMD, not native SOS),
 every retained FutuRe dump (#12–#16) held **3–7 `NodeAssemblyLoadContext`s mid-unload** while the next
-instance was built or run, and the zeroed object is the **garbage of a disposed hub** (Autofac child
+instance was built or run, and the zeroed object is the **garbage of a disposed hub** (its DI child
 registry, STJ polymorphic metadata, `TypeRegistry`) — see DebuggingNativeCrashes.md, *"the MANAGED view
 of sightings #11–#16"*. The GitSync pair (#10/#11, `GetCodeInfo`) is a different branch: no collectible
 context at all, an interior stale reference. 🚨 **When an unload does not finish, gcroot the
@@ -138,7 +139,8 @@ context at all, an interior stale reference. 🚨 **When an unload does not fini
 Measured 2026-09-11: the one strong holder of FutuRe's unfinished unloads was **System.Text.Json's static
 `ReflectionEmitCachingMemberAccessor` cache** (a `DynamicMethod` accessor's scope holds the collectible
 type; 1 s sliding expiry on a 200 ms timer), so contexts were freed when STJ's timer fired — during the
-next mesh. Evicted now on `Unloading` (`JsonMemberAccessorCacheEviction`), like Autofac's. Handle type
+next mesh. Evicted now on `Unloading` (`JsonMemberAccessorCacheEviction`); the DI container keeps no
+such cache (`MeshServiceProvider`). Handle type
 `(10)` in gcroot output is `HNDTYPE_WEAK_INTERIOR_POINTER` — weak, not a root. And **do not "fix" it by
 disabling concurrent GC** — that was tried
 (#1274), changed nothing measurable, and was removed. Read the instruction + registers, not the

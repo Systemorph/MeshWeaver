@@ -262,6 +262,7 @@ public static class DynamicContentTypeRegistrar
                 // when CALLED and hands back an already-completed observable, so the call itself is
                 // what must sit inside the pool.
                 return pool
+                    // atomic-blocking-leaf: one MVID read of one file, then one assembly load of that file
                     .InvokeBlocking(_ =>
                     {
                         var mismatch = ServedBuildIdentity.Mismatch(
@@ -277,6 +278,7 @@ public static class DynamicContentTypeRegistrar
                         // The probe build — a hosted hub's configuration and data-context build —
                         // is blocking work as well, so it takes its own pool slot.
                         : step.Load.Take(1).SelectMany(result =>
+                            // atomic-blocking-leaf: one probe build of one NodeType's hub configuration, a single call
                             pool.InvokeBlocking(_ => Register(mesh, registry, path, result, logger))));
             })
             .Catch<ContentTypeRegistrationOutcome, Exception>(ex => Observable.Return(

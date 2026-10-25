@@ -46,6 +46,9 @@ import threading
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import workflow_yaml  # noqa: E402 — the ONE step extractor every harness shares
+
 ROOT = Path(__file__).resolve().parents[2]
 PUBLISH_WORKFLOW = ROOT / ".github/workflows/node-repo-module-publish.yml"
 PACK_WORKFLOW = ROOT / ".github/workflows/node-repo-module-pack.yml"
@@ -66,26 +69,10 @@ def die(msg: str):
 
 # ── extraction ──────────────────────────────────────────────────────────────────────────────
 def extract_step(workflow: Path, step_id: str) -> str:
-    import yaml
-
-    if not workflow.is_file():
-        die(f"{workflow} does not exist — the publication lane this harness executes is missing, so "
-            "there is nothing to prove. A harness must never report a pass for a lane it could not "
-            "find (MeshWeaver#3878).")
-    doc = yaml.safe_load(workflow.read_text(encoding="utf-8"))
-    for job in (doc.get("jobs") or {}).values():
-        for step in job.get("steps") or []:
-            if isinstance(step, dict) and step.get("id") == step_id:
-                body = step.get("run")
-                if not body:
-                    die(f"step id `{step_id}` in {workflow.name} has no `run:` — nothing to execute.")
-                if "${{" in body:
-                    die(f"step id `{step_id}`'s `run:` now contains a ${{{{ }}}} expression, which this "
-                        "harness cannot supply. It refuses to execute a body it would have to "
-                        "rewrite — pass the value through `env:` instead.")
-                return body
-    die(f"no step with `id: {step_id}` in {workflow.name}. It was renamed, moved or deleted — and "
-        "this harness will not report a pass for a step it could not find.")
+    try:
+        return workflow_yaml.step_run(workflow, step_id)
+    except workflow_yaml.WorkflowYamlError as e:
+        die(str(e))
     return ""  # unreachable
 
 

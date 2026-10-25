@@ -9,6 +9,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -19,7 +20,7 @@ namespace MeshWeaver.Graph.Test;
 /// AT THE STORE, so its guarantee no longer rests on the seal the deleting process holds in memory.
 ///
 /// <para><b>The isolated fault.</b> The delete is paused at the store after the owner confirmed the
-/// version and while this process's seal is in place (<see cref="HeldWriteStorageAdapter.HoldDeletesOf"/>,
+/// version and while this process's seal is in place (<see cref="FaultInjectingStorageAdapter.HoldDeletes"/>,
 /// a controlled switch). A write then lands DIRECTLY on the store of record — beneath every decorator
 /// and every seal of this process — which is exactly what a writer in another process sharing the
 /// database does. Before #6856 the commit was an unconditional row delete and removed that write while
@@ -42,8 +43,8 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
     private InMemoryStorageAdapter? _otherProcess;
     private InMemoryStorageAdapter StoreOfRecord => _thisProcess ??= new InMemoryStorageAdapter(_rows, _objects);
     private InMemoryStorageAdapter OtherProcess => _otherProcess ??= new InMemoryStorageAdapter(_rows, _objects);
-    private HeldWriteStorageAdapter? _storage;
-    private HeldWriteStorageAdapter Storage => _storage ??= new HeldWriteStorageAdapter(StoreOfRecord);
+    private FaultInjectingStorageAdapter? _storage;
+    private FaultInjectingStorageAdapter Storage => _storage ??= new FaultInjectingStorageAdapter(StoreOfRecord);
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -71,18 +72,18 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
     /// </summary>
     private async Task<DeleteNodeResponse> PausedGuardedDelete(string path, long expected, Func<Task> whilePaused)
     {
-        Storage.HoldDeletesOf(path);
+        var deleteHold = Storage.HoldDeletes(path);
         var delete = ObserveNodeOperation(new DeleteNodeRequest(path) { ExpectedVersion = expected }).Replay(1);
         using var connection = delete.Connect();
         try
         {
-            await Storage.DeleteHeld.Should().Within(TestTimeouts.Convergence)
+            await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
                 .Emit("the guarded delete passed the owner's verdict and reached the store", cancellationToken: Ct);
             await whilePaused();
         }
         finally
         {
-            Storage.ReleaseDelete();
+            deleteHold.Release();
         }
         var response = (await delete.Should().Within(TestTimeouts.Convergence)
             .Emit("a delete always answers", Ct)).Message;
@@ -215,7 +216,7 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: Ct);
         var read = (await Stored(root.Path))!.Version;
 
-        Storage.HoldDeletesOf(root.Path);
+        var deleteHold = Storage.HoldDeletes(root.Path);
         var delete = ObserveNodeOperation(new DeleteNodeRequest(root.Path)
         {
             ExpectedVersion = read,
@@ -225,7 +226,7 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
         using var connection = delete.Connect();
         try
         {
-            await Storage.DeleteHeld.Should().Within(TestTimeouts.Convergence)
+            await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
                 .Emit("the cascade reached the root", cancellationToken: Ct);
             var current = (await Stored(root.Path))!;
             await OtherProcess
@@ -234,7 +235,7 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
         }
         finally
         {
-            Storage.ReleaseDelete();
+            deleteHold.Release();
         }
         var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", Ct)).Message;
         Output.WriteLine($"[delete] success={response.Success} reason={response.RejectionReason} error={response.Error}");

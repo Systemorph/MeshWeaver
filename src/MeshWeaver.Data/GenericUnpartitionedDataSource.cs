@@ -123,7 +123,7 @@ public interface IDataSource : IDisposable
     ///     <c>InitializingPartitions</c>, so the null key misses — and a
     ///     <c>SynchronizationStream</c> constructor always calls
     ///     <c>GetHostedHub(sync/{id}, HostedHubCreation.Always)</c>. The failure path therefore built
-    ///     a hub and a second Autofac container for a hub that had just been declared FAILED, and
+    ///     a hub and a second service container for a hub that had just been declared FAILED, and
     ///     its null-partition <c>CreateStream</c> opens one REMOTE stream per declared partition,
     ///     each starting its own 120 s initialization against the very dependency that had just
     ///     failed to answer. A failure path that amplifies the failure, at the moment — a pod-wide

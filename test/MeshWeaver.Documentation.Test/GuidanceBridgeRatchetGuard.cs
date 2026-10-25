@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -72,7 +73,7 @@ public class GuidanceBridgeRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoGuidanceFileTeachesTheForbiddenBridge()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root);
 
@@ -170,7 +171,7 @@ public class GuidanceBridgeRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerFindsTheShapeItIsRatchetingAndNotTheWarningsAgainstIt()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = Scan(root);
 
         Assert.True(found.Count > 0,

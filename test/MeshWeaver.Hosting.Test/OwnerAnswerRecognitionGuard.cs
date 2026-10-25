@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using MeshWeaver.Hosting.Security;
 using Xunit;
+using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -35,9 +36,8 @@ public class OwnerAnswerRecognitionGuard(ITestOutputHelper output)
     private static readonly Address Owner = new("TestData", "silent-read");
 
     private static ObjectDisposedException DisposedScope() =>
-        new("LifetimeScope",
-            "Instances cannot be resolved and nested lifetimes cannot be created from this "
-            + "LifetimeScope as it (or one of its parent scopes) has already been disposed.");
+        new(MeshServiceProvider.DisposedObjectName,
+            MeshServiceProvider.DisposedMessage);
 
     /// <summary>
     /// Every owner-side refusal a real producer emits, built by CALLING that producer.

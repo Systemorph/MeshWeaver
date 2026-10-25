@@ -51,8 +51,9 @@ Two things follow, and both are deliberate:
     every older `gh` (the local 2.95.0 has neither the refusal nor the flag), trading one silent
     breakage for another; feature-detecting it would leave this steward hostage to the output policy
     of a tool that has already changed under us once. Plain REST depends on none of it. This is the
-    same shape `.github/scripts/resolve-platform.py` already uses for the one job log it reads,
-    including `add_unredirected_header` so the token never crosses the 302 to signed storage.
+    same shape `.github/scripts/resolve-platform.py` already uses for the one job log it reads. The
+    transport is the shared `ghrest.py` (fetched beside this file by the lane), which strips the
+    token on any redirect that leaves GitHub's origin, so it never crosses the 302 to signed storage.
 
   • **A read is not believed unless it looks like a job log.** An empty or marker-less body is
     treated as UNREADABLE rather than as a log that happens to match no signature — otherwise
@@ -82,8 +83,10 @@ import json
 import re
 import sys
 import urllib.error
-import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ghrest  # noqa: E402 — the shared GitHub REST client; lanes fetch it beside this file
 
 GITHUB_API = "https://api.github.com"
 
@@ -159,21 +162,13 @@ class LogUnreadable(Exception):
 
 def github_fetch_with(token: str):
     def fetch(path: str, method: str = "GET"):
-        request = urllib.request.Request(
-            f"{GITHUB_API}{path}",
-            method=method,
-            data=b"" if method == "POST" else None,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "meshweaver-retry-known-transients",
-            },
-        )
-        # 🚨 UNREDIRECTED. A job-logs path answers a 302 to SIGNED storage, and urllib forwards
-        # ordinary headers across a redirect — which would hand this token to a host that is not
-        # GitHub and does not need it. The signed URL carries its own authorisation.
-        request.add_unredirected_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(request, timeout=60) as response:
+        # 🚨 THE TOKEN STAYS ON GITHUB'S ORIGIN. A job-logs path answers a 302 to SIGNED storage, and
+        # stock urllib forwards ordinary headers across a redirect — which would hand this token to
+        # a host that is not GitHub and does not need it. ghrest strips it on any redirect that
+        # leaves the origin; the signed URL carries its own authorisation.
+        with ghrest.request(path, token, method=method, data=b"" if method == "POST" else None,
+                            api=GITHUB_API, timeout=60,
+                            user_agent="meshweaver-retry-known-transients") as response:
             if path.endswith("/logs"):
                 raw = response.read(MAX_LOG_BYTES + 1)
                 if len(raw) > MAX_LOG_BYTES:
@@ -1180,6 +1175,7 @@ def _self_test_adapter(check) -> list[str]:
 
     global GITHUB_API
     seen_auth: dict[str, str | None] = {}
+    storage_origin = [""]  # the signed-storage server's origin, set once it is listening
     log_body = (REAL_LOG_HEAD + "2026-09-17T04:35:33.0Z dial tcp 51.12.25.82:443: connect: "
                 "connection refused\n").encode("utf-8")
 
@@ -1193,9 +1189,10 @@ def _self_test_adapter(check) -> list[str]:
         def do_GET(self):
             self._record()
             if self.path.endswith("/logs"):
-                # The shape that matters: a redirect to SIGNED storage on the same server.
+                # The shape that matters: a redirect to SIGNED storage on ANOTHER origin (a second
+                # server on its own port), as GitHub's blob storage is another host.
                 self.send_response(302)
-                self.send_header("Location", "/signed-storage/log.txt")
+                self.send_header("Location", f"{storage_origin[0]}/signed-storage/log.txt")
                 self.end_headers()
             elif self.path.startswith("/signed-storage/"):
                 self.send_response(200)
@@ -1226,6 +1223,9 @@ def _self_test_adapter(check) -> list[str]:
     server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    storage = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=storage.serve_forever, daemon=True).start()
+    storage_origin[0] = f"http://127.0.0.1:{storage.server_address[1]}"
     original, GITHUB_API = GITHUB_API, f"http://127.0.0.1:{server.server_address[1]}"
     local: list[str] = []
 
@@ -1243,12 +1243,13 @@ def _self_test_adapter(check) -> list[str]:
         adapter_check("...and the log it returned really carries ESC", "\x1b[" in body)
         adapter_check("...and the classifier matches it", classify(body) is not None)
 
-        # 🚨 The token must NOT cross to the storage host. `add_unredirected_header` is what stops
-        # it; a reader rewritten with a plain header would leak it and nothing else would notice.
+        # 🚨 The token must NOT cross to the storage host. ghrest's origin rule is what stops it; a
+        # reader rewritten onto stock urllib with a plain header would leak it and nothing else would
+        # notice (ghrest's own self-test measures that negative control).
         adapter_check("the API request carried the token",
                       seen_auth.get("/repos/o/r/actions/jobs/1/logs") == "Bearer secret-token")
-        adapter_check("the REDIRECT target received NO Authorization header",
-                      seen_auth.get("/signed-storage/log.txt") is None)
+        adapter_check("the REDIRECT target (another origin) was reached, with NO Authorization header",
+                      "/signed-storage/log.txt" in seen_auth and seen_auth["/signed-storage/log.txt"] is None)
 
         adapter_check("a JSON endpoint decodes to a dict", isinstance(fetch("/repos/o/r/x"), dict))
         adapter_check("a POST returns without raising", fetch("/repos/o/r/y", method="POST") == {})
@@ -1272,6 +1273,8 @@ def _self_test_adapter(check) -> list[str]:
         GITHUB_API = original
         server.shutdown()
         server.server_close()
+        storage.shutdown()
+        storage.server_close()
     return local
 
 

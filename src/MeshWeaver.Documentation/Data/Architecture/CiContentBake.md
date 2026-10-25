@@ -924,9 +924,20 @@ at Information, so whether a pass ran, what it removed and whether it refused we
 
 | collector | runs | outcome line |
 |---|---|---|
-| prebuilt-bundle retention | at boot and every `Interval` (daily), per replica | `PrebuiltBundleRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / FAULTED …` |
-| assembly-cache retention | once per pod start | `AssemblyCacheRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / FAULTED …` |
-| modules GC | once per pod start | `Modules GC: pass outcome — completed / FAILED CLOSED / CANCELLED / FAULTED …` |
+| prebuilt-bundle retention | at boot and every `Interval` (daily), per replica | `PrebuiltBundleRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / INTERRUPTED / FAULTED …` |
+| assembly-cache retention | once per pod start | `AssemblyCacheRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / INTERRUPTED / FAULTED …` |
+| modules GC | once per pod start | `Modules GC: pass outcome — COLLECTED / FAILED CLOSED / INTERRUPTED / FAULTED …` |
+
+All three write that line through one type, `PassLedger` (`MeshWeaver.Mesh.Threading`). It records
+exactly one outcome per pass (a second one throws). It also owns the pass's step boundary,
+`Step(ct)`. When the I/O pool cancels the pass (a teardown drain), the ledger records an
+`INTERRUPTED` outcome carrying what the pass removed so far, and throws
+`OperationCanceledException`. The hosted wrappers report that cancel as teardown, never as
+`FAULTED … nothing was collected`. The verdicts are the open constants `PassOutcome`; the modules
+GC adds its own `FAILED CLOSED`. Before the ledger, only the prebuilt-bundle pass had `INTERRUPTED`.
+The modules GC logged `CANCELLED` and returned as if it had finished, and the assembly-cache sweep
+did not look at its token at all. A cancel changes how much of a plan one pass reaches, never what
+the plan collects.
 
 Each carries the **denominator** (what was scanned and its bytes), what was removed or would be,
 and what was **kept, counted per KEEP rule** (`live=1, window=612, release-marker=40` —
@@ -1079,7 +1090,6 @@ is worse than a moving ref, because the divergence is silent. Bump every `uses:`
 | `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in; since #3022 executed by the tester **as the portal** (`platform-image`, composed gate host, `--app /app`) |
 | `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — `compile --output` then `--seed` over the full repo or (opt-in) the affected closure, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh`; since #3022 the bake compiles against and is keyed to the **portal** (`platform-image` + `platform-image-digest`, both required-or-explicit exactly like the tester's) |
 | `.github/workflows/node-repo-tag-modules.yml` | the `<Module>/vX.Y.Z` tag publisher (`scripts/tag-modules.py`) |
-| `.github/workflows/node-repo-platform-ref-bump.yml` | the scheduled `MW_PLATFORM_REF` bump — polls the upstream's default branch and opens a PR (never a push) so the source pin cannot silently lag; mints a GitHub App token, because a pull request opened with `GITHUB_TOKEN` starts no CI at all. Called by MeshWeaver.Plugins and MeshWeaver.SocialMedia — the two node repos that carry such a pin. See [Keeping the Platform Source Pin Current](../PlatformRefBumpLane) |
 
 The design rules the extraction preserves:
 

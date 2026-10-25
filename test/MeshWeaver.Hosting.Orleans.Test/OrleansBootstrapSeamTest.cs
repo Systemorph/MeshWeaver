@@ -5,6 +5,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -124,18 +125,15 @@ public class OrleansBootstrapSeamTest(ITestOutputHelper output)
     [Fact]
     public void NoSuiteInThisRepo_DerivesFromTheRetiredBases()
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !File.Exists(Path.Combine(root.FullName, "MeshWeaver.slnx")))
-            root = root.Parent;
-        root.Should().NotBeNull("the guard must find the repo root, or it checks nothing");
+        var root = RepoPaths.Root;
 
         var bridge = Path.Combine(
-            root!.FullName, "test", "MeshWeaver.Hosting.Orleans.TestBase", "OrleansTestBaseCompat.cs");
+            root, "test", "MeshWeaver.Hosting.Orleans.TestBase", "OrleansTestBaseCompat.cs");
         File.Exists(bridge).Should().BeTrue(
             "this guard is about that file; if it is gone the guard is stale and must go with it");
 
         var offenders = Directory
-            .EnumerateFiles(Path.Combine(root.FullName, "test"), "*.cs", SearchOption.AllDirectories)
+            .EnumerateFiles(Path.Combine(root, "test"), "*.cs", SearchOption.AllDirectories)
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
                         && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             // The bridge itself DECLARES them, and this guard NAMES them in its own message. Two

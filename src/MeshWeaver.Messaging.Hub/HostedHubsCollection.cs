@@ -49,7 +49,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// Keyed by reference: an address can hold one retiring predecessor and one live successor at the
     /// same time, and two hubs are never the same hub.
     ///
-    /// <para>A retired hub is still THIS collection's to join on. Its Autofac scope is a child of
+    /// <para>A retired hub is still THIS collection's to join on. Its service scope is a child of
     /// the owner's, so if the owner's own teardown ran ahead of it the owner would close that scope
     /// under a hub still resolving from it — the R1 straggler class, manufactured locally. So
     /// <see cref="DisposeHubsReactive"/> waits on these exactly as it waits on the registered ones,
@@ -411,7 +411,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     ///   <item>every <see cref="IDisposable"/> in that scope OUTLIVES the hub — Roslyn load
     ///     contexts, Npgsql connections, native buffers — so their finalizers run against a graph
     ///     already torn down, the standard route to a SIGSEGV at process exit;</item>
-    ///   <item>an Autofac parent scope TRACKS every child scope until the parent itself dies, so a
+    ///   <item>whatever still holds the hub holds its scope and everything the scope built, so a
     ///     portal that recycles hubs for hours accumulates one live scope per hub, with everything
     ///     each of them holds.</item>
     /// </list>
@@ -563,7 +563,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             // 🚨 A TEARDOWN RACE, not a fault (Systemorph/MeshWeaver#3243). The creation passed
             // IsDisposing — the freeze had not reached this collection — and then the container
             // itself died under the build: the generic host stops, the root provider goes down,
-            // and Autofac answers every resolution with ObjectDisposedException
+            // and the DI container answers every resolution with ObjectDisposedException
             // (LifetimeScope.ThrowDisposedException). Nothing failed and nothing was written; the
             // next access re-activates on a live host. Reported as fail: it is indistinguishable
             // from a configuration that genuinely threw on the same line, so every pod rollout
@@ -591,7 +591,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// <summary>
     /// Asks the container this collection builds hubs from whether it is still alive — the honest
     /// discriminator between an expected teardown race and a hub configuration that faulted while
-    /// the host was up. A live Autofac scope answers a plain resolution; a disposed one throws
+    /// the host was up. A live service scope answers a plain resolution; a disposed one throws
     /// <see cref="ObjectDisposedException"/> from <c>LifetimeScope.ThrowDisposedException</c>,
     /// which is the exact frame the production incident carried.
     ///
@@ -747,7 +747,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// flat 5 s while every individual step stays inside its own budget.</para>
     ///
     /// <para>What that cost: on expiry the collection signalled done anyway, the owner advanced to
-    /// ShutDown and tore down the DI container — while children were still mid-disposal, resolving
+    /// ShutDown and tore down DI container — while children were still mid-disposal, resolving
     /// services from it. That is the post-teardown straggler class described throughout this file
     /// (#613), i.e. the cap was manufacturing the very leak the rest of the file works to prevent,
     /// and it silently voided the in-flight-construction contract asserted below. Removing it does

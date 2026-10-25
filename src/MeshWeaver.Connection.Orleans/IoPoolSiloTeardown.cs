@@ -42,7 +42,7 @@ namespace MeshWeaver.Connection.Orleans;
 /// still starting — <c>Host.StartAsync</c> throws, and <c>RunAsync</c>'s <c>finally</c> goes
 /// straight to <c>host.DisposeAsync()</c>: no <c>IHostedService.StopAsync</c> runs, no
 /// <c>IHostedLifecycleService.StoppedAsync</c> runs, and the root provider is disposed while the
-/// already-started silo is still stopping. This observer then resolved from a dead Autofac
+/// already-started silo is still stopping. This observer then resolved from a dead DI container
 /// <c>LifetimeScope</c> and threw <see cref="ObjectDisposedException"/> from the one method whose
 /// whole job is to make the release safe — issues #1898 and #1899, both on the same pod and second
 /// as the aborted startup that caused them (#1897).</para>

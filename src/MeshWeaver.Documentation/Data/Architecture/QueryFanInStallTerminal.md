@@ -641,6 +641,57 @@ race's ordering, with no clock in it. Without the fold, the three delta-kind tes
 attributed to this window from the mechanism and the test's shape (an immediate delete, racing the
 open of a fresh listing), not from a recorded interleaving.
 
+## The merge never calls its consumer under its gate (2026-10-25)
+
+The merge mutates its state under one gate: provider hits, the live set, the terminal flag. It used
+to call `observer.OnNext` / `OnError` / `OnCompleted` inside that gate as well. That is half of a
+lock-order deadlock, because the consumer is not inert. It can run on synchronously into work that
+needs another lock.
+
+Measured on CI as `CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest` (main run 40129840536,
+#7117's run 40136105238). Leg 1 of a case-only rename issued its two staging creates, and both
+stalled at stage `write` and never answered. Reproduced locally, the two thread stacks were:
+
+- **Thread B** delivered a provider's Initial into the merge and held the merge's gate. Under it, the
+  merged Initial reached a create's `CreatableTypesCreationValidator`. The create then ran on
+  synchronously into its storage write. The write's change notification needs the storage feed's own
+  serializing `Observable.Merge` gate, and B blocked on it.
+- **Thread A** held that feed gate, delivering an earlier write's change into a live query over the
+  same store (`StorageAdapterMeshQueryProvider` → the merge), and blocked on the merge's gate.
+
+The feed gate is Rx's: `Observable.Merge` serializes its sources with a lock held while it delivers
+downstream. In production that is `PersistenceService.Changes`, the merge of every partition
+provider's feed. In the fault-injection rig it is `FaultInjectingStorageAdapter.Changes`. Either way
+it is library behaviour, so the half we own is the merge's.
+
+The fix is `GateFreeEmitter` (`src/MeshWeaver.Hosting/Persistence/Query`). Under the gate the merge
+only ENQUEUES its frames. After it leaves the gate, it drains them. One thread drains at a time. A
+thread that finds a drain already running leaves its frames to that drain and returns at once, so it
+is never blocked by a busy consumer. Order is still the gate's order, because every enqueue happens
+under it. A frame the consumer produces re-entrantly is delivered after the frame it is handling,
+never nested inside it. All three emitting sites use it: the multi-provider merge, the
+single-provider path and the snapshot fan-out (`CombineAnswers`).
+
+`AQueryMergeNeverHoldsItsGateWhileItsConsumerRunsTest` (`test/MeshWeaver.Hosting.Test`) pins it with
+no storage and no clock. While the consumer handles the merged Initial, a second provider delivers a
+live delta from another thread. That delivery must return while the consumer is still busy, and the
+delta must arrive after the Initial, exactly once. Without the emitter the delivery stays blocked for
+the whole 5 s bound and the test is red.
+
+Releasing the merge's own gate is not enough when an Rx operator between the providers and the
+consumer holds a lock of its own. The snapshot fan-out combined its providers with `CombineLatest`,
+which calls its subscriber under its own serializing lock. So the consumer still ran under a lock a
+second provider's delivery needed, and the same cycle stayed open on the snapshot `Query` and on
+`Autocomplete`. The fan-out now keeps each provider's latest answer itself, under its gate, and
+emits through the same emitter. `ASnapshotFanOutNeverHoldsALockWhileItsConsumerRunsTest` pins both
+surfaces the same way. With `CombineLatest` the delivery stays blocked for the whole bound.
+
+**Not established.** This rig pins the merge's half only. Two things were not measured: that no other
+lock held across a callback closes a similar cycle somewhere else on the write path, and how often
+the production `PersistenceService` feed actually meets this interleaving. The CI failures were the
+first test of a fresh process each time. A cold process widens the window, but that is an inference
+from where they ran, not a measurement.
+
 ## See also
 
 - [Access Control](../AccessControl) → "The fold can produce NO answer, and that is a third outcome",

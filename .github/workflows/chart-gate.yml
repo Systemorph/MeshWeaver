@@ -137,6 +137,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: deploy/aks/scripts/test-artifact-store-jobs.sh
 
+      # The standing build hosts (templates/build-host/, Doc/Architecture/BuildHosts): the runner the
+      # chart ships is the platform's byte for byte and passes its self-test, the defaults render no
+      # host, the fixture renders the per-channel Deployment + ScaledObject shape, and the refusals
+      # (a tag for a digest, plain http to a public host) hold. No cluster, no network.
+      - name: Assert the build hosts render per channel, ship the platform's runner, and refuse a half-declared block
+        if: ${{ !cancelled() }}
+        run: deploy/aks/scripts/test-build-hosts.sh
+
       - name: Assert observability installation refuses ephemeral or unverified storage
         if: ${{ !cancelled() }}
         run: python3 deploy/aks/scripts/test-observability-storage.py

@@ -18,7 +18,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// full hub CONSTRUCTION — <c>MessageHubConfiguration</c> → <c>TypeRegistry</c> ctor
 /// → <c>XmlDocs.Summary</c> — walking type metadata of compiled-NodeType assemblies
 /// whose collectible ALCs were already unloading. Best case: an
-/// ObjectDisposedException storm off the disposed Autofac scope (the
+/// ObjectDisposedException storm off the disposed service scope (the
 /// teardown-straggler log). Worst case: SIGSEGV in <c>String.Ctor</c> over a span
 /// into the unloaded assembly image (the CI dump, thread 22, "address not mapped").</para>
 ///
