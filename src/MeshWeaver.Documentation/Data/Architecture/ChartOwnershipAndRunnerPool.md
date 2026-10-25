@@ -1,7 +1,7 @@
 ---
 Name: Chart Ownership and the Runner Pool
 Category: Architecture
-Description: Why the helm chart still lives in the platform repo although the application it deploys does not, everything a relocation must carry in one change set, why the cheap path-filter interim is unsafe here, and the self-hosted runner shape with an honest account of what it buys.
+Description: The chart lives in Systemorph/MeshWeaver.Deploy and the platform copy is frozen (deletions only); why it lived here, everything the relocation had to carry in one change set, why the cheap path-filter interim is unsafe here, and the self-hosted runner shape with an honest account of what it buys.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M12 11v10"/><path d="M3 7l9 4 9-4"/><circle cx="12" cy="7" r="1.6"/></svg>
 ---
 
@@ -9,6 +9,30 @@ Two questions were raised during the 2026-08-31 CI overhaul and tracked as issue
 chart gate on core?"*, and *"can we mount a drive where git is checked out"*. Both are real, both
 are larger than they look, and neither should have stayed in an issue thread. This page is the
 state of record for both, measured against the code on 2026-09-01.
+
+## The chart lives in MeshWeaver.Deploy
+
+The relocation this page planned has happened (policy `chart-lives-in-deploy`). Systemorph/MeshWeaver.Deploy,
+a public repository, was seeded with the chart material (Deploy#1) and is now its only home. The
+sections below record why the chart was here and what a relocation had to carry; read them as
+history.
+
+Both copies stayed editable after the seed, and both moved. Two pipelines then baked
+`hosting-operator:main`, one from each copy, so the moving tag flapped between two charts. The
+platform's copy is therefore FROZEN: `scripts/check-chart-freeze.py`, run by the
+`Chart frozen (lives in MeshWeaver.Deploy)` job and hung off the required check, refuses any pull
+request that adds, modifies, retypes or renames into these paths:
+
+- `deploy/helm/`, `deploy/helm-db/`, `deploy/aks/values.aks.yaml`, `deploy/aks/manifests/`,
+  `deploy/aks/scripts/`, `deploy/homebrew/`;
+- `.github/workflows/chart-gate.yml`, `.github/workflows/homebrew.yml`,
+  `scripts/check-config-key-coverage.py`, `.github/scripts/test-bundle-registry.py`.
+
+A **deletion** is allowed, because that is how the copy leaves (#7127). Two neighbours stay
+editable here: `.github/scripts/build-run.py` and `deploy/build-host/`. main-cd builds the
+build-host runner image from them, and the Deploy chart gate reads them from a declared checkout of
+this repository. A chart change belongs in MeshWeaver.Deploy. The gate's message says so, and its
+self-test proves it refuses a modification and an addition and lets a pure deletion through.
 
 ## The chart lives here; the application it deploys does not
 
