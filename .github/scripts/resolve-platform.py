@@ -2427,12 +2427,17 @@ def write_outputs(chosen: Chosen, tester: str, portal: str, migration: str | Non
 # `latest` deployment reds that consumer by name, on purpose.
 #
 #   ONE read, `GET <api>/hosts` on the control instance (phase P3 serves it):
-#     {aliases:{latest:"<v>", previous:"<v>"}, versions:[{version, ready, maxReplicas, pinnedBy:[…]}]}
-#   * `latest` is `aliases.latest`, and it must name a retained version whose `ready` is true. The
+#     {aliases:{latest:"<v>", previous:"<v>"}, versions:[{version, deploymentName, complete, maxReplicas, aliases, pinned, pinnedBy?}]}
+#   * `latest` is `aliases.latest`, and it must name a retained version whose `complete` is true. The
 #     set it names is then resolved EXACTLY like a freeze: that one CD run, sealed, its images
 #     present — never a substitute.
 #   * for a package whose cap forbids `latest`, the version is the highest `version` with
-#     `ready == true` at or above the package's floor and at or below its cap.
+#     `complete == true` at or above the package's floor and at or below its cap.
+#   * `complete` means the record holds that version's FULL set, so the chart renders its
+#     Deployment. It is NOT "a pod is running": the control instance cannot observe pods truthfully
+#     and KEDA scales an idle version to ZERO, so `/hosts` carries no `ready` and none is read here.
+#     A complete version scaled to zero IS a valid target — a run pinned to it scales it up and a
+#     host claims only after staging that set (Plugins `Hosting/StandingBuildHosts` §7b).
 #   Alias and versions come from the same answer, so they cannot disagree about a switch that
 #   happened between two reads. `MW_BUILD_API_TOKEN` is sent as a bearer when set.
 #
@@ -2455,7 +2460,7 @@ class Deployed(NamedTuple):
     """One retained build-server deployment as `GET <api>/hosts` reports it."""
     version: str
     run: int
-    ready: bool
+    complete: bool
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -2523,7 +2528,7 @@ class HttpBuildHosts:
 
     def _hosts(self) -> dict:
         """`GET <api>/hosts`, read ONCE per instance: `{aliases:{latest, previous}, versions:[{version,
-        ready, maxReplicas, pinnedBy}]}` — the alias and the versions come from one answer, so they
+        complete, maxReplicas, …}]}` — the alias and the versions come from one answer, so they
         can never disagree about a switch that happened between two reads."""
         if self._doc is None:
             self._doc = self._get("hosts", "the build hosts",
@@ -2533,8 +2538,8 @@ class HttpBuildHosts:
 
     def latest(self) -> str:
         """The set `aliases.latest` names, canonical spelling. RED when the alias is absent, is not a
-        platform set, or names a version that is not retained and READY (§4: "a missing, unreadable or
-        not-Ready alias is a RED job")."""
+        platform set, or names a version that is not retained and COMPLETE (§4: "a missing, unreadable or
+        not-complete alias is a RED job"). `ready` is never read — see the section comment."""
         doc = self._hosts()
         aliases = doc.get("aliases")
         value = aliases.get(LATEST_ALIAS) if isinstance(aliases, dict) else None
@@ -2545,10 +2550,10 @@ class HttpBuildHosts:
                 f"aliases.{LATEST_ALIAS} (got {value!r}) — no deployment is switched to `latest` yet "
                 f"(Doc/Architecture/DeployTestSwitchLatest phases P7-P9). {NO_FALLBACK}")
         row = next((d for d in self.deployed() if d.version == name), None)
-        if row is None or not row.ready:
+        if row is None or not row.complete:
             raise ResolutionError(
                 f"the build hosts' `latest`: aliases.{LATEST_ALIAS} names {name}, but "
-                f"{'no retained deployment carries it' if row is None else 'its deployment is not ready'} "
+                f"{'no retained deployment carries it' if row is None else 'its set is not complete in the record'} "
                 f"(retained: {retained_text(self.deployed())}). {NO_FALLBACK}")
         return name
 
@@ -2564,7 +2569,7 @@ class HttpBuildHosts:
             if not name:
                 raise ResolutionError(f"the build hosts: {self.base}/hosts lists {version!r}, which is "
                                       f"not a platform set. {NO_FALLBACK}")
-            out.append(Deployed(name, int(match_set_name(name).group(2)), row.get("ready") is True))
+            out.append(Deployed(name, int(match_set_name(name).group(2)), row.get("complete") is True))
         return out
 
 
@@ -2610,14 +2615,14 @@ def read_package_bounds(root: str) -> list[PackageBounds]:
 
 
 def highest_in_range(floor_run: int | None, cap_run: int, deployed: list[Deployed]) -> Deployed | None:
-    """The highest READY deployment at or above the floor and at or below the cap, or None."""
-    fits = [d for d in deployed if d.ready and d.run <= cap_run and (floor_run is None or d.run >= floor_run)]
+    """The highest COMPLETE deployment (scaled to zero or not) at or above the floor and at or below the cap, or None."""
+    fits = [d for d in deployed if d.complete and d.run <= cap_run and (floor_run is None or d.run >= floor_run)]
     return max(fits, key=lambda d: d.run) if fits else None
 
 
 def retained_text(deployed: list[Deployed]) -> str:
     """The retained deployments as one readable list. Pure."""
-    return ", ".join(d.version + ("" if d.ready else " (not ready)") for d in deployed) or "none"
+    return ", ".join(d.version + ("" if d.complete else " (not complete)") for d in deployed) or "none"
 
 
 def cap_shape_errors(bounds: list[PackageBounds]) -> list[str]:
@@ -2683,7 +2688,7 @@ def check_caps(bounds: list[PackageBounds], hosts: "HttpBuildHosts | None") -> l
     for b in binding:
         if highest_in_range(set_run(b.floor), set_run(b.cap), deployed) is None:
             errors.append(
-                f"{b.package}/index.json: no READY build-server deployment lies in "
+                f"{b.package}/index.json: no COMPLETE build-server deployment lies in "
                 f"[{b.floor or 'no floor'}, {b.cap}] (retained: "
                 f"{retained_text(deployed)}). "
                 "The cap is not admitted: its deployment must be requested and tested first "
@@ -2694,7 +2699,7 @@ def check_caps(bounds: list[PackageBounds], hosts: "HttpBuildHosts | None") -> l
 
 def partition_packages(bounds: list[PackageBounds], hosts: "HttpBuildHosts", latest: str) -> dict[str, list[str]]:
     """`{set: [package, …]}` — the version each package builds against: `latest`, unless its cap
-    forbids it, then the highest retained READY deployment inside its floor and cap. Any package with
+    forbids it, then the highest retained COMPLETE deployment inside its floor and cap. Any package with
     no fit is RED (ResolutionError naming floor, cap and what is retained). The per-version lookup is
     read only when some cap forbids `latest`."""
     latest_run = set_run(latest)
@@ -2718,7 +2723,7 @@ def partition_packages(bounds: list[PackageBounds], hosts: "HttpBuildHosts", lat
             deployed = hosts.deployed()
         fit = highest_in_range(floor_run, cap_run, deployed)
         if fit is None:
-            problems.append(f"{b.package}: no READY deployment in [{b.floor or 'no floor'}, {b.cap}] "
+            problems.append(f"{b.package}: no COMPLETE deployment in [{b.floor or 'no floor'}, {b.cap}] "
                             f"(retained: {retained_text(deployed)}).")
             continue
         out.setdefault(fit.version, []).append(b.package)
@@ -2805,8 +2810,9 @@ class _FakeBuildApi:
 
 def self_test_build_hosts() -> tuple[int, list[str]]:
     """`--from-build-hosts` and the cap rules, against a fake build API serving `GET /hosts` in the
-    shape the control instance answers (`{aliases:{latest, previous}, versions:[{version, ready,
-    maxReplicas, pinnedBy}]}`), and, for the end-to-end case, the fake GitHub and registry the rest
+    shape the control instance answers (`{aliases:{latest, candidate, previous}, versions:[{version,
+    deploymentName, complete, maxReplicas, aliases, pinned, pinnedBy}]}` — no `ready`; every fake row
+    carries a LEGACY `ready` that CONTRADICTS `complete`, so a resolver that read it would fail), and, for the end-to-end case, the fake GitHub and registry the rest
     of the self-test uses. Every rule has a NEGATIVE control: the input that must make it fire, and
     the one that must not."""
     import subprocess
@@ -2828,6 +2834,16 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
         return ""
 
     def hosts(latest: object, *rows: tuple[str, bool]) -> tuple[int, str, dict[str, str]]:
+        # `(version, complete)`. The decoy `ready: not complete` proves `ready` is never read: a
+        # complete version reads as scaled to zero, an incomplete one as "ready".
+        return 200, json.dumps({"aliases": {"latest": latest, "candidate": None, "previous": None},
+                                "versions": [{"version": v, "deploymentName": "build-" + v.replace(".", "-"),
+                                              "complete": c, "ready": not c, "maxReplicas": 2,
+                                              "aliases": [], "pinned": False, "pinnedBy": []}
+                                             for v, c in rows]}), {}
+
+    def legacy(latest: str, *rows: tuple[str, bool]) -> tuple[int, str, dict[str, str]]:
+        # The shape `/hosts` never serves: `ready` and no `complete`.
         return 200, json.dumps({"aliases": {"latest": latest, "previous": None},
                                 "versions": [{"version": v, "ready": r, "maxReplicas": 2, "pinnedBy": []}
                                              for v, r in rows]}), {}
@@ -2840,7 +2856,8 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
         built = HttpBuildHosts(api.url, "tok")
         got = built.latest()
         built.deployed()
-        check("latest is the set aliases.latest names", got == "3.1.10412", got)
+        check("latest is the set aliases.latest names — complete and scaled to zero (decoy "
+              "`ready: false`) IS a target", got == "3.1.10412", got)
         check("the token is presented as a bearer, and /hosts is read ONCE for alias and versions",
               api.seen == [(route, "Bearer tok")], api.seen)
     with _FakeBuildApi({route: ready_latest}) as api:
@@ -2861,7 +2878,12 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
         check("an alias that is no set is RED", "names no platform set" in text, text)
     with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", False))}) as api:
         text = red(lambda: HttpBuildHosts(api.url).latest())
-        check("a not-Ready `latest` is RED", "not ready" in text, text)
+        check("a `latest` whose set is not complete in the record is RED (even with a decoy `ready: true`)",
+              "not complete" in text, text)
+    with _FakeBuildApi({route: legacy("3.1.10412", ("3.1.10412", True))}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).latest())
+        check("NEGATIVE: a row with `ready: true` and no `complete` is not a target — `ready` is never read",
+              "not complete" in text, text)
     with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10398", True))}) as api:
         text = red(lambda: HttpBuildHosts(api.url).latest())
         check("a `latest` no retained deployment carries is RED", "no retained deployment" in text, text)
@@ -2916,12 +2938,13 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
         check("a cap that admits `latest` is stale — RED", any("stale" in e for e in errors), errors)
     with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10390", True))}) as api:
         errors = check_caps([ok], HttpBuildHosts(api.url))
-        check("NEGATIVE: a binding cap with a READY deployment in range is admitted", errors == [], errors)
+        check("NEGATIVE: a binding cap with a COMPLETE deployment in range (scaled to zero) is admitted",
+              errors == [], errors)
     with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10390", False),
                                      ("3.1.10200", True))}) as api:
         errors = check_caps([ok], HttpBuildHosts(api.url))
-        check("a binding cap with no READY deployment in range is not admitted",
-              any("not admitted" in e and "(not ready)" in e for e in errors), errors)
+        check("a binding cap with no COMPLETE deployment in range is not admitted",
+              any("not admitted" in e and "(not complete)" in e for e in errors), errors)
 
     # ── partitions ──
     capped = ok._replace(package="Capped")
@@ -2930,14 +2953,14 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
                                      ("3.1.10398", True), ("3.1.10390", True), ("3.1.10420", True))}) as api:
         built = HttpBuildHosts(api.url)
         parts = partition_packages(pkgs, built, built.latest())
-        check("an uncapped package builds on `latest`; a capped one on the HIGHEST READY version in "
+        check("an uncapped package builds on `latest`; a capped one on the HIGHEST COMPLETE version in "
               "its range (out-of-range 10420 skipped)",
               parts == {"3.1.10412": ["Free"], "3.1.10398": ["Capped"]}, parts)
     with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10399", False),
                                      ("3.1.10398", True))}) as api:
         built = HttpBuildHosts(api.url)
         parts = partition_packages([capped], built, built.latest())
-        check("a NOT-ready version inside the range is never taken (10399 skipped for 10398)",
+        check("a version NOT complete inside the range is never taken (10399 skipped for 10398)",
               parts == {"3.1.10398": ["Capped"]}, parts)
     with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True))}) as api:
         built = HttpBuildHosts(api.url)
@@ -3019,7 +3042,7 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
               proc.returncode == 1 and "MW_BUILD_API" in proc.stdout, proc.stdout[-300:])
         with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10399", True))}) as api:
             proc = cli("--check-caps", "--root", root, "--build-api", api.url)
-            check("--check-caps admits a cap whose deployment is retained and ready",
+            check("--check-caps admits a cap whose deployment is retained and complete",
                   proc.returncode == 0 and "1 cap(s) admitted" in proc.stdout, proc.stdout[-300:])
         write("Broken", "{not json")
         proc = cli("--check-caps", "--root", root)
