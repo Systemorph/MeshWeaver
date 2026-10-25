@@ -141,9 +141,10 @@ jobs:
           kinds=$(printf '%s\n' "$on" | grep -E '^kind:' | sort | tr '\n' ' ')
           [ "$kinds" = "kind: Deployment kind: NetworkPolicy kind: Pod kind: Service " ] \
             || { echo "::error::enabled chart rendered [$kinds]"; exit 1; }
-          printf '%s\n' "$on" | grep -q '^  egress: \[\]' || { echo "::error::the NetworkPolicy does not deny egress"; exit 1; }
+          grep -q '^  egress: \[\]' <<<"$on" || { echo "::error::the NetworkPolicy does not deny egress"; exit 1; }
           # The helm-test pod must NOT carry the Service's selector labels (the Service would route to it).
-          printf '%s\n' "$on" | awk '/^kind: Pod/{p=1} p&&/app.kubernetes.io\/name:/{print; exit}' | grep -q 'ollama-smoke' \
+          pod_name=$(awk '/^kind: Pod/{p=1} p&&/app.kubernetes.io\/name:/{print; exit}' <<<"$on")
+          grep -q 'ollama-smoke' <<<"$pod_name" \
             || { echo "::error::the helm-test pod carries the Deployment's selector name"; exit 1; }
           if helm template ollama deploy/ollama/helm --set enabled=true --set image.repository=$ACR/$REPO >/dev/null 2>&1; then
             echo "::error::enabled without image.tag rendered — the immutable-tag refusal is gone"; exit 1
@@ -182,10 +183,15 @@ jobs:
           df -h / /mnt
           sudo systemctl stop docker docker.socket
           sudo mkdir -p /mnt/docker
-          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
+          # The containerd image store lets the daemon's OWN BuildKit push zstd layers (next steps) — no
+          # separate builder container, so nothing is pulled from Docker Hub beyond the Dockerfile's FROMs.
+          echo '{"data-root":"/mnt/docker","features":{"containerd-snapshotter":true}}' | sudo tee /etc/docker/daemon.json >/dev/null
           sudo systemctl start docker
           [ "$(docker info --format '{{.DockerRootDir}}')" = "/mnt/docker" ] \
             || { echo "::error::Docker did not move its data root to /mnt/docker"; exit 1; }
+          status=$(docker info --format '{{json .DriverStatus}}')
+          grep -q 'io.containerd.snapshotter' <<<"$status" \
+            || { echo "::error::Docker is not on the containerd image store — the zstd push needs it"; exit 1; }
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -212,10 +218,12 @@ jobs:
           repos=$(az acr repository list --name meshweaver -o tsv) \
             || { echo "::error::could not list the registry's repositories — refusing to decide whether $REPO:$tag exists"; exit 1; }
           exists=false
-          if printf '%s\n' "$repos" | grep -qx "$REPO"; then
+          # Here-strings, never `printf | grep -q`: under pipefail a grep that exits on its first match can
+          # SIGPIPE the writer, and the pipeline's 141 would read as "absent" and license a rebuild.
+          if grep -qx "$REPO" <<<"$repos"; then
             tags=$(az acr repository show-tags --name meshweaver --repository "$REPO" -o tsv) \
               || { echo "::error::could not list $REPO's tags — refusing to decide whether $tag exists"; exit 1; }
-            printf '%s\n' "$tags" | grep -qx "$tag" && exists=true
+            if grep -qx "$tag" <<<"$tags"; then exists=true; fi
           fi
           echo "exists=$exists" >> "$GITHUB_OUTPUT"
           if [ "$exists" = true ]; then
@@ -230,13 +238,14 @@ jobs:
       # layer in a single thread, and quantized weights do not compress anyway (whisper's 2 GB pushed at
       # ~12 MB/s by the same path). zstd keeps the layer format every current containerd pulls.
       # --provenance/--sbom off: one plain image manifest, as docker build gives the sibling images.
+      # The builder is the daemon's own (the `docker` driver over the containerd image store): a
+      # `docker-container` builder would pull moby/buildkit from Docker Hub anonymously (DockerHubInCi).
       - name: Build and push ollama:<line>-<sha> (BuildKit, zstd)
         if: steps.published.outputs.exists == 'false'
         run: |
           set -euo pipefail
-          docker buildx create --name ollama-push --driver docker-container --use
           start=$(date +%s)
-          docker buildx build --progress=plain --provenance=false --sbom=false \
+          docker buildx build --builder "$(docker context show)" --progress=plain --provenance=false --sbom=false \
             --output "type=image,name=$ACR/$REPO:${LINE}-${GITHUB_SHA::7},push=true,compression=zstd,compression-level=1,force-compression=true,oci-mediatypes=true" \
             deploy/ollama
           echo "built and pushed in $(( $(date +%s) - start ))s"
