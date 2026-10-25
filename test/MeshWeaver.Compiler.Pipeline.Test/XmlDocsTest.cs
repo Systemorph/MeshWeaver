@@ -38,6 +38,23 @@ public sealed class XmlDocsTest
         MessageHubExtensions.CreateTypeRegistry().XmlDocs().Should().NotBeSameAs(mesh.XmlDocs(), "another mesh owns another reader");
     }
 
+    /// <summary>
+    /// Every mesh owns a reader, so a process running many meshes parses the same documentation files
+    /// once per mesh — measured on a test host at ~10 MB of rendered text per mesh. The texts of an
+    /// assembly that can never unload are interned, so two meshes' readers hold ONE copy of each.
+    /// <b>Should fail if</b> the parse stops interning, and every mesh again carries its own copy
+    /// of every summary in every assembly it has read.
+    /// </summary>
+    [Fact]
+    public void TwoMeshes_ShareOneCopyOfEachSummaryText()
+    {
+        var method = typeof(ObjectPolymorphicConverter).GetMethod(nameof(ObjectPolymorphicConverter.CanConvert))!;
+        var first = MessageHubExtensions.CreateTypeRegistry().XmlDocs().Summary(method);
+        var second = MessageHubExtensions.CreateTypeRegistry().XmlDocs().Summary(method);
+        first.Length.Should().BeGreaterThan(0);
+        ReferenceEquals(first, second).Should().BeTrue("both meshes' snapshots of a non-collectible assembly point at the interned text");
+    }
+
     [Fact]
     public void AMethodSummary_RendersLikeNamotion()
         => Docs.Summary(typeof(ObjectPolymorphicConverter).GetMethod(nameof(ObjectPolymorphicConverter.CanConvert))!)
