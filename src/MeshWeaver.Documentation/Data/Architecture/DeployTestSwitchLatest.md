@@ -267,6 +267,16 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 | P9 | control | the roll that renders the first `build-<v>`, then the first green switch. Verify by reading `GET /api/builds/hosts` and the run nodes' recorded version, never the CD job's green | **yes** |
 | P10 | MeshWeaver.Plugins + satellites | adopt `--from-build-hosts` in Plugins `ci.yml` and the satellites, ONLY after P9 is verified, because §4 refuses a missing alias with no fallback and adopting earlier would red every consumer's CI | no |
 
+### Status of the module-facing phases (the cap half of P1, P5, P6's cap debt, P10)
+
+| phase | status | where |
+|---|---|---|
+| P1, cap half | **implemented.** `Package.MaxMeshVersion`, `CapReason` and `CapTracking` are carried by the node-repo listing. `resolve-platform.py --check-caps` is the validator, and `node-repo-validate.yml` runs it for every satellite. | core #7192 |
+| P5 | **implemented, inert.** `resolve-platform.py --from-build-hosts <api> [--packages-root .]` reads `GET /api/builds/hosts` (`{aliases:{latest, previous}, versions:[{version, ready, maxReplicas, pinnedBy}]}`). It resolves `aliases.latest` through the freeze path and writes `partitions`. It is RED on a missing, unreadable or not-ready answer, and it never falls back. No consumer passes the flag. | core #7192 |
+| P6, cap debt | **implemented, not called.** `node-repo-cap-debt.yml` publishes the repository's whole cap set as one signed `build-caps` event, then files one `Feedback/Feedback` "migrate to latest" item per capped package. The control intake keeps `Hosting/BuildCaps/<package>` (`{package, floor, cap, version, reason}`), written as System, for retention's `capVersions`. It deletes the node of a removed cap, and it computes the `BuildHostDeploy(reason: cap:<package>)` request for an undeployed cap but does not send it until P3 has the action. No satellite calls the lane until its service-user token is provisioned. | core #7192, MeshWeaver.Plugins (intake) |
+| P6, capped publish (D2) | **owed with P10.** It is the publish lanes consuming `partitions`, and nothing produces partitions until a consumer adopts `--from-build-hosts`. | — |
+| P10 | **blocked on P9.** | — |
+
 `deploy-test-switch-latest` and `package-mesh-version-cap` are `in force` as decisions, with
 P1 to P10 listed as owed on their register rows.
 When P9 is verified and P10 has landed, `build-hosts-follow-latest` is retired in the register.
