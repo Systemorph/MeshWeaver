@@ -6641,15 +6641,14 @@ ingress:
     # `memex-control` is the dedicated control instance's image (Memex docs/control-instance.md,
     # Route A): `control-promote` mirrors the accepted image here, and — like `mw-plugin-test` — its
     # destinations sit on CONTINUATION lines, so it is a second repository the join must not drop.
-    # `mw-build-host` is the standing build hosts' runner image (Doc/Architecture/BuildHosts):
-    # `build-host-image` mirrors each versioned build here inside a FOLDED scalar, so it is a fifth
-    # repository the derivation must see. `mw-core-tests` is core's own test image (the set's fifth
-    # digest, Doc/Architecture/BuildHosts): CD mirrors it beside the portal and migration images.
+    # `mw-core-tests` is core's own test image (the set's fifth digest, Doc/Architecture/BuildHosts):
+    # CD mirrors it beside the portal and migration images. (`mw-build-host`, the standing build
+    # hosts' runner image, is no longer published from here: it moved to MeshWeaver.Deploy's
+    # build-host.yml with the rest of the build-host deployment.)
     check(_targets.get("cr.meshweaver.cloud") == {"memex-portal-ai", "memex-migration",
-                                                  "mw-plugin-test", "memex-control", "mw-build-host",
-                                                  "mw-core-tests"},
+                                                  "mw-plugin-test", "memex-control", "mw-core-tests"},
           f"ARM 34: the fleet's own registry was derived with "
-          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all six repositories. "
+          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all five repositories. "
           f"`mw-plugin-test` and `memex-control` reach it through mirror calls whose destinations "
           f"are on the CONTINUATION line, and they are the repositories that vanish when the join "
           f"stops")
