@@ -80,10 +80,7 @@
     <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.84.2" />
     <PackageVersion Include="System.ClientModel" Version="1.14.0" />
     <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.62.0" />
-    <!-- 🚨 The ONE GUI package still pinned here, and not because the platform uses it: the
-         module-library shelf (tools/MeshWeaver.ModuleLibraries) stages it for the Plugins module
-         MeshWeaver.Blazor.Radzen. It leaves with the shelf list — see
-         Doc/Architecture/CoreCarriesNoGuiTechnology, "Build tooling that still names a GUI". -->
+    <PackageVersion Include="BlazorMonaco" Version="3.5.0" />
     <PackageVersion Include="Radzen.Blazor" Version="10.3.2" />
     <PackageVersion Include="DocSharp.Markdown" Version="0.21.0" />
     <PackageVersion Include="ClosedXML" Version="0.105.1" />
@@ -208,7 +205,7 @@
     <PackageVersion Include="Serilog.Settings.Configuration" Version="10.0.1" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <!-- Share-card rendering (OgCardRenderer) and the thumbnail generator's scaling
-         (MeshWeaver.ThumbnailGenerator, now in MeshWeaver.Plugins; it replaced SixLabors.ImageSharp). SkiaSharp is MIT; the NoDependencies native build
+         (tools/MeshWeaver.ThumbnailGenerator, which replaced SixLabors.ImageSharp). SkiaSharp is MIT; the NoDependencies native build
          deliberately drops the fontconfig/libfreetype link, so the portal image needs NO apt
          packages and the base image stays as it is — the font is supplied from an embedded
          resource instead. linux-x64 AND linux-arm64 natives ship in the package, which the
@@ -259,6 +256,7 @@
     <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Orleans.Server" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Playwright" Version="1.63.0" />
     <PackageVersion Include="NuGet.Protocol" Version="7.9.0" />
     <PackageVersion Include="NuGet.Packaging" Version="7.9.0" />
     <PackageVersion Include="NuGet.Versioning" Version="7.9.0" />
@@ -322,8 +320,8 @@
          Assembly identity: the public key token is unchanged (94bc3704cddfc263); only
          AssemblyVersion moves, 6.1.0.0 -> 7.0.0.0.
 
-         🚨 This entry is also MeshWeaver.Plugins' version source (its own pin file carries only
-         the GUI packages the platform does not use): MeshWeaver.Blazor, Blazor.Views, InstanceSync and
+         🚨 This entry is also MeshWeaver.Plugins' version source (it has no
+         Directory.Packages.props of its own): MeshWeaver.Blazor, Blazor.Views, InstanceSync and
          LogWatcher all reference System.Reactive versionless. Details and the crossing ledger:
          Doc/Architecture/DependencyMajorUpgrades. -->
     <PackageVersion Include="System.Reactive" Version="7.0.0" />
@@ -333,6 +331,8 @@
     <PackageVersion Include="Roslynator.CodeFixes" Version="4.15.0" />
     <PackageVersion Include="Roslynator.CodeAnalysis.Analyzers" Version="4.15.0" />
     <PackageVersion Include="Roslynator.Refactorings" Version="4.15.0" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.14.4" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.14.4" />
     <PackageVersion Include="Namotion.Reflection" Version="3.5.1" />
     <!-- 🚨 ONE Orleans family, one version. These four are referenced only by MeshWeaver.Plugins'
          hosts (this file is its version source), so no core project shows them to Dependabot and a
@@ -346,6 +346,7 @@
     <PackageVersion Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.4.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.6" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
