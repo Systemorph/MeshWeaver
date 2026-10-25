@@ -3933,6 +3933,39 @@ jobs:
           --repo "${{ github.repository }}" \
           --pr-body-file "$RUNNER_TEMP/pr-body.md"
 
+  chart-freeze:
+    name: "Chart frozen (lives in MeshWeaver.Deploy)"
+    # 🚨 THE GAP THIS CLOSES (policy `chart-lives-in-deploy`). MeshWeaver.Deploy was seeded from
+    # this repository's chart material (Deploy#1). Both copies stayed editable, both moved, and two
+    # pipelines baked `hosting-operator:main` from the two copies, so the moving tag flapped between
+    # them. The paths Deploy#1 copied are frozen here: a pull request may DELETE them (that is how
+    # they leave, #7127) and may do nothing else to them. `build-run.py` and `deploy/build-host/`
+    # stay editable: main-cd builds the build-host runner image from them here.
+    #
+    # 🚨 NO SKIP-TRAPDOOR: self-test first; no path filter (an unrelated pull request would
+    # otherwise "pass" by not running); no credential; no `continue-on-error`. The one exemption is
+    # on the EVENT: the diff it reads is a pull request's against its merge base.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - name: "The chart freeze can fail and can pass (self-test)"
+      run: python3 scripts/check-chart-freeze.py --self-test
+    - name: "No frozen chart path is added or modified"
+      run: |
+        set -euo pipefail
+        git fetch --no-tags origin "${{ github.base_ref }}"
+        # The MERGE BASE, not the base tip: a chart change somebody else made on main while this
+        # pull request is open must not read as this pull request making it.
+        base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+        echo "Comparing against merge base $base"
+        python3 scripts/check-chart-freeze.py --base "$base"
+
   collect-results:
     env:
       TESTS_MODE: ${{ needs.precheck.outputs.tests-mode }}
@@ -4002,7 +4035,7 @@ jobs:
     # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
     # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
     # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
-    needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
+    needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4455,6 +4488,16 @@ jobs:
         echo "::error::GITHUB'S PARSER READS THE KEYWORD AND THE NUMBER, AND NOTHING ELSE. Not the negation in front of it, not the possessive behind it, not the paragraph that says the issue stays open. Measured on 2026-09-22: '**Does not close #5057**' closed #5057 two seconds after the merge; 'Closes #2299's classification half' closed the whole of #2299 against its own body; and a DOCUMENTATION pull request narrating that misfire closed #2299 again, 57 minutes after a deliberate reopen."
         echo "::error::A sev:B/sev:H issue closes on POST-ROLL PRODUCTION VERIFICATION, never on a merge — the merge puts the fix on main, and what the label gates is whether the defect is gone from the running portal (policy 'severity-closes-on-verification'). Use 'Refs #N' or 'see #N' to mention an issue without closing it, and close it after the roll."
         echo "::error::If the verification has ALREADY happened, declare it per issue in the PR BODY: 'Verified-closing: #N — <what was verified, and where>'. That releases the severity check only; a negation is a contradiction to delete rather than out-vote, and a possessive is reworded ('Fixes the <half> of #N'). Rationale: Doc/Architecture/ClosingKeywordsAndIssueState."
+        exit 1
+
+    # ── …and a change to the FROZEN chart decides it too (policy `chart-lives-in-deploy`) ──────
+    # `!= 'success'` for the same reason as every gate above; the event predicate is IDENTICAL to
+    # the gate's own `if:` so the two can never disagree.
+    - name: Fail if a frozen chart path was changed
+      if: github.event_name == 'pull_request' && needs.chart-freeze.result != 'success'
+      run: |
+        echo "::error::The 'Chart frozen (lives in MeshWeaver.Deploy)' gate concluded '${{ needs.chart-freeze.result }}' — see that job, which names every frozen path this diff adds or modifies."
+        echo "::error::The chart lives in Systemorph/MeshWeaver.Deploy. Make the change there; this repository may only DELETE its frozen copy (deploy/helm, deploy/helm-db, deploy/aks/{values.aks.yaml,manifests,scripts}, deploy/homebrew, chart-gate.yml, homebrew.yml, check-config-key-coverage.py, test-bundle-registry.py). Rationale: Doc/Architecture/ChartOwnershipAndRunnerPool."
         exit 1
 
     - name: Fail if the clients gate failed
