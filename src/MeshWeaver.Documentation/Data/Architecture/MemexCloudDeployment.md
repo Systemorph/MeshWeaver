@@ -13,7 +13,7 @@ This guide explains how to stand up the Memex portal on a **private** Azure Kube
 >
 > The exact, ordered command sequence lives in `deploy/aks/README.md` (in the repository) — the public, self-contained AKS deployment sample, which `DEPLOY-RUNBOOK.md` was folded into. This document is the architecture and operations layer around it.
 
-> **Deployment model.** One Aspire AppHost (`deploy/aspire/Memex.Deploy.AppHost`) describes the workload from published images. The Aspire **Kubernetes publisher** generates the Helm chart (`deploy/helm`). The AKS *platform* — cluster, Postgres, VPN, TLS — is Bicep plus a thin overlay.
+> **Deployment model.** One Aspire AppHost (`src/Memex.Deploy.AppHost` (MeshWeaver.Plugins)) describes the workload from published images. The Aspire **Kubernetes publisher** generates the Helm chart (`deploy/helm`). The AKS *platform* — cluster, Postgres, VPN, TLS — is Bicep plus a thin overlay.
 
 ---
 
@@ -98,7 +98,7 @@ The ingress public IP is assigned by Azure. Retrieve it with `kubectl get svc -n
 
 ## 2. Images (Shared ACR)
 
-These images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on the registry (cross-RG if needed) so nodes can pull. Separately, the in-pod **self-updater** lists ACR tags under a **portal Workload Identity** (a shared UAMI federated to `system:serviceaccount:<ns>:memex-portal-sa`, granted `AcrPull`) — provisioned by `deploy/aks/infra/modules/portal-identity.bicep` and wired via `selfUpdate.azureClientId`. See [DeploymentAKS → Portal self-update](/Doc/Architecture/DeploymentAKS).
+These images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on the registry (cross-RG if needed) so nodes can pull. Separately, the in-pod **self-updater** lists ACR tags under a **portal Workload Identity** (a shared UAMI federated to `system:serviceaccount:<ns>:memex-portal-sa`, granted `AcrPull`) — provisioned by `infra/platform/modules/portal-identity.bicep` (Systemorph/Memex) and wired via `selfUpdate.azureClientId`. See [DeploymentAKS → Portal self-update](/Doc/Architecture/DeploymentAKS).
 
 | Image | Description |
 |---|---|
@@ -136,9 +136,9 @@ kubectl -n memex set image deployment/memex-portal-deployment memex-portal=<regi
 
 ## 3. Platform (Bicep)
 
-`deploy/aks/infra/main.bicep` provisions the cluster, the VNet-injected Postgres Flexible Server, the VPN gateway, RWX storage, and (optionally) a per-deployment ACR. Set `useSharedAcr=true` to point at your shared registry instead.
+`infra/platform/main.bicep` (Systemorph/Memex) provisions the cluster, the VNet-injected Postgres Flexible Server, the VPN gateway, RWX storage, and (optionally) a per-deployment ACR. Set `useSharedAcr=true` to point at your shared registry instead.
 
-Parameters live in `deploy/aks/infra/main.parameters.json`:
+Parameters live in `infra/platform/main.parameters.json` (Systemorph/Memex):
 - **Region and node size/count** — stay within your vCPU quota.
 - `postgresHighAvailability` — enable for production.
 - `gatewaySku` — use an AZ SKU such as `VpnGw1AZ`.

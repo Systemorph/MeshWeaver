@@ -54,7 +54,8 @@ updates:
       #
       # WHY: every Aspire.Hosting version depends on JsonPatch.Net, and 13.5.0 is where that crosses
       # from MIT to OSMFEULA (Open Source Maintenance Fee). The exposure is NOT our image - it is
-      # memex/aspire/Memex.Aspire.Hosting, PUBLISHED as MeshWeaver.Aspire.Hosting.Memex, whose
+      # the Aspire integration (MeshWeaver.Plugins src/Memex.Aspire.Hosting, versioned from this
+      # repository's Directory.Packages.props), PUBLISHED as MeshWeaver.Aspire.Hosting.Memex, whose
       # nuspec would hand the fee obligation to everyone who installs it and calls AddMemex().
       #
       # 🚨 TEMPORARY, and here is the exit. microsoft/aspire#19498 already replaced JsonPatch.Net
