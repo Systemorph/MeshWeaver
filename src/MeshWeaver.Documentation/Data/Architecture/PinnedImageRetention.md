@@ -402,7 +402,7 @@ join, ARM 20d reproduces the production line verbatim.
 base64-encoded inside Azure, with no source repository; an org-wide code search for
 `purge-old-images` returns zero hits outside this page; and the deployment repo's tree carries no
 bicep, terraform or task definition for them. The shared registry itself is out-of-band —
-`deploy/aks/infra/main.bicep` treats `meshweaver.azurecr.io` as an existing `sharedAcrLoginServer`
+`infra/platform/main.bicep` (Systemorph/Memex) treats `meshweaver.azurecr.io` as an existing `sharedAcrLoginServer`
 and only creates a registry when that is empty.
 
 So the reasoning that keeps two incidents from recurring lived in comments that existed in exactly

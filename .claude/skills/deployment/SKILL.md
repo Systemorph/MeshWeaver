@@ -216,7 +216,7 @@ az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <
   SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it
   re-runs the whole chart and can reset live config. 🚨 **Env folders live in the estate's PRIVATE
   deployments repository**, not `deploy/aks/envs/<env>/` — they moved out 2026-08-08/09
-  (`a69959165`) because their directory names are tenant identities; `deploy/aks/envs/example/` in
+  (`a69959165`) because their directory names are tenant identities; `deployments/aks/example/` (Systemorph/Memex, moved from this repo's `deploy/aks/envs/example/`) in
   this repo is the reference template only.
 - **Don't run `tools/deploy.sh` or `aspire deploy` against the AKS cluster** — those are the
   *Container Apps* route (a different target), not a code-update path for AKS.

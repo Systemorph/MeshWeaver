@@ -109,7 +109,7 @@ ServiceAccount, a namespaced Role/RoleBinding granting `get,patch` on the portal
 Deployment, and the conditional workload-identity annotation/label/env. The gaps are operational:
 
 1. **Azure (once):** ensure the portal UAMI + per-namespace federated credentials exist
-   (`deploy/aks/infra/modules/portal-identity.bicep`, default-on via `main.bicep`), and grant it
+   (`infra/platform/modules/portal-identity.bicep` in Systemorph/Memex, default-on via `main.bicep`), and grant it
    **AcrPull** on the registry (cross-RG, out-of-band — see `README.md` → "Grant AcrPull on a SHARED registry"):
    ```bash
    PORTAL_MI=$(az identity show -g <aks-resource-group> -n <portal-identity> --query principalId -o tsv)

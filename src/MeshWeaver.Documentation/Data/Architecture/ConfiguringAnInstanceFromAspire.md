@@ -279,7 +279,7 @@ generated from the Aspire model through Aspire's Kubernetes/Helm publisher. That
   record, not at a YAML file.
 
 `Aspire.Hosting.Kubernetes` is therefore not referenced by the deploy AppHost
-(`deploy/aspire/Memex.Deploy.AppHost`), and `--mode kubernetes` is gone.
+(`src/Memex.Deploy.AppHost` (MeshWeaver.Plugins)), and `--mode kubernetes` is gone.
 
 ## What is still open
 

@@ -88,7 +88,7 @@ cleanup must not trust the record list alone ([OperatingFromThePortal](/Doc/Arch
 The cluster is private — `kubectl` only via `az aks command invoke`.
 
 **Query every namespace, never a hand-written list** — the cluster runs at least three portal
-namespaces (`portalNamespaces` in `deploy/aks/infra/main.bicep` lists them), and a
+namespaces (`portalNamespaces` in `infra/platform/main.bicep` (Systemorph/Memex) lists them), and a
 loop that names only some of them silently omits a live image from the keeper list, which is exactly how
 you delete something in use:
 
