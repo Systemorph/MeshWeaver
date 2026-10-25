@@ -489,7 +489,7 @@ public class NodeTypeOperationalContentTest
         new("control", "Deployments") { NodeType = NodeTypeOperationalContent.DeploymentNodeType, Name = "control", Content = content };
 
     private const string Authored = """{"host":"control.example.com","buildHosts":{"enabled":true,"channels":{"latest":{"maxReplicas":2}}}}""";
-    private const string WithSets = """{"host":"control.example.com","buildHosts":{"enabled":true,"channels":{"latest":{"maxReplicas":2}}},"buildHostSets":{"latest":{"platformVersion":"3.1.10500"}}}""";
+    private const string WithSets = """{"host":"control.example.com","buildHosts":{"enabled":true,"channels":{"latest":{"maxReplicas":2}}},"buildHostSets":{"latest":"3.1.10500;;;"}}""";
 
     [Fact]
     public void ADeploymentExport_NeverNamesABuild()

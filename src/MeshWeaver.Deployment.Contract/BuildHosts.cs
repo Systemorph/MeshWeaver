@@ -82,6 +82,24 @@ public sealed record BuildHostChannel
     public bool IsComplete =>
         !string.IsNullOrWhiteSpace(PlatformVersion) && IsDigest(TesterDigest) && IsDigest(PortalDigest) && IsDigest(RunnerDigest);
 
+    /// <summary>
+    /// The set as ONE token — <c>&lt;platformVersion&gt;;&lt;testerDigest&gt;;&lt;portalDigest&gt;;&lt;runnerDigest&gt;</c>, a
+    /// missing part empty — the form <see cref="DeploymentContent.BuildHostSets"/> stores, so a write
+    /// replaces a set whole or not at all. Pure.
+    /// </summary>
+    public string ToSetToken() =>
+        string.Join(';', PlatformVersion?.Trim() ?? "", TesterDigest?.Trim() ?? "", PortalDigest?.Trim() ?? "", RunnerDigest?.Trim() ?? "");
+
+    /// <summary>The set a <see cref="ToSetToken"/> token names, or null when it is not exactly four parts. Pure.</summary>
+    public static BuildHostChannel? FromSetToken(string? token)
+    {
+        var parts = (token ?? "").Split(';');
+        if (parts.Length != 4)
+            return null;
+        static string? Part(string p) => string.IsNullOrWhiteSpace(p) ? null : p.Trim();
+        return new BuildHostChannel { PlatformVersion = Part(parts[0]), TesterDigest = Part(parts[1]), PortalDigest = Part(parts[2]), RunnerDigest = Part(parts[3]) };
+    }
+
     /// <summary><c>sha256:</c> followed by 64 lower-case hex characters.</summary>
     public static bool IsDigest(string? digest) =>
         digest is { Length: 71 } && digest.StartsWith("sha256:", StringComparison.Ordinal)

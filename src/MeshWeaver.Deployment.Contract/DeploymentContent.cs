@@ -614,15 +614,19 @@ public record DeploymentContent
     /// (<see cref="BuildHostsBlock"/>, Doc/Architecture/BuildHosts). Written only by core's CD through the
     /// operations instance; GitSync strips it on export and keeps the live value on import
     /// (<c>NodeTypeOperationalContent.DeploymentMemberNames</c>), so the record in git never names a
-    /// build and no authored change can roll a host back. Each entry uses the set fields of
-    /// <see cref="BuildHostChannel"/>; its <see cref="BuildHostChannel.MaxReplicas"/> is not read.
+    /// build and no authored change can roll a host back.
+    /// <para>🚨 Each channel's set is ONE scalar — a <see cref="BuildHostChannel.ToSetToken"/> token —
+    /// never an object of separate fields: a cross-hub write is a three-way merge that decides every
+    /// LEAF on its own, so a stale hand-over whose version is refused could still land a digest the
+    /// newer one did not change and leave a mixed set. As one leaf, the stale write conflicts as a
+    /// whole and its retry is refused as older (review of #7156 / MeshWeaver.Plugins#4166).</para>
     /// </summary>
     [Description("The platform set each build host channel runs (written by CD, never authored)")]
-    public ImmutableSortedDictionary<string, BuildHostChannel>? BuildHostSets { get; init; }
+    public ImmutableSortedDictionary<string, string>? BuildHostSets { get; init; }
 
-    /// <summary>The set channel <paramref name="channel"/> runs, or null.</summary>
+    /// <summary>The set channel <paramref name="channel"/> runs, or null (absent or not a set token).</summary>
     public BuildHostChannel? BuildHostSet(string channel) =>
-        BuildHostSets is { } sets && sets.TryGetValue(channel, out var set) ? set : null;
+        BuildHostSets is { } sets && sets.TryGetValue(channel, out var token) ? BuildHostChannel.FromSetToken(token) : null;
 
     /// <summary>OpenTelemetry export.</summary>
     [Description("Telemetry")]
