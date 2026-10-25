@@ -186,6 +186,10 @@ public static class FrameworkBuildIdentity
         "MeshWeaver.ServiceProvider",
         "MeshWeaver.ShortGuid",
         "MeshWeaver.Utils",
+        // The platform's tolerant YAML reader/writer (Doc/Architecture/TolerantYaml): in the
+        // closure through MeshWeaver.Hosting (MarkdownFileParser), so in-mesh content may read
+        // YAML with the same reader the import uses. Dependency-free.
+        "MeshWeaver.Yaml",
     ];
 
     /// <summary>
