@@ -150,7 +150,9 @@ public class InlineSvgEmissionBackplateGuard
             "src/MeshWeaver.Graph/IconBackplate.cs",
             "src/MeshWeaver.Domain/Icon.cs",
             "src/MeshWeaver.Hosting/Persistence/Parsers/MarkdownFileParser.cs",
-            "memex/Memex.Portal.Shared/Seo/SeoResolver.cs",
+            // memex/Memex.Portal.Shared/Seo/SeoResolver.cs left with Memex.Portal.Shared for
+            // MeshWeaver.Plugins (core slimming); its half of this guard went with it
+            // (Memex.Portal.Shared.Test.InlineSvgEmissionBackplateGuard).
         ];
         var missing = expected.Where(e => !files.Contains(e)).ToImmutableArray();
 

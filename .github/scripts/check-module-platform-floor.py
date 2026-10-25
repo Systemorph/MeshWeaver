@@ -34,7 +34,8 @@ already has in hand, so the check costs nothing.
 `src/MeshWeaver.Plugin.Packaging/NuGetVersionComparer.cs` exactly — numeric core parts compared
 as numbers, a release outranking any pre-release, dot-separated pre-release identifiers compared
 numerically when both are numeric, numeric ranking below alphanumeric, otherwise ordinal — and
-`ModulePlatformFloorScriptParityTest` in `test/Memex.Portal.Shared.Test` pins the two together on
+`ModulePlatformFloorScriptParityTest` in MeshWeaver.Plugins' `src/Memex.Portal.Shared.Test` (it reads
+this script from the pinned platform checkout) pins the two together on
 a table of cases. Two call sites computing the same fold differently either never converge or
 never fire, and both are silent.
 
