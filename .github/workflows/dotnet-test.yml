@@ -2455,6 +2455,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/resolve-platform.py --self-test
 
+    # The daily cap-debt filing (`node-repo-cap-debt.yml`, Doc/Architecture/DeployTestSwitchLatest
+    # §5): one submitted Feedback/Feedback item per capped package, refreshed and never duplicated,
+    # resolved when the cap goes, against a fake control instance (build API + MCP).
+    - name: "The cap-debt filing files once, refreshes, resolves, and refuses every missing input (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/cap-debt-triage.py --self-test
+
     # The ONE shell-facing reader of a platform version tag (policy `platform-semver-versioning`):
     # main-cd's never-backwards checks and line pointers read the run number through it, in both the
     # `3.0.0-ci.<run>` and the `3.<minor>.<run>` notation.
