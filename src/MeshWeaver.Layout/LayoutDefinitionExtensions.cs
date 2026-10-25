@@ -4,7 +4,7 @@ using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
-using Namotion.Reflection;
+using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Layout;
 
@@ -276,7 +276,7 @@ public static class LayoutDefinitionExtensions
         if (delgate is not null)
         {
             var method = delgate.Method;
-            var doc = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(method);
+            var doc = layout.Hub.XmlDocs().Summary(method);
             ret = ret.WithDescription(doc);
 
             // Check class-level DisplayAttribute for GroupName and fallback Order

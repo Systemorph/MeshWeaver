@@ -2031,6 +2031,11 @@ cmd_e2e() {
     test)
       local repo filter="${1:-HomeChatExecuteTest}"
       repo="$(resolve_repo)" || die "e2e test needs the repo — set MEMEX_REPO to your MeshWeaver checkout"
+      # The browser suite lives in MeshWeaver.Plugins with the portal GUI (core carries no GUI
+      # technology — Doc/Architecture/CoreCarriesNoGuiTechnology), resolved like the portal build's.
+      local plugins_repo="${MEMEX_PLUGINS_REPO:-$(cd "$repo/.." 2>/dev/null && pwd)/MeshWeaver.Plugins}"
+      [ -f "$plugins_repo/src/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" ] \
+        || die "e2e test needs a MeshWeaver.Plugins checkout (src/MeshWeaver.Portal.E2E.Test) — not found at '$plugins_repo'; clone it beside this repo or set MEMEX_PLUGINS_REPO"
       # A stale pidfile LIES when the background forward process has died (it's a plain bg pid,
       # not durable launchd) — so ALWAYS (re)start it (e2e_forward_start is idempotent), then WAIT
       # until the portal actually answers 200. Otherwise PortalFixture's reachability probe hits a
@@ -2047,11 +2052,15 @@ cmd_e2e() {
       # Point delegation/tool tests at the keyed tool-capable model (if one is pulled). Empty →
       # ChatDelegationTest Skips (qwen-small can't tool-call). Must match the model keyed in e2e_deploy.
       local e2e_tool_model; e2e_tool_model="$(detect_e2e_tool_model)"
-      E2E_BASE_URL="https://$E2E_HOST:$E2E_PORT" \
-      E2E_MODEL="${E2E_MODEL:-Provider/OpenAICompatible/qwen-small}" \
-      E2E_TOOL_MODEL="${E2E_TOOL_MODEL:-${e2e_tool_model:+Provider/OpenAICompatible/$e2e_tool_model}}" \
-        dotnet test "$repo/test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" \
-          --filter "FullyQualifiedName~$filter"
+      # Run FROM this checkout: `dotnet test` takes its runner from the first global.json above the
+      # CURRENT directory, and only this repo has one (Microsoft.Testing.Platform — xunit.v3 4.x
+      # refuses VSTest). The suite is built against this checkout as its platform.
+      ( cd "$repo" && \
+        E2E_BASE_URL="https://$E2E_HOST:$E2E_PORT" \
+        E2E_MODEL="${E2E_MODEL:-Provider/OpenAICompatible/qwen-small}" \
+        E2E_TOOL_MODEL="${E2E_TOOL_MODEL:-${e2e_tool_model:+Provider/OpenAICompatible/$e2e_tool_model}}" \
+          dotnet test "$plugins_repo/src/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" \
+            -p:MeshWeaverRoot="$repo/" --filter "FullyQualifiedName~$filter" )
       ;;
     down)
       local keep_db="no"

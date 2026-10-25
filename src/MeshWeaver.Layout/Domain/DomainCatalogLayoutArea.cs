@@ -5,7 +5,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ShortGuid;
-using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 
@@ -34,7 +33,7 @@ public static class DomainCatalogLayoutArea
                 Controls.H2(typeDefinition.DisplayName).WithStyle("margin: 0;"),
                 DomainViews.NavGlyph("⧉", host.Localize("ui.dataModel"), $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}")));
 
-        if (DomainViews.Description(MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type)) is { } descriptionLine)
+        if (DomainViews.Description(host.Hub.XmlDocs().Summary(typeDefinition.Type)) is { } descriptionLine)
             ret = ret.WithView(descriptionLine);
         
         return ret.WithView((areaHost, ctx) => RenderCatalog(areaHost, ctx, typeDefinition));

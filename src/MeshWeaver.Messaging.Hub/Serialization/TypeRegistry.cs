@@ -125,6 +125,9 @@ internal class TypeRegistry : ITypeRegistry
     // the chain and handed down (Doc/Architecture/PortalHeapIsHubs). An instance, never static.
     private readonly TypeDisplayMetadataCache descriptions;
 
+    /// <summary>The mesh's XML-documentation reader, shared down the registry chain with the descriptions.</summary>
+    internal XmlDocsReader Docs => descriptions.Docs;
+
     // Chains to the parent registry's builder: a definition the parent built is the one this registry
     // would build, unless key-function factories were registered here (see Localize).
     private readonly KeyFunctionBuilder keyFunctionBuilder;
