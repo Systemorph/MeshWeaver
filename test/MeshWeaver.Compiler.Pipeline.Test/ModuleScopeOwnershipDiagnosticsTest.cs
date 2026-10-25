@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Autofac;
 using MeshWeaver.Hosting;
 using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
@@ -82,7 +81,7 @@ public sealed class DiagnosedPerCircuit : IDisposable
 /// MeshWeaver#6584 and MeshWeaver#6588 never wrote a log line while they were live, so a quiet production
 /// log proved nothing. <see cref="ModuleScopeOwnership"/> writes the lines the defects WOULD write. Each
 /// test here re-introduces a defect deliberately — the route the code took before the fix — and shows the
-/// warning fires (the negative control), and shows the correct route writes nothing. Real Autofac
+/// warning fires (the negative control), and shows the correct route writes nothing. Real the DI container
 /// containers, built exactly as the mesh builds a module's (<see cref="ModuleServiceProvider.CreateForCallers"/>).
 /// </summary>
 public sealed class ModuleScopeOwnershipDiagnosticsTest
@@ -93,7 +92,7 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
         public required IServiceProvider Root { get; init; }
         public required IServiceProvider Module { get; init; }
 
-        public ILifetimeScope Circuit(string tag) => Root.GetRequiredService<ILifetimeScope>().BeginLifetimeScope(tag);
+        public MeshServiceProvider Circuit(string tag) => MeshServiceProvider.From(Root)!.BeginScope(tag);
     }
 
     /// <summary>A root with a module container beside it; the root forwards the module's two classes the
@@ -122,7 +121,7 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
             // returns, and every caller gets the one instance.
             services.AddScoped<IDiagnosedAlias>(sp => sp.GetRequiredService<DiagnosedSingleton>());
         module = ModuleServiceProvider.CreateForCallers(services, rootProvider, _ => false, [],
-            _ => Array.Empty<Func<ILifetimeScope?, object>>());
+            _ => Array.Empty<Func<MeshServiceProvider?, object>>());
         return new Mesh { Logs = logs, Root = rootProvider, Module = module };
     }
 
@@ -185,8 +184,8 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
         // The route before #6591: a forwarder the resolving scope owns.
         var mesh = Build(forwardersOwnWhatTheyReturn: true);
         var circuit = mesh.Circuit("circuit-a");
-        var singleton = circuit.Resolve<IServiceProvider>().GetRequiredService<DiagnosedSingleton>();
-        var perCircuit = circuit.Resolve<IServiceProvider>().GetRequiredService<DiagnosedPerCircuit>();
+        var singleton = circuit.GetRequiredService<DiagnosedSingleton>();
+        var perCircuit = circuit.GetRequiredService<DiagnosedPerCircuit>();
         mesh.Logs.Ownership.Should().BeEmpty("the line is written as the scope ends — when the disposal happens");
 
         circuit.Dispose();
@@ -205,8 +204,8 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
     {
         var mesh = Build(forwardersOwnWhatTheyReturn: false);
         var circuit = mesh.Circuit("circuit-a");
-        var singleton = circuit.Resolve<IServiceProvider>().GetRequiredService<DiagnosedSingleton>();
-        var perCircuit = circuit.Resolve<IServiceProvider>().GetRequiredService<DiagnosedPerCircuit>();
+        var singleton = circuit.GetRequiredService<DiagnosedSingleton>();
+        var perCircuit = circuit.GetRequiredService<DiagnosedPerCircuit>();
 
         circuit.Dispose();
 
@@ -260,10 +259,10 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
         var mesh = Build(forwardersOwnWhatTheyReturn: true);
         var a = mesh.Circuit("circuit-a");
         var b = mesh.Circuit("circuit-b");
-        a.Resolve<IServiceProvider>().GetRequiredService<DiagnosedSingleton>();
-        b.Resolve<IServiceProvider>().GetRequiredService<DiagnosedSingleton>();
-        a.Resolve<IServiceProvider>().GetRequiredService<DiagnosedPerCircuit>();
-        b.Resolve<IServiceProvider>().GetRequiredService<DiagnosedPerCircuit>();
+        a.GetRequiredService<DiagnosedSingleton>();
+        b.GetRequiredService<DiagnosedSingleton>();
+        a.GetRequiredService<DiagnosedPerCircuit>();
+        b.GetRequiredService<DiagnosedPerCircuit>();
 
         b.Dispose();
 
@@ -290,7 +289,7 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
         IServiceCollection services = new ServiceCollection();
         services.AddScoped<ThrowsWithoutACaller>();
         var module = ModuleServiceProvider.CreateForCallers(services, rootProvider, _ => false, [],
-            _ => Array.Empty<Func<ILifetimeScope?, object>>());
+            _ => Array.Empty<Func<MeshServiceProvider?, object>>());
 
         // The control: the construction really fails.
         Assert.ThrowsAny<Exception>(() => ModuleServiceProvider.ResolveAt(module, typeof(ThrowsWithoutACaller), 0));

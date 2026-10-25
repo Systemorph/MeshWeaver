@@ -24,7 +24,7 @@ namespace MeshWeaver.Mesh;
 ///   <item><description>the command runs off-turn via <c>ScheduleOffHubTurn</c>, so it holds no
 ///     grain turn;</description></item>
 ///   <item><description><c>SubscribeThroughPool</c> holds its pool permit for the SUBSCRIBE window
-///     only — deliberately, to protect the Autofac <c>BeginLifetimeScope</c>. Work that continues
+///     only — deliberately, to protect the hub service level being begun. Work that continues
 ///     past the subscribe (a timer, an await continuation, a multi-second command) has already
 ///     released the permit, so <c>DrainAll()</c> joins nothing.</description></item>
 /// </list>

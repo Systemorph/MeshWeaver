@@ -26,7 +26,7 @@ The four framework writers use the same preparation step: `ActivityLogAppender.A
 remains available for callers with a live scope; it is not the delayed-completion API.
 
 `ActivityReleaseLifetimeTest` captures cleanup from a real hub, retires that hub and its nested
-service scope, and then invokes the completion. The original callback fails at the disposed Autofac
+service scope, and then invokes the completion. The original callback fails at the disposed DI container
 scope; the prepared callback succeeds. `TerminalActivityWriterReleaseTest` separately proves that
 terminal writes still release unwatched mirrors and that a Running status releases nothing.
 

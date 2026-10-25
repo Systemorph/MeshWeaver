@@ -75,14 +75,14 @@ public sealed class ModuleConstructionGate
 ///
 /// <para>A post-creation handler a module registers reaches the mesh as a forwarding proxy
 /// (<see cref="ModuleServiceProxy"/>), and every call on the proxy resolves the module's instance from
-/// the module's OWN container. Autofac builds a container's shared instances one at a time, under one
-/// lock, so while ANY singleton of that module was under construction the handler could not be built,
+/// the module's OWN container. The container this replaced built a container's shared instances one at a
+/// time, under one lock, so while ANY singleton of that module was under construction the handler could not be built,
 /// and a create that only wanted to learn "this handler does not apply to me" waited — the boot-time
 /// stalls of #6391 (18 of 18 on a fresh pod, all System-written creates no handler applies to).</para>
 ///
 /// <para>Since #6542 every shared instance of a module's container is <b>built before the module is
 /// published</b> — at boot before the root provider is handed out, and on a swap before it commits — so
-/// the proxy only ever reads a built handler, which Autofac answers without the lock.
+/// the proxy only ever reads a built handler.
 /// <see cref="WhileANewGenerationsSingletonIsBeingBuilt_AnUnrelatedCreate_IsAnsweredOk"/> pins it: a
 /// singleton of the NEXT generation parks inside its constructor, and a create is answered <c>Ok</c>
 /// meanwhile. Before #6542 this test held the construction of a published module's singleton and pinned

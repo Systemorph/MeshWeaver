@@ -119,7 +119,7 @@ public class ActivityConflictSeverityTest
         {
             0 => new HubDisposingException(address, "activity write"),
             1 => new HubDisposedBeforeResponseException("activity", address, "update", address.ToString()),
-            _ => new ObjectDisposedException("Autofac.LifetimeScope", "nested lifetimes cannot be created")
+            _ => new ObjectDisposedException(MeshWeaver.ServiceProvider.MeshServiceProvider.DisposedObjectName, MeshWeaver.ServiceProvider.MeshServiceProvider.DisposedMessage)
         };
         var failure = new AggregateException(inner);
         var reason = NodeUpsertRejection.Classify(failure);

@@ -5,6 +5,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -34,9 +35,8 @@ public class RecycledHubRefusalTest : HubTestBase
     public RecycledHubRefusalTest(ITestOutputHelper output) : base(output) => this.output = output;
 
     private static ObjectDisposedException DisposedScope() =>
-        new("LifetimeScope",
-            "Instances cannot be resolved and nested lifetimes cannot be created from this "
-            + "LifetimeScope as it (or one of its parent scopes) has already been disposed.");
+        new(MeshServiceProvider.DisposedObjectName,
+            MeshServiceProvider.DisposedMessage);
 
     /// <summary>
     /// The refusal must be recognised as TRANSIENT by the classifier the READ path consults —
@@ -84,8 +84,7 @@ public class RecycledHubRefusalTest : HubTestBase
             .Should().BeTrue("otherwise GetMeshNode resolves null for a node that EXISTS — #2673");
 
         AccessControlPipeline.IsHubGone(GetHost(),
-                "Instances cannot be resolved and nested lifetimes cannot be created from this "
-                + "LifetimeScope as it (or one of its parent scopes) has already been disposed.")
+                MeshServiceProvider.DisposedMessage)
             .Should().BeTrue("a disposed scope named in the REASON is the same fact as one thrown");
         AccessControlPipeline.IsHubGone(GetHost(), "the query returned no rows")
             .Should().BeFalse("an ordinary undetermined outcome on a LIVE hub keeps its honest "

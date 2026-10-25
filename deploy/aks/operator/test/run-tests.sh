@@ -4509,7 +4509,7 @@ da_owner_log() {  # da_owner_log <syncblk owner line, or empty>
     printf 'OS Thread Id: 0x%x (%d)\n        Child SP               IP Call Site\n' "$((t + 512))" "$((t + 400))"
     printf '00007F3E%08x 00007F4F00000000 [InlinedCallFrame: 00007f3e%08x] System.Threading.Monitor.Enter_Slowpath(System.Runtime.CompilerServices.ObjectHandleOnStack)\n' "$((t * 4096))" "$((t * 4096))"
     printf '00007F3E%08x 00007F4F00000001 System.Threading.Monitor.Enter_Slowpath(System.Object) [/_/src/runtime/src/coreclr/System.Private.CoreLib/src/System/Threading/Monitor.CoreCLR.cs @ 26]\n' "$((t * 4096 + 16))"
-    printf '00007F3E%08x 00007F4F00000002 Autofac.Core.Lifetime.LifetimeScope.CreateSharedInstance(System.Guid, System.Func`1<System.Object>)\n' "$((t * 4096 + 32))"
+    printf '00007F3E%08x 00007F4F00000002 MeshWeaver.ServiceProvider.MeshServiceProvider.Shared(System.Guid, System.Func`1<System.Object>)\n' "$((t * 4096 + 32))"
     t=$((t+1))
   done
   # The owner: the process's oldest pool thread (highest stack address), 150 frames, the caller LAST.
@@ -4517,7 +4517,7 @@ da_owner_log() {  # da_owner_log <syncblk owner line, or empty>
   printf '00007F4F2E3C0000 00007F4F00000000 [HelperMethodFrame_1OBJ: 00007f4f2e3c0000] System.Threading.Monitor.ObjWait(Int32, System.Object)\n'
   f=1
   while [ "$f" -le 148 ]; do
-    printf '00007F4F2E3C%04x 00007F4F0000%04x Autofac.Core.Resolving.Pipeline.Layer%d.Execute(Autofac.Core.Resolving.Pipeline.ResolveRequestContext)\n' "$f" "$f" "$f"
+    printf '00007F4F2E3C%04x 00007F4F0000%04x MeshWeaver.ServiceProvider.Pipeline.Layer%d.Execute(MeshWeaver.ServiceProvider.ResolveContext)\n' "$f" "$f" "$f"
     f=$((f+1))
   done
   printf '00007F4F2E3CFFF0 00007F4F0000FFF0 MeshWeaver.Test.TheCallThatHoldsTheLock.Run()\n'
@@ -4531,7 +4531,7 @@ _da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p'
 [ "$(printf '%s' "$_da_json" | jq -r '.stacks.groups[0].frames | (.[1]), (.[-1]), (map(select(startswith("…"))) | length)' | tr '\n' '|')" = "[HelperMethodFrame_1OBJ] System.Threading.Monitor.ObjWait(Int32, System.Object)|MeshWeaver.Test.TheCallThatHoldsTheLock.Run()|0|" ] \
   && ok "…with its WHOLE stack: what it waits in at the top, and the CALLER that took the lock at the bottom" || bad "owner stack whole" "frames: $(printf '%s' "$_da_json" | jq -c '.stacks.groups[0].frames | [.[0:3], .[-3:]]')"
 [ "$(printf '%s' "$_da_json" | jq -r '[.stacks.groups[] | select(.threads == 30)] | length, (.[0].frames | join("|"))')" = "1
-[InlinedCallFrame] System.Threading.Monitor.Enter_Slowpath(System.Runtime.CompilerServices.ObjectHandleOnStack)|System.Threading.Monitor.Enter_Slowpath(System.Object)|Autofac.Core.Lifetime.LifetimeScope.CreateSharedInstance(System.Guid, System.Func\`1<System.Object>)" ] \
+[InlinedCallFrame] System.Threading.Monitor.Enter_Slowpath(System.Runtime.CompilerServices.ObjectHandleOnStack)|System.Threading.Monitor.Enter_Slowpath(System.Object)|MeshWeaver.ServiceProvider.MeshServiceProvider.Shared(System.Guid, System.Func\`1<System.Object>)" ] \
   && ok "…and its 30 waiters are ONE group: a frame's own stack address and source path no longer make every thread a stack of its own" || bad "waiters group" "groups of 30: $(printf '%s' "$_da_json" | jq -c '[.stacks.groups[] | select(.threads >= 2)]')"
 # Negative control: the SAME dump with no owner named in syncblk — the old thread is cut with the rest,
 # which is what the first real read did. It is the syncblk line, and nothing else, that keeps it.

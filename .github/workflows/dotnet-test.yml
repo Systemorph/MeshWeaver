@@ -1521,7 +1521,7 @@ jobs:
         fi
         # Per-class INIT → DISPOSE memory delta summary (one line per test instance):
         # managed=… rss=… rssAnon=… unmanaged=… shared=0|1
-        # rssAnon (Linux only) is where the Autofac Reflection.Emit factory pin lives;
+        # rssAnon (Linux only) is where a compiled-factory pin would live;
         # unmanaged = rss − managed is the portable approximation. Grep this file to
         # find the worst leakers without wading through the full per-event trace.
         if [ -f /tmp/meshweaver-memory-delta.log ]; then

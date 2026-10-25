@@ -203,7 +203,7 @@ public static class MeshDataSourceExtensions
                                 // NAMELESS INTERMEDIATE that no caller owns. A plain Reduce builds a
                                 // new one per call and registers it for disposal on `primary`, the
                                 // data source's hub-lifetime stream — so every call permanently
-                                // added a `sync/{id}` sub-hub (its own Autofac scope, TypeRegistry
+                                // added a `sync/{id}` sub-hub (its own service scope, TypeRegistry
                                 // and JsonSerializerOptions, ~140 KB). This factory runs uncached on
                                 // every call that passes a `configuration`, i.e. once per inbound
                                 // SubscribeRequest, so an unsubscribe reaped the subscription's own
@@ -1301,7 +1301,7 @@ public static class MeshDataSourceExtensions
                 // 🚨 RELEASE FIRST, LOG SECOND — A DIAGNOSTIC MUST NEVER PREVENT THE CLEANUP IT
                 // DESCRIBES (#5064). Control reaches this method only when `meshHub.IsDisposing`
                 // is already true (the guard above returned otherwise), so this arm runs while the
-                // hub's Autofac LifetimeScope is being closed underneath it and the resolve below
+                // hub's service scope is being closed underneath it and the resolve below
                 // can throw `ObjectDisposedException: … this LifetimeScope … has already been
                 // disposed`. With the resolve ahead of the release, that throw propagated out of
                 // the Rx error handler and `lease.Dispose()` never ran — so the collectible

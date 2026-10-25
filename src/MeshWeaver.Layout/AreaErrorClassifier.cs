@@ -143,7 +143,7 @@ public static class AreaErrorClassifier
     /// rendering host's OWN scope is gone.
     ///
     /// <para>This is the shape the incident arrived in: the render chain resolved a service from
-    /// the host hub's Autofac scope after that scope had been disposed, so the fault was Autofac's
+    /// the host hub's service scope after that scope had been disposed, so the fault was the container's
     /// own <see cref="ObjectDisposedException"/> — not the typed <see cref="HubDisposingException"/>
     /// the type-only overload matches — and the render reported a routine teardown at Error and then
     /// faulted AGAIN trying to localise its placeholder on the same dead scope.</para>

@@ -386,7 +386,7 @@ Three shapes count, and they are the same fact in three vocabularies:
 | `HubDisposingException` / `HubDisposedBeforeResponseException` | the two typed teardown exceptions — both **derive** from `ObjectDisposedException`, so they are covered by the line above |
 | `DeliveryFailureException` with `ErrorType.ShuttingDown` | the messaging layer's word for it (`MessageService.NackThroughParent`) |
 
-**Why every `ObjectDisposedException`, not just the Autofac-scope shape.** Nothing on this path
+**Why every `ObjectDisposedException`, not just the closed-scope shape.** Nothing on this path
 disposes anything as a way of *refusing* a patch, so on this path the exception has exactly one
 meaning. And the direction of a mistake is asymmetric — the same argument `MeshOperations.IsWriteDenial`
 makes for its own default: a false "terminal" loses a write and fails an install, every time; a false
@@ -781,8 +781,8 @@ deadline and is not answered twice); only the next create is answered `Ok`. Its 
 nothing held, succeeds on the first create.
 
 The same test used to park the construction of one of the module's singletons and pin that the
-create WAITED on the module's container — Autofac builds a container's shared instances one at a
-time, so the handler behind the proxy could not be built meanwhile. That state no longer exists:
+create WAITED on the module's container — the DI container then in use built a container's shared instances
+one at a time, so the handler behind the proxy could not be built meanwhile. That state no longer exists:
 every shared instance of a module's container is built before the module is published (MeshWeaver#6542,
 [Live Module Update](../LiveModuleUpdate) → "Built before published"), so the proxy only reads a built
 handler. The test now parks a singleton of the NEXT generation inside its constructor during a live

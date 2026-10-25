@@ -50,7 +50,7 @@ SynchronizationStream total                =  8 461     (0.5 % apart)
 ```
 
 So there is no separate "sync hub leak" to explain. **The question is entirely "why are there 8 461
-live `SynchronizationStream`s"**, and each one costs its own Autofac `ILifetimeScope` and
+live `SynchronizationStream`s"**, and each one costs its own service scope and
 `TypeRegistry` (~390 KB, of which ~173 KB is framework metadata duplicated per hub).
 
 ## 2. What retires one — three paths, and only one of them applies here
@@ -355,8 +355,8 @@ ninety seconds later and serving the same instance, holds 101 node hubs. The two
 by 958 node hubs and 4 260 MiB of last-GC heap, about 4.4 MiB per node hub (its own scope, type
 registry, workspace and its three or four `sync/` hubs would be in that figure). That fan-out is the candidate for the multi-GiB
 `[HEAPSTEP]` series every roll prints in its first minutes: the sampled allocation of those steps
-is `System.String`, `System.Byte[]`, `Entry[System.String][]` and Autofac's
-`IResolvePipelineBuilder` handlers and `MiddlewareDeclaration`, which is what hub construction
+is `System.String`, `System.Byte[]`, `Entry[System.String][]` and the resolve-pipeline
+handlers and middleware declarations of the DI container then in use (Autofac, since removed in MeshWeaver#7145), which is what hub construction
 allocates. `[HEAPSTEP]` names allocated types, not retained roots, and this section has neither a
 quiet-process root attribution nor a before/after on one process, so the per-hub figure and the
 link to the heap step are to be confirmed, not cited.

@@ -24,7 +24,7 @@ public class ModuleServiceProxy : DispatchProxy
     private int index;
     private string service = "";
     private Type? serviceType;
-    private Autofac.ILifetimeScope? caller;
+    private MeshWeaver.ServiceProvider.MeshServiceProvider? caller;
 
     /// <summary>Creates the proxy for <paramref name="serviceType"/>.</summary>
     public static object Create(Type serviceType, ModuleContexts contexts, string module, int index)
@@ -41,7 +41,7 @@ public class ModuleServiceProxy : DispatchProxy
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="index">The registration's index.</param>
     /// <param name="caller">The root-side scope the proxy serves, or null.</param>
-    public static object Create(Type serviceType, ModuleContexts contexts, string module, int index, Autofac.ILifetimeScope? caller)
+    public static object Create(Type serviceType, ModuleContexts contexts, string module, int index, MeshWeaver.ServiceProvider.MeshServiceProvider? caller)
     {
         ArgumentNullException.ThrowIfNull(serviceType);
         var proxy = (ModuleServiceProxy)DispatchProxy.Create(serviceType, typeof(ModuleServiceProxy));
@@ -138,7 +138,7 @@ public class ModuleServiceProxy : DispatchProxy
     ///
     /// <para>Null, too, when the current generation cannot produce this registration — it does not
     /// resolve, or resolves to something that is not <typeparamref name="T"/> — which is recorded and
-    /// reported once and makes the module's feature absent (<see cref="ModuleContexts.TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, System.Type?)"/>,
+    /// reported once and makes the module's feature absent (<see cref="ModuleContexts.TryLeaseModuleService(string, int, MeshWeaver.ServiceProvider.MeshServiceProvider?, System.Type?)"/>,
     /// MeshWeaver#6847): an optional module's broken service never faults a consumer of the set it
     /// belongs to.</para>
     /// </summary>
@@ -416,7 +416,7 @@ internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts,
 /// </summary>
 /// <typeparam name="TOptions">The platform options type.</typeparam>
 internal sealed class ModuleConfigureOptionsForwarder<TOptions>(
-    ModuleContexts contexts, string module, int index, Autofac.ILifetimeScope? caller)
+    ModuleContexts contexts, string module, int index, MeshWeaver.ServiceProvider.MeshServiceProvider? caller)
     : IConfigureNamedOptions<TOptions>
     where TOptions : class
 {
@@ -483,7 +483,7 @@ internal static class ModuleServiceForwarding
             : null;
     }
 
-    private static object ConfigureOptionsForwarder(Type options, ModuleContexts contexts, string module, int index, Autofac.ILifetimeScope? caller) =>
+    private static object ConfigureOptionsForwarder(Type options, ModuleContexts contexts, string module, int index, MeshWeaver.ServiceProvider.MeshServiceProvider? caller) =>
         Activator.CreateInstance(typeof(ModuleConfigureOptionsForwarder<>).MakeGenericType(options), contexts, module, index, caller)!;
 
     /// <summary>

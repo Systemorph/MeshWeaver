@@ -18,7 +18,7 @@ namespace MeshWeaver.Documentation.Test;
 /// sync streams unregister and the registrants run AFTERWARDS, on other threads. A harness that
 /// disposes and proceeds is running concurrently with all of that, and the very next thing it does
 /// is always one of the three that live teardown cannot survive: dispose the service scope (a
-/// continuation resolves from a dead Autofac scope), unload a collectible node ALC (a live thread
+/// continuation resolves from a dead service scope), unload a collectible node ALC (a live thread
 /// dereferences freed metadata — a native use-after-unload <b>SIGSEGV</b>), or return to xUnit so the
 /// next test class starts on top of the previous one's teardown.</para>
 ///

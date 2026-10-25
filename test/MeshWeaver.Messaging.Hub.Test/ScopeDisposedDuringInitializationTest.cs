@@ -16,9 +16,9 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// <c>Dispose()</c> cascades <c>CloseCreation</c> first, so <see cref="IMessageHub.IsShuttingDown"/>
 /// is already true when the BuildupAction faults.
 ///
-/// <para><b>The production sequence.</b> The host's root Autofac container (or an ancestor scope)
+/// <para><b>The production sequence.</b> The host's root service container (or an ancestor scope)
 /// is disposed directly — a <c>Host.StartAsync</c> abort, pod shutdown — without any HUB
-/// <c>Dispose()</c> having run. Autofac's <c>Disposable.Dispose()</c> flips the scope's disposed
+/// <c>Dispose()</c> having run. the container's <c>Disposable.Dispose()</c> flips the scope's disposed
 /// flag FIRST and only then runs the disposer over the tracked instances, so from that first
 /// instant every resolve throws <see cref="ObjectDisposedException"/> while the hub instance —
 /// itself a tracked component of the same scope, disposed later in the same sweep — still has
@@ -47,7 +47,7 @@ public class ScopeDisposedDuringInitializationTest(ITestOutputHelper output) : H
 {
     /// <summary>
     /// Registered in the hub's OWN scope and resolved by the BuildupAction — i.e. created AFTER
-    /// the hub instance, so Autofac's reverse-creation-order disposer disposes it BEFORE the hub.
+    /// the hub instance, so the container's reverse-creation-order disposal disposes it BEFORE the hub.
     /// Its <see cref="Dispose"/> therefore runs exactly inside the incident window: the scope's
     /// disposed flag is already set (every resolve throws), while the hub's <c>Dispose()</c> —
     /// later in the same sweep — has not run (<c>IsShuttingDown</c> still false). The
@@ -98,7 +98,7 @@ public class ScopeDisposedDuringInitializationTest(ITestOutputHelper output) : H
 
         // Out-of-band scope teardown — no hub Dispose(), no CloseCreation cascade: exactly the
         // host-root-container disposal of a Host.StartAsync abort / pod shutdown. Disposing the
-        // hub's AutofacServiceProvider disposes the underlying lifetime scope, which flips the
+        // hub's service provider disposes the underlying lifetime scope, which flips the
         // disposed flag, disposes the sentinel (waking the parked BuildupAction inside the
         // window), and only then disposes the tracked hub instance.
         ((IDisposable)hub!.ServiceProvider).Dispose();

@@ -157,7 +157,7 @@ var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
 `ReturnNullWhenNotPresent` sets one `bool` on the configuration record. It says how the reduction
 answers an absent state; it identifies no caller. But it is *a* configuration, so every read took the
 uncached branch — and, as the same field note spells out, an uncached reduce constructs a
-`SynchronizationStream`, hence a hosted `sync/{id}` sub-hub with its own Autofac scope, `TypeRegistry`
+`SynchronizationStream`, hence a hosted `sync/{id}` sub-hub with its own service scope, `TypeRegistry`
 and `JsonSerializerOptions`, **registered for disposal on its hub-lifetime parent**. One permanent hub
 per read, released only when the owning node hub dies.
 

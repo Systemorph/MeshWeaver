@@ -38,7 +38,7 @@ public class FaultClassifierOrleansForwardersTest
     /// <summary>
     /// 🚨 An activation abandoned because the hub it needed answered <see cref="ErrorType.ShuttingDown"/>
     /// is a teardown race, the same verdict the rest of the platform reaches; the activation-fault
-    /// classifier knew only the typed disposal and the Autofac text, so it ticketed the race at Error.
+    /// classifier knew only the typed disposal and the disposed-container text, so it ticketed the race at Error.
     /// </summary>
     [Fact]
     public void AShuttingDownDelivery_IsAnActivationTeardownRace()

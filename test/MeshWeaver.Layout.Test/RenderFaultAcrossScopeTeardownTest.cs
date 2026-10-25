@@ -24,7 +24,7 @@ namespace MeshWeaver.Layout.Test;
 /// <c>MeshWeaver.AI.Test</c>, exit 134 with every test green):</para>
 /// <code>
 /// Unhandled exception. System.ObjectDisposedException: Instances cannot be resolved … from this LifetimeScope …
-///    at Autofac.Extensions.DependencyInjection.AutofacServiceProvider.GetService(Type serviceType)
+///    at MeshWeaver.ServiceProvider.MeshServiceProvider.GetService(Type serviceType)
 ///    at MeshWeaver.Layout.Composition.LayoutAreaLocalizationExtensions.Localize(LayoutAreaHost host, …)
 ///    at MeshWeaver.Layout.Composition.LayoutAreaHost.CreateRenderErrorControl(Exception ex)
 ///    at MeshWeaver.Layout.Composition.LayoutAreaHost.FailRendering(Exception ex, String area)
@@ -38,7 +38,7 @@ namespace MeshWeaver.Layout.Test;
 /// and skips the placeholder when it is gone. But the error arm runs off the hub (here on the
 /// release lane) and the scope is disposed on ANOTHER thread, so it can close between the probe and
 /// the placeholder: the probe said "alive", the localisation resolved <c>AccessService</c> from the
-/// hub's provider a few statements later, Autofac threw, and the throw left the Rx error arm onto a
+/// hub's provider a few statements later, the DI container threw, and the throw left the Rx error arm onto a
 /// thread-pool thread — which kills the process. A check-then-act on a scope someone else disposes
 /// cannot be made safe by checking harder.</para>
 ///
