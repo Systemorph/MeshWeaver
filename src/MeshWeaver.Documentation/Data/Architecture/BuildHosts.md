@@ -356,8 +356,8 @@ hand. The design is [Deploy, Test the Deploy, Switch Latest](../DeployTestSwitch
 - **Token.** The token gains an optional fifth part, the `mw-core-tests` digest. A four-part token
   reads back byte-identically.
 - **Chart** (the build-host chart lives in Systemorph/MeshWeaver.Deploy; core's is frozen). Each entry renders Deployment `build-<v>` (dots as dashes, a DNS label) and ScaledObject
-  `build-<v>-scaler`, with demand from `/queue?version=<v>`. Its runner claims, reports and requests
-  its token by `MW_BUILD_VERSION`, never by channel. The selector and pod labels carry the version
+  `build-<v>-scaler`, with demand from `/queue?version=<v>`. Its runner (which moves to MeshWeaver.Deploy
+  along with the chart) claims, reports and requests its token by `MW_BUILD_VERSION`, never by channel. The selector and pod labels carry the version
   ONLY; the aliases label the Deployment, so a switch moves a label and restarts nothing. An alias
   that names two versions, a repeated version, or a malformed version is refused.
 - **Retention.** `BuildHostRetention.Keep` holds every alias target (`previous` while
