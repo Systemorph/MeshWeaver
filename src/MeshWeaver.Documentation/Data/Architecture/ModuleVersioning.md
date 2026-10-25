@@ -345,6 +345,71 @@ always wins over the environment default.
 > how — is the maintainer's decision, and it is stated here so that it is not settled as a side
 > effect of the strictness default.
 
+## The upper cap: `maxMeshVersion` (policy `package-mesh-version-cap`)
+
+A package may author an UPPER platform bound next to its floor, in the same `index.json`
+`content`. It is optional. Absent means the package builds against `latest`, which is the normal case.
+
+```json
+"content": {
+  "minMeshVersion": "3.1.10300",
+  "maxMeshVersion": "3.1.10400",
+  "capReason": "needs the pre-10401 shape of IFoo until the adapter lands",
+  "capTracking": "acme/Feedback/migrate-pkg-to-latest"
+}
+```
+
+**What it means today: build and test only.** A cap selects the build-server deployment the
+package's modules compile and test against: the highest retained, READY deployment at or above the
+floor and at or below the cap. It never holds a platform roll. Whether it also means anything at
+runtime is an open question of the design (Deploy, Test the Deploy, Switch Latest, §10 Q2).
+
+**What validates it** (`resolve-platform.py --check-caps`, run by `node-repo-validate.yml` on every
+satellite, so every repository inherits it):
+
+| rule | red when |
+|---|---|
+| well-formed | the cap is not a platform set (`3.1.<run>`, or a retired `3.0.0-ci.<run>`) |
+| cap ≥ floor | the cap is below `minMeshVersion`, compared by run number, the order `PlatformFloor` uses for two published builds |
+| companions | `capReason` or `capTracking` is missing, or either is present without a cap |
+| not stale | the cap is at or above `latest`: a cap that restricts nothing becomes a pin the day `latest` overtakes it, so remove it |
+| admitted | no READY build-server deployment lies inside the floor and cap |
+
+A tree with no cap passes and reads nothing. A tree WITH a cap reads the caller's build API
+(`vars.MW_BUILD_API`). An empty variable, or an endpoint that does not answer, is RED naming it,
+never a skip.
+
+**Resolution.** `resolve-platform.py --from-build-hosts <build API> --packages-root .` writes
+`partitions`, a map `{set: [package, …]}`: an uncapped package (or one whose cap admits `latest`) builds
+on `latest`, and a capped package builds on the highest READY deployment in its range. A package with no
+fit is RED, never a silent pick of `latest` or of a version below its floor. The mode is OFF by default.
+No consumer passes the flag until the control instance serves a `latest` deployment, because the mode
+has no fallback to the newest sealed set.
+
+Both questions are read from ONE answer, `GET <build API>/hosts` on the control instance:
+`{aliases:{latest, previous}, versions:[{version, ready, maxReplicas, pinnedBy}]}`. `latest` must name a
+version that is retained and `ready`.
+
+**The cap keeps its deployment, and is debt.** `node-repo-cap-debt.yml` is a reusable lane a repository
+calls daily. It does two things:
+
+1. It publishes the repository's whole cap set as one signed `build-caps` event to the control inbox. The
+   control plane keeps one `Hosting/BuildCaps/<package>` node per cap. The build hosts' retention reads
+   those nodes, so a capped package's deployment is not torn down while the cap stands. A package that is
+   missing from the set has had its cap removed, so its node is deleted.
+2. It files ONE submitted `Feedback/Feedback` triage item per capped package: "migrate <package> to
+   latest", with the cap, `latest`, the distance in platform builds, the cap's age and `capTracking`. The
+   item id is the (repository, package, cap) triple, so the next day refreshes it and never files a
+   duplicate. Removing the cap resolves the item.
+
+🚨 **What is NOT wired yet:**
+
+- `GET <build API>/hosts` is not served by the control instance yet. Until it is, admitting a binding cap,
+  resolving from the build hosts and the daily lane are all RED, naming that endpoint.
+- Main's floor stamp (MeshWeaver.Plugins `Hosting/PackageFloors`) still verifies every package on the one
+  set the run resolved. Until consumers adopt the per-package partitions, a capped package's floor can be
+  stamped above its own cap, and the validator then reds it.
+
 ## Full rebuild when the platform updates
 
 > 🚨 **Superseded for every platform build within one epoch** — see "The compatibility LADDER" above

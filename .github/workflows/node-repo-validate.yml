@@ -501,6 +501,23 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-resolver-copy.py" --root . --canonical "$RUNNER_TEMP/resolve-platform.canonical.py"
 
+      # 🚨 A PACKAGE'S UPPER PLATFORM CAP (policy `package-mesh-version-cap`,
+      # Doc/Architecture/DeployTestSwitchLatest §5). `maxMeshVersion` next to `minMeshVersion` in
+      # `<Package>/index.json`, with `capReason` and `capTracking`. The validator is the canonical
+      # resolver's `--check-caps` (one comparator for floor, cap and the deployments). A tree with no
+      # cap is green and reads nothing. A tree WITH a cap is read against the caller's build API
+      # (`vars.MW_BUILD_API`): a cap that admits `latest` is stale and RED, and a cap is admitted only
+      # while a READY build-server deployment lies inside its floor and cap. An empty
+      # `vars.MW_BUILD_API` with a cap declared is RED naming the variable, never a skip.
+      - name: "A package cap is well-formed and admitted — the validator can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/resolve-platform.canonical.py" --self-test
+      - name: "Every package cap (maxMeshVersion) is well-formed, at or above its floor, not stale, and admitted"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        env:
+          MW_BUILD_API: ${{ vars.MW_BUILD_API }}
+        run: python3 "$RUNNER_TEMP/resolve-platform.canonical.py" --check-caps --root . --build-api "${MW_BUILD_API:-}"
+
       # 🚨 AND THE SAME RULE FOR THE LOCAL NODE-TEST HARNESS (MeshWeaver#4785). `run-node-tests.py`
       # is the command AGENTS.md tells an author to run before pushing, and it IMPORTS
       # `compile-check.py` — a canonical whose surface moves. It existed only as three vendored
