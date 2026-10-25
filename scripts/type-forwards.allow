@@ -38,3 +38,14 @@
 # in-mesh sweep on systemorph and control found no Code/NodeType node naming it. A module compiled
 # against an earlier platform that still bound it is reported Unlinkable (ModulePlatformLink).
 MeshWeaver.PluginCatalog:MeshWeaver.PluginCatalog.IModuleUpdatePolicy  #7118 — deleted, not moved; no caller in the fleet or the live mesh
+
+# #7147 — NotOwnedServiceDescriptorExtensions and ReflectionCacheEviction are DELETED with Autofac,
+# not moved: the first populated an Autofac ContainerBuilder (PopulateMeshWeaver's signature takes
+# one), the second purged Autofac's reflection caches on load-context unload — no forwarder can
+# keep either without keeping Autofac. Their only callers were core's own (ModuleLoadContext,
+# CompilationCacheService); no fleet repository names them (git grep over origin/main of
+# MeshWeaver.Plugins, .Education, .Reinsurance, .SocialMedia, .Manufacturing, .Crm and Memex: 0
+# files). A module compiled against an earlier platform that still bound one is reported
+# Unlinkable (ModulePlatformLink).
+MeshWeaver.ServiceProvider:MeshWeaver.ServiceProvider.NotOwnedServiceDescriptorExtensions  #7147 — deleted with Autofac, not moved; signature is Autofac's ContainerBuilder; no caller outside core
+MeshWeaver.ServiceProvider:MeshWeaver.ServiceProvider.ReflectionCacheEviction  #7147 — deleted with Autofac, not moved; it purged Autofac's caches; no caller outside core
