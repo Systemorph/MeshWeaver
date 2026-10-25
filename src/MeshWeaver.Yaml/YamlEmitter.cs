@@ -21,6 +21,9 @@ internal static partial class YamlEmitter
 
     internal static string Emit(JsonNode? node)
     {
+        // The writer recurses per level; refuse a tree the reader could not read back anyway.
+        if (node is not null && DepthOf(node) > YamlParser.MaxDepth)
+            throw new ArgumentException($"the tree nests deeper than {YamlParser.MaxDepth} levels", nameof(node));
         var sb = new StringBuilder();
         switch (node)
         {
@@ -36,6 +39,26 @@ internal static partial class YamlEmitter
                 break;
         }
         return sb.ToString();
+    }
+
+    private static int DepthOf(JsonNode root)
+    {
+        var deepest = 0;
+        var pending = System.Collections.Immutable.ImmutableStack.Create((Node: root, Depth: 0));
+        while (!pending.IsEmpty)
+        {
+            pending = pending.Pop(out var item);
+            if (item.Node is not (JsonObject or JsonArray))
+                continue;
+            var depth = item.Depth + 1;
+            if (depth > deepest) deepest = depth;
+            if (deepest > YamlParser.MaxDepth)
+                return deepest;
+            var children = item.Node is JsonObject o ? o.Select(kv => kv.Value) : ((JsonArray)item.Node).AsEnumerable();
+            foreach (var child in children)
+                if (child is not null) pending = pending.Push((child, depth));
+        }
+        return deepest;
     }
 
     private static void EmitMapping(StringBuilder sb, JsonObject map, int indent, bool firstLineInline)
@@ -209,7 +232,25 @@ internal static partial class YamlEmitter
     [GeneratedRegex(@"^(y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$")]
     private static partial Regex Yaml11Boolean();
 
-    [GeneratedRegex(@"^[-+]?([0-9][0-9_]*)?(\.[0-9_]*)?([eE][-+]?[0-9]+)?$|^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\.[0-9_]*)?$|^[-+]?0b[01_]+$|^[-+]?0[0-7_]+$|^=$|^<<$")]
+    /// <summary>
+    /// What a YAML 1.1 reader would resolve to something other than a string — the yaml.org/type
+    /// regexes for int (binary, octal, decimal, hex, sexagesimal — all with <c>_</c>), float
+    /// (including <c>1.2.3</c>, which 1.1's <c>[0-9.]*</c> admits), anything that starts like a date, value and merge —
+    /// plus decimal digits with commas, which Ruby's Psych reads as an integer.
+    /// </summary>
+    [GeneratedRegex(
+        @"^[-+]?0b[01_]+$"
+        + @"|^[-+]?0[0-7_]+$"
+        + @"|^[-+]?(0|[1-9][0-9_,]*)$"
+        + @"|^[-+]?0x[0-9a-fA-F_]+$"
+        + @"|^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+(\.[0-9_]*)?$"
+        + @"|^[-+]?([0-9][0-9_,]*)?\.[0-9._]*([eE][-+]?[0-9]+)?$"
+        + @"|^[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+$"
+        + @"|^[-+]?\.(inf|Inf|INF)$|^\.(nan|NaN|NAN)$"
+        // Anything that STARTS like a date: readers are looser than the 1.1 timestamp regex (Ruby's
+        // Psych reads "2026-01-01 10:00:00 -5" as a time), and over-quoting costs nothing.
+        + @"|^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt \t]|$)"
+        + @"|^=$|^<<$|^~$")]
     private static partial Regex Yaml11NumberLike();
 
     private static bool IsPlainSafe(string text)

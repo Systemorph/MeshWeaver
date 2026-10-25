@@ -51,6 +51,10 @@ as the same JSON would.
 This is the YAML **1.2 core schema**: `yes`, `no`, `on`, `off` are strings, and a date such as
 `2026-01-01` is a string that binds to `DateTime`/`DateTimeOffset` like its JSON equivalent.
 
+A tag written before a line break applies to the node on the next line before it is resolved
+(`name: !!str` then `007` on the next line is the string `007`). In a block scalar, whitespace past the
+content indentation is content (`|-` over `x` and a line of three spaces is `"x\n "`).
+
 Covered syntax: block mappings and sequences (indented or not under a key, the compact `- key: v` form,
 nested `- - a`), flow collections over several lines with trailing commas, plain scalars folded over
 several lines, single-quoted (`''`) and double-quoted scalars with every YAML escape (`\n`, `\t`, `\xXX`,
@@ -73,11 +77,20 @@ The reader parses files that arrive by import and sync, so input it cannot bound
 - **Nesting deeper than 64 levels** (flow or block, properties-only lines included). The reader
   recurses per level; without the limit, deep nesting is an uncatchable stack overflow. 64 is also
   System.Text.Json's default `MaxDepth`, so nothing deeper could be bound anyway.
-- **Alias and merge-key expansion beyond 100,000 copied nodes** per text. Every alias is a deep copy,
-  so anchors that alias earlier anchors grow exponentially ("billion laughs").
+- **Alias and merge-key expansion beyond 100,000 copied nodes** per text — every node AND every null
+  slot a copy allocates. Every alias is a deep copy, so anchors that alias earlier anchors grow
+  exponentially ("billion laughs").
 - **A NUL character** anywhere in the text (YAML does not allow one in a stream).
 - **An escape that is not a Unicode scalar value** (`\U00110000`, a lone `\uD800`). A `\u` high
   surrogate followed by a `\u` low surrogate, the JSON spelling of one character, is read as that pair.
+
+Every loop in the reader consumes the text it inspects (a whitespace run inside a quoted scalar is
+read once, not re-scanned from each of its characters), and a duplicate key is replaced in place, so
+reading time is linear in the text. `TolerantYamlTest.GeneratedHostileInputs_…` throws several hundred
+generated hostile texts at both modes — long whitespace runs in every scalar style, wide and deep
+collections, alias and merge fans, million-character lines, tabs, indicator soup, one-character mutants
+of a valid document — and requires each to parse or refuse with `YamlParseException` within its own
+time budget.
 
 ## The tolerances
 
@@ -88,9 +101,10 @@ The reader parses files that arrive by import and sync, so input it cannot bound
   reading is a refusal — and the refusal is what used to lose the whole block.
 - **A duplicate key keeps its last value**, as System.Text.Json does with a duplicate JSON property.
 
-Everything else that has no single reading — an unterminated quote or flow collection, an unknown
-alias, a tab in indentation, an entry indented between two levels, text after a closing quote — throws
-`YamlParseException`.
+Everything else that has no single reading — an unterminated quote or flow collection, an EMPTY flow
+entry (`[a,,b]`, `{,}`; a trailing comma, an empty value `{k: }` and an empty key `{: v}` are legal),
+an unknown alias, a tab in indentation, an entry indented between two levels, text after a closing
+quote — throws `YamlParseException`.
 
 **In the binding** (`CreateSerializerOptions`, the default for `Deserialize<T>`):
 
@@ -110,8 +124,9 @@ PascalCase keys in declaration order, which keeps every existing mirrored file b
 
 ## Strict mode — for files strict readers also read
 
-`YamlParseOptions.StrictSpec` refuses the two reader tolerances above, and a plain scalar starting with
-`@`, a backtick or `%`, exactly where the YAML grammar does. The platform's own reads are tolerant; strict mode is for guards over files that OTHER readers
+`YamlParseOptions.StrictSpec` refuses the two reader tolerances above, a plain scalar starting with
+`@`, a backtick, `%`, `,`, `]` or `}`, and a leading empty line of a block scalar indented past its
+content — exactly where the YAML grammar does. The platform's own reads are tolerant; strict mode is for guards over files that OTHER readers
 also consume — `SkillFrontMatterGuard` (`.claude/skills`, read by the coding harnesses) and
 `DocumentationFrontMatterGuard` (the doc tree, read by GitHub and editors) hold their trees to it, so
 the platform's tolerance never turns a file another reader would drop into a green guard.
@@ -121,9 +136,10 @@ the platform's tolerance never turns a file another reader would drop into a gre
 `Serialize` writes block style with two-space indentation, a sequence under a key at the key's column
 (`Tags:` then `- a`), and the most readable scalar form that reads back as the same value:
 
-- **plain** when the text reads back as the same string — not when it would resolve to null, a boolean
-  or a number, including the YAML 1.1 forms (`yes`, `off`, `1_000`, `1:20`) a strict 1.1 reader would
-  convert;
+- **plain** when the text reads back as the same string — not when it would resolve to null, a boolean,
+  a number or a time, including the YAML 1.1 forms a 1.1 reader would convert (`yes`, `off`, `y`,
+  `0xFF_FF`, `-0xFF`, `0b101`, `017`, `1_000`, `1,000`, `1:20`, `1.2.3`, `.Inf`, anything starting
+  like a date such as `2026-01-01`) — checked against an independent YAML 1.1 reader (Ruby's Psych);
 - **single-quoted** (`'Foo: Bar'`, `'it''s'`) when plain would not survive;
 - **double-quoted** with escapes only for control characters;
 - **a literal block** (`|`, `|-`) for a multi-line string, with an indentation digit when its first line

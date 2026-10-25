@@ -87,13 +87,16 @@ internal sealed partial class YamlParser
             count++;
             switch (node)
             {
+                // A null child still costs the slot DeepClone allocates for it.
                 case JsonObject o:
                     foreach (var (_, child) in o)
                         if (child is not null) pending = pending.Push(child);
+                        else count++;
                     break;
                 case JsonArray a:
                     foreach (var child in a)
                         if (child is not null) pending = pending.Push(child);
+                        else count++;
                     break;
             }
         }
@@ -268,35 +271,38 @@ internal sealed partial class YamlParser
         SkipInlineSpaces();
         JsonNode? node;
         if (AtLineEndOrComment)
-            node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent);
+            node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent, props.Tag);
         else
             node = ParseInlineNode(parentIndent, props.Tag);
         return Apply(node, props);
     }
 
-    private JsonNode? ParseNodeOnFollowingLines(int parentIndent, bool sequenceAtParentIndent)
+    /// <summary>
+    /// Reads a node that starts on a following line. <paramref name="inheritedTag"/> is a tag
+    /// written before the line break (<c>key: !!str</c>): the scalar must not be resolved before it
+    /// applies, or <c>007</c> would already be the number 7.
+    /// </summary>
+    private JsonNode? ParseNodeOnFollowingLines(int parentIndent, bool sequenceAtParentIndent, string? inheritedTag)
     {
-        var before = Save();
         SkipToNextContent();
         if (AtEnd || AtAnyDocumentMarker)
             return null;
         var col = Column;
         if (col > parentIndent)
-            return ParseNodeAtLineStart(col, parentIndent);
+            return ParseNodeAtLineStart(col, parentIndent, inheritedTag);
         if (col == parentIndent && sequenceAtParentIndent && IsSequenceEntry)
             return ParseBlockSequence(col);
-        // Nothing nested: the value is empty. Leave the cursor where the caller can see the next
+        // Nothing nested: the value is empty, and the cursor is where the caller sees the next
         // sibling (or the end of its own collection).
-        Restore(before);
-        SkipToNextContent();
         return null;
     }
 
     /// <summary>Reads a node whose first character is the first content on its line, at column <paramref name="col"/>.</summary>
-    private JsonNode? ParseNodeAtLineStart(int col, int parentIndent)
+    private JsonNode? ParseNodeAtLineStart(int col, int parentIndent, string? inheritedTag = null)
     {
         var props = ParseProperties();
         SkipInlineSpaces();
+        var tag = props.Tag ?? inheritedTag;
         JsonNode? node;
         if (props.HasAny && AtLineEndOrComment)
         {
@@ -304,7 +310,7 @@ internal sealed partial class YamlParser
             EnterCollection();
             try
             {
-                node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent: false);
+                node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent: false, tag);
             }
             finally
             {
@@ -316,7 +322,7 @@ internal sealed partial class YamlParser
         else if (LineIsMappingKey())
             node = ParseBlockMapping(col);
         else
-            node = ParseInlineNode(parentIndent, props.Tag);
+            node = ParseInlineNode(parentIndent, tag);
         return Apply(node, props);
     }
 
@@ -403,12 +409,9 @@ internal sealed partial class YamlParser
                 merges = merges.Add(value);
             else
             {
-                if (map.ContainsKey(key))
-                {
-                    if (strict)
-                        throw ErrorAt($"duplicate mapping key '{key}'", keyMark);
-                    map.Remove(key);
-                }
+                // A duplicate keeps its LAST value, replaced in place (as System.Text.Json does).
+                if (strict && map.ContainsKey(key))
+                    throw ErrorAt($"duplicate mapping key '{key}'", keyMark);
                 map[key] = value;
             }
 
@@ -514,7 +517,7 @@ internal sealed partial class YamlParser
         SkipInlineSpaces();
         JsonNode? node;
         if (AtLineEndOrComment)
-            node = ParseNodeOnFollowingLines(indent, sequenceAtParentIndent: false);
+            node = ParseNodeOnFollowingLines(indent, sequenceAtParentIndent: false, props.Tag);
         else if (IsSequenceEntry)
             node = ParseBlockSequence(Column);
         else if (LineIsMappingKey())
@@ -654,12 +657,13 @@ internal sealed partial class YamlParser
     }
 
     /// <summary>
-    /// <c>@</c> and the backtick are reserved and <c>%</c> is the directive indicator: none may START a
-    /// plain scalar. Strict mode refuses them; the tolerant reader reads the text as written.
+    /// <c>@</c> and the backtick are reserved, <c>%</c> is the directive indicator and <c>, ] }</c>
+    /// are flow indicators: none may START a plain scalar (YAML 1.2 ns-plain-first). Strict mode
+    /// refuses them; the tolerant reader reads the text as written.
     /// </summary>
     private void RefuseReservedPlainStart()
     {
-        if (strict && Cur is '@' or '`' or '%')
+        if (strict && Cur is '@' or '`' or '%' or ',' or ']' or '}')
             throw Error($"a plain scalar cannot start with '{Cur}' (quote the value)");
     }
 
@@ -804,6 +808,7 @@ internal sealed partial class YamlParser
         var contentStart = pos;
         var lastContentEnd = -1;
         var lines = ImmutableList<string>.Empty;
+        var leadingMark = Save();
         while (!AtEnd)
         {
             var lineMark = Save();
@@ -813,8 +818,20 @@ internal sealed partial class YamlParser
             while (IsBlank(Cur)) Advance();
             if (Cur is '\n' or '\0')
             {
-                // A blank line belongs to the scalar whatever its indentation.
-                lines = lines.Add(spaces < contentIndent ? string.Empty : s[restStart..pos]);
+                // A line of blanks belongs to the scalar whatever its indentation. Up to the content
+                // indentation it is EMPTY; whitespace past it is CONTENT (YAML 1.2 l-empty vs
+                // l-nb-literal-text) — except before the first content line, where a longer blank
+                // line is an error in the grammar and read as empty by the tolerant reader.
+                var extra = spaces < contentIndent ? string.Empty : s[restStart..pos];
+                if (extra.Length > 0 && lastContentEnd < 0)
+                {
+                    if (strict)
+                        throw ErrorAt("a leading empty line of a block scalar is indented past its content", leadingMark);
+                    extra = string.Empty;
+                }
+                lines = lines.Add(extra);
+                if (extra.Length > 0)
+                    lastContentEnd = pos;
                 if (Cur == '\n') Advance();
                 continue;
             }
@@ -833,7 +850,7 @@ internal sealed partial class YamlParser
 
         // Trailing empty lines are governed by chomping, never by the body.
         var trailing = 0;
-        while (trailing < lines.Count && lines[lines.Count - 1 - trailing].Trim(' ', '\t').Length == 0)
+        while (trailing < lines.Count && lines[lines.Count - 1 - trailing].Length == 0)
             trailing++;
         var body = lines.Take(lines.Count - trailing).ToImmutableList();
         // The cursor now sits at the start of the line that ended the scalar, so the caller sees it.
@@ -990,7 +1007,13 @@ internal sealed partial class YamlParser
         var j = pos;
         while (j < s.Length && IsBlank(s[j])) j++;
         if (j >= s.Length || s[j] != '\n')
-            return false;
+        {
+            // Inner whitespace is content: take the whole run ONCE, so a long run is read in one
+            // pass rather than re-scanned from every character of it.
+            sb.Append(s, pos, j - pos);
+            while (pos < j) Advance();
+            return true;
+        }
         while (pos < j) Advance();
         Advance(); // '\n'
         var emptyLines = 0;
@@ -1105,6 +1128,10 @@ internal sealed partial class YamlParser
                 {
                     RefuseReservedPlainStart();
                     var text = ParsePlainFlow();
+                    // An entry with nothing in it ([a,,b], {,}) is not YAML. An empty KEY before ':'
+                    // ({: v}) and a tagged or anchored empty node are.
+                    if (text.Length == 0 && !props.HasAny && Cur != ':')
+                        throw Error("a flow collection entry is empty");
                     if (props.Tag is null)
                         plainText = text;
                     node = props.Tag is null ? YamlScalars.Resolve(text) : JsonValue.Create(text);
@@ -1215,11 +1242,9 @@ internal sealed partial class YamlParser
                 merges = merges.Add(value);
             else
             {
-                if (map.ContainsKey(key))
-                {
-                    if (strict) throw ErrorAt($"duplicate mapping key '{key}'", keyMark);
-                    map.Remove(key);
-                }
+                // A duplicate keeps its LAST value, replaced in place (as System.Text.Json does).
+                if (strict && map.ContainsKey(key))
+                    throw ErrorAt($"duplicate mapping key '{key}'", keyMark);
                 map[key] = value;
             }
             if (Cur == ',')
@@ -1284,8 +1309,6 @@ internal sealed partial class YamlParser
             Advance();
         }
         TrimEndBlanks(sb);
-        if (sb.Length == 0 && !AtEnd && !IsFlowIndicator(Cur) && Cur != ':')
-            throw Error("expected a value in a flow collection");
         return sb.ToString();
     }
 

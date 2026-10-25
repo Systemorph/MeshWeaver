@@ -680,6 +680,261 @@ public class TolerantYamlTest
         Assert.Equal(["null", "", "1.0"], block.Select(kv => kv.Key));
     }
 
+    // ───────────────────────────── second review of #7180 + self-audit ─────────────────────────────
+
+    [Fact]
+    public void AWideNullAnchor_IsChargedPerSlot()
+    {
+        var yaml = "a: &a [" + string.Join(", ", Enumerable.Repeat("~", 10_000)) + "]\n"
+            + "b: [" + string.Join(", ", Enumerable.Repeat("*a", 20)) + "]\n";
+        RefusedPromptly(() => TolerantYaml.Parse(yaml));
+        // Under the budget it still expands.
+        var small = Map("a: &a [~, ~]\nb: [*a, *a]\n");
+        Assert.Equal(2, small["b"]![1]!.AsArray().Count);
+    }
+
+    [Theory]
+    [InlineData('"')]
+    [InlineData('\'')]
+    public void ALongWhitespaceRunInAQuotedScalar_IsReadInOnePass(char quote)
+    {
+        var run = new string(' ', 200_000);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var value = Text(Map($"a: {quote}x{run}y{quote}\n")["a"]);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"took {watch.Elapsed}");
+        Assert.Equal("x" + run + "y", value);
+    }
+
+    [Theory]
+    [InlineData("0xFF_FF")]
+    [InlineData("-0xFF")]
+    [InlineData("+0x1")]
+    [InlineData("2026-01-01")]
+    [InlineData("2026-1-1 10:00:00")]
+    [InlineData("2026-01-01T10:00:00Z")]
+    [InlineData("1,000")]
+    [InlineData("1.2.3")]
+    [InlineData("0b1010")]
+    [InlineData("0o17")]
+    [InlineData("017")]
+    [InlineData("1:20")]
+    [InlineData("-1:20:30.5")]
+    [InlineData(".Inf")]
+    [InlineData("-.inf")]
+    [InlineData(".NaN")]
+    [InlineData("~")]
+    [InlineData("Y")]
+    [InlineData("NO")]
+    [InlineData("On")]
+    [InlineData("=")]
+    [InlineData("<<")]
+    public void Serialize_QuotesWhatAYaml11ReaderWouldNotReadAsAString(string value)
+    {
+        var yaml = TolerantYaml.Serialize(new JsonObject { ["k"] = value });
+        Assert.NotEqual($"k: {value}\n", yaml);
+        Assert.Equal(value, Text(Map(yaml)["k"]));
+    }
+
+    [Theory]
+    [InlineData("name: !!str\n  007\n", "007")]
+    [InlineData("name: !!str\n  null\n", "null")]
+    [InlineData("name: !!str\n  true\n", "true")]
+    [InlineData("name: &x !!str\n  0x1F\n", "0x1F")]
+    public void ATagBeforeTheLineBreak_AppliesBeforeResolution_InAMapping(string yaml, string expected)
+    {
+        var value = Map(yaml)["name"];
+        Assert.Equal(JsonValueKind.String, Kind(value));
+        Assert.Equal(expected, Text(value));
+    }
+
+    [Fact]
+    public void ATagBeforeTheLineBreak_AppliesBeforeResolution_InASequenceAndAtTheRoot()
+    {
+        var seq = Assert.IsType<JsonArray>(TolerantYaml.Parse("- !!str\n  007\n- !!str\n  null\n"));
+        Assert.Equal("007", Text(seq[0]));
+        Assert.Equal("null", Text(seq[1]));
+        Assert.Equal(JsonValueKind.String, Kind(seq[1]));
+        var root = TolerantYaml.Parse("--- !!str\n007\n");
+        Assert.Equal("007", Text(root));
+        Assert.Equal(12, Map("n: !!int\n  \"12\"\n")["n"]!.GetValue<int>());
+    }
+
+    [Theory]
+    [InlineData("a: |-\n  x\n   \n", "x\n ")]
+    [InlineData("a: |\n  x\n  \t\n", "x\n\t\n")]
+    [InlineData("a: |\n  x\n\n   \nb: 1\n", "x\n\n \n")]
+    [InlineData("a: |+\n  x\n  \n", "x\n\n")]
+    [InlineData("a: |\n  x\n \n", "x\n")]
+    public void BlockScalar_WhitespacePastTheIndentation_IsContent(string yaml, string expected) =>
+        Assert.Equal(expected, Text(Map(yaml)["a"]));
+
+    [Fact]
+    public void BlockScalar_ALeadingBlankLineIndentedPastTheContent_IsEmptyTolerantly_AndRefusedStrictly()
+    {
+        const string yaml = "a: |\n    \n  x\n";
+        Assert.Equal("\nx\n", Text(Map(yaml)["a"]));
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml, YamlParseOptions.StrictSpec));
+    }
+
+    [Theory]
+    [InlineData("tags: [a,,b]\n")]
+    [InlineData("m: {,}\n")]
+    [InlineData("s: [,]\n")]
+    [InlineData("m: {a: 1,, b: 2}\n")]
+    public void AnEmptyFlowEntry_IsRefused_InBothModes(string yaml)
+    {
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml));
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml, YamlParseOptions.StrictSpec));
+    }
+
+    [Fact]
+    public void TheLegalEmptyFlowForms_StillRead()
+    {
+        var map = Map("a: [x, y,]\nb: {k: }\nc: {: v}\nd: [!!str , z]\ne: [k: ]\n");
+        Assert.Equal(2, map["a"]!.AsArray().Count);
+        Assert.Null(map["b"]!["k"]);
+        Assert.Equal("v", Text(map["c"]![""]));
+        Assert.Equal("", Text(map["d"]![0]));
+        Assert.Null(map["e"]![0]!["k"]);
+    }
+
+    [Theory]
+    [InlineData("a: ,x\n")]
+    [InlineData("a: ]x\n")]
+    [InlineData("a: }x\n")]
+    public void StrictMode_RefusesFlowIndicatorPlainStarters(string yaml)
+    {
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml, YamlParseOptions.StrictSpec));
+        Assert.NotNull(TolerantYaml.Parse(yaml));
+    }
+
+    [Fact]
+    public void ManyDuplicateKeys_StayLinear_AndKeepTheLastValue()
+    {
+        var yaml = string.Concat(Enumerable.Range(0, 20_000).Select(i => $"k{i}: {i}\n"))
+            + string.Concat(Enumerable.Repeat("k0: dup\n", 20_000)) + "k0: last\n";
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var map = Map(yaml);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3), $"took {watch.Elapsed}");
+        Assert.Equal("last", Text(map["k0"]));
+        Assert.Equal(20_000, map.Count);
+    }
+
+    /// <summary>
+    /// The self-audit's fuzz half: a few hundred generated hostile texts — long whitespace runs in
+    /// every scalar style, wide and deep collections, alias fans, long lines, tabs everywhere and
+    /// indicator soup. Each must, within its own time budget, either parse or throw
+    /// <see cref="YamlParseException"/> — never hang and never any other exception type — in both
+    /// modes, and whatever parses must serialize and read back equal.
+    /// </summary>
+    [Fact]
+    public void GeneratedHostileInputs_ParseOrRefuse_PromptlyAndOnlyWithYamlParseException()
+    {
+        var random = new Random(7180);
+        var inputs = HostileInputs(random).ToList();
+        Assert.True(inputs.Count >= 300, $"only {inputs.Count} inputs generated");
+        foreach (var (name, text) in inputs)
+        {
+            foreach (var mode in new[] { YamlParseOptions.Tolerant, YamlParseOptions.StrictSpec })
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                IReadOnlyList<JsonNode?>? documents = null;
+                try
+                {
+                    documents = TolerantYaml.ParseAll(text, mode);
+                }
+                catch (YamlParseException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    Assert.Fail($"{name} (strict={mode.Strict}): {ex.GetType().Name}: {ex.Message}");
+                }
+                Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"{name} (strict={mode.Strict}) took {watch.Elapsed}");
+                foreach (var document in documents ?? [])
+                {
+                    var back = TolerantYaml.Parse(TolerantYaml.Serialize(document), YamlParseOptions.StrictSpec);
+                    Assert.True(JsonNode.DeepEquals(document, back), $"{name}: the written form did not read back equal");
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<(string Name, string Text)> HostileInputs(Random random)
+    {
+        const int Run = 100_000;
+        var spaces = new string(' ', Run);
+        var tabs = new string('\t', Run);
+        var mixed = string.Concat(Enumerable.Range(0, Run / 2).Select(i => i % 3 == 0 ? "\t" : " "));
+        foreach (var (wsName, ws) in new[] { ("spaces", spaces), ("tabs", tabs), ("mixed", mixed) })
+        {
+            yield return ($"double-quoted {wsName}", $"a: \"x{ws}y\"\n");
+            yield return ($"double-quoted {wsName} unterminated", $"a: \"x{ws}");
+            yield return ($"single-quoted {wsName}", $"a: 'x{ws}y'\n");
+            yield return ($"single-quoted {wsName} folded", $"a: 'x{ws}\n{ws}y'\n");
+            yield return ($"plain {wsName}", $"a: x{ws}y\n");
+            yield return ($"plain trailing {wsName}", $"a: x{ws}\n");
+            yield return ($"literal {wsName}", $"a: |\n  x{ws}\n  {ws}\n");
+            yield return ($"folded {wsName}", $"a: >\n  x{ws}\n\n  y\n");
+            yield return ($"flow {wsName}", $"a: [x{ws}, {ws}y, {{k{ws}: v}}]\n");
+            yield return ($"indent {wsName}", $"{ws}a: 1\n");
+            yield return ($"blank lines {wsName}", string.Concat(Enumerable.Repeat(ws[..100] + "\n", 1000)) + "a: 1\n");
+            yield return ($"key {wsName}", $"a{ws}: 1\n");
+            yield return ($"comment {wsName}", $"a: 1{ws}# c\n");
+        }
+        yield return ("wide flow", "a: [" + string.Join(",", Enumerable.Range(0, 100_000)) + "]\n");
+        yield return ("wide flow map", "a: {" + string.Join(",", Enumerable.Range(0, 50_000).Select(i => $"k{i}: {i}")) + "}\n");
+        yield return ("wide block", string.Concat(Enumerable.Range(0, 50_000).Select(i => $"- {i}\n")));
+        yield return ("wide mapping", string.Concat(Enumerable.Range(0, 50_000).Select(i => $"k{i}: v\n")));
+        yield return ("long line", "a: " + new string('x', 1_000_000) + "\n");
+        yield return ("long key", new string('k', 1_000_000) + ": v\n");
+        yield return ("long quoted", "a: \"" + new string('x', 1_000_000) + "\"\n");
+        yield return ("many escapes", "a: \"" + string.Concat(Enumerable.Repeat("\\u00e9\\n\\t", 100_000)) + "\"\n");
+        yield return ("alias fan", "a: &a {k: v}\n" + string.Concat(Enumerable.Range(0, 30_000).Select(i => $"b{i}: *a\n")));
+        yield return ("alias fan flow", "a: &a [1, 2, 3]\nb: [" + string.Join(",", Enumerable.Repeat("*a", 40_000)) + "]\n");
+        yield return ("merge fan", "a: &a {k: v}\n" + string.Concat(Enumerable.Range(0, 20_000).Select(i => $"b{i}:\n  <<: *a\n")));
+        yield return ("many anchors", string.Concat(Enumerable.Range(0, 50_000).Select(i => $"k{i}: &a{i} v\n")));
+        yield return ("many documents", string.Concat(Enumerable.Repeat("---\na: 1\n", 20_000)));
+        yield return ("many markers", string.Concat(Enumerable.Repeat("---\n...\n", 20_000)));
+        yield return ("deep flow 63", new string('[', 63) + new string(']', 63));
+        yield return ("deep flow 65", new string('[', 65) + new string(']', 65));
+        yield return ("deep block 1000", string.Concat(Enumerable.Range(0, 1000).Select(i => new string(' ', i) + "a:\n")));
+        yield return ("deep sequences inline", string.Concat(Enumerable.Repeat("- ", 1000)) + "x\n");
+        yield return ("deep mixed", string.Concat(Enumerable.Range(0, 1000).Select(i => new string(' ', 2 * i) + (i % 2 == 0 ? "- " : "k:") + "\n")));
+        yield return ("unclosed brackets", new string('[', 100_000));
+        yield return ("closing soup", new string(']', 100_000));
+        yield return ("many colons", "a: " + string.Concat(Enumerable.Repeat(": ", 100_000)) + "\n");
+        yield return ("many hashes", "a: " + string.Concat(Enumerable.Repeat(" #", 100_000)) + "\n");
+        yield return ("many dashes", string.Concat(Enumerable.Repeat("-", 100_000)) + "\n");
+        yield return ("block scalar headers", string.Concat(Enumerable.Repeat("a: |-9\n", 10_000)));
+        yield return ("tags", "a: " + string.Concat(Enumerable.Repeat("!t ", 50_000)) + "x\n");
+        yield return ("tag lines", string.Concat(Enumerable.Repeat("!!str\n", 50_000)) + "x\n");
+        yield return ("verbatim tag unclosed", "a: !<" + new string('x', 100_000) + "\n");
+        yield return ("hex escapes bad", "a: \"" + string.Concat(Enumerable.Repeat("\\uZZZZ", 1000)) + "\"\n");
+        yield return ("cr only", string.Concat(Enumerable.Repeat("a: 1\r", 50_000)));
+        yield return ("bom and nul", "\uFEFFa: 1\n\0");
+        yield return ("directives", string.Concat(Enumerable.Repeat("%YAML 1.2\n", 20_000)) + "---\na: 1\n");
+
+        // Indicator soup: random texts over the characters the grammar cares about.
+        const string alphabet = " \t\n-?:,[]{}#&*!|>'\"%@`~\\0123abcxyz.<=+_";
+        for (var i = 0; i < 260; i++)
+        {
+            var length = random.Next(1, i < 200 ? 200 : 20_000);
+            var chars = new char[length];
+            for (var c = 0; c < length; c++)
+                chars[c] = alphabet[random.Next(alphabet.Length)];
+            yield return ($"soup {i}", new string(chars));
+        }
+        // Valid-shaped documents with one random character changed.
+        const string valid = "a: 1\nb:\n  - x\n  - {k: v, l: [1, 2]}\nc: |\n  text\n  more\nd: \"q\\n\"\ne: &e {z: 1}\nf: *e\ng:\n  <<: *e\n";
+        for (var i = 0; i < 100; i++)
+        {
+            var chars = valid.ToCharArray();
+            chars[random.Next(chars.Length)] = alphabet[random.Next(alphabet.Length)];
+            yield return ($"mutant {i}", new string(chars));
+        }
+    }
+
     [Fact]
     public void ParseThenSerialize_IsStable()
     {
