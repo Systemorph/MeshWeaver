@@ -106,12 +106,10 @@ FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
   properties the #3378 remedy rests on, but it runs against the core commit the satellite **pins**
   (`MW_PLATFORM_REF`), so it reacts at the next pin move rather than at the bump — the documented
   cross-repo lag. The `Satellite package pins (removal declared)` gate covers a pin being REMOVED;
-  a pin being BUMPED was uncovered, and `BlazorMonacoPinGuard` is that cover: it fails on any
-  change to the pin with the re-verification checklist. **Since then the blind spot is closed at
-  the root:** core carries no GUI technology ([Core Carries No GUI Technology](../CoreCarriesNoGuiTechnology)),
-  so the pin moved to MeshWeaver.Plugins' own `src/Directory.Packages.Plugins.props` — beside the
-  only project that consumes it — and the guard moved with it to `src/Memex.Portal.Gui.Test`, where
-  a bump is now built and tested by the same pull request that makes it.
+  a pin being BUMPED was uncovered, and `BlazorMonacoPinGuard`
+  (`test/MeshWeaver.Documentation.Test/`) is that cover: it fails on any change to the pin with the
+  re-verification checklist, and asserts its own premise — that nothing in core references the
+  package — so the guard cannot go quietly wrong if that ever changes.
 - 🚨 **Dropping a `<script>` removes the LOAD, not the ASSET.** Measured on both portals
   2026-09-07, after MeshWeaver.Plugins#1393 stopped `App.razor` loading BlazorMonaco's `min/vs`
   tree, a plain `GET` of

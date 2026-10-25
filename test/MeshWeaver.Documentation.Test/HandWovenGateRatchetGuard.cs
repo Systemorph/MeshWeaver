@@ -84,6 +84,16 @@ public class HandWovenGateRatchetGuard
             + "kept rather than started per burst because a thread EXIT triggers the CoreCLR "
             + "collectible thread-static defect (#4654, Doc/Architecture/CollectibleThreadStatic"
             + "HandleReuse); IoPool's disposal releases it through Complete()."),
+
+        ("tools/MeshWeaver.ThumbnailGenerator/ThumbnailGenerator.cs",
+            "A STANDALONE Playwright CLI (OutputType Exe) whose csproj references Microsoft."
+            + "Playwright, SkiaSharp and System.CommandLine and NOT ONE MeshWeaver "
+            + "assembly. There is no hub, no grain turn and no IIoPool in that process, so the "
+            + "defect this rule prevents — parking a turn-based scheduler — cannot occur: its "
+            + "SemaphoreSlim bounds concurrent browser pages against an external server. Kept in "
+            + "scope rather than dropping `tools` from ProductionRoots, so a gate added to a tool "
+            + "that DOES reference the mesh still fails. 🚨 If this project ever gains a MeshWeaver "
+            + "ProjectReference, delete this entry and route the bound through IIoPool."),
     ];
 
     [Fact]
@@ -128,10 +138,9 @@ public class HandWovenGateRatchetGuard
                 $"{file} is registered as a sanctioned hand-woven gate but no longer contains one. "
                 + $"Delete the entry — it now exempts nothing. Reason on file: {why}");
 
-            // 🚨 Verify the REASON, not just the subject. A tools/ entry (the standalone
-            // ThumbnailGenerator CLI held one until it moved to MeshWeaver.Plugins) rests entirely on
-            // that project referencing no MeshWeaver assembly; the moment it does, the exemption is
-            // false and the gate must move to IIoPool. An exemption whose PREMISE
+            // 🚨 Verify the REASON, not just the subject. The ThumbnailGenerator entry rests
+            // entirely on that project referencing no MeshWeaver assembly; the moment it does, the
+            // exemption is false and the gate must move to IIoPool. An exemption whose PREMISE
             // silently stops holding is worse than one whose subject moved — the subject's absence
             // at least fails loudly.
             var project = Directory
