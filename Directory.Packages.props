@@ -273,7 +273,6 @@
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.19.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.19.0" />
-    <PackageVersion Include="System.Interactive" Version="7.0.1" />
     <!-- The memex test container package (src/MeshWeaver.Testcontainers): a real memex from the
          platform build as a test substrate, the way Testcontainers.PostgreSql gives a test a real
          Postgres. Same version as the test tree pins. -->
@@ -356,8 +355,11 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <PackageVersion Include="xunit.v3.runner.console" Version="4.0.2" />
     <PackageVersion Include="NSubstitute" Version="6.2.0" />
+    <!-- TRANSITIONAL: no core code uses Octokit (the GitHub REST client is a plain HttpClient,
+         Doc/Architecture/GitHubSync → "The GitHub REST transport"). MeshWeaver.GitSync still
+         references it so the image keeps carrying Octokit.dll for one cycle; see that csproj and
+         the doc's "Removing the transitional Octokit reference" for when this line goes. -->
     <PackageVersion Include="Octokit" Version="14.0.0" />
-    <PackageVersion Include="Octokit.Reactive" Version="14.0.0" />
   </ItemGroup>
 
   <ItemGroup>
