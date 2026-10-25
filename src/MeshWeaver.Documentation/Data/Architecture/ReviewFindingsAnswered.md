@@ -240,7 +240,11 @@ requires) bought a full Copilot round on code the pull request did not change: n
   --apply`). `--out DIR` writes, before any PUT, `<repo>.<id>.before.json` — the ruleset's fields
   as read, the restore body — and `<repo>.<id>.put.json`, the body it PUTs; restoring is a PUT of
   the `.before.json` file. A repository flipped without the lane would leave
-  every real change after the opening review unreviewed.
+  every real change after the opening review unreviewed, so the script enforces both halves:
+  `--apply` without `--repo` is a usage error (never the whole `FLEET`), `--apply` refuses a
+  repository whose default branch carries no `.github/workflows/request-review-on-change.yml`,
+  and `--out` refuses to overwrite a `.before.json` already there — a retry into the same
+  directory after the change would otherwise record the changed value as the restore point.
 - **The order.** The gate half and the lane land in core first (the gate change is safe under
   `review_on_push: true`, where every head is reviewed anyway); each repository then adds its thin
   caller; only then is that repository's ruleset flipped.
