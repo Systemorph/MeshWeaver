@@ -37,8 +37,17 @@ public class ContentBulkWriteAnnouncementTest(ITestOutputHelper output) : HubTes
         typeof(ImportContentRequest),
     ];
 
+    // The observer is MESH-scoped, as the content index's is in production: a sync is announced by its
+    // PRODUCER (the client hub here) and an import or a provider write by the owning hub, and both
+    // resolve the same observer.
     protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration configuration)
-        => base.ConfigureMesh(configuration).WithTypes(WireTypes);
+        => base.ConfigureMesh(configuration)
+            .WithTypes(WireTypes)
+            .WithServices(services => services.AddSingleton<IContentUploadObserver>(sp =>
+            {
+                recorder.Bind(sp.GetRequiredService<AccessService>());
+                return recorder;
+            }));
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
@@ -48,12 +57,7 @@ public class ContentBulkWriteAnnouncementTest(ITestOutputHelper output) : HubTes
             .WithTypes(WireTypes)
             .AddContentCollections()
             .AddFileSystemContentCollection("content", _ => contentPath)
-            .AddFileSystemContentCollection("source", _ => sourcePath)
-            .WithServices(services => services.AddSingleton<IContentUploadObserver>(sp =>
-            {
-                recorder.Bind(sp.GetRequiredService<AccessService>());
-                return recorder;
-            }));
+            .AddFileSystemContentCollection("source", _ => sourcePath);
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -144,6 +148,50 @@ public class ContentBulkWriteAnnouncementTest(ITestOutputHelper output) : HubTes
         announcement.FilePaths.Should().Equal(["notes/agent.md"]);
         announcement.ObjectId.Should().Be("writer",
             "what the index derives from the file is attributed to the identity that wrote it");
+    }
+
+    [Fact]
+    public async Task Paths_that_differ_only_by_case_are_both_announced()
+    {
+        // A case-sensitive store keeps both files; a case-insensitive de-duplication would drop one
+        // from the announcement and the index would never hear of it.
+        var response = await GetClient().SyncContentFiles(NodePath)
+            .To("content", "case")
+            .Add([Text("Readme.md", "upper"), Text("readme.md", "lower")])
+            .Mirror(false)
+            .Post()
+            .Timeout(TestTimeouts.Convergence)
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
+        response.Success.Should().BeTrue(response.Error ?? string.Empty);
+
+        recorder.Written.Should().ContainSingle().Which.FilePaths.Order(StringComparer.Ordinal)
+            .Should().Equal(["case/Readme.md", "case/readme.md"]);
+    }
+
+    [Fact]
+    public async Task Concurrent_first_writes_are_each_announced_as_their_own_writer()
+    {
+        // Both writes reach the collection before it was ever opened, so both wait on ONE
+        // initialization and resume on its completion flow — whose ambient identity is the first
+        // caller's (or none). Each announcement must still carry the identity its CALLER had.
+        var host = GetHost();
+        var provider = host.ServiceProvider.GetRequiredService<IFileContentProvider>();
+        var accessService = host.ServiceProvider.GetRequiredService<AccessService>();
+
+        IObservable<FileOperationResult> WriteAs(string user, string file)
+        {
+            using (accessService.SwitchAccessContext(new AccessContext { ObjectId = user, Name = user }))
+                return provider.SaveFileContent("content", file, new MemoryStream(Encoding.UTF8.GetBytes(user)));
+        }
+
+        var alice = WriteAs("alice", "first/alice.md");
+        var bob = WriteAs("bob", "first/bob.md");
+        var results = await alice.Merge(bob).ToList()
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        results.Should().OnlyContain(r => r.Success);
+
+        recorder.Written.Select(w => $"{w.FilePaths.Single()}|{w.ObjectId}").Order(StringComparer.Ordinal)
+            .Should().Equal(["first/alice.md|alice", "first/bob.md|bob"]);
     }
 
     [Fact]

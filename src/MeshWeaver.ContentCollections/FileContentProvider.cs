@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -14,6 +15,7 @@ public class FileContentProvider : IFileContentProvider
 {
     private readonly IContentService contentService;
     private readonly IEnumerable<IContentTransformer> transformers;
+    private readonly AccessService? accessService;
 
     /// <summary>
     /// Raster image extensions → media type. A file with one of these and no registered
@@ -41,9 +43,25 @@ public class FileContentProvider : IFileContentProvider
     public FileContentProvider(
         IContentService contentService,
         IEnumerable<IContentTransformer> transformers)
+        : this(contentService, transformers, null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a provider that also knows the access service, so a write is announced to the content
+    /// observers under the identity of whoever CALLED <see cref="SaveFileContent(string, string, Stream)"/>.
+    /// </summary>
+    /// <param name="contentService">The service used to resolve collections and file streams.</param>
+    /// <param name="transformers">Transformers that convert binary documents to markdown.</param>
+    /// <param name="accessService">The access service the writer's identity is read from; null on a host without one.</param>
+    public FileContentProvider(
+        IContentService contentService,
+        IEnumerable<IContentTransformer> transformers,
+        AccessService? accessService)
     {
         this.contentService = contentService;
         this.transformers = transformers;
+        this.accessService = accessService;
     }
 
     /// <inheritdoc />
@@ -161,6 +179,18 @@ public class FileContentProvider : IFileContentProvider
         string collectionName,
         string filePath,
         Stream content) =>
+        SaveFileContent(collectionName, filePath, content, accessService?.Context);
+
+    /// <summary>
+    /// <see cref="SaveFileContent(string, string, Stream)"/> with the writer's identity taken at the CALL:
+    /// collection resolution can complete on another caller's flow (concurrent first access shares one
+    /// initialization), so an identity read after it could name someone else.
+    /// </summary>
+    private IObservable<FileOperationResult> SaveFileContent(
+        string collectionName,
+        string filePath,
+        Stream content,
+        AccessContext? caller) =>
         contentService.GetCollection(collectionName)
             .SelectMany(collection =>
             {
@@ -170,8 +200,6 @@ public class FileContentProvider : IFileContentProvider
 
                 var directory = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
                 var fileName = Path.GetFileName(filePath);
-                // The writer's identity, taken before the pool hop the save makes.
-                var caller = collection.CallerSnapshot();
                 var folder = directory.Trim('/');
                 var written = folder.Length == 0 ? fileName : $"{folder}/{fileName}";
                 return collection.SaveFile(directory, fileName, content)

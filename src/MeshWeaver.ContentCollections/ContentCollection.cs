@@ -690,19 +690,24 @@ public class ContentCollection : IDisposable
     /// <param name="caller">The writer's identity, snapshotted where the write was composed.</param>
     internal void AnnounceWritten(IEnumerable<string> filePaths, AccessContext? caller)
     {
-        var paths = filePaths
-            .Select(NormaliseFilePath)
-            .Where(path => path.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToImmutableList();
+        var paths = AnnouncedPaths(filePaths);
         if (paths.Count == 0)
             return;
         using var _ = caller is null ? null : AccessService?.SwitchAccessContext(caller);
         Hub.RaiseContentFilesWritten(QualifiedPath, paths);
     }
 
-    /// <summary>The identity a write composed NOW would run under — see <see cref="AnnounceWritten"/>.</summary>
-    internal AccessContext? CallerSnapshot() => SnapshotCallerContext();
+    /// <summary>
+    /// The paths a write announces, in the index's key shape (forward slashes, no leading slash), each
+    /// once. De-duplicated ORDINALLY: a case-sensitive store keeps <c>A.txt</c> and <c>a.txt</c> as two
+    /// files, and dropping one would leave it unindexed.
+    /// </summary>
+    internal static ImmutableList<string> AnnouncedPaths(IEnumerable<string> filePaths)
+        => filePaths
+            .Select(NormaliseFilePath)
+            .Where(path => path.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToImmutableList();
 
     private static string NormaliseFilePath(string filePath)
         => filePath.Replace('\\', '/').TrimStart('/');

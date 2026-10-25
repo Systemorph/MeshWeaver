@@ -132,7 +132,7 @@ filePaths)`, raised by the collection after everything has committed and under t
 | Write | Raised by | One announcement covers |
 |---|---|---|
 | Collection→collection import (`ImportContentRequest`) | the import handler, after the last copy | every file the import copied |
-| Repository/GitSync content mirror (`SyncContentFilesRequest`) | the sync handler, after the writes and the prune | every file the SYNC wrote — a sync the producer split across deliveries (`SyncContentFilesBuilder`) defers each delivery's announcement to the last (`DeferWrittenAnnouncement`, `AnnounceWrittenPaths`), so it is still one |
+| Repository/GitSync content mirror (`SyncContentFilesRequest`) | the producer (`SyncContentFilesBuilder.Post`), once its last delivery answered success — the shape `MeshOperations.Upload` already has | every file the SYNC carried, however many deliveries the producer split it into; the paths travel on no delivery, so the announcement costs no payload budget |
 | `IFileContentProvider.SaveFileContent` (AI file writes, data-extension writes) | `FileContentProvider`, after the save | the one file |
 | A node picture (`NodeImageUpload.Replace`) | after the node points at it | the one new picture (every upload is a fresh generated name) |
 

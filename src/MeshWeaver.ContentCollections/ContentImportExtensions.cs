@@ -228,12 +228,9 @@ public static class ContentImportExtensions
 
         // The hub action block only subscribes + returns; every I/O leaf runs on the
         // collection's own pool — this layer is pure reactive composition.
-        // The writer's identity, taken HERE on the handler's turn (where the delivery's identity is
-        // ambient): the announcement below fires on a pool thread, after the writes commit.
         SyncFiles(contentService, request,
                 hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger(typeof(ContentImportExtensions).FullName!),
-                hub.ServiceProvider.GetService<AccessService>()?.Context)
+                    ?.CreateLogger(typeof(ContentImportExtensions).FullName!))
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
                 ex => hub.Post(FailureFor(delivery, ex), o => o.ResponseFor(delivery)));
@@ -270,14 +267,12 @@ public static class ContentImportExtensions
     /// <c>TargetPath</c> that the incoming set does not carry, so the folder mirrors the supplied set
     /// exactly. Returns the number of files written.
     ///
-    /// <para>Once everything has committed — the writes and the prune — the sync is announced to the
-    /// content observers ONCE (<see cref="IContentUploadObserver.OnFilesWritten"/>), with every file
-    /// it wrote, so the content index re-indexes what changed in one activity instead of never
-    /// (the sync used to announce nothing) or once per file. A delivery of a split sync defers its
-    /// announcement to the last one (<see cref="SyncContentFilesRequest.DeferWrittenAnnouncement"/>).</para>
+    /// <para>One delivery is not the whole sync — the producer may split it — so the delivery does not
+    /// announce what it wrote: <see cref="SyncContentFilesBuilder.Post"/> announces the WHOLE sync once,
+    /// after its last delivery answered.</para>
     /// </summary>
     private static IObservable<int> SyncFiles(
-        IContentService contentService, SyncContentFilesRequest request, ILogger? logger, AccessContext? caller)
+        IContentService contentService, SyncContentFilesRequest request, ILogger? logger)
         => contentService.GetCollection(request.CollectionName)
             .Select(target => target
                 ?? throw new InvalidOperationException($"Target content collection '{request.CollectionName}' not found"))
@@ -353,20 +348,8 @@ public static class ContentImportExtensions
                     ? Observable.Return(0)
                     : writeOps.Concat().Sum();
 
-                // What this delivery announces once it has committed: its own writes plus those the
-                // earlier deliveries of a split sync deferred to it — or nothing, when a later
-                // delivery announces for it.
-                var announced = request.DeferWrittenAnnouncement
-                    ? ImmutableList<string>.Empty
-                    : request.Files.Select(f => FullPath(f.Path))
-                        .Concat(stagedFiles.Select(s => FullPath(s.Path)))
-                        .Concat((request.AnnounceWrittenPaths ?? []).Select(NormalizePath))
-                        .ToImmutableList();
-                IObservable<int> Announcing(IObservable<int> committed)
-                    => committed.Do(_ => target.AnnounceWritten(announced, caller));
-
                 if (!request.Mirror)
-                    return Announcing(writes);
+                    return writes;
 
                 // 🚨 issue #2885: the WRITES are chunked so no delivery ever carries a whole asset
                 // tree, but the PRUNE is not chunkable — it asks "what is under this folder that the
@@ -391,7 +374,7 @@ public static class ContentImportExtensions
                 // Prune AFTER writing: enumerate the folder's current files, delete those not kept.
                 // EnumerateAllFiles yields collection-relative paths; a delete of an absent file is
                 // tolerated (best-effort) so a concurrent external delete never fails the mirror.
-                return Announcing(writes.SelectMany(written =>
+                return writes.SelectMany(written =>
                     EnumerateAllFiles(target, baseDir)
                         // 🚨 #3233: the staging folder is FRAMEWORK STATE, not content, and the
                         // prune rides the FIRST delivery — so pruning it would delete the very
@@ -405,7 +388,7 @@ public static class ContentImportExtensions
                             .Catch<int, Exception>(_ => Observable.Return(0)))
                         .Concat()
                         .Sum()
-                        .Select(_ => written)));
+                        .Select(_ => written));
             });
 
     /// <summary>
@@ -968,7 +951,33 @@ public sealed class SyncContentFilesBuilder
             : Observable.Defer(() => Stage(address, captured, oversized))
                 .SelectMany(plan => Reclaiming(PostPlanned(address, captured, plan), plan));
 
-        return ContentImportExtensions.CarryPostIdentity(pipeline, _hub, _identity);
+        return ContentImportExtensions.CarryPostIdentity(Announcing(pipeline, captured), _hub, _identity);
+    }
+
+    /// <summary>
+    /// Announces the WHOLE sync to the content observers ONCE (<see cref="IContentUploadObserver.OnFilesWritten"/>)
+    /// when it answered success — every file it carried, under the identity that made it, keyed
+    /// <c>{node}/{collection}</c> exactly as an upload of the same file is (<c>MeshOperations.Upload</c>
+    /// raises on the caller's side after the owner answered, too). Once per sync however many deliveries
+    /// the producer split it into, never once per file and never once per delivery: a boot re-import
+    /// re-sends every content file of a repository, and the content index opens one activity per
+    /// announcement (<c>Doc/Architecture/ContentRoute503</c>, Cause B). The paths travel nowhere — the
+    /// producer already holds them — so announcing costs no delivery budget. A refused sync announces
+    /// nothing.
+    /// </summary>
+    private IObservable<ImportContentResponse> Announcing(
+        IObservable<ImportContentResponse> sync, AccessContext? writer)
+    {
+        var collectionPath = $"{_nodePath.Trim('/')}/{_targetCollection}";
+        var written = ContentCollection.AnnouncedPaths(_files.Select(f => CombineTargetPath(f.Path)));
+        var access = _hub.ServiceProvider.GetService<AccessService>();
+        return sync.Do(answer =>
+        {
+            if (!answer.Success)
+                return;
+            using var _ = writer is null ? null : access?.SwitchAccessContext(writer);
+            _hub.RaiseContentFilesWritten(collectionPath, written);
+        });
     }
 
     /// <summary>
@@ -1079,18 +1088,8 @@ public sealed class SyncContentFilesBuilder
         {
             // The mirror is ONE pass and it is the FIRST — see the remark on Post().
             var prunes = _mirror && index == 0;
-            var last = index == deliveries.Count - 1;
             return new SyncContentFilesRequest(_targetCollection, _targetPath, delivery.Inline)
             {
-                // ONE announcement for the whole sync: every delivery but the last defers, and the
-                // last names what the earlier ones wrote (see SyncContentFilesRequest).
-                DeferWrittenAnnouncement = split && !last,
-                AnnounceWrittenPaths = split && last
-                    ? deliveries.Take(index)
-                        .SelectMany(d => d.Inline.Select(f => CombineTargetPath(f.Path))
-                            .Concat(d.Staged.Select(st => CombineTargetPath(st.Path))))
-                        .ToImmutableList()
-                    : null,
                 Mirror = prunes,
                 // An additive chunk prunes nothing, so it carries neither prune input.
                 SourceOwnedPaths = prunes ? _sourceOwnedPaths : null,
