@@ -30,7 +30,11 @@ THE NOT-IMAGE LIST — each entry states why no published image can contain it
     clients/react-native/, clients/voice-gateway/
                         standalone clients; no Dockerfile in the set COPYs them
     test/               test projects; no project under src/, tools/, memex/ or deploy/ references
-                        them, and none is published
+                        them. They ARE packed into `mw-core-tests` (the set's core test image,
+                        Doc/Architecture/DeployTestSwitchLatest D3) — deliberately still not an
+                        image input: that image carries the tests AT THE SET'S COMMIT, so it tests
+                        exactly that platform, and a test-only change reaches it with the next set
+                        rather than minting a set and a fleet roll of its own
     .claude/ .agents/ .codex/
                         agent skills and harness config — read by agents, never by a build
     AGENTS.md CLAUDE.md Readme.md LICENSE LICENSE-APACHE LICENSE-MIT MeshWeaver.sln.DotSettings

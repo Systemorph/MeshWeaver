@@ -346,7 +346,9 @@ jobs:
           CI_VERSION: ${{ steps.set.outputs.ci_version }}
         run: |
           set -euo pipefail
-          for repo in memex-migration mw-plugin-test; do
+          # mw-core-tests is the set's fifth image (Doc/Architecture/DeployTestSwitchLatest, D3): a
+          # released set names its core suites too. ACR only — it has no public consumer to mirror for.
+          for repo in memex-migration mw-plugin-test mw-core-tests; do
             echo "→ $repo: $VERSION"
             docker buildx imagetools create --tag "$ACR/$repo:$VERSION" "$ACR/$repo:$SHORT"
           done
@@ -362,7 +364,7 @@ jobs:
           done
           {
             echo "### Released \`$VERSION\` = \`$SHORT\` (build ${{ steps.set.outputs.ci_version }})"
-            echo "- memex-portal-ai, memex-migration, mw-plugin-test retagged \`$VERSION\` in ACR"
+            echo "- memex-portal-ai, memex-migration, mw-plugin-test, mw-core-tests retagged \`$VERSION\` in ACR"
             echo "- release marker \`_releases/$VERSION\` written on every artifact store"
           } >> "$GITHUB_STEP_SUMMARY"
 
