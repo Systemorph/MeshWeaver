@@ -360,7 +360,7 @@ A package may author an UPPER platform bound next to its floor, in the same `ind
 ```
 
 **What it means today: build and test only.** A cap selects the build-server deployment the
-package's modules compile and test against: the highest retained, READY deployment at or above the
+package's modules compile and test against: the highest retained, COMPLETE deployment at or above the
 floor and at or below the cap. It never holds a platform roll. Whether it also means anything at
 runtime is an open question of the design (Deploy, Test the Deploy, Switch Latest, §10 Q2).
 
@@ -373,7 +373,7 @@ satellite, so every repository inherits it):
 | cap ≥ floor | the cap is below `minMeshVersion`, compared by run number, the order `PlatformFloor` uses for two published builds |
 | companions | `capReason` or `capTracking` is missing, or either is present without a cap |
 | not stale | the cap is at or above `latest`: a cap that restricts nothing becomes a pin the day `latest` overtakes it, so remove it |
-| admitted | no READY build-server deployment lies inside the floor and cap |
+| admitted | no COMPLETE build-server deployment lies inside the floor and cap |
 
 A tree with no cap passes and reads nothing. A tree WITH a cap reads the caller's build API
 (`vars.MW_BUILD_API`). An empty variable, or an endpoint that does not answer, is RED naming it,
@@ -381,14 +381,20 @@ never a skip.
 
 **Resolution.** `resolve-platform.py --from-build-hosts <build API> --packages-root .` writes
 `partitions`, a map `{set: [package, …]}`: an uncapped package (or one whose cap admits `latest`) builds
-on `latest`, and a capped package builds on the highest READY deployment in its range. A package with no
+on `latest`, and a capped package builds on the highest COMPLETE deployment in its range. A package with no
 fit is RED, never a silent pick of `latest` or of a version below its floor. The mode is OFF by default.
 No consumer passes the flag until the control instance serves a `latest` deployment, because the mode
 has no fallback to the newest sealed set.
 
 Both questions are read from ONE answer, `GET <build API>/hosts` on the control instance:
-`{aliases:{latest, previous}, versions:[{version, ready, maxReplicas, pinnedBy}]}`. `latest` must name a
-version that is retained and `ready`.
+`{aliases:{latest, candidate, previous}, versions:[{version, deploymentName, complete, maxReplicas, aliases,
+pinned, pinnedBy}]}` (MeshWeaver.Plugins `Hosting/StandingBuildHosts` §7b). `latest` must name a version
+that is retained and `complete`. **`complete` is the only readiness the answer carries, and it is not "a
+pod is running"**: it says the record holds that version's full set, so the chart renders its Deployment.
+The control instance cannot observe pods truthfully, and KEDA scales an idle version to zero, so the
+answer has no `ready` field and the resolver reads none. A complete version scaled to zero is a valid
+target: a run pinned to it scales it up, and a host claims only after staging that set. A version with
+`complete: false` is skipped.
 
 **The cap keeps its deployment, and is debt.** `node-repo-cap-debt.yml` is a reusable lane a repository
 calls daily. It does two things:
