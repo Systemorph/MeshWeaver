@@ -12,13 +12,15 @@ namespace MeshWeaver.Deployment;
 /// (<see cref="LatestChannel"/>, <see cref="StableChannel"/>) that claims build runs from this
 /// instance's queue and runs every stage in a sandbox. Null on <see cref="DeploymentContent.BuildHosts"/>,
 /// or <see cref="Enabled"/> false, means the record runs none and nothing renders.
-/// <para><b>Who writes what.</b> The record's author states <see cref="Enabled"/> and each channel's
-/// <see cref="BuildHostChannel.MaxReplicas"/>. A channel's SET — <see cref="BuildHostChannel.PlatformVersion"/>,
-/// <see cref="BuildHostChannel.TesterDigest"/>, <see cref="BuildHostChannel.PortalDigest"/>,
-/// <see cref="BuildHostChannel.RunnerDigest"/> — is written by
-/// core's CD (the signed <c>build-host-update-available</c> event, policy
-/// <c>build-hosts-follow-latest</c>) through the operations instance, only while <see cref="Enabled"/> is
-/// already true and never backwards; the record change then applies itself.</para>
+/// <para><b>Who writes what.</b> The record's author states <see cref="Enabled"/> and, per channel here,
+/// <see cref="BuildHostChannel.MaxReplicas"/> — the set fields of an AUTHORED channel are not read. A
+/// channel's SET — <see cref="BuildHostChannel.PlatformVersion"/>, <see cref="BuildHostChannel.TesterDigest"/>,
+/// <see cref="BuildHostChannel.PortalDigest"/>, <see cref="BuildHostChannel.RunnerDigest"/> — lives in the
+/// record's MESH-OWNED <see cref="DeploymentContent.BuildHostSets"/>, written by core's CD (the signed
+/// <c>build-host-update-available</c> event, policy <c>build-hosts-follow-latest</c>) through the
+/// operations instance, only while <see cref="Enabled"/> is already true and never backwards; GitSync
+/// strips it on export and keeps it on import, so git never names a build and the record change applies
+/// itself.</para>
 /// </summary>
 public sealed record BuildHostsBlock
 {

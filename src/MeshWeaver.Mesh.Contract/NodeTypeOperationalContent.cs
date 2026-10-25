@@ -45,6 +45,36 @@ public static class NodeTypeOperationalContent
     public static bool IsNodeTypeNode(MeshNode? node) =>
         string.Equals(node?.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal);
 
+    /// <summary>The deployment record's node type — the second node type with mesh-owned members.</summary>
+    public const string DeploymentNodeType = "Hosting/Deployment";
+
+    /// <summary>
+    /// The deployment record's MESH-OWNED members (Doc/Architecture/BuildHosts): <c>buildHostSets</c>, the
+    /// platform set each standing build host channel runs, written by core's CD through the operations
+    /// instance and NEVER authored. The record is GitSynced one-way from its estate's repository, so the
+    /// same ownership rule as a NodeType's compile bookkeeping applies: an export strips it (no build is
+    /// ever named in git — the estate's NO PINS rule), an import keeps the LIVE value (a later authored
+    /// change to the record can neither roll the hosts back nor blank them), and a create starts without it.
+    /// </summary>
+    public static readonly IReadOnlySet<string> DeploymentMemberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "buildHostSets",
+    };
+
+    /// <summary>Whether <paramref name="node"/>'s type carries mesh-owned members at all.</summary>
+    public static bool HasOperationalMembers(MeshNode? node) => PreservedFor(node) is not null;
+
+    private static bool IsDeploymentNode(MeshNode? node) =>
+        string.Equals(node?.NodeType, DeploymentNodeType, StringComparison.Ordinal);
+
+    /// <summary>The members an import keeps LIVE for this node's type; null for a type with none.</summary>
+    private static IReadOnlySet<string>? PreservedFor(MeshNode? node) =>
+        IsNodeTypeNode(node) ? MemberNames : IsDeploymentNode(node) ? DeploymentMemberNames : null;
+
+    /// <summary>The members a repo file must not carry for this node's type; null for a type with none.</summary>
+    private static IReadOnlySet<string>? ExcludedFor(MeshNode? node) =>
+        IsNodeTypeNode(node) ? FileExcludedMembers : IsDeploymentNode(node) ? DeploymentMemberNames : null;
+
     /// <summary>
     /// The operational members by their serialized (camelCase) names, matched CASE-INSENSITIVELY:
     /// stored content is camelCased under the hub's naming policy, but writers fall back to the
@@ -232,10 +262,10 @@ public static class NodeTypeOperationalContent
     /// </summary>
     public static MeshNode StripOperational(MeshNode node, JsonSerializerOptions options)
     {
-        if (!IsNodeTypeNode(node) || ContentObject(node, options) is not { } content)
+        if (ExcludedFor(node) is not { } excluded || ContentObject(node, options) is not { } content)
             return node;
         var removed = false;
-        foreach (var key in content.Select(member => member.Key).Where(FileExcludedMembers.Contains).ToArray())
+        foreach (var key in content.Select(member => member.Key).Where(excluded.Contains).ToArray())
             removed |= content.Remove(key);
         return removed ? node with { Content = content } : node;
     }
@@ -255,7 +285,7 @@ public static class NodeTypeOperationalContent
     /// </summary>
     public static MeshNode WithoutOperational(MeshNode node, JsonSerializerOptions options)
     {
-        if (!IsNodeTypeNode(node) || node.Content is null)
+        if (ExcludedFor(node) is null || node.Content is null)
             return node;
         switch (node.Content)
         {
@@ -269,7 +299,7 @@ public static class NodeTypeOperationalContent
             case JsonNode:
                 return StripOperational(node, options);
             default:
-                return WithTypedMembersReset(node, options);
+                return WithTypedMembersReset(node, ExcludedFor(node)!, options);
         }
     }
 
@@ -284,7 +314,7 @@ public static class NodeTypeOperationalContent
     /// is a difference no caller can see. Content that is not a record (no <c>&lt;Clone&gt;$</c>)
     /// falls back to the JSON shape.
     /// </summary>
-    private static MeshNode WithTypedMembersReset(MeshNode node, JsonSerializerOptions options)
+    private static MeshNode WithTypedMembersReset(MeshNode node, IReadOnlySet<string> excluded, JsonSerializerOptions options)
     {
         var typed = node.Content!;
         var type = typed.GetType();
@@ -303,7 +333,7 @@ public static class NodeTypeOperationalContent
         {
             if (!property.CanRead || property.SetMethod is null)
                 continue;
-            if (FileExcludedMembers.Contains(property.Name))
+            if (excluded.Contains(property.Name))
             {
                 var current = property.GetValue(typed);
                 var blank = property.PropertyType.IsValueType
@@ -316,10 +346,10 @@ public static class NodeTypeOperationalContent
             }
             else if (property.GetCustomAttribute<JsonExtensionDataAttribute>() is not null
                      && property.GetValue(typed) is IDictionary<string, JsonElement> extra
-                     && extra.Keys.Any(FileExcludedMembers.Contains))
+                     && extra.Keys.Any(excluded.Contains))
             {
                 copy ??= clone.Invoke(typed, null);
-                var kept = extra.Where(kv => !FileExcludedMembers.Contains(kv.Key))
+                var kept = extra.Where(kv => !excluded.Contains(kv.Key))
                     .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
                 property.SetValue(copy, kept.Count == 0 ? null : kept);
             }
@@ -366,15 +396,15 @@ public static class NodeTypeOperationalContent
     {
         if (live is null)
             return WithoutOperational(incoming, options);
-        if (!IsNodeTypeNode(incoming)
+        if (PreservedFor(incoming) is not { } preserved || ExcludedFor(incoming) is not { } excluded
             || ContentObject(incoming, options) is not { } original)
             return incoming;
         var liveContent = ContentObject(live, options);
         var merged = (JsonObject)original.DeepClone();
-        foreach (var key in merged.Select(member => member.Key).Where(FileExcludedMembers.Contains).ToArray())
+        foreach (var key in merged.Select(member => member.Key).Where(excluded.Contains).ToArray())
             merged.Remove(key);
         if (liveContent is not null)
-            foreach (var (key, value) in liveContent.Where(member => MemberNames.Contains(member.Key)))
+            foreach (var (key, value) in liveContent.Where(member => preserved.Contains(member.Key)))
                 merged[key] = value?.DeepClone();
         return JsonNode.DeepEquals(merged, original) ? incoming : incoming with { Content = merged };
     }

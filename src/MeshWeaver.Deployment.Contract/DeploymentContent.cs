@@ -609,6 +609,21 @@ public record DeploymentContent
     [Description("Standing build hosts per release channel (the operations record only)")]
     public BuildHostsBlock? BuildHosts { get; init; }
 
+    /// <summary>
+    /// The platform SET each standing build host channel runs, by channel — MESH-OWNED, never authored
+    /// (<see cref="BuildHostsBlock"/>, Doc/Architecture/BuildHosts). Written only by core's CD through the
+    /// operations instance; GitSync strips it on export and keeps the live value on import
+    /// (<c>NodeTypeOperationalContent.DeploymentMemberNames</c>), so the record in git never names a
+    /// build and no authored change can roll a host back. Each entry uses the set fields of
+    /// <see cref="BuildHostChannel"/>; its <see cref="BuildHostChannel.MaxReplicas"/> is not read.
+    /// </summary>
+    [Description("The platform set each build host channel runs (written by CD, never authored)")]
+    public ImmutableSortedDictionary<string, BuildHostChannel>? BuildHostSets { get; init; }
+
+    /// <summary>The set channel <paramref name="channel"/> runs, or null.</summary>
+    public BuildHostChannel? BuildHostSet(string channel) =>
+        BuildHostSets is { } sets && sets.TryGetValue(channel, out var set) ? set : null;
+
     /// <summary>OpenTelemetry export.</summary>
     [Description("Telemetry")]
     public TelemetrySpec? Telemetry { get; init; }

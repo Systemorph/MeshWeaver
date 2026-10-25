@@ -1346,10 +1346,12 @@ public static class DeploymentPortalConfig
         // BuildHostQueue.DesiredPlatformConfigKey). Rendered from the SAME field the chart renders the
         // host's images from, so one record write moves both the hosts and the barrier. Only for an
         // ENABLED block and a non-blank version; a record without the block renders nothing new.
+        // The set is the record's MESH-OWNED BuildHostSets (written by CD, kept across imports), for
+        // each channel the AUTHORED block runs.
         if (d.BuildHosts is { Enabled: true } buildHosts)
-            foreach (var (channel, spec) in buildHosts.Channels)
-                if (!string.IsNullOrWhiteSpace(channel) && !string.IsNullOrWhiteSpace(spec?.PlatformVersion))
-                    Set(BuildHostPlatformVersionKey(channel.Trim()), spec.PlatformVersion.Trim());
+            foreach (var channel in buildHosts.Channels.Keys)
+                if (!string.IsNullOrWhiteSpace(channel) && d.BuildHostSet(channel)?.PlatformVersion is { } version && !string.IsNullOrWhiteSpace(version))
+                    Set(BuildHostPlatformVersionKey(channel.Trim()), version.Trim());
 
         foreach (var (key, value) in d.ExtraPortalConfig)
             // 🚨 The sole-signer flag is RESERVED for the typed field, rendered or not: an extra must
