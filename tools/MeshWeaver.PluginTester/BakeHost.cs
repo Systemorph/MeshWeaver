@@ -234,6 +234,22 @@ internal sealed class BakeHost
                 + ex.Message);
         }
 
+        // The HOST's compile surfaces, off the host's own MeshWeaver.Compiler.dll: an older host of
+        // this compatibility key may still ship a package whose implementation is wider than its
+        // reference assembly (System.Interactive), and its portals compile against the embedded
+        // reference assembly, so the bake must too. A host that embeds none gets its own files.
+        HostCompileSurfaces surfaces;
+        try
+        {
+            surfaces = HostCompileSurfaces.OfHost(app);
+        }
+        catch (Exception ex) when (ex is IOException or BadImageFormatException or UnauthorizedAccessException)
+        {
+            return (null,
+                $"the platform host at '{app}' has a {FrameworkBuildIdentity.AnchorAssemblyName}.dll whose "
+                + $"compile surfaces cannot be read — {ex.Message}");
+        }
+
         var references = new List<MetadataReference>(set.AssembliesByName.Count + modules.Count);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var skipped = 0;
@@ -248,8 +264,9 @@ internal sealed class BakeHost
             }
             if (!seen.Add(path))
                 continue;
-            // The same per-assembly choice the portal's runtime compile makes: the host's own file.
-            references.Add(MetadataReference.CreateFromFile(path));
+            // The same per-assembly choice the HOST's runtime compile makes: its embedded compile
+            // surface for that identity where it carries one, otherwise its own file.
+            references.Add(surfaces.ReferenceFor(path));
             if (path.StartsWith(app, StringComparison.Ordinal))
                 fromApp++;
             else
@@ -283,7 +300,10 @@ internal sealed class BakeHost
                 $"reference set = platform host '{app}' ({fromApp} assemblies) + its shared frameworks "
                 + $"under '{Path.GetFullPath(sharedFrameworksRoot)}' ({fromFrameworks} assemblies) + "
                 + $"{modules.Count} composed module(s)"
-                + (skipped == 0 ? string.Empty : $"; {skipped} non-managed file(s) skipped"),
+                + (skipped == 0 ? string.Empty : $"; {skipped} non-managed file(s) skipped")
+                + (surfaces.FileNames.Count == 0
+                    ? string.Empty
+                    : $"; the host's compile surfaces for {string.Join(", ", surfaces.FileNames.Order(StringComparer.Ordinal))}"),
             IsThisProcess = false,
             // The host's own files, in the reference set's precedence (shared frameworks, then the
             // TPA — empty here — then /app, later wins in AssembliesByName): what a portal booted

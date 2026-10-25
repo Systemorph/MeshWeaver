@@ -153,8 +153,15 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    embedded `ref/` assembly in place of the same-identity host file (a `CompileSurfacePackage` list in
    `MeshWeaver.Compiler`); the **package is now gone from the platform** — .NET 10's BCL covers what
    MeshWeaver used of it, nothing in `src/` called an Ix API, and a sweep of every node repository
-   found no in-mesh caller — so the compile-surface substitution was removed with it, and
-   `CompileReferences` references each host file as it is. Before adding a dependency to a platform
+   found no in-mesh caller — so the runtime compile's substitution was removed with it, and
+   `CompileReferences` references each host file as it is. **A bake against ANOTHER host still
+   honours that host's surfaces**: an older image of the same compatibility key ships the package and
+   embeds its `ref/` assembly in its own `MeshWeaver.Compiler.dll` (resources
+   `MeshWeaver.Compiler.CompileSurface.<file>`), so `mw-plugin-test … --app <dir>`
+   (`BakeHost.ResolveDirectory`) reads them from the TARGET host's assembly (`HostCompileSurfaces`),
+   never from its own, and compiles against the surface for a same-identity host file — exactly what
+   that image's portals compile. An unreadable anchor refuses the bake instead of answering "no
+   surfaces". Before adding a dependency to a platform
    project, check that its `lib/` and `ref/` expose the same surface; a mismatch is a CS0121 or a
    CS0433 waiting in somebody's NodeType.
 
