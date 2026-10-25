@@ -14,7 +14,6 @@
     <File Path="samples/Directory.Build.props" />
   </Folder>
   <Folder Name="/memex/">
-    <Project Path="memex/Memex.Portal.Shared/Memex.Portal.Shared.csproj" />
   </Folder>
   <Folder Name="/memex/aspire/">
     <Project Path="memex/aspire/Memex.Aspire.Hosting/Memex.Aspire.Hosting.csproj" />
@@ -94,7 +93,6 @@
     <Project Path="test/MeshWeaver.Hosting.Test/MeshWeaver.Hosting.Test.csproj" />
     <Project Path="test/MeshWeaver.PluginTester.Test/MeshWeaver.PluginTester.Test.csproj" />
     <Project Path="test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" />
-    <Project Path="test/Memex.Portal.Shared.Test/Memex.Portal.Shared.Test.csproj" />
     <Project Path="test/MeshWeaver.Testing.Xunit/MeshWeaver.Testing.Xunit.csproj" />
     <Project Path="test/MeshWeaver.Testing.Xunit.Test/MeshWeaver.Testing.Xunit.Test.csproj" />
     <Project Path="test/MeshWeaver.ThumbnailGenerator.Test/MeshWeaver.ThumbnailGenerator.Test.csproj" />
