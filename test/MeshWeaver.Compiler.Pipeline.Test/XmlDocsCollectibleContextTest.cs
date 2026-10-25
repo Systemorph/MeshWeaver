@@ -66,6 +66,27 @@ public sealed class XmlDocsCollectibleContextTest : IDisposable
         secondContext.Unload();
     }
 
+    /// <summary>
+    /// The texts of a never-unloading assembly are interned so every mesh shares one copy; a
+    /// COLLECTIBLE generation's must not be, because the runtime's intern pool would keep them for
+    /// the life of the process, one more set per recompile. The summary is generated at run time, so
+    /// nothing but the reader could have put it into the pool. <b>Should fail if</b> the parse
+    /// interns a collectible assembly's documentation.
+    /// </summary>
+    [Fact]
+    public void ACollectibleGenerationsDocs_AreNotInterned()
+    {
+        var unique = "Generated " + Guid.NewGuid().ToString("N") + ".";
+        var type = Emit("Uninterned", "gen", unique, out var context);
+        type.Assembly.IsCollectible.Should().BeTrue("CONTROL — the fixture emits into a collectible load context");
+
+        var summary = docs.Summary(type);
+        summary.Should().Be(unique);
+        string.IsInterned(summary).Should().BeNull("a collectible generation's documentation must not enter the process-wide intern pool");
+
+        context.Unload();
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private WeakReference ReadAndUnload(string node, string summary, out string typeSummary, out string propertySummary)
     {
