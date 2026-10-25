@@ -7,6 +7,15 @@
   <ItemGroup>
     <!-- Azure Repos push (MeshWeaver#5248): WorkloadIdentityCredential mints the Entra token. -->
     <PackageReference Include="Azure.Identity" />
+    <!-- TRANSITIONAL — NO code in this project uses Octokit any more (the GitHub REST client is a
+         plain HttpClient: GitHubRestApi). The reference stays for one cycle so the platform image
+         keeps carrying Octokit.dll: (a) already-deployed module bundles that bind the image's copy
+         (MeshWeaver.Plugins' Observability names Octokit.ApiException, and its bundle does not
+         carry Octokit itself) keep loading — the module link gate reports such a missing assembly
+         as unchecked rather than holding a roll; (b) MeshWeaver.Plugins keeps compiling until
+         MeshWeaver.Plugins#4206 ports it. Remove (with the Octokit PackageVersion) per
+         Doc/Architecture/GitHubSync → "Removing the transitional Octokit reference". -->
+    <PackageReference Include="Octokit" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="System.Reactive" />
   </ItemGroup>

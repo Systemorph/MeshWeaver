@@ -737,7 +737,7 @@ Everything that is not bulk git transfer — repository lookup and creation, ref
 calls of the REST push path, compare, issues, pull requests, reviews and check runs — goes
 through `OctokitGitHubRepoClient` over `GitHubRestApi`: one `HttpClient`, System.Text.Json with
 GitHub's snake_case names, and wire records holding exactly the fields the client reads or
-writes. It replaced the Octokit / Octokit.Reactive packages; the type kept its name because
+writes. It replaced Octokit / Octokit.Reactive in the code (the bare Octokit package reference stays for one cycle — see "Removing the transitional Octokit reference" below); the type kept its name because
 satellite repositories construct it, resolve it from DI and call `ParseRepoUrl` by it.
 
 What the transport guarantees, because callers depend on it:
@@ -765,6 +765,34 @@ answer, not a network failure — Octokit's exceptions never reached those class
 Classify by `StatusCode` or by the derived type, never by message text. The request shape of
 every endpoint and every row of the mapping are pinned by `GitHubRestTransportTest`
 (`MeshWeaver.Hosting.Test`) against a recorded-answer HTTP handler.
+
+#### Removing the transitional Octokit reference
+
+No core code uses Octokit, yet `MeshWeaver.GitSync.csproj` still carries
+`<PackageReference Include="Octokit" />`, and `Directory.Packages.props` still pins it. That is
+deliberate, for one cycle, so the platform image keeps carrying `Octokit.dll`:
+
+- **Already-deployed module bundles bind the image's copy.** MeshWeaver.Plugins' Observability
+  module (`LogIncidentFiler.IsNotFound`) names `Octokit.ApiException`. It reached Octokit only
+  through the `MeshWeaver.GitSync` project reference, and a bundle's closure does not follow
+  `MeshWeaver.*` references ([Module Closure Accounting](../ModuleClosureAccounting)), so its
+  bundle does not carry the DLL. 🚨 **The [module link gate](../ModulePlatformLinkGate) would not
+  hold a roll for it.** A referenced assembly that neither the platform nor the bundle carries is
+  reported as unchecked, not refused (`ModulePlatformLink` → `UncheckedAssemblies`). Package
+  verdicts are advisory for a platform roll anyway (policy
+  `platform-rolls-independently-of-packages`). An image without Octokit would therefore roll and
+  then throw `FileNotFoundException` inside that module.
+- **MeshWeaver.Plugins compiles against Octokit transitively** until it is ported to
+  `GitHubApiException` (MeshWeaver.Plugins#4206).
+
+**Remove the reference and the `PackageVersion` line in one core PR, and only when BOTH hold:**
+
+1. MeshWeaver.Plugins#4206 has merged, so nothing in Plugins names an Octokit type, and
+2. the Observability bundle has been rebuilt from that code, against a platform set built after
+   #4206 merged, and is the generation the instances have adopted.
+
+Before removing it, re-check every satellite for Octokit type names (a repository-wide search for
+`Octokit`). A satellite that names one needs the same port first.
 
 ---
 

@@ -58,12 +58,6 @@
     <!-- MeshWeaver.ContentCollections.Indexing (Excel text extraction, MeshWeaver.Plugins#3826;
          pinned centrally by #7134; MIT, no dependencies on net8.0+) -->
     <PackageReference Include="ExcelDataReader" />
-    <!-- MeshWeaver.Observability (MeshWeaver.Plugins) — TRANSITIONAL. The portal image stops
-         carrying Octokit when core's GitHub REST client drops it (MeshWeaver#7183); until the module
-         moves to core's GitHubApiException (MeshWeaver.Plugins#4206) it references Octokit
-         directly, and a container build after the image change resolves it here so the bundle
-         still carries Octokit.dll. Remove with the Octokit PackageVersion lines. -->
-    <PackageReference Include="Octokit" />
   </ItemGroup>
 
 </Project>
