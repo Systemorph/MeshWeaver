@@ -4,7 +4,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Reactive.Linq;
 using System.Text.Json.Serialization;
+using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.GitSync;
 
@@ -20,20 +23,25 @@ namespace MeshWeaver.GitSync;
 ///     credential). An EMPTY token sends no <c>Authorization</c> header at all: anonymous access to a
 ///     public repository, never "a bad token".</item>
 ///   <item><b>Redirects</b> are followed HERE, up to <see cref="MaxRedirects"/>, keeping the method
-///     (except a 303, which becomes a body-less GET) and keeping the credential while the host is
-///     unchanged — as Octokit's <c>RedirectHandler</c> did. <see cref="HttpClient"/>'s own redirect
-///     following strips <c>Authorization</c> on every hop, which would turn a RENAMED private
-///     repository (GitHub answers its old name with a 301) into a 404.</item>
+///     (except a 303, which becomes a body-less GET) — as Octokit's <c>RedirectHandler</c> did.
+///     <see cref="HttpClient"/>'s own redirect following strips <c>Authorization</c> on every hop,
+///     which would turn a RENAMED private repository (GitHub answers its old name with a 301) into
+///     a 404.</item>
+///   <item><b>The credential goes to the configured API ORIGIN and nowhere else</b> — scheme, host
+///     AND port compared (<see cref="MayCarryCredential"/>), decided per request: on every redirect
+///     hop and on every absolute pagination <c>Link</c>. A redirect to <c>http://</c> or to another
+///     port of the same host, and a next-page URL on another host, are sent without it.</item>
 ///   <item><b>Pagination</b> — a listing follows <c>Link: rel="next"</c> to the last page, as
-///     Octokit's <c>GetAll…</c> did.</item>
+///     Octokit's <c>GetAll…</c> did; each page is its own pooled request, composed reactively.</item>
 ///   <item><b>Errors</b> — a non-success status becomes a <see cref="GitHubApiException"/> (typed
 ///     per status, see <see cref="Failure"/>); a transport fault stays the
 ///     <see cref="HttpRequestException"/> <see cref="HttpClient"/> threw.</item>
 /// </list>
 ///
-/// <para>Every method is a <see cref="Task"/>-returning leaf meant to be invoked ONLY through the
-/// HTTP <c>IIoPool</c> (<c>Http.Invoke(ct =&gt; api.SendAsync(…))</c>); no observable surface of the
-/// client exposes it.</para>
+/// <para>🚨 <b>The surface is observable-only and owns the pool boundary.</b> Every public member
+/// returns a cold <see cref="IObservable{T}"/> whose one HTTP exchange runs inside the HTTP
+/// <see cref="IIoPool"/> (<see cref="IIoPool.Invoke{T}"/>); the only <c>async</c> code is the
+/// PRIVATE leaf that pool invocation runs, so no caller can reach an unpooled await.</para>
 /// </summary>
 internal sealed class GitHubRestApi
 {
@@ -50,79 +58,100 @@ internal sealed class GitHubRestApi
     private static readonly Uri DefaultBaseAddress = new("https://api.github.com/");
 
     private readonly HttpClient http;
+    private readonly IoPoolRegistry ioPools;
     private readonly Uri baseAddress;
 
     /// <param name="http">The client to send with. Its handler should NOT follow redirects itself
     /// (see the type remarks); <see cref="CreateDefaultClient"/> builds one that does not.</param>
-    /// <param name="baseAddress">The API root; <c>https://api.github.com/</c> when null.</param>
-    public GitHubRestApi(HttpClient http, Uri? baseAddress = null)
+    /// <param name="ioPools">The pool registry; every exchange runs on its
+    /// <see cref="IoPoolNames.Http"/> pool.</param>
+    /// <param name="baseAddress">The API root; <c>https://api.github.com/</c> when null. Its origin
+    /// is the only one a credential is ever sent to.</param>
+    public GitHubRestApi(HttpClient http, IoPoolRegistry ioPools, Uri? baseAddress = null)
     {
         this.http = http;
+        this.ioPools = ioPools;
         this.baseAddress = baseAddress ?? DefaultBaseAddress;
-        Json = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        };
+        Json = CreateJsonOptions();
     }
 
     /// <summary>The wire serializer options — snake_case names, nulls omitted on write, unknown
     /// fields ignored on read.</summary>
     public JsonSerializerOptions Json { get; }
 
+    private IIoPool Pool => ioPools.Get(IoPoolNames.Http);
+
+    /// <summary>The wire serializer options (a fresh instance per call).</summary>
+    public static JsonSerializerOptions CreateJsonOptions() => new(JsonSerializerDefaults.Web)
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     /// <summary>An <see cref="HttpClient"/> whose handler leaves redirects to this transport.</summary>
     public static HttpClient CreateDefaultClient()
         => new(new SocketsHttpHandler { AllowAutoRedirect = false });
 
-    /// <summary>One request; deserializes the success body as <typeparamref name="T"/>.</summary>
-    public async Task<T> SendAsync<T>(
-        HttpMethod method, string path, string token, object? body, CancellationToken ct)
-    {
-        var response = await SendRawAsync(method, path, token, body, ct).ConfigureAwait(false);
-        return Deserialize<T>(response.Body);
-    }
+    /// <summary>One request; the success body deserialized as <typeparamref name="T"/>.</summary>
+    public IObservable<T> Send<T>(HttpMethod method, string path, string token, object? body = null)
+        => SendRaw(method, path, token, body).Select(response => Deserialize<T>(response.Body, Json));
 
-    /// <summary>A listing: follows <c>Link: rel="next"</c> to the last page and concatenates.</summary>
-    public Task<ImmutableList<T>> GetAllAsync<T>(string path, string token, CancellationToken ct)
-        => GetAllAsync<ImmutableList<T>, T>(path, token, page => page, ct);
+    /// <summary>A listing: every page (<c>Link: rel="next"</c>), as ONE emission.</summary>
+    public IObservable<ImmutableList<T>> GetAll<T>(string path, string token)
+        => GetAll<ImmutableList<T>, T>(path, token, page => page);
 
     /// <summary>A listing whose pages wrap the items in an envelope (e.g. <c>check_runs</c>).</summary>
-    public async Task<ImmutableList<TItem>> GetAllAsync<TPage, TItem>(
-        string path, string token, Func<TPage, IEnumerable<TItem>?> items, CancellationToken ct)
-    {
-        var all = ImmutableList.CreateBuilder<TItem>();
-        string? next = WithQuery(path, "per_page=" + PageSize.ToString(CultureInfo.InvariantCulture));
-        while (next is not null)
+    public IObservable<ImmutableList<TItem>> GetAll<TPage, TItem>(
+        string path, string token, Func<TPage, IEnumerable<TItem>?> items)
+        => Page(WithQuery(path, "per_page=" + PageSize.ToString(CultureInfo.InvariantCulture)), token, items);
+
+    /// <summary>One page, then — when GitHub names a next one — the rest, each its own pooled
+    /// request. The next-page URL is absolute and may name ANY host; the credential decision is
+    /// re-made for it in <see cref="MayCarryCredential"/>, never inherited.</summary>
+    private IObservable<ImmutableList<TItem>> Page<TPage, TItem>(
+        string url, string token, Func<TPage, IEnumerable<TItem>?> items)
+        => SendRaw(HttpMethod.Get, url, token, null).SelectMany(response =>
         {
-            var response = await SendRawAsync(HttpMethod.Get, next, token, null, ct).ConfigureAwait(false);
-            if (items(Deserialize<TPage>(response.Body)) is { } pageItems)
-                all.AddRange(pageItems);
-            next = NextPage(response.Link);
-        }
-        return all.ToImmutable();
-    }
+            var here = (items(Deserialize<TPage>(response.Body, Json)) ?? []).ToImmutableList();
+            return NextPage(response.Link) is { } next
+                ? Page(next, token, items).Select(rest => here.AddRange(rest))
+                : Observable.Return(here);
+        });
 
     /// <summary>A success answer: its body and its <c>Link</c> header (null when absent).</summary>
     internal sealed record RawResponse(HttpStatusCode Status, string Body, string? Link);
 
     /// <summary>
-    /// One request with redirects followed (see the type remarks). A non-success final status is
-    /// thrown as a <see cref="GitHubApiException"/>; only a 2xx returns.
+    /// One request with redirects followed (see the type remarks), as one pooled exchange. A
+    /// non-success final status is thrown as a <see cref="GitHubApiException"/>; only a 2xx emits.
     /// </summary>
-    public async Task<RawResponse> SendRawAsync(
+    public IObservable<RawResponse> SendRaw(HttpMethod method, string path, string token, object? body)
+        => Pool.Invoke(ct => SendRawLeafAsync(method, path, token, body, ct));
+
+    /// <summary>
+    /// Whether a request to <paramref name="target"/> may carry the credential: only when it is the
+    /// configured API origin — same scheme, same host, same port. A plaintext <c>http://</c>
+    /// redirect, another port on the same host, or another host entirely never receives it.
+    /// </summary>
+    internal bool MayCarryCredential(Uri target)
+        => Uri.Compare(target, baseAddress, UriComponents.SchemeAndServer, UriFormat.Unescaped,
+               StringComparison.OrdinalIgnoreCase) == 0;
+
+    // The ONE async leaf, run solely by Pool.Invoke above (private: nothing else can reach it).
+    private async Task<RawResponse> SendRawLeafAsync(
         HttpMethod method, string path, string token, object? body, CancellationToken ct)
     {
         var uri = Resolve(path);
-        var originalHost = uri.Host;
         var json = body is null ? null : JsonSerializer.Serialize(body, body.GetType(), Json);
-        var sendCredential = !string.IsNullOrEmpty(token);
+        var hasToken = !string.IsNullOrEmpty(token);
         for (var hop = 0; ; hop++)
         {
             using var request = new HttpRequestMessage(method, uri);
             request.Headers.UserAgent.Add(new ProductInfoHeaderValue("MeshWeaver", null));
             request.Headers.Accept.ParseAdd("application/vnd.github+json");
             request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", ApiVersion);
-            if (sendCredential)
+            // Decided per hop against the configured origin — never carried over from the hop before.
+            if (hasToken && MayCarryCredential(uri))
                 request.Headers.Authorization = new AuthenticationHeaderValue("token", token);
             if (json is not null)
                 request.Content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -141,10 +170,6 @@ internal sealed class GitHubRestApi
                     method = HttpMethod.Get;
                     json = null;
                 }
-                // The credential follows the redirect only while it stays on the host it was meant
-                // for — never hand a token to whatever host a Location names.
-                if (!string.Equals(uri.Host, originalHost, StringComparison.OrdinalIgnoreCase))
-                    sendCredential = false;
                 continue;
             }
 
@@ -159,8 +184,8 @@ internal sealed class GitHubRestApi
 
     /// <summary>Deserializes a GitHub body with the wire options. An empty body reads as
     /// <c>default</c> only for a nullable target; otherwise it is a malformed answer.</summary>
-    public T Deserialize<T>(string body)
-        => JsonSerializer.Deserialize<T>(body.Length == 0 ? "null" : body, Json)
+    public static T Deserialize<T>(string body, JsonSerializerOptions json)
+        => JsonSerializer.Deserialize<T>(body.Length == 0 ? "null" : body, json)
            ?? throw new JsonException($"GitHub answered an empty body where {typeof(T).Name} was expected.");
 
     /// <summary>

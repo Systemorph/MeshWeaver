@@ -99,7 +99,7 @@ public class AWebhookIssueSnapshotKeepsItsCloseDecisionTest
         var fromWebhook = GitHubWebhookProcessor.MapIssue(
             JsonDocument.Parse(body).RootElement);
         var fromRest = OctokitGitHubRepoClient.ToIssue(
-            new GitHubRestApi(new HttpClient()).Deserialize<GitHubWireIssue>(body));
+            GitHubRestApi.Deserialize<GitHubWireIssue>(body, GitHubRestApi.CreateJsonOptions()));
 
         Assert.Equal(expected, fromWebhook.StateReason);
         Assert.Equal(fromWebhook.StateReason, fromRest.StateReason);

@@ -12,7 +12,7 @@ namespace MeshWeaver.GitSync;
 /// <summary>
 /// Production <see cref="IGitHubRepoClient"/> over GitHub's REST API (the Git Data, repository,
 /// issue and pull-request endpoints). Every GitHub leaf is one <see cref="GitHubRestApi"/> request
-/// bridged through the <see cref="IoPoolNames.Http"/> pool (<c>Http.Invoke(ct =&gt; api.X(…))</c>)
+/// run inside the <see cref="IoPoolNames.Http"/> pool (the transport owns that boundary)
 /// and composed reactively — no <c>async</c>/<c>await</c>/<c>Task</c> escapes a method signature,
 /// per <c>Doc/Architecture/ControlledIoPooling.md</c>; the pool keeps every request
 /// concurrency-bounded and off the hub scheduler (it would otherwise deadlock a hub/grain turn).
@@ -58,17 +58,17 @@ public sealed class OctokitGitHubRepoClient(
     // An empty token means ANONYMOUS access (a public repo, e.g. the plugin registry serving a
     // public plugins repo with no App identity configured): the transport then sends no
     // Authorization header at all — unauthenticated, lower rate limit, but valid.
-    private readonly GitHubRestApi api = new(httpClient ?? GitHubRestApi.CreateDefaultClient());
+    // The transport owns the HTTP pool boundary: every member it exposes is an observable whose
+    // exchange runs inside IoPoolNames.Http.
+    private readonly GitHubRestApi api = new(httpClient ?? GitHubRestApi.CreateDefaultClient(), ioPools);
 
-    private IIoPool Http => ioPools.Get(IoPoolNames.Http);
-
-    /// <summary>One request through the HTTP pool, deserialized as <typeparamref name="T"/>.</summary>
+    /// <summary>One pooled request, deserialized as <typeparamref name="T"/>.</summary>
     private IObservable<T> Call<T>(HttpMethod method, string path, string token, object? body = null)
-        => Http.Invoke(ct => api.SendAsync<T>(method, path, token, body, ct));
+        => api.Send<T>(method, path, token, body);
 
-    /// <summary>A whole listing (every page) through the HTTP pool, as ONE emission.</summary>
+    /// <summary>A whole listing (every page, each pooled), as ONE emission.</summary>
     private IObservable<ImmutableList<T>> ListAll<T>(string path, string token)
-        => Http.Invoke(ct => api.GetAllAsync<T>(path, token, ct));
+        => api.GetAll<T>(path, token);
 
     private static string RepoPath(string owner, string repo)
         => $"repos/{GitHubRestApi.Escape(owner)}/{GitHubRestApi.Escape(repo)}";
@@ -550,9 +550,9 @@ public sealed class OctokitGitHubRepoClient(
                 // checks scope returns empty rather than failing the whole detail read.
                 var checks = string.IsNullOrEmpty(headSha)
                     ? Observable.Return(GitHubCheckSummary.Empty)
-                    : Http.Invoke(ct => api.GetAllAsync<GitHubWireCheckRuns, GitHubWireCheckRun>(
+                    : api.GetAll<GitHubWireCheckRuns, GitHubWireCheckRun>(
                             $"{RepoPath(owner, repo)}/commits/{GitHubRestApi.Escape(headSha)}/check-runs",
-                            accessToken, page => page.CheckRuns, ct))
+                            accessToken, page => page.CheckRuns)
                         .Select(SummarizeChecks)
                         // Only "no checks configured / no checks:read scope" (404 / 403) degrade to empty;
                         // a real error (auth, 5xx) must surface, not be silently hidden as "no checks".
@@ -828,11 +828,11 @@ public sealed class OctokitGitHubRepoClient(
         => head.RefExists
             ? Observable.Return(head)
             : IsRepoEmpty(token, owner, repo).SelectMany(empty => empty
-                ? Http.Invoke(ct => api.SendRawAsync(HttpMethod.Put,
+                ? api.SendRaw(HttpMethod.Put,
                         $"{RepoPath(owner, repo)}/contents/{GitHubRestApi.EscapePath(prefix + ".gitkeep")}", token,
                         new GitHubWireCreateFile("Initialize repository (MeshWeaver sync)",
                             Convert.ToBase64String(Encoding.UTF8.GetBytes("Created by MeshWeaver to initialize this repository.\n")),
-                            branch), ct))
+                            branch))
                     .SelectMany(_ => ReadHead(token, owner, repo, branch))
                 : ReadDefaultBranchHead(token, owner, repo, fallback: head));
 

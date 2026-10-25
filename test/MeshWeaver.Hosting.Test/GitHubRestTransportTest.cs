@@ -98,6 +98,44 @@ public class GitHubRestTransportTest
         Assert.Null(gh.Requests[1].Authorization);
     }
 
+    [Theory]
+    [InlineData("http://api.github.com/repos/acme/widgets")]        // plaintext, same host
+    [InlineData("https://api.github.com:8443/repos/acme/widgets")]  // same host, another port
+    public async Task ARedirectOffTheApiOrigin_DropsTheCredential_EvenOnTheSameHost(string target)
+    {
+        var gh = new FakeGitHub()
+            .On("GET", R, Redirect(HttpStatusCode.MovedPermanently, target))
+            .On("GET", target, Json("""{"name":"widgets","owner":{"login":"acme"}}"""));
+        using var pools = new IoPoolRegistry();
+
+        await Run(Client(pools, gh).GetCanonicalRepository(Repo, "tok"));
+
+        Assert.Equal(2, gh.Requests.Count);
+        Assert.Equal("token tok", gh.Requests[0].Authorization);
+        Assert.Null(gh.Requests[1].Authorization);
+    }
+
+    [Fact]
+    public async Task ANextPageOnAnotherHost_IsFetchedWithoutTheCredential()
+    {
+        var gh = new FakeGitHub()
+            .On("GET", R + "/issues?state=all&sort=created&direction=desc&per_page=100",
+                Json("""[{"number":1,"state":"open"}]""",
+                    link: "<https://elsewhere.example.com/page2>; rel=\"next\""))
+            .On("GET", "https://elsewhere.example.com/page2",
+                Json("""[{"number":2,"state":"open"}]""",
+                    link: "<" + Api + "repos/acme/widgets/issues?page=3>; rel=\"next\""))
+            .On("GET", R + "/issues?page=3", Json("""[{"number":3,"state":"open"}]"""));
+        using var pools = new IoPoolRegistry();
+
+        var issues = await Run(Client(pools, gh).ListIssues(Repo, null, "tok"));
+
+        Assert.Equal([1, 2, 3], issues.Select(i => i.Number));
+        // 🚨 The absolute next-page URL is a fresh request: the credential decision is re-made for
+        // it, never inherited — the other host never sees the token; the API origin does again.
+        Assert.Equal(["token tok", null, "token tok"], gh.Requests.Select(r => r.Authorization));
+    }
+
     [Fact]
     public async Task ARedirectLoopFailsAfterOctokitsHopLimit()
     {
@@ -689,7 +727,7 @@ public class GitHubRestTransportTest
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var uri = request.RequestUri!;
-            var path = uri.Host == "api.github.com" ? uri.PathAndQuery : uri.GetLeftPart(UriPartial.Query);
+            var path = uri.GetLeftPart(UriPartial.Authority) == "https://api.github.com" ? uri.PathAndQuery : uri.GetLeftPart(UriPartial.Query);
             var body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
             ImmutableInterlocked.Update(ref requests, list => list.Add(new Seen(
                 request.Method.Method, path,
