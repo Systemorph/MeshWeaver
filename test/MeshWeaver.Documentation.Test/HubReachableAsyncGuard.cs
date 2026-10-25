@@ -66,8 +66,10 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     /// </summary>
     private static readonly string[] ScannedRoots = ["src", "memex", "tools", "samples", "clients"];
 
-    /// <summary>The seeded inventory's size for <see cref="NoNewAwaitOfAMeshRead"/>.</summary>
-    private const int AwaitedReadTotalBudget = 2;
+    /// <summary>The seeded inventory's size for <see cref="NoNewAwaitOfAMeshRead"/>. Zero: its
+    /// last two sites (DevAuthController, UserRoleResolver) left with Memex.Portal.Shared for
+    /// MeshWeaver.Plugins (core slimming), so every new await of a mesh read here is NEW.</summary>
+    private const int AwaitedReadTotalBudget = 0;
 
     /// <summary>The seeded inventory's size for <see cref="NoNewTaskShapedSeamInTheMeshContract"/>.</summary>
     private const int SeamTotalBudget = 5;
@@ -333,13 +335,6 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     public void BothScannersFindTheInventoryTheyRatchet()
     {
         var root = RepoPaths.Root;
-
-        Assert.True(ScanAwaitedReads(root).Count > 0,
-            "The awaited-read scanner found NO site anywhere under "
-            + string.Join(", ", ScannedRoots) + ". Either every site was migrated — in which case "
-            + "empty " + AwaitedReadAllowFile + ", drop " + nameof(AwaitedReadTotalBudget)
-            + " to 0 and delete this half of the assertion — or the scanner is broken, which would "
-            + "make the ratchet pass on no evidence.");
 
         Assert.True(ScanContractSeams(root).Count > 0,
             "The mesh-contract seam scanner found NO Task-returning interface member under "
