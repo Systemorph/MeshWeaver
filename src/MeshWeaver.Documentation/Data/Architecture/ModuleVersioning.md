@@ -369,8 +369,8 @@ satellite, so every repository inherits it):
 
 | rule | red when |
 |---|---|
-| well-formed | the cap is not a platform set (`3.1.<run>`, or a retired `3.0.0-ci.<run>`) |
-| cap ≥ floor | the cap is below `minMeshVersion`, compared by run number, the order `PlatformFloor` uses for two published builds |
+| well-formed | the cap is not a platform set (`3.1.<run>`, or a retired `3.0.0-ci.<run>`), or a bound is not a JSON string (`"maxMeshVersion": 10400` is RED, never read as "no cap") |
+| cap ≥ floor | the floor would refuse the cap, compared exactly as `PlatformFloor.Evaluate` compares: by run number between two published builds, by numeric core otherwise (so a release floor such as `3.1.0` is valid next to a cap, and `4.0.0` is above any `3.1.<run>`) |
 | companions | `capReason` or `capTracking` is missing, or either is present without a cap |
 | not stale | the cap is at or above `latest`: a cap that restricts nothing becomes a pin the day `latest` overtakes it, so remove it |
 | admitted | no COMPLETE build-server deployment lies inside the floor and cap |
@@ -382,9 +382,13 @@ never a skip.
 **Resolution.** `resolve-platform.py --from-build-hosts <build API> --packages-root .` writes
 `partitions`, a map `{set: [package, …]}`: an uncapped package (or one whose cap admits `latest`) builds
 on `latest`, and a capped package builds on the highest COMPLETE deployment in its range. A package with no
-fit is RED, never a silent pick of `latest` or of a version below its floor. The mode is OFF by default.
-No consumer passes the flag until the control instance serves a `latest` deployment, because the mode
-has no fallback to the newest sealed set.
+fit is RED, never a silent pick of `latest` or of a version below its floor. The floor is applied the
+same way in every step (validation, the range, the partition): `PlatformFloor.Evaluate`'s order. The mode
+is OFF by default. No consumer passes the flag until the control instance serves a `latest` deployment,
+because the mode has no fallback to the newest sealed set. That holds for the run's baseline too: in this
+mode a consumer job never keeps `PLATFORM_BASELINE`; it verifies the deployment it selected or is RED.
+Under an incident freeze (`MW_PLATFORM_REF`) the partitions are derived from the FROZEN set the run takes,
+so an uncapped package builds on the same set the main `set` output names.
 
 Both questions are read from ONE answer, `GET <build API>/hosts` on the control instance:
 `{aliases:{latest, candidate, previous}, versions:[{version, deploymentName, complete, maxReplicas, aliases,
@@ -405,8 +409,15 @@ calls daily. It does two things:
    missing from the set has had its cap removed, so its node is deleted.
 2. It files ONE submitted `Feedback/Feedback` triage item per capped package: "migrate <package> to
    latest", with the cap, `latest`, the distance in platform builds, the cap's age and `capTracking`. The
-   item id is the (repository, package, cap) triple, so the next day refreshes it and never files a
-   duplicate. Removing the cap resolves the item.
+   item id is the (repository, package, cap) triple, readable slugs plus a digest of the exact names, so
+   two packages whose names slug alike (`Foo.Bar`, `Foo-Bar`) never share an item, and the next day
+   refreshes it and never files a duplicate. Removing the cap resolves the item. The cleanup matches a
+   repository prefix that no other repository's can start with (`O/R` never resolves an item of
+   `O/R-Tools`).
+
+A daily lane's red is otherwise red in an empty room, so the caller contract also wires the ci-failure
+ledger lane under its own `cap-debt-red` label, on both outcomes: a red opens or appends to one issue and
+tells the control inbox, and the next green closes it.
 
 🚨 **What is NOT wired yet:**
 
