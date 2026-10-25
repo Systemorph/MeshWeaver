@@ -99,7 +99,7 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Graph.MailCopy.MeshMailAttachmentStore"] = MailAttachmentStoreMembers,
             // Enable starts the System backfill, so every public road to it is a surface: the engine, the
             // per-account copy and the switch over the providers.
-            ["MeshWeaver.Graph.MailCopy.MailCopyEngine"] = ["Kick", "Sync", "Enable"],
+            ["MeshWeaver.Graph.MailCopy.MailCopyEngine"] = ["Kick", "Sync", "Enable", "ServesFromCopy", "FollowMove"],
             ["MeshWeaver.Graph.MailCopy.IMailAccountCopy"] = ["KickAll", "Enable"],
             ["MeshWeaver.Graph.MailCopy.MailFeedAccountCopy"] = ["KickAll", "Enable"],
             ["MeshWeaver.Graph.MailCopy.IMailCopySwitch"] = ["Enable"],

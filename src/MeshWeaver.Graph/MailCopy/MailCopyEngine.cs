@@ -16,7 +16,15 @@ namespace MeshWeaver.Graph.MailCopy;
 /// <param name="Removed">The ids no longer in the mailbox's inbox.</param>
 /// <param name="Cursor">The provider's continuation (null: none to give — start over).</param>
 /// <param name="Done">Whether the feed reached the present (the backfill is complete).</param>
-public sealed record MailFeedStep(ImmutableList<MailMessageCopy> Changed, ImmutableList<string> Removed, string? Cursor, bool Done);
+public sealed record MailFeedStep(ImmutableList<MailMessageCopy> Changed, ImmutableList<string> Removed, string? Cursor, bool Done)
+{
+    /// <summary>
+    /// When the provider was ASKED for this step (UTC), if the feed knows — what the step's writes are dated with,
+    /// so a Delete or Undo the person asked for between the question and the writes is newer than the sync and
+    /// stays. Null: the engine dates the writes when it applies them.
+    /// </summary>
+    public DateTimeOffset? ReadAt { get; init; }
+}
 
 /// <summary>Raised by a feed when the provider refuses the stored cursor for good (expired history); the copy is rebuilt as a new generation.</summary>
 public sealed class MailFeedResyncRequiredException() : InvalidOperationException("The provider no longer accepts the stored sync cursor; the copy is rebuilt.");
@@ -43,6 +51,21 @@ public interface IMailCopyFeed
 
     /// <summary>The attachments of the account connected now. Cold; emits once.</summary>
     IObservable<IMailAttachmentSource> Attachments(string owner);
+
+    /// <summary>
+    /// Whether this feed can read ONE message's present state (<see cref="Reread"/>). A feed that can lets the
+    /// engine settle an event that lost to a newer local action on the mailbox's present state, and lets a
+    /// local Undo bring a message back; a feed that cannot has both ignored.
+    /// </summary>
+    bool CanReread => false;
+
+    /// <summary>
+    /// The message as it is in the inbox NOW — as a copy the engine stamps with provider, generation and time —
+    /// or null when it is not in the inbox (moved, deleted). Cold; emits once. Only called when
+    /// <see cref="CanReread"/>.
+    /// </summary>
+    IObservable<MailMessageCopy?> Reread(string owner, string messageId)
+        => Observable.Throw<MailMessageCopy?>(new NotSupportedException($"The {Provider} feed cannot read one message."));
 }
 
 /// <summary>
@@ -53,7 +76,7 @@ public interface IMailCopyFeed
 /// removals are tombstones that delete the message's attachment files first; switching off deletes the
 /// source, every copy, the files and the index.
 /// </summary>
-public sealed class MailCopyEngine(
+public sealed partial class MailCopyEngine(
     IMailCopyFeed feed, IMailCopyStore store, TimeProvider? clock = null, ILogger? logger = null, IMailAttachmentStore? attachments = null,
     AccessService? access = null)
 {
@@ -78,6 +101,14 @@ public sealed class MailCopyEngine(
     private readonly string holder = Guid.NewGuid().ToString("N");
     private ImmutableHashSet<string> running = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
     private ImmutableDictionary<string, DateTimeOffset> lastStarted = ImmutableDictionary<string, DateTimeOffset>.Empty.WithComparers(StringComparer.Ordinal);
+
+    // The raw stores and the feed, for the other parts of this class (primary-constructor parameters are not
+    // visible across partial declarations).
+    private IMailCopyStore ReadStore => store;
+    private IMailCopyFeed Feed => feed;
+    private AccessService? Access => access;
+    private ILogger? Log => logger;
+    private TimeProvider Clock => time;
 
     /// <summary>The provider segment of this engine's copies.</summary>
     public string Provider => feed.Provider;
@@ -335,24 +366,80 @@ public sealed class MailCopyEngine(
 
     private IObservable<int> Apply(string owner, MailCopySource source, MailFeedStep step, IMailAttachmentSource files)
     {
-        var at = time.GetUtcNow();
-        IObservable<int> Counted(IObservable<bool> write) => write.Take(1).Select(_ => 0).DefaultIfEmpty(0)
+        var at = step.ReadAt?.ToUniversalTime() ?? time.GetUtcNow();
+        // (failures, the id of an event that lost to a newer local action). A write that fails is counted and the
+        // others still run, so the commit that follows always covers the step's whole set of writes.
+        IObservable<(int Failed, string? Refused)> Counted(string id, IObservable<bool> write) => write.Take(1)
+            .Select(wrote => (Failed: 0, Refused: wrote ? null : id))
+            .DefaultIfEmpty((0, null))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "{Provider} copy: a copy write for {Owner} failed", Provider, owner);
-                return Observable.Return(1);
+                return Observable.Return<(int, string?)>((1, null));
             });
-        var writes = step.Removed.Select(id => Counted(Tombstoned(owner, source.Generation, id, at)))
-            .Concat(step.Changed.Where(m => m.ReceivedAt is { } received && received >= source.WindowStart)
-                .Select(message => Counted(Copied(owner, source, message with
+        var writes = step.Removed.Select(id => Counted(id, Tombstoned(owner, source.Generation, id, at)))
+            .Concat(step.Changed.Where(m => InWindow(m, source.WindowStart))
+                .Select(message => Counted(message.MessageId, Copied(owner, source, message with
                 {
                     Provider = Provider,
                     Generation = source.Generation,
                     CopiedAt = at,
                 }, files))))
             .ToList();
-        return writes.Count == 0 ? Observable.Return(0) : writes.MergeBounded(4).Sum();
+        if (writes.Count == 0)
+            return Observable.Return(0);
+        return writes.MergeBounded(4).ToList().SelectMany(results =>
+        {
+            var failed = results.Sum(r => r.Failed);
+            var refused = results.Select(r => r.Refused).OfType<string>().Where(id => id.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+            // 🚨 An event that lost to a newer local action is NOT simply dropped: which came first can only be
+            // guessed from clocks, so before the cursor moves past it the provider is asked again for the message's
+            // PRESENT state (a feed that can), and the copy settles on that.
+            return refused.Count == 0 || !feed.CanReread
+                ? Observable.Return(failed)
+                : refused.Select(id => Reconcile(owner, source, id, files, 1).Select(_ => 0)
+                        .Catch((Exception ex) =>
+                        {
+                            logger?.LogWarning(ex, "{Provider} copy: reconciling a message of {Owner} failed", Provider, owner);
+                            return Observable.Return(1);
+                        }))
+                    .MergeBounded(4).Sum().Select(more => failed + more);
+        });
     }
+
+    /// <summary>How often a reconcile retries after a concurrent write, before the step fails and repeats.</summary>
+    public const int MaxReconcileAttempts = 3;
+
+    /// <summary>Whether <paramref name="message"/> was received inside the window starting at <paramref name="windowStart"/>. Pure.</summary>
+    public static bool InWindow(MailMessageCopy message, DateTimeOffset windowStart)
+        => message.ReceivedAt is { } received && received >= windowStart;
+
+    // One message settled on the inbox's present state — a compare-and-set on the revision read BEFORE the
+    // provider is asked, so a Delete or Undo that completed while the answer was in flight makes it a conflict
+    // and the reconcile starts again; a delayed answer can never overwrite a newer move.
+    private IObservable<bool> Reconcile(string owner, MailCopySource source, string messageId, IMailAttachmentSource files, int attempt)
+        => copies.Revision(owner, Provider, source.Generation, messageId).SelectMany(revision =>
+                Prior(owner, source.Generation, messageId).SelectMany(prior =>
+                    feed.Reread(owner, messageId).Take(1).DefaultIfEmpty(null).SelectMany(message =>
+                    {
+                        var at = time.GetUtcNow();
+                        var live = message is not null && InWindow(message, source.WindowStart);
+                        var settled = live
+                            ? Carried(message! with { Provider = Provider, Generation = source.Generation, CopiedAt = at }, prior)
+                            : Tombstone(source.Generation, messageId, at);
+                        // The files of a copy that is going away are deleted first, while the copy still records them.
+                        return (live ? Observable.Return(Unit.Default) : DropFiles(owner, source.Generation, messageId, prior))
+                            .SelectMany(_ => copies.WriteIfUnchanged(owner, settled, revision))
+                            .SelectMany(wrote => wrote && live
+                                ? Attach(owner, settled, files).Select(_ => true)
+                                : Observable.Return(wrote));
+                    })))
+            .SelectMany(wrote => wrote
+                ? Observable.Return(true)
+                : attempt < MaxReconcileAttempts
+                    ? Reconcile(owner, source, messageId, files, attempt + 1)
+                    : Observable.Throw<bool>(new InvalidOperationException(
+                        "A message kept changing while it was reconciled; the step is repeated.")));
 
     private IObservable<MailMessageCopy?> Prior(string owner, string generation, string messageId)
         => fileStore is null
@@ -362,19 +449,24 @@ public sealed class MailCopyEngine(
     private IObservable<bool> Copied(string owner, MailCopySource source, MailMessageCopy message, IMailAttachmentSource files)
         => Prior(owner, source.Generation, message.MessageId).SelectMany(prior =>
         {
-            // The decision already stored is carried over (never fetched again); a message without attachments
-            // is decided empty; one the provider did not say anything about stays undecided.
-            var known = fileStore is null ? null
-                : prior?.Attachments is { } existing && existing.Any(a => a.StoredPath is not null) ? existing
-                : message.HasAttachments == false ? ImmutableList<MailAttachmentCopy>.Empty
-                : prior?.Attachments;
-            // 🚨 A marker that said "has attachments" is never overwritten by "none" NOR by "not said" (null): an interrupted save leaves
-            // files with no list, and removal finds them through the marker.
-            var copy = message with { Attachments = known, HasAttachments = MergedAttachmentMarker(message.HasAttachments, prior?.HasAttachments) };
+            var copy = Carried(message, prior);
             return copies.WriteIfNewer(owner, copy).SelectMany(wrote => wrote
                 ? Attach(owner, copy, files).Select(_ => true)
                 : Observable.Return(false));
         });
+
+    // A rewritten copy carries over what the stored one already decided. The decision already stored is never
+    // fetched again; a message without attachments is decided empty; one the provider did not say anything about
+    // stays undecided. 🚨 A marker that said "has attachments" is never overwritten by "none" NOR by "not said"
+    // (null): an interrupted save leaves files with no list, and removal finds them through the marker.
+    private MailMessageCopy Carried(MailMessageCopy message, MailMessageCopy? prior)
+    {
+        var known = fileStore is null ? null
+            : prior?.Attachments is { } existing && existing.Any(a => a.StoredPath is not null) ? existing
+            : message.HasAttachments == false ? ImmutableList<MailAttachmentCopy>.Empty
+            : prior?.Attachments;
+        return message with { Attachments = known, HasAttachments = MergedAttachmentMarker(message.HasAttachments, prior?.HasAttachments) };
+    }
 
     /// <summary>
     /// The "may hold files" marker a rewrite stores: a prior <c>true</c> survives an incoming <c>false</c> AND an
