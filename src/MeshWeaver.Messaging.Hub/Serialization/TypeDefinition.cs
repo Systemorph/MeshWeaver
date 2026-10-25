@@ -199,18 +199,10 @@ public record TypeDefinition : ITypeDefinition
 
     /// <summary>
     /// True while this definition's key comes from the key-function CONVENTIONS of a registry's
-    /// builder rather than an explicit key function — i.e. it is the plain definition any registry
-    /// would build for the type. What lets a hub-level registry reuse its parent's definition of a
-    /// type whose key the conventions decide instead of holding a copy (TypeRegistry.WithType).
+    /// builder rather than an explicit key function. A registry with key-function factories of its own
+    /// may then key an inherited, keyless definition differently (TypeRegistry.Localize).
     /// </summary>
     internal bool KeyFromBuilder => keyFromBuilder;
-
-    /// <summary>
-    /// True when the description and icon are the ones the type itself declares — neither was
-    /// overridden on this definition (<c>with { Description = … }</c> / <c>with { Icon = … }</c>).
-    /// </summary>
-    internal bool DescribedByType =>
-        ReferenceEquals(description, DisplayMetadata.Description) && Equals(Icon, DisplayMetadata.Icon);
 
     /// <summary>A copy of this definition whose key is <paramref name="keyFunction"/>.</summary>
     /// <param name="keyFunction">The explicit key function.</param>

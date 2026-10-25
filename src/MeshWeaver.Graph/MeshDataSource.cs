@@ -2519,21 +2519,20 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>, I
         if (staticNode != null)
         {
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
-            return WithType<MeshNode>(ts => ts
-                .WithKey(n => n.Id)
-                .WithInitialData([staticNode]));
+            // No WithKey: MeshNode's [Key] Id is the convention, so the mesh's definition already keys
+            // it. Re-stating it bound a keyed MeshNode override on every node hub's type registry.
+            return WithType<MeshNode>(ts => ts.WithInitialData([staticNode]));
         }
 
         if (_persistenceCore == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence core, using basic MeshNode type source");
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
-            return WithType<MeshNode>(ts => ts.WithKey(n => n.Id));
+            return WithType<MeshNode>(ts => ts);
         }
 
         return WithTypeSource(typeof(MeshNode),
-                new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath, ownStream)
-                    .WithKey(n => n.Id));
+                new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath, ownStream));
         // Note: persistence ref is still passed because creates+deletes go
         // straight to disk (insta write); only updates ride the Sample(200ms)
         // queue → SaveMeshNodeRequest. See Doc/Architecture/AsynchronousCalls.md
