@@ -37,7 +37,7 @@ internal static class DomainViews
         Controls.Link(glyph, href).WithTooltip(tooltip).WithStyle("text-decoration: none; font-size: 1.5em; line-height: 1;");
 
     /// <summary>The type's XML-doc summary as a hint line, or null when there is none.</summary>
-    /// <param name="summary">The summary text (plain text, from <c>XmlDocs.Summary</c>).</param>
+    /// <param name="summary">The summary text (plain text, from the mesh's <c>XmlDocsReader</c>).</param>
     /// <returns>A <see cref="Controls.Hint"/> label, or null.</returns>
     internal static UiControl? Description(string? summary) =>
         string.IsNullOrWhiteSpace(summary) ? null : Controls.Hint(summary).WithStyle("margin-bottom: 1rem;");

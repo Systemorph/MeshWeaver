@@ -87,6 +87,9 @@ internal class TypeRegistry : ITypeRegistry
     // census — Doc/Architecture/PortalHeapIsHubs). An instance, never static (NoStaticState).
     private readonly TypeDisplayMetadataCache descriptions;
 
+    /// <summary>The mesh's XML-documentation reader, shared down the registry chain with the descriptions.</summary>
+    internal XmlDocsReader Docs => descriptions.Docs;
+
     // The basic types are seeded ONLY at the root of a chain. A registry whose parent is a
     // TypeRegistry resolves them through that parent (every lookup below falls through to it), so
     // re-seeding 27 definitions into every hub's own map duplicated them once per hub.
