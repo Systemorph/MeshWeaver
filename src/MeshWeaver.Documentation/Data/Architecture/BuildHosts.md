@@ -424,8 +424,10 @@ repository with no admission job of its own, from the `node-repo-build-executor.
 
 🚨 **Every failure answers `actions`** — today's behaviour — and says why (a `::warning::` for a
 failure, a summary line for a deliberate `actions`). The build API base is `vars.MW_BUILD_API` when
-set, else the inbox's origin + `/api/builds`; https only (plain http only to localhost), never with
-credentials in the URL.
+set, else the inbox's origin + `/api/builds`; it AND the inbox are https only (plain http only to
+localhost), never with credentials in the URL — an http inbox would let an on-path party answer
+`verified` and turn the Actions legs off with no host build. Only channel `latest` is queued: a
+`build-request` carries no channel yet, so any other channel answers `actions`.
 
 **The required contexts do not change name.** A heavy leg is not replaced by a differently named
 job; the caller runs a SIBLING follow job (`build-follow.yml`, `if: executor == 'host'`) and passes

@@ -93,20 +93,25 @@ class Decision:
     lines: list[str] = field(default_factory=list)   # workflow-command lines to print
 
 
+def safe_url(raw: str) -> str:
+    """`raw` when it is https (or plain http to localhost) with a host and NO credentials; '' otherwise.
+    Both the API we read and the inbox we sign a request to are held to it: an http inbox would let
+    an on-path party answer `signature: verified` and turn the Actions legs off with no host build."""
+    p = urllib.parse.urlparse((raw or "").strip())
+    host = (p.hostname or "").lower()
+    local = p.scheme == "http" and host in ("localhost", "127.0.0.1", "::1")
+    if "@" in p.netloc or not ((p.scheme == "https" and host) or local):
+        return ""
+    return raw.strip()
+
+
 def api_url_of(i: Inputs) -> str:
     """The build API base: the explicit override, else the inbox's origin + /api/builds. '' = none."""
     raw = (i.build_api or "").strip().rstrip("/")
     if not raw and i.queue_url:
         p = urllib.parse.urlparse(i.queue_url.strip())
         raw = f"{p.scheme}://{p.netloc}/api/builds" if p.scheme and p.netloc else ""
-    if not raw:
-        return ""
-    p = urllib.parse.urlparse(raw)
-    host = (p.hostname or "").lower()
-    local = p.scheme == "http" and host in ("localhost", "127.0.0.1", "::1")
-    if "@" in p.netloc or not ((p.scheme == "https" and host) or local):
-        return ""
-    return raw
+    return safe_url(raw) if raw else ""
 
 
 def declared_stages(path: str) -> tuple[list[str], str]:
@@ -163,6 +168,11 @@ def decide(i: Inputs, get: Get, post: Post) -> Decision:
         return Decision(ACTIONS, api, why, lines)
 
     api = api_url_of(i)
+    # 🚨 ONLY `latest` IS QUEUED BY A build-request today (review of #7153): the request carries no
+    # channel, so a `stable` ask would queue a latest run its follower never reads. A non-latest
+    # channel is `actions` — said — until the request and the receiver route a channel.
+    if i.channel != "latest":
+        return actions(f"channel '{i.channel}' cannot be queued by a build-request yet (only latest is) — a follower would wait on a run of another channel")
     stages, no_stages = declared_stages(i.stages_file)
     if not stages:
         return actions(no_stages, warn=False)
@@ -183,6 +193,8 @@ def decide(i: Inputs, get: Get, post: Post) -> Decision:
         return actions(f"the instance executes {repo_name} on {executor!s:.40}", warn=False)
     if not i.secret or not i.queue_url:
         return actions("the instance says host, but this context has no webhook pair (BUILD_WEBHOOK_URL / BUILD_WEBHOOK_SECRET) to queue the run with")
+    if not safe_url(i.queue_url):
+        return actions("the inbox (BUILD_WEBHOOK_URL) is not an https URL without credentials — refusing to sign a build-request to it")
     payload = json.dumps(request_body(i), separators=(",", ":")).encode()
     status, text = post(i.queue_url, payload, {"Content-Type": "application/json", "X-Hub-Signature-256": sign(i.secret, payload),
                                                "User-Agent": "meshweaver-build-executor"})
@@ -335,6 +347,12 @@ def self_test() -> int:
         ("request refused", base, host_q, post_answer(401, ""), "HTTP 401", True),
         ("request transport failure", base, host_q, post_answer(0, "TimeoutError"), "transport", True),
         ("signature not verified", base, host_q, post_answer(202, {"signature": "unsigned"}), "did not verify", True),
+        ("an http inbox is never signed to, even with an https API",
+         with_(build_api="https://control.example.com/api/builds", queue_url="http://inbox.example.com/api/hooks/Hosting/PlatformBuilds"),
+         host_q, ok_post, "not an https URL", True),
+        ("an inbox with credentials in its URL", with_(build_api="https://control.example.com/api/builds",
+         queue_url="https://u:p@control.example.com/api/hooks/Hosting/PlatformBuilds"), host_q, ok_post, "not an https URL", True),
+        ("a non-latest channel is never queued", with_(channel="stable"), host_q, ok_post, "only latest is", True),
         ("empty inbox answer", base, host_q, post_answer(200, ""), "did not verify", True),
     ]
     for name, inp, g, p, phrase, warned in cases:
@@ -345,6 +363,10 @@ def self_test() -> int:
     calls.clear()
     decide(with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post)
     check("actions/a repository with no stages asks nothing and queues nothing", calls == [], calls)
+    for inp in (with_(build_api="https://control.example.com/api/builds", queue_url="http://inbox.example.com/x"), with_(channel="stable")):
+        calls.clear()
+        decide(inp, host_q, ok_post)
+        check("actions/an unsafe inbox or a non-latest channel POSTs nothing", not any(c[0] == "POST" for c in calls), calls)
     calls.clear()
     decide(base, get_answer(200, {"executor": "actions"}), ok_post)
     check("actions/an actions answer queues nothing", [c[0] for c in calls] == ["GET"], calls)
@@ -352,7 +374,7 @@ def self_test() -> int:
     d = decide(with_(build_api="https://ops.example.com/api/builds/"), host_q, ok_post)
     check("api/the explicit base wins, trailing slash dropped", d.api_url == "https://ops.example.com/api/builds", d)
     # 5. malformed inputs are refused, never guessed
-    for bad in (with_(sha="abc"), with_(channel="Latest Channel")):
+    for bad in (with_(sha="abc"), with_(channel="Latest Channel")):  # malformed, not merely non-latest
         try:
             decide(bad, host_q, ok_post)
             check("input/refused", False, bad)
