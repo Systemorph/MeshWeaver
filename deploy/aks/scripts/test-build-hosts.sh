@@ -229,7 +229,8 @@ for entry in \
   "values.build-hosts-registry-credential.yaml|a build host holds NO registry credential" \
   "values.build-hosts-postgres-sidecar.yaml|runs NO shared database" \
   "values.build-hosts-localhost-no-profile.yaml|names no profile" \
-  "values.build-hosts-run-deadline-too-long.yaml|RUN budget"; do
+  "values.build-hosts-run-deadline-too-long.yaml|RUN budget" \
+  "values.build-hosts-run-deadline-zero.yaml|RUN budget"; do
   f="${entry%%|*}"; phrase="${entry#*|}"
   if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" > "$WORK/refusal.yaml" 2> "$WORK/refusal.err"; then
     report "refusal $f RENDERED — the chart must refuse it"
