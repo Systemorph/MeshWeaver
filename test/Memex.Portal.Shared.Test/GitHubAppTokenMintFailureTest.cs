@@ -10,7 +10,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Options;
-using Octokit;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -24,8 +23,8 @@ namespace Memex.Portal.Shared.Test;
 /// installation's repository permissions. They used to be indistinguishable: every mint failure
 /// threw a bare <see cref="InvalidOperationException"/>, so a consumer that degrades to an
 /// anonymous fetch (the Store's package feed does, deliberately — a public source must keep
-/// working) could only report the fault it saw ONE LAYER LATER, which is Octokit's
-/// <c>AuthorizationException: Bad credentials</c>. That sentence describes a credential GitHub
+/// working) could only report the fault it saw ONE LAYER LATER, which is the REST client's
+/// <see cref="GitHubAuthorizationException"/>: <c>Bad credentials</c>. That sentence describes a credential GitHub
 /// REJECTED; read against a mint that never happened it sends the reader to the App's repository
 /// permissions, which are fine, and away from the private key or the installation, which are not.
 /// </para>
@@ -70,9 +69,9 @@ public class GitHubAppTokenMintFailureTest
         // The other side of the change, in the shape a Store poll pass has: the mint SUCCEEDS, the
         // token flows, and the repository read is what GitHub refuses.
         var rejected = service.GetInstallationToken()
-            .SelectMany(_ => Observable.Throw<string>(new AuthorizationException()));
+            .SelectMany(_ => Observable.Throw<string>(new GitHubAuthorizationException()));
 
-        var failure = await Assert.ThrowsAsync<AuthorizationException>(
+        var failure = await Assert.ThrowsAsync<GitHubAuthorizationException>(
             () => rejected.Timeout(Budget).Await());
 
         // The discriminator, with no message read on either side.

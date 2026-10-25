@@ -358,6 +358,10 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <PackageVersion Include="xunit.v3.runner.console" Version="4.0.2" />
     <PackageVersion Include="NSubstitute" Version="6.2.0" />
+    <!-- No core project references Octokit any more (the GitHub REST client is a plain HttpClient,
+         Doc/Architecture/GitHubSync → "The GitHub REST transport"). The versions stay only because
+         MeshWeaver.Plugins imports this central list in its source-checkout build and still names
+         Octokit types in a few files until its counterpart lands; delete both lines once it has. -->
     <PackageVersion Include="Octokit" Version="14.0.0" />
     <PackageVersion Include="Octokit.Reactive" Version="14.0.0" />
   </ItemGroup>

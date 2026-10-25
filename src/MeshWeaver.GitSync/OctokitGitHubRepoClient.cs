@@ -1,23 +1,27 @@
 using System.Collections.Immutable;
+using System.Globalization;
+using System.Net;
 using System.Reactive.Linq;
+using System.Text;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
-using Octokit;
-using Octokit.Reactive;
 
 namespace MeshWeaver.GitSync;
 
 /// <summary>
-/// Production <see cref="IGitHubRepoClient"/> over the Octokit.Reactive Git Data API. Every
-/// GitHub leaf is a native <see cref="IObservable{T}"/> from
-/// <see cref="IObservableGitHubClient"/> bridged through the <see cref="IoPoolNames.Http"/>
-/// pool (<c>Http.InvokeObservable(ct =&gt; client.X(…))</c>) and composed reactively — no
-/// <c>async</c>/<c>await</c>/<c>Task</c> escapes a method signature, per
-/// <c>Doc/Architecture/ControlledIoPooling.md</c>. The reactive client's observables are
-/// themselves <c>FromAsync</c>-shaped, so routing every one through
-/// <see cref="IIoPool.InvokeObservable{T}"/> keeps them concurrency-bounded and off the hub
-/// scheduler (they would otherwise deadlock a hub/grain turn).
+/// Production <see cref="IGitHubRepoClient"/> over GitHub's REST API (the Git Data, repository,
+/// issue and pull-request endpoints). Every GitHub leaf is one <see cref="GitHubRestApi"/> request
+/// bridged through the <see cref="IoPoolNames.Http"/> pool (<c>Http.Invoke(ct =&gt; api.X(…))</c>)
+/// and composed reactively — no <c>async</c>/<c>await</c>/<c>Task</c> escapes a method signature,
+/// per <c>Doc/Architecture/ControlledIoPooling.md</c>; the pool keeps every request
+/// concurrency-bounded and off the hub scheduler (it would otherwise deadlock a hub/grain turn).
+///
+/// <para>🚨 <b>The name is historical.</b> This client was built on Octokit / Octokit.Reactive and
+/// kept its type name when it moved to a plain <see cref="HttpClient"/> (Doc/Architecture/GitHubSync
+/// → "The GitHub REST transport"), because satellite repositories construct it, resolve it from DI
+/// and call <see cref="ParseRepoUrl"/> by this name. Failures are <see cref="GitHubApiException"/>s
+/// (typed per status), no longer Octokit's exception family.</para>
 ///
 /// <para>Export uses a single commit: blob per file → one tree → commit → update
 /// ref. Mirror is achieved by reconstructing the tree from scratch (no base_tree):
@@ -25,22 +29,51 @@ namespace MeshWeaver.GitSync;
 /// (so removed files vanish); blobs outside the subdirectory are carried over by
 /// their existing sha, so the rest of the repo is untouched.</para>
 /// </summary>
-public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<OctokitGitHubRepoClient>? logger = null)
+/// <param name="ioPools">The pool registry; every request runs on its <see cref="IoPoolNames.Http"/> pool.</param>
+/// <param name="logger">Optional logger.</param>
+/// <param name="httpClient">The client to send with. Null builds one whose handler does NOT follow
+/// redirects itself — the transport follows them and keeps the credential on the same host (see
+/// <see cref="GitHubRestApi"/>). An injected client should be built the same way.</param>
+public sealed class OctokitGitHubRepoClient(
+    IoPoolRegistry ioPools,
+    ILogger<OctokitGitHubRepoClient>? logger = null,
+    HttpClient? httpClient = null)
     : IGitHubRepoClient
 {
     private const string BlobMode = "100644";
-    private static readonly ProductHeaderValue Product = new("MeshWeaver");
+
+    /// <summary>
+    /// The pre-<see cref="HttpClient"/> constructor signature, kept explicitly so an assembly
+    /// compiled against it (a satellite module built on an older platform set) still binds at run
+    /// time — an optional parameter added to the primary constructor would change its metadata
+    /// signature and fault such a caller with <see cref="MissingMethodException"/>.
+    /// </summary>
+    /// <param name="ioPools">The pool registry.</param>
+    /// <param name="logger">Optional logger.</param>
+    public OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<OctokitGitHubRepoClient>? logger)
+        : this(ioPools, logger, httpClient: null)
+    {
+    }
+
+    // An empty token means ANONYMOUS access (a public repo, e.g. the plugin registry serving a
+    // public plugins repo with no App identity configured): the transport then sends no
+    // Authorization header at all — unauthenticated, lower rate limit, but valid.
+    private readonly GitHubRestApi api = new(httpClient ?? GitHubRestApi.CreateDefaultClient());
 
     private IIoPool Http => ioPools.Get(IoPoolNames.Http);
 
-    // An empty token means ANONYMOUS access (a public repo, e.g. the plugin registry serving a
-    // public plugins repo with no App identity configured). Octokit's `new Credentials("")` THROWS
-    // ArgumentException "String cannot be empty (Parameter 'token')", so never hand it an empty
-    // string — build a credential-less client instead (unauthenticated, lower rate limit but valid).
-    private static IObservableGitHubClient Client(string token) =>
-        new ObservableGitHubClient(string.IsNullOrEmpty(token)
-            ? new GitHubClient(Product)
-            : new GitHubClient(Product) { Credentials = new Credentials(token) });
+    /// <summary>One request through the HTTP pool, deserialized as <typeparamref name="T"/>.</summary>
+    private IObservable<T> Call<T>(HttpMethod method, string path, string token, object? body = null)
+        => Http.Invoke(ct => api.SendAsync<T>(method, path, token, body, ct));
+
+    /// <summary>A whole listing (every page) through the HTTP pool, as ONE emission.</summary>
+    private IObservable<ImmutableList<T>> ListAll<T>(string path, string token)
+        => Http.Invoke(ct => api.GetAllAsync<T>(path, token, ct));
+
+    private static string RepoPath(string owner, string repo)
+        => $"repos/{GitHubRestApi.Escape(owner)}/{GitHubRestApi.Escape(repo)}";
+
+    private static string Number(int number) => number.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>Parses <c>https://github.com/owner/repo(.git)</c> into (owner, repo).</summary>
     public static (string Owner, string Repo) ParseRepoUrl(string url)
@@ -68,7 +101,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     /// <remarks>
     /// 🚨 <b>This is the call that survives a RENAME.</b> GitHub answers
     /// <c>GET /repos/{owner}/{repo}</c> for a repository's OLD name with a <c>301</c> to its current
-    /// location, and Octokit's <c>RedirectHandler</c> follows it — so the repository object that
+    /// location, and the transport follows it (with the credential) — so the repository object that
     /// comes back carries the name the repository announces itself under TODAY, which is the name
     /// every webhook payload uses. Reading <c>Owner.Login</c> + <c>Name</c> off that RESPONSE (never
     /// re-parsing the url we asked with) is what turns <c>Systemorph/education</c> into
@@ -83,8 +116,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     public IObservable<RepoIdentity?> GetCanonicalRepository(string repositoryUrl, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        return Http.InvokeObservable(_ => client.Repository.Get(owner, repo))
+        return Call<GitHubWireRepository>(HttpMethod.Get, RepoPath(owner, repo), accessToken)
             .Select(r => r?.Owner?.Login is { Length: > 0 } login && r.Name is { Length: > 0 } name
                 ? new RepoIdentity(login, name)
                 : null)
@@ -102,12 +134,12 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     public IObservable<GitHubPushResult> Push(GitHubPushRequest request)
     {
         var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
-        var client = Client(request.AccessToken);
+        var token = request.AccessToken;
         var prefix = NormalizePrefix(request.Subdirectory);
         var branch = string.IsNullOrWhiteSpace(request.Branch) ? "main" : request.Branch;
 
-        return EnsureRepo(client, owner, repo, request.CreatePrivateIfMissing)
-            .SelectMany(repoCreated => ReadHead(client, owner, repo, branch)
+        return EnsureRepo(token, owner, repo, request.CreatePrivateIfMissing)
+            .SelectMany(repoCreated => ReadHead(token, owner, repo, branch)
                 .SelectMany(head0 =>
                 {
                     if (!head0.RefExists && !request.CreateBranchIfMissing)
@@ -119,7 +151,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                     // ONLY the Contents API can create that. EnsureInitialCommit seeds a throwaway file
                     // on the branch to initialize an empty repo, then we mirror normally — the mirror
                     // reconstructs the tree (dropping the seed) so the real content lands as the commit.
-                    return EnsureInitialCommit(client, owner, repo, branch, prefix, head0)
+                    return EnsureInitialCommit(token, owner, repo, branch, prefix, head0)
                     .SelectMany(head =>
                     {
                     // Existing blob entries (full repo). Empty when the repo/branch has no commit yet.
@@ -138,27 +170,26 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                     var exportPaths = request.Files.Select(f => prefix + f.Path).ToHashSet(StringComparer.Ordinal);
                     var deleted = underPrefix.Count(p => !exportPaths.Contains(p));
 
-                    return CreateBlobs(client, owner, repo, request.Files, prefix)
+                    return CreateBlobs(token, owner, repo, request.Files, prefix)
                         .SelectMany(exportEntries =>
                         {
-                            var newTree = new NewTree();
-                            foreach (var (path, sha) in preserved)
-                                newTree.Tree.Add(new NewTreeItem { Path = path, Mode = BlobMode, Type = TreeType.Blob, Sha = sha });
-                            foreach (var (path, sha) in exportEntries)
-                                newTree.Tree.Add(new NewTreeItem { Path = path, Mode = BlobMode, Type = TreeType.Blob, Sha = sha });
+                            // No base_tree: the tree is reconstructed from scratch (see the type remarks).
+                            var newTree = new GitHubWireNewTree(preserved.Concat(exportEntries)
+                                .Select(e => new GitHubWireNewTreeItem(e.Path, BlobMode, "blob", e.Sha))
+                                .ToImmutableList());
 
-                            return Http.InvokeObservable(ct => client.Git.Tree.Create(owner, repo, newTree))
+                            return Call<GitHubWireCreated>(HttpMethod.Post, RepoPath(owner, repo) + "/git/trees", token, newTree)
                                 .SelectMany(tree =>
                                 {
-                                    var commit = head.CommitSha is { Length: > 0 } parent
-                                        ? new NewCommit(request.CommitMessage, tree.Sha, parent)
-                                        : new NewCommit(request.CommitMessage, tree.Sha, Array.Empty<string>());
-                                    var who = new Committer(request.AuthorName, request.AuthorEmail, DateTimeOffset.UtcNow);
-                                    commit.Author = who;
-                                    commit.Committer = who;
-                                    return Http.InvokeObservable(ct => client.Git.Commit.Create(owner, repo, commit));
+                                    var parents = head.CommitSha is { Length: > 0 } parent
+                                        ? ImmutableList.Create(parent)
+                                        : ImmutableList<string>.Empty;
+                                    var who = new GitHubWireSignature(request.AuthorName, request.AuthorEmail,
+                                        DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture));
+                                    var commit = new GitHubWireNewCommit(request.CommitMessage, tree.Sha, parents, who, who);
+                                    return Call<GitHubWireCreated>(HttpMethod.Post, RepoPath(owner, repo) + "/git/commits", token, commit);
                                 })
-                                .SelectMany(commit => UpdateRef(client, owner, repo, branch, commit.Sha, head.RefExists)
+                                .SelectMany(commit => UpdateRef(token, owner, repo, branch, commit.Sha, head.RefExists)
                                     .Select(_ => new GitHubPushResult(
                                         commit.Sha, request.RepositoryUrl,
                                         request.Files.Count, deleted, repoCreated)));
@@ -197,11 +228,11 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     {
         ArgumentNullException.ThrowIfNull(pathFilter);
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
+        var token = accessToken;
         var prefix = NormalizePrefix(subdirectory);
         var commitRef = string.IsNullOrWhiteSpace(commitish) ? "main" : commitish.Trim();
 
-        return ResolveCommitish(client, owner, repo, commitRef)
+        return ResolveCommitish(token, owner, repo, commitRef)
             .SelectMany(head =>
             {
                 var blobs = head.ExistingBlobs
@@ -217,7 +248,8 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                         { ListingIsComplete = head.ListingIsComplete });
 
                 return blobs
-                    .Select(e => Http.InvokeObservable(ct => client.Git.Blob.Get(owner, repo, e.Sha))
+                    .Select(e => Call<GitHubWireBlob>(HttpMethod.Get,
+                            RepoPath(owner, repo) + "/git/blobs/" + GitHubRestApi.Escape(e.Sha), token)
                         .Select(blob => ToRepoFile(
                             prefix.Length == 0 ? e.Path : e.Path[prefix.Length..],
                             blob)))
@@ -240,9 +272,8 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     public IObservable<string> GetHeadSha(string repositoryUrl, string commitish, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
         var commitRef = string.IsNullOrWhiteSpace(commitish) ? "main" : commitish.Trim();
-        return ResolveRefSha(client, owner, repo, commitRef);
+        return ResolveRefSha(accessToken, owner, repo, commitRef);
     }
 
     // The GitHub compare endpoint returns at most this many files in one response; beyond it the
@@ -259,17 +290,16 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             return Observable.Return<IReadOnlyList<string>?>(Array.Empty<string>());
 
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
         var prefix = NormalizePrefix(subdirectory);
 
-        return Http.InvokeObservable(ct => client.Repository.Commit.Compare(owner, repo, baseSha, headSha))
+        return Compare(owner, repo, baseSha, headSha, accessToken)
             .Select(cmp =>
             {
                 // Only trust the diff when the head DESCENDS from the base (or equals it). "behind" /
                 // "diverged" means the base is NOT an ancestor — a force-push or history rewrite — so
                 // the file list is not the cumulative change set; and a truncated list (> the cap)
                 // is incomplete. Either way return null → the caller full-imports (never a silent miss).
-                var status = cmp.Status.ToString();
+                var status = cmp.Status;
                 if (!string.Equals(status, "ahead", StringComparison.OrdinalIgnoreCase)
                     && !string.Equals(status, "identical", StringComparison.OrdinalIgnoreCase))
                     return null;
@@ -284,7 +314,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                     AddIfUnderPrefix(changed, f.Filename, prefix);
                     // A rename reports the NEW filename; its OLD path must also count as changed so the
                     // stale node is pruned/re-created (prune handles the delete of the absent old file).
-                    AddIfUnderPrefix(changed, f.PreviousFileName, prefix);
+                    AddIfUnderPrefix(changed, f.PreviousFilename, prefix);
                 }
                 return (IReadOnlyList<string>)changed;
             })
@@ -309,11 +339,10 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         if (string.IsNullOrWhiteSpace(ancestorSha) || string.IsNullOrWhiteSpace(descendantRef))
             return Observable.Return(false);
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        return Http.InvokeObservable(ct => client.Repository.Commit.Compare(owner, repo, ancestorSha, descendantRef))
+        return Compare(owner, repo, ancestorSha, descendantRef, accessToken)
             .Select(cmp =>
             {
-                var status = cmp.Status.ToString();
+                var status = cmp.Status;
                 return string.Equals(status, "ahead", StringComparison.OrdinalIgnoreCase)
                        || string.Equals(status, "identical", StringComparison.OrdinalIgnoreCase);
             })
@@ -325,6 +354,13 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                 return Observable.Return(false);
             });
     }
+
+    /// <summary><c>GET /repos/{owner}/{repo}/compare/{base}...{head}</c> — one response, never
+    /// paginated (the <see cref="CompareFileCap"/> reasoning depends on that). Both refs are
+    /// URL-encoded whole, a branch's <c>/</c> included, as Octokit encoded them.</summary>
+    private IObservable<GitHubWireCompare> Compare(string owner, string repo, string @base, string head, string token)
+        => Call<GitHubWireCompare>(HttpMethod.Get,
+            $"{RepoPath(owner, repo)}/compare/{GitHubRestApi.Escape(@base)}...{GitHubRestApi.Escape(head)}", token);
 
     private static void AddIfUnderPrefix(List<string> into, string? repoPath, string prefix)
     {
@@ -340,19 +376,18 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request)
     {
         var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
-        var client = Client(request.AccessToken);
+        var token = request.AccessToken;
         var baseRef = string.IsNullOrWhiteSpace(request.BaseRef) ? "main" : request.BaseRef.Trim();
         var newBranch = request.NewBranch.Trim();
         if (string.IsNullOrEmpty(newBranch))
             return Observable.Throw<GitHubBranchResult>(new ArgumentException("New branch name is required.", nameof(request)));
 
-        return ResolveRefSha(client, owner, repo, baseRef)
+        return ResolveRefSha(token, owner, repo, baseRef)
             .SelectMany(sha =>
             {
                 logger?.LogInformation("Creating branch {Branch} from {BaseRef} ({Sha}) in {Owner}/{Repo}.",
                     newBranch, baseRef, sha[..Math.Min(8, sha.Length)], owner, repo);
-                return Http.InvokeObservable(ct => client.Git.Reference.Create(
-                        owner, repo, new NewReference($"refs/heads/{newBranch}", sha)))
+                return CreateRef(token, owner, repo, newBranch, sha)
                     .Select(reference => new GitHubBranchResult(newBranch, reference.Object.Sha));
             });
     }
@@ -363,15 +398,14 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     public IObservable<GitHubPullRequestInfo> OpenPullRequest(GitHubOpenPullRequestRequest request)
     {
         var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
-        var client = Client(request.AccessToken);
         var baseBranch = string.IsNullOrWhiteSpace(request.BaseBranch) ? "main" : request.BaseBranch.Trim();
         var head = request.HeadBranch?.Trim();
         if (string.IsNullOrEmpty(head))
             return Observable.Throw<GitHubPullRequestInfo>(new ArgumentException("Head branch is required.", nameof(request)));
 
-        var newPr = new NewPullRequest(request.Title, head, baseBranch) { Body = request.Body ?? "" };
+        var newPr = new GitHubWireNewPullRequest(request.Title, head, baseBranch, request.Body ?? "");
         logger?.LogInformation("Opening PR {Head} → {Base} in {Owner}/{Repo}.", head, baseBranch, owner, repo);
-        return Http.InvokeObservable(ct => client.PullRequest.Create(owner, repo, newPr))
+        return Call<GitHubWirePullRequest>(HttpMethod.Post, RepoPath(owner, repo) + "/pulls", request.AccessToken, newPr)
             .Select(ToInfo);
     }
 
@@ -384,8 +418,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         string repositoryUrl, int number, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        return Http.InvokeObservable(ct => client.PullRequest.Get(owner, repo, number))
+        return Call<GitHubWirePullRequest>(HttpMethod.Get, $"{RepoPath(owner, repo)}/pulls/{Number(number)}", accessToken)
             .Select(ToInfo);
     }
 
@@ -398,25 +431,23 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         string repositoryUrl, GitHubIssueState? state, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        var request = new RepositoryIssueRequest { State = MapStateFilter(state) };
-        // GetAllForRepository streams one Issue per page-item AND includes pull requests (a PR is an
-        // issue on GitHub); drop those, map, and .ToList() so the pool-bridged leaf emits one list.
-        return Http.InvokeObservable(ct => client.Issue.GetAllForRepository(owner, repo, request)
+        // Every page, AND the listing includes pull requests (a PR is an issue on GitHub); drop
+        // those and map. Sort and direction are Octokit's request defaults, so the order is unchanged.
+        return ListAll<GitHubWireIssue>(
+                $"{RepoPath(owner, repo)}/issues?state={MapStateFilter(state)}&sort=created&direction=desc", accessToken)
+            .Select(list => (IReadOnlyList<GitHubIssue>)list
                 .Where(i => i.PullRequest is null)
                 .Select(ToIssue)
-                .ToList())
-            .Select(list => (IReadOnlyList<GitHubIssue>)list);
+                .ToImmutableList());
     }
 
     /// <inheritdoc />
     public IObservable<GitHubIssue> GetIssue(string repositoryUrl, int number, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        return Http.InvokeObservable(ct => client.Issue.Get(owner, repo, number))
-            .SelectMany(issue => Http.InvokeObservable(ct =>
-                    client.Issue.Comment.GetAllForIssue(owner, repo, number).ToList())
+        var issuePath = $"{RepoPath(owner, repo)}/issues/{Number(number)}";
+        return Call<GitHubWireIssue>(HttpMethod.Get, issuePath, accessToken)
+            .SelectMany(issue => ListAll<GitHubWireComment>(issuePath + "/comments", accessToken)
                 .Select(comments => ToIssue(issue) with
                 {
                     Comments = comments.Select(ToComment).ToImmutableList(),
@@ -437,7 +468,7 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                 // Only the comments leg is forgiven — a 404 on the ISSUE itself still faults.
                 // CommentsAreComplete stays at its default false — the comments are exactly what
                 // could not be read here.
-                .Catch((NotFoundException _) => Observable.Return(ToIssue(issue))));
+                .Catch((GitHubNotFoundException _) => Observable.Return(ToIssue(issue))));
     }
 
     /// <inheritdoc />
@@ -445,28 +476,24 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         string repositoryUrl, int number, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
         // One request, no comments: this answers the state question for a transferred issue too,
         // and the emitted issue's Number/Url name its CURRENT home, so a caller holding a stale
         // reference can re-point rather than re-file (MeshWeaver#4629).
-        return Http.InvokeObservable(ct => client.Issue.Get(owner, repo, number))
+        return Call<GitHubWireIssue>(HttpMethod.Get, $"{RepoPath(owner, repo)}/issues/{Number(number)}", accessToken)
             // No comments were requested, so CommentsAreComplete stays false by default.
             .Select(issue => (GitHubIssue?)ToIssue(issue))
             // The number names no issue at all — a real absence, and the one answer a caller may
             // act on by clearing its link.
-            .Catch((NotFoundException _) => Observable.Return<GitHubIssue?>(null));
+            .Catch((GitHubNotFoundException _) => Observable.Return<GitHubIssue?>(null));
     }
 
     /// <inheritdoc />
     public IObservable<GitHubIssue> CreateIssue(GitHubCreateIssueRequest request)
     {
         var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
-        var client = Client(request.AccessToken);
-        var newIssue = new NewIssue(request.Title) { Body = request.Body ?? "" };
-        foreach (var label in request.Labels)
-            newIssue.Labels.Add(label);
+        var newIssue = new GitHubWireNewIssue(request.Title, request.Body ?? "", request.Labels);
         logger?.LogInformation("Creating issue '{Title}' in {Owner}/{Repo}.", request.Title, owner, repo);
-        return Http.InvokeObservable(ct => client.Issue.Create(owner, repo, newIssue))
+        return Call<GitHubWireIssue>(HttpMethod.Post, RepoPath(owner, repo) + "/issues", request.AccessToken, newIssue)
             .Select(ToIssue);
     }
 
@@ -475,8 +502,8 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         string repositoryUrl, int number, string body, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        return Http.InvokeObservable(ct => client.Issue.Comment.Create(owner, repo, number, body))
+        return Call<GitHubWireComment>(HttpMethod.Post,
+                $"{RepoPath(owner, repo)}/issues/{Number(number)}/comments", accessToken, new GitHubWireNewComment(body))
             .Select(ToComment);
     }
 
@@ -485,14 +512,10 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         string repositoryUrl, int number, GitHubIssueState state, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        var update = new IssueUpdate
-        {
-            State = state == GitHubIssueState.Open ? ItemState.Open : ItemState.Closed
-        };
+        var update = new GitHubWireIssueUpdate(state == GitHubIssueState.Open ? "open" : "closed");
         logger?.LogInformation("Setting issue #{Number} in {Owner}/{Repo} to {State}.",
             number, owner, repo, state);
-        return Http.InvokeObservable(ct => client.Issue.Update(owner, repo, number, update))
+        return Call<GitHubWireIssue>(HttpMethod.Patch, $"{RepoPath(owner, repo)}/issues/{Number(number)}", accessToken, update)
             .Select(ToIssue);
     }
 
@@ -505,12 +528,10 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         string repositoryUrl, PullRequestStatus? state, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        var request = new PullRequestRequest { State = MapPrStateFilter(state) };
-        return Http.InvokeObservable(ct => client.PullRequest.GetAllForRepository(owner, repo, request)
-                .Select(ToSummary)
-                .ToList())
-            .Select(list => (IReadOnlyList<GitHubPullRequestSummary>)list);
+        // Sort and direction are Octokit's PullRequestRequest defaults, so the order is unchanged.
+        return ListAll<GitHubWirePullRequest>(
+                $"{RepoPath(owner, repo)}/pulls?state={MapPrStateFilter(state)}&sort=created&direction=desc", accessToken)
+            .Select(list => (IReadOnlyList<GitHubPullRequestSummary>)list.Select(ToSummary).ToImmutableList());
     }
 
     /// <inheritdoc />
@@ -518,24 +539,25 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         string repositoryUrl, int number, string accessToken)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        var client = Client(accessToken);
-        return Http.InvokeObservable(ct => client.PullRequest.Get(owner, repo, number))
+        var prPath = $"{RepoPath(owner, repo)}/pulls/{Number(number)}";
+        return Call<GitHubWirePullRequest>(HttpMethod.Get, prPath, accessToken)
             .SelectMany(pr =>
             {
                 var headSha = pr.Head?.Sha;
-                var reviews = Http.InvokeObservable(ct =>
-                        client.PullRequest.Review.GetAll(owner, repo, number).ToList())
+                var reviews = ListAll<GitHubWireReview>(prPath + "/reviews", accessToken)
                     .Select(SummarizeReviews);
                 // Checks live over the head commit; a repo with no checks / a token lacking the
                 // checks scope returns empty rather than failing the whole detail read.
                 var checks = string.IsNullOrEmpty(headSha)
                     ? Observable.Return(GitHubCheckSummary.Empty)
-                    : Http.InvokeObservable(ct => client.Check.Run.GetAllForReference(owner, repo, headSha))
+                    : Http.Invoke(ct => api.GetAllAsync<GitHubWireCheckRuns, GitHubWireCheckRun>(
+                            $"{RepoPath(owner, repo)}/commits/{GitHubRestApi.Escape(headSha)}/check-runs",
+                            accessToken, page => page.CheckRuns, ct))
                         .Select(SummarizeChecks)
                         // Only "no checks configured / no checks:read scope" (404 / 403) degrade to empty;
                         // a real error (auth, 5xx) must surface, not be silently hidden as "no checks".
-                        .Catch<GitHubCheckSummary, ApiException>(ex =>
-                            ex is NotFoundException || ex.StatusCode == System.Net.HttpStatusCode.Forbidden
+                        .Catch<GitHubCheckSummary, GitHubApiException>(ex =>
+                            ex.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden
                                 ? Observable.Return(GitHubCheckSummary.Empty)
                                 : Observable.Throw<GitHubCheckSummary>(ex));
                 // Both leaves emit exactly once → Zip pairs them into a single detail emission.
@@ -553,98 +575,100 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     public IObservable<GitHubMergeResult> MergePullRequest(GitHubMergePullRequestRequest request)
     {
         var (owner, repo) = ParseRepoUrl(request.RepositoryUrl);
-        var client = Client(request.AccessToken);
-        var merge = new MergePullRequest
-        {
-            CommitTitle = request.CommitTitle,
-            CommitMessage = request.CommitMessage,
-            MergeMethod = request.Method switch
+        var merge = new GitHubWireMerge(
+            request.CommitTitle,
+            request.CommitMessage,
+            request.Method switch
             {
-                GitHubMergeMethod.Squash => PullRequestMergeMethod.Squash,
-                GitHubMergeMethod.Rebase => PullRequestMergeMethod.Rebase,
-                _ => PullRequestMergeMethod.Merge,
-            },
-        };
+                GitHubMergeMethod.Squash => "squash",
+                GitHubMergeMethod.Rebase => "rebase",
+                _ => "merge",
+            });
         logger?.LogInformation("Merging PR #{Number} in {Owner}/{Repo} ({Method}).",
             request.Number, owner, repo, request.Method);
-        return Http.InvokeObservable(ct => client.PullRequest.Merge(owner, repo, request.Number, merge))
+        return Call<GitHubWireMergeResult>(HttpMethod.Put,
+                $"{RepoPath(owner, repo)}/pulls/{Number(request.Number)}/merge", request.AccessToken, merge)
             .Select(m => new GitHubMergeResult(m.Merged, m.Sha, m.Message));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    /// <summary>Maps an Octokit <see cref="PullRequest"/> to our merged-state info record.</summary>
-    private static GitHubPullRequestInfo ToInfo(PullRequest pr) =>
-        new(pr.Number, pr.HtmlUrl, MapStatus(pr));
+    /// <summary>Maps a GitHub pull request to our merged-state info record.</summary>
+    private static GitHubPullRequestInfo ToInfo(GitHubWirePullRequest pr) =>
+        new(pr.Number, pr.HtmlUrl ?? "", MapStatus(pr));
 
-    /// <summary>GitHub <c>state</c> + <c>merged</c> → <see cref="PullRequestStatus"/>.</summary>
-    private static PullRequestStatus MapStatus(PullRequest pr) =>
-        pr.Merged ? PullRequestStatus.Merged
-        : pr.State.Value == ItemState.Closed ? PullRequestStatus.Closed
+    /// <summary>
+    /// GitHub <c>state</c> + merged → <see cref="PullRequestStatus"/>. Merged is read off
+    /// <c>merged_at</c> as well as <c>merged</c>: a LISTING row carries no <c>merged</c> field, and
+    /// Octokit derived its <c>Merged</c> from <c>merged_at</c> for exactly that reason.
+    /// </summary>
+    private static PullRequestStatus MapStatus(GitHubWirePullRequest pr) =>
+        pr.Merged || pr.MergedAt is not null ? PullRequestStatus.Merged
+        : string.Equals(pr.State, "closed", StringComparison.OrdinalIgnoreCase) ? PullRequestStatus.Closed
         : PullRequestStatus.Open;
 
-    /// <summary>Our issue-state filter → Octokit's <see cref="ItemStateFilter"/> (null = all).</summary>
-    private static ItemStateFilter MapStateFilter(GitHubIssueState? state) => state switch
+    /// <summary>Our issue-state filter → GitHub's <c>state</c> query value (null = all).</summary>
+    private static string MapStateFilter(GitHubIssueState? state) => state switch
     {
-        GitHubIssueState.Open => ItemStateFilter.Open,
-        GitHubIssueState.Closed => ItemStateFilter.Closed,
-        _ => ItemStateFilter.All,
+        GitHubIssueState.Open => "open",
+        GitHubIssueState.Closed => "closed",
+        _ => "all",
     };
 
-    /// <summary>Our PR-status filter → Octokit's <see cref="ItemStateFilter"/> (Merged folds into Closed).</summary>
-    private static ItemStateFilter MapPrStateFilter(PullRequestStatus? state) => state switch
+    /// <summary>Our PR-status filter → GitHub's <c>state</c> query value (Merged folds into closed).</summary>
+    private static string MapPrStateFilter(PullRequestStatus? state) => state switch
     {
-        PullRequestStatus.Open => ItemStateFilter.Open,
-        PullRequestStatus.Closed or PullRequestStatus.Merged => ItemStateFilter.Closed,
-        _ => ItemStateFilter.All,
+        PullRequestStatus.Open => "open",
+        PullRequestStatus.Closed or PullRequestStatus.Merged => "closed",
+        _ => "all",
     };
 
     /// <summary>
-    /// Maps an Octokit <see cref="Issue"/> to our snapshot record (comments filled separately).
+    /// Maps GitHub's <c>issue</c> object to our snapshot record (comments filled separately).
     ///
     /// <para>Internal so <c>AWebhookIssueSnapshotKeepsItsCloseDecisionTest</c> can hold this mapper
     /// and <c>GitHubWebhookProcessor.MapIssue</c> to the same answer — two mappers onto one record is
     /// where a field gets added to one and forgotten in the other.</para>
     /// </summary>
-    internal static GitHubIssue ToIssue(Issue issue) => new()
+    internal static GitHubIssue ToIssue(GitHubWireIssue issue) => new()
     {
         Number = issue.Number,
         Title = issue.Title,
         Body = issue.Body,
-        State = issue.State.Value == ItemState.Closed ? GitHubIssueState.Closed : GitHubIssueState.Open,
+        State = string.Equals(issue.State, "closed", StringComparison.OrdinalIgnoreCase)
+            ? GitHubIssueState.Closed : GitHubIssueState.Open,
         AuthorLogin = issue.User?.Login,
-        Labels = issue.Labels.Select(l => l.Name).ToImmutableList(),
-        Assignees = issue.Assignees.Select(a => a.Login).ToImmutableList(),
+        Labels = (issue.Labels ?? []).Select(l => l.Name).OfType<string>().ToImmutableList(),
+        Assignees = (issue.Assignees ?? []).Select(a => a.Login).OfType<string>().ToImmutableList(),
         CommentsCount = issue.Comments,
         Url = issue.HtmlUrl,
         CreatedAt = issue.CreatedAt,
         UpdatedAt = issue.UpdatedAt,
         ClosedAt = issue.ClosedAt,
-        // 🚨 .StringValue, never .Value: Octokit's ItemStateReason has no `duplicate` member and
-        // StringEnum<T>.Value THROWS ArgumentException on a value outside the enum — so the one
-        // reason a caller most needs is the one that would fault the whole read. GitHubIssueStateReasons
-        // .Parse is total over the raw token.
-        StateReason = GitHubIssueStateReasons.Parse(issue.StateReason?.StringValue),
+        // 🚨 The RAW wire token, through a total parse: `duplicate` is a value GitHub serves that a
+        // closed vendor enum could not hold (Octokit's could not — its .Value threw), and it is the
+        // one reason a caller most needs. GitHubIssueStateReasons.Parse never throws.
+        StateReason = GitHubIssueStateReasons.Parse(issue.StateReason),
     };
 
-    /// <summary>Maps an Octokit <see cref="IssueComment"/> to our comment record.</summary>
-    private static GitHubIssueComment ToComment(IssueComment c) =>
+    /// <summary>Maps a GitHub issue comment to our comment record.</summary>
+    private static GitHubIssueComment ToComment(GitHubWireComment c) =>
         new(c.Id, c.User?.Login, c.Body, c.CreatedAt, c.HtmlUrl);
 
-    /// <summary>Maps an Octokit <see cref="PullRequest"/> to our list-row summary.</summary>
-    private static GitHubPullRequestSummary ToSummary(PullRequest pr) =>
-        new(pr.Number, pr.Title, pr.User?.Login, MapStatus(pr), pr.Draft,
-            pr.Head?.Ref, pr.Base?.Ref, pr.HtmlUrl, pr.CreatedAt, pr.UpdatedAt);
+    /// <summary>Maps a GitHub pull request to our list-row summary.</summary>
+    private static GitHubPullRequestSummary ToSummary(GitHubWirePullRequest pr) =>
+        new(pr.Number, pr.Title ?? "", pr.User?.Login, MapStatus(pr), pr.Draft,
+            pr.Head?.Ref, pr.Base?.Ref, pr.HtmlUrl ?? "", pr.CreatedAt, pr.UpdatedAt);
 
     /// <summary>Combines the PR + its check/review roll-ups into the live detail record.</summary>
     private static GitHubPullRequestDetail ToDetail(
-        PullRequest pr, string? headSha, GitHubCheckSummary checks, GitHubReviewSummary reviews) =>
-        new(pr.Number, pr.Title, pr.Body, pr.User?.Login, MapStatus(pr), pr.Draft,
-            pr.Head?.Ref, pr.Base?.Ref, headSha, pr.HtmlUrl,
-            pr.Mergeable, pr.MergeableState?.StringValue, pr.Comments, checks, reviews);
+        GitHubWirePullRequest pr, string? headSha, GitHubCheckSummary checks, GitHubReviewSummary reviews) =>
+        new(pr.Number, pr.Title ?? "", pr.Body, pr.User?.Login, MapStatus(pr), pr.Draft,
+            pr.Head?.Ref, pr.Base?.Ref, headSha, pr.HtmlUrl ?? "",
+            pr.Mergeable, pr.MergeableState, pr.Comments, checks, reviews);
 
     /// <summary>Rolls PR reviews up to the latest decision per reviewer (dismissed / pending don't count).</summary>
-    private static GitHubReviewSummary SummarizeReviews(IList<PullRequestReview> reviews)
+    private static GitHubReviewSummary SummarizeReviews(IReadOnlyList<GitHubWireReview> reviews)
     {
         int approved = 0, changes = 0, commented = 0;
         var latestPerReviewer = reviews
@@ -653,23 +677,22 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             .Select(g => g.OrderBy(r => r.SubmittedAt).Last());
         foreach (var r in latestPerReviewer)
         {
-            var s = r.State.Value;
-            if (s == PullRequestReviewState.Approved) approved++;
-            else if (s == PullRequestReviewState.ChangesRequested) changes++;
-            else if (s == PullRequestReviewState.Commented) commented++;
+            var s = r.State;
+            if (string.Equals(s, "APPROVED", StringComparison.OrdinalIgnoreCase)) approved++;
+            else if (string.Equals(s, "CHANGES_REQUESTED", StringComparison.OrdinalIgnoreCase)) changes++;
+            else if (string.Equals(s, "COMMENTED", StringComparison.OrdinalIgnoreCase)) commented++;
         }
         return new GitHubReviewSummary(approved, changes, commented);
     }
 
     /// <summary>Rolls the head commit's check runs up to totals + an overall state.</summary>
-    private static GitHubCheckSummary SummarizeChecks(CheckRunsResponse resp)
+    private static GitHubCheckSummary SummarizeChecks(IReadOnlyList<GitHubWireCheckRun> runs)
     {
         int passed = 0, failed = 0, pending = 0;
-        foreach (var run in resp.CheckRuns)
+        foreach (var run in runs)
         {
-            if (run.Status.Value != CheckStatus.Completed) { pending++; continue; }
-            var c = run.Conclusion?.Value;
-            if (c is CheckConclusion.Success or CheckConclusion.Neutral or CheckConclusion.Skipped) passed++;
+            if (!string.Equals(run.Status, "completed", StringComparison.OrdinalIgnoreCase)) { pending++; continue; }
+            if (run.Conclusion?.ToLowerInvariant() is "success" or "neutral" or "skipped") passed++;
             else failed++;
         }
         var total = passed + failed + pending;
@@ -681,11 +704,29 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     }
 
     /// <summary>Resolves a commitish (branch name OR SHA) to its commit SHA — cheap, no tree read.</summary>
-    private IObservable<string> ResolveRefSha(IObservableGitHubClient client, string owner, string repo, string commitish)
+    private IObservable<string> ResolveRefSha(string token, string owner, string repo, string commitish)
         => IsSha(commitish)
-            ? Http.InvokeObservable(ct => client.Git.Commit.Get(owner, repo, commitish)).Select(c => c.Sha)
-            : Http.InvokeObservable(ct => client.Git.Reference.Get(owner, repo, $"heads/{commitish}"))
-                .Select(reference => reference.Object.Sha);
+            ? GetCommit(token, owner, repo, commitish).Select(c => c.Sha)
+            : GetBranchRef(token, owner, repo, commitish).Select(reference => reference.Object.Sha);
+
+    /// <summary><c>GET /repos/{owner}/{repo}/git/commits/{sha}</c>.</summary>
+    private IObservable<GitHubWireCommit> GetCommit(string token, string owner, string repo, string sha)
+        => Call<GitHubWireCommit>(HttpMethod.Get, $"{RepoPath(owner, repo)}/git/commits/{GitHubRestApi.Escape(sha)}", token);
+
+    /// <summary>
+    /// <c>GET /repos/{owner}/{repo}/git/ref/heads/{branch}</c> — the EXACT-match endpoint. Octokit
+    /// called the plural <c>git/refs/heads/{branch}</c>, which answers an ARRAY when the name is
+    /// only a prefix of other branches (<c>feat</c> next to <c>feat-a</c>) — a body its model could
+    /// not read; the singular one answers 404 there, which every caller already reads as
+    /// "no such branch".
+    /// </summary>
+    private IObservable<GitHubWireReference> GetBranchRef(string token, string owner, string repo, string branch)
+        => Call<GitHubWireReference>(HttpMethod.Get, $"{RepoPath(owner, repo)}/git/ref/heads/{GitHubRestApi.EscapePath(branch)}", token);
+
+    /// <summary><c>POST /repos/{owner}/{repo}/git/refs</c> creating <c>refs/heads/{branch}</c> at <paramref name="sha"/>.</summary>
+    private IObservable<GitHubWireReference> CreateRef(string token, string owner, string repo, string branch, string sha)
+        => Call<GitHubWireReference>(HttpMethod.Post, $"{RepoPath(owner, repo)}/git/refs", token,
+            new GitHubWireNewReference($"refs/heads/{branch}", sha));
 
     internal sealed record HeadInfo(string? CommitSha, bool RefExists, IReadOnlyList<(string Path, string Sha)> ExistingBlobs)
     {
@@ -713,49 +754,50 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     internal IObservable<bool> EnsureRepoExists(string repositoryUrl, string accessToken, bool createIfMissing)
     {
         var (owner, repo) = ParseRepoUrl(repositoryUrl);
-        return EnsureRepo(Client(accessToken), owner, repo, createIfMissing);
+        return EnsureRepo(accessToken, owner, repo, createIfMissing);
     }
 
     /// <summary>Ensures the repo exists; creates it private (under the user or the org) when missing.</summary>
-    private IObservable<bool> EnsureRepo(IObservableGitHubClient client, string owner, string repo, bool createIfMissing)
-        => Http.InvokeObservable(ct => client.Repository.Get(owner, repo))
+    private IObservable<bool> EnsureRepo(string token, string owner, string repo, bool createIfMissing)
+        => Call<GitHubWireRepository>(HttpMethod.Get, RepoPath(owner, repo), token)
             .Select(_ => false)
-            .Catch<bool, NotFoundException>(_ =>
+            .Catch<bool, GitHubNotFoundException>(_ =>
             {
                 if (!createIfMissing)
                     return Observable.Throw<bool>(new InvalidOperationException(
                         $"Repository {owner}/{repo} does not exist and auto-create is disabled."));
-                var newRepo = new NewRepository(repo) { Private = true, AutoInit = false };
+                var newRepo = new GitHubWireNewRepository(repo, Private: true, AutoInit: false);
                 logger?.LogInformation("Creating private GitHub repo {Owner}/{Repo}.", owner, repo);
-                return Http.InvokeObservable(ct => client.User.Current())
-                    .SelectMany(me => string.Equals(me.Login, owner, StringComparison.OrdinalIgnoreCase)
-                        ? Http.InvokeObservable(ct => client.Repository.Create(newRepo))
-                        : Http.InvokeObservable(ct => client.Repository.Create(owner, newRepo)))
+                return Call<GitHubWireUser>(HttpMethod.Get, "user", token)
+                    .SelectMany(me => Call<GitHubWireRepository>(HttpMethod.Post,
+                        string.Equals(me.Login, owner, StringComparison.OrdinalIgnoreCase)
+                            ? "user/repos"
+                            : $"orgs/{GitHubRestApi.Escape(owner)}/repos",
+                        token, newRepo))
                     .Select(_ => true);
             });
 
     /// <summary>Reads the branch head commit + its recursive blob list. Tolerates an empty repo (no ref yet).</summary>
-    private IObservable<HeadInfo> ReadHead(IObservableGitHubClient client, string owner, string repo, string branch)
-        => Http.InvokeObservable(ct => client.Git.Reference.Get(owner, repo, $"heads/{branch}"))
-            .SelectMany(reference => Http.InvokeObservable(ct => client.Git.Commit.Get(owner, repo, reference.Object.Sha))
-                .SelectMany(commit => TreeOf(client, owner, repo, commit)))
+    private IObservable<HeadInfo> ReadHead(string token, string owner, string repo, string branch)
+        => GetBranchRef(token, owner, repo, branch)
+            .SelectMany(reference => GetCommit(token, owner, repo, reference.Object.Sha)
+                .SelectMany(commit => TreeOf(token, owner, repo, commit)))
             // No commit to build on → no head, no existing blobs (the export then makes a first,
             // PARENT-LESS commit that creates the branch ref). GitHub signals "no commit" TWO ways:
-            // a missing branch on a non-empty repo is 404 (NotFoundException), but a brand-new repo
+            // a missing branch on a non-empty repo is 404 (GitHubNotFoundException), but a brand-new repo
             // with ZERO commits has an unborn HEAD and returns 409 "Git Repository is empty." for
             // ref/commit lookups. The original catch only handled 404, so the very first "sync back"
             // to a freshly-created empty repo failed with that 409.
-            .Catch<HeadInfo, ApiException>(ex =>
+            .Catch<HeadInfo, GitHubApiException>(ex =>
                 IsMissingOrEmptyRepo(ex)
                     ? Observable.Return(new HeadInfo(null, false, Array.Empty<(string, string)>()))
                     : Observable.Throw<HeadInfo>(ex));
 
-    /// <summary>True when an Octokit error means "this branch has no commit to build on": a missing
-    /// branch (404 <see cref="NotFoundException"/>) or a brand-new repo whose HEAD is unborn — GitHub
-    /// returns 409 "Git Repository is empty." for ref/commit lookups until the first commit lands.</summary>
-    internal static bool IsMissingOrEmptyRepo(ApiException ex)
-        => ex is NotFoundException
-           || ex.StatusCode == System.Net.HttpStatusCode.Conflict;
+    /// <summary>True when a GitHub error means "this branch has no commit to build on": a missing
+    /// branch (404 <see cref="GitHubNotFoundException"/>) or a brand-new repo whose HEAD is unborn —
+    /// GitHub returns 409 "Git Repository is empty." for ref/commit lookups until the first commit lands.</summary>
+    internal static bool IsMissingOrEmptyRepo(GitHubApiException ex)
+        => ex.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Conflict;
 
     /// <summary>
     /// Resolves the head the mirror builds on when the target branch is missing. Two cases:
@@ -772,15 +814,17 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     /// </list>
     /// </summary>
     private IObservable<HeadInfo> EnsureInitialCommit(
-        IObservableGitHubClient client, string owner, string repo, string branch, string prefix, HeadInfo head)
+        string token, string owner, string repo, string branch, string prefix, HeadInfo head)
         => head.RefExists
             ? Observable.Return(head)
-            : IsRepoEmpty(client, owner, repo).SelectMany(empty => empty
-                ? Http.InvokeObservable(ct => client.Repository.Content.CreateFile(owner, repo, prefix + ".gitkeep",
-                        new CreateFileRequest("Initialize repository (MeshWeaver sync)",
-                            "Created by MeshWeaver to initialize this repository.\n", branch)))
-                    .SelectMany(_ => ReadHead(client, owner, repo, branch))
-                : ReadDefaultBranchHead(client, owner, repo, fallback: head));
+            : IsRepoEmpty(token, owner, repo).SelectMany(empty => empty
+                ? Http.Invoke(ct => api.SendRawAsync(HttpMethod.Put,
+                        $"{RepoPath(owner, repo)}/contents/{GitHubRestApi.EscapePath(prefix + ".gitkeep")}", token,
+                        new GitHubWireCreateFile("Initialize repository (MeshWeaver sync)",
+                            Convert.ToBase64String(Encoding.UTF8.GetBytes("Created by MeshWeaver to initialize this repository.\n")),
+                            branch), ct))
+                    .SelectMany(_ => ReadHead(token, owner, repo, branch))
+                : ReadDefaultBranchHead(token, owner, repo, fallback: head));
 
     /// <summary>
     /// The DEFAULT branch's head with <c>RefExists=false</c> — the base for creating a new branch
@@ -789,24 +833,24 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     /// default branch cannot be resolved (races with repo initialization).
     /// </summary>
     private IObservable<HeadInfo> ReadDefaultBranchHead(
-        IObservableGitHubClient client, string owner, string repo, HeadInfo fallback)
-        => Http.InvokeObservable(ct => client.Repository.Get(owner, repo))
+        string token, string owner, string repo, HeadInfo fallback)
+        => Call<GitHubWireRepository>(HttpMethod.Get, RepoPath(owner, repo), token)
             .SelectMany(r => string.IsNullOrEmpty(r.DefaultBranch)
                 ? Observable.Return(fallback)
-                : ReadHead(client, owner, repo, r.DefaultBranch))
+                : ReadHead(token, owner, repo, r.DefaultBranch))
             .Select(AsNewBranchBase)
-            .Catch<HeadInfo, ApiException>(ex => IsMissingOrEmptyRepo(ex)
+            .Catch<HeadInfo, GitHubApiException>(ex => IsMissingOrEmptyRepo(ex)
                 ? Observable.Return(fallback)
                 : Observable.Throw<HeadInfo>(ex));
 
     /// <summary>True when the repo has no commits at all (a freshly-created repo): GitHub lists zero
     /// branches for an empty repo, and some endpoints 409 "Git Repository is empty.".</summary>
-    private IObservable<bool> IsRepoEmpty(IObservableGitHubClient client, string owner, string repo)
-        // The reactive GetAll streams one Branch per page-item; .ToList() reduces the stream to a
-        // single IList so the pool-bridged leaf emits exactly one value (empty ⇔ no branches).
-        => Http.InvokeObservable(ct => client.Repository.Branch.GetAll(owner, repo).ToList())
+    private IObservable<bool> IsRepoEmpty(string token, string owner, string repo)
+        // ONE page of one branch answers the question (empty ⇔ no branches); Octokit listed every
+        // page to reach the same count.
+        => Call<ImmutableList<GitHubWireBranch>>(HttpMethod.Get, RepoPath(owner, repo) + "/branches?per_page=1", token)
             .Select(branches => branches.Count == 0)
-            .Catch<bool, ApiException>(ex => IsMissingOrEmptyRepo(ex)
+            .Catch<bool, GitHubApiException>(ex => IsMissingOrEmptyRepo(ex)
                 ? Observable.Return(true)
                 : Observable.Throw<bool>(ex));
 
@@ -815,13 +859,13 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     /// blob list. Unlike <see cref="ReadHead"/> this does NOT swallow NotFound — a
     /// re-import at a non-existent commit/branch must surface a clear error.
     /// </summary>
-    private IObservable<HeadInfo> ResolveCommitish(IObservableGitHubClient client, string owner, string repo, string commitish)
+    private IObservable<HeadInfo> ResolveCommitish(string token, string owner, string repo, string commitish)
         => IsSha(commitish)
-            ? Http.InvokeObservable(ct => client.Git.Commit.Get(owner, repo, commitish))
-                .SelectMany(commit => TreeOf(client, owner, repo, commit))
-            : Http.InvokeObservable(ct => client.Git.Reference.Get(owner, repo, $"heads/{commitish}"))
-                .SelectMany(reference => Http.InvokeObservable(ct => client.Git.Commit.Get(owner, repo, reference.Object.Sha))
-                    .SelectMany(commit => TreeOf(client, owner, repo, commit)));
+            ? GetCommit(token, owner, repo, commitish)
+                .SelectMany(commit => TreeOf(token, owner, repo, commit))
+            : GetBranchRef(token, owner, repo, commitish)
+                .SelectMany(reference => GetCommit(token, owner, repo, reference.Object.Sha)
+                    .SelectMany(commit => TreeOf(token, owner, repo, commit)));
 
     /// <summary>
     /// The commit's recursive blob list — and, crucially, whether that list is the WHOLE tree.
@@ -835,8 +879,9 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     /// deleted" INFERENCE that has to be withheld. The identical read already exists next door for
     /// the compare endpoint (<see cref="CompareFileCap"/> → null → full import).</para>
     /// </summary>
-    private IObservable<HeadInfo> TreeOf(IObservableGitHubClient client, string owner, string repo, Commit commit)
-        => Http.InvokeObservable(ct => client.Git.Tree.GetRecursive(owner, repo, commit.Tree.Sha))
+    private IObservable<HeadInfo> TreeOf(string token, string owner, string repo, GitHubWireCommit commit)
+        => Call<GitHubWireTree>(HttpMethod.Get,
+                $"{RepoPath(owner, repo)}/git/trees/{GitHubRestApi.Escape(commit.Tree.Sha)}?recursive=1", token)
             .Select(tree =>
             {
                 if (tree.Truncated)
@@ -846,8 +891,8 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                         + "a deletion.", owner, repo, commit.Sha);
                 return new HeadInfo(
                     commit.Sha, true,
-                    tree.Tree
-                        .Where(i => string.Equals(i.Type.StringValue, "blob", StringComparison.OrdinalIgnoreCase))
+                    (tree.Tree ?? [])
+                        .Where(i => string.Equals(i.Type, "blob", StringComparison.OrdinalIgnoreCase))
                         .Select(i => (i.Path, i.Sha))
                         .ToArray())
                 { ListingIsComplete = !tree.Truncated };
@@ -858,24 +903,27 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
         s.Length is >= 7 and <= 40 && s.All(Uri.IsHexDigit);
 
     private IObservable<IReadOnlyList<(string Path, string Sha)>> CreateBlobs(
-        IObservableGitHubClient client, string owner, string repo, IReadOnlyList<RepoFile> files, string prefix)
+        string token, string owner, string repo, IReadOnlyList<RepoFile> files, string prefix)
     {
         if (files.Count == 0)
             return Observable.Return((IReadOnlyList<(string, string)>)Array.Empty<(string, string)>());
         return files
-            .Select(f => Http.InvokeObservable(ct => client.Git.Blob.Create(owner, repo,
-                    new NewBlob { Content = f.Content, Encoding = EncodingType.Utf8 }))
+            .Select(f => Call<GitHubWireCreated>(HttpMethod.Post, RepoPath(owner, repo) + "/git/blobs", token,
+                    new GitHubWireNewBlob(f.Content, "utf-8"))
                 .Select(blob => (Path: prefix + f.Path, blob.Sha)))
             .MergeBounded(8)
             .ToList()
             .Select(list => (IReadOnlyList<(string, string)>)list);
     }
 
-    private IObservable<Octokit.Reference> UpdateRef(
-        IObservableGitHubClient client, string owner, string repo, string branch, string commitSha, bool refExists)
+    /// <summary>Moves (<c>PATCH git/refs/heads/{branch}</c>, never forced) or creates the branch ref.</summary>
+    private IObservable<GitHubWireReference> UpdateRef(
+        string token, string owner, string repo, string branch, string commitSha, bool refExists)
         => refExists
-            ? Http.InvokeObservable(ct => client.Git.Reference.Update(owner, repo, $"heads/{branch}", new ReferenceUpdate(commitSha)))
-            : Http.InvokeObservable(ct => client.Git.Reference.Create(owner, repo, new NewReference($"refs/heads/{branch}", commitSha)));
+            ? Call<GitHubWireReference>(HttpMethod.Patch,
+                $"{RepoPath(owner, repo)}/git/refs/heads/{GitHubRestApi.EscapePath(branch)}", token,
+                new GitHubWireReferenceUpdate(commitSha, Force: false))
+            : CreateRef(token, owner, repo, branch, commitSha);
 
     /// <summary>
     /// Builds a <see cref="RepoFile"/> from a fetched blob, PRESERVING BINARY BYTES. A base64 blob is
@@ -885,9 +933,9 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     /// course videos: the old <c>DecodeBlob</c> UTF-8-decoded a base64 <c>.mp4</c>/<c>.png</c> blob
     /// into a string, mangling every non-UTF-8 byte. A non-base64 (already-utf8) blob stays text.
     /// </summary>
-    private static RepoFile ToRepoFile(string path, Blob blob)
+    private static RepoFile ToRepoFile(string path, GitHubWireBlob blob)
     {
-        if (!string.Equals(blob.Encoding.StringValue, "base64", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(blob.Encoding, "base64", StringComparison.OrdinalIgnoreCase))
             return new RepoFile(path, blob.Content);
         // Shared strict-UTF-8 text/binary classification (RepoFileCodec) — one rule per transport.
         return RepoFileCodec.FromBytes(path, Convert.FromBase64String(blob.Content));

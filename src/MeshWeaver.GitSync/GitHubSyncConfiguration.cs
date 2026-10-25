@@ -107,11 +107,16 @@ public static class GitHubSyncConfiguration
             sp.GetService<ILogger<FrameworkReleaseBroadcaster>>()));
         // The production repo client: BULK transfer (push/fetch) over the git protocol — REST
         // paid one request PER FILE, so one big-repo sync exhausted the GitHub App installation's
-        // hourly budget — with refs/PRs/issues remaining on the Octokit REST client it wraps.
+        // hourly budget — with refs/PRs/issues remaining on the GitHub REST client it wraps.
         // 🚨 Behind ONE seam, per provider (MeshWeaver#6500): GitProviderRepoClient reads the provider
         // off each URL and sends an Azure Repos one to the Azure DevOps REST client, every other one
         // to the GitHub client — so the sync, its two-way rules and every caller stay one code path.
-        services.AddSingleton<OctokitGitHubRepoClient>();
+        // Built explicitly, never activated: a container that registers HttpClient (AddHttpClient)
+        // would otherwise inject one that follows redirects itself and strips the credential on
+        // the hop (see GitHubRestApi) — the client builds its own when handed none.
+        services.AddSingleton(sp => new OctokitGitHubRepoClient(
+            sp.GetRequiredService<IoPoolRegistry>(),
+            sp.GetService<ILogger<OctokitGitHubRepoClient>>()));
         services.AddSingleton(sp => new AzureReposRepoClient(
             sp.GetRequiredService<IoPoolRegistry>(),
             httpClient: null,
