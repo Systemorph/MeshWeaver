@@ -72,4 +72,24 @@ public class MailCopySourceListingTest(ITestOutputHelper output) : MonolithMeshT
 
         all.Should().Contain(new MailCopySourceRef(a, "outlook")).And.Contain(new MailCopySourceRef(b, "gmail"));
     }
+
+    /// <summary>
+    /// The owner's listing is an ENUMERATION, never a page: a key clipped off it is a copy whose account is gone that
+    /// Settings can no longer show for deletion. It was bounded at 50 with no continuation (review of #7154).
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheOwnersListing_ReturnsEveryPersistedCopy_PastAnyPageSize()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var keys = Enumerable.Range(0, 51).Select(i => $"outlook.acct-{i:D2}").ToArray();
+        foreach (var key in keys)
+            await store.Create(owner, new MailCopySource { Provider = key, Generation = "g1" }).Timeout(Bound).Await(ct);
+
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            (await store.SourceKeys(owner).Timeout(Bound).Await(ct)).Order().Should().Equal(
+                keys, "every persisted copy is listed — the listing was clipped at 50 with no way to page on");
+    }
 }

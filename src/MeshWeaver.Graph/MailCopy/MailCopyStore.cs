@@ -616,16 +616,15 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     public IObservable<ImmutableList<string>> SourceKeys(string owner)
         => Gated(Assembly.GetCallingAssembly(), nameof(SourceKeys), owner, Permission.Read, () => Mesh().SelectMany(m => m.Mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"namespace:{MailCopyNodeTypes.NamespaceFor(owner)} nodeType:{MailCopyNodeTypes.SourceNodeType}", owner) with { Limit = 50 })
+                $"namespace:{MailCopyNodeTypes.NamespaceFor(owner)} nodeType:{MailCopyNodeTypes.SourceNodeType}", owner)
+                // An ENUMERATION: a key clipped off this list is a copy the owner can no longer see or delete.
+                .Complete())
             .Take(1)
             .Select(change => change.Items
                 .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
                                && string.Equals(node.Namespace, MailCopyNodeTypes.NamespaceFor(owner), StringComparison.Ordinal))
                 .Select(node => node.Id)
                 .ToImmutableList())));
-
-    /// <summary>The most copies one resume reads — one source per owner and account.</summary>
-    public const int MaxEnabledSources = 5000;
 
     /// <inheritdoc />
     [ImpersonationSurface]
@@ -634,7 +633,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
         => MailCopyAuthority.GatedPlatform(hub(), Assembly.GetCallingAssembly(), $"{nameof(MeshMailCopyStore)}.{nameof(EnabledSources)}",
             () => Mesh().SelectMany(m => m.Access
                 .RunAsSystem(() => m.Mesh
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MailCopyNodeTypes.SourceNodeType} partitions:all") with { Limit = MaxEnabledSources })
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MailCopyNodeTypes.SourceNodeType} partitions:all")
+                        // An ENUMERATION: a source clipped off this list is a copy the keeper never resumes.
+                        .Complete())
                     .Take(1)
                     .Select(change => change.Items
                         .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
