@@ -149,6 +149,157 @@ public class MailCopyEngineSeamsTest(ITestOutputHelper output) : MonolithMeshTes
         (await rig.Engine.StoredCopy(rig.Owner, "m1").Timeout(Bound).Await(ct)).Should().BeNull("nothing could settle it, so the newer Delete stands");
     }
 
+    // ── a rebuild fills a NEW generation beside the served one ───────────────
+
+    [Fact(Timeout = 180_000)]
+    public async Task ARebuild_KeepsServingTheOldCopy_WhileTheNewGenerationBackfills()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rig = await Rig(ct);
+        rig.Feed.Messages["m1"] = Message("m1", "Quarterly figures", "The invoice", 1);
+        rig.Feed.Messages["m2"] = Message("m2", "Lunch", "Pizza on Friday", 2);
+        await Enable(rig, ct);
+        var served = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
+
+        await InterruptedRebuild(rig, ct);
+
+        var during = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
+        during.Generation.Should().Be(served.Generation, "the served generation is untouched until the new one is backfilled");
+        during.PendingGeneration.Should().NotBeNullOrEmpty().And.NotBe(served.Generation);
+        during.PendingCursor.Should().Be("p1", "the pending backfill resumes from its own cursor");
+        during.Backfilled.Should().BeTrue();
+        var source = await rig.Engine.ServesFromCopy(rig.Owner).Timeout(Bound).Await(ct);
+        source.Should().NotBeNull("readers keep answering from the old generation");
+        source!.Generation.Should().Be(served.Generation);
+        (await rig.Engine.ReadInbox(source, rig.Owner, 10, null).Timeout(Bound).Await(ct)).Select(c => c.MessageId)
+            .Should().Equal(["m1", "m2"], "the old copies are still listed in full");
+        (await rig.Engine.StoredCopy(rig.Owner, "m2").Timeout(Bound).Await(ct))!.Body.Should().Contain("Pizza");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task WhenTheNewGenerationIsBackfilled_TheSourceFlips_AndTheOldCopiesAreRetired_ResumingTheSamePendingGeneration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rig = await Rig(ct);
+        rig.Feed.Messages["m1"] = Message("m1", "Quarterly figures", "The invoice", 1);
+        rig.Feed.Messages["m2"] = Message("m2", "Lunch", "Pizza on Friday", 2);
+        await Enable(rig, ct);
+        var served = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
+        await InterruptedRebuild(rig, ct);
+        var pending = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!.PendingGeneration!;
+
+        // The crash is over: the next sync RESUMES the pending generation (no third generation is minted).
+        rig.Feed.FailOnCursor = null;
+        await SyncAsync(rig, ct);
+
+        var after = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
+        after.Generation.Should().Be(pending, "the resumed pending generation became the served one");
+        after.PendingGeneration.Should().BeNull();
+        after.PendingCursor.Should().BeNull();
+        after.Backfilled.Should().BeTrue();
+        after.Projection.Should().Be(MailCopySource.CurrentProjection);
+        var all = await rig.Store.List(rig.Owner, "outlook", MeshMailCopyStore.MaxPage).Timeout(Bound).Await(ct);
+        all.Select(c => c.Generation).Distinct().Should().Equal([pending], "the old generation's copies are gone");
+        all.Select(c => c.MessageId).OrderBy(id => id, StringComparer.Ordinal).Should().Equal(["m1", "m2"]);
+        (await rig.Store.Read(rig.Owner, "outlook", served.Generation, "m1").Timeout(Bound).Await(ct)).Should().BeNull();
+        var source = await rig.Engine.ServesFromCopy(rig.Owner).Timeout(Bound).Await(ct);
+        source!.Generation.Should().Be(pending);
+        (await rig.Engine.ReadInbox(source, rig.Owner, 10, null).Timeout(Bound).Await(ct)).Select(c => c.MessageId).Should().Equal(["m1", "m2"]);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AnAccountChange_IsNeverServed_ButDoesNotFailReaders()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rig = await Rig(ct);
+        rig.Feed.Messages["m1"] = Message("m1", "Hello", "Body", 1);
+        await Enable(rig, ct);
+        var served = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
+
+        rig.Feed.Account = "acct-2";
+        (await rig.Engine.ServesFromCopy(rig.Owner).Timeout(Bound).Await(ct)).Should().BeNull("the old account's mail is not served under the new one");
+        await SyncAsync(rig, ct);
+
+        var after = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
+        after.Generation.Should().NotBe(served.Generation, "another account rebuilds in place");
+        after.PendingGeneration.Should().BeNull();
+        after.MailboxId.Should().Be("acct-2");
+        (await rig.Store.Read(rig.Owner, "outlook", served.Generation, "m1").Timeout(Bound).Await(ct)).Should().BeNull("the old account's copies are removed");
+        (await rig.Engine.StoredCopy(rig.Owner, "m1").Timeout(Bound).Await(ct))!.MessageId.Should().Be("m1", "the new account's own copy");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AnAccountTheFeedCannotNameRightNow_NeverRebuildsAHealthyCopy_AndIsReadLive()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rig = await Rig(ct);
+        rig.Feed.Messages["m1"] = Message("m1", "Hello", "Body", 1);
+        await Enable(rig, ct);
+        var served = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
+
+        rig.Feed.Account = "";
+        rig.Feed.Pending = [Message("m9", "New while unnamed", "Body", 0)];
+        var stepsBefore = rig.Feed.StepCalls;
+        for (var i = 0; i < 3; i++)
+            await rig.Engine.Sync(rig.Owner).Timeout(Bound).Await(ct);
+        rig.Feed.StepCalls.Should().Be(stepsBefore, "no feed step runs while the account cannot be named");
+        (await rig.Store.Read(rig.Owner, "outlook", served.Generation, "m9").Timeout(Bound).Await(ct)).Should().BeNull("nothing lands on the bound account's generation");
+
+        var after = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
+        after.Generation.Should().Be(served.Generation, "an unknown account is not another account");
+        after.PendingGeneration.Should().BeNull();
+        after.MailboxId.Should().Be("acct-1");
+        (await rig.Engine.ServesFromCopy(rig.Owner).Timeout(Bound).Await(ct)).Should().BeNull("an unnamed account is read live, not served");
+        (await rig.Store.Read(rig.Owner, "outlook", served.Generation, "m1").Timeout(Bound).Await(ct)).Should().NotBeNull();
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task ADeleteDuringARebuild_IsCarriedIntoTheNewGeneration_SoItIsNotResurrectedAtTheFlip()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rig = await Rig(ct);
+        rig.Feed.Messages["m1"] = Message("m1", "Hello", "Body", 1);
+        rig.Feed.Messages["m2"] = Message("m2", "Lunch", "Pizza", 2);
+        await Enable(rig, ct);
+        await InterruptedRebuild(rig, ct);
+
+        await rig.Engine.FollowMove(rig.Owner, "m1", removed: true).Timeout(Bound).Await(ct);
+        rig.Feed.FailOnCursor = null;
+        await SyncAsync(rig, ct);
+
+        (await rig.Engine.StoredCopy(rig.Owner, "m1").Timeout(Bound).Await(ct)).Should().BeNull("the Delete reached the pending generation too");
+        (await rig.Engine.StoredCopy(rig.Owner, "m2").Timeout(Bound).Await(ct)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void OnlyAnAbsentNode_IsReadAsGone_NotAnyDeliveryFailure()
+    {
+        MeshMailCopyStore.IsGone(new InvalidOperationException("boom"), "u/_MailCopy/outlook/x").Should().BeFalse();
+        MeshMailCopyStore.IsGone(new MeshNodeReadEndedWithDeleteException("u/_MailCopy/outlook/x"), "u/_MailCopy/outlook/x").Should().BeTrue();
+        MeshMailCopyStore.IsGone(new MeshNodeReadEndedWithDeleteException("u/other"), "u/_MailCopy/outlook/x").Should().BeFalse("another path says nothing about this one");
+    }
+
+    // Marks the backfilled copy as made before the projection (so the next sync must rebuild it), then runs the sync
+    // with a feed that pages and fails at the second page: the rebuild is left half-filled, as a crash would leave it.
+    private async Task InterruptedRebuild(Rigging rig, CancellationToken ct)
+    {
+        var current = (await rig.Store.Source(rig.Owner, "outlook").Timeout(Bound).Await(ct))!;
+        (await rig.Store.Commit(rig.Owner, "outlook", current.Generation, c => c with { Projection = 0 }).Timeout(Bound).Await(ct))
+            .Should().NotBeNull();
+        rig.Feed.Paged = true;
+        rig.Feed.FailOnCursor = "p1";
+        var failed = false;
+        try
+        {
+            await rig.Engine.Sync(rig.Owner).Timeout(Bound).Await(ct);
+        }
+        catch (InvalidOperationException)
+        {
+            failed = true;
+        }
+        failed.Should().BeTrue("the scripted feed fails on the second page");
+    }
+
     // ── rig ─────────────────────────────────────────────────────────────────
 
     private sealed record Rigging(string Owner, ScriptedFeed Feed, MeshMailCopyStore Store, MailCopyEngine Engine);
@@ -235,10 +386,21 @@ public class MailCopyEngineSeamsTest(ITestOutputHelper output) : MonolithMeshTes
             => Observable.Return(ImmutableList.Create((Account, "Mail")));
         public IObservable<IMailAttachmentSource> Attachments(string owner) => Observable.Return<IMailAttachmentSource>(new NoAttachments());
 
+        /// <summary>Whether the first listing comes in two pages (cursor null, then "p1").</summary>
+        public bool Paged { get; set; }
+        /// <summary>A cursor whose step fails, as a crash mid-backfill.</summary>
+        public string? FailOnCursor { get; set; }
+
         public IObservable<MailFeedStep> Step(string owner, string? cursor, DateTimeOffset windowStart)
             => Observable.Defer(() =>
             {
                 Interlocked.Increment(ref StepCalls);
+                if (cursor is not null && cursor == FailOnCursor)
+                    return Observable.Throw<MailFeedStep>(new InvalidOperationException("scripted feed failure"));
+                if (Paged && cursor is null)
+                    return Observable.Return(new MailFeedStep([.. Messages.OrderBy(m => m.Key, StringComparer.Ordinal).Take(1).Select(m => m.Value)], [], "p1", Done: false));
+                if (Paged && cursor == "p1")
+                    return Observable.Return(new MailFeedStep([.. Messages.OrderBy(m => m.Key, StringComparer.Ordinal).Skip(1).Select(m => m.Value)], [], "c1", Done: true));
                 if (cursor is null)
                     return Observable.Return(new MailFeedStep([.. Messages.Values], [], "c1", Done: true));
                 var changed = Pending;

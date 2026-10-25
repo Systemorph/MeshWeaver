@@ -65,6 +65,23 @@ public interface IMailAttachmentStore
     /// with nothing in it is not an error.
     /// </summary>
     IObservable<Unit> DeleteAll(string owner, string copyPath);
+
+    /// <summary>
+    /// Copies every file of the LEGACY copy node <paramref name="legacyCopyPath"/>
+    /// (<c>{owner}/_MailCopy/{key}/{id}</c>) into the attachments of <paramref name="copyPath"/>, at the same
+    /// relative paths, and emits how many it copied. It deletes nothing — the caller empties the legacy node
+    /// with <see cref="DeleteLegacy"/> only once the moved copy is written. A store that cannot move files
+    /// refuses, so no move ever deletes a file it did not copy.
+    /// </summary>
+    IObservable<int> CopyLegacy(string owner, string legacyCopyPath, string copyPath)
+        => Observable.Throw<int>(new NotSupportedException("This attachment store cannot move legacy attachment files."));
+
+    /// <summary>
+    /// <see cref="DeleteAll"/> for a LEGACY copy node, <c>{owner}/_MailCopy/{key}/{id}</c>, once
+    /// <see cref="CopyLegacy"/> has copied its files. A store that cannot move files refuses.
+    /// </summary>
+    IObservable<Unit> DeleteLegacy(string owner, string legacyCopyPath)
+        => Observable.Throw<Unit>(new NotSupportedException("This attachment store cannot delete legacy attachment files."));
 }
 
 /// <summary>
@@ -111,15 +128,25 @@ public static class MailAttachments
 
     /// <summary>
     /// Whether <paramref name="copyPath"/> is one of <paramref name="owner"/>'s copy nodes —
-    /// <c>{owner}/_MailCopy/{key}/{id}</c>, exactly — and <paramref name="relativePath"/> (when given) a
+    /// <c>{owner}_MailCopy/{key}/{id}</c>, exactly — and <paramref name="relativePath"/> (when given) a
     /// path INSIDE its attachments collection: no empty, <c>.</c> or <c>..</c> segment, no backslash. The
     /// only targets the attachment store writes to or empties as System. Pure.
     /// </summary>
     public static bool IsCopyTarget(string owner, string copyPath, string? relativePath = null)
+        => IsUnder(MailCopyNodeTypes.NamespaceFor(owner), owner, copyPath, relativePath);
+
+    /// <summary>
+    /// <see cref="IsCopyTarget"/> for a copy node still at the LEGACY place, <c>{owner}/_MailCopy/{key}/{id}</c>
+    /// in the owner's home partition — the only other target the move of a legacy copy reads and empties. Pure.
+    /// </summary>
+    public static bool IsLegacyCopyTarget(string owner, string copyPath, string? relativePath = null)
+        => IsUnder(MailCopyNodeTypes.LegacyNamespaceFor(owner), owner, copyPath, relativePath);
+
+    private static bool IsUnder(string root, string owner, string copyPath, string? relativePath)
     {
         static bool Plain(string segment) => segment.Length > 0 && segment is not "." and not ".." && !segment.Contains('\\');
-        var prefix = MailCopyNodeTypes.NamespaceFor(owner) + "/";
-        if (string.IsNullOrWhiteSpace(owner) || owner.Contains('/')
+        var prefix = root + "/";
+        if (!MailCopyNodeTypes.IsValidOwner(owner)
             || !copyPath.StartsWith(prefix, StringComparison.Ordinal))
             return false;
         var rest = copyPath[prefix.Length..].Split('/');
@@ -257,6 +284,56 @@ public sealed class MeshMailAttachmentStore(Func<IMessageHub?> hub, ILogger? log
                     .Select(_ => Unit.Default)))
             .Take(1))
             .Do(_ => logger?.LogDebug("Mail copy: the attachments of {Copy} were deleted", copyPath)));
+
+    /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IObservable<int> CopyLegacy(string owner, string legacyCopyPath, string copyPath)
+        => MailAttachments.IsLegacyCopyTarget(owner, legacyCopyPath)
+            ? Gated(Assembly.GetCallingAssembly(), nameof(CopyLegacy), owner, copyPath, null, () => Mesh().SelectMany(m => m.Access
+                .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => Collection(m.Hub, legacyCopyPath)
+                    .SelectMany(legacy => Files(legacy, "/")
+                        // One file at a time, each read and written whole (≤ 25 MB, MailAttachments.MaxBytes);
+                        // the first failure stops the move and reaches the caller, which then keeps the legacy node.
+                        .Select(file => legacy.GetContentBytes(file).Take(1)
+                            .SelectMany(bytes => bytes is null
+                                ? Observable.Throw<string>(new InvalidOperationException($"The legacy attachment '{file}' of '{legacyCopyPath}' could not be read."))
+                                // 🚨 System is declared HERE, on the write itself: the bytes arrive from the I/O pool,
+                                // where the enclosing scope's identity is not guaranteed, and the builder captures the
+                                // identity when it posts.
+                                : m.Access.RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Hub
+                                        .SaveContentFile(copyPath).To(MailAttachments.Collection, file.TrimStart('/')).Post(bytes))
+                                    .Take(1)
+                                    .Select(answer => answer.Success
+                                        ? file
+                                        : throw new InvalidOperationException($"The attachment could not be stored: {answer.Error}")))
+                            .Do(stored => m.Hub.RaiseContentUploaded($"{copyPath}/{MailAttachments.Collection}", stored.TrimStart('/'))))
+                        .Concat()
+                        .Count()))
+                .Take(1)))
+            : Observable.Throw<int>(new ArgumentException($"'{legacyCopyPath}' is not one of the legacy mail copies of '{owner}'.", nameof(legacyCopyPath)));
+
+    /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IObservable<Unit> DeleteLegacy(string owner, string legacyCopyPath)
+        => MailAttachments.IsLegacyCopyTarget(owner, legacyCopyPath)
+            ? MailCopyAuthority.Gated(hub(), Assembly.GetCallingAssembly(), $"{nameof(MeshMailAttachmentStore)}.{nameof(DeleteLegacy)}", owner,
+                Permission.Delete, () => Mesh().SelectMany(m => m.Access
+                    .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => Collection(m.Hub, legacyCopyPath)
+                        .SelectMany(collection => Everything(collection, "/")
+                            .Select(item => item.IsFolder ? collection.DeleteFolder(item.Path) : collection.DeleteFile(item.Path))
+                            .Concat()
+                            .LastOrDefaultAsync()
+                            .Select(_ => Unit.Default)))
+                    .Take(1)))
+            : Observable.Throw<Unit>(new ArgumentException($"'{legacyCopyPath}' is not one of the legacy mail copies of '{owner}'.", nameof(legacyCopyPath)));
+
+    // Every FILE under a folder, recursively — what a move copies (the folders follow from the files' paths).
+    private static IObservable<string> Files(ContentCollection collection, string folder)
+        => collection.GetFiles(folder).Select(file => file.Path)
+            .Concat(collection.GetFolders(folder).SelectMany(f => Files(collection, f.Path)))
+            .Catch<string, DirectoryNotFoundException>(_ => Observable.Empty<string>());
 
     // 🚨 The caller is authorized (MailCopyAuthority) and the TARGET is pinned to the owner's own copy
     // nodes: these run as System, so a path anywhere else would be a System write to — or an emptying
