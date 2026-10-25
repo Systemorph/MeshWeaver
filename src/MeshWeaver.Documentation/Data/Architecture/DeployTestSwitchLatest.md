@@ -6,9 +6,10 @@ Description: The target build shape. Each platform set is deployed as its own ve
 
 # Deploy, Test the Deploy, Switch Latest
 
-> **Status: DESIGN — nothing on this page is wired yet.** It is the target shape for policy
-> `deploy-test-switch-latest` and policy `package-mesh-version-cap`, both `proposed` in
-> [Policy Not Prose](../PolicyNotProse). Today's mechanism is [Build Hosts](../BuildHosts), with
+> **Status: DECIDED DESIGN — nothing on this page is wired yet.** It is the target shape for
+> policy `deploy-test-switch-latest` and policy `package-mesh-version-cap`, both `in force` in
+> [Policy Not Prose](../PolicyNotProse) as decisions, with the wiring listed as owed (§8). The
+> owner's answers are recorded in §10; four questions there are still open. Today's mechanism is [Build Hosts](../BuildHosts), with
 > its design of record in MeshWeaver.Plugins at `Hosting/StandingBuildHosts`, under the in-force
 > policy `build-hosts-follow-latest`. Every *today* claim below cites a file and line on `main`.
 
@@ -56,7 +57,9 @@ skipped on missing input (§6).
 
 1. **Image set.** Unchanged: `gate`, the images, `promote`, the compatibility ladder and `arm`
    produce an immutable set (version, tester, portal and runner digests). The set is already the
-   unit the hosts run (`BuildHostChannel.ToSetToken`, `BuildHosts.cs:90`).
+   unit the hosts run (`BuildHostChannel.ToSetToken`, `BuildHosts.cs:90`). The set gains a
+   FIFTH digest, the `mw-core-tests` image: core's test projects built from the set's commit with
+   the set's SDK, in the same CD run (§10, D3).
 2. **Deploy `build-<version>`.** Job `build-host-deploy` replaces the move half of today's
    `build-host-latest`. It sends the signed event `build-host-deploy-requested` into the control
    plane's inbox, the same path and the same HMAC as today (`main-cd.yml:4158-4176`). The
@@ -70,12 +73,16 @@ skipped on missing input (§6).
    version, never a channel. It follows each stage through the existing follow lane
    (`build-follow.yml`: only `succeeded` is green, a timeout is red, an unreadable endpoint is
    red). The run executes:
-   - **the core suites**, as stages of a new core declaration `.github/build-stages.json`, against
-     the set's images: today's 6 shards, the doc gate and the ladder's link probe;
+   - **the core suites**, as stages of a new core declaration `.github/build-stages.json`, run
+     from the set's `mw-core-tests` image: today's 6 shards, the doc gate and the ladder's link
+     probe;
    - **the dependents' affected gates**: MeshWeaver.Plugins' and each satellite's `compile-check`
      and `gate` stages (H7, `BuildHosts.md` §5), for the modules the platform delta affects,
-     against the same candidate. See open question Q1: this step contradicts an in-force policy.
-4. **Switch `latest`.** On an all-green run, job `build-host-switch` sends
+     against the same candidate. Their verdict GATES the switch (§10, D1). That is a register
+     exception to `dependents-verify-on-their-side`, scoped to the module-facing `latest` switch
+     only.
+4. **Switch `latest`.** On a run where the core suites AND every affected dependents' gate are
+   green, job `build-host-switch` sends
    `build-host-switch-requested`. Its InstanceAction `BuildHostSwitch` moves the alias `latest`
    to the candidate version in ONE record write, never backwards, and only to a version whose run
    is recorded green for every planned stage. The receiver re-reads that run node; the event's
@@ -95,7 +102,7 @@ Reuse, generalise, add nothing parallel:
 
 | piece | today | target |
 |---|---|---|
-| the set | one token per CHANNEL in `DeploymentContent.BuildHostSets["latest"]` | one token per VERSION in `BuildHostSets["v/<version>"]`. The token is unchanged (`BuildHosts.cs:90`) |
+| the set | one token per CHANNEL in `DeploymentContent.BuildHostSets["latest"]` | one token per VERSION in `BuildHostSets["v/<version>"]`. The token keeps its shape (`BuildHosts.cs:90`) and gains the `mw-core-tests` digest as its fifth part (D3) |
 | the alias | the channel name IS the host | `BuildHostSets["alias/latest"] = "<version>"`, one scalar leaf, so a stale switch conflicts as a whole, the same reason the set is one token (`BuildHosts.md` §4) |
 | the authored block | `BuildHostsBlock { Enabled, Channels }` (`BuildHosts.cs:25-41`) | `Enabled` stays. A new init-only `Retention` (§5) and a per-version default `MaxReplicas`. `Channels` is kept for `stable` (Q4). Init-only only: the binary-break rule (`BuildHosts.cs:2-4`) |
 | the Deployment | `build-host-<channel>` | `build-<v>`, where `<v>` is the version with dots as dashes (`build-3-1-10412`), so it is a valid DNS label, with labels `meshweaver.io/build-version=<version>` and `meshweaver.io/build-alias=latest` on the one the alias names |
@@ -127,8 +134,10 @@ cap allows**.
   retention defect.
 - **Per package, not per repository.** A repository's run partitions its modules by the version
   each one resolves to. Uncapped modules run on `latest`. Capped modules run on their cap's
-  deployment, each set built once. Only a `latest` run publishes for uncapped modules. Whether a
-  capped module's run publishes is Q3.
+  deployment, each set built once. **Both publish** (§10, D2): an uncapped module publishes from
+  its `latest` run, and a capped module builds AND publishes against the highest deployment its
+  cap allows, so instances on older platforms keep getting its fixes. Publishing does not retire
+  the debt: the capped package still carries its "migrate to latest" triage item (§5).
 - **On a host**, the claim names the version, so the follow lane needs no change. **On Actions**
   (until a repository claims `ciEquivalent`), the resolved digests feed the existing `with:`
   inputs of `node-repo-gate.yml` / `node-repo-publish-bake.yml`, unchanged.
@@ -170,16 +179,24 @@ and triage decides the rest, as for every finding ([Incidental Findings](../Inci
 1. the deployment `latest` names;
 2. the candidate under test, if any (at most one; a newer candidate supersedes an older one, which
    is torn down);
-3. for every package with a cap, the highest version at or below that cap. Several packages with
+3. the PREVIOUS `latest`, the deployment the alias named before its last switch (§10, D4);
+4. for every package with a cap, the highest version at or below that cap. Several packages with
    the same cap share one deployment.
+
+**Rollback is an instant switch.** Because rule 3 keeps the previous `latest` deployed and its
+digests locked, going back is `BuildHostSwitch` moving the alias to that version: one record
+write, no redeploy, no staging, nothing restarted. It is the one switch allowed to move the alias
+BACKWARDS, it names the version it leaves in its reason, and it reads the record back like every
+switch (§7). The version it left is then the previous `latest` and is retained under rule 3 until
+the next forward switch.
 
 **Tear down everything else** with `BuildHostTeardown`: the record entry goes, so the Deployment and
 the ScaledObject leave on the next reconcile. The `build-cache` claim is never touched by a
 teardown. Its content-addressed entries for a torn-down set age out under the cache's own sweep.
-A teardown is refused for any version that rule 1, 2 or 3 still holds. The rule is computed from
+A teardown is refused for any version that rule 1, 2, 3 or 4 still holds. The rule is computed from
 the record and the catalog, both live, never from a list the CD run carries.
 
-**Digests.** Every digest of a retained deployment (tester, portal, runner) is a PINNED digest in
+**Digests.** Every digest of a retained deployment (tester, portal, runner, core tests) is a PINNED digest in
 the sense of [Pinned Image Retention](../PinnedImageRetention): `lock-pinned-digests.py` reads the
 record's `buildHostSets` and locks them, so the ACR purge, which counts newer builds, never deletes
 an image a capped package still compiles against. A teardown unlocks them. This closes the
@@ -204,9 +221,10 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
   verified is not delivered*).
 - **Every job is cut at 45 minutes.** A run longer than one job is followed through the Check
   Runs, as the follow lane already does (`BuildHosts.md` §1).
-- **Platform delivery is not held by any of this** (policy `platform-module-deploy-separate`):
-  promote, verify, bake and `delivery-verdict` keep their order. A red candidate holds only the
-  module-facing `latest`.
+- **Platform delivery is not held by any of this** (policy `platform-module-deploy-separate`
+  stays in force unchanged): promote, verify, bake and `delivery-verdict` keep their order, and a
+  platform roll never waits on a module verdict. A red candidate, whether core's suites or a
+  dependent's gate went red, holds only the module-facing `latest`.
 
 ## 8. Migration, as phased pull requests
 
@@ -216,15 +234,16 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 | P1 | core | contract: init-only additions to `BuildHostsBlock` (`Retention`, the per-version default), the `v/` and `alias/` key forms, `Package.MaxMeshVersion` + `CapReason` + `CapTracking`, and the cap validator in `node-repo-validate.yml` | no |
 | P2 | core | chart: render one Deployment and one ScaledObject per `v/` entry, plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
 | P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, `GET /api/builds/hosts`, the retention computation | no |
-| P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, and the test image the stages need (Q5) | no |
+| P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, and the `mw-core-tests` image as the set's fifth digest (D3) | no |
 | P5 | core + MeshWeaver.Plugins | `resolve-platform.py --from-build-hosts` (core) and the platform-ref adoption in Plugins `ci.yml` and the satellites, including per-package resolution under a cap | no |
-| P6 | MeshWeaver.Plugins + core | the daily cap-debt job (control) and the `lock-pinned-digests.py` reading of `buildHostSets` (core) | no |
+| P6 | MeshWeaver.Plugins + core | the daily cap-debt job (control), the capped-run publish path (D2), the retention of the previous `latest` and the backwards rollback switch (D4), and the `lock-pinned-digests.py` reading of `buildHostSets` (core) | no |
 | P7 | Memex | the `buildHosts` block on `mesh/Deployments/control.json`, through the record's approval path | **yes** |
 | P8 | core | `.github/build-hosts.json` `enabled: true`, AFTER P7 (the order `BuildHosts.md` §4 fixes) | **yes** |
 | P9 | control | the roll that renders the first `build-<v>`, then the first green switch. Verify by reading `GET /api/builds/hosts` and the run nodes' recorded version, never the CD job's green | **yes** |
 
-When P9 is verified, `build-hosts-follow-latest` is retired in the register and
-`deploy-test-switch-latest` becomes `in force`.
+`deploy-test-switch-latest` and `package-mesh-version-cap` are `in force` as decisions, with
+P1 to P9 listed as owed on their register rows. When P9 is verified, `build-hosts-follow-latest`
+is retired in the register.
 
 ## 9. Cost
 
@@ -239,6 +258,8 @@ When P9 is verified, `build-hosts-follow-latest` is retired in the register and
   entries, not a node. The price is a cold start when a capped package's run arrives.
 - **Staging per version.** Each deploy copies the tester and portal `/app` by digest into the
   composed host, and builds the reference set once. One extra deploy per armed set.
+- **One more image per set.** `mw-core-tests` (D3) is built and pushed in every CD run and locked
+  for as long as its set is retained (§6).
 - 🚨 **Quota is the binding constraint, not money.** At its last measurement the dind pool could
   not schedule at all: `Standard Dsv6 Family vCPUs` were at their regular limit and
   `Total Regional Low-priority vCPUs` at their spot limit, with Plugins `main` queued behind it
@@ -247,34 +268,37 @@ When P9 is verified, `build-hosts-follow-latest` is retired in the register and
   for that quota with every satellite's CI. P4 must not be enabled before the quota and node-pool
   change Memex #695 asks for has landed, through the governed CI-runner path.
 
-## 10. Open questions for the owner
+## 10. Decided, and still open
 
-- **Q1 — the dependents' gates on the candidate contradict two in-force policies.**
-  `dependents-verify-on-their-side` says no core job waits for another repository's verdict, and
-  `platform-module-deploy-separate` says the platform deploy reads no module verdict. If the switch
-  of `latest` waits on Plugins' affected gates, core's CD waits on Plugins again, which is the cost
-  the removed `dependent-suites-gate` measured. Options: (a) the switch waits only on core's
-  suites, and the dependents' gates run on the candidate as advisory evidence; (b) the switch
-  waits on both, and the register supersedes both policies for the module-facing `latest` ONLY,
-  never for the platform roll.
+### Decided
+
+- **D1 — the switch gate.** `latest` moves only when core's suites AND the affected
+  MeshWeaver.Plugins and satellite gates are green on the deployed build server. This is a
+  register exception to `dependents-verify-on-their-side`, scoped to the module-facing `latest`
+  switch ONLY: core pull requests still merge on core's own checks, and no other core job waits
+  on a dependent. `platform-module-deploy-separate` stays in force: a platform roll never waits
+  on a module verdict (§7).
+- **D2 — capped runs publish.** A package whose cap forbids `latest` builds AND publishes against
+  the highest deployment its cap allows (§4). It still carries its "migrate to latest" triage
+  item (§5), so publishing never turns the cap into a resting place.
+- **D3 — core's tests run from a test image built with the set.** `mw-core-tests` becomes the
+  fifth digest of the image set (§2), built in the same CD run, locked with the set's other
+  digests (§6). The host never builds core's tests from source.
+- **D4 — rollback.** Retention keeps `latest`, the candidate, the PREVIOUS `latest`, and every
+  version a cap needs (§6). Rollback is an instant switch of the alias to the previous `latest`,
+  never a redeploy.
+
+### Open
+
 - **Q2 — what a cap means at runtime.** Build-time only, as designed here? Or does an instance
   above the cap hold that package's update the way a floor holds one? A runtime hold must never
   hold a platform roll.
-- **Q3 — does a capped module's run publish?** Today only `latest` publishes. If a capped run
-  publishes, instances on old platforms get fixes. If it does not, a capped package is frozen
-  until it migrates, which is debt with a deadline.
 - **Q4 — `stable`.** Keep `build-stable` as a second alias over the same versioned deployments
   (a retained version, like a cap), or retire it?
-- **Q5 — what the core suites run against on a host.** A host composes built images (`BuildHosts.md`
-  §5). Core's tests are built from source. Either CD builds a `mw-core-tests` image in the same
-  set (its digest becomes a fifth part of the set token), or the host builds core's tests from the
-  set's commit with the set's SDK. The first is reproducible. The second is cheaper in registry.
 - **Q6 — does `arm` move after the deploy test?** The owner's order puts tests after the image.
   Today `arm` (the fleet's roll target) is decided before any host exists. Should the fleet's
   `<line>-latest` pointer and the module-facing `latest` become the same switch, with the PR-time
   ubuntu shards then reduced to a pre-merge subset?
-- **Q7 — keep the previous `latest` for a rollback?** Retention as specified keeps no previous
-  version unless a cap holds it. A bad switch would then need a full redeploy to go back.
 - **Q8 — the identity of a deployment.** Versioned Deployments inside the control record's
   `buildHostSets`, as designed, or a `Deployments/build-<v>` record per version on control? The
   first keeps the NO PINS rule trivially. The second makes each version an operable instance in

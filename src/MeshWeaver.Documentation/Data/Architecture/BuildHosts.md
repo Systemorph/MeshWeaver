@@ -22,10 +22,10 @@ instance's MCP), which builds on `Hosting/BuildService` there. The instance side
 MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChannels),
 [Module Build Architecture](../ModuleBuildArchitecture) and [Build Server](../BuildServer).
 
-> **Target shape:** [Deploy, Test the Deploy, Switch Latest](../DeployTestSwitchLatest) (DESIGN,
-> policy `deploy-test-switch-latest`, proposed) generalises the channels on this page into one
+> **Target shape:** [Deploy, Test the Deploy, Switch Latest](../DeployTestSwitchLatest) (DECIDED
+> DESIGN, not wired; policy `deploy-test-switch-latest`, in force with its wiring owed) generalises the channels on this page into one
 > versioned deployment per platform set plus a `latest` alias that moves only after the set passed
-> its tests ON its deployment. Until it is in force, this page describes what runs.
+> its tests ON its deployment. Until that wiring lands, this page describes what runs.
 
 | piece | file | what it does |
 |---|---|---|
