@@ -484,7 +484,7 @@ what the Actions legs they replace check — each item is a reason a host green 
 **Status (2026-10-25).** Wired, dormant, in MeshWeaver.Plugins (#4180) and the four satellites
 (SocialMedia #254, Reinsurance #273, Manufacturing #136, Education #411): every run answers `actions`
 until a declaration claims `ciEquivalent` AND the instance says `host` for that repository. No
-declaration claims it yet: MeshWeaver.Plugins' owes the seven items in its `Hosting/StandingBuildHosts`
+declaration claims it yet: MeshWeaver.Plugins owes the seven items in its `Hosting/StandingBuildHosts`
 (H7), and the satellites declare no stages. **This repository's own CI is NOT wired**, and must not be
 until its heavy legs can be stated as stages: they build the platform from source and test it
 (`dotnet-test.yml`'s build and shards), while a host composes an already-built platform image and
