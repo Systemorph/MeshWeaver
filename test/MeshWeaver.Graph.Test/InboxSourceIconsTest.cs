@@ -363,7 +363,7 @@ public class InboxStateAndFilterTest
     ];
 
     private static InboxFilter Groups(params string[] groups)
-        => new() { States = groups.ToImmutableDictionary(g => g, _ => true) };
+        => new() { ActivityStates = groups.ToImmutableDictionary(g => g, _ => true) };
 
     /// <summary>Open lists what still waits; Done what is over; both everything; none everything.</summary>
     [Fact]
@@ -375,7 +375,7 @@ public class InboxStateAndFilterTest
         InboxRows.Apply(StateRows, Groups(InboxRows.DoneKey)).Select(r => r.Title).Order().Should().Equal(done.Order());
         InboxRows.Apply(StateRows, Groups(InboxRows.OpenKey, InboxRows.DoneKey)).Should().HaveCount(StateRows.Length);
         InboxRows.Apply(StateRows, new InboxFilter()).Should().HaveCount(StateRows.Length, "none ticked: all");
-        InboxRows.Apply(StateRows, new InboxFilter { States = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, false) })
+        InboxRows.Apply(StateRows, new InboxFilter { ActivityStates = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, false) })
             .Should().HaveCount(StateRows.Length, "an unticked box narrows nothing");
         InboxRows.Apply(StateRows, Groups(InboxRows.OpenKey) with { Category = "Mail" }).Should().HaveCount(open.Length, "it narrows a picked category too");
         InboxRows.Fingerprint(Groups(InboxRows.OpenKey)).Should().NotBe(InboxRows.Fingerprint(new InboxFilter()))

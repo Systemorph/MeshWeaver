@@ -162,4 +162,13 @@ public record InboxQueryLeg
     /// what matters (important notifications).
     /// </summary>
     public bool DefaultKind { get; init; }
+
+    /// <summary>
+    /// Which state filter the leg's rows belong to — an <see cref="InboxStateKind"/> constant: activities are
+    /// Open / Done, mail and chats are Unread / Read, notifications have none. Left empty, the kind is implied by
+    /// <see cref="Category"/> (<see cref="InboxStateKind.Resolve"/>): <c>Mail</c>, <c>Conversations</c> and
+    /// <c>Notifications</c> are right without saying so, everything else is an activity. Declare it explicitly
+    /// when a provider files under a category of its own.
+    /// </summary>
+    public string? StateKind { get; init; }
 }
