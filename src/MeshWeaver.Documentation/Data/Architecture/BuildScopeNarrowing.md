@@ -29,6 +29,7 @@ Every changed path lands in exactly one bucket:
 | `src/<project>/…` | the COMPILED half — the caller's `project-closure.py` answers the closure |
 | a top-level dir in **`NOOP_DIRS`** | reaches nothing this lane builds |
 | a repo-root file in **`NOOP_FILES`** | reaches nothing any lane builds |
+| a CI path — under **`.github/`** or **`scripts/`** (`CI_PATH_PREFIXES`) | the CALLER's selector decides, on a pull request only — see [CI paths owe no module leg](#ci-paths-owe-no-module-leg) |
 | **anything else** | EVERYTHING — the full set, naming the file |
 
 The last row is the safety net, and every entry above it is a claim that a class of path cannot
@@ -97,8 +98,9 @@ caller believes, and "cannot verify" has exactly one honest answer: the full set
 
 ## A declared home for dev tools — `devtools/`
 
-`scripts/` is the gates' directory, so a change there is EVERYTHING, and that is right: a gate
-script genuinely changes what a run proves. But it left a script that NO lane runs — a local dev
+`scripts/` is the gates' directory, so a change there used to be EVERYTHING — a gate script
+genuinely changes what a run proves (since policy `ci-paths-owe-no-module-leg` the CALLER's selector
+decides it on a pull request, below). But it left a script that NO lane runs — a local dev
 loop, a triage helper — with nowhere to live except the gates' directory. Measured on
 MeshWeaver.Plugins run 34618468550 (#1668, 2026-09-11): a one-line edit to
 `scripts/run-node-tests.py`, which no workflow references, selected **52 of 52** compiled projects
@@ -154,16 +156,58 @@ gate and the bake as well as this lane, so narrowing it is a separate decision w
 radius than the module matrix. The number is recorded here so that decision can be taken on
 evidence rather than re-derived.
 
-**`.github/workflows/ci.yml` stays on the loud path too**, and it is the biggest single trigger.
-That is correct: the caller's workflow file carries the module matrix, the platform pin and both
-image digests, and a pin move genuinely invalidates every bundle in the repository.
+**`.github/workflows/ci.yml` stays on the loud path of every main push**, and on a pull request it
+is now the caller's call (policy `ci-paths-owe-no-module-leg`, below). The caller's workflow file
+carries the module matrix, the platform pin and both image digests, and a pin move genuinely
+invalidates every bundle in the repository — which is exactly why the main push, always full or
+narrowed only by its own publication, keeps treating it as EVERYTHING.
+
+## CI paths owe no module leg
+
+Policy [`ci-paths-owe-no-module-leg`](../PolicyNotProse): in a node repo, **a pull request whose diff
+is limited to CI and script paths (`.github/`, `scripts/`) runs only the CI checks and their
+self-tests.** It owes no module compile-check, no bundle and no realm-gate leg; main's push run and
+the daily full run cover those.
+
+Before this rule `node-repo-scope.py` classified both prefixes as EVERYTHING *before* it asked the
+caller's selector, so no caller could narrow them: MeshWeaver.Plugins#4187 taught its
+`scripts/affected-modules.py` the policy and its `Module bundles` lane still packed every module
+(review thread 4370061382 on that pull request).
+
+The shape is **"respect the caller's selector"**, never "these paths are inert". A path under
+`CI_PATH_PREFIXES` is handed to the caller's `affected-modules.py` beside the node-package paths,
+and the caller answers whether it reaches a module:
+
+| the caller | a CI-only pull request |
+|---|---|
+| ships no `scripts/affected-modules.py` | the full set — unchanged, checked before classification |
+| has a selector that predates the policy (it answers `runAll` for a CI path) | the full set, and the reason names the policy |
+| has a selector that knows the policy (`affected: []` for a CI path) | **0 bundles, 0 suites** — only the caller's `--always` floor, built and not tested |
+
+So no satellite has to change in step with core, and a caller that wants `ci.yml` kept loud says so
+in its own selector. A CI path beside a module path adds nothing to that module's selection.
+
+Four things stay EVERYTHING whatever any selector answers:
+
+- **`tools/`** — not a CI path. MeshWeaver.Plugins' `src/Directory.Build.targets` and two test
+  projects read it, so it is build input.
+- **any other path the build reads** — an unnamed repo-root file, a top-level dir no list names,
+  a file directly under `src/` — the classifier's catch-all, untouched.
+- **a main push narrowed by `--publication-base`** — that run IS the "main's push run" the policy
+  relies on, so there a CI path is still the full set.
+- **a publication-reach question (`--publication-reach`)** — the newest-wins check of
+  `node-repo-module-pack.yml` (`publish-newest-only`) asks whether a NEWER trunk commit reaches a
+  module before publishing it, and it calls the script with `--event pull_request`. The policy
+  narrows a pull request's BUILD SELECTION only. A newer CI-only commit changes the workflow and
+  build inputs that commit's own run packs with, so here it reaches every module, and the older run
+  stands down instead of publishing over the newer one.
 
 ## The guards
 
 Two, and each was made to fail before it was believed.
 
 **`node-repo-scope.py --self-test`** runs unconditionally in the `select` job of every satellite's
-every run, next to the answer it produces, and again in core's own `dotnet-test.yml`. 73 cases (2026-09-11).
+every run, next to the answer it produces, and again in core's own `dotnet-test.yml`. 82 cases (2026-10-25).
 The load-bearing ones for this change:
 
 - every name in `NOOP_FILES` narrows to nothing on its own — asserted by iterating the set itself,
@@ -176,7 +220,11 @@ The load-bearing ones for this change:
   still runs the full set;
 - both divergence directions narrow on the agreed directories while the divergent one is
   EVERYTHING;
-- a RENAMED `NOOP_DIRS` literal still refuses to narrow at all.
+- a RENAMED `NOOP_DIRS` literal still refuses to narrow at all;
+- a CI-only diff packs zero bundles, a CI path beside a module path selects exactly that module,
+  `tools/` (alone or beside a CI path) still selects everything, and a selector that predates
+  `ci-paths-owe-no-module-leg`, a missing selector, a publication-narrowed main push and a
+  `--publication-reach` question each keep a CI path on the full set.
 
 **`check-noop-scope-parity.py`** runs in `node-repo-validate.yml`, so it reaches every satellite at
 that satellite's `platform-ref`. It imports the platform's sets from `node-repo-scope.py` rather
@@ -203,6 +251,11 @@ Each mechanism was reverted and the suite observed to go red before being restor
 | the intersection reverted to the old equality refusal | 2 |
 | the closed list widened to "any root file" | 5, including the gate allow file |
 | the parity guard's own six branches | each observed red on its own fixture |
+| the CI-path branch deleted (CI paths EVERYTHING again) | 6 |
+| `tools/` added to `CI_PATH_PREFIXES` | 3 |
+| CI paths declared inert outright, the caller's selector not asked | 1 — the pre-policy selector case |
+| the publication-narrowed main push deferring CI paths too | 1 |
+| the publication-reach question deferring CI paths too | 1 |
 
 ## Measured effect
 
