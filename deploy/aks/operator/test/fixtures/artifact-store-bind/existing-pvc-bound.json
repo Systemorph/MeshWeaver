@@ -1,1 +1,0 @@
-{"metadata":{"name":"artifact-store","namespace":"acme"},"spec":{"volumeName":"artifact-store-acme"},"status":{"phase":"Bound"}}

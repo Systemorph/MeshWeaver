@@ -84,8 +84,8 @@ Actions and blank-maintainer fixtures, and the misspelled-executor refusal.
 
 Unlike the `kubectl apply` list above (the original bootstrap), this file carries no placeholder and is
 applied exactly as committed, by the `ApplyClusterManifest` InstanceAction on the control instance:
-Systemorph/Memex `aks-ops.yml` runs `deploy/aks/operator/bin/hosting-manifest-apply` from a checkout of
-this repository. Its dry run (`check`) is a read: it prints the file's sha256 and the API server's own
+Systemorph/Memex `aks-ops.yml` runs `hosting-manifest-apply` (MeshWeaver.Plugins `deploy/hosting-operator/bin`) against
+this repository's `deploy/aks/manifests`. Its dry run (`check`) is a read: it prints the file's sha256 and the API server's own
 server-side dry-run answer, one `created|configured|unchanged` line per object, no value. The apply runs
 only on the lane's mutate leg, with a mesh approval that binds that sha256, and refuses other bytes. The
 script refuses a kind outside Namespace, ServiceAccount, an empty service-account-token Secret, RBAC and
@@ -93,11 +93,14 @@ ValidatingAdmissionPolicy objects, a wildcard rule, the escalate/bind/impersonat
 cluster-admin/admin/edit/system:* or to anything but a ServiceAccount, and a leftover `<placeholder>`.
 That is a backstop under the approval, not a substitute for reading the file.
 
-## The image is published on every push to `main`
+## The image is published by MeshWeaver.Plugins
 
-`meshweaver.azurecr.io/hosting-operator:<short sha>` (immutable — what a deployment record pins)
-and `:main` (moving) are built and pushed by `.github/workflows/hosting-operator.yml`'s `publish`
-job, on `push` to `main` only, behind a preflight that fails red naming a missing OIDC secret.
+`meshweaver.azurecr.io/hosting-operator:main` (moving) and an immutable `:<plugins sha7>-<core sha7>`
+are built and pushed by MeshWeaver.Plugins' `.github/workflows/hosting-operator.yml`, which carries the
+scripts (`deploy/hosting-operator`) and stages this repository's `deploy/` (the chart) into the build
+context — on its own `main`, and hourly when this repository's chart or drift scripts moved
+(MeshWeaver.Plugins `Hosting/HostingOperator`). The `:<core sha7>` tags this repository's
+`hosting-operator.yml` published until the operator moved stay in the registry.
 Until MeshWeaver#3353 the image was built by hand (last on 2026-08-22) and nothing republished it,
 so every script fix shipped to the repository and never to a Job.
 
@@ -138,7 +141,7 @@ that needs a new grant lands with the grant, and the next deploy carries both to
 no laptop in the loop. Measured before this existed (2026-09-09): the `storageclasses` rule had
 been on main since the volume-capacity step, the cluster's ClusterRole predated it, and the first
 record-driven Reconcile through the fixed operator stopped at step 1/6 with `Forbidden`.
-`deploy/aks/operator/test/check-rbac-coverage.sh` is the other half: every `kubectl <verb>
+`MeshWeaver.Plugins/deploy/hosting-operator/test/check-rbac-coverage.sh` is the other half: every `kubectl <verb>
 <resource>` a `bin/` script names must be granted here, or the operator test suite is red.
 `kubectl apply` prints `configured` / `unchanged` per resource in the lane's log — that line is
 the change report.

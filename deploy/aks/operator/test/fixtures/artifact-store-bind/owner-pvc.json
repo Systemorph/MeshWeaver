@@ -1,1 +1,0 @@
-{"metadata":{"name":"control-artifacts","namespace":"control"},"spec":{"volumeName":"pvc-owner","accessModes":["ReadWriteMany"]},"status":{"phase":"Bound"}}
