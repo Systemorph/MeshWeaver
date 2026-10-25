@@ -258,7 +258,10 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    (`MW_BUILD_ARTIFACT_STORE`, a `file:` store on the runners' shared share), READS IT BACK and
    re-hashes it, and only then posts `{"kind":"artifact","unit","key","sha256","bytes"}` — before
    the stage's verdict; a failed upload or read-back fails the stage, and artifacts with no store
-   configured fail it too. The run's workspace is removed only after every receipt was
+   configured fail it too. The hand-over is INSIDE the run budget: every store call gets only the
+   time left until the run's end, and a hand-over the budget does not cover fails the stage ("the run
+   deadline passed during the hand-over") — a stage finishing near the limit never holds its claim
+   past the pod's grace. The run's workspace is removed only after every receipt was
    acknowledged; a workspace whose receipts were not is kept and swept after two run deadlines.
    On the publishing side, `build-host-publication.yml` (OIDC, the same gate as the log) reads
    `GET /api/builds/{repo}/{sha}/artifacts?channel=`, fetches every object by its receipt
@@ -380,8 +383,9 @@ the set's version, and sends the same event for channel `stable`. 🚨 It is del
 main-passed ceiling is one; here it only decides which set a build host runs and gates no platform
 roll. The ceiling is read from MeshWeaver.Plugins' PRIVATE Actions runs and their annotations, so
 the token is requested with `permission-actions: read` and `permission-checks: read` — an App that
-does not hold them fails the token step, naming it. A red roll reports itself on the one open
-`build-host` issue.
+does not hold them fails the token step, naming it. A red, timed-out or cancelled roll reports
+itself on the one open `build-host` issue — from its OWN job (`build-host-stable-report`,
+`if: always()`), because a step inside the job it monitors dies with that job's timeout.
 
 **The receiver** (the operations instance, MeshWeaver.Plugins) writes the event's set into
 `DeploymentContent.BuildHosts.Channels[<channel>]` (the typed record block,
@@ -399,7 +403,7 @@ two acts, in order: the record's `BuildHosts` block through its approval path, t
 `build-host-image` and `build-host-latest` are outside `delivery-verdict` (the fleet's delivery does
 not depend on a build host) and outside `alert-on-failure` (whose `ci-failure` issue recovers on
 platform delivery, not on a build host): job `build-host-report` files or comments on the ONE open
-`build-host-latest` issue when either fails, and closes it only after a run that actually HANDED
+`build-host-latest` issue when either fails or is cancelled, and closes it only after a run that actually HANDED
 build-latest a set. `build-host-stable.yml` reports on its own `build-host` issue, the same way.
 
 ## 5. Not done here

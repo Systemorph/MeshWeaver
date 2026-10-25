@@ -164,6 +164,15 @@ def _escape_prop(v: str) -> str:
     return _escape_data(v).replace(":", "%3A").replace(",", "%2C")
 
 
+def one_line(text: str) -> str:
+    """A server-supplied string (a stage's summary or state) as ONE inert physical line: line breaks
+    collapse to " ⏎ " and every legacy `##[` is broken, so it can neither start a second line that
+    carries a command nor be a command where it is printed at a line's start."""
+    flat = " ⏎ ".join(p.strip() for p in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n") if p.strip())
+    flat = flat.replace(LEGACY, LEGACY_BROKEN)
+    return INERT + flat if flat.startswith("::") else flat
+
+
 def neutralise(text: str) -> list[str]:
     """The physical lines a log entry may be printed as. An annotation is RE-COMPOSED from its
     validated parts (severity, the known properties, the message) — never echoed — and every other
@@ -288,8 +297,8 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
                 cursor = nxt
             elif lines and isinstance(lines[-1], dict) and isinstance(lines[-1].get("seq"), int):
                 cursor = lines[-1]["seq"]
-            new_state = str(body.get("state") or "").strip().lower()
-            summary = str(body.get("summary") or "").strip()
+            new_state = one_line(str(body.get("state") or "")).strip().lower()
+            summary = one_line(str(body.get("summary") or "")).strip()
             # A stage's verdict is NOT the end: the RUN can still restart it (a host lost, a re-queue
             # after a platform move). The follower ends only when the run is terminal — and exits
             # with the stage's FINAL state then. A page without `runTerminal` (an older instance)
@@ -379,8 +388,8 @@ def main(argv: list[str]) -> int:
                       timeout_minutes=a.timeout_minutes, audience=a.audience, http=Http(), env=env, probe=a.probe.strip(),
                       out=lambda s: print(s, flush=True))
     except Failure as f:
-        print(f"::error title=Build follow::{f}", flush=True)
-        summary(env, f"- ❌ `{a.stage}`: {f}")
+        print(f"::error title=Build follow::{_escape_data(one_line(str(f)))}", flush=True)
+        summary(env, f"- ❌ `{a.stage}`: {one_line(str(f))}")
         return 1
     summary(env, f"- ✅ `{a.stage}` succeeded on build-{a.channel}")
     return code
@@ -582,6 +591,16 @@ def self_test() -> int:
         printed = neutralise(evil)
         check(f"neutralise/no legacy delimiter survives: {evil!r}", all(LEGACY not in p for p in printed), printed)
     check("neutralise/plain text", neutralise("compiled 3/4") == ["compiled 3/4"])
+    # a TERMINAL summary (e.g. a hand-over failure naming a stage-created filename) is one inert line
+    evil_summary = "hand-over failed: Store/bundle\n::stop-commands::tok\n##[group]x\r::add-mask::y"
+    code, err, out, _ = _run([_page([], 0, "failed", summary=evil_summary)])
+    printed = [o for o in out] + [err or ""]
+    check("summary/one line: no command can start a line it reaches",
+          all(not ln.lstrip().startswith(("::stop", "::add", "##[")) for o in printed for ln in o.split("\n")) and "\n" not in (err or ""), printed)
+    check("summary/no legacy delimiter survives", all(LEGACY not in o for o in printed), printed)
+    code, _, out, _ = _run([_page([], 0, "succeeded", summary="ok\n::add-mask::z")])
+    check("summary/the green line is one inert line too", code == 0 and not any(o.startswith("::add") for o in out) and all("\n" not in o for o in out), out)
+    check("summary/one_line keeps plain text", one_line("3 errors") == "3 errors" and one_line("::x").startswith(INERT))
 
     # 10. No OIDC grant is a named red, never a silent anonymous read.
     try:

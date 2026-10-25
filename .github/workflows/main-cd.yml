@@ -4200,7 +4200,8 @@ jobs:
         run: |
           set -euo pipefail
           open=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=build-host-latest&state=open&per_page=10" --jq '.[].number')
-          if [ "$IMAGE" = failure ] || [ "$HANDOVER" = failure ]; then
+          # failed OR cancelled (a timeout, a cancelled run) is a lane that did not hand over
+          if [ "$IMAGE" = failure ] || [ "$HANDOVER" = failure ] || [ "$IMAGE" = cancelled ] || [ "$HANDOVER" = cancelled ]; then
             body="The build-latest lane failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — build-host-image: \`${IMAGE}\`, build-host-latest: \`${HANDOVER}\`. Every image of the platform set IS published and the fleet's delivery is unaffected; build-latest keeps its previous set until a run hands it over. Read the failed job's ::error:: line (Doc/Architecture/BuildHosts)."
             first=$(printf '%s\n' "$open" | head -n 1)
             if [ -n "$first" ]; then

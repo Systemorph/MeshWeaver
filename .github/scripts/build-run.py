@@ -1305,9 +1305,10 @@ def _git_run(args: list[str], env: dict) -> tuple[int, str]:
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
-def _run_capture_stdout(argv: list[str]) -> tuple[int, str]:
-    """A HOST helper (ci-artifact-store.py): no credential but the Azure workload identity's."""
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=1800,
+def _run_capture_stdout(argv: list[str], timeout: float = 1800) -> tuple[int, str]:
+    """A HOST helper (ci-artifact-store.py): no credential but the Azure workload identity's.
+    `timeout` is the caller's remaining RUN budget; past it the helper is killed (TimeoutExpired)."""
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=max(1.0, timeout),
                        env={k: v for k, v in os.environ.items() if not SECRET_ENV.search(k) or k.startswith("AZURE_")})
     return r.returncode, (r.stdout or "") + ("\n" + r.stderr if r.returncode else "")
 
@@ -1324,7 +1325,7 @@ class Host:
                  sandbox=None, leftovers: Callable[[], list[int]] = None,
                  registry_get: Callable[[str, str], tuple[int, object]] = None,
                  fetch_runner: Callable[[list[str], dict], int] = None,
-                 store_runner: Callable[[list[str]], tuple[int, str]] = None,
+                 store_runner: Callable[..., tuple[int, str]] = None,
                  git_runner: Callable[[list[str], dict], tuple[int, str]] = None,
                  sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.monotonic) -> None:
@@ -1693,7 +1694,8 @@ class Host:
                 ok = self.run_stage(dict(st, timeoutMinutes=min(st["timeoutMinutes"], remaining / 60)),
                                     checkout_dir, outputs_dir, sink, {**extra, "MW_BUILD_STAGE": st["name"]},
                                     readonly=self.stage_readonly(repo, st), writable=[artifacts_dir],
-                                    hand_over=lambda: self.hand_over_artifacts(repo, sha, st["name"], artifacts_dir))
+                                    hand_over=lambda: self.hand_over_artifacts(repo, sha, st["name"], artifacts_dir,
+                                                                               deadline=run_end))
                 self.assert_clean()
                 if not ok:
                     failed_at = st["name"]
@@ -1952,12 +1954,17 @@ class Host:
             return str(r)
         return None if key == os.path.basename(output_dir.rstrip("/")) else f"the recomputed key is {key[:16]}…, not the directory's name"
 
-    def hand_over_artifacts(self, repo: str, sha: str, stage: str, artifacts_dir: str) -> tuple[list[dict], Optional[str]]:
+    def hand_over_artifacts(self, repo: str, sha: str, stage: str, artifacts_dir: str,
+                            deadline: Optional[float] = None) -> tuple[list[dict], Optional[str]]:
         """H9: upload every file a stage left under `$MW_BUILD_ARTIFACTS/<unit>/` (a module bundle,
         its publication record, the gate bake) to the shared CI artifact store with core's
         `ci-artifact-store.py` (content-addressed, SHA-256), READ IT BACK and re-hash it, and only
         then return its receipt `{"kind":"artifact","unit","key","sha256","bytes"}`. Returns
-        (receipts, the first problem or None); a stage with artifacts and no store is a problem."""
+        (receipts, the first problem or None); a stage with artifacts and no store is a problem.
+        The hand-over is INSIDE the run budget: every store call gets the time left until `deadline`
+        (the run's absolute end, on self.clock) and no more, so a stage finishing near the limit
+        cannot hold its claim past the follower's window or the pod's grace; when the budget runs
+        out the hand-over is a problem and the stage fails."""
         files = []
         for root, _dirs, names in os.walk(artifacts_dir):
             for n in sorted(names):
@@ -1967,11 +1974,21 @@ class Host:
                 files.append(full)
         if not files:
             return [], None
-        store = self.env.get("MW_BUILD_ARTIFACT_STORE", "").strip()
-        if not store:
+        store_url = self.env.get("MW_BUILD_ARTIFACT_STORE", "").strip()
+        if not store_url:
             return [], "the stage produced artifacts but no artifact store is configured (MW_BUILD_ARTIFACT_STORE)"
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ci-artifact-store.py")
         receipts = []
+
+        def left() -> float:
+            return float("inf") if deadline is None else deadline - self.clock()
+
+        def store(argv: list[str]) -> tuple[int, str]:
+            budget = left()
+            if budget <= 0:
+                raise subprocess.TimeoutExpired(argv, 0)
+            return self.store_runner(argv, timeout=min(1800.0, budget))
+
         for full in sorted(files):
             unit = os.path.relpath(full, artifacts_dir).replace(os.sep, "/")
             if "/" not in unit:
@@ -1981,7 +1998,10 @@ class Host:
             # commit/channel/stage that produces OTHER bytes writes a different object, so an earlier
             # acknowledged receipt's object is never replaced under it.
             key = f"build-hosts/{repo}/{sha}/{self.channel}/{stage}/{digest}/{unit}"
-            rc, out = self.store_runner([sys.executable, script, "put", "--store", store, "--key", key, "--file", full])
+            try:
+                rc, out = store([sys.executable, script, "put", "--store", store_url, "--key", key, "--file", full])
+            except subprocess.TimeoutExpired:
+                return receipts, f"the run deadline passed during the hand-over of {unit} (put)"
             locator = next((l.split("=", 1)[1] for l in out.splitlines() if l.startswith("locator=")), "")
             if rc != 0 or not locator:
                 return receipts, f"ci-artifact-store put {unit} failed (exit {rc}): {out.strip()[-200:]}"
@@ -1990,7 +2010,10 @@ class Host:
             readback = tempfile.mkdtemp(prefix=".readback-", dir=self.work)
             try:
                 back = os.path.join(readback, "f")
-                rc, out = self.store_runner([sys.executable, script, "get", "--store", store, "--locator", locator, "--out", back])
+                try:
+                    rc, out = store([sys.executable, script, "get", "--store", store_url, "--locator", locator, "--out", back])
+                except subprocess.TimeoutExpired:
+                    return receipts, f"the run deadline passed during the hand-over of {unit} (read-back)"
                 if rc != 0 or not os.path.isfile(back) or _sha256_file(back) != digest:
                     return receipts, f"the stored {unit} did not read back as sha256 {digest[:12]}… (exit {rc}): {out.strip()[-160:]}"
             finally:
@@ -2759,9 +2782,11 @@ def self_test() -> int:
         store_dir = os.path.join(tmp, "store")
         os.makedirs(store_dir)
         store_calls: list[list[str]] = []
+        store_timeouts: list = []
 
-        def fake_store(argv):
+        def fake_store(argv, timeout=None):
             store_calls.append(argv)
+            store_timeouts.append(timeout)
             verb = argv[2]
             if verb == "put":
                 src = argv[argv.index("--file") + 1]
@@ -2788,12 +2813,30 @@ def self_test() -> int:
         check("h9/every upload was read back", [c[2] for c in store_calls] == ["put", "get", "put", "get"], [c[2] for c in store_calls])
         fin = [e for e in evs if e["kind"] == "stage-finished"]
         check("h9/the stage succeeded", fin and fin[-1]["state"] == "succeeded", fin)
+        check("h9/every store call is bounded by the run budget left",
+              store_timeouts and all(t is not None and 0 < t <= min(1800, ha.run_deadline) for t in store_timeouts), store_timeouts)
+        # the hand-over is INSIDE the run budget: a store that outlasts it, or a budget already spent, fails the stage
+        def slow_store(argv, timeout=None):
+            raise subprocess.TimeoutExpired(argv, timeout)
+        posted.clear()
+        host(api_ev(), env=dict(env_s, MW_BUILD_ARTIFACT_STORE="file:" + store_dir), store_runner=slow_store,
+             checkout=checkout_with({"stages": [{"name": "modules", "kind": "build", "command": art_cmd}]})).run(claim)
+        fin = [e for _, es in posted for e in es if e["kind"] == "stage-finished"]
+        check("h9/a store call cut by the run deadline fails the stage, naming it", fin and fin[-1]["state"] == "failed"
+              and "run deadline passed during the hand-over" in fin[-1]["summary"], fin)
+        store_calls.clear()
+        hd = host(api_ev(), env=dict(env_s, MW_BUILD_ARTIFACT_STORE="file:" + store_dir), store_runner=fake_store)
+        spent_dir = os.path.join(tmp, "spent-artifacts", "Store")
+        os.makedirs(spent_dir)
+        open(os.path.join(spent_dir, "x.zip"), "w").write("x")
+        _r, problem = hd.hand_over_artifacts("R", "f" * 40, "modules", os.path.dirname(spent_dir), deadline=hd.clock() - 1)
+        check("h9/a spent budget makes no store call and is a problem", not store_calls and problem and "run deadline" in problem, (store_calls, problem))
         # a store that reads back other bytes, and a missing store, fail the stage
-        def lying_store(argv):
+        def lying_store(argv, timeout=None):
             if argv[2] == "get":
                 open(argv[argv.index("--out") + 1], "w").write("other")
                 return 0, ""
-            return fake_store(argv)
+            return fake_store(argv, timeout)
         posted.clear()
         host(api_ev(), env=dict(env_s, MW_BUILD_ARTIFACT_STORE="file:" + store_dir), store_runner=lying_store,
              checkout=checkout_with({"stages": [{"name": "modules", "kind": "build", "command": art_cmd}]})).run(claim)

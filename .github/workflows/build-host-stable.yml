@@ -37,7 +37,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      issues: write     # a red roll reports itself on the one open `build-host` issue
+    outputs:
+      enabled: ${{ steps.build_host_stable.outputs.enabled }}
+      handed: ${{ steps.post.outputs.handed }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -115,6 +117,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: "Sign and POST build-host-update-available for build-stable"
         if: steps.build_host_stable.outputs.enabled == 'true'
+        id: post
         env:
           URL: ${{ vars.CONTROL_WEBHOOK_URL }}
           SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
@@ -154,45 +157,55 @@ jobs:
             2*)
               [ "$verdict" = verified ] || { echo "::error::the inbox stored the build-host event but did not VERIFY its signature (signature: '${verdict:-<none>}') — build-stable would not move"; exit 1; }
               echo "- build-stable handed the main-passed ceiling \`$V_SET\` for record \`$DEPLOYMENT\`: STORED and signature-verified (HTTP $code). Not yet a roll — the record change is" >> "$GITHUB_STEP_SUMMARY"
+              echo "handed=true" >> "$GITHUB_OUTPUT"
               ;;
             000) echo "::error::could not reach the control plane's inbox — build-stable was NOT handed $V_SET"; exit 1 ;;
             401) echo "::error::the inbox REFUSED the signature (HTTP 401) — build-stable was NOT handed $V_SET"; exit 1 ;;
             *)   echo "::error::the inbox refused the build-host event (HTTP $code) — build-stable was NOT handed $V_SET"; exit 1 ;;
           esac
-      # The alert clears ITSELF: after a successful, ENABLED hand-over (a disabled no-op is not a
-      # recovery — nothing was handed over), the one open `build-host` issue is closed with the run
-      # that recovered it, so a later failure opens a fresh, current alert instead of appending to a
-      # stale one.
-      - name: Close the build-host alert after a successful hand-over
-        if: success() && steps.build_host_stable.outputs.enabled == 'true'
+  # The REPORT is its own job (if: always()): a step inside the 15-minute job it monitors dies with
+  # that job on a timeout, and `failure()` excludes a cancellation. This job reads the operation's
+  # RESULT and its `handed` output: a failed or cancelled roll files (or comments on) the one open
+  # `build-host` issue; only an ENABLED, completed hand-over clears it (a disabled no-op is not a
+  # recovery — nothing was handed over). REST only: `gh issue …` is GraphQL, and a spent secondary
+  # quota must never swallow the one durable alert this scheduled run exists to file.
+  build-host-stable-report:
+    name: "Build host: report the build-stable roll (its own alert)"
+    needs: [build-host-stable]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File, comment or close the build-host alert
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.build-host-stable.result }}
+          ENABLED: ${{ needs.build-host-stable.outputs.enabled }}
+          HANDED: ${{ needs.build-host-stable.outputs.handed }}
         run: |
           set -euo pipefail
           open=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=build-host&state=open&per_page=10" --jq '.[].number')
-          for n in $open; do
-            gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "Recovered: build-stable was handed its set by [run ${GITHUB_RUN_ID}](${RUN_URL})."
-            gh issue close "$n" --repo "$GITHUB_REPOSITORY" --reason completed
-          done
-      - name: Report a red build-stable roll on the build-host issue
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          body="build-stable's daily roll failed: [run ${GITHUB_RUN_ID}](${RUN_URL}). The host keeps running its previous set; read the failed step's ::error:: line (Doc/Architecture/BuildHosts)."
-          # REST, not GraphQL (`gh issue list` is GraphQL): a spent secondary quota must never swallow
-          # the one durable alert this scheduled run exists to file.
-          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=build-host&state=open&per_page=1" --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
-          else
-            gh label create build-host --repo "$GITHUB_REPOSITORY" --description "A standing build host's hand-over failed" \
-              --color D93F0B --force || echo "::warning::could not ensure the build-host label (continuing)"
-            url=$(gh issue create --repo "$GITHUB_REPOSITORY" --title "build-stable roll failed: run ${GITHUB_RUN_ID}" \
-              --label build-host --body "$body")
-            gh issue edit "${url##*/}" --repo "$GITHUB_REPOSITORY" --add-label "bug,sev:M" >/dev/null \
-              || echo "::warning::could not stamp bug + sev:M on ${url} — the issue-taxonomy lane will name it"
+          if [ "$RESULT" != success ] && [ "$RESULT" != skipped ] || { [ "$ENABLED" = true ] && [ "$HANDED" != true ]; }; then
+            body="build-stable's daily roll did not complete: [run ${GITHUB_RUN_ID}](${RUN_URL}) — result \`${RESULT}\`, handed \`${HANDED:-false}\`. The host keeps running its previous set; read the job's ::error:: line, or its timeout/cancellation (Doc/Architecture/BuildHosts)."
+            first=$(printf '%s\n' "$open" | head -n 1)
+            if [ -n "$first" ]; then
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$first/comments" -f body="$body" >/dev/null
+            else
+              gh label create build-host --repo "$GITHUB_REPOSITORY" --description "A standing build host's hand-over failed" \
+                --color D93F0B --force || echo "::warning::could not ensure the build-host label (continuing)"
+              url=$(gh api -X POST "repos/$GITHUB_REPOSITORY/issues" -f title="build-stable roll failed: run ${GITHUB_RUN_ID}" \
+                -f body="$body" -f 'labels[]=build-host' --jq .html_url)
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/${url##*/}/labels" -f 'labels[]=bug' -f 'labels[]=sev:M' >/dev/null \
+                || echo "::warning::could not stamp bug + sev:M on ${url} — the issue-taxonomy lane will name it"
+            fi
+            exit 0
+          fi
+          if [ "$ENABLED" = true ] && [ "$HANDED" = true ]; then
+            for n in $open; do
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$n/comments" -f body="Recovered: build-stable was handed its set by [run ${GITHUB_RUN_ID}](${RUN_URL})." >/dev/null
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/$n" -f state=closed -f state_reason=completed >/dev/null
+            done
           fi
