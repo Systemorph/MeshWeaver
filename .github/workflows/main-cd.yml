@@ -2813,7 +2813,8 @@ jobs:
           sources=()
           for arch in amd64 arm64; do
             f="$RUNNER_TEMP/core-tests-digest/$arch"
-            d=$(cat "$f" 2>/dev/null || true)
+            [ -s "$f" ] || { echo "::error::no linux/$arch digest was handed over ($f is missing or empty) — refusing to publish an index without it"; exit 1; }
+            d=$(<"$f")
             case "$d" in sha256:*) ;; *) echo "::error::no linux/$arch digest was handed over ('$d') — refusing to publish an index without it"; exit 1 ;; esac
             sources+=("${{ env.ACR }}/mw-core-tests@$d")
           done
