@@ -165,7 +165,7 @@ az bicep build --file infra/platform/main.bicep --stdout > /dev/null   # compile
 
 ## Step 1 — Provision the infrastructure
 
-Edit `infra/main.parameters.json` (region, `namePrefix`, node SKU/count, CIDRs,
+Edit `infra/platform/main.parameters.json` (region, `namePrefix`, node SKU/count, CIDRs,
 toggles). Then deploy at **subscription** scope (the template creates the
 resource group):
 
@@ -174,7 +174,7 @@ az deployment sub create \
   --name memex-aks-infra \
   --location westeurope \
   --template-file infra/platform/main.bicep \
-  --parameters @infra/main.parameters.json \
+  --parameters @infra/platform/main.parameters.json \
   --parameters postgresAdminPassword="$PG_ADMIN_PW"   # required: deployPostgresFlexible=true
 ```
 
@@ -1002,7 +1002,8 @@ migration and the portal:
 Set them via `dotnet user-secrets` / env / GitHub secrets at publish time, e.g.:
 
 ```bash
-aspire publish --apphost src/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj   # in a MeshWeaver.Plugins checkout \
+# Run from a MeshWeaver.Plugins checkout:
+aspire publish --apphost src/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj \
   -o deploy/helm -- --mode kubernetes \
   -- --Parameters:embedding-endpoint=https://<foundry>.services.ai.azure.com/... \
      --Parameters:embedding-key=<key>
