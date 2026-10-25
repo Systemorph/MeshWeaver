@@ -114,6 +114,14 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "scope over REST with a fleet-reader App token (Issues: read). It checks nothing out, "
                 + "runs on no pull request and gates no merge — its verdict is its own standing issue, "
                 + "about the fleet's issues, never a core build"),
+            new KeyValuePair<string, string>("build-host-stable.yml",
+                "the DAILY scheduled roll of the standing build host `build-stable` (Doc/Architecture/BuildHosts): "
+                + "until core's stable promoter exists, `stable` IS the newest sealed set MeshWeaver.Plugins' "
+                + "own main has passed on, read with resolve-platform.py --passed-on-main over REST with a "
+                + "fleet-reader App token (Actions + Checks: read). It checks nothing out, runs on no pull "
+                + "request, gates no merge and no platform roll — it decides only which set one build host "
+                + "runs. Deliberately NOT a job of main-cd.yml, which reads no Plugins verdict "
+                + "(policy `platform-module-deploy-separate`)"),
         ]);
 
     /// <summary>The repos this guard treats as "not the platform".</summary>
