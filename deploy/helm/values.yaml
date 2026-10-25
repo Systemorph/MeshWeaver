@@ -1205,11 +1205,6 @@ buildHosts:
     testerDigest: ""
     portalDigest: ""
     runnerDigest: ""
-  # VERSIONED build servers (Doc/Architecture/DeployTestSwitchLatest §3): one `build-<version>` Deployment +
-  # ScaledObject per entry, written from the record's mesh-owned buildHostSets (`v/<version>` + `alias/<name>`)
-  # — never authored by hand. Each entry: version, testerDigest, portalDigest, runnerDigest, maxReplicas,
-  # aliases (latest | candidate | previous | stable; an alias names ONE version).
-  versions: []
   stable:
     enabled: false
     maxReplicas: 1

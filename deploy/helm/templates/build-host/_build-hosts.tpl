@@ -101,54 +101,11 @@ The refusals, and why each one exists:
 {{- $channels = append $channels (dict "name" $name "platformVersion" $pv "maxReplicas" $max
       "tester" (printf "%s@%s" $testerRepo $c.testerDigest) "portal" (printf "%s@%s" $portalRepo $c.portalDigest)
       "runner" (printf "%s@%s" $runnerRepo $c.runnerDigest)
-      "testerDigest" $c.testerDigest "portalDigest" $c.portalDigest "runnerDigest" $c.runnerDigest
-      "resource" (printf "build-host-%s" $name) "queueQuery" (printf "channel=%s" $name) "kind" "channel" "version" "" "aliases" list) -}}
+      "testerDigest" $c.testerDigest "portalDigest" $c.portalDigest "runnerDigest" $c.runnerDigest) -}}
 {{- end -}}
-{{- end -}}
-{{- /* VERSIONED build servers (Doc/Architecture/DeployTestSwitchLatest §3): one `build-<v>` per entry, its
-       aliases as labels. An alias names at most ONE version, and a version appears once. */ -}}
-{{- $seenVersions := dict -}}
-{{- $seenAliases := dict -}}
-{{- range $i, $v := ($b.versions | default list) -}}
-{{- $ver := required (printf "buildHosts.versions[%d].version is required" $i) $v.version -}}
-{{- if not (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$" $ver) -}}
-{{- fail (printf "buildHosts.versions[%d].version %q must be MAJOR.MINOR.PATCH with an optional -prerelease" $i $ver) -}}
-{{- end -}}
-{{- if hasKey $seenVersions $ver -}}
-{{- fail (printf "buildHosts.versions names %s twice — one deployment per version" $ver) -}}
-{{- end -}}
-{{- $_ := set $seenVersions $ver true -}}
-{{- range $k := (list "testerDigest" "portalDigest" "runnerDigest") -}}
-{{- $d := (index $v $k | default "") -}}
-{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $d) -}}
-{{- fail (printf "buildHosts.versions[%s].%s %q must be a sha256:<64 hex> digest — a build server runs ONE immutable set" $ver $k $d) -}}
-{{- end -}}
-{{- end -}}
-{{- range $a := ($v.aliases | default list) -}}
-{{- if not (has $a (list "latest" "candidate" "previous" "stable")) -}}
-{{- fail (printf "buildHosts.versions[%s] names alias %q — the aliases are latest, candidate, previous and stable" $ver $a) -}}
-{{- end -}}
-{{- if hasKey $seenAliases $a -}}
-{{- fail (printf "alias %q names two versions (%s and %s) — an alias is ONE version" $a (index $seenAliases $a) $ver) -}}
-{{- end -}}
-{{- $_ := set $seenAliases $a $ver -}}
-{{- end -}}
-{{- $max := int ($v.maxReplicas | default 2) -}}
-{{- if lt $max 1 -}}
-{{- fail (printf "buildHosts.versions[%s].maxReplicas must be at least 1" $ver) -}}
-{{- end -}}
-{{- $dns := printf "build-%s" (lower $ver | replace "." "-") -}}
-{{- if gt (len $dns) 63 -}}
-{{- fail (printf "buildHosts.versions[%s] makes the name %q, longer than a DNS label's 63 characters" $ver $dns) -}}
-{{- end -}}
-{{- $channels = append $channels (dict "name" $ver "platformVersion" $ver "maxReplicas" $max
-      "tester" (printf "%s@%s" $testerRepo $v.testerDigest) "portal" (printf "%s@%s" $portalRepo $v.portalDigest)
-      "runner" (printf "%s@%s" $runnerRepo $v.runnerDigest)
-      "testerDigest" $v.testerDigest "portalDigest" $v.portalDigest "runnerDigest" $v.runnerDigest
-      "resource" $dns "queueQuery" (printf "version=%s" $ver) "kind" "version" "version" $ver "aliases" ($v.aliases | default list)) -}}
 {{- end -}}
 {{- if not $channels -}}
-{{- fail "buildHosts.enabled is true but no channel is enabled and no version is listed (buildHosts.latest.enabled / buildHosts.stable.enabled / buildHosts.versions)" -}}
+{{- fail "buildHosts.enabled is true but no channel is enabled (buildHosts.latest.enabled / buildHosts.stable.enabled)" -}}
 {{- end -}}
 {{- $np := ($b.networkPolicy | default dict) -}}
 {{- $wi := ($b.workloadIdentity | default dict) -}}

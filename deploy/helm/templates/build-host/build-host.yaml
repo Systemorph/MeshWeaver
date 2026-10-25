@@ -81,19 +81,12 @@ spec:
 apiVersion: "apps/v1"
 kind: "Deployment"
 metadata:
-  name: "{{ $c.resource }}"
+  name: "build-host-{{ $c.name }}"
   labels:
     app.kubernetes.io/name: "{{ $.Chart.Name }}"
     app.kubernetes.io/component: "build-host"
     app.kubernetes.io/instance: "{{ $.Release.Name }}"
-    {{- if eq $c.kind "channel" }}
     hosting.meshweaver.io/channel: "{{ $c.name }}"
-    {{- else }}
-    meshweaver.io/build-version: "{{ $c.version }}"
-    {{- range $c.aliases }}
-    meshweaver.io/build-alias-{{ . }}: "true"
-    {{- end }}
-    {{- end }}
   annotations:
     hosting.meshweaver.io/platform-version: "{{ $c.platformVersion }}"
 spec:
@@ -106,25 +99,14 @@ spec:
     matchLabels:
       app.kubernetes.io/component: "build-host"
       app.kubernetes.io/instance: "{{ $.Release.Name }}"
-      {{- if eq $c.kind "channel" }}
       hosting.meshweaver.io/channel: "{{ $c.name }}"
-      {{- else }}
-      # The VERSION only — a selector is immutable, and an alias moves on every switch.
-      meshweaver.io/build-version: "{{ $c.version }}"
-      {{- end }}
   template:
     metadata:
       labels:
         app.kubernetes.io/name: "{{ $.Chart.Name }}"
         app.kubernetes.io/component: "build-host"
         app.kubernetes.io/instance: "{{ $.Release.Name }}"
-        {{- if eq $c.kind "channel" }}
         hosting.meshweaver.io/channel: "{{ $c.name }}"
-        {{- else }}
-        # The VERSION only: an alias label here would roll the pods on every switch, and a switch
-        # restarts nothing (Doc/Architecture/DeployTestSwitchLatest §2). Aliases label the Deployment.
-        meshweaver.io/build-version: "{{ $c.version }}"
-        {{- end }}
         {{- if $b.workloadIdentityClientId }}
         azure.workload.identity/use: "true"
         {{- end }}
@@ -198,11 +180,7 @@ spec:
             # a process could inherit; no stage's sandbox binds /run/build-worker.
             - { name: BUILD_TOKEN_FILE, value: "/run/build-worker/token" }
             - { name: MW_BUILD_RUN_DEADLINE_SECONDS, value: {{ $b.runDeadline | quote }} }
-            {{- if eq $c.kind "channel" }}
             - { name: MW_BUILD_CHANNEL, value: {{ $c.name | quote }} }
-            {{- else }}
-            - { name: MW_BUILD_VERSION, value: {{ $c.version | quote }} }
-            {{- end }}
             - { name: MW_BUILD_PLATFORM_VERSION, value: {{ $c.platformVersion | quote }} }
             - { name: MW_BUILD_TESTER_DIGEST, value: {{ $c.testerDigest | quote }} }
             - { name: MW_BUILD_PORTAL_DIGEST, value: {{ $c.portalDigest | quote }} }
@@ -305,22 +283,15 @@ spec:
 apiVersion: "keda.sh/v1alpha1"
 kind: "ScaledObject"
 metadata:
-  name: "{{ $c.resource }}-scaler"
+  name: "build-host-{{ $c.name }}-scaler"
   labels:
     app.kubernetes.io/name: "{{ $.Chart.Name }}"
     app.kubernetes.io/component: "build-host"
     app.kubernetes.io/instance: "{{ $.Release.Name }}"
-    {{- if eq $c.kind "channel" }}
     hosting.meshweaver.io/channel: "{{ $c.name }}"
-    {{- else }}
-    meshweaver.io/build-version: "{{ $c.version }}"
-    {{- range $c.aliases }}
-    meshweaver.io/build-alias-{{ . }}: "true"
-    {{- end }}
-    {{- end }}
 spec:
   scaleTargetRef:
-    name: "{{ $c.resource }}"
+    name: "build-host-{{ $c.name }}"
   minReplicaCount: 0
   maxReplicaCount: {{ $c.maxReplicas }}
   pollingInterval: {{ $b.pollingInterval }}
@@ -336,7 +307,7 @@ spec:
     - type: metrics-api
       metricType: AverageValue
       metadata:
-        url: "{{ $b.apiUrl }}/queue?{{ $c.queueQuery }}"
+        url: "{{ $b.apiUrl }}/queue?channel={{ $c.name }}"
         valueLocation: "demand"
         targetValue: "1"
 {{- end }}
