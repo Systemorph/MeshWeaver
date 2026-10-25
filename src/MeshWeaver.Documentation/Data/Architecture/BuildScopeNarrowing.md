@@ -187,7 +187,7 @@ and the caller answers whether it reaches a module:
 So no satellite has to change in step with core, and a caller that wants `ci.yml` kept loud says so
 in its own selector. A CI path beside a module path adds nothing to that module's selection.
 
-Three things stay EVERYTHING whatever any selector answers:
+Four things stay EVERYTHING whatever any selector answers:
 
 - **`tools/`** — not a CI path. MeshWeaver.Plugins' `src/Directory.Build.targets` and two test
   projects read it, so it is build input.
@@ -195,6 +195,12 @@ Three things stay EVERYTHING whatever any selector answers:
   a file directly under `src/` — the classifier's catch-all, untouched.
 - **a main push narrowed by `--publication-base`** — that run IS the "main's push run" the policy
   relies on, so there a CI path is still the full set.
+- **a publication-reach question (`--publication-reach`)** — the newest-wins check of
+  `node-repo-module-pack.yml` (`publish-newest-only`) asks whether a NEWER trunk commit reaches a
+  module before publishing it, and it calls the script with `--event pull_request`. The policy
+  narrows a pull request's BUILD SELECTION only. A newer CI-only commit changes the workflow and
+  build inputs that commit's own run packs with, so here it reaches every module, and the older run
+  stands down instead of publishing over the newer one.
 
 ## The guards
 
@@ -217,8 +223,8 @@ The load-bearing ones for this change:
 - a RENAMED `NOOP_DIRS` literal still refuses to narrow at all;
 - a CI-only diff packs zero bundles, a CI path beside a module path selects exactly that module,
   `tools/` (alone or beside a CI path) still selects everything, and a selector that predates
-  `ci-paths-owe-no-module-leg`, a missing selector and a publication-narrowed main push each keep
-  a CI path on the full set.
+  `ci-paths-owe-no-module-leg`, a missing selector, a publication-narrowed main push and a
+  `--publication-reach` question each keep a CI path on the full set.
 
 **`check-noop-scope-parity.py`** runs in `node-repo-validate.yml`, so it reaches every satellite at
 that satellite's `platform-ref`. It imports the platform's sets from `node-repo-scope.py` rather
@@ -249,6 +255,7 @@ Each mechanism was reverted and the suite observed to go red before being restor
 | `tools/` added to `CI_PATH_PREFIXES` | 3 |
 | CI paths declared inert outright, the caller's selector not asked | 1 — the pre-policy selector case |
 | the publication-narrowed main push deferring CI paths too | 1 |
+| the publication-reach question deferring CI paths too | 1 |
 
 ## Measured effect
 

@@ -359,7 +359,8 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
            override: list[str] | None, say, publishing: bool = False,
-           always: frozenset[str] = frozenset(), publication_base: str = "") -> dict:
+           always: frozenset[str] = frozenset(), publication_base: str = "",
+           publication_reach: bool = False) -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -462,7 +463,11 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         # 🚨 ONLY on a pull request / merge group. A main push narrowed by `--publication-base`
         # IS "main's push run" the policy relies on to cover the modules: the caller's workflow
         # carries the platform pin and the image digests, so there a CI path stays EVERYTHING.
-        elif f.startswith(CI_PATH_PREFIXES) and not publication_diff:
+        # 🚨 And NEVER for a PUBLICATION-REACH question (`--publication-reach`): the
+        # newest-wins supersession check asks whether a newer trunk commit reaches a module, and
+        # a newer CI-only commit changes the workflow and build inputs that commit's own run packs
+        # with. Answering "nothing" there lets an older, slower run publish over the newer one.
+        elif f.startswith(CI_PATH_PREFIXES) and not publication_diff and not publication_reach:
             ci_files.append(f)
             report.append(f"  {f}  → a CI path — the caller's selector decides "
                           "(policy ci-paths-owe-no-module-leg)")
@@ -880,6 +885,16 @@ def self_test() -> int:
         got = _run(root, "modules", "push", ci_only)
         check("[modules] a CI-only PUSH is still FULL (main's push run covers the modules)",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        # 🚨 The newest-wins supersession check (node-repo-module-pack.yml, `publish-newest-only`)
+        # calls this script with `--event pull_request` over the trunk tip's diff. A newer CI-only
+        # commit must REACH every module there, or an older run publishes over the newer one.
+        got = _run(root, "modules", "pull_request", ci_only, extra=["--publication-reach"])
+        check("[modules] PUBLICATION REACH: a newer CI-only commit reaches every module",
+              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+        got = _run(root, "modules", "pull_request", ["Alpha/index.json"], extra=["--publication-reach"])
+        check("[modules] …while publication reach still narrows a diff with no CI path",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Alpha"],
+              f"{got['scope']} {got['selected']}")
         selector = root / "scripts" / "affected-modules.py"
         selector.write_text(_STUB_SELECTOR_PRE_POLICY, encoding="utf-8")
         try:
@@ -1120,6 +1135,10 @@ def main() -> int:
                    help="this run hands its output to a registry or feed — never narrow. The "
                         "publish path's change detector is the derived version, and a diff that "
                         "misses a unit means that unit silently never ships.")
+    p.add_argument("--publication-reach", action="store_true", dest="publication_reach",
+                   help="the question is PUBLICATION reachability (does a newer trunk commit reach "
+                        "this module?), not a pull request's build selection: a CI path stays "
+                        "EVERYTHING (policy ci-paths-owe-no-module-leg covers PR selection only)")
     p.add_argument("--always", default="",
                    help="comma-separated module names the caller's gates compose on EVERY run — "
                         "a floor the narrowing always keeps (--for modules)")
@@ -1149,7 +1168,8 @@ def main() -> int:
     always = frozenset(a.strip() for a in args.always.split(",") if a.strip())
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
-                    publishing=args.publishing, always=always, publication_base=args.publication_base)
+                    publishing=args.publishing, always=always, publication_base=args.publication_base,
+                    publication_reach=args.publication_reach)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"
