@@ -676,7 +676,7 @@ another flow). Re-run the image step; do NOT roll."
 image_pull_acr() {                                     # §3 Option A
   local tag="${1:-$ACR_DEFAULT_TAG}" channel="${2:-}"
   need docker docker
-  need az azure-cli
+  need az "--cask azure-cli"
   if [ -n "$channel" ]; then
     step "Following channel $channel from ACR ($ACR) — resolving it to a version (§3 Option A)"
   else
@@ -2449,7 +2449,7 @@ cmd_channel() {
   [ $# -eq 1 ] || die "channel: usage: memex-local channel <label>   (e.g. 3-latest, 3-mac)"
   channel_label_ok "$1" || die "'$1' is not a channel label (expected e.g. 3-latest, 3.1-latest, 3-mac) — pin a version with --tag instead"
   need docker docker
-  need az azure-cli
+  need az "--cask azure-cli"
   # Keep Azure's own answer (MemexLocalSurfacesAzureErrorsGuard): it names the missing role exactly.
   local acr_err=""
   if ! acr_err="$(az acr login -n "$ACR_NAME" -o none 2>&1)"; then
@@ -2695,7 +2695,7 @@ cmd_autoroll() {
         shift
       done
       need docker docker; need kubectl kubectl
-      [ "$source" = "acr" ] && need az "azure-cli"
+      [ "$source" = "acr" ] && need az "--cask azure-cli"
       mkdir -p "$LOCAL_HOME" "$(dirname "$AUTOROLL_PLIST")"
       # Record the tick's image source. 'build' (default) watches ONLY the local docker store —
       # the dev loop, where an ACR poll would clobber a just-built local image with the registry's.
