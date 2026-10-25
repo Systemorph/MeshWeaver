@@ -255,6 +255,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Agent Framework Stores — mesh nodes behind Microsoft's abstractions](AgentFrameworkStores)
 - [Centralized speech — Whisper Swiss German as a container](CentralizedSpeech)
 - [OCR Service — local Tesseract in the cluster](OcrService) — the default OCR engine: Tesseract 5 with eng/deu/fra/ita/ind + osd baked in, language detection, no egress, disabled until an instance's record turns it on
+- [Local Model Service — Ollama in the cluster](LocalModelService) — the fleet's self-hosted model service: qwen3.6 (image recognition/OCR, translation, summaries) and bge-m3 (embeddings) baked in, OpenAI-compatible at /v1, no egress, disabled until an instance's record turns it on; worked examples per job
 - [Email Ingestion, Channels and Notifications](EmailIngestionAndNotifications)
 - [Event Subscriptions — the durable 'when THIS fires, run THAT' engine](EventSubscriptions)
 - [Foreign-Language Bridge (Python, Bun/Node) over gRPC](ForeignLanguageBridge)

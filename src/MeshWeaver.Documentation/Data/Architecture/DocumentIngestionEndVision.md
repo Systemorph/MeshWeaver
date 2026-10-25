@@ -204,7 +204,7 @@ per document:  Discovered ─claim(insert-if-absent)─▶ Claimed ─▶ Extrac
 
 Extraction and labelling run on **local models** as in-cluster **CPU pods**, reachable as mesh
 services behind one interface (GPU later, behind the same interface): NER (GLiNER, the `s1-extract`
-service), OCR for images (Tesseract, the [`deploy/ocr`](/Doc/Architecture/OcrService) service; a vision model optional), embeddings (an OpenAI-compatible endpoint such as Ollama). Role
+service), OCR for images (Tesseract, the [`deploy/ocr`](/Doc/Architecture/OcrService) service; or the vision model of the [`deploy/ollama`](/Doc/Architecture/LocalModelService) service), translation, summaries and embeddings (that same OpenAI-compatible Ollama service). Role
 assignment that needs reasoning goes to a model satisfying the partition's data residency (EU by
 default), and every name it returns is **grounded** in the text — what the document does not
 contain is dropped.
@@ -329,7 +329,7 @@ order) and renders on every run node's `Plan` area. Status as of 2026-10-03.
 | F2 | Ask-and-await: question node routed to a person's inbox; park on the answer; resume from checkpoint; no timeout unless declared | Plugins · Hosting/Job + inbox | M | G1, G24 | not started · nobody | A2, A4, A5 |
 | F3 | Triage classifies the unblocking event, parks the job on it, resumes it | Plugins · Hosting triage | M | G1, G24 | bug-fix triage in PR · Plugins #2698; unblock classification: nobody | C1–C4 |
 | F4 | Correlation map as nodes; events over synced streams to the owner; dead owner adopted once | Plugins · Hosting/Queue + Job | L | G1, G3, G24 | not started · queue agent | D1, D2 |
-| G11 | Local model services (CPU pods, one mesh-reachable interface; NER, OCR/vision, embeddings) | core (deploy via CD) + Plugins (provider) | L | — | OCR service built · core `deploy/ocr` ([OCR Service](/Doc/Architecture/OcrService): Tesseract 5, packs baked in, image CD, chart disabled by default; per-instance enablement owner-gated). NER: `s1-extract` exists, unwired. Embeddings: nobody | S3g |
+| G11 | Local model services (CPU pods, one mesh-reachable interface; NER, OCR/vision, embeddings) | core (deploy via CD) + Plugins (provider) | L | — | OCR service built · core `deploy/ocr` ([OCR Service](/Doc/Architecture/OcrService): Tesseract 5, packs baked in, image CD, chart disabled by default; per-instance enablement owner-gated). Local model service built · core `deploy/ollama` ([Local Model Service](/Doc/Architecture/LocalModelService): qwen3.6 vision/translation/summary + bge-m3 embeddings, baked, OpenAI-compatible, chart disabled by default; per-instance enablement owner-gated; embeddings switch = a planned re-index). NER: `s1-extract` exists, unwired | S3g |
 | G13 | Taxonomy as typed nodes, default per package, editable per partition | Plugins · Indexing | M | — | not started · nobody | S3i, S3k |
 | G6 | Governed provision-content-table activity; candidate approvers; user-named approver; signal the parked job | Plugins · Governance + Indexing | M | G1, G3, G5 | not started · nobody | S2b, S2c, S3b |
 | G9 | Exactly once per content: node per SHA-256, atomic insert-if-absent claim on PostgreSQL | core + Plugins | M | G1 | not started · nobody | S3d, S3e, S3h |
