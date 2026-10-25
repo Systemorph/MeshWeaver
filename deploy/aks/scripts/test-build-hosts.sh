@@ -222,6 +222,60 @@ else
   report "the build-host fixture does not render:"; sed 's/^/    /' "$WORK/hosts.err"
 fi
 
+# 3c. versioned build servers: 1 and 3 versions (0 is the defaults case above)
+for spec in "values.build-hosts-one-version.yaml|3.1.10500:latest:2" \
+            "values.build-hosts-versions.yaml|3.1.10400:previous:2,3.1.10500:latest:3,3.1.10600:candidate:4"; do
+  f="${spec%%|*}"; want="${spec#*|}"
+  if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" --namespace check > "$WORK/v.yaml" 2> "$WORK/v.err"; then
+    if python3 - "$WORK/v.yaml" "$want" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+want = [w.split(":") for w in sys.argv[2].split(",")]
+problems = []
+deps = {d["metadata"]["name"]: d for d in docs if d["kind"] == "Deployment" and (d["metadata"].get("labels") or {}).get("app.kubernetes.io/component") == "build-host"}
+sos = {d["metadata"]["name"]: d for d in docs if d["kind"] == "ScaledObject"}
+names = sorted("build-" + v.replace(".", "-") for v, _, _ in want)
+if sorted(deps) != names:
+    problems.append(f"Deployments {sorted(deps)} are not one per version {names}")
+for v, alias, mx in want:
+    n = "build-" + v.replace(".", "-")
+    dep, so = deps.get(n), sos.get(n + "-scaler")
+    if not dep or not so:
+        problems.append(f"{v}: Deployment or ScaledObject missing"); continue
+    labels = dep["metadata"]["labels"]
+    if labels.get("meshweaver.io/build-version") != v or labels.get(f"meshweaver.io/build-alias-{alias}") != "true":
+        problems.append(f"{v}: labels do not name the version and its alias {alias}: {labels}")
+    if "hosting.meshweaver.io/channel" in labels:
+        problems.append(f"{v}: a versioned server carries a channel label")
+    other = [k for k in labels if k.startswith("meshweaver.io/build-alias-") and k != f"meshweaver.io/build-alias-{alias}"]
+    if other:
+        problems.append(f"{v}: carries aliases it was not given: {other}")
+    build = next(c for c in dep["spec"]["template"]["spec"]["containers"] if c["name"] == "build")
+    env = {e["name"]: e.get("value") for e in build.get("env", [])}
+    if env.get("MW_BUILD_VERSION") != v or "MW_BUILD_CHANNEL" in env or env.get("MW_BUILD_PLATFORM_VERSION") != v:
+        problems.append(f"{v}: the runner does not claim by version: {[k for k in env if k.startswith('MW_BUILD_')]}")
+    pod_labels = dep["spec"]["template"]["metadata"]["labels"]
+    if any(k.startswith("meshweaver.io/build-alias-") for k in pod_labels):
+        problems.append(f"{v}: an alias label is in the POD template — a switch would roll the pods: {pod_labels}")
+    sel = dep["spec"]["selector"]["matchLabels"]
+    if sel.get("meshweaver.io/build-version") != v:
+        problems.append(f"{v}: the selector does not pin the version (two versions' pods would mix): {sel}")
+    s = so["spec"]
+    url = f"http://memex-portal-service:8080/api/builds/queue?version={v}"
+    trig = s.get("triggers", [{}])[0].get("metadata", {}).get("url")
+    if trig != url or s.get("maxReplicaCount") != int(mx) or s.get("scaleTargetRef", {}).get("name") != n:
+        problems.append(f"{v}: ScaledObject not demand-by-version {url} / max {mx} / target {n}: {trig} {s.get('maxReplicaCount')}")
+if problems:
+    print("\n".join(problems)); sys.exit(1)
+PY
+    then ok "$f renders one build-<v> per version, each claiming and scaling by its version, labelled with its alias alone"
+    else report "$f renders a wrong versioned shape (see above)"
+    fi
+  else
+    report "$f does not render:"; sed 's/^/    /' "$WORK/v.err"
+  fi
+done
+
 # 4. refusals
 for entry in \
   "values.build-hosts-tag-not-digest.yaml|must be a sha256:<64 hex> digest" \
@@ -230,7 +284,10 @@ for entry in \
   "values.build-hosts-postgres-sidecar.yaml|runs NO shared database" \
   "values.build-hosts-localhost-no-profile.yaml|names no profile" \
   "values.build-hosts-run-deadline-too-long.yaml|RUN budget" \
-  "values.build-hosts-run-deadline-zero.yaml|RUN budget"; do
+  "values.build-hosts-run-deadline-zero.yaml|RUN budget" \
+  "values.build-hosts-alias-twice.yaml|an alias is ONE version" \
+  "values.build-hosts-version-twice.yaml|one deployment per version" \
+  "values.build-hosts-bad-version.yaml|must be MAJOR.MINOR.PATCH"; do
   f="${entry%%|*}"; phrase="${entry#*|}"
   if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" > "$WORK/refusal.yaml" 2> "$WORK/refusal.err"; then
     report "refusal $f RENDERED — the chart must refuse it"

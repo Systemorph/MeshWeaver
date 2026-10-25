@@ -1,0 +1,16 @@
+# One versioned build server, named by latest.
+buildHosts:
+  enabled: true
+  apiUrl: "http://memex-portal-service:8080/api/builds"
+  runnerRepository: "cr.example.com/mw-build-host"
+  testerRepository: "cr.example.com/mw-plugin-test"
+  portalRepository: "cr.example.com/memex-portal-ai"
+  latest:
+    enabled: false
+  versions:
+    - version: "3.1.10500"
+      testerDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      portalDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      runnerDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      maxReplicas: 2
+      aliases: ["latest"]

@@ -2,7 +2,9 @@
 // MeshWeaver.Plugins Hosting/StandingBuildHosts, gap G7). Init-only properties only: a new positional
 // constructor parameter would replace the record's signature and break every module compiled
 // against the old one (the binary-break rule).
+using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.ComponentModel;
 
 namespace MeshWeaver.Deployment;
@@ -44,6 +46,124 @@ public sealed record BuildHostsBlock
     /// <summary>The channel named <paramref name="channel"/>, or null.</summary>
     public BuildHostChannel? Channel(string channel) =>
         Channels.TryGetValue(channel, out var c) ? c : null;
+
+    /// <summary>The replica ceiling of every VERSIONED deployment (<see cref="BuildHostSetKeys.Version"/>);
+    /// it must cover the core shards plus the dependents' gates a candidate runs (Doc/Architecture/DeployTestSwitchLatest §9).</summary>
+    [Description("The most replicas each versioned build server scales to")]
+    public int MaxReplicasPerVersion { get; init; } = BuildHostChannel.DefaultMaxReplicas;
+
+    /// <summary>Which versioned deployments are kept (Doc/Architecture/DeployTestSwitchLatest §6).</summary>
+    [Description("Which versioned build servers are kept")]
+    public BuildHostRetention Retention { get; init; } = new();
+}
+
+/// <summary>
+/// The retention rule for versioned build servers (Doc/Architecture/DeployTestSwitchLatest §6): keep what
+/// the aliases name (<c>latest</c>, the candidate under test, the PREVIOUS <c>latest</c> for an instant
+/// rollback), every version a queued or running attempt recorded, and every version a package cap needs;
+/// tear down the rest. Pure.
+/// </summary>
+public sealed record BuildHostRetention
+{
+    /// <summary>The most versioned deployments the record may hold at once; a deploy beyond it is refused, never a silent eviction.</summary>
+    public const int DefaultMaxVersions = 6;
+
+    /// <summary>Keep the deployment <c>latest</c> named before its last switch, so a rollback is an alias move, not a redeploy.</summary>
+    [Description("Keep the previous latest for an instant rollback")]
+    public bool KeepPreviousLatest { get; init; } = true;
+
+    /// <summary>The ceiling on versioned deployments held at once.</summary>
+    [Description("The most versioned build servers held at once")]
+    public int MaxVersions { get; init; } = DefaultMaxVersions;
+
+    /// <summary>
+    /// The versions to KEEP: every alias target (<see cref="BuildHostSetKeys.PreviousAlias"/> only while
+    /// <see cref="KeepPreviousLatest"/>), plus <paramref name="attemptVersions"/> (queued or running) and
+    /// <paramref name="capVersions"/> (each capped package's highest admissible deployment). Pure.
+    /// </summary>
+    public ImmutableSortedSet<string> Keep(ImmutableSortedDictionary<string, string>? sets,
+        IEnumerable<string> attemptVersions, IEnumerable<string> capVersions) =>
+        (sets ?? ImmutableSortedDictionary<string, string>.Empty)
+            .Where(e => BuildHostSetKeys.AliasName(e.Key) is { } alias && (KeepPreviousLatest || alias != BuildHostSetKeys.PreviousAlias))
+            .Select(e => e.Value.Trim())
+            .Concat(attemptVersions).Concat(capVersions)
+            .Where(BuildHostSetKeys.IsVersion)
+            .ToImmutableSortedSet(StringComparer.Ordinal);
+
+    /// <summary>The deployed versions <see cref="Keep"/> does not hold — what a teardown may remove. Pure.</summary>
+    public ImmutableSortedSet<string> Teardown(ImmutableSortedDictionary<string, string>? sets,
+        IEnumerable<string> attemptVersions, IEnumerable<string> capVersions)
+    {
+        var keep = Keep(sets, attemptVersions, capVersions);
+        return BuildHostSetKeys.Versions(sets).Keys.Where(v => !keep.Contains(v)).ToImmutableSortedSet(StringComparer.Ordinal);
+    }
+}
+
+/// <summary>
+/// The key forms of <see cref="DeploymentContent.BuildHostSets"/> (Doc/Architecture/DeployTestSwitchLatest §3):
+/// <c>v/&lt;version&gt;</c> → one versioned build server's set token, and <c>alias/&lt;name&gt;</c> → the
+/// VERSION an alias names (one scalar leaf, so a stale switch conflicts as a whole). A bare key is the
+/// channel form the hosts used before versioned deployments, still read. Pure.
+/// </summary>
+public static class BuildHostSetKeys
+{
+    /// <summary>The prefix of a versioned entry.</summary>
+    public const string VersionPrefix = "v/";
+
+    /// <summary>The prefix of an alias entry.</summary>
+    public const string AliasPrefix = "alias/";
+
+    /// <summary>The alias every module build resolves.</summary>
+    public const string LatestAlias = "latest";
+
+    /// <summary>The alias of the candidate under test (at most one).</summary>
+    public const string CandidateAlias = "candidate";
+
+    /// <summary>The alias of the deployment <c>latest</c> named before its last switch — the rollback target.</summary>
+    public const string PreviousAlias = "previous";
+
+    /// <summary>The key of version <paramref name="version"/>'s entry.</summary>
+    public static string Version(string version) => VersionPrefix + version.Trim();
+
+    /// <summary>The key of alias <paramref name="name"/>.</summary>
+    public static string Alias(string name) => AliasPrefix + name.Trim();
+
+    /// <summary>The version a <c>v/</c> key names, or null for any other key.</summary>
+    public static string? VersionOf(string key) =>
+        key.StartsWith(VersionPrefix, StringComparison.Ordinal) && IsVersion(key[VersionPrefix.Length..]) ? key[VersionPrefix.Length..] : null;
+
+    /// <summary>The alias an <c>alias/</c> key names, or null for any other key.</summary>
+    public static string? AliasName(string key) =>
+        key.StartsWith(AliasPrefix, StringComparison.Ordinal) && key.Length > AliasPrefix.Length ? key[AliasPrefix.Length..] : null;
+
+    /// <summary>A platform version: <c>MAJOR.MINOR.PATCH</c> with an optional <c>-pre.release</c> of [0-9A-Za-z.-], at most 48 characters.</summary>
+    public static bool IsVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version) || version.Length > 48 || version != version.Trim())
+            return false;
+        var dash = version.IndexOf('-');
+        var core = dash < 0 ? version : version[..dash];
+        var pre = dash < 0 ? null : version[(dash + 1)..];
+        var parts = core.Split('.');
+        if (parts.Length != 3 || parts.Any(p => p.Length == 0 || p.AsSpan().IndexOfAnyExcept("0123456789") >= 0))
+            return false;
+        return pre is null || (pre.Length > 0 && pre.AsSpan().IndexOfAnyExcept("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-") < 0);
+    }
+
+    /// <summary>The Kubernetes name of version <paramref name="version"/>'s deployment: <c>build-</c> + the version
+    /// lower-cased with dots as dashes (<c>3.1.10412</c> → <c>build-3-1-10412</c>), a valid DNS label.</summary>
+    public static string DeploymentName(string version) => "build-" + version.Trim().ToLowerInvariant().Replace('.', '-');
+
+    /// <summary>Every versioned entry, by version, whose token parses. Pure.</summary>
+    public static ImmutableSortedDictionary<string, BuildHostChannel> Versions(ImmutableSortedDictionary<string, string>? sets) =>
+        (sets ?? ImmutableSortedDictionary<string, string>.Empty)
+            .Select(e => (Version: VersionOf(e.Key), Set: BuildHostChannel.FromSetToken(e.Value)))
+            .Where(x => x.Version is not null && x.Set is not null)
+            .ToImmutableSortedDictionary(x => x.Version!, x => x.Set!, StringComparer.Ordinal);
+
+    /// <summary>The version alias <paramref name="name"/> names, or null. Pure.</summary>
+    public static string? AliasTarget(ImmutableSortedDictionary<string, string>? sets, string name) =>
+        sets is not null && sets.TryGetValue(Alias(name), out var v) && IsVersion(v.Trim()) ? v.Trim() : null;
 }
 
 /// <summary>
@@ -67,6 +187,12 @@ public sealed record BuildHostChannel
     [Description("The set's portal image digest (sha256:…)")]
     public string? PortalDigest { get; init; }
 
+    /// <summary>The set's core TEST image digest (<c>mw-core-tests</c>, <c>sha256:…</c>) — core's test projects built
+    /// from the set's commit in the same CD run; a candidate's core suites run from it (Doc/Architecture/DeployTestSwitchLatest §2).
+    /// Optional: a set without it serves module builds, and only a candidate test needs it.</summary>
+    [Description("The set's core test image digest (sha256:…)")]
+    public string? CoreTestsDigest { get; init; }
+
     /// <summary>The set's build-host RUNNER image digest (<c>mw-build-host</c>, <c>sha256:…</c>) — bash,
     /// python3, git, bubblewrap, the .NET SDK and <c>build-run.py</c>, built by core's CD in the same run
     /// as the set, so the runner that drives a stage is the one that ships with its platform.</summary>
@@ -83,21 +209,29 @@ public sealed record BuildHostChannel
         !string.IsNullOrWhiteSpace(PlatformVersion) && IsDigest(TesterDigest) && IsDigest(PortalDigest) && IsDigest(RunnerDigest);
 
     /// <summary>
-    /// The set as ONE token — <c>&lt;platformVersion&gt;;&lt;testerDigest&gt;;&lt;portalDigest&gt;;&lt;runnerDigest&gt;</c>, a
-    /// missing part empty — the form <see cref="DeploymentContent.BuildHostSets"/> stores, so a write
-    /// replaces a set whole or not at all. Pure.
+    /// The set as ONE token — <c>&lt;platformVersion&gt;;&lt;testerDigest&gt;;&lt;portalDigest&gt;;&lt;runnerDigest&gt;</c>, plus
+    /// <c>;&lt;coreTestsDigest&gt;</c> only when the set names one (so a four-part token written before it still reads
+    /// back identically), a missing part empty — the form <see cref="DeploymentContent.BuildHostSets"/> stores, so a
+    /// write replaces a set whole or not at all. Pure.
     /// </summary>
-    public string ToSetToken() =>
-        string.Join(';', PlatformVersion?.Trim() ?? "", TesterDigest?.Trim() ?? "", PortalDigest?.Trim() ?? "", RunnerDigest?.Trim() ?? "");
+    public string ToSetToken()
+    {
+        var four = string.Join(';', PlatformVersion?.Trim() ?? "", TesterDigest?.Trim() ?? "", PortalDigest?.Trim() ?? "", RunnerDigest?.Trim() ?? "");
+        return string.IsNullOrWhiteSpace(CoreTestsDigest) ? four : four + ";" + CoreTestsDigest.Trim();
+    }
 
-    /// <summary>The set a <see cref="ToSetToken"/> token names, or null when it is not exactly four parts. Pure.</summary>
+    /// <summary>The set a <see cref="ToSetToken"/> token names, or null when it is not four or five parts. Pure.</summary>
     public static BuildHostChannel? FromSetToken(string? token)
     {
         var parts = (token ?? "").Split(';');
-        if (parts.Length != 4)
+        if (parts.Length is not (4 or 5))
             return null;
         static string? Part(string p) => string.IsNullOrWhiteSpace(p) ? null : p.Trim();
-        return new BuildHostChannel { PlatformVersion = Part(parts[0]), TesterDigest = Part(parts[1]), PortalDigest = Part(parts[2]), RunnerDigest = Part(parts[3]) };
+        return new BuildHostChannel
+        {
+            PlatformVersion = Part(parts[0]), TesterDigest = Part(parts[1]), PortalDigest = Part(parts[2]), RunnerDigest = Part(parts[3]),
+            CoreTestsDigest = parts.Length == 5 ? Part(parts[4]) : null,
+        };
     }
 
     /// <summary><c>sha256:</c> followed by 64 lower-case hex characters.</summary>

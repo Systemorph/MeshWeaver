@@ -1,0 +1,28 @@
+# Three versioned build servers: latest, the previous latest, and a candidate under test.
+buildHosts:
+  enabled: true
+  apiUrl: "http://memex-portal-service:8080/api/builds"
+  runnerRepository: "cr.example.com/mw-build-host"
+  testerRepository: "cr.example.com/mw-plugin-test"
+  portalRepository: "cr.example.com/memex-portal-ai"
+  latest:
+    enabled: false
+  versions:
+    - version: "3.1.10400"
+      testerDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      portalDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      runnerDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      maxReplicas: 2
+      aliases: ["previous"]
+    - version: "3.1.10500"
+      testerDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      portalDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      runnerDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      maxReplicas: 3
+      aliases: ["latest"]
+    - version: "3.1.10600"
+      testerDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      portalDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      runnerDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      maxReplicas: 4
+      aliases: ["candidate"]

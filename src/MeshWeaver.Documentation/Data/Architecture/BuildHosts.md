@@ -344,6 +344,26 @@ Dockerfile copies `.github/scripts`' scripts, installs bubblewrap, runs the self
 shape above for both channels, and the refusals hold; the fixture also runs through every portal
 invariant in `check-chart-invariants.sh`.
 
+### Versioned build servers (contract and chart)
+
+Besides the channel hosts, the chart renders one **versioned build server** per entry in
+`buildHosts.versions`. The entries come from the record's mesh-owned `buildHostSets`, never typed by
+hand. The design is [Deploy, Test the Deploy, Switch Latest](../DeployTestSwitchLatest) §3.
+
+- **Keys.** `v/<version>` holds that version's set token. `alias/<name>` holds the VERSION an alias
+  names (`latest`, `candidate`, `previous`; one scalar leaf). `BuildHostSetKeys` parses both;
+  `DeploymentContent.BuildHostAliasSet` / `BuildHostVersionSet` resolve them.
+- **Token.** The token gains an optional fifth part, the `mw-core-tests` digest. A four-part token
+  reads back byte-identically.
+- **Chart.** Each entry renders Deployment `build-<v>` (dots as dashes, a DNS label) and ScaledObject
+  `build-<v>-scaler`, with demand from `/queue?version=<v>`. Its runner claims, reports and requests
+  its token by `MW_BUILD_VERSION`, never by channel. The selector and pod labels carry the version
+  ONLY; the aliases label the Deployment, so a switch moves a label and restarts nothing. An alias
+  that names two versions, a repeated version, or a malformed version is refused.
+- **Retention.** `BuildHostRetention.Keep` holds every alias target (`previous` while
+  `KeepPreviousLatest`), every attempt's recorded version, and every capped package's version;
+  `Teardown` is the rest.
+
 ## 4. Core's CD deploys the host
 
 **The runner image.** `main-cd.yml` job `build-host-image` builds `deploy/build-host/Dockerfile`
