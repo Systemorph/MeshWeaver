@@ -74,7 +74,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 >   `tags/list` query string and the `Link` header for this: ACR pages at 100 tags in lexical
 >   order, so a mirror that dropped `?last=` served the OLDEST hundred to every caller and a lister
 >   through it would have printed "nothing newer" forever.
-> * **Operator** (`deploy/aks/operator`, this repo): `hosting-pull-secret` turns the instance key
+> * **Operator** (`deploy/hosting-operator` in MeshWeaver.Plugins): `hosting-pull-secret` turns the instance key
 >   in Key Vault into the namespace's `kubernetes.io/dockerconfigjson` Secret — ensuring the
 >   namespace first (it runs before `hosting-deploy` on Provision, first on Roll/Reconcile), reading
 >   the Secret back before reporting, never printing the key. The image is now PUBLISHED on every

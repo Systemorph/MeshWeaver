@@ -4,7 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Xunit;
-using YamlDotNet.RepresentationModel;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
 using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
@@ -129,14 +130,14 @@ public class PluginPublicationProvenanceTest
     public void ProducerOutputsReachTheFinalJobWithoutEventMetadataFallback()
     {
         var jobs = Jobs();
-        var bake = (YamlMappingNode)jobs.Children[new YamlScalarNode("publish-bake")];
-        var outputs = (YamlMappingNode)bake.Children[new YamlScalarNode("outputs")];
-        Assert.Equal("${{ steps.content.outputs.sha }}", outputs.Children[new YamlScalarNode("content-sha")].ToString());
-        Assert.Equal("${{ steps.platform-version.outputs.version }}", outputs.Children[new YamlScalarNode("version")].ToString());
+        var bake = (JsonObject)jobs["publish-bake"]!;
+        var outputs = (JsonObject)bake["outputs"]!;
+        Assert.Equal("${{ steps.content.outputs.sha }}", TolerantYaml.ScalarText(outputs["content-sha"]));
+        Assert.Equal("${{ steps.platform-version.outputs.version }}", TolerantYaml.ScalarText(outputs["version"]));
         var post = FindStep("register-publication", "name", "Sign and POST the publication record");
-        var env = (YamlMappingNode)post.Children[new YamlScalarNode("env")];
-        Assert.Equal("${{ needs.publish-bake.outputs.content-sha }}", env.Children[new YamlScalarNode("CONTENT_SHA")].ToString());
-        Assert.Equal("${{ needs.publish-bake.outputs.version }}", env.Children[new YamlScalarNode("RELEASED_VERSION")].ToString());
+        var env = (JsonObject)post["env"]!;
+        Assert.Equal("${{ needs.publish-bake.outputs.content-sha }}", TolerantYaml.ScalarText(env["CONTENT_SHA"]));
+        Assert.Equal("${{ needs.publish-bake.outputs.version }}", TolerantYaml.ScalarText(env["RELEASED_VERSION"]));
     }
 
     [Fact]
@@ -201,21 +202,15 @@ public class PluginPublicationProvenanceTest
         return run;
     }
 
-    private static YamlMappingNode Jobs()
-    {
-        var yaml = new YamlStream();
-        using var reader = File.OpenText(Path.Combine(RepoPaths.Root, Workflow));
-        yaml.Load(reader);
-        return (YamlMappingNode)((YamlMappingNode)yaml.Documents[0].RootNode).Children[new YamlScalarNode("jobs")];
-    }
+    private static JsonObject Jobs() =>
+        (JsonObject)TolerantYaml.Parse(File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow)))!["jobs"]!;
 
-    private static YamlMappingNode FindStep(string job, string key, string value) =>
-        ((YamlSequenceNode)((YamlMappingNode)Jobs().Children[new YamlScalarNode(job)])
-            .Children[new YamlScalarNode("steps")]).Children.Cast<YamlMappingNode>()
-        .Single(step => step.Children.TryGetValue(new YamlScalarNode(key), out var found) && found.ToString() == value);
+    private static JsonObject FindStep(string job, string key, string value) =>
+        ((JsonArray)Jobs()[job]!["steps"]!).Cast<JsonObject>()
+        .Single(step => step.TryGetPropertyValue(key, out var found) && TolerantYaml.ScalarText(found) == value);
 
     private static string Step(string job, string key, string value) =>
-        FindStep(job, key, value).Children[new YamlScalarNode("run")].ToString();
+        TolerantYaml.ScalarText(FindStep(job, key, value)["run"])!;
 
     private sealed class ShellRun : IDisposable
     {

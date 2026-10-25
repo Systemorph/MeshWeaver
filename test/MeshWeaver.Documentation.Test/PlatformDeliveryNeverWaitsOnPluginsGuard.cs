@@ -4,7 +4,8 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-using YamlDotNet.RepresentationModel;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
 using Xunit;
 using MeshWeaver.Fixture;
 
@@ -294,35 +295,23 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
 
     // ─────────────────────────────── YAML plumbing ───────────────────────────────
 
-    private static Dictionary<string, YamlMappingNode> Jobs(string text)
+    private static Dictionary<string, JsonObject> Jobs(string text)
     {
-        var yaml = new YamlStream();
-        yaml.Load(new StringReader(text));
-        var jobs = (YamlMappingNode)((YamlMappingNode)yaml.Documents[0].RootNode).Children[new YamlScalarNode("jobs")];
-        return jobs.Children.ToDictionary(kv => ((YamlScalarNode)kv.Key).Value!, kv => (YamlMappingNode)kv.Value, StringComparer.Ordinal);
+        var jobs = (JsonObject)TolerantYaml.Parse(text)!["jobs"]!;
+        return jobs.ToDictionary(kv => kv.Key, kv => (JsonObject)kv.Value!, StringComparer.Ordinal);
     }
 
-    private static List<string> NeedsOf(YamlMappingNode job)
+    private static List<string> NeedsOf(JsonObject job) => job["needs"] switch
     {
-        if (!job.Children.TryGetValue(new YamlScalarNode("needs"), out var n)) return [];
-        return n switch
-        {
-            YamlScalarNode s => [s.Value!],
-            YamlSequenceNode seq => seq.Children.OfType<YamlScalarNode>().Select(s => s.Value!).ToList(),
-            _ => [],
-        };
-    }
+        JsonValue s => [TolerantYaml.ScalarText(s)!],
+        JsonArray seq => seq.OfType<JsonValue>().Select(s => TolerantYaml.ScalarText(s)!).ToList(),
+        _ => [],
+    };
 
-    private static string? ScalarOf(YamlMappingNode job, string key) =>
-        job.Children.TryGetValue(new YamlScalarNode(key), out var v) ? (v as YamlScalarNode)?.Value : null;
+    private static string? ScalarOf(JsonObject job, string key) =>
+        job[key] is JsonValue v ? TolerantYaml.ScalarText(v) : null;
 
-    private static string Serialize(YamlNode node)
-    {
-        var doc = new YamlStream(new YamlDocument(node));
-        using var w = new StringWriter();
-        doc.Save(w, assignAnchors: false);
-        return w.ToString();
-    }
+    private static string Serialize(JsonNode node) => TolerantYaml.Serialize(node);
 
     private static string Mutate(string text, string from, string to)
     {

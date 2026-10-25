@@ -1,1 +1,0 @@
-{"metadata":{"name":"artifact-store","namespace":"acme"},"spec":{"volumeName":"pvc-someone-else"},"status":{"phase":"Bound"}}
