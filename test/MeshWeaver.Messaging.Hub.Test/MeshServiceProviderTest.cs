@@ -40,6 +40,10 @@ public class MeshServiceProviderTest
         }
     }
 
+    public interface IGeneric<T> { }
+    public sealed class Generic<T> : IGeneric<T> { }
+    public sealed class ClassOnly<T> : IGeneric<T> where T : class { }
+
     private static IServiceProvider Root(Action<IServiceCollection> configure)
     {
         var services = new ServiceCollection();
@@ -164,5 +168,57 @@ public class MeshServiceProviderTest
         scope.ServiceProvider.GetRequiredService<TakesList>().Count.Should().Be(1);
         root.CreateScope().ServiceProvider.GetRequiredService<TakesList>().Count.Should().Be(0,
             "the root's own scopes do not see a level's registrations");
+    }
+
+    /// <summary>
+    /// An open generic is closed ONCE per closed type and the closure reused: every later lookup of
+    /// <c>IGeneric&lt;int&gt;</c> answers the same registration instead of re-running
+    /// <c>MakeGenericType</c> and allocating a new one — the cost every <c>ILogger&lt;T&gt;</c> /
+    /// <c>IOptions&lt;T&gt;</c> resolve paid. A type argument that breaks the implementation's constraints
+    /// is answered as no match, every time.
+    /// </summary>
+    [Fact]
+    public void AnOpenGeneric_IsClosedOncePerClosedType_AndTheClosureIsReused()
+    {
+        var registry = new ServiceRegistry(
+            new ServiceCollection().AddTransient(typeof(IGeneric<>), typeof(Generic<>)).AddTransient(typeof(IGeneric<>), typeof(ClassOnly<>)),
+            [], []);
+        var ofInt = new ServiceIdentifier(typeof(IGeneric<int>), null);
+        var ofString = new ServiceIdentifier(typeof(IGeneric<string>), null);
+
+        var first = registry.Default(ofInt);
+        first.Should().NotBeNull();
+        first!.ImplementationType.Should().Be(typeof(Generic<int>), "ClassOnly<int> breaks its constraint, so the earlier registration answers");
+        registry.Default(ofInt).Should().BeSameAs(first, "the closure over int is built once and reused");
+        registry.AllOf(ofInt).Should().ContainSingle().Which.Should().BeSameAs(first, "an enumeration reuses the same closure");
+
+        var ofStringFirst = registry.Default(ofString);
+        ofStringFirst!.ImplementationType.Should().Be(typeof(ClassOnly<string>), "the last registration answers when its constraint holds");
+        registry.Default(ofString).Should().BeSameAs(ofStringFirst);
+        ofStringFirst.Should().NotBeSameAs(first, "each closed type has its own closure");
+    }
+
+    /// <summary>
+    /// A root singleton closed over a type argument, resolved from a hub level once it exists, allocates
+    /// nothing per resolve — no closure re-built, no collectible check re-walking the generic arguments.
+    /// Before the closure was cached this cost 256 bytes on every <c>ILogger&lt;T&gt;</c> resolve.
+    /// </summary>
+    [Fact]
+    public void ACachedClosedGenericSingleton_ResolvesWithoutAllocating()
+    {
+        var root = Root(s => s.AddSingleton(typeof(IGeneric<>), typeof(Generic<>)));
+        var level = new ServiceCollection().AddSingleton<IValidator>(new NamedValidator("hub")).SetupModules(root);
+        var instance = level.GetRequiredService<IGeneric<MeshServiceProviderTest>>();
+        for (var i = 0; i < 1_000; i++)
+            level.GetRequiredService<IGeneric<MeshServiceProviderTest>>();
+
+        const int resolves = 10_000;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < resolves; i++)
+            level.GetRequiredService<IGeneric<MeshServiceProviderTest>>();
+        var perResolve = (double)(GC.GetAllocatedBytesForCurrentThread() - before) / resolves;
+
+        perResolve.Should().BeLessThan(1, "a cached closed-generic singleton is answered from its closure and slot, allocating nothing");
+        level.GetRequiredService<IGeneric<MeshServiceProviderTest>>().Should().BeSameAs(instance);
     }
 }

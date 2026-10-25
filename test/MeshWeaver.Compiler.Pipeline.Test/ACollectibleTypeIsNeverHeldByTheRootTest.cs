@@ -58,6 +58,45 @@ public class ACollectibleTypeIsNeverHeldByTheRootTest
         GC.KeepAlive(root);
     }
 
+    /// <summary>A root open generic whose closures the root itself caches — a transient asked for AT the root.</summary>
+    public sealed class Transient<T> { }
+
+    /// <summary>
+    /// The root caches each closure of an open generic for reuse, and that cache must never pin what it
+    /// closed over: a transient closed over the collectible type and resolved AT the root leaves its closure
+    /// (closed type, implementation type, constructor plan) on the root's registration for the root's whole
+    /// life — keyed weakly, so the context still unloads.
+    /// </summary>
+    [Fact]
+    public void UnloadedNodeContext_IsCollectible_AfterTheRootClosedAnOpenGenericOverIt()
+    {
+        var root = new ServiceCollection().AddTransient(typeof(Transient<>), typeof(Transient<>)).CreateMeshWeaverServiceProvider();
+
+        var weak = CloseAtTheRootThenUnload(root);
+        Collect(weak);
+
+        weak.IsAlive.Should().BeFalse(
+            "the root's cache of closed registrations is keyed weakly by the closed type: it must not keep the "
+            + "collectible context alive once nothing else names its types");
+        GC.KeepAlive(root);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference CloseAtTheRootThenUnload(IServiceProvider root)
+    {
+        var bytes = CompileWidget();
+        var ctx = new NodeAssemblyLoadContext("CollectibleWidgetClosure", dllPath: null, logger: null);
+        var widgetType = ctx.LoadFromBytes(bytes, null).GetType("Dyn.Widget")!;
+        var closedType = typeof(Transient<>).MakeGenericType(widgetType);
+
+        root.GetRequiredService(closedType).Should().NotBeSameAs(root.GetRequiredService(closedType),
+            "a transient: the root caches the closure, never the instance");
+
+        var weak = new WeakReference(ctx);
+        ctx.Dispose(); // → Unload
+        return weak;
+    }
+
     private static IServiceProvider RootWithOpenGeneric() =>
         new ServiceCollection().AddSingleton(typeof(Holder<>), typeof(Holder<>)).CreateMeshWeaverServiceProvider();
 
