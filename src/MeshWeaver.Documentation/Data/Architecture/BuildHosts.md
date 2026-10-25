@@ -514,12 +514,17 @@ runs a repository's checks against it — a different workload, not a missing sw
 `.github/build-stages.json` for the deploy-test-switch shape (the design page in core PR #7182, P4):
 `test-shard-0` … `test-shard-<N-1>`, one per shard of `dotnet-test.yml`'s suite (N =
 `CI_SHARD_TOTAL`), and `doc-gate`. Each runs from the set's **`mw-core-tests`** image, the set's
-fifth digest (`BuildHostChannel.CoreTestsDigest`): main-cd's `core-tests-image` builds core's
-tests once with CI's flags, `deploy/core-tests/core-tests.py pack` stores every shard's bins
-content-addressed with a manifest, and `promote` tags it with the set. A stage runs
+fifth digest (`BuildHostChannel.CoreTestsDigest`): main-cd's `core-tests-image-arch` builds core's
+tests with CI's flags once PER ARCHITECTURE, on a runner of that architecture — a test bin carries
+the build machine's native `mw-plugin-test` apphost and its SDK's ReadyToRun Razor generator, so an
+x64 tree cannot serve the arm64 image — `deploy/core-tests/core-tests.py pack` stores every shard's
+bins content-addressed with a manifest, `core-tests-image` joins the two platform images into the
+set's index, and `promote` tags it with the set. A stage runs
 `python3 /core-tests/core-tests.py run --shard <i> --total <N>`, which copies that shard's bins out
-of the read-only image tree into the run's checkout and runs them as CI's shard loop does; `doc-gate`
-runs the doc and samples gates with the image's plugin tester against the checkout.
+of the read-only image tree into the run's checkout and runs them as CI's shard loop does — each
+unit in its own process group, ended whole at the wall clock, and judged on a trx written by THAT
+invocation; `doc-gate` runs the doc and samples gates with the image's plugin tester against the
+checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI's doc-gate job.
 - **The list is GENERATED**: `.github/scripts/core-build-stages.py --write` derives it from
   `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
   reds any drift. The runner also refuses a `--total` the image was not packed for.

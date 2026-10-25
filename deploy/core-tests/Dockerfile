@@ -11,8 +11,10 @@
 # writable checkout before it runs them. The SDK base makes the image runnable on its own as well:
 #   docker run --rm mw-core-tests:<version> python3 /core-tests/core-tests.py run --shard 0 --total 8
 #
-# Built and pushed by core's CD (`main-cd.yml` job `core-tests-image`). Build from the REPO ROOT
-# after packing:
+# Built and pushed by core's CD (`main-cd.yml`): `core-tests-image-arch` builds, packs and pushes
+# one platform image per architecture ON that architecture (the bins carry a native apphost and a
+# ReadyToRun Razor generator), and `core-tests-image` joins them. Build from the REPO ROOT after
+# packing, on the architecture the image is for:
 #   python3 deploy/core-tests/core-tests.py pack --repo . --out artifacts/core-tests --sha <sha> --version <v>
 #   docker build -f deploy/core-tests/Dockerfile -t mw-core-tests:local .
 FROM mcr.microsoft.com/dotnet/sdk:10.0

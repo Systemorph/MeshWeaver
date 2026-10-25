@@ -2674,17 +2674,31 @@ jobs:
   # are stored once. A build-server deployment runs core's suites FROM it — one stage per shard,
   # `.github/build-stages.json`, generated from CI_SHARD_TOTAL — and never builds them from source.
   # Part of the set like the other legs: staging tag only here, identity tags and `main` in
-  # `promote`, asserted by check-image-set.sh. Linux amd64 + arm64 like every image of the set: the
-  # bins are portable IL, so the two architectures share every layer but the base.
-  core-tests-image:
-    name: "Build + push mw-core-tests (core's suites, the set's fifth digest)"
+  # `promote`, asserted by check-image-set.sh. Linux amd64 + arm64 like every image of the set.
+  # 🚨 ONE BUILD PER ARCHITECTURE, ON A RUNNER OF THAT ARCHITECTURE. The bins are NOT only portable
+  # IL: each carries the native `mw-plugin-test` apphost of the machine that built it
+  # (StartupFailureProcessTest executes it) and the Razor generator ReadyToRun-compiled for the
+  # build SDK's own RID (RazorBuildTest loads it, and the other architecture's copy throws
+  # BadImageFormatException). An x64 tree copied into the arm64 image ships an x64 apphost and no
+  # arm64 generator, so each leg builds natively, packs its own tree and pushes its platform image
+  # BY DIGEST; `core-tests-image` joins the two into the set's index.
+  core-tests-image-arch:
+    name: "Build + push mw-core-tests for linux/${{ matrix.arch }} (by digest)"
     needs: gate
     if: needs.gate.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     outputs:
+      # Identical in both legs by construction (the same computation on the same commit and run).
       version: ${{ steps.vars.outputs.version }}
-      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2735,16 +2749,75 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
         run: bash .github/scripts/acr-login.sh
-      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
-      - name: "Build + push mw-core-tests (staging tag, ACR), and read its digest"
+      # No QEMU: this runner IS the platform, so the image's own RUN steps (the packed runner's
+      # self-test) execute natively, on the architecture the tree was built for.
+      - name: "Build + push mw-core-tests for linux/${{ matrix.arch }} (by digest, ACR)"
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker buildx build --platform "linux/$ARCH" -f deploy/core-tests/Dockerfile \
+            --output "type=image,name=${{ env.ACR }}/mw-core-tests,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file "$RUNNER_TEMP/core-tests-$ARCH.json" .
+          digest=$(jq -r '."containerimage.digest" // empty' "$RUNNER_TEMP/core-tests-$ARCH.json")
+          case "$digest" in sha256:*) ;; *) echo "::error::mw-core-tests linux/$ARCH was pushed but reported no digest ('$digest')"; exit 1 ;; esac
+          mkdir -p "$RUNNER_TEMP/core-tests-digest"
+          echo "$digest" > "$RUNNER_TEMP/core-tests-digest/$ARCH"
+          echo "- mw-core-tests linux/$ARCH = \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: core-tests-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/core-tests-digest/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # The two platform images joined into the set's index under the staging tag — the digest the set
+  # names. Each architecture must be present: an index missing one would be a set its build hosts on
+  # that architecture cannot run.
+  core-tests-image:
+    name: "Build + push mw-core-tests (core's suites, the set's fifth digest)"
+    needs: [gate, core-tests-image-arch]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ needs.core-tests-image-arch.outputs.version }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: core-tests-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/core-tests-digest
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - uses: docker/setup-buildx-action@v4
+      - name: "Join mw-core-tests' platform images (staging tag, ACR), and read its digest"
         id: push
         env:
           TAG: ${{ needs.gate.outputs.staging_tag }}
         run: |
           set -euo pipefail
-          docker buildx build --platform linux/amd64,linux/arm64 -f deploy/core-tests/Dockerfile \
-            --tag "${{ env.ACR }}/mw-core-tests:$TAG" --push .
+          sources=()
+          for arch in amd64 arm64; do
+            f="$RUNNER_TEMP/core-tests-digest/$arch"
+            d=$(cat "$f" 2>/dev/null || true)
+            case "$d" in sha256:*) ;; *) echo "::error::no linux/$arch digest was handed over ('$d') — refusing to publish an index without it"; exit 1 ;; esac
+            sources+=("${{ env.ACR }}/mw-core-tests@$d")
+          done
+          docker buildx imagetools create --tag "${{ env.ACR }}/mw-core-tests:$TAG" "${sources[@]}"
           digest=$(docker buildx imagetools inspect "${{ env.ACR }}/mw-core-tests:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')
           case "$digest" in sha256:*) ;; *) echo "::error::mw-core-tests:$TAG was pushed but resolves to no digest ('$digest')"; exit 1 ;; esac
           echo "digest=$digest" >> "$GITHUB_OUTPUT"

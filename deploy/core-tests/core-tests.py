@@ -30,13 +30,15 @@ the runner that reads a manifest is always the one that wrote it.
         of the SORTED `-list classes` output. RED on: a --total the image was not packed for (the
         stage declaration and the image disagree), a shard index outside it, a shard with nothing
         to run, a tampered blob, a unit with no classes, and any unit whose host exits non-zero
-        or writes no trx.
+        or writes no trx (a trx left by an earlier run is deleted first). Each unit leads its own
+        process group, and whatever remains in it when the host ends is terminated (TERM, then KILL).
 
     core-tests.py doc-gate [--root /core-tests] [--work <dir>] [--repo .]
         The doc and samples gates (dotnet-test.yml's doc-gate job), against the checkout at the
         set's commit, with the plugin tester from this image: stage-doc-gate.sh /
         stage-samples-gate.sh, then bake-then-gate.sh with each tree's allow file and warning
-        baseline. RED when either gate is.
+        baseline, then check-tests-area-verdicts.py over each tree and its gate log (`--require-tests`
+        for Doc), as dotnet-test.yml's doc-gate job does. RED when either gate or verifier is.
 
     core-tests.py --self-test
         Proves each refusal fires and the green path is green, against a fake repository and a fake
@@ -50,10 +52,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Optional
 
 SCHEMA = 1
@@ -63,6 +67,8 @@ TESTER_PROJECT = "tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj"
 TFM_DIR = os.path.join("bin", "Release", "net10.0")
 # dotnet-test.yml's per-unit cap (`timeout … 8m`): a unit past it is a wedge, never a slow pass.
 UNIT_TIMEOUT_SECONDS = 480
+# How long a timed-out unit's process group gets between SIGTERM and SIGKILL.
+KILL_GRACE_SECONDS = 10
 SHARD_TOTAL_RE = re.compile(r"^\s*CI_SHARD_TOTAL:\s*(\d+)\s*(?:#.*)?$", re.M)
 CLASS_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -203,10 +209,49 @@ def materialise(root: str, manifest: dict, csproj: str, work: str) -> str:
     return dest_root
 
 
+def _end_group(pgid: int) -> None:
+    """TERM, then (after a bounded grace) KILL, every process left in the unit's process group."""
+    for sig, grace in ((signal.SIGTERM, KILL_GRACE_SECONDS), (signal.SIGKILL, 0)):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.1)
+
+
+def _run_unit(argv: list[str], cwd: str, timeout: int, env: Optional[dict] = None,
+              capture: bool = False) -> tuple[int, str]:
+    """One test-host invocation in its OWN session, so the wall clock ends the whole tree.
+
+    `subprocess.run(timeout=…)` kills only the immediate child: a host that launched processes of
+    its own (a server under test, a nested `dotnet`) leaves them running into the next unit, holding
+    ports and writing into the work tree. The host leads a new process group here, and whatever is
+    still in that group when the host ends — on its own or at the wall clock — is terminated before
+    the next unit starts. Returns (exit code, stdout when captured); 124 is the wall clock.
+    """
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, start_new_session=True,
+                            stdout=subprocess.PIPE if capture else None, text=True)
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+        rc = proc.returncode
+    except subprocess.TimeoutExpired:
+        out, rc = "", 124
+    finally:
+        _end_group(proc.pid)
+    if rc == 124 and proc.returncode is None:
+        proc.wait()
+    return rc, out or ""
+
+
 def _list_classes(dotnet: str, name: str, cwd: str) -> list[str]:
-    p = subprocess.run([dotnet, f"{name}.dll", "-list", "classes"], cwd=cwd, capture_output=True, text=True,
-                       timeout=UNIT_TIMEOUT_SECONDS)
-    return sorted(line.strip() for line in p.stdout.splitlines() if CLASS_RE.match(line.strip()))
+    _, out = _run_unit([dotnet, f"{name}.dll", "-list", "classes"], cwd, UNIT_TIMEOUT_SECONDS, capture=True)
+    return sorted(line.strip() for line in out.splitlines() if CLASS_RE.match(line.strip()))
 
 
 def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotnet",
@@ -249,12 +294,13 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
             trx = f"{name}.part{part}"
         os.makedirs(os.path.join(d, "TestResults"), exist_ok=True)
         trx_path = os.path.join(d, "TestResults", f"{trx}.trx")
+        # The trx must be THIS invocation's: a reused work directory (or a bin packed with a
+        # TestResults of its own) would otherwise satisfy the no-result check below with an old file.
+        if os.path.lexists(trx_path):
+            os.remove(trx_path)
         print(f"::group::{label}", flush=True)
-        try:
-            rc = subprocess.run([dotnet, f"{name}.dll", "-trx", f"TestResults/{trx}.trx", "-showLiveOutput",
-                                 "-longRunning", "60", *args], cwd=d, env=env, timeout=unit_timeout).returncode
-        except subprocess.TimeoutExpired:
-            rc = 124
+        rc, _ = _run_unit([dotnet, f"{name}.dll", "-trx", f"TestResults/{trx}.trx", "-showLiveOutput",
+                           "-longRunning", "60", *args], d, unit_timeout, env=env)
         print("::endgroup::", flush=True)
         if rc == 124:
             print(f"[CI] {label} exit=124 TIMEOUT ({unit_timeout}s wall-clock cap hit — a wedge, not a slow pass)", flush=True)
@@ -284,12 +330,22 @@ def doc_gate(root: str, repo: str, work: str) -> int:
                               ("samples", "stage-samples-gate.sh", "samples/Graph/Data")):
         stage = os.path.join(work, tree)
         subprocess.run(["bash", f".github/scripts/{stager}", src, stage], cwd=repo, check=True)
+        gate_log = os.path.join(work, f"{tree}-gate")
         rc = subprocess.run(["bash", ".github/scripts/bake-then-gate.sh", tester, stage,
                              os.path.join(work, "bake", tree), f".github/{tree}-gate.allow", sha,
-                             os.path.join(work, f"{tree}-gate"), f".github/{tree}-gate-warnings.allow"],
+                             gate_log, f".github/{tree}-gate-warnings.allow"],
                             cwd=repo).returncode
         print(f"[CI] {tree}-gate exit={rc}", flush=True)
-        status = status or rc
+        # bake-then-gate.sh can be green over a `Test/` suite that reported `tests=skipped` or no
+        # positive count; dotnet-test.yml's doc-gate job closes that with this verifier, and so does
+        # this stage — the Doc tree must carry at least one suite (`--require-tests`), exactly as CI.
+        verify = ["python3", ".github/scripts/check-tests-area-verdicts.py",
+                  "--gate-log", f"{gate_log}.log", "--tree", stage]
+        if tree == "doc":
+            verify.append("--require-tests")
+        vrc = subprocess.run(verify, cwd=repo).returncode
+        print(f"[CI] {tree}-tests-area exit={vrc}", flush=True)
+        status = status or rc or vrc
     return status
 
 
@@ -302,6 +358,11 @@ behaviour = open(dll).read().strip()
 if rest[:2] == ["-list", "classes"]:
     print("xUnit.net v3 header line"); print("Ns.C"); print("Ns.A"); print("Ns.B"); sys.exit(0)
 if behaviour == "hang":
+    time.sleep(30)
+if behaviour == "spawn":
+    import subprocess
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    open(os.path.join(os.getcwd(), "child.pid"), "w").write(str(child.pid))
     time.sleep(30)
 classes = [rest[i + 1] for i, a in enumerate(rest) if a == "-class"]
 with open(os.path.join(os.getcwd(), "classes.log"), "a") as fh:
@@ -389,8 +450,59 @@ def _self_test() -> int:
         pack(repo, img, sha, "3.1.1")
         expect(run_shard(img, 1, 2, os.path.join(t, "wh"), dotnet, unit_timeout=2) == 1,
                "a unit past its wall clock is killed and reds the shard")
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("spawn")
+        pack(repo, img, sha, "3.1.1")
+        expect(run_shard(img, 1, 2, os.path.join(t, "wg"), dotnet, unit_timeout=2) == 1,
+               "a unit that spawned a child and hung reds the shard")
+        pid = int(open(os.path.join(t, "wg", "test", "B", TFM_DIR, "child.pid")).read())
+        alive = True
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.1)
+        if alive:
+            os.kill(pid, signal.SIGKILL)
+        expect(not alive, "the wall clock ends the unit's whole process group, not just the host "
+                          "(its child does not outlive it into the next unit)")
+        # A stale trx from an earlier run of the same work directory must not stand in for this one.
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("pass")
         pack(repo, img, sha, "3.1.1")
+        expect(run_shard(img, 1, 2, os.path.join(t, "ws"), dotnet) == 0, "a reused work directory: first run green")
+        expect(os.path.isfile(os.path.join(t, "ws", "test", "B", TFM_DIR, "TestResults", "B.trx")),
+               "…and it left B.trx behind")
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("notrx")
+        pack(repo, img, sha, "3.1.1")
+        expect(run_shard(img, 1, 2, os.path.join(t, "ws"), dotnet) == 1,
+               "a host that writes NO trx into a reused work directory reds the shard (the old trx is not this run's)")
+
+        print("doc-gate — the Tests-area verifier decides alongside the gate:")
+        scripts = os.path.join(repo, ".github", "scripts")
+        verifier_log = os.path.join(t, "verifier.log")
+        for stager in ("stage-doc-gate.sh", "stage-samples-gate.sh"):
+            with open(os.path.join(scripts, stager), "w") as fh:
+                fh.write('mkdir -p "$2"\n')
+        with open(os.path.join(scripts, "bake-then-gate.sh"), "w") as fh:
+            fh.write('echo "GATE OK" > "$6.log"\nexit 0\n')
+        with open(os.path.join(scripts, "check-tests-area-verdicts.py"), "w") as fh:
+            fh.write("import os, sys\n"
+                     f"open({verifier_log!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+                     "sys.exit(1 if os.environ.get('FAKE_VERIFIER_RED') and '--require-tests' in sys.argv else 0)\n")
+        gw = os.path.join(t, "wd")
+        expect(doc_gate(img, repo, gw) == 0, "both gates green and every Test/ suite counted ⇒ green")
+        calls = open(verifier_log).read().splitlines()
+        expect(calls == [f"--gate-log {gw}/doc-gate.log --tree {gw}/doc --require-tests",
+                         f"--gate-log {gw}/samples-gate.log --tree {gw}/samples"],
+               f"the verifier reads each tree's gate log and staged tree, --require-tests for Doc only ({calls})")
+        os.environ["FAKE_VERIFIER_RED"] = "1"
+        try:
+            expect(doc_gate(img, repo, os.path.join(t, "wd2")) != 0,
+                   "a green bake whose Doc Tests area did not run its cases reds the stage")
+        finally:
+            del os.environ["FAKE_VERIFIER_RED"]
+
         b_sha = hashlib.sha256(b"pass").hexdigest()
         os.chmod(os.path.join(img, "blobs", b_sha), 0o644)
         open(os.path.join(img, "blobs", b_sha), "w").write("tampered")
