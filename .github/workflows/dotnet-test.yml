@@ -994,8 +994,8 @@ jobs:
     # 🚨 This job used to pre-pull `pgvector/pgvector:pg17` from Docker Hub, anonymously, on every
     # shard. Since the Postgres suites left core (the test-move tranches, #2847 and its successors)
     # NO core suite starts a container: nothing references Testcontainers.PostgreSql, and the one
-    # project naming MeshWeaver.Testcontainers (Memex.Portal.Shared.Test) exercises readiness logic
-    # against an in-process host. So the pull fetched an image nothing used — and on 2026-10-09 it
+    # project that named MeshWeaver.Testcontainers (Memex.Portal.Shared.Test, now in
+    # MeshWeaver.Plugins) exercises readiness logic against an in-process host. So the pull fetched an image nothing used — and on 2026-10-09 it
     # was the ONLY red of six shards × several PRs (#6381 among them), Docker Hub answering
     # `toomanyrequests` to the runner pool's shared egress IP. Retrying a per-IP window is not a
     # fix; not asking is.
