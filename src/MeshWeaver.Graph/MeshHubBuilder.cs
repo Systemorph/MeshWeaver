@@ -114,7 +114,9 @@ public class MeshHubBuilder
             else
             {
                 // Register NodeDescription as the default entity type for generic nodes
-                result = result.WithType<NodeDescription>(ts => ts.WithKey(n => n.Id));
+                // Keyed by its [Key] Id through the conventions — no explicit key, which would be an
+                // override of the mesh's definition on every such hub.
+                result = result.WithType<NodeDescription>(ts => ts);
             }
 
             return result;
