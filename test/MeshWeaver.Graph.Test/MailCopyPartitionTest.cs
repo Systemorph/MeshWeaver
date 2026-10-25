@@ -415,6 +415,63 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         (await Listed($"{MailCopyNodeTypes.NamespaceFor(owner)}/_Access/{owner}_Access", ct)).Should().BeNull("and no grant for the owner on it");
     }
 
+    /// <summary>
+    /// The account switch reads either place: a copy not yet moved shows as ON and is switched off through the public
+    /// account API — moved first by the store's Disable, then deleted with its files. (Its preliminary account check
+    /// read only the copy partition, so a legacy-only copy read as off and its Disable deleted nothing.)
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ALegacyOnlyCopy_IsOnInTheAccountSwitch_AndSwitchingItOffDeletesIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var files = new RecordingAttachments();
+        var store = new MeshMailCopyStore(() => Mesh, attachments: files);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var feed = new OneAccountFeed();
+        var account = new MailFeedAccountCopy(new MailCopyEngine(feed, store, access: access, attachments: files), feed);
+        var id = MailCopyNodeTypes.IdFor("outlook", "g1", "m1");
+        using (AsSystem())
+        {
+            var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            await mesh.CreateNode(new MeshNode("outlook", MailCopyNodeTypes.LegacyNamespaceFor(owner))
+            {
+                NodeType = MailCopyNodeTypes.SourceNodeType, State = MeshNodeState.Active,
+                Content = new MailCopySource { Provider = "outlook", Generation = "g1", MailboxId = "acct", Backfilled = true },
+            }).Timeout(Bound).Await(ct);
+            await mesh.CreateNode(new MeshNode(id, MailCopyNodeTypes.LegacySourcePath(owner, "outlook"))
+            {
+                NodeType = MailCopyNodeTypes.MessageNodeType, State = MeshNodeState.Active,
+                Content = new MailMessageCopy { Provider = "outlook", Generation = "g1", MessageId = "m1", HasAttachments = true },
+            }).Timeout(Bound).Await(ct);
+        }
+
+        Task<ImmutableList<MailCopyAccount>> offered;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            offered = account.Accounts(owner).Timeout(Bound).Await(ct);
+        (await offered).Should().ContainSingle().Which.IsOn.Should().BeTrue("the legacy copy is still on");
+
+        Task<bool> off;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            off = account.Disable(owner, "acct").Timeout(Bound).Await(ct);
+        (await off).Should().BeTrue("the copy was there to switch off");
+
+        await Absent(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
+        await Absent($"{MailCopyNodeTypes.LegacySourcePath(owner, "outlook")}/{id}", ct);
+        await Absent(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct);
+        files.Calls.Should().Contain(c => c.StartsWith("delete ")).And.Contain(c => c.StartsWith("copy "),
+            "its files were moved and then went with the switch-off");
+    }
+
+    private sealed class OneAccountFeed : IMailCopyFeed
+    {
+        public string Provider => "outlook";
+        public IObservable<string> AccountId(string owner) => Observable.Return("acct");
+        public IObservable<ImmutableList<(string AccountId, string Label)>> Accounts(string owner) => Observable.Return(ImmutableList.Create(("acct", "Mail")));
+        public IObservable<MailFeedStep> Step(string owner, string? cursor, DateTimeOffset windowStart) => Observable.Empty<MailFeedStep>();
+        public IObservable<IMailAttachmentSource> Attachments(string owner) => Observable.Empty<IMailAttachmentSource>();
+    }
+
     private sealed class RecordingAttachments : IMailAttachmentStore
     {
         public bool FailCopy { get; init; }

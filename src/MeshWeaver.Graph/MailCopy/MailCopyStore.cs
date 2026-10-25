@@ -129,6 +129,14 @@ public interface IMailCopyStore
     IObservable<int> MoveLegacy(string owner, string provider) => Observable.Return(0);
 
     /// <summary>
+    /// The source of a copy still filed at the LEGACY place (<c>{owner}/_MailCopy/{provider}</c>), or null — what the
+    /// account switch reads, beside <see cref="Source"/>, to show a not-yet-moved copy as on and to let it be switched
+    /// off (whose <see cref="Disable"/> moves it first). Never what the inbox serves from. A store without a legacy
+    /// place answers null.
+    /// </summary>
+    IObservable<MailCopySource?> LegacySource(string owner, string provider) => Observable.Return<MailCopySource?>(null);
+
+    /// <summary>
     /// The keys (<c>outlook</c>, <c>outlook.{accountId}</c>, <c>gmail</c>) of the copies <paramref name="owner"/> has
     /// ON, whether or not their account is still connected — so a copy whose account is gone can still be listed
     /// and deleted. A store that cannot list answers none.
@@ -306,7 +314,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     {
         var legacyPath = MailCopyNodeTypes.LegacySourcePath(owner, provider);
         var sourcePath = MailCopyNodeTypes.SourcePath(owner, provider);
-        return LegacySource(owner, provider).SelectMany(legacy => legacy is null
+        return LegacySourceCore(owner, provider).SelectMany(legacy => legacy is null
             ? Observable.Return(0)
             : CommitAt(owner, legacyPath, legacy.Generation, Fenced)
                 .SelectMany(fenced => fenced is null
@@ -367,7 +375,13 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
 
     // The legacy source: FOUND through a complete listing frame (an incomplete one is a fault, never "none"), then
     // READ from its stream, which the index can trail. As System: the move runs in the background with no viewer left.
-    private IObservable<MailCopySource?> LegacySource(string owner, string provider)
+    /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IObservable<MailCopySource?> LegacySource(string owner, string provider)
+        => Gated(Assembly.GetCallingAssembly(), nameof(LegacySource), owner, Permission.Read, () => LegacySourceCore(owner, provider));
+
+    private IObservable<MailCopySource?> LegacySourceCore(string owner, string provider)
     {
         var legacyPath = MailCopyNodeTypes.LegacySourcePath(owner, provider);
         return LegacyExists(owner, legacyPath).SelectMany(exists => exists

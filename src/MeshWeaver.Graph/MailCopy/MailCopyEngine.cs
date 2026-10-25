@@ -123,6 +123,19 @@ public sealed partial class MailCopyEngine(
     public IObservable<MailCopySource?> Source(string owner) => store.Source(owner, Provider).Take(1).DefaultIfEmpty(null);
 
     /// <summary>
+    /// The copy's source in the copy partition, else a copy still at the LEGACY place that its next sync moves — what
+    /// the account switch shows and switches off by. 🚨 Never what the inbox serves from: a legacy source names no
+    /// copies in the copy partition. Both reads are composed HERE, at the call, under the caller's identity. Cold;
+    /// emits once.
+    /// </summary>
+    public IObservable<MailCopySource?> SourceAnywhere(string owner)
+    {
+        var current = store.Source(owner, Provider).Take(1).DefaultIfEmpty(null);
+        var legacy = store.LegacySource(owner, Provider).Take(1).DefaultIfEmpty(null);
+        return current.SelectMany(found => found is not null ? Observable.Return<MailCopySource?>(found) : legacy);
+    }
+
+    /// <summary>
     /// Switches the copy ON (a no-op when it is on) and starts the backfill. Cold. The switch-on is judged as
     /// the identity ambient when this is CALLED — never as whoever later subscribes the result — while every
     /// subscription still mints its own generation. The backfill runs as System on the owner's behalf, so the
@@ -570,7 +583,8 @@ public sealed class MailFeedAccountCopy(MailCopyEngine engine, IMailCopyFeed fee
     /// <inheritdoc />
     public IObservable<ImmutableList<MailCopyAccount>> Accounts(string owner)
     {
-        var isOn = engine.IsOn(owner);
+        // Either place: a copy not yet moved out of the home partition is still on.
+        var isOn = engine.SourceAnywhere(owner).Select(source => source is not null);
         return feed.Accounts(owner).Take(1).SelectMany(accounts => accounts.Count == 0
             ? Observable.Return(ImmutableList<MailCopyAccount>.Empty)
             : isOn.Select(on => accounts.Select(a => new MailCopyAccount(Provider, a.AccountId, a.Label, on)).ToImmutableList()));
@@ -596,7 +610,8 @@ public sealed class MailFeedAccountCopy(MailCopyEngine engine, IMailCopyFeed fee
     /// <inheritdoc />
     public IObservable<bool> Disable(string owner, string accountId)
     {
-        var source = engine.Source(owner);
+        // Either place: a copy not yet moved is switched off too — the store's Disable moves it first, then deletes it.
+        var source = engine.SourceAnywhere(owner);
         var disable = engine.Disable(owner);
         // Only the copy OF THIS ACCOUNT: a different account id deletes nothing.
         return source.SelectMany(found => found is null || (found.MailboxId is { } bound && bound != accountId)

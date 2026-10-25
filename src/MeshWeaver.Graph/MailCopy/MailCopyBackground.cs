@@ -70,6 +70,9 @@ internal sealed class BackgroundMailCopyStore(IMailCopyStore inner, AccessServic
 
     public IObservable<int> MoveLegacy(string owner, string provider)
         => AsSystem(owner, () => inner.MoveLegacy(owner, provider));
+
+    public IObservable<MailCopySource?> LegacySource(string owner, string provider)
+        => AsSystem(owner, () => inner.LegacySource(owner, provider));
 }
 
 /// <inheritdoc cref="BackgroundMailCopyStore"/>
