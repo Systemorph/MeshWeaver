@@ -12,13 +12,15 @@ namespace MeshWeaver.Deployment;
 /// (<see cref="LatestChannel"/>, <see cref="StableChannel"/>) that claims build runs from this
 /// instance's queue and runs every stage in a sandbox. Null on <see cref="DeploymentContent.BuildHosts"/>,
 /// or <see cref="Enabled"/> false, means the record runs none and nothing renders.
-/// <para><b>Who writes what.</b> The record's author states <see cref="Enabled"/> and each channel's
-/// <see cref="BuildHostChannel.MaxReplicas"/>. A channel's SET — <see cref="BuildHostChannel.PlatformVersion"/>,
-/// <see cref="BuildHostChannel.TesterDigest"/>, <see cref="BuildHostChannel.PortalDigest"/>,
-/// <see cref="BuildHostChannel.RunnerDigest"/> — is written by
-/// core's CD (the signed <c>build-host-update-available</c> event, policy
-/// <c>build-hosts-follow-latest</c>) through the operations instance, only while <see cref="Enabled"/> is
-/// already true and never backwards; the record change then applies itself.</para>
+/// <para><b>Who writes what.</b> The record's author states <see cref="Enabled"/> and, per channel here,
+/// <see cref="BuildHostChannel.MaxReplicas"/> — the set fields of an AUTHORED channel are not read. A
+/// channel's SET — <see cref="BuildHostChannel.PlatformVersion"/>, <see cref="BuildHostChannel.TesterDigest"/>,
+/// <see cref="BuildHostChannel.PortalDigest"/>, <see cref="BuildHostChannel.RunnerDigest"/> — lives in the
+/// record's MESH-OWNED <see cref="DeploymentContent.BuildHostSets"/>, written by core's CD (the signed
+/// <c>build-host-update-available</c> event, policy <c>build-hosts-follow-latest</c>) through the
+/// operations instance, only while <see cref="Enabled"/> is already true and never backwards; GitSync
+/// strips it on export and keeps it on import, so git never names a build and the record change applies
+/// itself.</para>
 /// </summary>
 public sealed record BuildHostsBlock
 {
@@ -79,6 +81,24 @@ public sealed record BuildHostChannel
     /// <c>sha256:&lt;64 hex&gt;</c> form the chart requires. A channel that is not complete renders no host.</summary>
     public bool IsComplete =>
         !string.IsNullOrWhiteSpace(PlatformVersion) && IsDigest(TesterDigest) && IsDigest(PortalDigest) && IsDigest(RunnerDigest);
+
+    /// <summary>
+    /// The set as ONE token — <c>&lt;platformVersion&gt;;&lt;testerDigest&gt;;&lt;portalDigest&gt;;&lt;runnerDigest&gt;</c>, a
+    /// missing part empty — the form <see cref="DeploymentContent.BuildHostSets"/> stores, so a write
+    /// replaces a set whole or not at all. Pure.
+    /// </summary>
+    public string ToSetToken() =>
+        string.Join(';', PlatformVersion?.Trim() ?? "", TesterDigest?.Trim() ?? "", PortalDigest?.Trim() ?? "", RunnerDigest?.Trim() ?? "");
+
+    /// <summary>The set a <see cref="ToSetToken"/> token names, or null when it is not exactly four parts. Pure.</summary>
+    public static BuildHostChannel? FromSetToken(string? token)
+    {
+        var parts = (token ?? "").Split(';');
+        if (parts.Length != 4)
+            return null;
+        static string? Part(string p) => string.IsNullOrWhiteSpace(p) ? null : p.Trim();
+        return new BuildHostChannel { PlatformVersion = Part(parts[0]), TesterDigest = Part(parts[1]), PortalDigest = Part(parts[2]), RunnerDigest = Part(parts[3]) };
+    }
 
     /// <summary><c>sha256:</c> followed by 64 lower-case hex characters.</summary>
     public static bool IsDigest(string? digest) =>

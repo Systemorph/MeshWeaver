@@ -609,6 +609,29 @@ public record DeploymentContent
     [Description("Standing build hosts per release channel (the operations record only)")]
     public BuildHostsBlock? BuildHosts { get; init; }
 
+    /// <summary>
+    /// The platform SET each standing build host channel runs, by channel — MESH-OWNED, never authored
+    /// (<see cref="BuildHostsBlock"/>, Doc/Architecture/BuildHosts). Written only by core's CD through the
+    /// operations instance; GitSync strips it on export and keeps the live value on import
+    /// (<c>NodeTypeOperationalContent.DeploymentMemberNames</c>), so the record in git never names a
+    /// build and no authored change can roll a host back.
+    /// <para>🚨 Each channel's set is ONE scalar — a <see cref="BuildHostChannel.ToSetToken"/> token —
+    /// never an object of separate fields: a cross-hub write is a three-way merge that decides every
+    /// LEAF on its own, so a stale hand-over whose version is refused could still land a digest the
+    /// newer one did not change and leave a mixed set. As one leaf, the stale write conflicts as a
+    /// whole and its retry is refused as older (review of #7156 / MeshWeaver.Plugins#4166).</para>
+    /// </summary>
+    // CD-written state, never edited by a person: kept OUT of the generated record editor (the editor
+    // honours [Browsable(false)]), so it shows no untranslated label and cannot be hand-edited — this
+    // assembly carries no MeshWeaver reference for a [Translation] (review of #7156).
+    [Browsable(false)]
+    [Description("The platform set each build host channel runs (written by CD, never authored)")]
+    public ImmutableSortedDictionary<string, string>? BuildHostSets { get; init; }
+
+    /// <summary>The set channel <paramref name="channel"/> runs, or null (absent or not a set token).</summary>
+    public BuildHostChannel? BuildHostSet(string channel) =>
+        BuildHostSets is { } sets && sets.TryGetValue(channel, out var token) ? BuildHostChannel.FromSetToken(token) : null;
+
     /// <summary>OpenTelemetry export.</summary>
     [Description("Telemetry")]
     public TelemetrySpec? Telemetry { get; init; }
