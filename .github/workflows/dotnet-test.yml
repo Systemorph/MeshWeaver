@@ -2399,6 +2399,10 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-follow.py --self-test
 
+    - name: "Who runs the heavy legs: host only when declared, said and queued; actions — said — on every failure (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-executor.py --self-test
+
     - name: "The build host stages the plugins layer before it claims, and runs each stage in a fresh process (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-run.py --self-test
