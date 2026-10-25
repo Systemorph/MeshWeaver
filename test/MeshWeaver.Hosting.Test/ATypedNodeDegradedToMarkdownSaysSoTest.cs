@@ -30,8 +30,10 @@ namespace MeshWeaver.Hosting.Test;
 /// <para>🚨 <b>And it is that file's own YAML that does it</b> — not a missing parser. Its
 /// <c>description:</c> value contains <c>Initech: fund reporting pilot</c>, a <c>": "</c> inside a plain
 /// scalar, which YAML does not permit;
-/// <see cref="TheLiveFilesYamlIsRefused_AndTheRescueDoesNotRecoverDescription"/> reproduces the
-/// refusal locally. Its sibling <c>Crm/Skill/crm</c> — read the same day — is degraded IDENTICALLY
+/// the previous third-party reader refused the whole block on it, and only a partial regex rescue
+/// ran. The platform's own TOLERANT reader (<c>Doc/Architecture/TolerantYaml</c>) now reads that value
+/// as the text it plainly is — <see cref="TheLiveFilesYaml_IsReadInFull_DescriptionIncluded"/>
+/// pins it. Its sibling <c>Crm/Skill/crm</c> — read the same day — is degraded IDENTICALLY
 /// (<c>MarkdownContent</c>, no description, name/category/icon/order intact) and its file carries
 /// the same malformed value, so "the type's parser was absent" is not needed to explain either one
 /// and does not explain both.</para>
@@ -104,40 +106,33 @@ public class ATypedNodeDegradedToMarkdownSaysSoTest
     }
 
     /// <summary>
-    /// 🚨 THE SECOND HALF OF THE LIVE CASE, measured rather than assumed: this file's YAML is
-    /// REFUSED by the deserializer, and the defensive extractor that rescues the parse does not
-    /// rescue <c>description</c>.
+    /// 🚨 THE SECOND HALF OF THE LIVE CASE, and what the tolerant reader changed about it. This
+    /// file's <c>description:</c> value contains <c>Initech: fund reporting pilot</c> — a
+    /// <c>": "</c> inside a plain scalar, which the YAML grammar does not permit. The previous
+    /// third-party reader refused the WHOLE front matter on it, and the regex rescue that then ran
+    /// recovers <c>NodeType</c>, <c>Name</c>, <c>Category</c>, <c>Icon</c>, <c>State</c> and
+    /// <c>Order</c> but never <c>Description</c> — which is exactly the live node's signature:
+    /// right name, icon and category, blank description.
     ///
-    /// <para>The `description:` value contains <c>Initech: fund reporting pilot</c> — a <c>": "</c>
-    /// inside a plain scalar, which YAML does not permit. <c>Parse</c> catches that and falls back
-    /// to its regex recovery, which recovers <c>NodeType</c>, <c>Name</c>/<c>Title</c>,
-    /// <c>Category</c>, <c>Icon</c>/<c>Thumbnail</c>, <c>State</c> and <c>Order</c> — and NOT
-    /// <c>Description</c>/<c>Abstract</c>. That is why the live node shows the right name, icon and
-    /// category with a blank description: not one missing parser, but a REFUSED front matter whose
-    /// rescue is partial.</para>
-    ///
-    /// <para>Measured on the live mesh the same day, BOTH of that space's typed markdown nodes show
-    /// exactly this signature — <c>Crm/Agent/crm-assistant</c> and <c>Crm/Skill/crm</c> are each
-    /// <c>MarkdownContent</c> with no description and with name, category, icon and order intact.
-    /// Only <see cref="MarkdownFileParser"/> has a regex rescue, and it only runs when the
-    /// deserializer failed, so that signature IS the fingerprint of this path.</para>
-    ///
-    /// <para>This test pins what IS, not what should be. If the recovery list is ever extended to
-    /// <c>Description</c>, this test tells the author exactly which behaviour they changed.</para>
+    /// <para>A mapping cannot begin in the middle of a value line, so the only other reading of
+    /// that line is the text itself — and the tolerant reader returns it
+    /// (<c>Doc/Architecture/TolerantYaml</c>). The description now reaches the node. If this test
+    /// goes red with a null description, the reader went strict again and the live signature
+    /// is back.</para>
     /// </summary>
     [Fact]
-    public void TheLiveFilesYamlIsRefused_AndTheRescueDoesNotRecoverDescription()
+    public void TheLiveFilesYaml_IsReadInFull_DescriptionIncluded()
     {
         var node = BuiltIns().TryParse(".md", "Crm/Agent/crm-assistant.md", CrmAgentFile, "Crm/Agent/crm-assistant.md");
 
         Assert.NotNull(node);
-        // Recovered by the defensive extractor — which is why the node looks right in a listing.
         Assert.Equal("Agent", node!.NodeType);
         Assert.Equal("CrmAssistant", node.Name);
         Assert.Equal("Crm", node.Category);
-        // NOT recovered: Description/Abstract is absent from the extractor's field list.
-        Assert.Null(node.Description);
-        Assert.Null(ContentOf(node)!.Abstract);
+        // The value that used to kill the whole block, read as the text it is.
+        Assert.StartsWith("Keeps the client pipeline honest from a conversation", node.Description);
+        Assert.Contains("new deal at Initech: fund reporting pilot, 45k", node.Description);
+        Assert.Equal(node.Description, ContentOf(node)!.Abstract);
     }
 
     /// <summary>
@@ -178,12 +173,12 @@ public class ATypedNodeDegradedToMarkdownSaysSoTest
     /// record that under-reports is worse than one that admits it knows nothing.</para>
     ///
     /// <para>🚨 The non-ASCII key survived the regex only because .NET's <c>\w</c> is
-    /// Unicode-aware — coverage by accident, not by design, which is exactly why the reader may not
-    /// be a hand-written grammar. The set of spellings YamlDotNet accepts is YamlDotNet's to
-    /// define.</para>
+    /// Unicode-aware — coverage by accident, not by design, which is exactly why the key reader must
+    /// be the SAME YAML reader that binds the front matter, never a narrower grammar of its own. The
+    /// set of spellings that reader accepts is that reader's to define.</para>
     ///
     /// <para>This YAML is VALID, which is the point: it takes the dictionary path — the one the
-    /// live case, whose YAML is refused, never exercises.</para>
+    /// live case — whose value the strict grammar refuses — does not need.</para>
     /// </summary>
     [Fact]
     public void KeysTheNarrowGrammarWouldMiss_AreStillNamed()

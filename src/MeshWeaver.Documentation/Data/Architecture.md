@@ -188,6 +188,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Setting Up Data Sync](DataSyncSetup)
 - [DatabaseBackups](DatabaseBackups)
 - [Declarative export and import](DeclarativeImportExport)
+- [Tolerant YAML](TolerantYaml) — the platform reads YAML with its own reader: YAML syntax, JSON semantics — keys case-insensitive, unknown keys ignored, scalars converted between kinds, a `: ` inside a value read as text — and one exception type with a position when the text has no single reading
 - [Syncing a Space with GitHub](GitHubSync)
 - [What a Green Build Costs a Synced Space](GitSyncTriggerCost) — one field decided whether a delivery was free or a full clone, and it is deliberately frozen while an import does not converge; the second, weaker pointer that makes a settled source free again, and why the skip needs the verdict to be FINAL and not merely recorded
 - [When a Publication Seal Stops Advancing](PublicationSealStarvation) — a Space converges on a green build only while the publication sealed for THIS instance's framework identity keeps reaching the built commit; when the instance's identity and the lane that publishes for it drift apart that condition stops being satisfiable, and until the hold was recorded on the node a held source was byte-identical to a settled one
@@ -454,6 +455,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Pod-Hub Delivery — the Transport Swap and its Roll Plan](PodHubDeliveryRollPlan)
 - [Hub Service Layers](HubServiceLayers) — MeshWeaver's own DI container, `MeshServiceProvider`: a hub level holds only its own descriptors and the instances it built; a parent's scoped service resolved in a hub gets the hub's dependencies; module types answered by a registration source; per-instance locks, no process-static cache (replaced Autofac, MeshWeaver#7145)
 - [The Portal Heap Is Hubs](PortalHeapIsHubs)
+- [Type Registry Layers](TypeRegistryLayers) — a hub's `ITypeRegistry` holds only the types it adds or overrides and resolves the rest through its parent, the same shape as the hub's service layer (MeshWeaver#7167)
 - [Per-Process Infrastructure Hubs](PerProcessInfrastructureHubs) — a hub that exists once per process is addressed `portal/{role}-{meshId}`, under a type the router carries to that process; why the activity-tracking hub left `activity/_tracking`
 - [SignalR Mesh Participant — joining the mesh over a WebSocket](SignalRMeshParticipant)
 - [Teardown Layers — work finishes, nothing is forced](TeardownLayers)

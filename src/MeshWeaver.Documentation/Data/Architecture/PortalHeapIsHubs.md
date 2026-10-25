@@ -224,6 +224,13 @@ per-instance key objects (two `Lazy`, two `LazyHelper`, two delegates, a closure
 resolved from the builder on first use, and the two weak-shadow name maps are created on the first
 demotion only.
 
+**Superseded: the registry is now a parent-chained overlay** ([Type Registry Layers](../TypeRegistryLayers)).
+The local binding above still left two map entries per inherited type in every hub, and keyless types
+and closed generics were still copied. A hub's registry now holds ONLY what it adds to the chain or
+overrides in it, and an identical `WithType` stores nothing; parent changes therefore show through.
+Measured on 12 Markdown node hubs and their 69 `sync/` hubs: 5,751 own entries before (344 per node
+hub, 19 per `sync/` hub), 0 after.
+
 **Measured on a realistic population** (before the binding was made local; the hub's two map entries
 per shared type are back, the definition objects stay shared) — 99 activated Markdown node hubs with the standard data-source
 setup plus their hosted hubs, 516 `MessageHub`s, in one test mesh (`dumpheap -stat -live`):

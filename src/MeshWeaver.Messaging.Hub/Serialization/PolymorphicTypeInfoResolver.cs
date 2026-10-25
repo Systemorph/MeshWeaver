@@ -176,9 +176,15 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
                 continue;
 
             // Check if this registered type inherits from or implements the base type
+            // The discriminator is the name THIS registry serialises the type with, never the enumeration
+            // key: the merged view yields a parent's entry before a hub's override, so a hub that renamed
+            // an inherited type would otherwise emit the parent's name through a base or an interface.
             if (IsValidDerivedTypeForBase(baseType, derivedType))
             {
-                derivedTypes.Add(new JsonDerivedType(derivedType, registeredType.Key));
+                var discriminator = typeRegistry.TryGetCollectionName(derivedType, out var canonical) && canonical is not null
+                    ? canonical
+                    : registeredType.Key;
+                derivedTypes.Add(new JsonDerivedType(derivedType, discriminator));
             }
         }
 
