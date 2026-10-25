@@ -138,6 +138,28 @@ fails none). It is worth doing when CI volume makes the per-job seconds dominate
 saying out loud that until then, the caching already in place is most of the benefit for none of the
 standing cost.
 
+## Outcome: the chart moved to a public repository of its own
+
+The chart, the database chart, `deploy/aks/manifests`, `deploy/aks/scripts`, `values.aks.yaml`,
+`scripts/check-config-key-coverage.py`, the bundle-registry harness, `chart-gate.yml` and memex-local
+(`deploy/homebrew`, `homebrew.yml`) moved to the PUBLIC
+[`Systemorph/MeshWeaver.Deploy`](https://github.com/Systemorph/MeshWeaver.Deploy) at the same paths —
+shape 2 above, a separate public repository — so every reader stayed
+credential-free:
+
+- the hosting operator's image (MeshWeaver.Plugins) checks it out at a declared ref and tags the image
+  `<plugins sha7>-<core sha7>-<deploy sha7>`, so the estate's aks-ops lane reads the chart, the
+  manifests and the drift scripts at the commit the image was built from;
+- the estate's `config-key-coverage` and `helm-release` read it as they read this repository before;
+- the chart-reading guard tests (and memex-local's own) moved with it into
+  `test/MeshWeaver.Deploy.ChartGuards`, built against a checkout of this repository;
+- this repository's registry retention gate names the chart's new home (`chartRepository`) and leaves
+  its re-derivation to MeshWeaver.Deploy's `Registry retention` job, which reads this repository's
+  record with no credential.
+
+Nothing estate-specific was in the moved material — this repository is public — so the estate's
+private repository received nothing: its real values were already there.
+
 ## See also
 
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — what a published image set guarantees

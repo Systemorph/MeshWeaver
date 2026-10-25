@@ -3930,7 +3930,7 @@ jobs:
               exit 1
               ;;
             404)
-              echo "::error::the platform-update inbox answered 404. It is FAIL-CLOSED and answers 404 for BOTH an unlisted target and a wrong URL — check vars.PLATFORM_WEBHOOK_URL against the instance's WebhookInbox:Targets (deploy/aks/values.aks.yaml sets WebhookInbox__Targets__0=Hosting/PlatformBuilds). No release event was delivered."
+              echo "::error::the platform-update inbox answered 404. It is FAIL-CLOSED and answers 404 for BOTH an unlisted target and a wrong URL — check vars.PLATFORM_WEBHOOK_URL against the instance's WebhookInbox:Targets (MeshWeaver.Deploy deploy/aks/values.aks.yaml sets WebhookInbox__Targets__0=Hosting/PlatformBuilds). No release event was delivered."
               exit 1
               ;;
             401)
@@ -3938,7 +3938,7 @@ jobs:
               exit 1
               ;;
             500)
-              echo "::error::the platform-update inbox declares a SecretConfigKey that is empty on the instance (HTTP 500), so it can verify nothing and refuses every delivery. Provision the key WebhookInbox__Targets__N__SecretConfigKey names (deploy/aks/values.aks.yaml: Hosting:PlatformWebhookSecret) on the target instance. No release event was delivered."
+              echo "::error::the platform-update inbox declares a SecretConfigKey that is empty on the instance (HTTP 500), so it can verify nothing and refuses every delivery. Provision the key WebhookInbox__Targets__N__SecretConfigKey names (MeshWeaver.Deploy deploy/aks/values.aks.yaml: Hosting:PlatformWebhookSecret) on the target instance. No release event was delivered."
               exit 1
               ;;
             *)

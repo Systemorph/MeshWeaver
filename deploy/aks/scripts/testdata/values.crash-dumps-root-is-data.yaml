@@ -1,3 +1,0 @@
-# Refusal control: a crash-dump root that normalises to /data itself.
-crashDumps:
-  root: "/data/dumps/.."
