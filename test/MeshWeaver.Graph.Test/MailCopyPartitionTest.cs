@@ -345,7 +345,16 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         await Present(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
         var held = (await Present(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!;
         held.Backfilled.Should().BeFalse("a half-moved copy is never served from");
-        held.LeaseHolder.Should().NotBeNull("nor synced by anyone but the mover");
+        held.LeaseHolder.Should().BeNull("the failed attempt released its lease, so the next one need not wait it out");
+        (await Present(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct)).ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!
+            .LeaseHolder.Should().BeNull("and its fence on the legacy copy");
+
+        // The next attempt — files reachable again — finishes the move at once.
+        var retry = new MeshMailCopyStore(() => Mesh, attachments: new RecordingAttachments());
+        using (Mesh.ServiceProvider.GetRequiredService<AccessService>().SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            move = retry.MoveLegacy(owner, "outlook").Timeout(Bound).Await(ct);
+        (await move).Should().Be(1);
+        await Absent(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
     }
 
     [Fact(Timeout = 120_000)]
@@ -461,6 +470,52 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         await Absent(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct);
         files.Calls.Should().Contain(c => c.StartsWith("delete ")).And.Contain(c => c.StartsWith("copy "),
             "its files were moved and then went with the switch-off");
+    }
+
+    /// <summary>
+    /// Overlapping moves on ONE store — a switch-on, a switch-off's move and a background sync at once — never both pass
+    /// the fence: each attempt is its own lease holder. Whatever the interleaving, the copy ends up moved exactly once,
+    /// released with its real state, and the legacy one is gone.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task OverlappingMovesOnOneStore_MoveTheCopyOnce()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh, attachments: new RecordingAttachments());
+        using (AsSystem())
+        {
+            var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            await mesh.CreateNode(new MeshNode("outlook", MailCopyNodeTypes.LegacyNamespaceFor(owner))
+            {
+                NodeType = MailCopyNodeTypes.SourceNodeType, State = MeshNodeState.Active,
+                Content = new MailCopySource { Provider = "outlook", Generation = "g1", Cursor = "https://graph.example/delta?x=3", Backfilled = true },
+            }).Timeout(Bound).Await(ct);
+            foreach (var m in new[] { "m1", "m2", "m3" })
+                await mesh.CreateNode(new MeshNode(MailCopyNodeTypes.IdFor("outlook", "g1", m), MailCopyNodeTypes.LegacySourcePath(owner, "outlook"))
+                {
+                    NodeType = MailCopyNodeTypes.MessageNodeType, State = MeshNodeState.Active,
+                    Content = new MailMessageCopy { Provider = "outlook", Generation = "g1", MessageId = m, Subject = m },
+                }).Timeout(Bound).Await(ct);
+        }
+
+        var attempts = new List<Task<int>>();
+        using (Mesh.ServiceProvider.GetRequiredService<AccessService>().SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            for (var i = 0; i < 3; i++)
+                attempts.Add(store.MoveLegacy(owner, "outlook").Timeout(Bound).Await(ct));
+        var outcomes = new List<int?>();
+        foreach (var attempt in attempts)
+            outcomes.Add(await Record.ExceptionAsync(() => attempt) is null ? await attempt : null);
+
+        outcomes.Should().Contain(n => n != null, "one attempt moves the copy");
+        outcomes.Sum(n => n ?? 0).Should().Be(3, "each copy is moved by exactly one attempt");
+        await Absent(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
+        var source = (await Present(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!;
+        source.Backfilled.Should().BeTrue("released with the legacy copy's real state — never deleted as 'switched off' by a losing attempt");
+        source.LeaseHolder.Should().BeNull();
+        source.Cursor.Should().Be("https://graph.example/delta?x=3");
+        foreach (var m in new[] { "m1", "m2", "m3" })
+            await Present(MailCopyNodeTypes.CopyPath(owner, "outlook", "g1", m), ct);
     }
 
     private sealed class OneAccountFeed : IMailCopyFeed
