@@ -49,19 +49,46 @@ public class TestMeshHttpHandlersDieWithTheMeshTest
             + "outside the disposed container refers to it");
     }
 
+    [Fact]
+    public void WithHandlersScopedToTheMesh_TheContainerDisposesThePipelineAndItsScope()
+    {
+        var log = new DisposalLog();
+        var container = CreateAClientAndDisposeTheContainer(scopeHandlersToTheMesh: true, log);
+
+        log.HandlerDisposed.Should().BeTrue(
+            "an infinite lifetime removes the factory's expiry timer, which was its only route to "
+            + "disposing a handler pipeline, so the mesh must dispose the pipeline itself");
+        log.ScopedServiceDisposed.Should().BeTrue(
+            "the handler scope's services were disposed only by the factory's cleanup after expiry, "
+            + "so the mesh must dispose the handler scope itself");
+
+        FullCollection();
+
+        container.IsAlive.Should().BeFalse(
+            "owning the pipeline and its scope must not root the container from outside it");
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static WeakReference CreateAClientAndDisposeTheContainer(bool scopeHandlersToTheMesh)
+    private static WeakReference CreateAClientAndDisposeTheContainer(bool scopeHandlersToTheMesh, DisposalLog? log = null)
     {
         var services = new ServiceCollection();
-        services.AddHttpClient(ClientName);
+        var client = services.AddHttpClient(ClientName);
+        if (log is not null)
+        {
+            // A handler that resolves a scoped disposable service: the shape whose disposal only
+            // the factory's expiry cleanup ever performed.
+            services.AddSingleton(log);
+            services.AddScoped<ScopedProbe>();
+            client.AddHttpMessageHandler(sp => new ProbeHandler(sp.GetRequiredService<ScopedProbe>(), log));
+        }
         if (scopeHandlersToTheMesh)
             services.WithHandlersScopedToTheMesh();
         var provider = services.BuildServiceProvider();
 
         // The handler, and with it the factory's tracking entry, is created here. That is what
         // DeploymentReportService does in its constructor for every mesh.
-        using (var client = provider.GetRequiredService<IHttpClientFactory>().CreateClient(ClientName))
-            client.Should().NotBeNull();
+        using (var created = provider.GetRequiredService<IHttpClientFactory>().CreateClient(ClientName))
+            created.Should().NotBeNull();
 
         provider.Dispose();
         return new WeakReference(provider);
@@ -72,5 +99,28 @@ public class TestMeshHttpHandlersDieWithTheMeshTest
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+    }
+
+    private sealed class DisposalLog
+    {
+        public bool HandlerDisposed { get; set; }
+        public bool ScopedServiceDisposed { get; set; }
+    }
+
+    private sealed class ScopedProbe(DisposalLog log) : IDisposable
+    {
+        public void Dispose() => log.ScopedServiceDisposed = true;
+    }
+
+    private sealed class ProbeHandler(ScopedProbe probe, DisposalLog log) : DelegatingHandler
+    {
+        public ScopedProbe Probe { get; } = probe;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                log.HandlerDisposed = true;
+            base.Dispose(disposing);
+        }
     }
 }

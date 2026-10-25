@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Immutable;
+using System.Net.Http;
 using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -20,17 +23,74 @@ namespace MeshWeaver.Hosting.Monolith.TestBase;
 ///
 /// <para><b>The shape.</b> With an INFINITE handler lifetime the factory starts no expiry timer, so
 /// nothing outside the mesh refers to it and it is collected with the mesh. No test mesh lives long
-/// enough to need the DNS refresh that handler rotation exists for. Pinned by
-/// <c>TestMeshHttpHandlersDieWithTheMeshTest</c>.</para>
+/// enough to need the DNS refresh that handler rotation exists for.</para>
+///
+/// <para><b>Teardown.</b> The expiry timer was also the factory's ONLY route to disposing a handler
+/// pipeline and the service scope it was built in: the factory is not disposable, and a client it
+/// creates does not own its handler. Without the timer nothing would ever dispose them. So the mesh
+/// owns them instead: a <see cref="MeshHttpHandlerTeardown"/> singleton records the outermost handler
+/// of every pipeline and its handler scope, and disposes both when the mesh's container is disposed.
+/// Pinned, collectability and disposal alike, by <c>TestMeshHttpHandlersDieWithTheMeshTest</c>.</para>
 /// </summary>
 public static class MeshScopedHttpHandlers
 {
     /// <summary>
     /// Sets every HTTP client's handler lifetime in <paramref name="services"/> to infinite, so the
-    /// factory starts no expiry timer that would keep the container reachable.
+    /// factory starts no expiry timer that would keep the container reachable, and makes the
+    /// container dispose every handler pipeline and handler scope the factory built.
     /// </summary>
     /// <param name="services">The mesh's service collection.</param>
     /// <returns>The same collection, for chaining.</returns>
     public static IServiceCollection WithHandlersScopedToTheMesh(this IServiceCollection services)
-        => services.ConfigureHttpClientDefaults(http => http.SetHandlerLifetime(Timeout.InfiniteTimeSpan));
+    {
+        services.AddSingleton<MeshHttpHandlerTeardown>();
+        return services.ConfigureHttpClientDefaults(http => http
+            .SetHandlerLifetime(Timeout.InfiniteTimeSpan)
+            .ConfigureAdditionalHttpMessageHandlers((handlers, handlerServices) =>
+                handlers.Insert(0, handlerServices.GetRequiredService<MeshHttpHandlerTeardown>()
+                    .Own(new PipelineHead(), handlerServices))));
+    }
+
+    /// <summary>
+    /// The outermost handler of a pipeline. Disposing it disposes every inner handler, down to the
+    /// primary one, because a <see cref="DelegatingHandler"/> disposes its inner handler.
+    /// </summary>
+    private sealed class PipelineHead : DelegatingHandler;
+}
+
+/// <summary>
+/// Owns, for one mesh container, the handler pipelines and handler scopes its
+/// <c>IHttpClientFactory</c> built, and disposes them with the container. See
+/// <see cref="MeshScopedHttpHandlers"/>.
+/// </summary>
+/// <param name="root">The container this teardown is registered in.</param>
+public sealed class MeshHttpHandlerTeardown(IServiceProvider root) : IDisposable
+{
+    private ImmutableList<IDisposable> owned = ImmutableList<IDisposable>.Empty;
+
+    /// <summary>
+    /// Records <paramref name="pipelineHead"/> and the handler scope behind
+    /// <paramref name="handlerServices"/> for disposal with the container.
+    /// </summary>
+    /// <param name="pipelineHead">The outermost handler of the pipeline being built.</param>
+    /// <param name="handlerServices">The provider the pipeline is built from: the handler scope's,
+    /// or the root's when the client suppresses its handler scope (then nothing extra is owned).</param>
+    /// <returns><paramref name="pipelineHead"/>, for inserting into the pipeline.</returns>
+    internal DelegatingHandler Own(DelegatingHandler pipelineHead, IServiceProvider handlerServices)
+    {
+        ImmutableInterlocked.Update(ref owned, list => list.Add(pipelineHead));
+        // The factory's handler scope hands its own provider to the pipeline builder, and that
+        // provider IS the scope: disposing it disposes the scoped services the handlers resolved.
+        if (!ReferenceEquals(handlerServices, root) && handlerServices is IDisposable scope)
+            ImmutableInterlocked.Update(ref owned, list => list.Add(scope));
+        return pipelineHead;
+    }
+
+    /// <summary>Disposes every owned pipeline, then every owned handler scope.</summary>
+    public void Dispose()
+    {
+        var toDispose = Interlocked.Exchange(ref owned, ImmutableList<IDisposable>.Empty);
+        foreach (var disposable in toDispose)
+            disposable.Dispose();
+    }
 }
