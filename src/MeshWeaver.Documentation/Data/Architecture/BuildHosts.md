@@ -413,7 +413,10 @@ build-latest a set. `build-host-stable.yml` reports on its own `build-host` issu
 repository with no admission job of its own, from the `node-repo-build-executor.yml` lane. It answers
 `executor=host` only when all three hold:
 
-1. the repository **declares** its stages (`.github/build-stages.json`, at least one);
+1. the repository **declares** its stages (`.github/build-stages.json`, at least one) and **claims them
+   CI-equivalent** (`"ciEquivalent": true` — a reviewed statement that they check everything the Actions
+   legs they replace check; without it the stages can be PROBED on a host, never routed — see *Before a
+   repository claims equivalence* below);
 2. the operations instance **says** host for it: `GET /api/builds/queue?channel=<c>&repo=<name>`
    answers `"executor":"host"` (the instance's `Hosting:Builds:Executor`, narrowed per repository by
    `Hosting:Builds:HostRepos`);
@@ -433,8 +436,11 @@ onto a base, while Actions tests every other event's commit unmerged, so a branc
 run on a branch stays on `actions`.
 
 **The required contexts do not change name.** A heavy leg is not replaced by a differently named
-job; the caller runs a SIBLING follow job (`build-follow.yml`, `if: executor == 'host'`) and passes
-its result into the shared lane as `host-verdict`:
+job; the caller runs a SIBLING follow job (`build-follow.yml` with `executor:`) and passes its result
+into the shared lane as `host-verdict`. 🚨 The follow job **always runs**: with `executor: actions` it
+is a no-op success with output `followed=false`. A SKIPPED follow job would skip every job downstream
+that still reads `success()` — GitHub propagates a skipped ancestor (actions/runner#2205) — so tagging,
+publication and the green ledger would vanish on the very path where nothing runs on a host:
 
 | lane | input | with `executor: host` |
 |---|---|---|
@@ -444,6 +450,22 @@ its result into the shared lane as `host-verdict`:
 A follow job that did not run, was cancelled or failed is RED in the lane — a skipped need is never
 a pass. Any `executor` other than `actions` / `host` is RED. With the defaults (`actions`, no
 verdict) every lane behaves exactly as before, so a caller that passes nothing is unchanged.
+
+**Before a repository claims equivalence** (review of MeshWeaver.Plugins#4180), its stages must cover
+what the Actions legs they replace check — each item is a reason a host green would otherwise mean less:
+
+- **the run's own module bundles as references**, not only `/portal/app` — a NodeType using an API this
+  pull request changes in `MeshWeaver.AI` / `Markdown.Collaboration` / `Maps` must compile against it;
+- **Code nodes** (`check-scripts.py`), not only NodeTypes;
+- **the canonical scripts** through `MW_PLATFORM_SCRIPTS` (read-only, at the host's resolved
+  platform) — the sandbox has no GitHub credential for the launcher's fallback fetch;
+- **the tester through the host's paths** (`MW_BUILD_GATE_HOST`, `MW_BUILD_PORTAL_DOTNET`), never a
+  hard-coded `/host/…`;
+- **the warning ratchets** (`--warning-baseline` over the in-mesh compile);
+- **the affected selection**, including a verified no-op when nothing is owed;
+- **the Tests-area evidence handed back**: the host's gate log as an H9 artifact, so the caller's
+  ratchet RE-RUNS the check on it. Until then every caller's `tests-ratchet` is RED on a host run —
+  command text is not execution evidence.
 
 **The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
 credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`

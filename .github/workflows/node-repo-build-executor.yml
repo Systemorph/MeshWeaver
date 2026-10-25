@@ -11,12 +11,16 @@ name: Build executor — a standing build host, or GitHub Actions
 #     permissions: { contents: read }
 #     secrets:
 #       build-webhook-secret: ${{ secrets.BUILD_WEBHOOK_SECRET }}
-#   compile-check-follow:                 # only when the host runs the stage
-#     needs: [executor]
-#     if: ${{ !cancelled() && needs.executor.outputs.executor == 'host' }}
+#   compile-check-follow:                 # ALWAYS runs: a no-op success (followed=false) on Actions,
+#     needs: [executor]                   # so no job downstream inherits a skip (actions/runner#2205)
+#     if: ${{ !cancelled() }}
 #     uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main
 #     permissions: { contents: read, id-token: write }
-#     with: { api-url: "${{ needs.executor.outputs.api-url }}", stage: compile-check }
+#     with:
+#       executor: ${{ needs.executor.outputs.executor || 'actions' }}
+#       api-url: ${{ needs.executor.outputs.api-url }}
+#       stage: compile-check
+#       scripts-ref: main
 #   compile-check:                        # the REQUIRED context, unchanged by name
 #     needs: [executor, compile-check-follow]
 #     if: ${{ !cancelled() }}
@@ -26,7 +30,7 @@ name: Build executor — a standing build host, or GitHub Actions
 #       host-verdict: ${{ needs.compile-check-follow.result }}
 #
 # 🚨 DORMANT UNTIL THE INSTANCE SAYS SO: `host` requires the repository to declare its stages
-# (`.github/build-stages.json`), the operations instance to answer `"executor":"host"` for it
+# (`.github/build-stages.json`) AND claim them CI-equivalent (`"ciEquivalent": true`), the operations instance to answer `"executor":"host"` for it
 # (`GET /api/builds/queue?repo=`), and the signed `build-request` to be accepted and verified. Any
 # failure answers `actions` — today's behaviour — and says why (build-executor.py). The job itself
 # never fails on the instance's account; it fails only on a malformed input.
