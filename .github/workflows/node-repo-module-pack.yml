@@ -3953,6 +3953,9 @@ jobs:
       # stands the module down; that is safe because the newer run takes the same fallback and
       # builds the module. A trunk that cannot be read is RED for the whole batch: "cannot tell"
       # must never publish as "nothing newer".
+      # 🚨 `--publication-reach`: this is a PUBLICATION question, not a pull request's build
+      # selection, so a newer CI-only commit (`.github/`, `scripts/`) REACHES the module — policy
+      # ci-paths-owe-no-module-leg narrows PR selection only, and a newer workflow is a newer packing.
       - name: A newer trunk commit reaches this module? (publish-newest-only)
         id: newer
         if: ${{ inputs.publish && inputs.publish-newest-only && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' }}
@@ -3987,6 +3990,7 @@ jobs:
                 GITHUB_OUTPUT="$RUNNER_TEMP/mods/$MODULE/newer-scope.out" GITHUB_STEP_SUMMARY=/dev/null \
                   python3 build-logic/.github/scripts/node-repo-scope.py --for modules --root . \
                     --modules "@$RUNNER_TEMP/mods/$MODULE/newer-entry.json" --event pull_request \
+                    --publication-reach \
                     --changed-list "$changed" > "$RUNNER_TEMP/mods/$MODULE/newer-scope.json"
                 if [ "$(jq -r '.count' "$RUNNER_TEMP/mods/$MODULE/newer-scope.json")" != "0" ]; then
                   newer=true
