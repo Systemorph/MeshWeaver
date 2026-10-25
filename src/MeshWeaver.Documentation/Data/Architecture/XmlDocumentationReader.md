@@ -75,6 +75,21 @@ generation-collected assertion fail. Every call site reaches the reader through 
 `ITypeRegistry`/service provider, or an `ITypeDefinition`; a definition built outside any registry
 (the public `TypeDefinition` constructor) owns a reader of its own.
 
+**Per-mesh, so kept small and shared where it can be.** A process running many meshes — a test
+host above all — parses the same files once per mesh, and disposed meshes can stay reachable for a
+while (the HTTP client factory's handler lifetime holds a mesh's service provider for about two
+minutes). A heap dump of `Memex.Portal.Shared.Test` (MeshWeaver.Plugins run 40214543622, which the
+test infrastructure's 6 GiB memory watchdog aborted) showed 88 live readers, 1,032,764
+`XmlMemberDoc` entries and 835 MB of strings, about 10 MB of rendered text per mesh. So the
+snapshot keeps only what a lookup can read: a member with no summary, no `<inheritdoc/>` and no
+`<param>` is left out (a lookup treats it exactly as absent); `<param>` texts are kept on TYPE
+entries only, because the positional-record fallback is the one place they are read; and the texts
+and IDs of an assembly that can never unload are interned with `string.Intern`, so every mesh's
+snapshot points at one copy of each string (`XmlDocsTest.TwoMeshes_ShareOneCopyOfEachSummaryText`).
+A collectible NodeType assembly's texts are not interned: the runtime's intern pool would keep them
+alive after its load context unloads. Interning shares immutable VALUES, never a cache entry, so
+no snapshot and no cached miss is visible to another mesh.
+
 **The first read is synchronous.** A cold lookup reads and parses the file on the caller's thread,
 exactly as Namotion did. It is not warmed through the IO pool: `IIoPool` lives in
 `MeshWeaver.Mesh.Contract`, which depends on the assembly the reader lives in, and a warm-up the
