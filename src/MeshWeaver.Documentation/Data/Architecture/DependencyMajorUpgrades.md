@@ -376,6 +376,11 @@ resolved from core's list, so both move to 18.1.0 when the satellite's `MW_PLATF
 Both were included in the 1,817-file corpus run above, and neither implements an extension point
 that 18.0.0 broke.
 
+**Since then YamlDotNet has left the fleet.** Core reads and writes YAML with its own
+[`MeshWeaver.Yaml`](../TolerantYaml) (#7180); MeshWeaver.Plugins ported both modules above to it
+(MeshWeaver.Plugins#4227), and the `PackageVersion` entry and the platform's last reference were then
+removed. This entry stays as the record of that bump.
+
 ### xunit.v3 3.2.2 → 4.0.1 — the major where the ANALYZERS were the whole cost
 
 Measured 2026-09-15.
