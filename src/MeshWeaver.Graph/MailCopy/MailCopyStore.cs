@@ -331,7 +331,13 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                     ? Observable.Return(false)
                     : CommitAt(owner, legacyPath, legacy.Generation, current => current.LeaseHolder is null || current.LeaseHolder == attempt
                                                                             || current.LeaseUntil is not { } until || until <= DateTimeOffset.UtcNow
-                            ? current with { LeaseHolder = attempt, LeaseUntil = DateTimeOffset.UtcNow + RetireLease, Backfilled = false }
+                            // 🚨 The cursor goes too (and a pending rebuild): a retirement that deletes some copies and then
+                            // stops must never leave a cursor an old-image sync could resume and call the gutted copy complete.
+                            ? current with
+                            {
+                                LeaseHolder = attempt, LeaseUntil = DateTimeOffset.UtcNow + RetireLease, Backfilled = false,
+                                Cursor = null, PendingGeneration = null, PendingCursor = null,
+                            }
                             : null)
                         .SelectMany(fenced =>
                         {
@@ -414,9 +420,12 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                     if (heldFresh is { } freshGeneration)
                         (deletedLegacy ? Observable.Return(true) : LegacyExists(owner, legacyPath))
                             .SelectMany(exists => exists
-                                ? CommitAt(owner, MailCopyNodeTypes.SourcePath(owner, provider), freshGeneration, current => current.LeaseHolder == attempt
-                                        ? current with { LeaseHolder = null, LeaseUntil = null }
-                                        : null)
+                                // 🚨 Never a rolled-back source's dormant lease (no expiry): released, it would sync a copy that
+                                // was switched off.
+                                ? CommitAt(owner, MailCopyNodeTypes.SourcePath(owner, provider), freshGeneration, current =>
+                                        current.LeaseHolder == attempt && current.LeaseUntil != DateTimeOffset.MaxValue
+                                            ? current with { LeaseHolder = null, LeaseUntil = null }
+                                            : null)
                                     .Select(_ => false)
                                 : RollBack(owner, provider, freshGeneration, attempt, _ => { }))
                             .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Mail copy: settling the fresh copy of {Owner} failed; its lease lapses after {Lease}", owner, RetireLease));
@@ -467,6 +476,11 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
         {
             if (existing is null)
                 return Observable.Throw<string?>(new InvalidOperationException($"The mail copy '{sourcePath}' exists but could not be read; the retirement stops."));
+            // 🚨 Another LIVE retirement holds it (preparing or rolling back): never treated as independently enabled.
+            if (existing.LeaseHolder is { } foreign && foreign.StartsWith("retire:", StringComparison.Ordinal) && foreign != attempt
+                && existing.LeaseUntil is { } live && live > DateTimeOffset.UtcNow)
+                return Observable.Throw<string?>(new InvalidOperationException(
+                    $"The mail copy '{sourcePath}' is held by another retirement; the next sync repeats this one."));
             var leftover = existing.Generation == legacyGeneration
                            || (existing.LeaseHolder is { } holder && holder.StartsWith("retire:", StringComparison.Ordinal)
                                && (holder == attempt || existing.LeaseUntil is not { } until || until <= DateTimeOffset.UtcNow));

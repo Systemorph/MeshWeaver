@@ -389,7 +389,7 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         var ct = TestContext.Current.CancellationToken;
         var owner = await SeedOwner(ct);
         var store = new MeshMailCopyStore(() => Mesh, attachments: new RecordingAttachments { FailDelete = true });
-        await SeedLegacy(owner, new MailCopySource { Provider = "outlook", Generation = "g1", Backfilled = true },
+        await SeedLegacy(owner, new MailCopySource { Provider = "outlook", Generation = "g1", Backfilled = true, Cursor = "https://graph.example/delta?x=4" },
             [new MailMessageCopy { Provider = "outlook", Generation = "g1", MessageId = "m1", HasAttachments = true }], ct);
 
         (await Record.ExceptionAsync(() => AsOwner(owner, () => store.RetireLegacy(owner, "outlook"), ct)))
@@ -398,6 +398,7 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         await Present(LegacyCopyPath(owner, "g1", "m1"), ct);   // the node keeps the only handle on its files
         var legacy = await SourceWhere(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), s => s.LeaseHolder is null, ct);
         legacy.Backfilled.Should().BeFalse("a fenced legacy copy is never served from again — readers of either image honor Backfilled");
+        legacy.Cursor.Should().BeNull("an old-image sync can never resume a copy the retirement has started to delete");
         (await Listed(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).Should().BeNull("nothing is switched on until the legacy copy is gone");
 
         // The next attempt — files reachable again — finishes at once: the failed one released its fence.
@@ -567,6 +568,31 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         var source = await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), s => s.LeaseHolder is null, ct);
         source.Generation.Should().NotBe("fresh-of-a-failed-attempt", "adopted: rotated and held by the retry, then released");
         await Absent(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
+    }
+
+    /// <summary>
+    /// A destination another LIVE retirement holds (preparing it, or rolling it back) is never taken for an independently
+    /// enabled copy: this retirement is refused, deletes nothing of the legacy copy, and the next sync repeats it.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ADestinationHeldByAnotherLiveRetirement_RefusesThisOne()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh, attachments: new RecordingAttachments());
+        await SeedDestination(owner, new MailCopySource
+        {
+            Provider = "outlook", Generation = "held-by-another",
+            LeaseHolder = "retire:another", LeaseUntil = DateTimeOffset.UtcNow.AddMinutes(30),
+        }, [], ct);
+        await SeedLegacy(owner, new MailCopySource { Provider = "outlook", Generation = "g1", Backfilled = true },
+            [new MailMessageCopy { Provider = "outlook", Generation = "g1", MessageId = "m1" }], ct);
+
+        (await Record.ExceptionAsync(() => AsOwner(owner, () => store.RetireLegacy(owner, "outlook"), ct)))
+            .Should().BeOfType<InvalidOperationException>();
+
+        await Present(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
+        (await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), _ => true, ct)).LeaseHolder.Should().Be("retire:another");
     }
 
     /// <summary>A copy switched on in the copy partition INDEPENDENTLY is kept exactly as it is — never adopted or rolled back.</summary>
