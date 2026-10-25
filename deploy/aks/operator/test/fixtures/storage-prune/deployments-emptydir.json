@@ -1,3 +1,0 @@
-{"items":[{"metadata":{"name":"memex-portal-deployment"},"spec":{"template":{"spec":{
-  "containers":[{"name":"memex-portal","volumeMounts":[{"name":"data","mountPath":"/data"}]}],
-  "volumes":[{"name":"data","emptyDir":{}}]}}}}]}

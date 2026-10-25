@@ -7,8 +7,9 @@ Description: The target build shape. Each platform set is deployed as its own ve
 # Deploy, Test the Deploy, Switch Latest
 
 > **Status: DECIDED DESIGN — nothing on this page is wired yet.** It is the target shape for
-> policy `deploy-test-switch-latest` and policy `package-mesh-version-cap`, both `in force` in
-> [Policy Not Prose](../PolicyNotProse) as decisions, with the wiring listed as owed (§8). The
+> policy `deploy-test-switch-latest` and policy `package-mesh-version-cap`. Both are DECIDED and
+> both stay `proposed` in [Policy Not Prose](../PolicyNotProse) until their wiring (§8) lands,
+> because the register marks a row `in force` only once its mechanism exists. The
 > owner's answers are recorded in §10; four questions there are still open. Today's mechanism is [Build Hosts](../BuildHosts), with
 > its design of record in MeshWeaver.Plugins at `Hosting/StandingBuildHosts`, under the in-force
 > policy `build-hosts-follow-latest`. Every *today* claim below cites a file and line on `main`.
@@ -68,7 +69,12 @@ skipped on missing input (§6).
    never `helm` by hand. The action writes the version's entry in the mesh-owned set (§3). The
    record change applies itself (policy `record-change-applies-itself`). The action completes when
    the new Deployment reports Ready, and Ready already means the plugins layer is staged
-   (`BuildHosts.md` §3).
+   (`BuildHosts.md` §3). 🚨 **A deploy carries its own warm-up demand.** Scaling demand comes only
+   from attempts (§3) and an idle version scales to zero (§9), so before any test attempt exists
+   nothing would keep a replica up for the readiness wait. The `v/<version>` entry the action
+   writes is therefore marked `warming`, and the chart renders a `warming` version's ScaledObject
+   with `minReplicaCount: 1`. Step 3 admits the test attempts BEFORE the action clears `warming`,
+   so the floor drops back to zero only once the attempts' own demand holds the replica.
 3. **Test the deployment.** Job `build-host-test` queues a run whose claim names the CANDIDATE
    version, never a channel. It follows each stage through the existing follow lane
    (`build-follow.yml`: only `succeeded` is green, a timeout is red, an unreadable endpoint is
@@ -78,9 +84,9 @@ skipped on missing input (§6).
      probe;
    - **the dependents' affected gates**: MeshWeaver.Plugins' and each satellite's `compile-check`
      and `gate` stages (H7, `BuildHosts.md` §5), for the modules the platform delta affects,
-     against the same candidate. Their verdict GATES the switch (§10, D1). That is a register
-     exception to `dependents-verify-on-their-side`, scoped to the module-facing `latest` switch
-     only.
+     against the same candidate. Their verdict GATES the switch (§10, D1). Once the policy is in
+     force, that is a register exception to `dependents-verify-on-their-side`, scoped to the
+     module-facing `latest` switch only; until then that policy holds unexcepted.
 4. **Switch `latest`.** On a run where the core suites AND every affected dependents' gate are
    green, job `build-host-switch` sends
    `build-host-switch-requested`. Its InstanceAction `BuildHostSwitch` moves the alias `latest`
@@ -182,8 +188,10 @@ and a cap must not either.
 (*"or migrate to latest"*). A daily job on the control instance reads every package that declares a
 cap in the registry catalog. For each one it files, or refreshes, ONE triage item: a
 `Feedback/Feedback` node whose message names the package, the cap, `latest`, the distance in
-platform builds, the age of the cap and `capTracking`. The item is keyed by (package, cap), so a
-second day updates the same item and never files a duplicate. Removing the cap closes it. The job
+platform builds, the age of the cap and `capTracking`. The item is keyed by the package's stable
+identity alone, never by its cap: a second day updates the same item, and a cap that is RAISED but
+still forbids `latest` updates the cap named in that same item in place, so neither ever files a
+duplicate. Removing the cap closes it. The job
 runs as System after the platform-action check (policy `authorize-as-caller-execute-as-system`),
 and triage decides the rest, as for every finding ([Incidental Findings](../IncidentalFindings)).
 
@@ -257,7 +265,7 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 |---|---|---|---|
 | P0 | core | this design, the owner's answers (§10) and the two register rows | no |
 | P1 | core | contract: init-only additions to `BuildHostsBlock` (`Retention`, the per-version default), the `v/` and `alias/` key forms, `Package.MaxMeshVersion` + `CapReason` + `CapTracking`, and the cap validator in `node-repo-validate.yml` | no |
-| P2 | core | chart: render one Deployment and one ScaledObject per `v/` entry, plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
+| P2 | core | chart: render one Deployment and one ScaledObject per `v/` entry (with `minReplicaCount: 1` while the entry is `warming`, §2), plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
 | P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, the stage-log endpoint answering by recorded version, `GET /api/builds/hosts`, the retention computation | no |
 | P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, the follow lane's `version` input (§4), and the `mw-core-tests` image as the set's fifth digest (D3) | no |
 | P5 | core | `resolve-platform.py --from-build-hosts`, including per-package resolution under a cap, IMPLEMENTED and self-tested but INERT: no consumer passes the flag, so Plugins and the satellites stay on today's newest-sealed path | no |
@@ -267,8 +275,9 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 | P9 | control | the roll that renders the first `build-<v>`, then the first green switch. Verify by reading `GET /api/builds/hosts` and the run nodes' recorded version, never the CD job's green | **yes** |
 | P10 | MeshWeaver.Plugins + satellites | adopt `--from-build-hosts` in Plugins `ci.yml` and the satellites, ONLY after P9 is verified, because §4 refuses a missing alias with no fallback and adopting earlier would red every consumer's CI | no |
 
-`deploy-test-switch-latest` and `package-mesh-version-cap` are `in force` as decisions, with
-P1 to P10 listed as owed on their register rows.
+`deploy-test-switch-latest` and `package-mesh-version-cap` are decided and stay `proposed` on
+their register rows, with P1 to P10 listed as owed; each moves to `in force` once its wiring has
+landed.
 When P9 is verified and P10 has landed, `build-hosts-follow-latest` is retired in the register.
 
 ## 9. Cost
@@ -280,7 +289,7 @@ When P9 is verified and P10 has landed, `build-hosts-follow-latest` is retired i
   PR-time `dotnet-test.yml` is unchanged, so this is an ADDED pass, not a moved one, until Q6
   decides otherwise.
 - **Idle cost is low.** KEDA scales every version to zero (`minReplicaCount: 0`, `BuildHosts.md`
-  §3). A retained but idle deployment costs its record entry, its locked images and its cache
+  §3), except a version still `warming` under its deploy (§2 step 2), which holds one replica. A retained but idle deployment costs its record entry, its locked images and its cache
   entries, not a node. The price is a cold start when a capped package's run arrives.
 - **Staging per version.** Each deploy copies the tester and portal `/app` by digest into the
   composed host, and builds the reference set once. One extra deploy per armed set.
@@ -299,8 +308,8 @@ When P9 is verified and P10 has landed, `build-hosts-follow-latest` is retired i
 ### Decided
 
 - **D1 — the switch gate.** `latest` moves only when core's suites AND the affected
-  MeshWeaver.Plugins and satellite gates are green on the deployed build server. This is a
-  register exception to `dependents-verify-on-their-side`, scoped to the module-facing `latest`
+  MeshWeaver.Plugins and satellite gates are green on the deployed build server. Once the policy
+  is in force, this is a register exception to `dependents-verify-on-their-side`, scoped to the module-facing `latest`
   switch ONLY: core pull requests still merge on core's own checks, and no other core job waits
   on a dependent. `platform-module-deploy-separate` stays in force: a platform roll never waits
   on a module verdict (§7).

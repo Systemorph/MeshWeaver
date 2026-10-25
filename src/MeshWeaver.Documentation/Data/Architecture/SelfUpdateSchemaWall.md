@@ -238,7 +238,7 @@ Plugins/control-plane half, and it has a precise shape:
   operator route has the same ordering the in-pod route has had since the seam landed. Until it does,
   a `Roll` across a schema bump is `Roll` + `Reconcile`, in that order, by hand.
 
-  **The operator half is `hosting-migrate`** (`deploy/aks/operator/bin/`; policy `roll-migrates-first`
+  **The operator half is `hosting-migrate`** (`MeshWeaver.Plugins/deploy/hosting-operator/bin/`; policy `roll-migrates-first`
   in the [register](../PolicyNotProse)): it reads the
   migration Job the release itself rendered (`helm get manifest` — wait-for-postgres, rehearsal,
   budget, envFrom and pull Secret all kept), moves only the migration containers to the target tag,

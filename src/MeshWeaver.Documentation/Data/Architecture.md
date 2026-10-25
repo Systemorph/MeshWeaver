@@ -99,6 +99,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Request a Hub Sends to Itself](SelfAddressedRequests) — node CRUD is issued on the hub that executes it, so routing and the reply leg cannot lose it; what that leaves, and why an empty queue at the timeout proves nothing when the handler answers from a detached observable
 - [Router Traffic Detection](RouterTrafficDetection) — the detector has two sites; the receiver names the two addresses, the origin names the call site, and a ratchet per tree keeps the seams adopted
 - [No Static State](NoStaticState)
+- [The XML Documentation Reader](XmlDocumentationReader) — how doc summaries are read for types and members (compiled NodeTypes included) without a process-wide cache, a lock, or pinning a collectible generation
 - [The Routing Entry Point](RoutingEntryPoint) — every routed message pays an Orleans grain PLACEMENT; the two measured ways it fails and drops live traffic, and the case for a local routing service where a silo is co-hosted
 - [Open Vocabularies Are String Constants](OpenVocabulariesAsStringConstants) — a persisted or module-extended vocabulary is `const string`, never an `enum`; it stays open for anyone to extend with their own constants, and resolution is a durable chain of rule nodes rather than a switch
 - [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
@@ -253,6 +254,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Script Execution](ScriptExecution)
 - [Agent Framework Stores — mesh nodes behind Microsoft's abstractions](AgentFrameworkStores)
 - [Centralized speech — Whisper Swiss German as a container](CentralizedSpeech)
+- [OCR Service — local Tesseract in the cluster](OcrService) — the default OCR engine: Tesseract 5 with eng/deu/fra/ita/ind + osd baked in, language detection, no egress, disabled until an instance's record turns it on
 - [Email Ingestion, Channels and Notifications](EmailIngestionAndNotifications)
 - [Event Subscriptions — the durable 'when THIS fires, run THAT' engine](EventSubscriptions)
 - [Foreign-Language Bridge (Python, Bun/Node) over gRPC](ForeignLanguageBridge)
@@ -568,6 +570,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Staged Pull Request Pipeline](StagedPullRequestPipeline) — the expensive suites on a fresh merge with the current main beside the review, then arming only when the review is answered and every required check is green (policy `suites-parallel-with-review`): event-driven advance, three loud releases, and the measurements
 - [Fresh Merge Under Test](FreshMergeUnderTest) — every suite job tests the head merged onto the base's CURRENT tip, computed in the job and reported, never the push-time `refs/pull/N/merge` (policy `suites-test-fresh-merge`)
 - [Carving Projects Out Of Core](CarvingProjectsOutOfCore) — what a SOURCE move costs and what it does not
+- [Core Carries No GUI Technology](CoreCarriesNoGuiTechnology) — no Blazor, Razor, FluentUI, Radzen, Monaco wrapper or browser automation in the platform repository; the GUI pins and Playwright suites live in MeshWeaver.Plugins, and the proposal for the build tooling that still names a GUI
 - [Red-Log Watching & Ticketing](LogWatchTriage) — every `fail:`/`crit:` becomes exactly one triaged issue
 - [Log Entries Are a Query Result, Not a Feed](LogEntriesAreAQueryResult) — `Hosting/LogEntry` is the output of one `Logs` action, so an absence in it is evidence of nothing; the denominator printed on every row, the level that lives on a different node, and how to ask for a line that carries an answer
 - [Telling a Stalled Pipeline From a Dead One](TellingAStalledPipelineFromADeadOne) — the incident store carries three clocks and `lastModified` is triage bookkeeping, not ingestion; which query reaches detection and which reaches delivery (and the three that error), the normal-lag-then-silence signature that means dead rather than behind, and why a missing pipeline self-finding is evidence of death rather than health
@@ -607,7 +610,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Merge Queue Mechanics](MergeQueueMechanics)
 - [The fleet's ONE CI process](FleetCiProcess) — the mechanism lives here as a lane or a shared script; a satellite carries a thin caller (verdict adoption, the lock resolver, the cancellation rule)
 - [Operating from the portal, not the cluster](OperatingFromThePortal)
-- [Operator Credentials Travel by Name](OperatorCredentialsByName) — the operator's only environment is a ConfigMap, so a step is handed a Key Vault object's NAME and reads the value with the identity it already runs as; why every database action failed at step 1 (Memex#132), why the CSI class built for it was consumed by nobody, and the one contract the Postgres steps now share with hosting-kv-ensure on both executors
+- [Operator Credentials Travel by Name](/Hosting/OperatorCredentialsByName) — the operator's only environment is a ConfigMap, so a step is handed a Key Vault object's NAME and reads the value with the identity it already runs as; why every database action failed at step 1 (Memex#132), why the CSI class built for it was consumed by nobody, and the one contract the Postgres steps now share with hosting-kv-ensure on both executors
 - [The Payment Provider Contract](PaymentProviderContract)
 - [Secrets: Write-Only Entry, Split Identities](SecretsWriteOnlyEntry) — nobody touches Key Vault by hand: a write-only GUI per owning app, ONE governed writer identity that can list/set/delete but never read a value, a reader identity (the pods) that can only `get`, the write-time fingerprint tag, and the CI guard against new hand-run vault commands
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)

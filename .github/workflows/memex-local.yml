@@ -1,0 +1,69 @@
+name: memex-local (Linux gate)
+
+# memex-local — deploy/homebrew/bin/memex-local, ~2000 lines that stand up every developer's local
+# portal — was gated inside hosting-operator.yml until the hosting operator moved to
+# Systemorph/MeshWeaver.Plugins ("core slimming"). The CLI stays here, so its Linux gate stays here,
+# unchanged: the same three steps, on every pull request, with no path filter.
+#
+# 🚨 Nothing in CI opened this script until MeshWeaver#2367, and what that cost, in one file:
+# `memex-local help` was an unbounded FORK BOMB (a backtick in an unquoted heredoc re-entered
+# main()); `helm_deploy` aborted on macOS bash 3.2 for the paths the script itself calls normal; and
+# `up`/`update` reported success on a portal with no sign-in page and no view packs. Three live
+# defects, zero red ticks, because nothing ever ran it.
+#
+# This runner is bash 5 and has no colima/kubectl/helm, so what it CAN prove is asserted by running
+# the CLI against stub tools (every red state of the usability verification, plus that a green one
+# is reachable) and by static assertions for the two traps a Linux runner can never reach by
+# execution — the heredoc backtick and macOS bash 3.2's empty-array abort. homebrew.yml installs the
+# formula and runs the same suite under bash 3.2 on macOS.
+#
+# 🛡️ NO SKIP-TRAPDOOR: every input is in this repository; no secret, no `continue-on-error`, no
+# input-shaped `if:`, no path filter.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One live run per ref: a newer push to the same PR branch cancels the run it supersedes; main and
+# the merge queue never cancel (each main push is its own group, keyed on the commit).
+concurrency:
+  group: memex-local-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  memex-local:
+    name: memex-local (parse + shellcheck + behaviour)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Asserted rather than assumed: a dependency satisfied by luck of the runner image breaks on an
+      # image bump as a "command not found" unrelated to the code being gated.
+      - name: Assert the tools this gate needs
+        run: |
+          set -euo pipefail
+          missing=()
+          command -v shellcheck >/dev/null 2>&1 || missing+=("shellcheck — apt-get install shellcheck")
+          command -v bash       >/dev/null 2>&1 || missing+=("bash")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the memex-local gate cannot run — provide:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          shellcheck --version
+
+      - name: memex-local parses
+        run: bash -n deploy/homebrew/bin/memex-local
+
+      - name: shellcheck (memex-local)
+        run: shellcheck -S warning deploy/homebrew/bin/memex-local deploy/homebrew/test/run-tests.sh
+
+      - name: Behaviour tests (memex-local)
+        run: deploy/homebrew/test/run-tests.sh

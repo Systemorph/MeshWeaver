@@ -1216,6 +1216,17 @@ data:
   {{- if hasKey .Values.config.memex_portal "Speech__Language" }}
   Speech__Language: "{{ .Values.config.memex_portal.Speech__Language }}"
   {{- end }}
+  # ---- OCR (the deploy/ocr Tesseract service) ---------------------------------
+  # EMITTED ONLY WHEN SET. Absent ⇒ the portal's MeshWeaver.Ocr answers NotConfigured and sends
+  # nothing anywhere (there is no default engine). An instance turns it on in its deployment record:
+  #   Ocr__Engine = HttpService, Ocr__HttpService__Endpoint = http://<release>-ocr:8080/ocr
+  # (Doc/Architecture/OcrService → "Enabling it on an instance").
+  {{- if hasKey .Values.config.memex_portal "Ocr__Engine" }}
+  Ocr__Engine: "{{ .Values.config.memex_portal.Ocr__Engine }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Ocr__HttpService__Endpoint" }}
+  Ocr__HttpService__Endpoint: "{{ .Values.config.memex_portal.Ocr__HttpService__Endpoint }}"
+  {{- end }}
   {{- if hasKey .Values.config.memex_portal "Commerce__BaseUrl" }}
   Commerce__BaseUrl: "{{ .Values.config.memex_portal.Commerce__BaseUrl }}"
   {{- end }}
