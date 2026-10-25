@@ -87,13 +87,13 @@ Already handled by the core-slimming source move: Plugins carries `src/Memex.Por
 The Plugins half is an ADDITION and lands first; the core half DELETES and lands last
 ([Cross-Repo Pair Gate](../CrossRepoPairGate)):
 
-1. **Plugins** — adds `Directory.Packages.Plugins.props` and its import, the moved projects, their
+1. **Plugins** (MeshWeaver.Plugins#4202) — adds `Directory.Packages.Plugins.props` and its import, the moved projects, their
    registration, and the moved pin guard. Against today's core it changes nothing (every pin is
    still declared by the platform, so every entry is skipped).
 2. **Core** — removes the five pins (declared under `Satellite-pins:`), the three projects, the
    E2E/thumbnail entries in `MeshWeaver.slnx`, `shard-assign.sh`, `test/Directory.Build.props` and
    `HandWovenGateRatchetGuard`, and `BlazorMonacoPinGuard`. Its body carries
-   `Pairs-with: Systemorph/MeshWeaver.Plugins#<n>`.
+   `Pairs-with: Systemorph/MeshWeaver.Plugins#4202`.
 
 No satellite other than Plugins references any of the moved packages (measured on `origin/main` of
 Education, Reinsurance, SocialMedia, Manufacturing and Crm). Memex has its own
