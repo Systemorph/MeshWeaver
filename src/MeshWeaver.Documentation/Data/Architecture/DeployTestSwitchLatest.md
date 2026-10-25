@@ -141,7 +141,11 @@ cap allows**.
   its `latest` run, and a capped module builds AND publishes against the highest deployment its
   cap allows, so instances on older platforms keep getting its fixes. Publishing does not retire
   the debt: the capped package still carries its "migrate to latest" triage item (§5).
-- **On a host**, the claim names the version, so the follow lane needs no change. **On Actions**
+- **On a host**, the claim names the version, and the follow lane must select by it. Today it
+  does not: it keys a stage log by repository, SHA and `channel` (`build-follow.yml:83-84`,
+  `build-follow.py:211,245-246`), so the same commit run against two versions is ambiguous. The
+  lane gains a `version` input that the follower sends as the log query key in place of
+  `channel`, and the build API answers by the run's RECORDED version (P3, P4). **On Actions**
   (until a repository claims `ciEquivalent`), the resolved digests feed the existing `with:`
   inputs of `node-repo-gate.yml` / `node-repo-publish-bake.yml`, unchanged.
 
@@ -216,7 +220,11 @@ version gone is re-resolved, or red, never queued for a deployment that is leavi
 **Digests.** Every digest of a retained deployment (tester, portal, runner, core tests) is a PINNED digest in
 the sense of [Pinned Image Retention](../PinnedImageRetention): `lock-pinned-digests.py` reads the
 record's `buildHostSets` and locks them, so the ACR purge, which counts newer builds, never deletes
-an image a capped package still compiles against. A teardown unlocks them. This closes the
+an image a capped package still compiles against. A teardown removes only THIS deployment's
+entry, and with it this deployment's claim on the pins; it unlocks nothing. The lane locks and never
+unlocks ([Pinned Image Retention](../PinnedImageRetention): *"IT LOCKS. IT DOES NOT UNLOCK."*), and a
+digest another retained deployment or a running portal still names must stay locked, so releasing a
+lock is left to that page's guarded, opt-in release arm, which requires a complete inventory. This closes the
 retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' digests.
 
 ## 7. Failure semantics
@@ -250,8 +258,8 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 | P0 | core | this design, the owner's answers (§10) and the two register rows | no |
 | P1 | core | contract: init-only additions to `BuildHostsBlock` (`Retention`, the per-version default), the `v/` and `alias/` key forms, `Package.MaxMeshVersion` + `CapReason` + `CapTracking`, and the cap validator in `node-repo-validate.yml` | no |
 | P2 | core | chart: render one Deployment and one ScaledObject per `v/` entry, plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
-| P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, `GET /api/builds/hosts`, the retention computation | no |
-| P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, and the `mw-core-tests` image as the set's fifth digest (D3) | no |
+| P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, the stage-log endpoint answering by recorded version, `GET /api/builds/hosts`, the retention computation | no |
+| P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, the follow lane's `version` input (§4), and the `mw-core-tests` image as the set's fifth digest (D3) | no |
 | P5 | core | `resolve-platform.py --from-build-hosts`, including per-package resolution under a cap, IMPLEMENTED and self-tested but INERT: no consumer passes the flag, so Plugins and the satellites stay on today's newest-sealed path | no |
 | P6 | MeshWeaver.Plugins + core | the daily cap-debt job (control), the capped-run publish path (D2), the retention of the previous `latest` and the backwards rollback switch (D4), and the `lock-pinned-digests.py` reading of `buildHostSets` (core) | no |
 | P7 | Memex | the `buildHosts` block on `mesh/Deployments/control.json`, through the record's approval path | **yes** |
