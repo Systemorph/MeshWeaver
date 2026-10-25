@@ -50,6 +50,10 @@ The refusals, and why each one exists:
 {{- if ($b.postgres | default dict).enabled -}}
 {{- fail "buildHosts.postgres is not supported — a build host runs NO shared database; a stage that needs PostgreSQL starts a disposable one inside its own sandbox (sandbox-postgres.sh)" -}}
 {{- end -}}
+{{- $runDeadline := int ($b.runDeadlineSeconds | default 2100) -}}
+{{- if or (lt $runDeadline 60) (gt $runDeadline 2400) -}}
+{{- fail (printf "buildHosts.runDeadlineSeconds %d must be within [60, 2400] — the END-TO-END budget: a follow job waits at most 43 minutes for its run to be terminal (inside the 45-minute job cap), and 3 of them are a claim's queue and the host's start-up" $runDeadline) -}}
+{{- end -}}
 {{- $sb := ($b.sandbox | default dict) -}}
 {{- $sandbox := dict "seccompProfile" ($sb.seccompProfile | default "") "seccompLocalhostProfile" ($sb.seccompLocalhostProfile | default "")
       "appArmorProfile" ($sb.appArmorProfile | default "") "appArmorLocalhostProfile" ($sb.appArmorLocalhostProfile | default "") -}}
@@ -110,7 +114,7 @@ The refusals, and why each one exists:
       "orasImage" (required "buildHosts.orasImage is required" $b.orasImage)
       "nodeSelector" ($b.nodeSelector | default dict) "tolerations" ($b.tolerations | default list)
       "resources" ($b.resources | default dict) "workSizeLimit" ($b.workSizeLimit | default "60Gi")
-      "runDeadline" (int ($b.runDeadlineSeconds | default 3600))
+      "runDeadline" $runDeadline
       "scaleDownStabilizationSeconds" (int ($b.scaleDownStabilizationSeconds | default 300))
       "sandbox" $sandbox
       "pollingInterval" (int ($b.pollingInterval | default 15)) "cooldownPeriod" (int ($b.cooldownPeriod | default 600))

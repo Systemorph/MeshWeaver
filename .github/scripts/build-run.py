@@ -503,7 +503,13 @@ class Api:
                 raw = r.read().decode()
                 return r.status, (json.loads(raw) if raw.strip() else None)
         except urllib.error.HTTPError as e:
-            return e.code, None
+            # The BODY of a refusal is part of the answer: a 409's `error` tells `stale-set` (drain)
+            # from `stale-claim-id` (claim again with a fresh id). Kept beside its status code.
+            try:
+                raw = e.read().decode()
+                return e.code, (json.loads(raw) if raw.strip() else None)
+            except (OSError, ValueError):
+                return e.code, None
         except (urllib.error.URLError, OSError, ValueError) as e:
             return 0, str(e)
 
@@ -511,6 +517,15 @@ class Api:
 def events_path(repo: str, sha: str, stage: str) -> str:
     return f"/{urllib.parse.quote(repo, safe='')}/{sha}/stages/{urllib.parse.quote(stage, safe='')}/events"
 
+
+# THE END-TO-END BUDGET, one set of numbers for host and follower: a follow job is hard-cut at 45
+# minutes and waits for its run to be TERMINAL, at most FOLLOW_TIMEOUT_MINUTES (43). Of that, up to
+# QUEUE_STARTUP_SECONDS (3 min) is a claim's queue wait and the host's start-up, so a run may last at
+# most MAX_RUN_DEADLINE (40 min) — the chart and the runner both refuse more. Default 35 min.
+FOLLOW_TIMEOUT_MINUTES = 43
+QUEUE_STARTUP_SECONDS = 180
+MAX_RUN_DEADLINE = FOLLOW_TIMEOUT_MINUTES * 60 - QUEUE_STARTUP_SECONDS
+DEFAULT_RUN_DEADLINE = 2100
 
 HEARTBEAT_SECONDS = 45     # < 60: the instance's lease lasts 10 min past the host's last batch
 
@@ -1325,9 +1340,9 @@ class Host:
                 self.identity = ""
         self.ready_file = env.get("MW_BUILD_READY_FILE", "/tmp/build-host-ready")
         try:
-            self.run_deadline = float(env.get("MW_BUILD_RUN_DEADLINE_SECONDS", "3600") or 3600)
+            self.run_deadline = float(env.get("MW_BUILD_RUN_DEADLINE_SECONDS", str(DEFAULT_RUN_DEADLINE)) or DEFAULT_RUN_DEADLINE)
         except ValueError:
-            self.run_deadline = 3600.0
+            self.run_deadline = float(DEFAULT_RUN_DEADLINE)
         self.plugins_digest: Optional[str] = None
         self.plugins_dir: Optional[str] = None
         self.plugins_known = False
@@ -1352,6 +1367,10 @@ class Host:
             missing.append("MW_BUILD_PLATFORM_VERSION (the set this host runs)")
         if not self.identity:
             missing.append("MW_BUILD_FRAMEWORK_IDENTITY or a readable MW_BUILD_IDENTITY_FILE")
+        if not (0 < self.run_deadline <= MAX_RUN_DEADLINE):
+            missing.append(f"MW_BUILD_RUN_DEADLINE_SECONDS within (0, {MAX_RUN_DEADLINE}] — the END-TO-END budget: "
+                           f"the run deadline plus queue and start-up must fit the follow job's "
+                           f"{FOLLOW_TIMEOUT_MINUTES}-minute verdict window inside its 45-minute cap")
         if missing:
             raise Refusal("the host cannot start — provide: " + "; ".join(missing))
 
@@ -1393,8 +1412,14 @@ class Host:
         if status != 200 or not isinstance(index, dict):
             self.log(f"the registry's bundle index is unreadable (HTTP {status}) — NOT claiming this cycle")
             return False
-        served_for = index.get("frameworkIdentity") or index.get("identity")
-        if served_for and served_for != self.identity:
+        # The index states the framework it serves (`frameworkMvid`, the identity a bundle is built
+        # against). MISSING is a refusal as much as DIFFERENT: an index that cannot say which
+        # framework its bundles are for cannot be staged for this host's.
+        served_for = index.get("frameworkMvid") or index.get("frameworkIdentity") or index.get("identity")
+        if not served_for:
+            self.log("the registry's bundle index names no framework identity (frameworkMvid) — NOT claiming")
+            return False
+        if served_for != self.identity:
             self.log(f"the registry serves bundles for identity {served_for}, this host runs {self.identity} — NOT claiming")
             return False
         try:
@@ -1578,6 +1603,17 @@ class Host:
                 # RED inside the pod's grace period, never holds the claim indefinitely.
                 self.checkout(repo, sha, claim.get("refs") or [], checkout_dir, token, self.env, self.log,
                               deadline=time.monotonic() + max(1.0, self.run_deadline - (self.clock() - started)))
+                # ONE merged tree per attempt (policy suites-test-fresh-merge): a pull-request run's
+                # head is merged onto ONE base — the claim's `mergeBaseSha`, or main's tip resolved
+                # ONCE from the mirror when the claim names none — and every stage runs on that tree.
+                # The STAGE DECLARATION is read from the MERGED tree, so a command, dependency or
+                # timeout the merge brings in is the one that runs. Trunk and probe runs are not
+                # merged. The base is named in the plan; the instance refuses a PR success whose plan
+                # names another sha, or none.
+                merge_base = None
+                probe = claim.get("isProbe") is True or str(claim.get("kind") or "").lower() == "probe"
+                if not trunk and not probe:
+                    merge_base = self.merge_onto_base(repo, checkout_dir, claim.get("mergeBaseSha"), token)
                 stages = select_stages(load_stages(os.path.join(checkout_dir, ".github", "build-stages.json")),
                                        claim.get("stages"))
             except Refusal as r:
@@ -1586,22 +1622,6 @@ class Host:
                           {"kind": "stage-finished", "state": "failed", "summary": str(r)[:MAX_LINE]},
                           {"kind": "run-finished", "succeeded": False, "error": str(r)[:MAX_LINE]}])
                 return "ran" if sink.flush(attempts=12) else "undelivered"
-            # ONE merged tree per attempt (policy suites-test-fresh-merge): a pull-request run's head
-            # is merged onto ONE base — the claim's `mergeBaseSha`, or main's tip resolved ONCE from
-            # the mirror when the claim names none — and every stage runs on that tree. Trunk and
-            # probe runs are not merged. The base is named in the plan; the instance refuses a PR
-            # success whose plan names another sha, or none.
-            merge_base = None
-            probe = claim.get("isProbe") is True or str(claim.get("kind") or "").lower() == "probe"
-            if not trunk and not probe:
-                try:
-                    merge_base = self.merge_onto_base(repo, checkout_dir, claim.get("mergeBaseSha"), token)
-                except Refusal as r:
-                    sink = self._sink_for(repo, sha, stages[0]["name"])
-                    sink.add([{"kind": "line", "text": f"run refused before any stage: {r}"},
-                              {"kind": "stage-finished", "state": "failed", "summary": str(r)[:MAX_LINE]},
-                              {"kind": "run-finished", "succeeded": False, "error": str(r)[:MAX_LINE]}])
-                    return "ran" if sink.flush(attempts=12) else "undelivered"
             # The PLAN, host-emitted and never a child's: the instance refuses a host-run success
             # unless every planned stage reported success.
             plan = self._sink_for(repo, sha, stages[0]["name"])
@@ -1627,7 +1647,7 @@ class Host:
                 "MW_BUILD_TESTER_DIGEST": self.env.get("MW_BUILD_TESTER_DIGEST", ""),
                 "MW_BUILD_PORTAL_DIGEST": self.env.get("MW_BUILD_PORTAL_DIGEST", ""),
                 "MW_BUILD_PLATFORM_REF": self.env.get("MW_BUILD_PLATFORM_REF", ""),
-                "MW_PLUGINS_KEY": self.plugins_key or "",
+                "MW_PLUGINS_KEY": self.effective_plugins_key(),
                 "MW_BUILD_REFSET_KEY": self.env.get("MW_BUILD_REFSET_KEY", ""),
             }
             failed_at = None
@@ -1886,6 +1906,11 @@ class Host:
         self.deliver(sink)
         return ok
 
+    def effective_plugins_key(self) -> str:
+        """The plugins layer's identity in a cache key, in EITHER mode: the registry index's key
+        (H8), else the sealed publication's digest — so a changed plugins layer is always a new key."""
+        return self.plugins_key or self.plugins_digest or ""
+
     def cache_key_problem(self, output_dir: str, checkout: str) -> Optional[str]:
         """None when the output's directory name IS the key the host recomputes from the inputs its
         `.cache-key.json` names; otherwise the reason it is not promoted."""
@@ -1894,7 +1919,7 @@ class Host:
                 spec = json.load(fh)
         except (OSError, ValueError) as e:
             return f"no readable {CACHE_KEY_FILE} ({type(e).__name__})"
-        env = dict(self.env, MW_BUILD_FRAMEWORK_IDENTITY=self.identity, MW_PLUGINS_KEY=self.plugins_key or "")
+        env = dict(self.env, MW_BUILD_FRAMEWORK_IDENTITY=self.identity, MW_PLUGINS_KEY=self.effective_plugins_key())
         try:
             key = cache_key_of(checkout, spec, env)
         except Refusal as r:
@@ -1926,7 +1951,10 @@ class Host:
             if "/" not in unit:
                 return receipts, f"{unit} is not under a unit directory ($MW_BUILD_ARTIFACTS/<unit>/<file>)"
             digest, size = _sha256_file(full), os.path.getsize(full)
-            key = f"build-hosts/{repo}/{sha}/{self.channel}/{stage}/{unit}"
+            # The DIGEST is in the key: a later attempt, probe or platform-set build of the same
+            # commit/channel/stage that produces OTHER bytes writes a different object, so an earlier
+            # acknowledged receipt's object is never replaced under it.
+            key = f"build-hosts/{repo}/{sha}/{self.channel}/{stage}/{digest}/{unit}"
             rc, out = self.store_runner([sys.executable, script, "put", "--store", store, "--key", key, "--file", full])
             locator = next((l.split("=", 1)[1] for l in out.splitlines() if l.startswith("locator=")), "")
             if rc != 0 or not locator:
@@ -2464,7 +2492,7 @@ def self_test() -> int:
         kf = os.path.join(tmp, "mwi")
         with open(kf, "w") as fh:
             fh.write("mwi_secret\n")
-        idx = {"frameworkIdentity": "c3e1", "bundles": [
+        idx = {"frameworkMvid": "c3e1", "bundles": [
             {"plugin": "Store", "version": "1.4.2", "bundleHash": "aa"}, {"plugin": "AI", "version": "1.36.5"}]}
         fetched: list[list[str]] = []
 
@@ -2500,8 +2528,11 @@ def self_test() -> int:
         h8.fetch_runner = lambda argv, env_: 3
         check("h8/a failed module-fetch means no claim", h8.cycle() == "no-inputs" and len(claims_seen) == n_claims)
         h8w = host(_FakeApi({("POST", "/claim"): lambda p_, b: (claims_seen.append(b), (204, None))[1]}), env=h8env,
-                   registry_get=lambda u, k: (200, dict(idx, frameworkIdentity="c9e9")), fetch_runner=fetch_runner)
+                   registry_get=lambda u, k: (200, dict(idx, frameworkMvid="c9e9")), fetch_runner=fetch_runner)
         check("h8/an index for another framework identity means no claim", h8w.cycle() == "no-inputs")
+        h8m = host(_FakeApi({("POST", "/claim"): lambda p_, b: (204, None)}), env=h8env,
+                   registry_get=lambda u, k: (200, {"bundles": idx["bundles"]}), fetch_runner=fetch_runner)
+        check("h8/an index naming NO framework means no claim", h8m.cycle() == "no-inputs")
         h8k = host(_FakeApi({}), env=dict(h8env, MW_REGISTRY_KEY_FILE=os.path.join(tmp, "absent")), fetch_runner=fetch_runner)
         check("h8/no instance key means no claim", h8k.cycle() == "no-inputs")
         for bad in ({}, {"bundles": [{"plugin": "AI"}]}, {"bundles": [{"plugin": "../x", "version": "1"}]}, {"bundles": ["AI"]}):
@@ -2924,6 +2955,49 @@ def self_test() -> int:
         hss = host(_FakeApi({("POST", "/claim"): lambda p_, b: (sid.append(b["claimId"]), (409, {"error": "stale-set"}))[1]}))
         check("claim/stale-set → drain, no new claim", hss.claim() is None and len(sid) == 1 and hss.stopping, sid)
         check("claim/a draining host claims nothing more", hss.cycle() == "stopping" and len(sid) == 1, sid)
+        # the plugins layer is in the cache key in EITHER mode
+        hk1 = host(_FakeApi({}))
+        hk1.plugins_digest, hk1.plugins_key = "sha256:" + "a" * 64, None
+        check("key/the seal's digest keys the plugins layer when there is no index key", hk1.effective_plugins_key() == "sha256:" + "a" * 64)
+        hk1.plugins_key = "sha256:" + "b" * 64
+        check("key/the index key wins when present", hk1.effective_plugins_key() == "sha256:" + "b" * 64)
+        # a refusal's JSON body reaches claim() through the real transport
+        import http.server
+        class _H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                body = json.dumps({"error": "stale-set"}).encode()
+                self.send_response(409); self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=srv.handle_request, daemon=True).start()
+        st_, body_ = Api(f"http://localhost:{srv.server_address[1]}/api/builds", "t").call("POST", "/claim", {})
+        srv.server_close()
+        check("api/a 409's JSON body is kept beside its status", st_ == 409 and body_ == {"error": "stale-set"}, (st_, body_))
+        # the stage declaration is read from the MERGED tree
+        def merging_git(args, env_):
+            if "rev-parse" in args:
+                return 0, "e" * 40 + "\n"
+            if "merge" in args and "--abort" not in args:
+                gs = os.path.join(args[1], ".github", "build-stages.json")
+                json.dump({"stages": [{"name": "merged", "kind": "build", "command": "true"}]}, open(gs, "w"))
+            return 0, ""
+        posted.clear()
+        hmt = host(api_ev(), env=env_s, git_runner=merging_git, checkout=checkout_with({"stages": [
+            {"name": "head", "kind": "build", "command": "true"}]}))
+        hmt.run(dict(claim, isTrunk=False, mergeBaseSha=None))
+        pl = [e for _, es in posted for e in es if e["kind"] == "plan"]
+        check("merge/the stages run are the MERGED tree's declaration", pl and pl[0]["stages"] == ["merged"], pl)
+        # the end-to-end budget
+        check("budget/run deadline + queue/start-up fits the follower's window",
+              MAX_RUN_DEADLINE + QUEUE_STARTUP_SECONDS <= FOLLOW_TIMEOUT_MINUTES * 60 < 45 * 60 and DEFAULT_RUN_DEADLINE <= MAX_RUN_DEADLINE)
+        try:
+            host(_FakeApi({}), env=dict(env, MW_BUILD_RUN_DEADLINE_SECONDS="3600")).preflight()
+            check("budget/a run deadline beyond the window is refused", False, "started")
+        except Refusal as e:
+            check("budget/the refusal names the budget", "END-TO-END" in str(e), e)
         plan_from_child = OutputParser("/w", "x").feed('::mw-event::{"kind":"plan","stages":["x"]}')
         check("plan/a child cannot emit the plan", plan_from_child and "refused" in plan_from_child[0]["text"], plan_from_child)
     finally:

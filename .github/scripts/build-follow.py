@@ -354,7 +354,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--sha", default="")
     ap.add_argument("--stage", default="")
     ap.add_argument("--channel", default="latest")
-    ap.add_argument("--timeout-minutes", type=float, default=40)
+    ap.add_argument("--timeout-minutes", type=float, default=MAX_TIMEOUT_MINUTES)
     ap.add_argument("--audience", default="")
     ap.add_argument("--probe", default="", help="a probe run's id (the claim's `probe`); rides on every log read")
     a = ap.parse_args(argv)

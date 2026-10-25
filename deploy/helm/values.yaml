@@ -1147,8 +1147,10 @@ buildHosts:
     limits: { cpu: "15", memory: 52Gi }
   workSizeLimit: 60Gi
   # The run deadline. Also the pod's terminationGracePeriodSeconds: on SIGTERM (a roll, a scale-in)
-  # the runner stops claiming and finishes the run it holds.
-  runDeadlineSeconds: 3600
+  # the runner stops claiming and finishes the run it holds. At most 2400 (refused above): the
+  # END-TO-END budget is this deadline + 3 min of queue/start-up inside a follow job's 43-minute
+  # verdict window, inside the fleet's 45-minute job cap.
+  runDeadlineSeconds: 2100
   # KEDA: polling, the scale-to-zero calm window, and the scale-down stabilization window (longer
   # than a claim's round trip, so a replica is not removed between two runs).
   pollingInterval: 15

@@ -65,8 +65,11 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
 - **only `succeeded` is green.** Failed, `not-run` (the run ended before the stage started),
   cancelled, skipped and any state the follower does not know are RED, named. A skipped or
   never-run stage is not a passed one.
-- **a timeout is RED** (`timeout-minutes`, at most 43 — the job is hard-cut at 45). No verdict in
-  time means the run is not judged.
+- **a timeout is RED** (`timeout-minutes`, default and maximum 43 — the job is hard-cut at 45). No
+  verdict in time means the run is not judged. 🚨 **The end-to-end budget is ONE set of numbers**:
+  a host's run deadline (`buildHosts.runDeadlineSeconds`, default 2100 s, refused above 2400 s) plus
+  up to 3 minutes of a claim's queue and the host's start-up fits the follower's 43 minutes, inside
+  the fleet's 45-minute job cap — so a run the host permits always reaches its verdict in time.
 - **an unreadable endpoint is RED, naming why**: 403 at once (the token's repository or run does not
   match the build), 401 after one token refresh, 404 after a five-minute grace (the run may not be registered
   yet), transport errors and 5xx after six consecutive failures.
@@ -106,7 +109,8 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    `pluginsDigest` on the run, and a run records exactly what compiled it.
    **With `buildHosts.registry.url` set (H8) the layer comes from the REGISTRY's bundle index
    instead** — `GET /api/plugins/bundles/index.json`, what an instance on this framework identity
-   installs (the index core's `module-fetch` reads), with the host's read-only `mwi_` instance key
+   installs (the index core's `module-fetch` reads; its `frameworkMvid` must name this host's
+   framework identity — a missing or different one is no claim), with the host's read-only `mwi_` instance key
    (a file in the host container, never bound into a sandbox). The layer's KEY is the digest of the
    sorted `package@version[@bundle-hash]` list; a changed bundle is fetched with core's
    `meshweaver-plugin-build module-fetch` (key through `--key-env`, never argv) into
@@ -148,8 +152,9 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    if absent), or, when the claim names none, main's tip resolved ONCE from the repository's mirror
    (its HEAD, fetched just before) — and every stage tests that tree; the base is never re-resolved
    per stage. The plan names it as `"mergeBase":"<40 hex>"` (the instance refuses a PR success whose
-   plan names another sha, or none). A conflict is red, never a test of the unmerged head. Trunk and
-   probe runs are not merged and carry no `mergeBase`.
+   plan names another sha, or none). A conflict is red, never a test of the unmerged head. The
+   STAGE DECLARATION is read from the MERGED tree, so a command, dependency or timeout the merge brings
+   in is the one that runs. Trunk and probe runs are not merged and carry no `mergeBase`.
 4. **Run every stage** the repository declares in `.github/build-stages.json`:
 
    ```json
@@ -219,7 +224,7 @@ follower given the aggregate's name is refused rather than matched to a stage. A
      file and the toolchain identity — run with the HOST's tester and portal digests;
    - **a NodeType** (`{"kind":"nodetype","sources":[…],"options":"…","allowList":"…"}`): the
      declared source set (each file's hash), the reference-set identity (framework identity, portal
-     digest, the plugins key), the canonical compile-check options and allow-list, and the compiler
+     digest, the plugins layer — the registry index's key, else the sealed publication's digest), the canonical compile-check options and allow-list, and the compiler
      (the tester digest).
    A stage computes the same key with `python3 /opt/build-host/build-run.py --cache-key spec.json`.
    An existing key is kept; a name that is not the recomputed key, a symlink, or a path outside the
@@ -231,7 +236,9 @@ follower given the aggregate's name is refused rather than matched to a stage. A
 7. **Artifacts are handed over by the HOST (H9).** A stage leaves every module bundle (and its
    `<module>.publication.json` record, in the module pack lane's format) and the gate bake under
    `$MW_BUILD_ARTIFACTS/<unit>/` (writable; outside the outputs cache). After the stage exits, the
-   host uploads each file to the shared CI artifact store with core's `ci-artifact-store.py`
+   host uploads each file to the shared CI artifact store with core's `ci-artifact-store.py` (under a
+   key carrying the file's sha256, so another attempt's different bytes never replace an
+   acknowledged receipt's object)
    (`MW_BUILD_ARTIFACT_STORE`, a `file:` store on the runners' shared share), READS IT BACK and
    re-hashes it, and only then posts `{"kind":"artifact","unit","key","sha256","bytes"}` — before
    the stage's verdict; a failed upload or read-back fails the stage, and artifacts with no store
@@ -374,8 +381,10 @@ two acts, in order: the record's `BuildHosts` block through its approval path, t
 `enabled: true` here.
 
 `build-host-image` and `build-host-latest` are outside `delivery-verdict` (the fleet's delivery does
-not depend on a build host) and UNDER `alert-on-failure` (a host left on an old set is paged, not
-unattended); `build-host-stable.yml` reports on its own `build-host` issue.
+not depend on a build host) and outside `alert-on-failure` (whose `ci-failure` issue recovers on
+platform delivery, not on a build host): job `build-host-report` files or comments on the ONE open
+`build-host-latest` issue when either fails, and closes it only after a run that actually HANDED
+build-latest a set. `build-host-stable.yml` reports on its own `build-host` issue, the same way.
 
 ## 5. Not done here
 

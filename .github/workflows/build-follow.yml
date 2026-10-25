@@ -68,11 +68,13 @@ on:
         default: latest
       timeout-minutes:
         description: >-
-          How long to wait for the stage's verdict before failing RED. At most 43: the job is
-          hard-cut at 45 minutes, and the follower must reach its own verdict first.
+          How long to wait for the RUN to be terminal before failing RED. At most 43: the job is
+          hard-cut at 45 minutes, and the follower must reach its own verdict first. The host's run
+          deadline (buildHosts.runDeadlineSeconds, at most 2400 s) plus a claim's queue and the host's
+          start-up (3 min) fits inside it — the end-to-end budget is one set of numbers.
         required: false
         type: number
-        default: 40
+        default: 43
       audience:
         description: The OIDC audience (the instance's Hosting:Builds:OidcAudience). Empty = the api-url's origin.
         required: false

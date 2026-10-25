@@ -4049,6 +4049,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      handed: ${{ steps.build_host_send.outputs.handed }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -4119,6 +4121,7 @@ jobs:
           esac
           { echo "version=$newest"; echo "core=$core"; echo "plugins=$plugins"; echo "runner=$runner"; } >> "$GITHUB_OUTPUT"
       - name: "Sign and POST build-host-update-available for build-latest"
+        id: build_host_send
         if: steps.build_host.outputs.enabled == 'true' && steps.build_host_current.outputs.send == 'true'
         env:
           URL: ${{ vars.CONTROL_WEBHOOK_URL }}
@@ -4164,12 +4167,60 @@ jobs:
               # STORED AND VERIFIED IS NOT DELIVERED: the receiver changes the record only when that
               # record declares buildHosts.enabled. Whether build-latest RUNS the set is read on the
               # run nodes it claims (`PlatformVersion`), never inferred from this 200.
+              echo "handed=true" >> "$GITHUB_OUTPUT"
               echo "- build-latest handed \`$V_SET\` (tester \`${TESTER_DIGEST:7:12}\`, portal \`${PORTAL_DIGEST:7:12}\`, runner \`${RUNNER_DIGEST:7:12}\`) for record \`$DEPLOYMENT\`: STORED and signature-verified (HTTP $code). Not yet a roll — the record's Reconcile is" >> "$GITHUB_STEP_SUMMARY"
               ;;
             000) echo "::error::could not reach the control plane's inbox — build-latest was NOT handed $V_SET"; exit 1 ;;
             401) echo "::error::the inbox REFUSED the signature (HTTP 401): secrets.CONTROL_WEBHOOK_SECRET and the instance's Hosting:PlatformWebhookSecret differ — build-latest was NOT handed $V_SET"; exit 1 ;;
             *)   echo "::error::the inbox refused the build-host event (HTTP $code) — build-latest was NOT handed $V_SET"; exit 1 ;;
           esac
+
+  # 📣 THE BUILD-HOST LANE REPORTS ITSELF, on its own label. A red `build-host-image` or
+  # `build-host-latest` files or comments on the ONE open `build-host-latest` issue; that issue is
+  # CLOSED only by a run that actually handed build-latest a set (`handed`) — never by platform
+  # delivery recovering, never by a disabled no-op. REST only (a GraphQL secondary limit must never
+  # swallow the alert). Separate from `ci-failure` (platform delivery) and from `build-host`
+  # (build-host-stable.yml's daily roll).
+  build-host-report:
+    name: "Build host: report the build-latest lane (its own alert)"
+    needs: [preflight, build-host-image, build-host-latest]
+    if: always() && needs.preflight.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File, comment or close the build-host-latest alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          IMAGE: ${{ needs.build-host-image.result }}
+          HANDOVER: ${{ needs.build-host-latest.result }}
+          HANDED: ${{ needs.build-host-latest.outputs.handed }}
+        run: |
+          set -euo pipefail
+          open=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=build-host-latest&state=open&per_page=10" --jq '.[].number')
+          if [ "$IMAGE" = failure ] || [ "$HANDOVER" = failure ]; then
+            body="The build-latest lane failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — build-host-image: \`${IMAGE}\`, build-host-latest: \`${HANDOVER}\`. Every image of the platform set IS published and the fleet's delivery is unaffected; build-latest keeps its previous set until a run hands it over. Read the failed job's ::error:: line (Doc/Architecture/BuildHosts)."
+            first=$(printf '%s\n' "$open" | head -n 1)
+            if [ -n "$first" ]; then
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$first/comments" -f body="$body" >/dev/null
+            else
+              gh label create build-host-latest --repo "$GITHUB_REPOSITORY" --description "The build-latest hand-over lane (main-cd build-host-*) failed" \
+                --color D93F0B --force || echo "::warning::could not ensure the build-host-latest label (continuing)"
+              url=$(gh api -X POST "repos/$GITHUB_REPOSITORY/issues" -f title="build-latest lane failed: run ${GITHUB_RUN_ID}" \
+                -f body="$body" -f 'labels[]=build-host-latest' --jq .html_url)
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/${url##*/}/labels" -f 'labels[]=bug' -f 'labels[]=sev:M' >/dev/null \
+                || echo "::warning::could not stamp bug + sev:M on ${url} — the issue-taxonomy lane will name it"
+            fi
+            exit 0
+          fi
+          if [ "$HANDED" = true ]; then
+            for n in $open; do
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$n/comments" -f body="Recovered: build-latest was handed its set by [run ${GITHUB_RUN_ID}](${RUN_URL})." >/dev/null
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/$n" -f state=closed -f state_reason=completed >/dev/null
+            done
+          fi
 
   # ────────── THE PUBLISHED MODULE SET — READ, NEVER BUILT HERE (policy `platform-module-deploy-separate`) ──────────
   # "we separate platform deploy 100% from module deploy". This run does NOT pack, bake or seal any
@@ -5378,16 +5429,15 @@ jobs:
     # per-build compatibility measurement that replaced the per-build satellite wave, it does not
     # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
     # Its verdict artifacts are read below so the alert names the satellite and the types.
-    # `build-host-image` and `build-host-latest` are in this list ON PURPOSE (Doc/Architecture/BuildHosts):
-    # they are outside the promotion and `delivery-verdict`, so a red there never holds the fleet —
-    # and without a direct need here a standing build host left on an old set would be an unattended
-    # red. While `.github/build-hosts.json` says `enabled: false` the hand-over sends nothing and
-    # cannot fail on a hand-over. build-stable's daily roll is NOT here: it reads MeshWeaver.Plugins'
-    # main-passed ceiling, and this workflow reads no Plugins verdict (its own workflow, build-host-stable.yml).
+    # `build-host-image` / `build-host-latest` are NOT in this list ON PURPOSE (Doc/Architecture/BuildHosts):
+    # `ci-failure`'s recovery reads platform delivery (verify-images), not a build host's, so a red
+    # there could neither close on its own recovery nor stay closed when only images recovered. They
+    # report on their OWN `build-host-latest` issue (job `build-host-report`), closed only by a
+    # successful hand-over.
     # `image-closure-record` is in this list ON PURPOSE (#4066): it is outside `delivery-verdict` so a
     # control-side outage cannot stop an image shipping, and main CD has no PR observer — so without a
     # direct need here its red would be an unattended job and never a durable alert.
-    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, build-host-image, build-host-latest, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
+    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
     # compatibility legs need `published-modules`, so under `failure()` a missing module
     # publication filed THIS issue ("no deployable image was published") over a platform set that
@@ -5457,7 +5507,6 @@ jobs:
           * arm: the FLEET is frozen on control (policy control-first-never-silent) when its ::error reads 'FLEET DELIVERY FROZEN ON CONTROL' - every image is published, but control has run none of the builds it was given for longer than the platformLagBoundMinutes bound, so control-first offers the fleet nothing. The error names control's running commit, the first build it missed and control's OWN self-update verdict (its /health self_update line); the open control-lag issue carries the same reading. The remedy is control's roll, never an arm override.
           * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
           * image-closure-record: every image IS published - what failed is recording portal-ai's closure as mesh data on the control instance (#4066, Doc/Architecture/ImageClosureAsMeshData). Read the job's ::error:: line: a 404 means the control record does not yet allowlist the inbox target Admin/ImageClosures with secretConfigKey Hosting:PlatformWebhookSecret; a 401 a secret mismatch; an unverified 2xx a target declared without a secret key. No image and no publication is missing.
-          * build-host-image / build-host-latest: every image of the set IS published and the fleet's delivery is unaffected - what failed is the standing build hosts' runner image, or handing the armed set to build-latest through the control plane's inbox (Doc/Architecture/BuildHosts). The host keeps running its previous set; read the job's ::error:: line.
           * satellite-compat (a matrix leg) / satellite-compat-image: the set IS published and the release event WAS sent - what failed is the per-build measurement that a satellite's NodeTypes still compile against it (the counterweight to the daily rebuild, 2026-09-12). A red leg means THIS BUILD BROKE that satellite: its types compiled against the set the fleet is on and do not against this one (a satellite that was already broken, or an unestablished baseline, is an advisory on the run page, never a red). The lines under Compatibility below name the types. No image and no publication is missing.
 
           The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. This issue CLOSES ITSELF when a CD run reports a successful heal (#3176) - a later failure files a fresh issue rather than appending here, so this one's title and age stay true to its own cause.${compat}"
