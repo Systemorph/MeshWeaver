@@ -1,10 +1,9 @@
 using System.Linq;
-using Autofac;
-using Autofac.Core;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Messaging;
+using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -15,8 +14,8 @@ namespace MeshWeaver.Graph.Test;
 /// (<c>MemexConfiguration</c>), and until the Blazor.Graph view pack's conversion ships that
 /// pack's mesh-hub configuration registers it too. Both fold into the same hub, so the
 /// registration must dedupe: a doubled call registers exactly ONE of each autocomplete
-/// provider, never two (which would answer every @-completion twice). Read off the hub's own
-/// component registry, so the test needs no mesh services to activate the providers.
+/// provider, never two (which would answer every @-completion twice). Read off the hub's
+/// registrations, so the test needs no mesh services to activate the providers.
 /// </summary>
 public class MeshNavigationRegisteredTwiceDedupesTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -29,13 +28,13 @@ public class MeshNavigationRegisteredTwiceDedupesTest(ITestOutputHelper output) 
     [HubFact]
     public void AddMeshNavigation_Twice_RegistersEachProviderOnce()
     {
-        var registry = GetHost().ServiceProvider.GetRequiredService<ILifetimeScope>().ComponentRegistry;
+        var registry = MeshServiceProvider.From(GetHost().ServiceProvider)!;
 
-        registry.RegistrationsFor(new TypedService(typeof(IAutocompleteProvider)))
-            .Count(r => r.Activator.LimitType == typeof(MeshNodeAutocompleteProvider))
+        registry.RegistrationsOf(typeof(IAutocompleteProvider))
+            .Count(r => (r.ImplementationType ?? r.Instance?.GetType()) == typeof(MeshNodeAutocompleteProvider))
             .Should().Be(1, "TryAddEnumerable dedupes the mesh-node provider across the two registrations");
 
-        registry.RegistrationsFor(new TypedService(typeof(UnifiedReferenceAutocompleteProvider)))
+        registry.RegistrationsOf(typeof(UnifiedReferenceAutocompleteProvider))
             .Should().HaveCount(1,
                 "the manual ServiceType check dedupes the unified-reference provider across the two registrations");
     }

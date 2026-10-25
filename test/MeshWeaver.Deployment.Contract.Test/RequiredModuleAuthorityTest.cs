@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using MeshWeaver.Deployment;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Deployment.Contract.Test;
 
@@ -54,7 +55,7 @@ public class RequiredModuleAuthorityTest
     [Fact]
     public void TheDeclaredCeilingIsTheOneTheChartRenders()
     {
-        var root = RepoRoot();
+        var root = RepoPaths.TryFindRoot();
         Assert.SkipWhen(root is null, "repository tree not reachable from the test bin — the chart is read from it");
         var chart = Path.Combine(root!, "deploy", "helm", "templates", "memex-portal", "config.yaml");
         Assert.True(File.Exists(chart), $"the portal ConfigMap template is not at {chart}");
@@ -270,14 +271,6 @@ public class RequiredModuleAuthorityTest
         // CHART that would not carry it.
         Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Aspire(null))[$"Modules__Required__{over}"]);
         Assert.Equal("MeshWeaver.Mcp.dll", DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm)[$"Modules__Required__{over}"]);
-    }
-
-    private static string? RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName;
     }
 
     [Fact]

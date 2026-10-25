@@ -7,6 +7,7 @@ using MeshWeaver.Plugin.Build;
 using Xunit;
 
 using MeshWeaver.Compiler;
+using MeshWeaver.Fixture;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
@@ -253,7 +254,7 @@ public class FrameworkBuildIdentityTest
         // surface shipped content can compile against, enforced by the gate itself. This test
         // recomputes that closure from the csproj graph so the list cannot silently drift when
         // the tester gains or loses a framework reference.
-        var root = FindRepositoryRoot();
+        var root = RepoPaths.TryFindRoot();
         Assert.SkipWhen(root is null,
             "repository tree not reachable from the test bin — closure pin runs in-repo only");
 
@@ -459,7 +460,7 @@ public class FrameworkBuildIdentityTest
         //
         // CanonicalList_MatchesTheTesterClosure pins one side of that equality. This pins the other,
         // and it is the check whose absence let a one-line-per-host change take the site down.
-        var root = FindRepositoryRoot();
+        var root = RepoPaths.TryFindRoot();
         Assert.SkipWhen(root is null,
             "repository tree not reachable from the test bin — closure pin runs in-repo only");
 
@@ -700,18 +701,6 @@ public class FrameworkBuildIdentityTest
         using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
         var md = pe.GetMetadataReader();
         return md.GetGuid(md.GetModuleDefinition().Mvid).ToString("N");
-    }
-
-    private static string? FindRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-        return null;
     }
 
     /// <summary>

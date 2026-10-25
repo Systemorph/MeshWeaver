@@ -113,16 +113,16 @@ public sealed class PrebuiltBundleRetentionHostedService(
             .Select(_ => GuardedPass(RunPass(root, pool), status.Record, ex =>
             {
                 status.RecordFault(ex);
-                logger.LogWarning(ex,
-                    "PrebuiltBundleRetention: pass outcome — FAULTED: the pass over {Root} faulted — nothing was collected; the next pass plans it again",
+                PassLedger.ReportTerminal(PrebuiltBundleStore.PassName, logger, ex,
+                    ": the pass over {Root} faulted — nothing was collected; the next pass plans it again",
                     root);
-            }, _ =>
+            }, cancelled =>
                 // Not a fault and not "nothing was collected": the pool ended the pass (teardown).
-                // A pass cut short during collection has already logged its INTERRUPTED outcome with
-                // what it removed and written it to the ledger; this line adds no second verdict.
-                logger.LogInformation(
-                    "PrebuiltBundleRetention: the pass over {Root} was cancelled by the I/O pool (teardown) — "
-                    + "anything not yet reached is planned again by the next pass", root)))
+                // The pass has already recorded its INTERRUPTED outcome (and, during collection,
+                // written what it removed to the ledger); this line adds no second verdict.
+                PassLedger.ReportTerminal(PrebuiltBundleStore.PassName, logger, cancelled,
+                    ": the pass over {Root} faulted — nothing was collected; the next pass plans it again",
+                    root)))
             .Concat()
             .Subscribe(
                 _ => { },

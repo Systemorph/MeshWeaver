@@ -50,7 +50,7 @@ SynchronizationStream total                =  8 461     (0.5 % apart)
 ```
 
 So there is no separate "sync hub leak" to explain. **The question is entirely "why are there 8 461
-live `SynchronizationStream`s"**, and each one costs its own Autofac `ILifetimeScope` and
+live `SynchronizationStream`s"**, and each one costs its own service scope and
 `TypeRegistry` (~390 KB, of which ~173 KB is framework metadata duplicated per hub).
 
 ## 2. What retires one — three paths, and only one of them applies here
@@ -355,8 +355,8 @@ ninety seconds later and serving the same instance, holds 101 node hubs. The two
 by 958 node hubs and 4 260 MiB of last-GC heap, about 4.4 MiB per node hub (its own scope, type
 registry, workspace and its three or four `sync/` hubs would be in that figure). That fan-out is the candidate for the multi-GiB
 `[HEAPSTEP]` series every roll prints in its first minutes: the sampled allocation of those steps
-is `System.String`, `System.Byte[]`, `Entry[System.String][]` and Autofac's
-`IResolvePipelineBuilder` handlers and `MiddlewareDeclaration`, which is what hub construction
+is `System.String`, `System.Byte[]`, `Entry[System.String][]` and the resolve-pipeline
+handlers and middleware declarations of the DI container then in use (Autofac, since removed in MeshWeaver#7145), which is what hub construction
 allocates. `[HEAPSTEP]` names allocated types, not retained roots, and this section has neither a
 quiet-process root attribution nor a before/after on one process, so the per-hub figure and the
 link to the heap step are to be confirmed, not cited.
@@ -541,7 +541,16 @@ for the reading process.
 (MeshWeaver.Hosting.Orleans.Test). Four System reads through the silo's cache activate four hubs,
 the pass's mirrors are released, and each hub must reach `DisposalCompleted`. On the unfixed grain
 none does within the 36 s convergence bound. A second fact covers the conservative half: a node
-read by `TestUser` must keep its activation after every mirror of it has gone.
+`TestUser` opened a view of from another process must keep its activation after that view and every
+mirror of it have gone. The person is recognised on the view's own subscribe.
+
+That fact first read the node through the client process's mesh-node cache, which by the rule above
+never marks the owner. It passed only when the cache's later **teardown** message happened to be
+stamped with the test host's standing identity (`SetHostIdentity`, a single-identity host) and reached
+the grain before the owner's last lease dropped. A teardown stamped any other way retired the hub, and
+main went red intermittently. Released under System, the same teardown retires it every time. A
+person fact must put the person on the read itself, never on whatever identity a later message
+inherits.
 
 **Not established:** the before/after on a live replica. The reading to take is the per-address
 census of §10.1 inside the first 30 minutes of a generation, compared with the same window on a

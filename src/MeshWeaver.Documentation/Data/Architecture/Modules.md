@@ -1179,19 +1179,22 @@ bytes whose manifest states none. See
 [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) → "A bundle states what it
 was built against" for the producer half.
 
-The policy gate is the deployment's **existing update policy — `Admin/UpdatePolicy`**, the same
-single surface that governs the platform image roll; there is no module-specific knob.
-**Continuous lands unattended; Stable — the platform default since 2026-09-08 — and None
-(what an absent policy reads as, #3542) decline the UPGRADE** (the catalog's manual Update still
-works there). The record's version `pattern` governs the platform IMAGE only — modules carry their
-own versions — so a `Continuous` record without a pattern still lands modules while its platform
-stays on clean releases. A
-deployment that pins its image takes updates deliberately, and its modules do not run ahead of
-that choice. A **first landing** is deliberately policy-exempt: it completes an install the
-operator's own surfaces already sanctioned, and gating it would ship a package whose binary half
-never arrives. The wiring is `IModuleUpdatePolicy` (`MeshWeaver.PluginCatalog`), implemented by
-the memex portals over the policy node; a host that registers no implementation gets the default
-(allowed).
+The policy gate is the **package's own update policy** — `PackageManifest.EffectiveUpdatePolicy`
+on its install record — read per package by `RegistryUpdateReconciler.PolicyDecline`, and
+**independent of the platform's `Admin/UpdatePolicy`**, which governs the platform image roll only.
+**`Auto` lands the upgrade unattended; `Notify` and `None` decline it** (the catalog's manual Update
+still works there), and an unreadable record reads as `Notify` — the absence of a readable policy
+never reads as "land". A fresh install is `Auto`; an administrator opts one package out on its
+catalog card. So pinning the platform image, or choosing Stable on `Admin/UpdatePolicy`, does
+**not** hold a package's modules: to hold a module, set THAT package's policy. The content half of
+the same package reads the same policy (`PackageUpdateReconciler`), but the two halves are
+reconciled INDEPENDENTLY: an `Auto` package whose partition is owned by a sync source has its
+content held until the sync lands it (`HoldForSync`), while its compatible module upgrade lands
+regardless (`RegistryUpdateReconciler.AdoptOne` no longer waits for the partition's sync). A
+**first landing** is deliberately policy-exempt: it completes an install
+the operator's own surfaces already sanctioned, and gating it would ship a package whose binary
+half never arrives. The former host-wide `IModuleUpdatePolicy` seam, which tied module upgrades to
+the image policy, was retired and has since been deleted.
 
 ## Deciding: what can be a module, and where its source may live
 

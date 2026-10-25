@@ -197,7 +197,7 @@ using (accessService.ImpersonateAsHub(hub))
 
 The `FutuRe/Analysis` group hub needs to read data from two business-unit sub-hubs: `FutuRe/AsiaRe/Analysis` and `FutuRe/EuropeRe/Analysis`. Each sub-hub has its own RLS scope, so the parent hub must be granted explicit read access via `AccessAssignment` nodes, then query using its own identity.
 
-**Step 1 — grant read access in each sub-hub** (see `samples/Graph/Data/FutuRe/AsiaRe/Analysis/_Access/FutuRe_Analysis_Access.json`):
+**Step 1 — grant read access in each sub-hub** (see the FutuRe demo's `FutuRe/AsiaRe/Analysis/_Access/FutuRe_Analysis_Access.json`, in MeshWeaver.Plugins' `test/samples/Graph/Data/`):
 
 ```json
 {

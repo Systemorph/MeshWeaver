@@ -718,16 +718,4 @@ public static partial class MeshNodeImageHelper
             _ => null,
         };
     }
-
-    /// <summary>
-    /// Legacy method — returns the icon only if it's an image URL.
-    /// Prefer <see cref="GetIconForRendering"/> which also returns SVG and emoji icons.
-    /// </summary>
-    [Obsolete("Use GetIconForRendering instead")]
-    public static string? GetIconAsImageUrl(string? icon)
-    {
-        if (string.IsNullOrEmpty(icon))
-            return null;
-        return icon.Contains('/') || icon.StartsWith("data:") ? icon : null;
-    }
 }

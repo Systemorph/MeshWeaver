@@ -170,7 +170,7 @@ public sealed class IoPoolRegistry : IDisposable
     /// the ThreadPool via <see cref="IIoPool"/> runs independently. If the service
     /// scope is disposed while such an operation is still running, its continuation
     /// (which may resolve a service) throws <see cref="ObjectDisposedException"/>
-    /// from the dead Autofac scope — surfacing as an unobserved "catastrophic"
+    /// from the dead service scope — surfacing as an unobserved "catastrophic"
     /// failure. Await this between <c>DisposalCompleted</c> and scope disposal.
     /// On timeout it completes anyway (a stuck slot is a separate bug the caller
     /// can surface from a non-zero <see cref="TotalInFlight"/>).

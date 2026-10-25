@@ -41,8 +41,15 @@ public sealed class StaleStreamStateException : InvalidOperationException
 /// signal for when to read again (the node's next write, a new listing frame); the cache evicts the
 /// faulted entry so that next read opens a fresh subscription.</para>
 /// </summary>
-public sealed class SyncStreamOwnerRefusedException : InvalidOperationException
+public sealed class SyncStreamOwnerRefusedException : InvalidOperationException, IClassifiedFault
 {
+    /// <summary>Every refusal counted was the owner's ShuttingDown verdict — "the address is coming
+    /// back" — so for a reader this is a transient fault of the transport, never a defect.</summary>
+    public string ClassifiedKind => FaultKind.Transient;
+
+    /// <inheritdoc />
+    public string? ClassifiedLayer => FaultLayer.Transport;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncStreamOwnerRefusedException"/> class.
     /// </summary>
@@ -2404,7 +2411,7 @@ public static class JsonSynchronizationStream
     /// <para>🚨 Resolved through <see cref="GetLogger"/> rather than a bare
     /// <c>ServiceProvider.GetService&lt;ILoggerFactory&gt;()</c>, and that matters here more than
     /// anywhere else in this file: a stream whose hub was just released is very often one whose HOST
-    /// is winding down too, and Autofac throws <c>ObjectDisposedException</c> from a closed scope. A
+    /// is winding down too, and the DI container throws <c>ObjectDisposedException</c> from a closed scope. A
     /// raw resolution would turn a benign "no patch derived" into a fault raised BY THE DIAGNOSTIC,
     /// on the exact teardown path this code exists to make quiet. <c>GetLogger</c> already answers
     /// that with a <c>NullLogger</c> — losing the line is the correct price, and

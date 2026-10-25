@@ -2307,7 +2307,7 @@ never for the last test name.
 **10. The straggler capture is not a lead on this.** `0 UNHANDLED, 120 first-chance` is exactly what the
 design produces, and neither half points anywhere: `TeardownStragglerCapturer` *was* loaded — its module
 initializer ran, which the 120 records prove — but its first-chance filter is
-`IsTeardownDisposedStraggler` (Autofac `LifetimeScope` and `MemoryCache` shapes only), so an emit `NRE`
+`IsTeardownDisposedStraggler` (the disposed-service-scope and `MemoryCache` shapes only), so an emit `NRE`
 was never eligible; and the `NRE` is **caught** in `EmitPipeline.EmitCompilationToDirectory`, stamped
 with the canary verdict and turned into a compile failure on the node, so it never reaches
 `AppDomain.UnhandledException`. All 120 records on 2026-09-22 were `ObjectDisposedException`, zero were

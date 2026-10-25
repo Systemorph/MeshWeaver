@@ -48,7 +48,7 @@ public static class AccessControlPipeline
     /// and the only evidence left is the <see cref="ObjectDisposedException"/> its scope throws.
     /// The exception test alone would over-claim: an <see cref="ObjectDisposedException"/> from
     /// something the HANDLER touched on a live hub is a real fault, not a recycle, so the message
-    /// is matched on the Autofac scope wording the rest of the codebase already keys on (the same
+    /// is matched on the service scope wording the rest of the codebase already keys on (the same
     /// two shapes <c>TeardownStragglerCapturer</c> filters).</para>
     /// </summary>
     /// <summary>
@@ -83,25 +83,11 @@ public static class AccessControlPipeline
     /// than an exception — the permission fold reports an undetermined outcome as text.
     /// </summary>
     internal static bool IsHubGone(IMessageHub hub, string? reason)
-        => hub.IsShuttingDown
-           || (reason is not null
-               && (reason.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase)
-                   || reason.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase)));
+        => hub.IsShuttingDown || HubDisposingException.IsDisposedContainerReason(reason);
 
     internal static bool IsHubGone(IMessageHub hub, Exception error)
     {
-        if (hub.IsShuttingDown)
-            return true;
-        for (var e = error; e is not null; e = e.InnerException)
-        {
-            if (e is not ObjectDisposedException)
-                continue;
-            var msg = e.Message ?? string.Empty;
-            if (msg.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase)
-                || msg.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-        return false;
+        return hub.IsShuttingDown || HubDisposingException.IsDisposedContainer(error);
     }
 
     /// <summary>
@@ -274,7 +260,7 @@ public static class AccessControlPipeline
             // CRITICAL: do NOT resolve SecurityService / AccessService /
             // ILoggerFactory at pipeline-registration time. This callback runs
             // synchronously inside MessageService.ctor (which is itself being
-            // resolved by Autofac during MessageHub construction). Resolving
+            // resolved by the DI container during MessageHub construction). Resolving
             // any scoped service that transitively depends on IMessageHub here
             // creates a circular DI resolution → stack overflow on hub
             // creation. Instead, resolve lazily per-delivery via the closure

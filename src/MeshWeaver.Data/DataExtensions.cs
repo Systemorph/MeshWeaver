@@ -1488,7 +1488,7 @@ public static class DataExtensions
     /// that DID commit is a no-op and one that died with its hub lands. No bound moves.</para>
     ///
     /// <para>🚨 <b>Why every <see cref="ObjectDisposedException"/> in the graph counts</b>, not just
-    /// the Autofac-scope shape <see cref="HubDisposingException.IsDisposedContainer"/> matches.
+    /// the closed-scope shape <see cref="HubDisposingException.IsDisposedContainer"/> matches.
     /// Nothing on this path disposes anything as a way of REFUSING a patch: a disposed scope, a
     /// disposed subject, a disposed CTS and the two typed teardown exceptions
     /// (<see cref="HubDisposingException"/>, <c>HubDisposedBeforeResponseException</c> — both derive
@@ -1619,9 +1619,7 @@ public static class DataExtensions
     /// delivery failure carrying it belongs here rather than in the <c>Unknown</c> bucket.</para>
     /// </summary>
     internal static bool IsOwnerTeardown(Exception? ex)
-        => ExceptionChain.Contains<ObjectDisposedException>(ex)
-           || ExceptionChain.Contains(ex, static e =>
-               e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown });
+        => FaultClassifier.Classify(ex, TeardownContext.DisposedIsOwnTeardown).IsTeardown;
 
     /// <summary>
     /// 🚨 Totality for a one-shot watcher: runs <paramref name="onEmptyCompletion"/> when
@@ -3630,7 +3628,7 @@ public static class DataExtensions
             // SilentReadNackTest's bulk-only failure is
             //   TargetInvocationException → ObjectDisposedException: "Instances cannot be resolved
             //   and nested lifetimes cannot be created from this LifetimeScope …"
-            // i.e. the hub's Autofac scope closed underneath an in-flight read. It is NOT a
+            // i.e. the hub's service scope closed underneath an in-flight read. It is NOT a
             // HubDisposingException — a scope closed under a live delivery announces nothing — so
             // it fell to the value arm, fabricated a GetDataResponse{Error}, CLAIMED THE ONCE-ONLY
             // ANSWER SLOT and left the caller with "this node does not exist" for a node that
@@ -4961,7 +4959,7 @@ public static class DataExtensions
         var contextPath = request.Message.Context;
         // 🚨 Resolved HERE, while the handler runs on a live hub — never inside the answer callback.
         // The answer arrives whenever the slowest provider settles, which can be after this hub has
-        // been disposed; a resolve from its Autofac scope then throws ObjectDisposedException out
+        // been disposed; a resolve from its service scope then throws ObjectDisposedException out
         // of a Subscribe(onNext) body, Rx rethrows it on the completing thread, and the process dies
         // (exit 134, no failing test). ILoggerFactory is the root singleton, so the instance held
         // here does not die with the hub. Posting the response during disposal is fine.

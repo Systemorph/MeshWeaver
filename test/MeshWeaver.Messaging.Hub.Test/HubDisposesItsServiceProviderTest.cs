@@ -11,7 +11,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// 🚨 <b>A hosted hub's lifetime scope must be closed when that hub is disposed.</b>
 ///
 /// <para><c>MessageHubConfiguration.CreateServiceProvider</c> builds a provider per hub —
-/// <c>ConfigureServices(parent).SetupModules(...)</c>, which on Autofac is
+/// <c>ConfigureServices(parent).SetupModules(...)</c>, which on the DI container is
 /// <c>BeginLifetimeScope</c> for a hosted hub and a fresh root container for a root hub. Nothing
 /// closed it: the call was present in <c>HandleShutdownCore</c>'s ShutDown phase and
 /// <b>commented out</b>.</para>
@@ -30,7 +30,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 ///   later, against a graph already torn down, which is the classic route to a <b>SIGSEGV at
 ///   process exit</b>. MeshWeaver.Reinsurance#98 is exactly that shape: the gate exits <b>139</b>,
 ///   and whichever NodeType happened to be mid-compile is reported as "never came live".</item>
-///   <item>An Autofac parent scope <b>tracks every child scope it creates</b> until the parent
+///   <item>An unclosed child scope <b>keeps everything it built</b> until the parent
 ///   itself is disposed. A portal that activates and recycles hubs for hours therefore accumulates
 ///   one undisposed scope per hub, with everything each one holds — which is why a disposable-mesh
 ///   e2e runner reaches ~7 GB of 7 GB and starts taking 20-second GC pauses.</item>
@@ -67,7 +67,7 @@ public class HubDisposesItsServiceProviderTest(ITestOutputHelper output) : HubTe
         var host = GetHost();
 
         // 🚨 Registered by TYPE, not as a pre-built instance. `AddSingleton(instance)` hands the
-        // container an object it did not create, and both MS DI and Autofac deliberately never
+        // container an object it did not create, and both MS DI and the DI container deliberately never
         // dispose those — the caller owns what the caller built. A test written that way can never
         // pass, however correct the fix, and reads as "the fix does not work". The container must
         // CONSTRUCT it to own it, which is also the shape that actually leaks in production.

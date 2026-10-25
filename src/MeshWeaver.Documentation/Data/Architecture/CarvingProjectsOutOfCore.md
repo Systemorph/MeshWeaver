@@ -325,6 +325,65 @@ So the conversion, not a copy:
    one. And any `Add<Name>()` helper in `SampleDataExtensions` leaves with the content — the moved
    suites call `IncludePartition("<Name>")`, the primitive it wrapped.
 
+## The product demo samples
+
+ACME, FutuRe, Northwind and PensionFund were product demos sitting in the framework's
+`samples/Graph` (with their `content/` and `attachments/` folders). They left as **test content**,
+not as packages: MeshWeaver.Plugins carries them at `test/samples/Graph/{Data,content,attachments}`,
+laid out exactly as here. Core keeps the minimal samples its own tests and docs use — `Systemorph`,
+`MathDemo`, `PythonDemo`, `TestSpace`, the users, `Type`, `Doc` and the infrastructure partitions.
+
+**Why test content and not a package.** Every compiled consumer of these trees was already in the
+plugins repo — the suites that stage `samples/Graph` into their output, and the `dotnet new` template
+generator that seeds ACME — so that is where they went. A package would publish them, because a
+merge to a satellite's `main` lists the package in the registry. Turning FutuRe or PensionFund into a
+MeshWeaver.Reinsurance package is a decision for the owner. It also cannot be the vehicle for the
+compiled suites: MeshWeaver.Plugins does not check out MeshWeaver.Reinsurance, and pointing it at
+that repo would make a platform-side repo depend on a satellite. `test/` is in every package
+enumerator's skip set, so nothing there is published.
+
+**"Plugins already has Northwind" was only half true.** The plugins repo's `Northwind` Store package
+is the compiled analytics application (`MeshWeaver.Northwind.Application`): the dashboard, the data
+cube and the sales areas. Core's tree was a different demo. It had node-per-entity NodeTypes
+(`Northwind/{Customer,Product,Supplier,Employee}`) with 91 customers, 77 products and 29 suppliers as
+nodes, their data-bound views and in-mesh `Test/` areas, the reports catalog, the articles and the
+documentation pages. Of all that, only the `AnalyticsCatalog` overlapped the package. So the tree
+moved whole instead of being deleted as a duplicate.
+
+**How a suite stages both trees.** `src/Directory.Build.props` defines `PluginsDemoSamplesGraph`
+and `CoreDemoSamplesExclude`. A suite stages
+`$(MeshWeaverRoot)/samples/Graph/**;$(PluginsDemoSamplesGraph)/**` under one `Link`, and excludes the
+four trees from the platform's root. Each output file therefore has exactly one source, whether or
+not the pinned platform checkout still carries its old copy. FutuRe.Test's `Compile Include`s of the
+FutuRe sources point at the plugins copy too.
+
+**What the move surfaced.** The plugins repo holds content to three ratchets that core's samples tree
+never met:
+
+- `check-data-plane-messages.py` flagged ACME's Todo status menu. It posted a `DataChangeRequest`
+  with the `Todo` record to its own hub, and that write never reached the node. Driving the card's
+  "Update" action in `TodoStatusChangeTest` leaves the stored status at `Pending` (measured: the
+  wait for `Active` times out at 30 s). The menu now writes through
+  `GetMeshNodeStream().Update(...)`, and the same test sees `Active`.
+- `check-node-page-provenance.py` flagged seven landing pages registered with a bare `WithView`.
+  They now use `WithNodePage`. FutuRe's group analysis lands on the framework's area catalogue, which
+  is recorded as an expected unresolved area.
+- `check-node-path-collisions.py --root .` refused `ACME.json` + `ACME/index.md`. Here
+  `--filesystem-layout` admits that pair because the FileSystem adapter merges it; there it is
+  refused. The root is now `ACME/index.md` alone, with the same name, description, category and icon.
+
+**What CI stops compiling here.** The samples stage of core's content gate used to compile these
+trees and run their in-mesh `Test/` areas. The node-repo gate reads top-level packages only, so in
+the plugins repo the trees are compiled only by the suites that load them. Running core's tester over
+the moved trees with the same `bake-then-gate.sh` gives `[PASS]` for all four packages: 24 of 24
+types compiled, the Northwind tests passed, and there were 0 warnings. A CI lane that does the same
+thing there is still owed.
+
+The `PensionFund idempotence intermittent` entry left `.github/samples-gate.allow` with its subject.
+The defect it named is not fixed. Re-installing PensionFund rewrites `Currency/{CHF,EUR,USD}` without
+`decimalPlaces`, because default-suppression drops a value equal to the C# initializer. That defect is
+now only reachable through the moved tree.
+
 ## Related
 
 - [Module Build Architecture](../ModuleBuildArchitecture) — the unified build every repo follows

@@ -10,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Compiler.Pipeline.Test;
 
@@ -177,7 +178,7 @@ public class AdoptionRefusalIsClassifiedAndReportedOnceTest
     [Fact]
     public void NoSiteInSrcLogsTheIdentityRefusalExceptThroughTheLedger()
     {
-        var src = Path.Combine(FindRepoRoot(), "src");
+        var src = Path.Combine(RepoPaths.Root, "src");
         var direct = new Regex(@"NodeTypeBuildIdentity\.RecoveryVerb\b(?!For|HealedHere|RequirePrebuilt)");
         var reporter = new Regex(@"NodeTypeAdoptionRefusalLog>\(\)\s*\.Report\(");
 
@@ -201,15 +202,6 @@ public class AdoptionRefusalIsClassifiedAndReportedOnceTest
             "the five guarded load paths (schema probe, data-source schema, data-model area, cell "
             + "surface, contract handler) report through the ledger; fewer means the matcher went "
             + "blind and this guard would pass having checked nothing");
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "Could not locate the repository root (MeshWeaver.slnx).");
-        return dir!.FullName;
     }
 
     private sealed class RecordingLogger : ILogger

@@ -137,24 +137,6 @@ public static class SuppliedNavigationRail
     {
         /// <summary>The sort choices for the top-level entries — a dropdown beside the search box.</summary>
         public IReadOnlyList<NavSortOption> SortOptions { get; init; } = [];
-
-        /// <summary>
-        /// The flat entries, in rail order. <b>A filter, never the render order</b> — reading this
-        /// and <see cref="Groups"/> in turn is precisely how #3406 put every leaf page ahead of
-        /// every folder. Kept because an in-mesh caller compiles at RUNTIME and is invisible to
-        /// both <c>dotnet build</c> and a repo grep, so the two former buckets are retired as
-        /// forwarders rather than deleted.
-        /// </summary>
-        [Obsolete("The rail is ONE ordered sequence now — walk Items. Pages and Groups are filters "
-                  + "over it, and concatenating them re-creates the #3406 ordering bug.")]
-        public IReadOnlyList<RailLink> Pages => [.. Items.OfType<RailLink>()];
-
-        /// <summary>
-        /// The collapsible entries, in rail order. A filter — see <see cref="Pages"/>.
-        /// </summary>
-        [Obsolete("The rail is ONE ordered sequence now — walk Items. Pages and Groups are filters "
-                  + "over it, and concatenating them re-creates the #3406 ordering bug.")]
-        public IReadOnlyList<RailGroup> Groups => [.. Items.OfType<RailGroup>()];
     }
 
     /// <summary>

@@ -93,6 +93,7 @@ public static class ReleaseSchemaMarker
     /// pool, never on a hub action block.</summary>
     public static IObservable<ReleaseSchemaStep> ObserveStep(
         IIoPool pool, string? publishedRoot, string? installedVersion, string targetVersion, ILogger? logger = null) =>
+        // atomic-blocking-leaf: Step reads exactly two small marker files (installed and target), no walk
         pool.InvokeBlocking(_ => Step(publishedRoot, installedVersion, targetVersion, logger));
 
     /// <summary>A version as a marker file NAME: build metadata (<c>+sha</c>) dropped, and anything that

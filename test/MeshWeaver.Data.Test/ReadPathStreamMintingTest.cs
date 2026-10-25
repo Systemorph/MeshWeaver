@@ -21,7 +21,7 @@ namespace MeshWeaver.Data.Test;
 /// caller-specific (client id, subscriber, init callback). The read handlers, however, supplied a
 /// CONSTANT — <c>x =&gt; x.ReturnNullWhenNotPresent()</c> — so every
 /// <c>GetDataRequest</c> took the uncached branch, and every uncached reduce constructs a
-/// <c>SynchronizationStream</c>, hence a hosted <c>sync/{id}</c> sub-hub with its own Autofac
+/// <c>SynchronizationStream</c>, hence a hosted <c>sync/{id}</c> sub-hub with its own DI container
 /// scope, <c>TypeRegistry</c> and <c>JsonSerializerOptions</c> (~390 KB), registered for disposal on
 /// its HUB-LIFETIME parent (the data source's <c>EntityStore</c> stream). One permanent hub per
 /// read, released only when the owning node hub dies.</para>

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -139,7 +140,7 @@ public class ProbeSemanticsGuard
         var constants = DeclaredConstants();
         var tag = EndpointTagWiring(constants)[probes["readinessProbe"]];
 
-        var source = File.ReadAllText(Path.Combine(FindRepoRoot(), ServiceDefaults));
+        var source = File.ReadAllText(Path.Combine(RepoPaths.Root, ServiceDefaults));
         var registrations = Regex.Matches(source, @"AddCheck[^;]*?;", RegexOptions.Singleline)
             .Select(m => m.Value)
             .Where(r => constants.Any(c => c.Value == tag
@@ -163,7 +164,7 @@ public class ProbeSemanticsGuard
     /// <summary>The <c>httpGet</c> path each probe in the portal deployment names.</summary>
     private static IReadOnlyDictionary<string, string> ChartProbePaths()
     {
-        var yaml = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Deployment)));
+        var yaml = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, Deployment)));
         var paths = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var probe in new[] { "startupProbe", "readinessProbe", "livenessProbe" })
@@ -219,7 +220,7 @@ public class ProbeSemanticsGuard
     /// <summary>The <c>ProbeEndpoints</c> string constants, by name — the one place they are declared.</summary>
     private static IReadOnlyDictionary<string, string> DeclaredConstants()
     {
-        var source = File.ReadAllText(Path.Combine(FindRepoRoot(), ProbeEndpoints));
+        var source = File.ReadAllText(Path.Combine(RepoPaths.Root, ProbeEndpoints));
         var constants = Regex.Matches(source, @"public const string (?<name>\w+)\s*=\s*""(?<value>[^""]+)"";")
             .ToDictionary(m => m.Groups["name"].Value, m => m.Groups["value"].Value, StringComparer.Ordinal);
 
@@ -237,7 +238,7 @@ public class ProbeSemanticsGuard
     private static IReadOnlyDictionary<string, string> EndpointTagWiring(
         IReadOnlyDictionary<string, string> constants)
     {
-        var source = File.ReadAllText(Path.Combine(FindRepoRoot(), ServiceDefaults));
+        var source = File.ReadAllText(Path.Combine(RepoPaths.Root, ServiceDefaults));
         var wiring = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (Match m in Regex.Matches(
@@ -304,7 +305,7 @@ public class ProbeSemanticsGuard
     /// </summary>
     private static string? ValuesLeaf(string dottedKey)
     {
-        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Values));
+        var lines = File.ReadAllLines(Path.Combine(RepoPaths.Root, Values));
         var segments = dottedKey.Split('.');
         var depth = 0;
         var indent = -1;
@@ -335,13 +336,4 @@ public class ProbeSemanticsGuard
     private static string ExecutableLinesOf(string yaml) =>
         string.Join("\n", yaml.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

@@ -1,0 +1,34 @@
+# Core's caller of the review-on-change lane (policy `review-on-real-change`): on every push to a pull
+# request, request ONE Copilot review when the push changed the pull request's own diff, and nothing
+# when it only merged `main`. The lane header (node-repo-request-review.yml) states the contract; the
+# predicate is check-review-answered.py `review_request_action`.
+#
+# `scripts-ref: github.sha` makes the lane fetch the predicate from the SAME tree this run is for (the
+# pull request's merge commit), exactly as review-answered.yml's `lane` job does, so a pull request
+# that changes the predicate is judged by its own copy.
+#
+# Not a required check: its job is to ASK for a review. What a missing review does to the merge is
+# the required `Automatic review answered` check's decision (`copilot_currency`).
+name: Request review on real change
+
+on:
+  pull_request:
+    types: [synchronize]
+  # The sweep: a review requested while another was pending can land on the previous head, and no
+  # event follows (#7142 review). Every 15 minutes the lane re-judges the open pull requests.
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  request:
+    uses: ./.github/workflows/node-repo-request-review.yml
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      # On `schedule` github.sha is main's tip — the predicate as merged.
+      scripts-ref: ${{ github.sha }}

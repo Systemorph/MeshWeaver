@@ -1295,10 +1295,10 @@ public sealed class IoPool : IIoPool, IDisposable
                 Interlocked.Exchange(ref armed, 1);
 
                 // Run the SUBSCRIBE — providers opening + the initial-snapshot emission that routes →
-                // CreateHub (Autofac BeginLifetimeScope) — as a TRACKED, GATED, pool-cancellable leaf,
+                // CreateHub (a hub service level being begun) — as a TRACKED, GATED, pool-cancellable leaf,
                 // exactly like Invoke. So while that bounded, dangerous window runs it holds a gate permit
                 // and counts in _inFlight; Drain() cancels _poolCts then RE-ACQUIRES every permit, so it
-                // BLOCKS until this subscribe has released — i.e. the owning Autofac scope is never disposed
+                // BLOCKS until this subscribe has released — i.e. the owning service scope is never disposed
                 // while a BeginLifetimeScope is running (the endemic teardown SIGSEGV).
                 var setup = Observable.FromAsync(async subscriberCt =>
                     {

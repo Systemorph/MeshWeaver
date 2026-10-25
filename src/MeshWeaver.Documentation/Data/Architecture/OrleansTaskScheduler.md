@@ -226,7 +226,7 @@ private IObservable<T> ScheduleRenderSubscribe<T>(IObservable<T> source) =>
 
 🚨 **The pooled variant is not a nicety — a bare `SubscribeOn(TaskPoolScheduler.Default)` is
 invisible to mesh teardown.** During disposal that hop keeps executing on a ThreadPool thread
-*after* the hub's Autofac `LifetimeScope` is disposed (→ `ObjectDisposedException` from a menu
+*after* the hub's service scope is disposed (→ `ObjectDisposedException` from a menu
 renderer's `GetService`) and, for a node whose render touches types compiled into a collectible
 `AssemblyLoadContext`, *after* that ALC is unloaded (→ a native use-after-unload crash: the
 `FutuRe.Test` exit=139). `SubscribeThroughPool` makes the subscribe a tracked, cancellable leaf on

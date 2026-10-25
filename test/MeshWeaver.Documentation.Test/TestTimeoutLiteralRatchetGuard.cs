@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -102,7 +103,7 @@ public class TestTimeoutLiteralRatchetGuard
     [Fact]
     public void TheHandWrittenTimeoutCountOnlyEverGoesDown()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var perFile = SourceScan.SourceFiles(root, ScannedRoots)
             .Select(f => (Path: SourceScan.Relative(root, f), Count: CountIn(f)))
             .Where(x => x.Count > 0 && !Exempt.Contains(x.Path))
@@ -133,7 +134,7 @@ public class TestTimeoutLiteralRatchetGuard
     [Fact]
     public void TheBaselineStaysCloseToTheTree()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var total = SourceScan.SourceFiles(root, ScannedRoots)
             .Where(f => !Exempt.Contains(SourceScan.Relative(root, f)))
             .Sum(CountIn);

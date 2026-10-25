@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -44,8 +45,8 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
     private const string AllowFileName = "LayoutAreaDataBakeSites.allow";
 
     /// <summary>The seeded inventory's size. Lower it in the same change that lowers a line.
-    /// (18: NotificationsSettingsTab left with Memex.Portal.Shared for MeshWeaver.Plugins.)</summary>
-    private const int TotalBudget = 18;
+    /// (13: NotificationsSettingsTab left with Memex.Portal.Shared for MeshWeaver.Plugins.)</summary>
+    private const int TotalBudget = 13;
 
     /// <summary>Reads that make a unit wait on data.</summary>
     internal static readonly Regex LoadPattern = new(
@@ -79,7 +80,7 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewLayoutAreaBakesDataIntoControls()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root);
 
@@ -126,7 +127,7 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerSeesTheProductionTree()
     {
-        var found = Scan(SourceScan.FindRepoRoot());
+        var found = Scan(RepoPaths.Root);
         Assert.True(found.Values.Sum() > 0,
             "The scan found no layout area that bakes data anywhere under " + string.Join(", ", ScannedRoots)
             + ". Either every area was converted — then delete this guard and its allow file in the "

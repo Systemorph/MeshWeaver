@@ -337,7 +337,7 @@ public record SubscribeAck;
 ///
 /// <para>🚨 <see cref="IReleasesRemoteState"/>: this is the ONLY thing that ends the owner's
 /// per-subscriber stream and its <c>sync/{id}</c> sub-hub — nothing else disposes a server-side
-/// stream. Losing it does not lose a notification, it leaks a <c>Started</c> hub (its Autofac
+/// stream. Losing it does not lose a notification, it leaks a <c>Started</c> hub (its DI container
 /// lifetime scope and its TypeRegistry) for the life of the owner's process, which is why it must
 /// leave a subscribing hub that is itself tearing down (MeshWeaver#3432).</para>
 /// </summary>

@@ -4,7 +4,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Autofac" />
     <PackageReference Include="Microsoft.Reactive.Testing" />
     <PackageReference Include="Namotion.Reflection" />
     <PackageReference Include="NSubstitute" />
@@ -25,6 +24,10 @@
     <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- The shared storage fault injectors (FaultInjectingStorageAdapter + FaultSwitch): a test that
+         needs a store fault arms one instead of hand-rolling an IStorageAdapter decorator. A library
+         over src/ only, so referencing it creates no cycle. -->
+    <ProjectReference Include="..\MeshWeaver.Testing.FaultInjection\MeshWeaver.Testing.FaultInjection.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
     <!-- The red-log watcher's burst aggregation. CompileFailureReportOrderTest reproduces #1840
          end to end — the console burst the portal writes, through the SAME aggregation the watcher

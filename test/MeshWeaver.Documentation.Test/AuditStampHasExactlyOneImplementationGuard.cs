@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -44,7 +45,7 @@ public class AuditStampHasExactlyOneImplementationGuard
 
     private static string ReadSubject()
     {
-        var path = Path.Combine(SourceScan.FindRepoRoot(), Subject);
+        var path = Path.Combine(RepoPaths.Root, Subject);
         Assert.True(File.Exists(path), $"{Subject} is missing — this guard's subject moved; follow it.");
         return File.ReadAllText(path);
     }

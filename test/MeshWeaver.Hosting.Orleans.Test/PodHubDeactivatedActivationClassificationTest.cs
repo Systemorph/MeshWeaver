@@ -292,7 +292,7 @@ public class PodHubDeactivatedActivationClassificationTest
     [Fact]
     public void TheScopeTeardownProbe_IsForwardedThroughThePodHubClassifier()
     {
-        var disposed = new ObjectDisposedException("AutofacServiceProvider");
+        var disposed = new ObjectDisposedException("service provider");
 
         RoutingGrain.ClassifyPodHubDeliveryException(disposed, scopeDisposed: () => true)
             .Should().Be(ErrorType.ShuttingDown,

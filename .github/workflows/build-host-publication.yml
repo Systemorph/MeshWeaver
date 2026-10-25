@@ -1,0 +1,136 @@
+name: Build host — stage a host-executed run's modules for the publish lane
+
+# ♻️ REUSABLE (workflow_call) — H9 of the standing build hosts (Doc/Architecture/BuildHosts;
+# MeshWeaver.Plugins Hosting/StandingBuildHosts §2, §7a). When a run's module bundles were built on
+# a standing build host, the bytes are in the shared CI artifact store and the instance holds their
+# RECEIPTS. This lane reads them (`GET {api}/{repo}/{sha}/artifacts?channel=`, the run's GitHub OIDC
+# token — the same gate as the stage log), fetches every object with core's ci-artifact-store.py,
+# verifies each against its receipt's sha256 and size, and uploads them as
+# `module-publication-<lane>-host` — the shape the module pack lane stages. The caller then runs the
+# UNCHANGED node-repo-module-publish.yml, which collects `module-publication-<lane>-*`:
+#
+#   host-publication:
+#     uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main
+#     permissions: { contents: read, id-token: write }
+#     with:
+#       api-url: ${{ vars.MW_BUILD_API }}
+#       lane: ${{ needs.select.outputs.lane }}
+#       artifact-store: ${{ needs.select.outputs.artifact-store }}
+#       artifact-store-id: ${{ needs.select.outputs.artifact-store-id }}
+#   publish:
+#     needs: [host-publication, …]
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main
+#
+# 🚨 A SEPARATE LANE ON PURPOSE: it needs `id-token: write`, and a reusable workflow's permissions
+# are a hard requirement on EVERY caller (check-workflow-permission-pairing.py). Adding it to the
+# publish lane would break every existing caller at startup; a caller opts in here instead.
+# 🛡️ No skip-trapdoor: a run with no receipts, a hash or size mismatch, or an unreadable endpoint
+# is RED (build-artifacts-fetch.py, whose --self-test runs first).
+# 🚨 NOT YET a replacement for node-repo-module-pack.yml: module-publication.py check-callers (run
+# by node-repo-validate.yml) requires the publisher's lane and selection outputs to come from the
+# pack lane, so a caller keeps that lane's `select` and adds this one beside it. A host-only graph
+# needs that output contract and the caller validator extended together (owed with H7). The `file:` store spec is the
+# one this lane can read without a cloud login (the runners' shared share); an `azblob:` store needs
+# an ambient `az` login the caller provides on the same runner.
+
+on:
+  workflow_call:
+    inputs:
+      api-url:
+        description: The operations instance's build API base, e.g. https://control.example.com/api/builds.
+        required: true
+        type: string
+      lane:
+        description: The publication lane key (`module-publication-<lane>-*` is what the publish lane collects).
+        required: true
+        type: string
+      artifact-store:
+        description: The CI artifact store spec the host uploaded to (e.g. file:/ci-artifacts).
+        required: true
+        type: string
+      artifact-store-id:
+        description: >-
+          The store identity the run resolved (resolve-artifact-store's `store-id`). REQUIRED: every
+          get and the final upload are bound to it (--expect-store-id), so bytes never cross stores.
+        required: true
+        type: string
+      sha:
+        description: >-
+          The commit the run is keyed by — the PR HEAD or the trunk commit. Empty means
+          github.event.pull_request.head.sha, falling back to github.sha.
+        required: false
+        type: string
+        default: ''
+      channel:
+        description: The release channel whose host ran the build. Only `latest` publishes.
+        required: false
+        type: string
+        default: latest
+      stage:
+        description: Only this stage's receipts (empty = every stage's).
+        required: false
+        type: string
+        default: ''
+      audience:
+        description: The OIDC audience. Empty = the api-url's origin.
+        required: false
+        type: string
+        default: ''
+      scripts-ref:
+        description: The Systemorph/MeshWeaver ref the scripts are fetched at (the lane's own vintage).
+        required: false
+        type: string
+        default: main
+
+jobs:
+  stage:
+    name: Stage the host-executed run's modules
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write      # the run's OIDC token is the bearer the build API verifies
+    steps:
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Fetch the lane's scripts at its scripts ref
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/s"
+          for f in build-artifacts-fetch.py build-follow.py ci-artifact-store.py; do
+            "$RUNNER_TEMP/mw-core-file" "$SCRIPTS_REF" ".github/scripts/$f" > "$RUNNER_TEMP/s/$f"
+            [ -s "$RUNNER_TEMP/s/$f" ] || { echo "::error::fetched an EMPTY $f at $SCRIPTS_REF"; exit 1; }
+          done
+      - name: The fetch can say no (self-test)
+        run: python3 "$RUNNER_TEMP/s/build-artifacts-fetch.py" --self-test
+      - name: Fetch every receipt's object and verify it against the receipt
+        env:
+          API_URL: ${{ inputs.api-url }}
+          STORE: ${{ inputs.artifact-store }}
+          STORE_ID: ${{ inputs.artifact-store-id }}
+          SHA: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
+          CHANNEL: ${{ inputs.channel }}
+          STAGE: ${{ inputs.stage }}
+          AUDIENCE: ${{ inputs.audience }}
+        run: |
+          set -euo pipefail
+          [ -n "${API_URL:-}" ] || { echo "::error::api-url is empty — there is no build API to read receipts from"; exit 1; }
+          [ -n "${STORE_ID:-}" ] || { echo "::error::artifact-store-id is empty — pass the store-id the run resolved (resolve-artifact-store); an unbound fetch could read another store"; exit 1; }
+          [ "$CHANNEL" = latest ] || { echo "::error::only a run on the latest channel publishes (channel '$CHANNEL')"; exit 1; }
+          python3 "$RUNNER_TEMP/s/build-artifacts-fetch.py" --api-url "$API_URL" --store "$STORE" \
+            --expect-store-id "$STORE_ID" --sha "$SHA" --channel "$CHANNEL" --stage "$STAGE" \
+            --audience "$AUDIENCE" --out "$RUNNER_TEMP/staged"
+      - name: Stage them for the publish lane
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        with:
+          store: ${{ inputs.artifact-store }}
+          expected-store-id: ${{ inputs.artifact-store-id }}
+          name: module-publication-${{ inputs.lane }}-host
+          path: ${{ runner.temp }}/staged
+          retention-days: 1
+          if-no-files-found: error

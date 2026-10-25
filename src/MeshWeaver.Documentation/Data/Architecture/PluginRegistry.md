@@ -50,7 +50,8 @@ must be asked for explicitly (`RequireInstanceKey=false` — local dev / the e2e
 every request.
 
 > 🚨 The flat `PluginCatalog:RegistryTokens` allowlist this replaced is **obsolete and no longer
-> read** (`PluginRegistryTokens.SectionName`/`.Validate` are `[Obsolete]`). It was *open when unset*,
+> read** (`PluginRegistryTokens.SectionName`/`.Validate` were retired and have been deleted;
+> only the wire `Scheme`/`AuthorizationHeader` remain). It was *open when unset*,
 > which is how this registry served its private sources to anonymous callers until 2026-08-06, and a
 > flat list could never express WHICH plugins an instance may pull. Adding a token to it today gates
 > nothing.

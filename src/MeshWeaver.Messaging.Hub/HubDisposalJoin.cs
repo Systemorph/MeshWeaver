@@ -13,7 +13,7 @@ namespace MeshWeaver.Messaging;
 /// hosted hubs tear down, the sync streams unregister and the registrants run — all afterwards, on
 /// other threads. A caller that disposes and then proceeds is running CONCURRENTLY with that. In a
 /// harness the very next thing is one of: disposing the service scope (a continuation resolves from
-/// a dead Autofac scope), unloading a collectible node ALC (a live thread dereferences freed
+/// a dead service scope), unloading a collectible node ALC (a live thread dereferences freed
 /// metadata — a native use-after-unload <b>SIGSEGV</b>, exit 139), or returning to xUnit so the next
 /// test class starts on top of the previous one's live teardown. The observed signature is a burst
 /// of <c>[SYNC_STREAM] Not setting … — stream is disposed</c> and

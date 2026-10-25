@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -64,7 +65,7 @@ public class CreateStampsAreStorageStableRatchetGuard
     [Fact]
     public void NoCreatePathStampsCreatedDateFromARawUtcNow()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var failures = new List<string>();
 
         foreach (var file in SourceScan.SourceFiles(root, ScannedRoots))

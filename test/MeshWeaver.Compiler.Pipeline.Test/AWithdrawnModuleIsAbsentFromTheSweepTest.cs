@@ -18,7 +18,7 @@ namespace MeshWeaver.Graph.Test;
 /// (once the boot generation's weak reference was collected) or answer the withdrawn generation (before
 /// that); the boot pre-warm sweep enumerates the set, faulted, and the pod refused readiness for one
 /// broken module. The set is now one registry the mesh owns (<see cref="InstalledModules"/>), served
-/// to every container kind through an ordinary factory — so this holds on the Autofac host AND on a
+/// to every container kind through an ordinary factory — so this holds on the DI container host AND on a
 /// host built with plain MS DI <c>BuildServiceProvider()</c>.
 /// </summary>
 public sealed class AWithdrawnModuleIsAbsentFromTheSweepTest(ITestOutputHelper output)
@@ -30,7 +30,7 @@ public sealed class AWithdrawnModuleIsAbsentFromTheSweepTest(ITestOutputHelper o
     protected override bool Broken => true;
 
     [Fact]
-    public async Task OnTheAutofacHost_TheWithdrawnModuleIsAbsent_AndTheSweepCompletes()
+    public async Task OnTheMeshWeaverHost_TheWithdrawnModuleIsAbsent_AndTheSweepCompletes()
     {
         var ct = TestContext.Current.CancellationToken;
         Contexts.Current(Module).Should().BeNull("the precondition: the module was withdrawn at boot");

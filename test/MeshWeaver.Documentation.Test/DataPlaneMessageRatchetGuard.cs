@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -59,7 +60,7 @@ public class DataPlaneMessageRatchetGuard(ITestOutputHelper output)
     {
         ["GetDataRequest"] = 18,
         ["GetDataResponse"] = 25,
-        ["DataChangeRequest"] = 7,
+        ["DataChangeRequest"] = 6,
         ["PatchDataChangeRequest"] = 0,
         ["DataChangedEvent"] = 0,
     }.ToImmutableDictionary(StringComparer.Ordinal);
@@ -80,7 +81,7 @@ public class DataPlaneMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewReferenceToADataPlaneMessageOutsideTheDataLayer()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = ReadAllow(Path.Combine(root, "test", AllowFileName));
         var found = Scan(root);
 
@@ -139,7 +140,7 @@ public class DataPlaneMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerSeesEveryTypeInTheDataLayer()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var counts = MessageTypes.ToDictionary(t => t, _ => 0, StringComparer.Ordinal);
         foreach (var file in SourceScan.SourceFiles(root, HomeRoots.Select(h => h.TrimEnd('/'))))
             foreach (var (type, count) in CountIn(File.ReadAllText(file)))

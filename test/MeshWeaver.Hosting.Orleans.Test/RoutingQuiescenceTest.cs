@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// 🚨 <b>Issue #2638 — the silo stop must not run over routing work this silo has already
-/// accepted.</b> The open question #2647 left was WHERE in the silo host's stop sequence the Autofac
+/// accepted.</b> The open question #2647 left was WHERE in the silo host's stop sequence the DI container
 /// root goes relative to routing quiescence, and whether a lifecycle hook can hold it without
 /// deadlocking. The answer, from source (Orleans 10.2.2 <c>Silo.Participate</c> /
 /// <c>LifecycleSubject.OnStop</c>, <c>MeshTeardownHostedService</c>, <c>MeshHostApplicationBuilder</c>):

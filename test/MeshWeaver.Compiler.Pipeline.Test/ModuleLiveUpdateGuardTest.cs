@@ -100,16 +100,3 @@ public sealed class ModuleLiveUpdateGuardTest
         return context.LoadFromStream(buffer);
     }
 }
-
-/// <summary>
-/// The Autofac.Extensions.DependencyInjection cache that <c>ReflectionCacheSet.Shared</c> can lose is
-/// cleared directly by <see cref="MeshWeaver.ServiceProvider.ReflectionCacheEviction"/> — it was the
-/// last strong root of a swapped-out module generation. If a future Autofac renames it, this fails
-/// instead of every module swap leaking silently.
-/// </summary>
-public sealed class ReflectionCacheEvictionReachesAutofacsKeyedServicesCacheTest
-{
-    [Fact]
-    public void TheKeyedServicesUsageCacheIsReachable() =>
-        MeshWeaver.ServiceProvider.ReflectionCacheEviction.FromKeyedServicesUsageCacheIsReachable.Should().BeTrue();
-}

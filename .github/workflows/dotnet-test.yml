@@ -1521,7 +1521,7 @@ jobs:
         fi
         # Per-class INIT → DISPOSE memory delta summary (one line per test instance):
         # managed=… rss=… rssAnon=… unmanaged=… shared=0|1
-        # rssAnon (Linux only) is where the Autofac Reflection.Emit factory pin lives;
+        # rssAnon (Linux only) is where a compiled-factory pin would live;
         # unmanaged = rss − managed is the portable approximation. Grep this file to
         # find the worst leakers without wading through the full per-event trace.
         if [ -f /tmp/meshweaver-memory-delta.log ]; then
@@ -2353,10 +2353,12 @@ jobs:
 
     # Two source files importing to ONE node path (`X.md` + `X.json`, `X.md` + `X/index.json`,
     # case-folded) are silently last-writer-wins at import. Every node repo's validate lane fetches
-    # this guard from here, so it is proven here; and core's own trees are held to it. The samples
-    # tree is served by FileSystemStorageAdapter, which MERGES `X.json` + `X/index.md` by design
-    # (ACME is laid out that way) — `--filesystem-layout` admits that one pair and nothing else.
-    # The doc tree is served by DocumentationNodeProvider, which merges nothing.
+    # this guard from here, so it is proven here; and core's own trees are held to it. Both trees
+    # are held to the strict form. The samples tree is served by FileSystemStorageAdapter, which
+    # MERGES `X.json` + `X/index.md`, and it used to need `--filesystem-layout` for the one pair it
+    # carried (ACME.json + ACME/index.md). ACME left with the product demos, so no tree here needs
+    # the exemption, and a new merged pair is refused. The doc tree is served by
+    # DocumentationNodeProvider, which merges nothing.
     - name: "Two files importing to one node path are caught (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-node-path-collisions.py --self-test
@@ -2365,7 +2367,7 @@ jobs:
       run: |
         set -euo pipefail
         python3 .github/scripts/check-node-path-collisions.py --tree src/MeshWeaver.Documentation/Data
-        python3 .github/scripts/check-node-path-collisions.py --filesystem-layout --tree samples/Graph/Data
+        python3 .github/scripts/check-node-path-collisions.py --tree samples/Graph/Data
 
     # A node file carrying a member MeshNode no longer has is a BUILD ERROR (#6638): GitSync's strict
     # reader refuses the whole snapshot on one such file, and the platform stays strict, so the
@@ -2387,6 +2389,35 @@ jobs:
     - name: "The gate host composes by its rules and refuses a partial one (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/compose-gate-host.sh --self-test
+
+    # The standing build hosts (Doc/Architecture/BuildHosts): the follow lane's script
+    # (build-follow.yml fetches it at its scripts-ref), the host runner the chart ships, and CD's
+    # build-host announcement. Each must prove its refusals fire — a follower that reads a timeout
+    # as green, a runner that claims before it staged the plugins layer, or an announcement that
+    # names a tag for a digest would each be a green on no evidence.
+    - name: "The build follower reds a timeout, a 403 and every non-succeeded verdict (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-follow.py --self-test
+
+    - name: "Who runs the heavy legs: host only when declared, said and queued; actions — said — on every failure (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-executor.py --self-test
+
+    - name: "The build host stages the plugins layer before it claims, and runs each stage in a fresh process (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-run.py --self-test
+
+    - name: "CD hands build-latest a set only when declared, by digest (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-host-announcement.py --self-test
+
+    - name: "A stage's database is disposable: no TCP, a private socket, refused without a server (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: bash .github/scripts/sandbox-postgres.sh --self-test
+
+    - name: "A host-executed run's modules are staged only by verified receipt (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-artifacts-fetch.py --self-test
 
     # The upstream SOURCE a node-repo bake stages (stage-sealed-upstream.sh, fetched by
     # node-repo-publish-bake.yml at its scripts ref) must be what the sealed publication's bytes
@@ -2481,6 +2512,13 @@ jobs:
     # page. Offline cases: aged-out, paginated, duplicates (keep the oldest), closed-only, a labelled
     # PR, an unknown label (must FAIL, not answer "none"), an API failure; the old window scan and a
     # first-page-only pager are the negative controls and must miss.
+    # The ONE GitHub REST client the scripts share. Two local servers on two ports prove the token
+    # reaches GitHub's origin and never the signed-storage origin a 302 points to — with the stock
+    # urllib request driven as the negative control, which DOES forward it.
+    - name: "The shared GitHub client keeps the token off a redirect to another host (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/ghrest.py --self-test
+
     - name: "A standing tracking issue is found by its label, never by a recent-issues window (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/sentinel-issue.py --self-test
@@ -2712,12 +2750,6 @@ jobs:
     - name: "Every PR-reachable secret is asserted by a preflight — the gate can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pr-secret-preflight.py --self-test
-    # The dependent-suites request builds a paired Plugins pull request's head on Plugins' PRIVATE
-    # runners; this proves the one trust decision on that path — a FORK's head is refused — on the
-    # pull request that would weaken it, not on the first advisory run that meets a fork.
-    - name: "A paired Plugins FORK head is refused (self-test)"
-      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
-      run: python3 .github/scripts/paired-plugins-head.py --self-test
     - name: "Every PR-reachable secret is asserted by a preflight"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-pr-secret-preflight.py --root .
@@ -2970,6 +3002,17 @@ jobs:
       run: >-
         python3 .github/scripts/module-pack-batch.py --self-test
         --workflow .github/workflows/node-repo-module-pack.yml
+
+    # The module lane ends a wedged suite below the job cap, with evidence (Plugins #4155: a
+    # MeshWeaver.AI suite went silent and the cap's cancel kept no trx, no trace and no dump).
+    # A wrapper that stopped ending its tree, or a dump request framed wrongly, would only show on
+    # the next wedge — the one run it exists for.
+    - name: "The module lane's stuck-suite wrapper and dump request hold (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/diag-dump.py --self-test
+        .github/scripts/run-bounded-suite.sh --self-test
 
     - name: "Gate the shell CI itself runs"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -3890,315 +3933,6 @@ jobs:
           --repo "${{ github.repository }}" \
           --pr-body-file "$RUNNER_TEMP/pr-body.md"
 
-  # ── THE DEPENDENT'S SUITES, AGAINST THIS CANDIDATE — REQUIRED (policy `dependent-suites-affected-gate`) ──
-  #
-  # 🚨 A CORE PULL REQUEST PROVES IT DOES NOT BREAK MeshWeaver.Plugins BEFORE IT MERGES (MeshWeaver#2689).
-  # "Compatible" — the standing assumption that upstream stays backwards compatible within a major
-  # (policy `platform-semver-versioning`) — is a CLAIM, and this block MEASURES it, for exactly the
-  # Plugins realms the diff can reach — only what is affected runs, and the once-a-day run stays the
-  # only full run (policy `dependent-suites-affected-gate`). Measured the day it was made required: core
-  # #6297 made one-way-synced partitions refuse every non-system write behind unchanged signatures, the
-  # advisory run below never ran (no label), and Plugins' main went red on its GitSync suite within hours.
-  #
-  # It supersedes policy `core-merge-never-blocked` (register: Doc/Architecture/PolicyNotProse). What
-  # that policy was protecting against — a merge waiting four hours on another repository's runner
-  # capacity (#5807) — is answered by SIZE, not by silence: the Plugins side runs only what the diff
-  # reaches, per realm, and refuses (red, named) rather than running everything when it cannot tell.
-  #
-  #   * EVERY non-fork pull request dispatches; there is no label and no opt-in.
-  #   * `Consolidate test results` NEEDS `dependent-suites` and fails unless it succeeded.
-  #   * It succeeds when Plugins' reachable suites pass against the candidate — or when the PR body
-  #     DECLARES the break it measured (`Breaks-plugins: <realms> — <what> — counterpart
-  #     Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>`), the counterpart's OWN run
-  #     against this same candidate is green, and the semver consequence is in the diff
-  #     (.github/scripts/check-plugins-break-declaration.py).
-  #
-  # HOW. `dependent-suites-dispatch` sends `repository_dispatch core-candidate-suites` to
-  # MeshWeaver.Plugins with this run's candidate (the PR's merge commit), its first parent as the base,
-  # and a key unique to this run attempt — once with Plugins' default branch, and once more with the
-  # counterpart's head when the body declares one (`Breaks-plugins:` or `Pairs-with:`). That
-  # repository's `core-candidate.yml` selects PER REALM the suites whose compiled closure can reach the
-  # diff (printing the edge for each and naming every realm NOT selected), builds them FROM SOURCE
-  # against the candidate, re-runs only what failed at the base, and writes a verdict at
-  # `refs/core-candidate/<key>` in ITS OWN repository. `dependent-suites` PULLS those verdicts
-  # read-only and decides. Plugins writes nothing into this repository, and nothing of Plugins' source
-  # enters this build — so PlatformNeverDependsOnPluginsGuard's checkout ledger is untouched; the read
-  # and the dispatch are ledgered (ApiReadLedger, PlatformReleaseNotifyGuard.DispatchLedger).
-  #
-  # 🚨 NO SKIP-TRAPDOOR. The credential is asserted RED by name in `preflight`; the receiver is proven
-  # to exist on Plugins' default branch before dispatching; the waiter never reports silence as a pass
-  # (await-dependent-verdict.py); a refused selection is red. Fork and Dependabot pull requests are
-  # exempt on the EVENT — the same one predicate as every credentialed gate here
-  # (SharedRuleExemptionIsOneEventPredicateGuard) — because GitHub withholds the Actions secrets from
-  # both, and the Dependabot store does not hold this App's credential. `Consolidate test results`
-  # prints that exemption BY NAME ("NOT MEASURED") rather than going quietly green. Provisioning
-  # DEPENDENT_DISPATCH_APP_* in the Dependabot store (Doc/Architecture/DependabotSecretStore) is what
-  # lets the Dependabot half of the exemption go.
-  preflight:
-    name: "Required CI inputs"
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-    - name: Assert every external input, or fail naming what to provision
-      env:
-        DEPENDENT_DISPATCH_APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-        DEPENDENT_DISPATCH_APP_PRIVATE_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-      run: |
-        missing=()
-        [ -n "${DEPENDENT_DISPATCH_APP_ID:-}" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID           app id of the org's meshweaver-cloud GitHub App (Contents: write on MeshWeaver.Plugins, to send repository_dispatch) — Settings → Secrets → Actions")
-        [ -n "${DEPENDENT_DISPATCH_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY  that App's private key (PEM) — Settings → Secrets → Actions")
-        if [ ${#missing[@]} -gt 0 ]; then
-          echo "::error::The dependent's suites cannot be requested — provision the following, then re-run:"
-          for m in "${missing[@]}"; do echo "  • $m"; done
-          exit 1
-        fi
-        echo "Every external input is present (validity is proven where it is used, not assumed here)."
-
-  dependent-suites-dispatch:
-    name: "Dependent suites (request)"
-    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for the stage gate too.
-    # 🚦 AND FOR CORE'S OWN SUITES (Doc/Architecture/CrossRepoPairGate § "Requested after core's own
-    # suites"). A candidate that fails its own build or tests cannot merge whatever Plugins says, so
-    # measuring it spends dind runners the waiting candidates need — on 2026-10-08 48 candidate legs
-    # of ten core PRs queued for them at once. So the request needs `build` and `test`, and when they
-    # are not green it is NOT sent and goes RED by name ("waiting for core's own suites"): never a
-    # skip, which would read as satisfied. A tree already tested green (precheck reuse) is core's
-    # own green and is requested as before.
-    needs: [preflight, stage-gate, precheck, build, test]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.preflight.result == 'success' && needs.stage-gate.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      candidate: ${{ steps.commits.outputs.candidate }}
-      base: ${{ steps.commits.outputs.base }}
-      key: ${{ steps.commits.outputs.key }}
-      counterpart: ${{ steps.want.outputs.counterpart }}
-      plugins: ${{ steps.paired.outputs.plugins }}
-    steps:
-    - name: "Core's own build and tests are green on this candidate (otherwise: not requested — waiting for core's own suites)"
-      env:
-        REUSED: ${{ needs.precheck.outputs.skip }}
-        BUILD: ${{ needs.build.result }}
-        TEST: ${{ needs.test.result }}
-      run: |
-        if [ "$REUSED" = "true" ]; then
-          echo "this tree was already tested green (precheck reuse) — core's own suites are green; requesting"
-        elif [ "$BUILD" = "success" ] && [ "$TEST" = "success" ]; then
-          echo "core's own build ($BUILD) and tests ($TEST) are green on this candidate — requesting the dependent's suites"
-        else
-          echo "::error title=Dependent suites NOT requested — waiting for core's own suites::core's own build is '$BUILD' and its tests '$TEST' on this candidate. MeshWeaver.Plugins' suites are requested only after core's own suites are green, so a candidate that fails them never takes Plugins runners. Fix core's own red; the next push (or re-running the failed jobs) requests them."
-          exit 1
-        fi
-    - uses: actions/checkout@v7
-      with:
-        fetch-depth: 2
-    - name: The declared counterpart, if any (`Breaks-plugins:` first, then `Pairs-with:`) — read live
-      id: want
-      env:
-        GH_TOKEN: ${{ github.token }}
-        PR: ${{ github.event.pull_request.number }}
-      run: |
-        set -euo pipefail
-        gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.body // ""' > "$RUNNER_TEMP/pr-body.md"
-        # A malformed Breaks-plugins line is red HERE, before anything is spent on it.
-        python3 .github/scripts/check-plugins-break-declaration.py --pr-body-file "$RUNNER_TEMP/pr-body.md" --print-counterpart > "$RUNNER_TEMP/breaks.txt"
-        breaks=$(cat "$RUNNER_TEMP/breaks.txt")
-        paired=$(grep -oE '^[[:space:]]*Pairs-with:[[:space:]]*Systemorph/MeshWeaver\.Plugins#[0-9]+' "$RUNNER_TEMP/pr-body.md" | head -1 | sed 's/.*#//' || true)
-        counterpart="${breaks:-$paired}"
-        echo "counterpart=$counterpart" >> "$GITHUB_OUTPUT"
-        if [ -n "$breaks" ]; then echo "PR #$PR declares a Plugins break with counterpart MeshWeaver.Plugins#$breaks: it is ALSO measured at that head."
-        elif [ -n "$paired" ]; then echo "PR #$PR pairs with MeshWeaver.Plugins#$paired: it is ALSO measured at that head (advisory)."
-        else echo "PR #$PR declares no Plugins counterpart: measured against Plugins' default branch only."; fi
-    - name: Name the candidate, its base and this attempt's key
-      id: commits
-      run: |
-        set -euo pipefail
-        candidate=$(git rev-parse HEAD)
-        [ "$candidate" = "$GITHUB_SHA" ] || { echo "::error::checked out $candidate, not the run's $GITHUB_SHA"; exit 1; }
-        # The FIRST PARENT: for a PR merge commit, the base-branch tip it was merged onto. The
-        # candidate's own change is exactly base..candidate, which is what Plugins selects on.
-        base=$(git rev-parse HEAD^1)
-        key="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-        { echo "candidate=$candidate"; echo "base=$base"; echo "key=$key"; } >> "$GITHUB_OUTPUT"
-        echo "candidate $candidate · base $base · key $key"
-    - name: Mint a MeshWeaver.Plugins token (dispatch)
-      id: token
-      uses: actions/create-github-app-token@v3
-      with:
-        app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-        private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-        owner: Systemorph
-        repositories: MeshWeaver.Plugins
-        permission-contents: write
-        permission-pull-requests: read   # the counterpart Plugins PR's head, when one is declared
-    - name: The counterpart Plugins head (a declared counterpart only)
-      id: paired
-      if: steps.want.outputs.counterpart != ''
-      env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
-        PAIRED: ${{ steps.want.outputs.counterpart }}
-      # 🚨 TRUST BOUNDARY: the head is built on MeshWeaver.Plugins' PRIVATE runners, beside the private
-      # source. Only a head that lives IN Systemorph/MeshWeaver.Plugins is taken; a FORK's head is
-      # REFUSED, red and named.
-      run: python3 .github/scripts/paired-plugins-head.py --pr "$PAIRED"
-    # PRESENT is not a RECEIVER. A dispatch to a repository whose default branch has no workflow
-    # listening would be accepted (204) and start nothing, and the waiter would then time out
-    # blaming Plugins. Prove the receiver first and say so by name.
-    - name: The receiver exists on MeshWeaver.Plugins' default branch
-      env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
-      run: |
-        set -euo pipefail
-        if ! gh api "repos/Systemorph/MeshWeaver.Plugins/contents/.github/workflows/core-candidate.yml" --jq .content > "$RUNNER_TEMP/receiver.b64"; then
-          echo "::error::MeshWeaver.Plugins has no .github/workflows/core-candidate.yml on its default branch (or this token cannot read it) — the request would start nothing. The receiver lands in Plugins FIRST."
-          exit 1
-        fi
-        if ! tr -d '\n' < "$RUNNER_TEMP/receiver.b64" | base64 -d | grep -Eq '^\s*types:\s*\[\s*core-candidate-suites\s*\]'; then
-          echo "::error::MeshWeaver.Plugins' core-candidate.yml no longer subscribes to 'repository_dispatch: types: [core-candidate-suites]' — the request would be accepted and start nothing."
-          exit 1
-        fi
-        echo "receiver present and subscribed to core-candidate-suites"
-    # ONE sender, two requests at most: Plugins' default branch (key K — the measurement that decides),
-    # and the counterpart's head (key K-c) when one is declared. Distinct keys AND distinct concurrency
-    # groups, so the two runs never supersede each other.
-    - name: Request the dependent's suites against this candidate
-      env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
-        CANDIDATE: ${{ steps.commits.outputs.candidate }}
-        BASE: ${{ steps.commits.outputs.base }}
-        KEY: ${{ steps.commits.outputs.key }}
-        PLUGINS: ${{ steps.paired.outputs.plugins }}
-        GROUP: ${{ format('pr-{0}', github.event.pull_request.number) }}
-      run: |
-        set -euo pipefail
-        requests=("$KEY||$GROUP")
-        [ -z "${PLUGINS:-}" ] || requests+=("$KEY-c|$PLUGINS|$GROUP-c")
-        for r in "${requests[@]}"; do
-          IFS='|' read -r k p g <<< "$r"
-          jq -n --arg c "$CANDIDATE" --arg b "$BASE" --arg k "$k" --arg g "$g" --arg x "true" --arg p "$p" \
-            '{event_type: "core-candidate-suites", client_payload: {candidate: $c, base: $b, key: $k, group: $g, cancel: $x, plugins: $p}}' \
-            | gh api -X POST repos/Systemorph/MeshWeaver.Plugins/dispatches --input -
-          echo "requested: MeshWeaver.Plugins core-candidate-suites for $CANDIDATE with Plugins ${p:-<default branch>} (key $k, group $g)"
-        done
-
-  dependent-suites:
-    # REQUIRED (policy `dependent-suites-affected-gate`): `Consolidate test results` needs this job and
-    # fails unless it succeeded. Its red says "this change breaks MeshWeaver.Plugins realm(s) X and
-    # declares nothing" — or that the measurement is missing, which is never a pass.
-    name: "Dependent suites (MeshWeaver.Plugins)"
-    # After the request, which itself waits for core's own build and tests: the 42-minute window is
-    # the whole budget of the dependent's run, from the moment it was requested.
-    needs: [dependent-suites-dispatch, test]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.dependent-suites-dispatch.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-    - uses: actions/checkout@v7
-      with:
-        fetch-depth: 2
-    - name: "Prove the waiter and the decision cannot pass on silence (self-tests)"
-      run: |
-        python3 .github/scripts/await-dependent-verdict.py --self-test
-        python3 .github/scripts/check-plugins-break-declaration.py --self-test
-    - name: Mint a MeshWeaver.Plugins token (read)
-      id: token
-      uses: actions/create-github-app-token@v3
-      with:
-        app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-        private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-        owner: Systemorph
-        repositories: MeshWeaver.Plugins
-        permission-contents: read
-        permission-pull-requests: read
-        # The queue census (await-dependent-verdict.py): Actions METADATA of core-candidate.yml runs —
-        # where this candidate is and what is ahead of it. Never a log; never part of the verdict.
-        permission-actions: read
-    - name: Wait for MeshWeaver.Plugins' verdict(s) on this candidate
-      id: wait
-      env:
-        GITHUB_TOKEN: ${{ steps.token.outputs.token }}
-        KEY: ${{ needs.dependent-suites-dispatch.outputs.key }}
-        CANDIDATE: ${{ needs.dependent-suites-dispatch.outputs.candidate }}
-        BASE: ${{ needs.dependent-suites-dispatch.outputs.base }}
-        PLUGINS: ${{ needs.dependent-suites-dispatch.outputs.plugins }}
-      run: |
-        set +e
-        end=$(( $(date +%s) + 42*60 ))
-        wait_one() {  # $1 = key, $2 = out file
-          left=$(( (end - $(date +%s)) / 60 )); [ "$left" -ge 1 ] || left=1
-          python3 .github/scripts/await-dependent-verdict.py --key "$1" --candidate "$CANDIDATE" --base "$BASE" \
-            --deadline-minutes "$left" --out "$2" --no-verdict-out "$RUNNER_TEMP/no-verdict-$1.txt"
-        }
-        wait_one "$KEY" "$RUNNER_TEMP/main-verdict.json"; rc=$?
-        # Exit 3 = NO verdict by the deadline (EXIT_NO_VERDICT): handed to the step below so silence
-        # fails under its OWN name. Exit 1 = a verdict that is not green — the decision step reads it.
-        if [ "$rc" = 3 ]; then echo "outcome=no-verdict" >> "$GITHUB_OUTPUT"; exit 0; fi
-        # The counterpart's silence is NOT the gate's silence: the decision step rejects a missing
-        # counterpart verdict when a Breaks-plugins declaration needs it, and ignores it for an
-        # advisory Pairs-with pair. So it never sets no-verdict here.
-        if [ -n "${PLUGINS:-}" ]; then
-          wait_one "$KEY-c" "$RUNNER_TEMP/counterpart-verdict.json"
-          crc=$?
-          [ "$crc" != 3 ] || echo "::warning::the counterpart's run wrote no verdict in time — a Breaks-plugins declaration cannot rest on it"
-        fi
-        echo "outcome=verdict" >> "$GITHUB_OUTPUT"
-        exit 0
-    # 🚨 STILL RED — silence is never a pass. The step name is also what merge-queue-steward.py
-    # (DEPENDENT_NO_VERDICT_STEP) matches, dormant while the queue is off — AND what
-    # MeshWeaver.Plugins' scripts/core-candidate-requester.py (NO_VERDICT_STEP) reads to decide that
-    # this waiter is RESUMABLE: rename one, rename all three. That script also reads the DECIDE step
-    # below ("Compatible, or a declared break?", DECIDE_STEP): only that step having RUN counts as an
-    # answer, so a waiter that failed before reading any verdict is re-run too — rename it in both.
-    # 🔁 A LATE VERDICT STILL DECIDES (Doc/Architecture/CrossRepoPairGate § "A late verdict still
-    # decides"). When Plugins' candidate answers after this window, its Verdict job RE-RUNS this job
-    # (and Consolidate test results); the waiter's first poll finds the verdict and decides on it. So
-    # this red is not a dead end and needs no human: under load the waiter used to give up first, the
-    # candidate read "completed" as "nobody waits" and stood down, and no verdict was ever accepted
-    # (2026-10-08, core run 37841893441).
-    # The message names WHY, from the waiter's last queue census: "no runner within 42 min (queued
-    # behind N candidate runs: …)", "still running at the deadline", or "no run carries this key".
-    - name: "No verdict in time: the dependent's suites did not report (infrastructure)"
-      if: ${{ steps.wait.outputs.outcome == 'no-verdict' }}
-      env:
-        KEY: ${{ needs.dependent-suites-dispatch.outputs.key }}
-      run: |
-        why=$(cat "$RUNNER_TEMP/no-verdict-$KEY.txt" 2>/dev/null || echo "no verdict within 42 min (the waiter left no census)")
-        echo "::error title=No verdict in time — $why::MeshWeaver.Plugins wrote no verdict for this candidate inside the 42-minute window: $why. The candidate is UNVERIFIED, so this required gate is red. NO HUMAN STEP IS NEEDED: the candidate keeps measuring, and when its verdict lands MeshWeaver.Plugins re-runs THIS job, which then reads that verdict at once and decides (Doc/Architecture/CrossRepoPairGate, 'A late verdict still decides'). Only if no candidate run is live for this key (e.g. cancelled by hand) re-run 'Dependent suites (request)' — it requests a fresh candidate under a new key."
-        { echo "### ⏳ Dependent suites — no verdict in time"; echo; echo "$why"; } >> "$GITHUB_STEP_SUMMARY"
-        exit 1
-    - name: Compatible, or a declared break? (decide)
-      if: ${{ steps.wait.outputs.outcome == 'verdict' }}
-      env:
-        GH_TOKEN: ${{ github.token }}
-        PLUGINS_TOKEN: ${{ steps.token.outputs.token }}
-        PR: ${{ github.event.pull_request.number }}
-        COUNTERPART: ${{ needs.dependent-suites-dispatch.outputs.counterpart }}
-      run: |
-        set -euo pipefail
-        # The body is read LIVE, and held to what the request job MEASURED: a Breaks-plugins line added
-        # after the request is refused by name — push, or 'Re-run all jobs', so it is measured.
-        gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.body // ""' > "$RUNNER_TEMP/pr-body.md"
-        args=(--main-verdict "$RUNNER_TEMP/main-verdict.json" --pr-body-file "$RUNNER_TEMP/pr-body.md" --dispatched-counterpart "${COUNTERPART:-}")
-        [ ! -f "$RUNNER_TEMP/counterpart-verdict.json" ] || args+=(--counterpart-verdict "$RUNNER_TEMP/counterpart-verdict.json")
-        if [ -n "${COUNTERPART:-}" ]; then
-          GH_TOKEN="$PLUGINS_TOKEN" gh api "repos/Systemorph/MeshWeaver.Plugins/pulls/$COUNTERPART" > "$RUNNER_TEMP/counterpart-pr.json"
-          args+=(--counterpart-pr "$RUNNER_TEMP/counterpart-pr.json")
-        fi
-        # The SEMVER evidence, from the diff itself (base = the merge commit's first parent).
-        pv() { git show "$1:Directory.Build.props" | sed -n 's:.*<PlatformVersion Condition="[^"]*">\([^<]*\)</PlatformVersion>.*:\1:p' | head -1; }
-        ep() { git show "$1:src/MeshWeaver.Compiler/platform-compatibility.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["epoch"])'; }
-        args+=(--platform-version-base "$(pv HEAD^1)" --platform-version-head "$(pv HEAD)" --epoch-base "$(ep HEAD^1)" --epoch-head "$(ep HEAD)")
-        python3 .github/scripts/check-plugins-break-declaration.py "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
-
   collect-results:
     env:
       TESTS_MODE: ${{ needs.precheck.outputs.tests-mode }}
@@ -4262,11 +3996,13 @@ jobs:
     # compiled plugin calls compiles clean everywhere in this repo and throws MissingMethodException in a
     # portal. The ladder's rung 2 — deployed plugin bytes on this platform — must be able to fail the
     # required check, or it is a notification.
-    # preflight, dependent-suites-dispatch and dependent-suites are NEEDS on the same principle, applied to
-    # the DEPENDENT (policy `dependent-suites-affected-gate`, #2689): a behaviour change behind an
-    # unchanged signature breaks MeshWeaver.Plugins with every check here green (#6297 → Plugins' GitSync
-    # suite, 2026-10-08). A measurement that could not fail the required check would be a notification.
-    needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, preflight, dependent-suites-dispatch, dependent-suites]
+    # NO dependent's suites are a NEED (policy `dependents-verify-on-their-side`, which superseded
+    # `dependent-suites-affected-gate`): core merges on its OWN checks and asks no other repository to
+    # run anything. MeshWeaver.Plugins and every satellite verify a new SEALED core set on their own
+    # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
+    # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
+    # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
+    needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4647,42 +4383,6 @@ jobs:
       run: |
         echo "::error::The 'AGENTS.md shared rule blocks' gate concluded '${{ needs.shared-rules.result }}' — see that job, which names the repo and the exact drift. Every repo's CLAUDE.md is a one-line @AGENTS.md include, so a block that differs between repos means agents follow different instructions in each of them. The register is .github/shared-rules.json; the rationale is Doc/Architecture/SharedRuleBlocks. The fix is always a pull request in the repo the error names — never a bypass here."
         exit 1
-
-    # ── …and MeshWeaver.Plugins' REACHABLE SUITES decide it too (policy `dependent-suites-affected-gate`) ──
-    # `!= 'success'` rather than `== 'failure'`: a job that was skipped or cancelled produced no verdict,
-    # and no verdict must never read as passed. The ONE exemption is a fork pull request, on the EVENT
-    # (GitHub withholds every secret from it), and it is printed by name below — never a quiet green.
-    # One failable step PER needed job, each a plain conjunction (check-green-marker-order.py: a marker
-    # must never record a tree green while any of the three is red).
-    - name: "Fail if the dependent-suites inputs are missing"
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.preflight.result != 'success'
-      run: |
-        echo "::error::Dependent suites (MeshWeaver.Plugins): the credential preflight ('Required CI inputs') concluded '${{ needs.preflight.result }}' — see that job."
-        echo "::error::A change that breaks MeshWeaver.Plugins merges only by DECLARING it on one line of the PR body — 'Breaks-plugins: <realm>[, <realm>…] — <what breaks> — counterpart Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>' — with that counterpart green against this candidate and the semver consequence in the diff. Then push (or 'Re-run all jobs'): the request job must read the line to measure the counterpart. Rationale: Doc/Architecture/CrossRepoPairGate."
-        exit 1
-    - name: "Fail if the dependent suites could not be requested"
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.dependent-suites-dispatch.result != 'success'
-      run: |
-        if [ "${{ needs.precheck.outputs.skip }}" != "true" ] && { [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ]; }; then
-          echo "::error::Dependent suites (MeshWeaver.Plugins): NOT REQUESTED — waiting for core's own suites (build '${{ needs.build.result }}', tests '${{ needs.test.result }}'). The dependent's suites are requested only after core's own are green on this candidate."
-        else
-          echo "::error::Dependent suites (MeshWeaver.Plugins): the request ('Dependent suites (request)') concluded '${{ needs.dependent-suites-dispatch.result }}' — see that job."
-        fi
-        echo "::error::A change that breaks MeshWeaver.Plugins merges only by DECLARING it on one line of the PR body — 'Breaks-plugins: <realm>[, <realm>…] — <what breaks> — counterpart Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>' — with that counterpart green against this candidate and the semver consequence in the diff. Then push (or 'Re-run all jobs'): the request job must read the line to measure the counterpart. Rationale: Doc/Architecture/CrossRepoPairGate."
-        exit 1
-    - name: "Fail unless MeshWeaver.Plugins' reachable suites pass (or the break is declared)"
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.dependent-suites.result != 'success'
-      run: |
-        echo "::error::Dependent suites (MeshWeaver.Plugins): the verdict ('Dependent suites (MeshWeaver.Plugins)') — it names the realms this change breaks, the edge that selected each, and what is missing — concluded '${{ needs.dependent-suites.result }}' — see that job."
-        echo "::error::A change that breaks MeshWeaver.Plugins merges only by DECLARING it on one line of the PR body — 'Breaks-plugins: <realm>[, <realm>…] — <what breaks> — counterpart Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>' — with that counterpart green against this candidate and the semver consequence in the diff. Then push (or 'Re-run all jobs'): the request job must read the line to measure the counterpart. Rationale: Doc/Architecture/CrossRepoPairGate."
-        exit 1
-
-    # The exemption's OTHER face: `preflight` is skipped on a pull request ONLY for the exempt events
-    # (it has no other condition), so this names them without restating the predicate.
-    - name: "Dependent suites NOT MEASURED — fork or Dependabot pull request (event exemption)"
-      if: github.event_name == 'pull_request' && needs.preflight.result == 'skipped'
-      run: |
-        echo "::warning::Event exemption (fork or Dependabot pull request): GitHub withholds the credential that asks MeshWeaver.Plugins to run its suites, so whether this change breaks a Plugins realm is NOT MEASURED here. A fork: re-land it from a branch of Systemorph/MeshWeaver. Dependabot: the daily full run measures it; provisioning DEPENDENT_DISPATCH_APP_* in the Dependabot store removes this exemption (policy dependent-suites-affected-gate)."
 
     # ── …and an UNLANDED CROSS-REPO COUNTERPART decides it too ──────────────────────────────
     # `!= 'success'` rather than `== 'failure'`, for the same reason as the gates above: a job

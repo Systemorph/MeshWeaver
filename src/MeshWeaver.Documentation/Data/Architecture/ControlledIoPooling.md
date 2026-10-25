@@ -415,10 +415,30 @@ a loud teardown residual for a silent one, which is the same defect with better 
 `OctokitGitHubRepoClient` is safe however its lambda treats `ct`. `InvokeStream` (and `RunStream`,
 which forwards to it) enumerates as `source(ct).WithCancellation(ct)`, handing the token to the
 enumerator itself. **`Invoke` has no projection, and `IoPoolExtensions.Run` composes straight
-onto it**, so those two are where a discarded token is unrecoverable — and they are what
+onto it**, so those two are where a discarded token is unrecoverable. **`InvokeBlocking` and
+`RunBlocking` have no projection either** (next section): the work IS the call. Those four are what
 `PooledLeafObservesItsTokenGuard` scans. It holds `src/` at zero for a lambda that never references
 its own token parameter, asserts its detector in both directions, and asserts its own denominator:
 a zero over no sites scanned is not a reading.
+
+Its first version matched `Invoke` and `Run` only, so all 53 lambda `InvokeBlocking` leaves in
+`src/` were outside it. Three of those were the leaves teardown reports had actually named (#2480,
+#7049, and the assembly-cache sweep). The widened guard has one sanctioned exemption, for blocking
+leaves only. A blocking leaf that is ONE call (a read of one small file, one assembly load, a parse
+of bytes already in memory) has no step at which to check a token. It declares that at the call
+site with a line comment `// atomic-blocking-leaf: <why it has no step boundary>`, on the call's
+own line or in the comment block directly above it. The guard checks each declaration:
+
+- It is refused on an async `Invoke`/`Run` leaf. That leaf can always pass the token or project it.
+- It needs a reason of at least 20 characters.
+- A declaration that excuses nothing is STALE and red. That covers a leaf that observes its token
+  now, and a comment that no longer sits next to its call.
+
+There is no allow file. A declaration sits where a reviewer reads the call, and its truth (is this
+really one call?) is the reviewer's question. The triage of the 53 sites: every leaf that walked or
+looped (a directory enumeration, a loop of probes, reads or writes, a copy tree, a reference set
+over N assemblies, a staged module swap) now takes the token and checks it between steps. The
+rest carry a declaration that names the single call.
 
 🚨 **And it states what it cannot see.** It is a LEXICAL scan of the LAMBDA form, so a leaf passed as
 a METHOD GROUP or a delegate variable — `_httpPool.Invoke(ReadIndex)`, `pool.Invoke(io)` — is
@@ -501,6 +521,18 @@ whatever was not reached is re-planned by the next pass. Pinned by `RetentionSwe
   listing, an empty subtree, a pointer probe, a seal probe, or a pointer resolution during removal) must see no
   further IO call.
 - The guarded pass must report a drained pass as cancelled, never as faulted.
+
+`AssemblyCacheGenerations.Sweep`, the assembly-cache retention pass, was the fourth walk with this
+shape: `pool.InvokeBlocking(_ => SweepCore(…))`, listing every per-NodeType directory and claim file
+of the cache and, where collection is armed, deleting its plan one file at a time. It is fixed the
+same way. `SweepCore`, `Scan` and `ReadClaims` take a REQUIRED token. It is checked per directory
+and per file of the listing, per claim, and before each delete. A cancel during the walk propagates
+and is never reported as "cache could not be read". A cancel during collection logs one
+`pass outcome — INTERRUPTED` line carrying what the pass did delete, and then throws. The hosted
+service reports a cancelled pass apart from a faulted one. Pinned by
+`AssemblyCacheSweepUnwindsOnTheDrainTest`, which parks the armed pass inside its first delete and
+drains the pool. The test requires residual 0 and the rest of the plan still on disk. Run against
+the pre-fix leaf (the pool's token not handed to `SweepCore`), it measured residual 1.
 
 The distinction the guard cannot draw lexically, and a reviewer must: a blocking leaf that is **one
 short syscall** (`_ => File.ReadAllText(path)`) has no step at which to look and is correct as it
@@ -599,7 +631,7 @@ reactive instead:
 in-flight message round-trips — but **I/O offloaded through `IIoPool` runs on the ThreadPool,
 independent of the action block, and `DisposalCompleted` knows nothing about it.** If the teardown
 disposes the service scope after `DisposalCompleted` but while an `IIoPool` operation (or any other
-async cleanup) is still in flight, that continuation resolves a service from the dead Autofac scope and
+async cleanup) is still in flight, that continuation resolves a service from the dead service scope and
 throws `ObjectDisposedException: …LifetimeScope… has already been disposed` — unobserved, it surfaces
 as an xUnit **"catastrophic failure"** that aborts the whole run.
 

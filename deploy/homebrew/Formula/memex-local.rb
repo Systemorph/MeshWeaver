@@ -37,15 +37,18 @@ class MemexLocal < Formula
   # checkout can install the tip of main.
   head "https://github.com/Systemorph/MeshWeaver.git", branch: "main"
 
-  # Runtime toolchain — exactly the tools LocalColimaMac.md §1 installs, plus the Azure CLI the
-  # registry-mode image pull needs (`az acr login`; the CI-built image lives in a private ACR).
+  # Runtime toolchain — exactly the tools LocalColimaMac.md §1 installs.
+  # NOTE: the Azure CLI the registry-mode image pull needs (`az acr login`) is NOT a formula
+  # dependency either: Homebrew moved `azure-cli` from homebrew/core to a CASK, so
+  # `depends_on "azure-cli"` no longer resolves ("No available formula with the name
+  # azure-cli") and the whole install fails. A cask cannot be depended on (below), so, like
+  # the .NET SDK, it is named in `caveats` and enforced at runtime (`need az`).
   # NOTE: the .NET SDK is intentionally NOT a formula dependency. `depends_on cask:`
   # is rejected by current Homebrew ("Unsupported special dependency: :cask"), it's
   # needed only for the local-build image path (Option B, §3) — the ACR-pull path
   # (Option A, the registry-mode default) needs no SDK — and LocalColimaMac.md §1
   # treats the standalone .NET installer as equally valid. The requirement is
   # surfaced in `caveats` and enforced at runtime by `preflight()` / `doctor`.
-  depends_on "azure-cli"       # az acr login (registry mode pulls the CI-built image)
   depends_on "colima"          # k3s VM
   depends_on "helm"            # chart install/upgrade
   depends_on "kubernetes-cli"  # kubectl
@@ -79,8 +82,8 @@ class MemexLocal < Formula
         memex-local registry https://memex.meshweaver.cloud
         memex-local up
 
-      That pulls the CI-built multi-arch image from ACR (`az login` first — no .NET
-      SDK, no source checkout), registers this install at the registry on first
+      That pulls the CI-built multi-arch image from ACR (`brew install --cask azure-cli`
+      and `az login` first — no .NET SDK, no source checkout), registers this install at the registry on first
       boot, installs the packages it is granted and lands their compiled modules —
       the only way a local install gets Radzen/Analysis/EntityViews/GoogleMaps/Speech.
       A higher plan is a platform admin's edit of this instance's grant on the

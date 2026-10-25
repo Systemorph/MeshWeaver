@@ -8,7 +8,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// Deterministic repro for the Autofac "LifetimeScope … has already been disposed"
+/// Deterministic repro for the DI container "LifetimeScope … has already been disposed"
 /// CATASTROPHICS during Orleans TestCluster / silo teardown (task #18, defect 2 — the
 /// second straggler adjacent to #228).
 ///
@@ -18,7 +18,7 @@ namespace MeshWeaver.Hosting.Test;
 /// Orleans TestCluster silo and client, and any prod silo on the legacy builder) had NO
 /// ordered mesh drain on shutdown: <c>host.StopAsync()</c> stopped the hosted services and
 /// then <c>host.Dispose()</c> disposed the root <c>IServiceProvider</c> — which IS the mesh
-/// root hub's Autofac container (<see cref="MessageHubServiceProviderFactory"/>) — while the
+/// root hub's service container (<see cref="MessageHubServiceProviderFactory"/>) — while the
 /// hub's action blocks, offloaded <c>IIoPool</c> work and the <c>AsyncDisposeQueue</c> were
 /// still draining. A late continuation then resolves a service (or begins a nested hub
 /// scope) from the disposed container → <see cref="ObjectDisposedException"/>
@@ -39,7 +39,7 @@ namespace MeshWeaver.Hosting.Test;
 public class MeshHostBuilderTeardownOrderingTest
 {
     [Fact(Timeout = 60000)]
-    public async Task StopAsync_DrainsTheMeshRootHub_BeforeTheHostDisposesItsAutofacScope()
+    public async Task StopAsync_DrainsTheMeshRootHub_BeforeTheHostDisposesItsServiceScope()
     {
         var hostBuilder = new HostBuilder();
         _ = new MeshHostBuilder(hostBuilder, new Address("mesh", "teardown-ordering"));
@@ -54,10 +54,10 @@ public class MeshHostBuilderTeardownOrderingTest
         // The ordering contract: StopAsync (which runs every IHostedService.StopAsync,
         // including the mesh drain) must have FULLY drained the mesh root hub before the
         // caller goes on to dispose the host — because host.Dispose() tears down the
-        // Autofac container the hub's continuations resolve from. A hub still running
+        // service container the hub's continuations resolve from. A hub still running
         // here is the armed LifetimeScope catastrophic.
         mesh.IsDisposing.Should().BeTrue(
-            "host shutdown must dispose the mesh root hub BEFORE the Autofac scope goes away — "
+            "host shutdown must dispose the mesh root hub BEFORE the service scope goes away — "
             + "otherwise late continuations resolve from a disposed LifetimeScope (the CI catastrophic)");
         mesh.RunLevel.Should().Be(MessageHubRunLevel.Dead,
             "the drain must be COMPLETE (action blocks + IoPool + AsyncDisposeQueue) when StopAsync returns, "

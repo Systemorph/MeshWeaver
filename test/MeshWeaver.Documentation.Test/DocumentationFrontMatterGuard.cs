@@ -1,6 +1,7 @@
 using System.Text;
 using Xunit;
 using YamlDotNet.Serialization;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -39,7 +40,7 @@ public class DocumentationFrontMatterGuard
     /// <summary>Every shipped doc markdown file that OPENS a front-matter block, as (path, front matter).</summary>
     private static (string Path, string FrontMatter)[] FrontMatterFiles()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var dir = Path.Combine(root, DataRoot);
         if (!Directory.Exists(dir))
             return [];
