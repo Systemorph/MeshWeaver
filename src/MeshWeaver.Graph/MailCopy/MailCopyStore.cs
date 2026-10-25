@@ -191,14 +191,24 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     public IObservable<MailCopySource?> Source(string owner, string provider)
         => Gated(Assembly.GetCallingAssembly(), nameof(Source), owner, Permission.Read, () => SourceCore(owner, provider));
 
+    // 🚨 Existence from the index, content from the node's STREAM: the index trails the store, and a source read off it
+    // can lack a pending generation a rebuild just committed — which the sweep would then take for leftovers and delete.
     private IObservable<MailCopySource?> SourceCore(string owner, string provider)
         => Mesh().SelectMany(m => m.Mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MailCopyNodeTypes.SourcePath(owner, provider)}", owner) with { Limit = 1 })
             .Take(1)
-            .Select(change => change.Items
-                .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal))
-                .Select(node => node.ContentAs<MailCopySource>(m.Options, logger))
-                .FirstOrDefault(source => source is not null)));
+            .Select(change => change.Items.FirstOrDefault(node =>
+                string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)))
+            .SelectMany(found => found is null
+                ? Observable.Return<MailCopySource?>(null)
+                : Live(owner, found.Path)
+                    .Select(live => string.Equals(live.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
+                        ? live.ContentAs<MailCopySource>(m.Options, logger)
+                        : null)
+                    // Switched off between the index answer and the stream: off.
+                    .Catch((Exception ex) => IsGone(ex, found.Path)
+                        ? Observable.Return<MailCopySource?>(null)
+                        : Observable.Throw<MailCopySource?>(ex))));
 
     /// <inheritdoc />
     [ImpersonationSurface]
