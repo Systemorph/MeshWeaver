@@ -624,8 +624,10 @@ public sealed class MessageHub : IMessageHub
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions(parentHub);
 
-        TypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
-        TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
+        // No explicit WithType for PingRequest / PingResponse here: Register<PingRequest> below registers
+        // the request and its IRequest<PingResponse> response, and the mesh registry already holds both.
+        // Registering them twice built two definitions per type per hub (1,215 PingRequest definitions
+        // for 608 hubs, Doc/Architecture/PortalHeapIsHubs).
         Register<DisposeRequest>(HandleDispose);
         // Disposal is fully SYNCHRONOUS + reactive — the handler returns immediately, kicks off
         // the Quiescing poll / hosted-hub drain as Rx subscriptions (Observable.Interval/Timer,
