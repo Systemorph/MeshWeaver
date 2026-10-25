@@ -1,0 +1,36 @@
+{{- if and .Values.enabled .Values.networkPolicy.enabled }}
+# Ingress only from the named namespaces, on the service port only. Egress: NONE — the models are
+# baked into the image, so the service calls nothing (no DNS, no API server, no registry, no model pull).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ollama.fullname" . }}
+  labels:
+    {{- include "ollama.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ollama.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  egress: []
+  ingress:
+    # The chart's own `helm test` pod (templates/tests/smoke.yaml), from the release namespace only.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ollama.smokeLabels" . | nindent 14 }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- if .Values.networkPolicy.allowedNamespaces }}
+    - from:
+        {{- range .Values.networkPolicy.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- end }}
+{{- end }}
