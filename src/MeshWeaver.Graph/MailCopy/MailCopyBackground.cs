@@ -59,6 +59,11 @@ internal sealed class BackgroundMailCopyStore(IMailCopyStore inner, AccessServic
     public IObservable<MailMessageCopy?> Read(string owner, string provider, string generation, string messageId)
         => AsSystem(owner, () => inner.Read(owner, provider, generation, messageId));
 
+    public IObservable<ImmutableList<string>> SourceKeys(string owner)
+        => AsSystem(owner, () => inner.SourceKeys(owner));
+
+    public IObservable<ImmutableList<MailCopySourceRef>> EnabledSources() => inner.EnabledSources();
+
     public IObservable<ImmutableList<MailMessageCopy>> ReadPage(
         string owner, string provider, string generation, long? from, int size, bool oldestFirst = false)
         => AsSystem(owner, () => inner.ReadPage(owner, provider, generation, from, size, oldestFirst));

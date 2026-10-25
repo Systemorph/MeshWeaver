@@ -30,6 +30,30 @@ namespace MeshWeaver.Graph.MailCopy;
 internal static class MailCopyAuthority
 {
     /// <summary>
+    /// <paramref name="work"/> at PLATFORM scope (it spans owners), composed only once <paramref name="caller"/> passes the
+    /// in-mesh impersonation guard as a System act. Cold.
+    /// </summary>
+    public static IObservable<T> GatedPlatform<T>(IMessageHub? hub, Assembly caller, string surface, Func<IObservable<T>> work)
+    {
+        var access = hub?.ServiceProvider.GetService<AccessService>();
+        return Observable.Defer(() =>
+        {
+            if (hub is null)
+                return Observable.Throw<T>(new InvalidOperationException(
+                    "The mail copies cannot be reached: no mesh was available on this host when the call was made."));
+            if (access is null)
+                return work();
+            // Platform scope names every owner who keeps a copy: judged by the in-mesh impersonation guard like a System act.
+            access.ImpersonationGuard.Check(caller, surface, new AccessContext
+            {
+                ObjectId = AccessService.SystemObjectId,
+                Name = AccessService.SystemObjectId,
+            });
+            return work();
+        });
+    }
+
+    /// <summary>
     /// <paramref name="work"/>, composed only once <paramref name="caller"/> and the ambient identity
     /// may act on <paramref name="owner"/>'s copy with <paramref name="permission"/>. A refusal is an
     /// error on the returned observable; nothing of the work runs. Cold.

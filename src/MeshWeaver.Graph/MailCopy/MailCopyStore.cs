@@ -127,7 +127,25 @@ public interface IMailCopyStore
     /// it moved; 0 when there was nothing to move. A store without a legacy place moves nothing.
     /// </summary>
     IObservable<int> MoveLegacy(string owner, string provider) => Observable.Return(0);
+
+    /// <summary>
+    /// The keys (<c>outlook</c>, <c>outlook.{accountId}</c>, <c>gmail</c>) of the copies <paramref name="owner"/> has
+    /// ON, whether or not their account is still connected — so a copy whose account is gone can still be listed
+    /// and deleted. A store that cannot list answers none.
+    /// </summary>
+    IObservable<ImmutableList<string>> SourceKeys(string owner) => Observable.Return(ImmutableList<string>.Empty);
+
+    /// <summary>
+    /// Every copy that is ON on this installation, across owners — what the keeper resumes after a restart.
+    /// Platform scope: refused to in-mesh code. A store that cannot list answers none.
+    /// </summary>
+    IObservable<ImmutableList<MailCopySourceRef>> EnabledSources() => Observable.Return(ImmutableList<MailCopySourceRef>.Empty);
 }
+
+/// <summary>One copy that is on: whose it is and its key.</summary>
+/// <param name="Owner">The user id that owns the copy.</param>
+/// <param name="Key">The copy's key (<see cref="MailCopySource.Provider"/>).</param>
+public sealed record MailCopySourceRef(string Owner, string Key);
 
 /// <summary>
 /// The copies as mesh nodes in the OWNER's partition.
@@ -726,6 +744,68 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                            && copy.MessageId.Length > 0
                            // A tombstone is never listed nor opened.
                            && !copy.Removed);
+
+    /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IObservable<ImmutableList<string>> SourceKeys(string owner)
+        // 🚨 Both places: a copy not yet moved out of the home partition (MoveLegacy) is still on, and must still be
+        // listed — and deletable — like any other.
+        => Gated(Assembly.GetCallingAssembly(), nameof(SourceKeys), owner, Permission.Read, () => Keys(owner, MailCopyNodeTypes.NamespaceFor(owner))
+            .Zip(Keys(owner, MailCopyNodeTypes.LegacyNamespaceFor(owner)), (current, legacy) => current.Union(legacy).ToImmutableList()));
+
+    private IObservable<ImmutableList<string>> Keys(string owner, string @namespace)
+        => Mesh().SelectMany(m => m.Mesh
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{@namespace} nodeType:{MailCopyNodeTypes.SourceNodeType}", owner)
+                // An ENUMERATION: a key clipped off this list is a copy the owner can no longer see or delete.
+                .Complete())
+            .Take(1)
+            .SelectMany(change => RejectIncompleteListing(change, nameof(SourceKeys)))
+            .Select(change => change.Items
+                .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
+                               && string.Equals(node.Namespace, @namespace, StringComparison.Ordinal))
+                .Select(node => node.Id)
+                .ToImmutableList()));
+
+    /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IObservable<ImmutableList<MailCopySourceRef>> EnabledSources()
+        => MailCopyAuthority.GatedPlatform(hub(), Assembly.GetCallingAssembly(), $"{nameof(MeshMailCopyStore)}.{nameof(EnabledSources)}",
+            () => Mesh().SelectMany(m => m.Access
+                .RunAsSystem(() => m.Mesh
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MailCopyNodeTypes.SourceNodeType} partitions:all")
+                        // An ENUMERATION: a source clipped off this list is a copy the keeper never resumes.
+                        .Complete())
+                    .Take(1)
+                    .SelectMany(change => RejectIncompleteListing(change, nameof(EnabledSources)))
+                    .Select(change => change.Items
+                        .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal))
+                        // Both places: resuming a copy still at the legacy place is what moves it (MoveLegacy).
+                        .Select(node => MailCopyNodeTypes.OwnerOfSourceNamespace(node.Namespace) is { } owner
+                            ? new MailCopySourceRef(owner, node.Id)
+                            : null)
+                        .OfType<MailCopySourceRef>()
+                        .ToImmutableList()))));
+
+    /// <summary>
+    /// 🚨 An ENUMERATION that is only a FLOOR is a fault, never a listing: a frame whose fan-in names silent
+    /// providers, or that a provider marked incomplete, may be MISSING sources — read as the whole list it would hide
+    /// a disconnected account's copy from Settings, or leave an enabled copy out of restart recovery. It goes down the
+    /// error channel instead. <see cref="MeshQueryRequest.Complete"/> only lifts the page bound; it says nothing about
+    /// whether every provider answered (review of #7154). Pure.
+    /// </summary>
+    internal static IObservable<QueryResultChange<MeshNode>> RejectIncompleteListing(QueryResultChange<MeshNode> change, string listing)
+    {
+        if (change.SilentProviders is { Count: > 0 } silent)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"The mail copy listing '{listing}' is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] did not answer."));
+        if (change.SnapshotIncomplete)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"The mail copy listing '{listing}' is INCOMPLETE: a provider dropped part of its read."));
+        return Observable.Return(change);
+    }
 
     private IObservable<T> Gated<T>(Assembly caller, string surface, string owner, Permission permission, Func<IObservable<T>> work)
         => MailCopyAuthority.Gated(hub(), caller, $"{nameof(MeshMailCopyStore)}.{surface}", owner, permission, work);

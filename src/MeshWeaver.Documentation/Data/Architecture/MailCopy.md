@@ -164,3 +164,7 @@ the rest. Three more things come from the engine, so the provider only maps copi
 The engine's background paths declare System on the owner's behalf; the public surfaces (`Enable`, `Kick`, `Sync`,
 `ServesFromCopy`, `FollowMove`) are judged as the CODE that calls them by the in-mesh impersonation guard.
 
+
+## Listing the copies that are on
+
+`IMailCopyStore.SourceKeys(owner)` lists the keys of the owner's persisted copies whether or not their account is still connected, so a copy whose account is gone can still be shown and deleted. `IMailCopyStore.EnabledSources()` lists every copy that is on across owners (platform scope, refused to in-mesh code); it is what a keeper reads after a restart to resume them. Both are default interface members that answer none, so a store that cannot list changes nothing.

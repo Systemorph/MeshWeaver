@@ -316,6 +316,22 @@ public static class MailCopyNodeTypes
     /// </summary>
     public static string LegacyNamespaceFor(string owner) => $"{owner}/{Segment}";
 
+    /// <summary>
+    /// The owner of a copy whose SOURCE node is filed in <paramref name="namespace"/> — the copy partition
+    /// <c>{owner}_MailCopy</c>, or the legacy <c>{owner}/_MailCopy</c> — or null for any other namespace. Pure.
+    /// </summary>
+    public static string? OwnerOfSourceNamespace(string? @namespace)
+    {
+        if (string.IsNullOrEmpty(@namespace))
+            return null;
+        var owner = @namespace.EndsWith("/" + Segment, StringComparison.Ordinal)
+            ? @namespace[..^(Segment.Length + 1)]
+            : !@namespace.Contains('/') && @namespace.EndsWith(Segment, StringComparison.Ordinal)
+                ? @namespace[..^Segment.Length]
+                : null;
+        return IsValidOwner(owner) ? owner : null;
+    }
+
     /// <summary>The source node: <c>{owner}_MailCopy/{provider}</c>.</summary>
     public static string SourcePath(string owner, string provider) => $"{NamespaceFor(owner)}/{provider}";
 

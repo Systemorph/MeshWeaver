@@ -80,6 +80,42 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         => MailCopyNodeTypes.IsValidOwner(owner).Should().Be(valid,
             "the HOME partition of 'jroe_MailCopy' would be the copy partition of 'jroe'");
 
+    [Theory]
+    [InlineData("jroe_MailCopy", "jroe")]
+    [InlineData("jroe/_MailCopy", "jroe")]
+    [InlineData("felice.buergi_MailCopy", "felice.buergi")]
+    [InlineData("jroe", null)]
+    [InlineData("jroe/Notes", null)]
+    [InlineData("Org/jroe/_MailCopy", null)]
+    [InlineData("_MailCopy", null)]
+    [InlineData("x_MailCopy_MailCopy", null)]
+    [InlineData(null, null)]
+    public void TheOwnerOfASource_IsReadFromEitherPlace(string? @namespace, string? owner)
+        => MailCopyNodeTypes.OwnerOfSourceNamespace(@namespace).Should().Be(owner);
+
+    [Fact(Timeout = 120_000)]
+    public async Task ACopyNotYetMoved_IsStillListed_ForTheOwnerAndForTheKeeper()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await store.Create(owner, new MailCopySource { Provider = "outlook", Generation = "g1" }).Timeout(Bound).Await(ct);
+        using (AsSystem())
+            await Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(new MeshNode("gmail", MailCopyNodeTypes.LegacyNamespaceFor(owner))
+            { NodeType = MailCopyNodeTypes.SourceNodeType, State = MeshNodeState.Active, Content = new MailCopySource { Provider = "gmail", Generation = "g1" } })
+                .Timeout(Bound).Await(ct);
+
+        Task<ImmutableList<string>> keys;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            keys = store.SourceKeys(owner).Timeout(Bound).Await(ct);
+        (await keys).Order().Should().Equal(["gmail", "outlook"], "the legacy copy is still on, so Settings still lists it — and can delete it");
+
+        var all = await store.EnabledSources().Timeout(Bound).Await(ct);
+        all.Should().Contain(new MailCopySourceRef(owner, "outlook"), "a copy in the copy partition is resumed")
+            .And.Contain(new MailCopySourceRef(owner, "gmail"), "and so is one still at the legacy place — resuming it is what moves it");
+    }
+
     [Fact]
     public void Relocated_ReRootsOnlyTheStoredPathsUnderTheMovedNode()
     {
