@@ -67,6 +67,12 @@ internal sealed class BackgroundMailCopyStore(IMailCopyStore inner, AccessServic
     public IObservable<ImmutableList<MailMessageCopy>> ReadPage(
         string owner, string provider, string generation, long? from, int size, bool oldestFirst = false)
         => AsSystem(owner, () => inner.ReadPage(owner, provider, generation, from, size, oldestFirst));
+
+    public IObservable<int> MoveLegacy(string owner, string provider)
+        => AsSystem(owner, () => inner.MoveLegacy(owner, provider));
+
+    public IObservable<MailCopySource?> LegacySource(string owner, string provider)
+        => AsSystem(owner, () => inner.LegacySource(owner, provider));
 }
 
 /// <inheritdoc cref="BackgroundMailCopyStore"/>
@@ -77,4 +83,10 @@ internal sealed class BackgroundMailAttachmentStore(IMailAttachmentStore inner, 
 
     public IObservable<Unit> DeleteAll(string owner, string copyPath)
         => access.RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => inner.DeleteAll(owner, copyPath));
+
+    public IObservable<int> CopyLegacy(string owner, string legacyCopyPath, string copyPath)
+        => access.RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => inner.CopyLegacy(owner, legacyCopyPath, copyPath));
+
+    public IObservable<Unit> DeleteLegacy(string owner, string legacyCopyPath)
+        => access.RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => inner.DeleteLegacy(owner, legacyCopyPath));
 }

@@ -49,7 +49,7 @@ public class MailCopyContractTest(ITestOutputHelper output) : MonolithMeshTestBa
         MailCopyNodeTypes.SourceNodeType.Should().Be("MailCopySource");
         MailCopyNodeTypes.MessageNodeType.Should().Be("MailMessageCopy");
         MailCopyNodeTypes.Segment.Should().Be("_MailCopy");
-        MailCopyNodeTypes.CopyPath("jroe", "outlook", "g1", "AAMk-1").Should().StartWith("jroe/_MailCopy/outlook/");
+        MailCopyNodeTypes.CopyPath("jroe", "outlook", "g1", "AAMk-1").Should().StartWith("jroe_MailCopy/outlook/");
     }
 
     [Fact]
