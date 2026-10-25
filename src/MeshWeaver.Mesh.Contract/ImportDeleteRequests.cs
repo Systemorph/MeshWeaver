@@ -212,6 +212,28 @@ public record SyncContentFilesRequest(
     /// <para>See <c>Doc/Architecture/OutOfBandContentTransfer</c>.</para>
     /// </summary>
     public IReadOnlyList<StagedContentFile>? StagedFiles { get; init; }
+
+    /// <summary>
+    /// When true, the files this delivery writes are NOT announced to the content observers when it
+    /// commits, because a LATER delivery of the same sync announces the whole set
+    /// (<see cref="AnnounceWrittenPaths"/>). Set by the producer on every delivery of a split sync
+    /// but the last; false (the ordinary, unsplit case) announces this delivery's own writes.
+    ///
+    /// <para>🚨 A sync announces ONCE, never once per delivery and never once per file: the
+    /// observers start work per announcement (the content index opens one indexing activity), and a
+    /// boot re-import re-sends every content file of a repository. See
+    /// <c>IContentUploadObserver.OnFilesWritten</c>.</para>
+    /// </summary>
+    public bool DeferWrittenAnnouncement { get; init; }
+
+    /// <summary>
+    /// The collection-relative paths that EARLIER deliveries of this split sync wrote and deferred
+    /// (<see cref="DeferWrittenAnnouncement"/>), announced together with this delivery's own writes
+    /// once it commits. Null for an unsplit sync. Deliveries are posted strictly in order and the
+    /// sequence stops at the first refusal, so when this delivery commits every path named here is
+    /// already written.
+    /// </summary>
+    public IReadOnlyList<string>? AnnounceWrittenPaths { get; init; }
 }
 
 /// <summary>
