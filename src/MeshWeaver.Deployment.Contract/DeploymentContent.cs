@@ -621,6 +621,10 @@ public record DeploymentContent
     /// newer one did not change and leave a mixed set. As one leaf, the stale write conflicts as a
     /// whole and its retry is refused as older (review of #7156 / MeshWeaver.Plugins#4166).</para>
     /// </summary>
+    // CD-written state, never edited by a person: kept OUT of the generated record editor (the editor
+    // honours [Browsable(false)]), so it shows no untranslated label and cannot be hand-edited — this
+    // assembly carries no MeshWeaver reference for a [Translation] (review of #7156).
+    [Browsable(false)]
     [Description("The platform set each build host channel runs (written by CD, never authored)")]
     public ImmutableSortedDictionary<string, string>? BuildHostSets { get; init; }
 

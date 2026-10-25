@@ -118,6 +118,14 @@ public class BuildHostsRecordTest
     };
 
     [Fact]
+    public void TheCdOwnedSets_AreKeptOutOfGeneratedEditors()
+    {
+        var property = typeof(DeploymentContent).GetProperty(nameof(DeploymentContent.BuildHostSets))!;
+        Assert.False(System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.ComponentModel.BrowsableAttribute>(property)?.Browsable ?? true,
+            "a CD-written member is never offered for hand-editing, and so shows no untranslated label");
+    }
+
+    [Fact]
     public void ASet_IsOneToken_ThatRoundTrips_AndRefusesAnythingElse()
     {
         var set = new BuildHostChannel { PlatformVersion = "3.1.10500", TesterDigest = Tester, PortalDigest = Portal, RunnerDigest = Runner };
