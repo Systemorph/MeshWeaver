@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
+using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 
@@ -41,9 +42,8 @@ public class DisposalRegistrantFaultIsolationTest(ITestOutputHelper output) : Hu
         {
             WasDisposed = true;
             throw new ObjectDisposedException(
-                "SomeLifetimeScope",
-                "Instances cannot be resolved and nested lifetimes cannot be created from this "
-                + "LifetimeScope as it (or one of its parent scopes) has already been disposed.");
+                MeshServiceProvider.DisposedObjectName,
+                MeshServiceProvider.DisposedMessage);
         }
     }
 

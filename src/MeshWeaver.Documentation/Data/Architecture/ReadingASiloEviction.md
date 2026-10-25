@@ -247,7 +247,8 @@ failed. It does not yet name the call that holds it.
   process's first moments, is owned by OS thread `0x1e`, one of the first pool workers, with
   `MonitorHeld` 43: **21 threads waiting**. Monitor #169 is owned by thread `0xf1` with 4 waiting.
 - **Every waiter shown is in the same frame**: `Monitor.Enter` under
-  `Autofac.Core.Lifetime.LifetimeScope.CreateSharedInstance`. That is the lock a container scope
+  `LifetimeScope.CreateSharedInstance` of the DI container then in use (Autofac, since removed in
+  MeshWeaver#7145). That is the lock a container scope
   holds while it constructs one of its single-instance services, and it is one lock per scope, not
   one per service. The owner of #169 is itself such a waiter: it holds one scope's lock while it
   constructs a service and waits for another scope's lock for that service's constructor argument.

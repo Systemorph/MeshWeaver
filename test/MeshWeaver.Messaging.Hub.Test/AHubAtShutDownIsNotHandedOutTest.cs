@@ -43,7 +43,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// first line of <c>GetHubWithOutcome</c>), <see cref="AHubParkedAtShutDown_IsNotHandedOut_ASuccessorIs"/>
 /// fails on <c>successor.Should().NotBeSameAs(first)</c> — the lookup hands back the corpse; with
 /// the corpse retired it passes. <see cref="TheOwnerStillJoinsARetiredHub"/> is the half that keeps
-/// the first half safe: a retired hub's Autofac scope is a child of its owner's, so an owner that
+/// the first half safe: a retired hub's service scope is a child of its owner's, so an owner that
 /// finished its own teardown ahead of the corpse would close that scope under a hub still resolving
 /// from it — the R1 straggler class, manufactured locally.</para>
 /// </summary>

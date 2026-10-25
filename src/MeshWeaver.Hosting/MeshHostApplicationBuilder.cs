@@ -46,7 +46,7 @@ public record MeshHostApplicationBuilder : MeshBuilder
         Host.ConfigureContainer(new MessageHubServiceProviderFactory(BuildHub));
         this.RegisterMeshQueryCoreOnMeshHub();
         // Drain the mesh root hub (action blocks + IoPool + AsyncDisposeQueue) during host shutdown,
-        // BEFORE the host disposes the scope — otherwise a late continuation hits the disposed Autofac
+        // BEFORE the host disposes the scope — otherwise a late continuation hits the disposed DI container
         // scope and throws an unobserved ObjectDisposedException.
         //
         // 🚨 The ordering does NOT come from registering here. Hosted services stop in reverse
@@ -79,7 +79,7 @@ public record MeshHostBuilder : MeshBuilder
         this.RegisterMeshQueryCoreOnMeshHub();
         // Same ordered drain as MeshHostApplicationBuilder above: quiesce the mesh root hub
         // (action blocks + IoPool + AsyncDisposeQueue) during host StopAsync, BEFORE the host
-        // disposes the root scope — which IS the hub's Autofac container. Without it, a late
+        // disposes the root scope — which IS the hub's service container. Without it, a late
         // continuation resolves from (or begins a nested hub scope on) the already-disposed
         // container and throws ObjectDisposedException("LifetimeScope … has already been
         // disposed") on a pooled task nobody observes — the pre-existing "Catastrophic failure"

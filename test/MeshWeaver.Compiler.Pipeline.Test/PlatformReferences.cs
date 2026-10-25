@@ -14,7 +14,7 @@ namespace MeshWeaver.Graph.Test;
 /// images each time. Roslyn reads every reference's metadata when it binds the compilation, so
 /// each compile re-read the whole platform into memory only a finalizer releases. On CI (#4127)
 /// this host was <c>FailFast</c>ed by the memory watchdog at 6.3 GB RSS with 41 MB of managed
-/// heap, blamed on a cumulative Autofac leak — the sibling occurrence's trace
+/// heap, blamed on a cumulative the DI container leak — the sibling occurrence's trace
 /// (<c>Memex.Portal.Shared.Test</c>, same run) shows the growth as two steps that coincide
 /// exactly with its Roslyn-emitting classes and nothing else. <see cref="CompileReferences.Default"/>
 /// is what a NodeType compile uses in production: built once, and Roslyn caches each reference's

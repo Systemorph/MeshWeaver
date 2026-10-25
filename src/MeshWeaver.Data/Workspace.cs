@@ -1197,7 +1197,7 @@ public class Workspace : IWorkspace
     // is NOT free and NOT garbage-collectable.
     //
     // Every ReduceManager.ReduceStream constructs a SynchronizationStream, and a
-    // SynchronizationStream constructs a hosted `sync/{id}` sub-hub (its own Autofac lifetime
+    // SynchronizationStream constructs a hosted `sync/{id}` sub-hub (its own DI container lifetime
     // scope, TypeRegistry and JsonSerializerOptions — ~140 KB apiece), then registers itself for
     // disposal ON ITS PARENT (WorkspaceStreams.CreateReducedStream). The parent is the data
     // source's primary stream, which lives as long as the hub. So an UNCACHED GetStream leaks a

@@ -22,7 +22,7 @@ public static class FaultKind
     /// carrying one, or a routed transport timeout flattened into a delivery failure's text.</summary>
     public const string Timeout = nameof(Timeout);
 
-    /// <summary>A DI scope (the Autofac <c>LifetimeScope</c>) was disposed under live work — or,
+    /// <summary>A DI scope (a <c>MeshServiceProvider</c> scope) was disposed under live work — or,
     /// with a <see cref="TeardownContext.ScopeDisposed"/> probe, the CALLER's own scope is gone.</summary>
     public const string ScopeTeardown = nameof(ScopeTeardown);
 
@@ -95,9 +95,9 @@ public interface IClassifiedFault
 /// </summary>
 /// <param name="ScopeDisposed">Probe for "the caller's own DI scope is gone". When set, ANY
 /// <see cref="ObjectDisposedException"/> in the graph is a <see cref="FaultKind.ScopeTeardown"/>
-/// exactly when the probe confirms it — and an Autofac "LifetimeScope disposed" text that the probe
+/// exactly when the probe confirms it — and a disposed-container exception that the probe
 /// does NOT confirm is somebody else's scope, so it is not this caller's teardown. When null, the
-/// Autofac text alone is the evidence.</param>
+/// disposed-container shape alone is the evidence.</param>
 /// <param name="OwnAddress">When set, only a <see cref="HubDisposingException"/> for THIS address is
 /// a <see cref="FaultKind.HubTeardown"/>; another hub's disposal is, from here, a transient fault of
 /// the transport (<see cref="FaultLayer.Transport"/>).</param>
@@ -250,8 +250,9 @@ public static class FaultClassifier
 
     /// <summary>
     /// True when <paramref name="exception"/> is (or carries anywhere in its graph) the DI container's
-    /// "this scope is gone" — an <see cref="ObjectDisposedException"/> naming a disposed Autofac
-    /// <c>LifetimeScope</c>. The one copy of that text match.
+    /// "this scope is gone" — an <see cref="ObjectDisposedException"/> for a disposed
+    /// <c>MeshServiceProvider</c> scope (<see cref="HubDisposingException.DisposedContainerObjectName"/>).
+    /// The one copy of that match.
     /// </summary>
     /// <param name="exception">The fault; may be null.</param>
     public static bool IsDisposedContainer(Exception? exception)
@@ -259,7 +260,7 @@ public static class FaultClassifier
 
     /// <summary>
     /// True when EVERY branch of <paramref name="exception"/>'s graph — through wrappers and nested
-    /// aggregates, bounded and cycle-safe — reaches the disposed-<c>LifetimeScope</c> frame. The
+    /// aggregates, bounded and cycle-safe — reaches the disposed-container frame. The
     /// teardown suppressors' rule: a wrapper over a disposed scope BESIDE a real defect carries the
     /// defect, so it is not benign (where <see cref="IsDisposedContainer"/>, which asks whether the
     /// graph CONTAINS one, says yes).
@@ -269,7 +270,7 @@ public static class FaultClassifier
         => EveryBranchReaches(exception, IsDisposedContainerFrameCore);
 
     /// <summary>
-    /// True when <paramref name="exception"/> ITSELF is the disposed-<c>LifetimeScope</c>
+    /// True when <paramref name="exception"/> ITSELF is the disposed-container
     /// <see cref="ObjectDisposedException"/> — no walk. For a first-chance handler, which must never
     /// admit an <see cref="AggregateException"/> whose message it would then format (exponential in
     /// the depth of a shared nested graph).
@@ -294,10 +295,20 @@ public static class FaultClassifier
     /// <param name="exception">One frame.</param>
     public static bool IsNetworkFault(Exception exception) => exception is SocketException;
 
+    /// <summary>
+    /// As <see cref="IsDisposedContainer(Exception?)"/>, for a REASON string — an outcome that carries
+    /// the failure as text (the permission fold's undetermined outcome).
+    /// </summary>
+    /// <param name="reason">The reason text; may be null.</param>
+    public static bool IsDisposedContainerReason(string? reason)
+        => reason is not null
+           && (reason.Contains(HubDisposingException.DisposedContainerPhrase, StringComparison.OrdinalIgnoreCase)
+               || reason.Contains(HubDisposingException.DisposedContainerObjectName, StringComparison.Ordinal));
+
     private static bool IsDisposedContainerFrameCore(Exception e) =>
-        e is ObjectDisposedException
-        && ((e.Message?.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase) ?? false)
-            || (e.Message?.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase) ?? false));
+        e is ObjectDisposedException disposed
+        && (string.Equals(disposed.ObjectName, HubDisposingException.DisposedContainerObjectName, StringComparison.Ordinal)
+            || (disposed.Message?.Contains(HubDisposingException.DisposedContainerPhrase, StringComparison.OrdinalIgnoreCase) ?? false));
 
     private static bool IsScopeTeardown(Exception exception, TeardownContext? context)
         => context?.ScopeDisposed is { } probe

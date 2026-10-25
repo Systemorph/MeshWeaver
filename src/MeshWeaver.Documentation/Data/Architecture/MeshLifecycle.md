@@ -7,7 +7,7 @@ Icon: ArrowSync
 
 # Mesh Lifecycle: Build Up & Tear Down
 
-A mesh is an actor system wired into a DI (Autofac) **service scope**. Standing it
+A mesh is an actor system wired into a DI **service scope** (`MeshServiceProvider`). Standing it
 up and taking it down are mirror images, and the tear-down side has ONE rule that
 is easy to get wrong and produces a brutal, run-aborting failure when you do:
 
@@ -30,7 +30,7 @@ var mesh = new MeshBuilder(/* … */)
     .UseMonolithMesh()                       // or UseOrleansMeshServer() on a silo
     .ConfigureServices(s => s.AddSingleton<MyRepository>())   // mesh-scoped singletons
     .AddGraph()
-    .Build();                                // builds the Autofac scope + root hub
+    .Build();                                // builds the service scope + root hub
 ```
 
 Two invariants make tear-down tractable, so honor them at build time:
@@ -93,7 +93,7 @@ The canonical helper does all of it:
 ```csharp
 // MeshWeaver.Mesh.MeshTeardownExtensions
 var report = await mesh.TeardownAsync(timeout);   // activities → Dispose() → DisposalCompleted → DrainAll → AsyncDisposeQueue
-// ONLY NOW is it safe to dispose the Autofac scope:
+// ONLY NOW is it safe to dispose the service scope:
 await ((IAsyncDisposable)mesh.ServiceProvider).DisposeAsync();
 ```
 

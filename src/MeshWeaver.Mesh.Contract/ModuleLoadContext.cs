@@ -63,11 +63,11 @@ public sealed class ModuleLoadContext : AssemblyLoadContext, IPlatformLoadContex
         Stage = stage;
         ModuleName = moduleName;
         Directory = directory;
-        // The same two process-static caches a NodeType context purges (CompilationCacheService):
-        // each would otherwise root this context from a static field the moment one of its types
-        // was resolved through Autofac or serialised through System.Text.Json, and a context that
-        // can never be collected is a swap that never finishes. Static handlers — no self-reference.
-        Unloading += ReflectionCacheEviction.EvictFor;
+        // The process-static cache a NodeType context purges too (CompilationCacheService): it would
+        // otherwise root this context from a static field the moment one of its types was serialised
+        // through System.Text.Json, and a context that can never be collected is a swap that never
+        // finishes. (The DI container keeps no process-static cache, so nothing there needs purging.)
+        // Static handler — no self-reference.
         Unloading += JsonMemberAccessorCacheEviction.EvictFor;
     }
 

@@ -38,7 +38,7 @@ public partial class MeshQuery : IMeshQueryCore
     // The tracked, DRAINABLE pool the query SUBSCRIBE runs through (replaces a bare
     // .SubscribeOn(TaskPoolScheduler.Default) the teardown drain couldn't reach). Running the
     // subscribe here means teardown's IoPoolRegistry.DrainAll() cancel+joins it, so a query
-    // straggler can't create a per-node hub on the disposing Autofac scope (the teardown SIGSEGV).
+    // straggler can't create a per-node hub on the disposing service scope (the teardown SIGSEGV).
     private MeshWeaver.Mesh.Threading.IIoPool? _queryPool;
     private MeshWeaver.Mesh.Threading.IIoPool QueryPool => _queryPool ??=
         hub?.ServiceProvider?.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()

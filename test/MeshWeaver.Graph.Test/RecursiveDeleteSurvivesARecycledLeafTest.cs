@@ -36,7 +36,7 @@ namespace MeshWeaver.Graph.Test;
 ///
 /// <para><b>The repro is deterministic, not a race.</b> A deletion validator, on its first call for
 /// one leaf, disposes that leaf's hub, waits for the disposal to complete, and then touches the
-/// hub's scope exactly as a per-hub-scoped service does — which raises the genuine Autofac
+/// hub's scope exactly as a per-hub-scoped service does — which raises the genuine container
 /// <see cref="ObjectDisposedException"/>. The contract: the delete converges on the fresh
 /// activation and removes the whole subtree. Two cases, one per half of the delete that addresses
 /// the leaf: the pre-flight <c>ValidateDeleteRequest</c> and the commit's leaf
@@ -110,7 +110,7 @@ public class RecursiveDeleteSurvivesARecycledLeafTest(ITestOutputHelper output)
         result.Removed.Should().BeTrue("the root was there, so this call really removed something");
 
         // POSITIVE CONTROL — the repro really happened: the hub was disposed and the genuine
-        // Autofac fault was raised from its scope. Without it the delete would pass for the wrong
+        // The DI container fault was raised from its scope. Without it the delete would pass for the wrong
         // reason (the validator never fired, or the scope was still alive).
         validator.Fault.Should().NotBeNull(
             $"validation call #{call} of '{victimPath}' must have disposed that leaf's hub and "
@@ -133,7 +133,7 @@ public class RecursiveDeleteSurvivesARecycledLeafTest(ITestOutputHelper output)
 /// <summary>
 /// A deletion validator that, on its N-th call for ONE path, disposes that path's per-node hub,
 /// waits for the disposal to COMPLETE, and then resolves from the hub's scope the way a
-/// per-hub-scoped service does — raising the real Autofac <see cref="ObjectDisposedException"/>.
+/// per-hub-scoped service does — raising the real the DI container <see cref="ObjectDisposedException"/>.
 /// Every other call (and every other path) answers Valid at once.
 ///
 /// <para>Instance state, never static: the mesh owns this singleton for the life of the test's

@@ -109,7 +109,7 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         SetOutputHelper(null);
         FileOutput.Dispose();
 
-        // NOTE: Earlier version called Dispose() here to release the Autofac
+        // NOTE: Earlier version called Dispose() here to release the DI container
         // SP at end of every [Fact]. That broke 40+ tests across PathResolution,
         // Hosting.Monolith, FutuRe, Graph etc. — too many test classes hold
         // singleton handles that are read AFTER DisposeAsync (e.g. via test

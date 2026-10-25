@@ -37,7 +37,7 @@ namespace MeshWeaver.Fixture;
 /// <para>The two benign races, both "a message/continuation runs AFTER the test's
 /// scope is gone":</para>
 /// <list type="number">
-///   <item><b>Disposed Autofac <c>LifetimeScope</c></b> — when a <c>TestCluster</c>
+///   <item><b>Disposed service scope</b> — when a <c>TestCluster</c>
 ///   / mesh is disposed, an in-flight message is still being (de)serialized on a
 ///   ThreadPool task; resolving a codec from the now-disposed container throws
 ///   <see cref="ObjectDisposedException"/> ("LifetimeScope … already disposed").</item>
@@ -70,7 +70,7 @@ internal static class TestTeardownExceptionSuppressor
     {
         var msg = ex.Message ?? string.Empty;
 
-        // (1) disposed Autofac LifetimeScope during in-flight (de)serialization — the platform's one
+        // (1) a disposed service scope during in-flight (de)serialization — the platform's one
         // definition of that fact (FaultClassifier), not a third copy of its text match. EVERY branch,
         // through wrappers: a wrapper over a disposed scope beside a real defect is not benign.
         if (MeshWeaver.Messaging.FaultClassifier.EveryBranchIsDisposedContainer(ex))

@@ -21,7 +21,7 @@ namespace MeshWeaver.Documentation.Test;
 /// enqueued cleanup). It ran whenever the pool reached it: MeshWeaver.Plugins run 34222933802
 /// (2026-09-08, shard 1) captured 11 <c>ObjectDisposedException</c> stragglers across three suites,
 /// every one <c>MeshNodeStreamCache.GetQueryRaw</c>'s Defer resolving <c>GetWorkspace()</c> from an
-/// Autofac scope the mesh had already closed, the FutuRe pair 4 ms after <c>DISPOSE_DONE</c>. Core
+/// service scope the mesh had already closed, the FutuRe pair 4 ms after <c>DISPOSE_DONE</c>. Core
 /// #3737 fixed that one site; this guard keeps every other one fixed.</para>
 ///
 /// <para><b>The fix at a site</b> is <c>MeshWeaver.Messaging.OwnedConnectionExtensions</c>:

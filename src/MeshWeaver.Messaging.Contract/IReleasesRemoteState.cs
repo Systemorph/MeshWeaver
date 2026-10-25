@@ -23,7 +23,7 @@ namespace MeshWeaver.Messaging;
 /// HUB-teardown route — a Blazor circuit ending, a <c>DisposeRequest</c>, a recycle — the
 /// subscribing hub is by construction already in <c>DisposeHostedHubs</c> (that phase is what
 /// disposes the child), so the farewell was refused at the only door it has and the owner was never
-/// told: one <c>RunLevel=Started</c> hub per subscription, each holding its own Autofac lifetime
+/// told: one <c>RunLevel=Started</c> hub per subscription, each holding its own DI container lifetime
 /// scope and TypeRegistry, for the life of the process.</para>
 ///
 /// <para>🚨 <b>Implementing this is a claim about what happens when the message is LOST, and it is a

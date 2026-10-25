@@ -13,12 +13,12 @@ namespace MeshWeaver.Messaging;
 /// one. Only a PROBE that finds the hub's own scope no longer resolving turns the type test into a
 /// positive statement about teardown. The probe resolves the hub's already-materialised
 /// <see cref="IMessageHub"/> registration: on a live scope that is a cheap instance lookup with no
-/// side effects; on a disposing scope Autofac throws from
+/// side effects; on a disposing scope the DI container throws from
 /// <c>LifetimeScope.ThrowDisposedException</c> — which is the signal.</para>
 ///
 /// <para><b>Why a disposed scope is proof the hub is going away.</b> The hub instance is a tracked
 /// component of that same scope, so its <c>Dispose()</c> is already queued in the very disposer
-/// that flipped the scope's disposed flag (Autofac sets the flag FIRST, then runs the disposer over
+/// that flipped the scope's disposed flag (the DI container sets the flag FIRST, then runs the disposer over
 /// the tracked instances in reverse creation order). Anything observed in that window — an init
 /// BuildupAction, a permission fold's next emission, a render's error placeholder — is racing a
 /// teardown that has already been decided, never a fault on a live hub.</para>

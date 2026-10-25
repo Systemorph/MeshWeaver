@@ -189,7 +189,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// <see cref="ModuleServices.UnresolvableForwarders"/> for why one reading is already sustained.
     ///
     /// <para>🚨 Each generation is inspected under the SAME leases a forwarder's resolve takes
-    /// (<see cref="TryLeaseCurrent"/>, as <see cref="TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, Type?)"/>): its context and its
+    /// (<see cref="TryLeaseCurrent"/>, as <see cref="TryLeaseModuleService(string, int, MeshWeaver.ServiceProvider.MeshServiceProvider?, Type?)"/>): its context and its
     /// services are leased, and its currency re-checked, BEFORE its container is read — so a live swap
     /// that retires it mid-scan defers the disposal to the scan's release instead of pulling the
     /// container from under it (an <see cref="ObjectDisposedException"/> read as a transient Unhealthy).
@@ -243,11 +243,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
 
     /// <summary>As <see cref="ResolveModuleService(string, int)"/>, for <paramref name="caller"/> — the
     /// root-side scope resolving (a Blazor circuit's, a request's, a hub's), or null (MeshWeaver#6584,
-    /// <see cref="ModuleServices.Resolve(IServiceProvider, int, Autofac.ILifetimeScope?)"/>).</summary>
+    /// <see cref="ModuleServices.Resolve(IServiceProvider, int, MeshWeaver.ServiceProvider.MeshServiceProvider?)"/>).</summary>
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="index">The registration's index.</param>
     /// <param name="caller">The root-side scope resolving, or null.</param>
-    public object ResolveModuleService(string module, int index, Autofac.ILifetimeScope? caller) =>
+    public object ResolveModuleService(string module, int index, MeshWeaver.ServiceProvider.MeshServiceProvider? caller) =>
         (Current(module)?.Services ?? throw new InvalidOperationException(
             $"Module {module} holds no service scope in this mesh."))
         .Resolve(Root, index, caller);
@@ -309,10 +309,10 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// <param name="expected">What the root's forwarder forwards — the leased instance must be one; null
     /// when the caller does not know.</param>
     internal (object Instance, IDisposable Release)? TryLeaseModuleService(
-        string module, int index, Autofac.ILifetimeScope? caller, Type? expected = null) =>
+        string module, int index, MeshWeaver.ServiceProvider.MeshServiceProvider? caller, Type? expected = null) =>
         TryLeaseModuleService(module, index, caller, expected, out ModuleLeaseFault _);
 
-    /// <summary>As <see cref="TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, Type?)"/>, saying WHY a
+    /// <summary>As <see cref="TryLeaseModuleService(string, int, MeshWeaver.ServiceProvider.MeshServiceProvider?, Type?)"/>, saying WHY a
     /// null answer is null (<paramref name="fault"/>): the module is not held or is retiring
     /// (<see cref="ModuleLeaseFault.None"/> — the module's feature is genuinely ABSENT), or the module is
     /// held and could not produce the registration — this time (<see cref="ModuleLeaseFault.Temporary"/>)
@@ -326,7 +326,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// <param name="expected">What the root's forwarder forwards, or null.</param>
     /// <param name="fault">Why the answer is null; <see cref="ModuleLeaseFault.None"/> when it is not.</param>
     internal (object Instance, IDisposable Release)? TryLeaseModuleService(
-        string module, int index, Autofac.ILifetimeScope? caller, Type? expected, out ModuleLeaseFault fault)
+        string module, int index, MeshWeaver.ServiceProvider.MeshServiceProvider? caller, Type? expected, out ModuleLeaseFault fault)
     {
         fault = ModuleLeaseFault.None;
         if (TryLeaseCurrent(module) is not { } leased)
@@ -394,17 +394,15 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     // a disposal somewhere in its causes. A disposal is the caller's fault only when its own scope (or,
     // for a root-side lease, the mesh's root) is the thing that ended; a constructor that ran into a
     // disposed dependency of its OWN under a live caller is a construction fault like any other, and is
-    // isolated to its lease. Resolving the scope itself is side-effect free and is refused exactly once
-    // the scope is disposed — Autofac marks it disposed before it runs its disposal, so a scope that is
+    // isolated to its lease. A scope is marked disposed before it runs its disposal, so a scope that is
     // ENDING already answers true.
-    private bool CallerHasEnded(Autofac.ILifetimeScope? caller)
+    private bool CallerHasEnded(MeshWeaver.ServiceProvider.MeshServiceProvider? caller)
     {
+        if (caller is not null)
+            return caller.IsDisposed;
         try
         {
-            if (caller is not null)
-                Autofac.ResolutionExtensions.Resolve<Autofac.ILifetimeScope>(caller);
-            else
-                Root.GetService(typeof(IServiceProvider));
+            Root.GetService(typeof(IServiceProvider));
             return false;
         }
         catch (ObjectDisposedException)
@@ -414,7 +412,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     }
 
     // A disposal anywhere in the causes, as the container reports it: an ObjectDisposedException, or one
-    // wrapped by the resolution that ran into it (Autofac's DependencyResolutionException).
+    // wrapped by whatever the resolution that ran into it threw.
     private static bool IsDisposal(Exception exception)
     {
         for (var cause = exception; cause is not null; cause = cause.InnerException)
@@ -465,7 +463,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     // at a singleton. Nothing is recorded — the next lease resolves afresh — and it is reported once per
     // registration and exception type, so a fault that repeats on every query cannot flood the log.
     private void NotServedThisTime(ModuleGeneration generation, ModuleServices services, int index,
-        Autofac.ILifetimeScope? caller, Exception exception)
+        MeshWeaver.ServiceProvider.MeshServiceProvider? caller, Exception exception)
     {
         if (!services.MarkReported(index, InnermostOf(exception).GetType().FullName ?? ""))
             return;
@@ -501,8 +499,8 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     internal IServiceProvider? ModuleScopeSeenFrom(string module, ModuleSwapStage? stage) =>
         (stage?.Get(module) ?? Current(module))?.Services?.Scope(Root);
 
-    /// <summary>As <see cref="ResolveModuleService(string, int, Autofac.ILifetimeScope?)"/>, seen from a container of <paramref name="stage"/>.</summary>
-    internal object ResolveModuleServiceSeenFrom(string module, int index, ModuleSwapStage? stage, Autofac.ILifetimeScope? caller) =>
+    /// <summary>As <see cref="ResolveModuleService(string, int, MeshWeaver.ServiceProvider.MeshServiceProvider?)"/>, seen from a container of <paramref name="stage"/>.</summary>
+    internal object ResolveModuleServiceSeenFrom(string module, int index, ModuleSwapStage? stage, MeshWeaver.ServiceProvider.MeshServiceProvider? caller) =>
         ((stage?.Get(module) ?? Current(module))?.Services ?? throw new InvalidOperationException(
             $"Module {module} holds no service scope in this mesh."))
         .Resolve(Root, index, caller);
@@ -526,7 +524,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         catch (Exception exception)
         {
             var cause = exception;
-            // Autofac wraps a constructor's exception in one DependencyResolutionException per level;
+            // A container may wrap a constructor's exception once per level of the resolve;
             // the sentence an operator acts on is the innermost one, the outer ones name the path.
             while (cause.InnerException is not null)
                 cause = cause.InnerException;
@@ -549,7 +547,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// <summary>
     /// Runs the boot publication unless it was already claimed — what the registry's own singleton
     /// registration calls on its first resolve (MeshWeaver#6557), so every host kind withdraws a module
-    /// whose shared instances cannot be built. The Autofac root claims it earlier, outside any lock
+    /// whose shared instances cannot be built. The root container claims it earlier, outside any lock
     /// (<see cref="MeshWeaver.ServiceProvider.IRootContainerBuilt"/>); a host built with plain MS DI
     /// <c>BuildServiceProvider()</c> reaches it here, at the first read of the registry. Claimed BEFORE it
     /// runs, so a resolve of the registry from inside a constructor it builds does not run it again.
@@ -1193,7 +1191,7 @@ public sealed class ModuleSwapStage
 }
 
 /// <summary>
-/// Why a lease of a module's service answered null (<see cref="ModuleContexts.TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, Type?, out ModuleLeaseFault)"/>).
+/// Why a lease of a module's service answered null (<see cref="ModuleContexts.TryLeaseModuleService(string, int, MeshWeaver.ServiceProvider.MeshServiceProvider?, Type?, out ModuleLeaseFault)"/>).
 /// Internal and closed: never persisted or serialised, and decided and read only in this assembly.
 /// </summary>
 internal enum ModuleLeaseFault

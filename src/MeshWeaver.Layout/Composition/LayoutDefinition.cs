@@ -248,7 +248,7 @@ public record LayoutDefinition(IMessageHub Hub)
         return Observable.Create<EntityStoreAndUpdates>(observer =>
         {
             // 🚨 LOCALIZED HERE, WHILE THE SCOPE IS ALIVE — never inside the completion handler
-            // below. `host.Localize` is a DI resolve off the host's Autofac scope, and the
+            // below. `host.Localize` is a DI resolve off the host's service scope, and the
             // completion that decides the placeholder can arrive DURING that scope's teardown: the
             // render faults on the disposed scope, completes, and the placeholder is built on a
             // scope that no longer resolves anything. That is the second ObjectDisposedException of

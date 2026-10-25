@@ -149,7 +149,7 @@ with no occurrence"*.
 
 🚨 **All three fired inside one seven-minute window, 05:05–05:12Z, and that window is a roll.** Their
 subjects are teardown by construction — `ObjectDisposedException` unregistering a grain from the
-directory, a mesh hub resolving from a disposed Autofac scope. They fire when pods stop, and they
+directory, a mesh hub resolving from a disposed service scope. They fire when pods stop, and they
 are silent when nothing is stopping them. Fifteen quiet days meant fifteen days without a roll, not
 fifteen days of health.
 

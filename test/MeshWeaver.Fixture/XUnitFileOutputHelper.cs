@@ -323,7 +323,7 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         // Teardown logs AFTER the container is disposed. Anything that logs from a Dispose path
         // (CompilationCacheService.Dispose, drained through AsyncDisposeQueue by
         // MonolithMeshTestBase.DisposeAsync) would otherwise reach GetMinLogLevel → GetService →
-        // Autofac's disposed LifetimeScope → ObjectDisposedException. Measured on Acme.Test:
+        // a disposed service scope → ObjectDisposedException. Measured on Acme.Test:
         // 23 first-chance ObjectDisposedExceptions per run, every one of them that exact chain.
         // They were caught (GetMinLogLevel swallows and defaults to Information), so they never
         // failed a test — they just burned 23 throws plus 23 first-chance stack captures on the

@@ -631,7 +631,7 @@ reactive instead:
 in-flight message round-trips — but **I/O offloaded through `IIoPool` runs on the ThreadPool,
 independent of the action block, and `DisposalCompleted` knows nothing about it.** If the teardown
 disposes the service scope after `DisposalCompleted` but while an `IIoPool` operation (or any other
-async cleanup) is still in flight, that continuation resolves a service from the dead Autofac scope and
+async cleanup) is still in flight, that continuation resolves a service from the dead service scope and
 throws `ObjectDisposedException: …LifetimeScope… has already been disposed` — unobserved, it surfaces
 as an xUnit **"catastrophic failure"** that aborts the whole run.
 

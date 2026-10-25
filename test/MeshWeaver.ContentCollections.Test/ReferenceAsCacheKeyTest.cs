@@ -24,7 +24,7 @@ namespace MeshWeaver.ContentCollections.Test;
 /// <c>EqualityComparer&lt;IReadOnlyCollection&lt;string&gt;&gt;.Default</c>, which for a
 /// <c>string[]</c> is REFERENCE equality. <c>Workspace._localStreamCache</c> is keyed on the
 /// reference, so such a reference misses the cache on EVERY call — and every miss constructs a
-/// <c>SynchronizationStream</c>, hence a hosted <c>sync/{id}</c> sub-hub with its own Autofac
+/// <c>SynchronizationStream</c>, hence a hosted <c>sync/{id}</c> sub-hub with its own DI container
 /// scope, <c>TypeRegistry</c> and <c>JsonSerializerOptions</c> (~390 KB), registered for disposal
 /// on the HUB-LIFETIME node hub. One permanent hub per read, released only when the node hub dies.
 /// It is the #3952 read-path defect reached by a different route: there the cache was BYPASSED,
