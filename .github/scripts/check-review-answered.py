@@ -1401,6 +1401,10 @@ def lost_rerun_race(readback) -> bool:
     return isinstance(readback, dict) and bool(readback.get("status")) and readback.get("status") != "completed"
 
 
+#: Run statuses of a run none of whose jobs has started: it read nothing yet (`pending` = held by a
+#: concurrency group, `queued` = waiting for a runner, `waiting` = an environment gate, `requested`).
+NOT_STARTED_RUN_STATUSES = ("requested", "pending", "queued", "waiting")
+
 #: The event whose run of this check branch protection is KNOWN to read and that is re-run for the
 #: pull request's head (measured on #4649; the manual remedy measured on #4652 and #4662).
 PROTECTION_READ_EVENT = "pull_request"
@@ -1440,6 +1444,15 @@ def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dic
         return "none", f"run {candidate.get('id')} is for {str(candidate.get('head_sha'))[:10]}, not the current head {head[:10]}"
     if str(candidate.get("id")) == str(own_run_id):
         return "none", f"run {candidate.get('id')} is this run"
+    if candidate.get("status") in NOT_STARTED_RUN_STATUSES:
+        # 🚨 Never "wait" here (MeshWeaver#7203 review): a `pull_request` run that has not STARTED is
+        # very often pending in this very run's concurrency group (`…-gate`, review-answered.yml), so it
+        # cannot start until this run ends — waiting for it would hold it back for the whole wait and
+        # then fail. Nothing needs refreshing: no job of it has read anything yet, so every verdict it
+        # publishes reads live state AFTER this verdict was taken.
+        return "none", (f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} is {candidate.get('status')} — it has not "
+                        "started, so it reads live state after this verdict; nothing to refresh, and waiting for it "
+                        "could hold it back in the shared concurrency group")
     if candidate.get("status") != "completed":
         # 🚨 NOT "it reads live state itself" (MeshWeaver#7187): a run is `in_progress` until its LAST
         # job ends, and the job whose check-run branch protection reads may have finished — red, on a
@@ -2245,8 +2258,23 @@ def outage_marked(jobs) -> list:
                     for s in j.get("steps") or ())]
 
 
-def retry_outage_action(run: dict, attempt: int, jobs, pr: dict | None) -> tuple[str, str]:
-    """('rerun' | 'none' | 'manual' | 'fail', why) for a completed run of `Review answered`. Pure."""
+def outage_streak(marked_by_attempt) -> int:
+    """How many attempts IN A ROW, newest first, met an outage. Pure. `marked_by_attempt` is one boolean
+    per attempt, newest FIRST (`bool(outage_marked(jobs))`). Only outage-marked attempts count: a verdict
+    red or a refresh re-run before them consumes none of the retry allowance (MeshWeaver#7203 review —
+    `run_attempt` alone counted those too, so a FIRST outage on attempt 3 was never retried)."""
+    n = 0
+    for marked in marked_by_attempt:
+        if not marked:
+            break
+        n += 1
+    return n
+
+
+def retry_outage_action(run: dict, attempt: int, jobs, pr: dict | None, streak: int | None = None) -> tuple[str, str]:
+    """('rerun' | 'none' | 'manual' | 'fail', why) for a completed run of `Review answered`. Pure.
+    `streak` is `outage_streak` over this run's attempts ending at `attempt` (1 when omitted — this
+    attempt alone); the bound MAX_OUTAGE_ATTEMPTS applies to it, never to `attempt`."""
     rid = run.get("id")
     if run.get("conclusion") != "failure":
         return "none", f"run {rid} concluded {run.get('conclusion')} — only a failed run can carry an outage"
@@ -2263,46 +2291,75 @@ def retry_outage_action(run: dict, attempt: int, jobs, pr: dict | None) -> tuple
         return "none", f"#{pr.get('number')} is {pr.get('state')}"
     if run.get("head_sha") != head:
         return "none", f"run {rid} judged {str(run.get('head_sha'))[:10]}, the head is now {head[:10]} — a run of its own judges it"
-    if attempt >= MAX_OUTAGE_ATTEMPTS:
-        return "fail", (f"run {rid} met an API outage on {attempt} attempts in a row ({', '.join(marked)}) — the "
+    streak = max(1, streak or 1)
+    if streak >= MAX_OUTAGE_ATTEMPTS:
+        return "fail", (f"run {rid} met an API outage on {streak} attempts in a row, up to attempt {attempt} "
+                        f"({', '.join(marked)}) — the "
                         "automatic retry stops here; re-run it by hand once the API answers")
     return "rerun", f"run {rid} attempt {attempt} took no verdict (API outage in {', '.join(marked)}) — re-running the whole run"
 
 
+def wait_for_capacity(gh, deadline: float) -> None:
+    """Sleep until the primary limit has RETRY_MIN_REMAINING calls left, its reset has passed, or
+    `deadline`. Reads only `GET /rate_limit`, which does not count against the limit it reports."""
+    while True:
+        remaining, reset = gh.rate_limit("core")
+        if remaining is None or remaining >= RETRY_MIN_REMAINING or reset is None:
+            return
+        pause = min(reset + 10, deadline) - gh.now()
+        if pause <= 0:
+            return
+        print(f"  {remaining} calls left until the limit resets at "
+              f"{datetime.datetime.fromtimestamp(reset, datetime.UTC):%H:%M:%SZ} — waiting {int(pause)}s before reading",
+              flush=True)
+        gh.sleep(pause)
+
+
 def run_retry_outage(repo: str, run_id: str, attempt: int, gh=None, wait_s: float = RETRY_WAIT_SECONDS) -> int:
     """The retry listener: exit 0 when it re-ran an outage run or had nothing to do (both printed), 1 when
-    it could not read, could not re-run, or the outage outlasted MAX_OUTAGE_ATTEMPTS (named)."""
+    it could not read, could not re-run, or the outage outlasted MAX_OUTAGE_ATTEMPTS (named).
+
+    🚨 ORDER (MeshWeaver#7203 review). It FIRST waits for capacity — through the free `GET /rate_limit`
+    only — and only THEN makes its metered reads, decides, and posts at once. Reading first failed both
+    ways: with the limit spent the very first read raised ApiOutage under the five-minute budget, so the
+    listener died and nothing ever re-ran the run; and a decision read BEFORE a wait of up to 35 minutes
+    re-ran a run whose pull request had since closed, moved its head or been re-run by a newer attempt."""
     try:
         gh = gh if gh is not None else Gh(repo)
+        wait_for_capacity(gh, gh.now() + wait_s)
         run = gh.api(f"actions/runs/{run_id}")
         if not isinstance(run, dict) or str(run.get("id")) != str(run_id):
             raise ReadError(f"actions/runs/{run_id} did not return that run")
-        listing = gh.api(f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
-        jobs = listing.get("jobs") if isinstance(listing, dict) else None
-        if not isinstance(jobs, list):
-            raise ReadError(f"actions/runs/{run_id}/attempts/{attempt}/jobs did not return a job listing")
+
+        def attempt_jobs(n: int) -> list:
+            listing = gh.api(f"actions/runs/{run_id}/attempts/{n}/jobs?per_page=100")
+            jobs_ = listing.get("jobs") if isinstance(listing, dict) else None
+            if not isinstance(jobs_, list):
+                raise ReadError(f"actions/runs/{run_id}/attempts/{n}/jobs did not return a job listing")
+            return jobs_
+        jobs = attempt_jobs(attempt)
         numbers = [p.get("number") for p in run.get("pull_requests") or () if isinstance(p, dict) and p.get("number")]
-        pr = None
-        if numbers and outage_marked(jobs):
-            pr = gh.api(f"pulls/{numbers[0]}")
-            if not isinstance(pr, dict) or pr.get("number") != numbers[0]:
-                raise ReadError(f"pulls/{numbers[0]} did not return pull request #{numbers[0]}")
-        action, why = retry_outage_action(run, attempt, jobs, pr)
-        if action == "rerun":
-            deadline = gh.now() + wait_s
-            while True:
-                remaining, reset = gh.rate_limit("core")
-                if remaining is None or remaining >= RETRY_MIN_REMAINING or reset is None:
+        pr, streak = None, 1
+        if outage_marked(jobs):
+            # The earlier attempts, newest first, only as far as the bound needs and only while they
+            # were outages too: a verdict attempt ends the streak.
+            marks = [True]
+            for n in range(attempt - 1, max(0, attempt - MAX_OUTAGE_ATTEMPTS), -1):
+                marks.append(bool(outage_marked(attempt_jobs(n))))
+                if not marks[-1]:
                     break
-                pause = min(reset + 10, deadline) - gh.now()
-                if pause <= 0:
-                    break
-                print(f"  {remaining} calls left until the limit resets at "
-                      f"{datetime.datetime.fromtimestamp(reset, datetime.UTC):%H:%M:%SZ} — waiting {int(pause)}s before re-running",
-                      flush=True)
-                gh.sleep(pause)
-            if not post_rerun(gh, run_id, RERUN_WHOLE_RUN):
-                action, why = "none", f"run {run_id} was already re-run by another invocation"
+            streak = outage_streak(marks)
+            if numbers:
+                pr = gh.api(f"pulls/{numbers[0]}")
+                if not isinstance(pr, dict) or pr.get("number") != numbers[0]:
+                    raise ReadError(f"pulls/{numbers[0]} did not return pull request #{numbers[0]}")
+        action, why = retry_outage_action(run, attempt, jobs, pr, streak)
+        if action == "rerun" and not post_rerun(gh, run_id, RERUN_WHOLE_RUN):
+            action, why = "none", f"run {run_id} was already re-run by another invocation"
+    except ApiOutage as e:
+        print(f"::error::the outage retry of run {run_id} could not read even after waiting up to {int(wait_s)}s "
+              f"for the limit to reset: {e} — re-run run {run_id} by hand once the API answers")
+        return 1
     except (ReadError, KeyError, TypeError, ValueError) as e:
         print(f"::error::the outage retry of run {run_id} could not complete: {e}")
         return 1
@@ -3752,6 +3809,10 @@ def self_test() -> int:
     ref_case("merge_group entry -> none", "none", "merge_group", red_read, says="merge-queue")
     ref_case("#7187: read run in flight -> WAIT for it, never skip", "wait", "pull_request_review_comment",
              dict(red_read, status="in_progress", conclusion=None), says="letting it finish")
+    for status in NOT_STARTED_RUN_STATUSES:
+        ref_case(f"read run {status} (not started, maybe held by THIS run's group) -> none, never wait", "none",
+                 "pull_request_review", dict(red_read, status=status, conclusion=None, run_started_at=None),
+                 says="has not started")
     ref_case("read run already green -> none", "none", "pull_request_review_comment",
              dict(red_read, conclusion="success"), says="already reads success")
     ref_case("read run red but started AFTER this verdict -> none", "none", "pull_request_review_comment",
@@ -4045,38 +4106,77 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
     open_pr = {"number": 7173, "state": "open", "head": {"sha": HEAD}}
 
     class _RetryGh:
-        def __init__(self, run_, jobs, pr=open_pr, remaining=0):
-            self.run_, self.jobs, self.pr, self.remaining, self.posted, self.clock = run_, jobs, pr, remaining, [], _Clock()
+        """A fake adapter. While the primary limit is spent (`remaining` 0 and no wait has happened
+        yet) every METERED read raises ApiOutage, as `Gh._call` does past its five-minute budget; a low
+        but non-zero `remaining` still answers. `rate_limit` is free. `after_wait` replaces the run / pull request once the
+        listener has slept — the world moving on during the wait."""
+        def __init__(self, run_, jobs, pr=open_pr, remaining=0, after_wait=None, refuse_after_wait=False):
+            self.run_, self.pr, self.remaining, self.posted, self.clock = run_, pr, remaining, [], _Clock()
+            self.jobs = jobs if isinstance(jobs, dict) else {int(run_.get("run_attempt") or 1): jobs}
+            self.after_wait, self.refuse_after_wait, self.reads = after_wait or {}, refuse_after_wait, []
         def sleep(self, s):
             self.clock.sleep(s)
+            self.run_ = self.after_wait.get("run", self.run_)
+            self.pr = self.after_wait.get("pr", self.pr)
         def now(self):
             return self.clock.now()
         def rate_limit(self, resource="core"):
             return (self.remaining if not self.clock.slept else 4000), self.clock.t + 600
         def api(self, path):
+            self.reads.append(path)
+            if self.refuse_after_wait or (self.remaining == 0 and not self.clock.slept):
+                raise ApiOutage(f"GET {path}: API rate limit exceeded (HTTP 403)", "rate-limit", self.clock.t + 600)
             if path == f"actions/runs/{self.run_['id']}":
                 return self.run_
-            if path.startswith(f"actions/runs/{self.run_['id']}/attempts/"):
-                return {"jobs": self.jobs}
+            prefix = f"actions/runs/{self.run_['id']}/attempts/"
+            if path.startswith(prefix):
+                return {"jobs": self.jobs[int(path[len(prefix):].split("/")[0])]}
             if path == "pulls/7173":
                 return self.pr
             raise ReadError(f"unexpected GET {path}")
         def post(self, path):
             self.posted.append(path)
+    RERUN = ["actions/runs/40187547005/rerun"]
     for name, stub, attempt, expect_rc, expect_posted, expect_slept in [
-        ("#7173: outage run, limit spent -> waits for the reset, re-runs the WHOLE run",
-         _RetryGh(failed_run, [outage_job]), 1, 0, ["actions/runs/40187547005/rerun"], [610.0]),
-        ("outage run, budget left -> re-runs at once", _RetryGh(failed_run, [outage_job], remaining=900), 1, 0,
-         ["actions/runs/40187547005/rerun"], []),
-        ("NEG: a VERDICT red (marker skipped) -> never re-run", _RetryGh(failed_run, [verdict_job]), 1, 0, [], []),
-        ("NEG: the head moved -> not re-run", _RetryGh(failed_run, [outage_job], pr=dict(open_pr, head={"sha": "c" * 40})), 1, 0, [], []),
-        ("NEG: outage on the 3rd attempt -> RED, named, stops",
-         _RetryGh(dict(failed_run, run_attempt=3), [outage_job]), 3, 1, [], []),
+        ("#7173: outage run, limit spent -> waits for the reset BEFORE reading, re-runs the WHOLE run",
+         _RetryGh(failed_run, [outage_job]), 1, 0, RERUN, [610.0]),
+        ("outage run, budget left -> re-runs at once", _RetryGh(failed_run, [outage_job], remaining=900), 1, 0, RERUN, []),
+        ("NEG: a VERDICT red (marker skipped) -> never re-run", _RetryGh(failed_run, [verdict_job], remaining=900), 1, 0, [], []),
+        ("NEG: the head moved -> not re-run", _RetryGh(failed_run, [outage_job], pr=dict(open_pr, head={"sha": "c" * 40})), 1, 0, [], [610.0]),
+        ("#7203: head moved DURING the wait -> decided on the fresh read, not re-run",
+         _RetryGh(failed_run, [outage_job], after_wait={"pr": dict(open_pr, head={"sha": "c" * 40})}), 1, 0, [], [610.0]),
+        ("#7203: limit LOW (reads still answer), head moved during the wait -> not re-run",
+         _RetryGh(failed_run, [outage_job], remaining=20, after_wait={"pr": dict(open_pr, head={"sha": "c" * 40})}),
+         1, 0, [], [610.0]),
+        ("#7203: PR closed DURING the wait -> not re-run",
+         _RetryGh(failed_run, [outage_job], after_wait={"pr": dict(open_pr, state="closed")}), 1, 0, [], [610.0]),
+        ("#7203: a newer attempt started DURING the wait -> not re-run",
+         _RetryGh(failed_run, [outage_job], after_wait={"run": dict(failed_run, run_attempt=2, status="in_progress")}),
+         1, 0, [], [610.0]),
+        ("#7203: the limit is still spent after the wait -> RED, named, no traceback",
+         _RetryGh(failed_run, [outage_job], refuse_after_wait=True), 1, 1, [], [610.0]),
+        ("#7203: FIRST outage on attempt 3 (1-2 were verdicts) -> re-run, not 'three in a row'",
+         _RetryGh(dict(failed_run, run_attempt=3), {3: [outage_job], 2: [verdict_job], 1: [verdict_job]}, remaining=900),
+         3, 0, RERUN, []),
+        ("outage on attempts 2-3 after a verdict on 1 -> re-run (streak 2)",
+         _RetryGh(dict(failed_run, run_attempt=3), {3: [outage_job], 2: [outage_job], 1: [verdict_job]}, remaining=900),
+         3, 0, RERUN, []),
+        ("NEG: outage on 3 attempts in a row -> RED, named, stops",
+         _RetryGh(dict(failed_run, run_attempt=3), {3: [outage_job], 2: [outage_job], 1: [outage_job]}, remaining=900),
+         3, 1, [], []),
+        ("NEG: outage streak of 3 after a verdict (attempt 4) -> RED, stops",
+         _RetryGh(dict(failed_run, run_attempt=4), {4: [outage_job], 3: [outage_job], 2: [outage_job], 1: [verdict_job]},
+                  remaining=900), 4, 1, [], []),
     ]:
-        with contextlib.redirect_stdout(io.StringIO()):
-            rc = run_retry_outage("Systemorph/MeshWeaver", str(stub.run_["id"]), attempt, gh=stub)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = run_retry_outage("Systemorph/MeshWeaver", str(stub.run_["id"]), attempt, gh=stub)
+        except Exception as e:  # the negative control of the bootstrap case: an uncaught ApiOutage
+            rc = f"raised {type(e).__name__}"
         check(f"retry: {name}", rc == expect_rc and stub.posted == expect_posted and stub.clock.slept == expect_slept,
               f"rc={rc} posted={stub.posted} slept={stub.clock.slept}")
+    for marks, want in [([True], 1), ([True, True, False, True], 2), ([False, True], 0), ([], 0)]:
+        check(f"outage_streak({marks}) = {want}", outage_streak(marks) == want, f"got {outage_streak(marks)}")
 
     # ── the marker step the listener keys on is in every workflow that judges, by this exact name
     here = os.path.dirname(os.path.abspath(__file__))
@@ -4086,6 +4186,13 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
             with open(os.path.join(wf_dir, wf), encoding="utf-8") as f:
                 n = f.read().count(f'name: "{OUTAGE_STEP_NAME}"')
             check(f"marker step in {wf}", n == need, f"expected {need} got {n}")
+        # The listener reads `pulls/{n}`; with an explicit `permissions:` block `pull-requests` is `none`
+        # unless granted, and a private repository then refuses the read (MeshWeaver#7203 review). The
+        # lane's job, its caller contract (workflow + job level) and core's caller all grant it.
+        for wf, need in [("node-repo-review-answered-retry.yml", 3), ("review-answered-retry.yml", 2)]:
+            with open(os.path.join(wf_dir, wf), encoding="utf-8") as f:
+                n = len(re.findall(r"^[#\s]*pull-requests:\s*read\b", f.read(), re.MULTILINE))
+            check(f"pull-requests: read granted in {wf}", n == need, f"expected {need} got {n}")
     else:
         print(f"self-test note outage: the workflows are not beside this copy ({wf_dir}) — the marker-step check runs in core's tree")
     return failures

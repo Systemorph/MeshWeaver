@@ -38,12 +38,14 @@ name: Node repo review answered — outage retry (reusable)
 #   permissions:
 #     actions: write
 #     contents: read
+#     pull-requests: read
 #   jobs:
 #     retry:
 #       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-review-answered-retry.yml@main
 #       permissions:
 #         actions: write     # read the completed attempt's jobs; POST …/runs/{id}/rerun
 #         contents: read
+#         pull-requests: read   # GET pulls/{n}: is the pull request still open, on the same head?
 #
 # Never a required context: it judges a run AFTER it completed. The job-level `if:` below only drops
 # runs that did not FAIL (cancelled, `action_required`, green) — none of which can carry an outage —
@@ -70,6 +72,11 @@ jobs:
     permissions:
       actions: write
       contents: read
+      # GET pulls/{n} (still open, same head?). Without it a PRIVATE repository answers that read with a
+      # permission refusal — an explicit `permissions:` leaves `pull-requests` at `none` — and the
+      # listener never re-runs anything. A called workflow cannot widen its caller's grant, so every
+      # caller grants it too (the contract above; check-review-answered.py --self-test asserts it).
+      pull-requests: read
     steps:
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - uses: actions/setup-python@v7
