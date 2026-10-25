@@ -345,7 +345,7 @@ public static class InboxLayoutArea
         foreach (var stateKind in StateKinds)
         {
             var group = Controls.Stack.WithVerticalGap(4)
-                .WithView(Controls.Text(host.Localize(StateTitleKey(stateKind))), "Title" + stateKind);
+                .WithView(Controls.H6(host.Localize(StateTitleKey(stateKind))).WithStyle("margin: 0;"), "Title" + stateKind);
             foreach (var state in InboxStateKind.Vocabulary(stateKind))
                 group = group.WithView(Controls.CheckBox(new JsonPointerReference($"{StateField(stateKind)}/{state}")) with
                 {
