@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 using MeshWeaver.Fixture;
+using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -258,15 +259,23 @@ public class PackageFamiliesMoveTogetherGuard
         var resolved = ResolvedPackages();
         var pins = Pins();
 
-        // Denominator: the closure must actually contain the platform host — otherwise the check
-        // reads a graph too small to see the shape it polices, and passes vacuously.
-        Assert.True(resolved.ContainsKey("ModelContextProtocol.Core"),
-            "this test assembly's resolved graph no longer contains ModelContextProtocol.Core "
-            + "(via MeshWeaver.Hosting) — the check would read a graph that cannot show the "
-            + "incident it exists for. Re-point it at a closure that includes MeshWeaver.Hosting.");
+        // Denominator: the closure must actually contain BOTH ends of the edge this check exists
+        // for — the lifting package (ModelContextProtocol.Core, via MeshWeaver.Hosting) and the
+        // lifted one (Microsoft.Extensions.AI.Abstractions). Otherwise the check reads a graph that
+        // cannot show the incident, and passes vacuously.
+        //
+        // Deliberately NOT a count of pins found in the graph: the SDK's conflict resolution drops
+        // a package from .deps.json when the shared framework carries that assembly at an equal or
+        // higher version, so the same commit shows 47 pins on a host whose runtime predates
+        // 10.0.13 and 28 on CI's newer SDK (every Microsoft.Extensions.* 10.0.13 pin is then
+        // framework-supplied). A floor of 30 was therefore a statement about the runner's SDK, not
+        // about the graph — and a pin the framework outranks can never be the NU1605 shape anyway.
+        foreach (var end in IncidentEdge)
+            Assert.True(resolved.ContainsKey(end),
+                $"this test assembly's resolved graph no longer contains {end} — the check would "
+                + "read a graph that cannot show the incident it exists for. Re-point it at a "
+                + "closure that includes MeshWeaver.Hosting and the AI abstractions.");
         var checkedPins = pins.Count(p => resolved.ContainsKey(p.Id));
-        Assert.True(checkedPins >= 30,
-            $"only {checkedPins} pin(s) appear in the resolved graph — too few to mean anything");
 
         var offenders = PinsBelowResolved(pins, resolved);
         Assert.True(offenders.Count == 0,
@@ -302,17 +311,48 @@ public class PackageFamiliesMoveTogetherGuard
         lifted["Microsoft.Extensions.AI.Abstractions"] = "10.8.3";
         Assert.Empty(PinsBelowResolved(pins, lifted));
 
-        // A pre-release pin with a resolved release of the same base is NOT a lift.
+        // A pre-release pin that the graph resolves to exactly is NOT a lift.
         Assert.Empty(PinsBelowResolved([("Aspire.Hosting.Kubernetes", "13.4.6-preview.1")],
             new Dictionary<string, string> { ["Aspire.Hosting.Kubernetes"] = "13.4.6-preview.1" }));
+
+        // But a SAME-BASE upgrade IS a lift, in both shapes: NuGet orders 1.0.0-preview.1 below
+        // 1.0.0 and below 1.0.0-preview.2, and a direct referencer pinned at preview.1 fails
+        // NU1605 exactly as a numeric downgrade does. Comparing base versions alone hid both.
+        var toRelease = PinsBelowResolved([("Some.Package", "1.0.0-preview.1")],
+            new Dictionary<string, string> { ["Some.Package"] = "1.0.0" });
+        Assert.Single(toRelease);
+        Assert.Contains("1.0.0-preview.1", toRelease[0]);
+        var toNextPreview = PinsBelowResolved([("Some.Package", "1.0.0-preview.1")],
+            new Dictionary<string, string> { ["Some.Package"] = "1.0.0-preview.2" });
+        Assert.Single(toNextPreview);
+        Assert.Contains("1.0.0-preview.2", toNextPreview[0]);
+
+        // Numeric pre-release fields compare numerically: preview.10 is above preview.9.
+        Assert.Single(PinsBelowResolved([("Some.Package", "1.0.0-preview.9")],
+            new Dictionary<string, string> { ["Some.Package"] = "1.0.0-preview.10" }));
+        // …and a pin ABOVE the resolved pre-release is not a lift.
+        Assert.Empty(PinsBelowResolved([("Some.Package", "1.0.0")],
+            new Dictionary<string, string> { ["Some.Package"] = "1.0.0-preview.2" }));
     }
 
-    /// <summary>The ONE comparison routine — the live check and the negative control both call it.</summary>
+    /// <summary>
+    /// Both ends of the incident edge: <c>ModelContextProtocol.Core</c> lifted
+    /// <c>Microsoft.Extensions.AI.Abstractions</c> above its pin. The live check refuses a graph
+    /// that does not contain both.
+    /// </summary>
+    private static readonly string[] IncidentEdge =
+        ["ModelContextProtocol.Core", "Microsoft.Extensions.AI.Abstractions"];
+
+    /// <summary>
+    /// The ONE comparison routine — the live check and the negative control both call it. Full
+    /// NuGet ordering (pre-release included), never the base version: family ALIGNMENT is about
+    /// bases, but a downgrade is about the exact version restore compares.
+    /// </summary>
     private static List<string> PinsBelowResolved(
         IEnumerable<(string Id, string Version)> pins, IReadOnlyDictionary<string, string> resolved) =>
         pins
             .Where(p => resolved.TryGetValue(p.Id, out var r)
-                        && Version.Parse(BaseVersion(r)) > Version.Parse(BaseVersion(p.Version)))
+                        && NuGetVersionComparer.Instance.Compare(r, p.Version) > 0)
             .Select(p => $"{p.Id}: pinned {p.Version}, resolved {resolved[p.Id]}")
             .ToList();
 

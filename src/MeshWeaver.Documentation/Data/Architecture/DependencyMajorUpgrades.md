@@ -53,7 +53,13 @@ repository boundary. Two guards in `PackageFamiliesMoveTogetherGuard` now hold i
 - **`NoPinSitsBelowWhatThePlatformGraphResolves`** reads the test assembly's own `.deps.json` (a
   closure that contains `MeshWeaver.Hosting`) and fails on any pin below the version that graph
   resolves. It is family-agnostic, so it also caught four `Microsoft.Extensions.*` pins left at
-  10.0.12 while their siblings moved to 10.0.13.
+  10.0.12 while their siblings moved to 10.0.13. It compares the FULL NuGet version
+  (`NuGetVersionComparer`), so a pin at `1.0.0-preview.1` under a resolved `1.0.0` or
+  `1.0.0-preview.2` is a downgrade too; only family alignment works on base versions. Its
+  denominator is the incident edge itself (both `ModelContextProtocol.Core` and
+  `Microsoft.Extensions.AI.Abstractions` must be in the graph), never a count of pins found: the
+  SDK drops a package from `.deps.json` when the shared framework carries it at an equal or higher
+  version, so the same commit showed 47 pins on a developer host and 28 on CI's newer SDK.
 
 The fix moves the whole chain together: the MCP SDK to 2.3.0, `Microsoft.Extensions.AI*` to
 10.11.0, `OpenAI` to 2.14.0 (the floor of `Microsoft.Extensions.AI.OpenAI` 10.11.0) and
