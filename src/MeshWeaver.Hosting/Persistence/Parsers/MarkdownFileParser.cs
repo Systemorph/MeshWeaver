@@ -453,7 +453,9 @@ public partial class MarkdownFileParser : IFileFormatParser
             sb.AppendLine("---");
             // Line endings as the surrounding AppendLine writes them, so the block and its
             // fences agree on every platform (the emitter itself writes '\n').
-            var yaml = TolerantYaml.Serialize(frontMatter, FrontMatterWriteOptions).TrimEnd().ReplaceLineEndings();
+            // Trim only the emitter's final line break: a literal block's last line may END in an
+            // authored space, and TrimEnd() would cut it.
+            var yaml = TolerantYaml.Serialize(frontMatter, FrontMatterWriteOptions).TrimEnd('\n').ReplaceLineEndings();
             sb.AppendLine(yaml);
             sb.AppendLine("---");
             sb.AppendLine();

@@ -72,6 +72,23 @@ public class MarkdownFrontMatterTolerantYamlTest
         Assert.Equal("# Opening", slide.Content);
     }
 
+    /// <summary>
+    /// Review of #7180: when Notes is the LAST emitted key its literal block ends the front matter,
+    /// so a trim of the whole block cut an authored trailing space off its last line.
+    /// </summary>
+    [Fact]
+    public void Serialize_ThenParse_KeepsATrailingSpaceOnTheLastLiteralLine()
+    {
+        var node = new MeshNode("S02", "deck")
+        {
+            NodeType = "Slide",
+            Name = "Two",
+            Content = new SlideContent { Content = "# Two", Notes = "first\nsecond " }
+        };
+        var back = Parser.Parse("/root/deck/S02.md", Parser.Serialize(node), "deck/S02.md")!;
+        Assert.Equal("first\nsecond ", Assert.IsType<SlideContent>(back.Content).Notes);
+    }
+
     [Fact]
     public void Parse_BindsEitherCasing_AndTheLegacyAliases()
     {

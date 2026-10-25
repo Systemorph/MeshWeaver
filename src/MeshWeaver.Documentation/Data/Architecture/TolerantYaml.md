@@ -55,14 +55,29 @@ Covered syntax: block mappings and sequences (indented or not under a key, the c
 nested `- - a`), flow collections over several lines with trailing commas, plain scalars folded over
 several lines, single-quoted (`''`) and double-quoted scalars with every YAML escape (`\n`, `\t`, `\xXX`,
 `\uXXXX`, `\UXXXXXXXX`, an escaped line break), literal `|` and folded `>` block scalars with the `-`/`+`
-chomping indicators and an explicit indentation digit, full-line and trailing `#` comments, `---` and
-`...` document markers, `%` directives (skipped), anchors `&a` and aliases `*a` (an alias is a deep copy),
+chomping indicators and an explicit indentation digit (chomping keeps only the line breaks that were actually there, so a
+block at the end of the text without a final break gains none), full-line and trailing `#` comments, `---` and
+`...` document markers, `%` directives (skipped), verbatim tags (`!<tag:yaml.org,2002:str>`), anchors `&a` and aliases `*a` (an alias is a deep copy),
 merge keys `<<: *a` and `<<: [*a, *b]` (explicit keys win, then the first source that names a key), and
 the core tags `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. Any other tag (`!Ref`) is ignored and the
 value read as if it were untagged. A CRLF line ending and a leading byte-order mark are normalised away.
 
 Not covered: explicit `? key` entries (refused with a position) and a collection used as a mapping key
 inside a flow mapping (read as its JSON text).
+
+## Limits — hostile input fails fast, with a position
+
+The reader parses files that arrive by import and sync, so input it cannot bound is refused as a
+`YamlParseException`, never a hang or a crash:
+
+- **Nesting deeper than 64 levels** (flow or block, properties-only lines included). The reader
+  recurses per level; without the limit, deep nesting is an uncatchable stack overflow. 64 is also
+  System.Text.Json's default `MaxDepth`, so nothing deeper could be bound anyway.
+- **Alias and merge-key expansion beyond 100,000 copied nodes** per text. Every alias is a deep copy,
+  so anchors that alias earlier anchors grow exponentially ("billion laughs").
+- **A NUL character** anywhere in the text (YAML does not allow one in a stream).
+- **An escape that is not a Unicode scalar value** (`\U00110000`, a lone `\uD800`). A `\u` high
+  surrogate followed by a `\u` low surrogate, the JSON spelling of one character, is read as that pair.
 
 ## The tolerances
 
@@ -95,8 +110,8 @@ PascalCase keys in declaration order, which keeps every existing mirrored file b
 
 ## Strict mode — for files strict readers also read
 
-`YamlParseOptions.StrictSpec` refuses the two reader tolerances above, exactly where the YAML grammar
-does. The platform's own reads are tolerant; strict mode is for guards over files that OTHER readers
+`YamlParseOptions.StrictSpec` refuses the two reader tolerances above, and a plain scalar starting with
+`@`, a backtick or `%`, exactly where the YAML grammar does. The platform's own reads are tolerant; strict mode is for guards over files that OTHER readers
 also consume — `SkillFrontMatterGuard` (`.claude/skills`, read by the coding harnesses) and
 `DocumentationFrontMatterGuard` (the doc tree, read by GitHub and editors) hold their trees to it, so
 the platform's tolerance never turns a file another reader would drop into a green guard.

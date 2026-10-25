@@ -23,6 +23,22 @@ internal sealed partial class YamlParser
     private int line = 1;
     private int lineStart;
     private ImmutableDictionary<string, JsonNode?> anchors = ImmutableDictionary<string, JsonNode?>.Empty;
+    private int depth;
+    private long expansionBudget = MaxExpandedNodes;
+
+    /// <summary>
+    /// The deepest a collection may nest. The reader recurses per level, so an unbounded depth is an
+    /// uncatchable stack overflow on hostile input; 64 is also System.Text.Json's default
+    /// <c>MaxDepth</c>, so nothing deeper could be bound anyway.
+    /// </summary>
+    internal const int MaxDepth = 64;
+
+    /// <summary>
+    /// How many nodes alias and merge-key expansion may COPY in one text. Each alias is a deep copy,
+    /// so anchors that alias earlier anchors grow exponentially ("billion laughs"); the budget turns
+    /// that into a positioned refusal instead of an exhausted process.
+    /// </summary>
+    internal const long MaxExpandedNodes = 100_000;
 
     private YamlParser(string text, bool strict)
     {
@@ -30,8 +46,58 @@ internal sealed partial class YamlParser
         var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         if (normalized.Length > 0 && normalized[0] == '\uFEFF')
             normalized = normalized[1..];
+        // '\0' is the cursor's end-of-input sentinel, so a literal NUL would read as an end that
+        // never advances. YAML does not allow it in a stream; refuse it with its position.
+        var nul = normalized.IndexOf('\0');
+        if (nul >= 0)
+        {
+            var lastBreak = normalized.LastIndexOf('\n', Math.Max(nul - 1, 0));
+            if (nul == 0) lastBreak = -1;
+            var lineNumber = 1 + normalized.AsSpan(0, nul).Count('\n');
+            throw new YamlParseException("a NUL character is not allowed in YAML text", lineNumber, nul - lastBreak);
+        }
         s = normalized;
         this.strict = strict;
+    }
+
+    private void EnterCollection()
+    {
+        if (++depth > MaxDepth)
+            throw Error($"collections nest deeper than {MaxDepth} levels");
+    }
+
+    /// <summary>A deep copy of an anchored node, charged against <see cref="MaxExpandedNodes"/>.</summary>
+    private JsonNode? Expand(JsonNode? target, Mark mark)
+    {
+        if (target is null) return null;
+        var size = CountNodes(target, expansionBudget + 1);
+        if (size > expansionBudget)
+            throw ErrorAt($"alias expansion exceeds {MaxExpandedNodes} copied nodes", mark);
+        expansionBudget -= size;
+        return target.DeepClone();
+    }
+
+    private static long CountNodes(JsonNode root, long cap)
+    {
+        var count = 0L;
+        var pending = ImmutableStack.Create(root);
+        while (!pending.IsEmpty && count <= cap)
+        {
+            pending = pending.Pop(out var node);
+            count++;
+            switch (node)
+            {
+                case JsonObject o:
+                    foreach (var (_, child) in o)
+                        if (child is not null) pending = pending.Push(child);
+                    break;
+                case JsonArray a:
+                    foreach (var child in a)
+                        if (child is not null) pending = pending.Push(child);
+                    break;
+            }
+        }
+        return count;
     }
 
     /// <summary>Reads every document in <paramref name="text"/>.</summary>
@@ -233,7 +299,18 @@ internal sealed partial class YamlParser
         SkipInlineSpaces();
         JsonNode? node;
         if (props.HasAny && AtLineEndOrComment)
-            node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent: false);
+        {
+            // Properties alone on a line put the node on the next one — another level of recursion.
+            EnterCollection();
+            try
+            {
+                node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent: false);
+            }
+            finally
+            {
+                depth--;
+            }
+        }
         else if (IsSequenceEntry)
             node = ParseBlockSequence(Column);
         else if (LineIsMappingKey())
@@ -301,6 +378,20 @@ internal sealed partial class YamlParser
 
     private JsonObject ParseBlockMapping(int indent)
     {
+        EnterCollection();
+        try
+        {
+            return ParseBlockMappingEntries(indent);
+        }
+        finally
+        {
+            depth--;
+        }
+    }
+
+    private JsonObject ParseBlockMappingEntries(int indent)
+    {
+        var start = Save();
         var map = new JsonObject();
         var merges = ImmutableList<JsonNode?>.Empty;
         while (true)
@@ -334,7 +425,7 @@ internal sealed partial class YamlParser
             if (!LineIsMappingKey())
                 throw Error("expected a 'key: value' mapping entry");
         }
-        return ApplyMerges(map, merges);
+        return ApplyMerges(map, merges, start);
     }
 
     private (string Key, bool IsMergeKey) ParseMappingKey()
@@ -360,7 +451,7 @@ internal sealed partial class YamlParser
         return (key, plain && key == "<<");
     }
 
-    private JsonObject ApplyMerges(JsonObject map, ImmutableList<JsonNode?> merges)
+    private JsonObject ApplyMerges(JsonObject map, ImmutableList<JsonNode?> merges, Mark mark)
     {
         // Explicit keys win; among merged sources, the first that names a key wins.
         foreach (var merge in merges)
@@ -375,12 +466,25 @@ internal sealed partial class YamlParser
             foreach (var source in sources)
                 foreach (var (k, v) in source)
                     if (!map.ContainsKey(k))
-                        map[k] = v?.DeepClone();
+                        map[k] = Expand(v, mark);
         }
         return map;
     }
 
     private JsonArray ParseBlockSequence(int indent)
+    {
+        EnterCollection();
+        try
+        {
+            return ParseBlockSequenceEntries(indent);
+        }
+        finally
+        {
+            depth--;
+        }
+    }
+
+    private JsonArray ParseBlockSequenceEntries(int indent)
     {
         var sequence = new JsonArray();
         while (true)
@@ -441,7 +545,16 @@ internal sealed partial class YamlParser
             else if (Cur == '!')
             {
                 var start = pos;
-                while (!IsBlankOrEnd(Cur) && !IsFlowIndicator(Cur)) Advance();
+                if (PeekAt(1) == '<')
+                {
+                    // A verbatim tag (!<tag:yaml.org,2002:str>) may carry flow indicators; it ends at '>'.
+                    while (!AtEnd && Cur != '>' && Cur != '\n') Advance();
+                    if (Cur != '>')
+                        throw Error("unterminated verbatim tag");
+                    Advance();
+                }
+                else
+                    while (!IsBlankOrEnd(Cur) && !IsFlowIndicator(Cur)) Advance();
                 tag = s[start..pos];
             }
             else
@@ -507,7 +620,7 @@ internal sealed partial class YamlParser
                     if (!anchors.TryGetValue(name, out var target))
                         throw ErrorAt($"unknown alias '*{name}'", mark);
                     ExpectLineEnd("an alias");
-                    return target?.DeepClone();
+                    return Expand(target, mark);
                 }
             case '|':
             case '>':
@@ -533,10 +646,21 @@ internal sealed partial class YamlParser
                 }
             default:
                 {
+                    RefuseReservedPlainStart();
                     var text = ParsePlainBlock(parentIndent);
                     return tag is null ? YamlScalars.Resolve(text) : JsonValue.Create(text);
                 }
         }
+    }
+
+    /// <summary>
+    /// <c>@</c> and the backtick are reserved and <c>%</c> is the directive indicator: none may START a
+    /// plain scalar. Strict mode refuses them; the tolerant reader reads the text as written.
+    /// </summary>
+    private void RefuseReservedPlainStart()
+    {
+        if (strict && Cur is '@' or '`' or '%')
+            throw Error($"a plain scalar cannot start with '{Cur}' (quote the value)");
     }
 
     private void ExpectLineEnd(string after)
@@ -662,7 +786,10 @@ internal sealed partial class YamlParser
             {
                 var j = i;
                 while (j < s.Length && s[j] == ' ') j++;
-                if (j < s.Length && s[j] != '\n' && s[j] != '\t')
+                // Indentation is spaces only; a tab after them is CONTENT (a line of blanks is empty).
+                var k = j;
+                while (k < s.Length && IsBlank(s[k])) k++;
+                if (k < s.Length && s[k] != '\n')
                 {
                     contentIndent = j - i;
                     break;
@@ -674,6 +801,8 @@ internal sealed partial class YamlParser
                 contentIndent = int.MaxValue; // empty scalar: no line belongs to it
         }
 
+        var contentStart = pos;
+        var lastContentEnd = -1;
         var lines = ImmutableList<string>.Empty;
         while (!AtEnd)
         {
@@ -698,6 +827,7 @@ internal sealed partial class YamlParser
             var textStart = pos;
             SkipToEndOfLine();
             lines = lines.Add(s[textStart..pos]);
+            lastContentEnd = pos;
             if (Cur == '\n') Advance();
         }
 
@@ -708,14 +838,18 @@ internal sealed partial class YamlParser
         var body = lines.Take(lines.Count - trailing).ToImmutableList();
         // The cursor now sits at the start of the line that ended the scalar, so the caller sees it.
 
+        // Chomping governs the line breaks that ACTUALLY followed the content — clip keeps one,
+        // keep keeps them all — so a scalar ending at the end of the text without a break gains none.
+        var breaksFrom = body.Count == 0 || lastContentEnd < 0 ? contentStart : lastContentEnd;
+        var breaks = breaksFrom >= pos ? 0 : s.AsSpan(breaksFrom, pos - breaksFrom).Count('\n');
         var text = literal ? string.Join('\n', body) : Fold(body);
         if (body.Count == 0)
-            return chomp == '+' ? new string('\n', trailing) : string.Empty;
+            return chomp == '+' ? new string('\n', breaks) : string.Empty;
         return chomp switch
         {
             '-' => text,
-            '+' => text + "\n" + new string('\n', trailing),
-            _ => text + "\n",
+            '+' => text + new string('\n', breaks),
+            _ => breaks > 0 ? text + "\n" : text,
         };
     }
 
@@ -794,9 +928,9 @@ internal sealed partial class YamlParser
                     case '_': sb.Append('\u00A0'); break;
                     case 'L': sb.Append('\u2028'); break;
                     case 'P': sb.Append('\u2029'); break;
-                    case 'x': sb.Append(ReadHexEscape(2)); break;
-                    case 'u': sb.Append(ReadHexEscape(4)); break;
-                    case 'U': sb.Append(ReadHexEscape(8)); break;
+                    case 'x': sb.Append((char)ReadHexEscape(2)); break;
+                    case 'u': sb.Append(ReadUtf16Escape()); break;
+                    case 'U': sb.Append(CodePoint(ReadHexEscape(8))); break;
                     default:
                         if (strict)
                             throw Error($"unknown escape sequence '\\{e}'");
@@ -875,7 +1009,7 @@ internal sealed partial class YamlParser
         return true;
     }
 
-    private string ReadHexEscape(int digits)
+    private long ReadHexEscape(int digits)
     {
         var start = pos;
         for (var k = 0; k < digits; k++)
@@ -884,8 +1018,34 @@ internal sealed partial class YamlParser
                 throw Error($"invalid escape: expected {digits} hexadecimal digits");
             Advance();
         }
-        var code = int.Parse(s.AsSpan(start, digits), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-        return char.ConvertFromUtf32(code);
+        return long.Parse(s.AsSpan(start, digits), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>A Unicode scalar value as text; anything else (a surrogate, beyond U+10FFFF) is refused with its position.</summary>
+    private string CodePoint(long code)
+    {
+        if (code > 0x10FFFF || code is >= 0xD800 and <= 0xDFFF)
+            throw Error($"escape U+{code:X} is not a Unicode scalar value");
+        return char.ConvertFromUtf32((int)code);
+    }
+
+    /// <summary>
+    /// <c>\uXXXX</c>. A high surrogate followed directly by a <c>\u</c> low surrogate is the
+    /// JSON spelling of one character and is read as that pair; a lone surrogate is refused.
+    /// </summary>
+    private string ReadUtf16Escape()
+    {
+        var code = ReadHexEscape(4);
+        if (code is >= 0xD800 and <= 0xDBFF && Cur == '\\' && PeekAt(1) == 'u')
+        {
+            var mark = Save();
+            Advance(2);
+            var low = ReadHexEscape(4);
+            if (low is >= 0xDC00 and <= 0xDFFF)
+                return new string([(char)code, (char)low]);
+            Restore(mark);
+        }
+        return CodePoint(code);
     }
 
     // ───────────────────────────── flow collections ─────────────────────────────
@@ -908,8 +1068,12 @@ internal sealed partial class YamlParser
         }
     }
 
-    private JsonNode? ParseFlowNode()
+    private JsonNode? ParseFlowNode() => ParseFlowNode(out _);
+
+    /// <summary>Reads a flow node; <paramref name="plainText"/> is the written text when it was an untagged plain scalar (a key keeps that text).</summary>
+    private JsonNode? ParseFlowNode(out string? plainText)
     {
+        plainText = null;
         var props = ParseProperties();
         SkipFlowWhitespace();
         JsonNode? node;
@@ -934,12 +1098,15 @@ internal sealed partial class YamlParser
                     var name = ReadName();
                     if (!anchors.TryGetValue(name, out var target))
                         throw ErrorAt($"unknown alias '*{name}'", mark);
-                    node = target?.DeepClone();
+                    node = Expand(target, mark);
                     break;
                 }
             default:
                 {
+                    RefuseReservedPlainStart();
                     var text = ParsePlainFlow();
+                    if (props.Tag is null)
+                        plainText = text;
                     node = props.Tag is null ? YamlScalars.Resolve(text) : JsonValue.Create(text);
                     break;
                 }
@@ -948,6 +1115,19 @@ internal sealed partial class YamlParser
     }
 
     private JsonArray ParseFlowSequence()
+    {
+        EnterCollection();
+        try
+        {
+            return ParseFlowSequenceEntries();
+        }
+        finally
+        {
+            depth--;
+        }
+    }
+
+    private JsonArray ParseFlowSequenceEntries()
     {
         var open = Save();
         Advance(); // '['
@@ -962,7 +1142,7 @@ internal sealed partial class YamlParser
                 return sequence;
             }
             var jsonLike = Cur is '"' or '\'' or '[' or '{';
-            var item = ParseFlowNode();
+            var item = ParseFlowNode(out var itemText);
             SkipFlowWhitespace();
             if (Cur == ':' && (jsonLike || IsBlankOrEnd(PeekAt(1)) || IsFlowIndicator(PeekAt(1))))
             {
@@ -970,7 +1150,7 @@ internal sealed partial class YamlParser
                 Advance();
                 SkipFlowWhitespace();
                 var value = Cur is ',' or ']' ? null : ParseFlowNode();
-                item = new JsonObject { [FlowKey(item)] = value };
+                item = new JsonObject { [itemText ?? FlowKey(item)] = value };
                 SkipFlowWhitespace();
             }
             sequence.Add(item);
@@ -990,6 +1170,19 @@ internal sealed partial class YamlParser
 
     private JsonObject ParseFlowMapping()
     {
+        EnterCollection();
+        try
+        {
+            return ParseFlowMappingEntries();
+        }
+        finally
+        {
+            depth--;
+        }
+    }
+
+    private JsonObject ParseFlowMappingEntries()
+    {
         var open = Save();
         Advance(); // '{'
         var map = new JsonObject();
@@ -1001,12 +1194,13 @@ internal sealed partial class YamlParser
             if (Cur == '}')
             {
                 Advance();
-                return ApplyMerges(map, merges);
+                return ApplyMerges(map, merges, open);
             }
             var keyMark = Save();
             var plainKey = !(Cur is '"' or '\'' or '[' or '{');
-            var keyNode = ParseFlowNode();
-            var key = FlowKey(keyNode);
+            // A plain key keeps its written text, as in a block mapping: {null: a, '': b} has two keys.
+            var keyNode = ParseFlowNode(out var keyText);
+            var key = keyText ?? FlowKey(keyNode);
             SkipFlowWhitespace();
             JsonNode? value = null;
             if (Cur == ':')
@@ -1036,7 +1230,7 @@ internal sealed partial class YamlParser
             if (Cur == '}')
             {
                 Advance();
-                return ApplyMerges(map, merges);
+                return ApplyMerges(map, merges, open);
             }
             throw AtEnd ? ErrorAt("unterminated flow mapping", open) : Error("expected ',' or '}' in a flow mapping");
         }

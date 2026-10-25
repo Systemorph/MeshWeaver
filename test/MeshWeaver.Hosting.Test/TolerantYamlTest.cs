@@ -531,6 +531,8 @@ public class TolerantYamlTest
     [InlineData("&anchor")]
     [InlineData("*alias")]
     [InlineData("key:")]
+    [InlineData("\n")]
+    [InlineData("last line ends in a space\nsecond ")]
     public void Serialize_StringsRoundTripExactly(string value)
     {
         var yaml = TolerantYaml.Serialize(new JsonObject { ["k"] = value, ["seq"] = new JsonArray(value) });
@@ -562,6 +564,120 @@ public class TolerantYamlTest
         Assert.Equal(Colour.Green, back.Colour);
         Assert.Equal("set", back.Missing);
         Assert.DoesNotContain("child", yaml); // nulls omitted
+    }
+
+    // ───────────────────────────── hostile input (review of #7180) ─────────────────────────────
+
+    /// <summary>Runs <paramref name="parse"/> and asserts it REFUSES promptly — a bounded failure, not a hang or a crash.</summary>
+    private static YamlParseException RefusedPromptly(Action parse)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var ex = Assert.Throws<YamlParseException>(parse);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"the refusal took {watch.Elapsed}");
+        return ex;
+    }
+
+    [Fact]
+    public void AnEmbeddedNul_IsRefusedWithItsPosition_NotReadAsAnEndThatNeverAdvances()
+    {
+        var ex = RefusedPromptly(() => TolerantYaml.Parse("a: |\n  \0text\n"));
+        Assert.Equal(2, ex.Line);
+        Assert.Equal(3, ex.Column);
+        RefusedPromptly(() => TolerantYaml.Parse("a: x\0y\n"));
+    }
+
+    [Fact]
+    public void DeepNesting_IsRefused_NeverAStackOverflow()
+    {
+        RefusedPromptly(() => TolerantYaml.Parse(new string('[', 10_000) + new string(']', 10_000)));
+        RefusedPromptly(() => TolerantYaml.Parse(new string('{', 10_000)));
+        RefusedPromptly(() => TolerantYaml.Parse(string.Concat(Enumerable.Range(0, 10_000).Select(i => new string(' ', i) + "a:\n"))));
+        RefusedPromptly(() => TolerantYaml.Parse(string.Concat(Enumerable.Range(0, 10_000).Select(i => new string(' ', 2 * i) + "- \n"))));
+        RefusedPromptly(() => TolerantYaml.Parse(string.Concat(Enumerable.Range(0, 10_000).Select(i => $"&a{i}\n")) + "x\n"));
+        // The limit leaves ordinary depth alone.
+        var ok = TolerantYaml.Parse(new string('[', 64) + new string(']', 64));
+        Assert.NotNull(ok);
+    }
+
+    [Fact]
+    public void BillionLaughs_IsRefusedByTheExpansionBudget()
+    {
+        var yaml = "l0: &l0 [lol, lol, lol, lol, lol, lol, lol, lol, lol, lol]\n"
+            + string.Concat(Enumerable.Range(1, 9).Select(i =>
+                $"l{i}: &l{i} [{string.Join(", ", Enumerable.Repeat($"*l{i - 1}", 10))}]\n"));
+        RefusedPromptly(() => TolerantYaml.Parse(yaml));
+
+        // Block aliases and merge-key copies are charged against the same budget.
+        var block = "l0: &l0\n  - lol\n  - lol\n  - lol\n  - lol\n  - lol\n  - lol\n  - lol\n  - lol\n  - lol\n  - lol\n"
+            + string.Concat(Enumerable.Range(1, 9).Select(i =>
+                $"l{i}: &l{i}\n" + string.Concat(Enumerable.Repeat($"  - *l{i - 1}\n", 10))));
+        RefusedPromptly(() => TolerantYaml.Parse(block));
+
+        var merge = "m0: &m0 {k: [lol, lol, lol, lol, lol, lol, lol, lol, lol, lol]}\n"
+            + string.Concat(Enumerable.Range(1, 9).Select(i =>
+                $"m{i}: &m{i}\n" + string.Concat(Enumerable.Range(0, 10).Select(j => $"  k{j}:\n    <<: *m{i - 1}\n"))));
+        RefusedPromptly(() => TolerantYaml.Parse(merge));
+    }
+
+    [Theory]
+    [InlineData("a: \"\\U00110000\"\n")]
+    [InlineData("a: \"\\uD800\"\n")]
+    [InlineData("a: \"\\uDC00x\"\n")]
+    public void AnEscapeOutsideUnicode_IsAYamlParseException(string yaml) =>
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml));
+
+    [Fact]
+    public void ASurrogatePairEscape_IsOneCharacter() =>
+        Assert.Equal("😀", Text(Map("a: \"\\uD83D\\uDE00\"\n")["a"]));
+
+    [Fact]
+    public void AVerbatimTag_IsReadThroughItsClosingBracket()
+    {
+        var map = Map("a: !<tag:yaml.org,2002:str> 123\nb: [!<tag:yaml.org,2002:str> 7, x]\n");
+        Assert.Equal(JsonValueKind.String, Kind(map["a"]));
+        Assert.Equal("123", Text(map["a"]));
+        Assert.Equal("7", Text(map["b"]![0]));
+        Assert.Equal(JsonValueKind.String, Kind(map["b"]![0]));
+    }
+
+    [Theory]
+    [InlineData("description: @invalid\n")]
+    [InlineData("description: `cmd`\n")]
+    [InlineData("description: %x\n")]
+    [InlineData("tags: [@a]\n")]
+    public void StrictMode_RefusesReservedPlainStarters_TheTolerantReaderKeepsTheText(string yaml)
+    {
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml, YamlParseOptions.StrictSpec));
+        Assert.NotNull(TolerantYaml.Parse(yaml));
+    }
+
+    [Fact]
+    public void BlockScalar_ATabAfterTheIndentation_IsContent()
+    {
+        var map = Map("notes: |\n  \tfirst\n  second\nnext: x\n");
+        Assert.Equal("\tfirst\nsecond\n", Text(map["notes"]));
+        Assert.Equal("x", Text(map["next"]));
+    }
+
+    [Theory]
+    [InlineData("a: |\n  text", "text")]
+    [InlineData("a: |+\n  text", "text")]
+    [InlineData("a: >\n  x\n  y", "x y")]
+    [InlineData("a: |\n  text\n", "text\n")]
+    [InlineData("a: |+\n  text\n\n", "text\n\n")]
+    public void Chomping_KeepsOnlyTheBreaksThatWereThere(string yaml, string expected) =>
+        Assert.Equal(expected, Text(Map(yaml)["a"]));
+
+    [Fact]
+    public void FlowKeys_KeepTheirWrittenText_LikeBlockKeys()
+    {
+        var flow = Map("m: {null: keep, '': empty, 1.0: one, true: t, 0x1F: hex}\n")["m"]!.AsObject();
+        Assert.Equal(["null", "", "1.0", "true", "0x1F"], flow.Select(kv => kv.Key));
+        var pairs = Map("s: [null: a, 007: b]\n")["s"]!.AsArray();
+        Assert.Equal("null", pairs[0]!.AsObject().Single().Key);
+        Assert.Equal("007", pairs[1]!.AsObject().Single().Key);
+        var block = Map("null: keep\n'': empty\n1.0: one\n");
+        Assert.Equal(["null", "", "1.0"], block.Select(kv => kv.Key));
     }
 
     [Fact]

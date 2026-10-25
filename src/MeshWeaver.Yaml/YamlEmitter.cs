@@ -135,6 +135,10 @@ internal static partial class YamlEmitter
     {
         if (!text.Contains('\n') || text.EndsWith("\n\n", StringComparison.Ordinal))
             return false;
+        // A block needs at least one content line: "\n" alone would write an empty block, which
+        // reads back as "".
+        if (text.Trim('\n').Length == 0)
+            return false;
         foreach (var c in text)
             if (c != '\n' && c != '\t' && NeedsEscape(c))
                 return false;

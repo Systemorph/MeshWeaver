@@ -104,7 +104,12 @@ public class DocumentationFrontMatterGuard
 
             try
             {
-                TolerantYaml.Parse(frontMatter, YamlParseOptions.StrictSpec);
+                // Front matter binds to a record, so the root must be a MAPPING (or empty).
+                var root = TolerantYaml.Parse(frontMatter, YamlParseOptions.StrictSpec);
+                if (root is not null and not System.Text.Json.Nodes.JsonObject)
+                    offenders.AppendLine(
+                        $"  {path}: front matter parses, but its root is a {root.GetValueKind()} — "
+                        + "it must be a 'key: value' mapping, or nothing binds.");
             }
             catch (Exception ex)
             {
