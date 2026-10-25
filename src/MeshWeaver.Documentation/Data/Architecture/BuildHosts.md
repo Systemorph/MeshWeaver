@@ -22,6 +22,11 @@ instance's MCP), which builds on `Hosting/BuildService` there. The instance side
 MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChannels),
 [Module Build Architecture](../ModuleBuildArchitecture) and [Build Server](../BuildServer).
 
+> **Target shape:** [Deploy, Test the Deploy, Switch Latest](../DeployTestSwitchLatest) (DECIDED
+> DESIGN, not wired; policy `deploy-test-switch-latest`, decided and `proposed` until its wiring lands) generalises the channels on this page into one
+> versioned deployment per platform set plus a `latest` alias that moves only after the set passed
+> its tests ON its deployment. Until that wiring lands, this page describes what runs.
+
 | piece | file | what it does |
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
@@ -504,11 +509,14 @@ whole workflow (the admission queues a new attempt).
 
 ## 6. Not done here
 
-- **The receiver of `build-host-update-available`** (the record write) and the **`POST /token`
-  route** (minting `GetScopedInstallationToken(owner, [repo], {"contents":"read"})` for the ONE
-  repository of the run, only for the host that holds its claim) are the operations instance's, in
-  MeshWeaver.Plugins. Until the receiver exists the event must stay unsent — which `enabled: false`
-  guarantees.
+- **The receiver of `build-host-update-available`** (the record write) EXISTS: MeshWeaver.Plugins
+  #4166 shipped it (`Hosting/Deployment/Source/BuildHostUpdates.cs`), and it changes a record only
+  when that record's `BuildHosts.Enabled` is already true. The event still stays unsent while
+  `enabled: false` here, and no record enables build hosts yet (the control record carries no
+  `buildHosts` block), so turning the hosts on remains the two declared acts of §4. The
+  **`POST /token` route** (minting `GetScopedInstallationToken(owner, [repo], {"contents":"read"})`
+  for the ONE repository of the run, only for the host that holds its claim) is the operations
+  instance's, in MeshWeaver.Plugins.
 - **The fleet-reader App's grant** is Contents / Metadata / Pull requests today; the stable roll
   needs Actions: read and Checks: read on MeshWeaver.Plugins. Widening it is a maintainer act;
   until then `stable` stays out of `.github/build-hosts.json` `channels`.
