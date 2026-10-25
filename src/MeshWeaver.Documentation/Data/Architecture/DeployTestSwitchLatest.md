@@ -106,7 +106,7 @@ Reuse, generalise, add nothing parallel:
 | the alias | the channel name IS the host | `BuildHostSets["alias/latest"] = "<version>"`, one scalar leaf, so a stale switch conflicts as a whole, the same reason the set is one token (`BuildHosts.md` §4) |
 | the authored block | `BuildHostsBlock { Enabled, Channels }` (`BuildHosts.cs:25-41`) | `Enabled` stays. A new init-only `Retention` (§5) and a per-version default `MaxReplicas`. `Channels` is kept for `stable` (Q4). Init-only only: the binary-break rule (`BuildHosts.cs:2-4`) |
 | the Deployment | `build-host-<channel>` | `build-<v>`, where `<v>` is the version with dots as dashes (`build-3-1-10412`), so it is a valid DNS label, with labels `meshweaver.io/build-version=<version>` and `meshweaver.io/build-alias=latest` on the one the alias names |
-| the ScaledObject | one per channel, demand from `/queue?channel=<c>` | one per version, demand from `/queue?version=<v>`. Demand for `latest` is counted against the version the alias names, so only that host scales for it |
+| the ScaledObject | one per channel, demand from `/queue?channel=<c>` | one per version, demand from `/queue?version=<v>`. Demand is counted by each attempt's RECORDED version, never by the alias: the alias is consulted once, when a `latest` run is admitted (next row), so an attempt queued on V before a switch to V+1 still scales V |
 | the claim | `{channel, platformVersion, …}` | `{version, alias?, …}`. A run queued for `latest` is resolved to a version WHEN IT IS QUEUED, and the run node records the version (StandingBuildHosts §1: *"a run records a set"*) |
 | the receiver | `build-host-update-available` → `BuildHostSets[channel]` (`BuildHostUpdates.cs:105-136`) | three events → three InstanceActions: `BuildHostDeploy`, `BuildHostSwitch`, `BuildHostTeardown`. Each one is authorized as the caller (the signed CD event) and executed as System (policy `authorize-as-caller-execute-as-system`) |
 
@@ -128,10 +128,13 @@ cap allows**.
   not-Ready alias is a RED job naming what was looked for. It never falls back to "newest sealed",
   because that set may be untested (resolve-platform.py's own rule: *"never a fallback to a moving
   tag nobody named"*).
-- **With a cap**, the resolver takes the highest version in `versions` at or below the cap. If no
-  retained deployment satisfies the cap, the result is RED, naming the cap, and never a silent
-  pick of `latest`. That outcome cannot arise while retention (§5) works, so a red here is a
-  retention defect.
+- **With a cap**, the resolver takes the highest version in `versions` that satisfies BOTH bounds:
+  at or above the package's `minMeshVersion` and at or below its cap, compared by the one
+  comparator `PlatformFloor`. If no retained, Ready deployment lies in that range, the result is
+  RED, naming the floor, the cap and the retained versions, and never a silent pick of `latest` or
+  of a version below the floor. Once a cap is admitted (§5) retention holds its deployment (§6),
+  so a red after admission is a retention defect; a red before the cap's deployment is Ready is
+  the admission still in progress, and says so.
 - **Per package, not per repository.** A repository's run partitions its modules by the version
   each one resolves to. Uncapped modules run on `latest`. Capped modules run on their cap's
   deployment, each set built once. **Both publish** (§10, D2): an uncapped module publishes from
@@ -156,7 +159,15 @@ case. A cap carries two companion fields, both required when the cap is present:
 - the cap names a sealed set that exists. An unknown version is red;
 - **a cap that admits `latest` is red: "the cap is stale, remove it".** A cap that restricts
   nothing would quietly become a pin the day `latest` overtakes it;
-- a cap cannot be added without `capReason` and `capTracking`.
+- a cap cannot be added without `capReason` and `capTracking`;
+- **admission reserves the deployment.** A new cap usually names a version that `latest` has just
+  left, so its deployment may already be gone. The validator reads `GET /api/builds/hosts`: if the
+  highest version in the cap's range is retained and Ready, the cap is admitted and rule 5 of §6
+  holds it from the moment the cap is on a default branch. If it is not deployed, the cap's
+  admission requests `BuildHostDeploy(<v>)` for that SEALED set, followed by the same test run a
+  candidate gets (§2 step 3) and NO switch; capped builds of the package are red, naming the
+  pending deployment, until it is Ready and green. If the set's images are no longer in the
+  registry, the cap cannot be admitted, and the validator says so by name.
 
 **Runtime.** This design gives the cap BUILD-and-TEST meaning only: it selects the deployment a
 package's modules compile and test against. What an instance that runs above the cap does with
@@ -180,8 +191,10 @@ and triage decides the rest, as for every finding ([Incidental Findings](../Inci
 2. the candidate under test, if any (at most one; a newer candidate supersedes an older one, which
    is torn down);
 3. the PREVIOUS `latest`, the deployment the alias named before its last switch (§10, D4);
-4. for every package with a cap, the highest version at or below that cap. Several packages with
-   the same cap share one deployment.
+4. every version a queued or running attempt recorded (§3), until that attempt ends;
+5. for every package with a cap, the highest version inside its floor-to-cap range (§4), including
+   one that a cap admission (§5) is deploying. Several packages with the same range share one
+   deployment.
 
 **Rollback is an instant switch.** Because rule 3 keeps the previous `latest` deployed and its
 digests locked, going back is `BuildHostSwitch` moving the alias to that version: one record
@@ -193,8 +206,12 @@ the next forward switch.
 **Tear down everything else** with `BuildHostTeardown`: the record entry goes, so the Deployment and
 the ScaledObject leave on the next reconcile. The `build-cache` claim is never touched by a
 teardown. Its content-addressed entries for a torn-down set age out under the cache's own sweep.
-A teardown is refused for any version that rule 1, 2, 3 or 4 still holds. The rule is computed from
-the record and the catalog, both live, never from a list the CD run carries.
+A teardown is refused for any version that rule 1, 2, 3, 4 or 5 still holds. The rule is computed from
+the record, the queue and the catalog, all live, never from a list the CD run carries. **Admission
+and teardown cannot race:** both are writes to the control record through its owning hub, which
+serialises them. A teardown re-checks rule 4 inside its own write, and an attempt's admission
+re-checks, inside ITS write, that the version is still in the record; an attempt that finds its
+version gone is re-resolved, or red, never queued for a deployment that is leaving.
 
 **Digests.** Every digest of a retained deployment (tester, portal, runner, core tests) is a PINNED digest in
 the sense of [Pinned Image Retention](../PinnedImageRetention): `lock-pinned-digests.py` reads the
@@ -230,20 +247,21 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 
 | phase | repo | change | owner-gated? |
 |---|---|---|---|
-| P0 | core | this design, plus the two `proposed` register rows | no |
+| P0 | core | this design, the owner's answers (§10) and the two register rows | no |
 | P1 | core | contract: init-only additions to `BuildHostsBlock` (`Retention`, the per-version default), the `v/` and `alias/` key forms, `Package.MaxMeshVersion` + `CapReason` + `CapTracking`, and the cap validator in `node-repo-validate.yml` | no |
 | P2 | core | chart: render one Deployment and one ScaledObject per `v/` entry, plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
 | P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, `GET /api/builds/hosts`, the retention computation | no |
 | P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, and the `mw-core-tests` image as the set's fifth digest (D3) | no |
-| P5 | core + MeshWeaver.Plugins | `resolve-platform.py --from-build-hosts` (core) and the platform-ref adoption in Plugins `ci.yml` and the satellites, including per-package resolution under a cap | no |
+| P5 | core | `resolve-platform.py --from-build-hosts`, including per-package resolution under a cap, IMPLEMENTED and self-tested but INERT: no consumer passes the flag, so Plugins and the satellites stay on today's newest-sealed path | no |
 | P6 | MeshWeaver.Plugins + core | the daily cap-debt job (control), the capped-run publish path (D2), the retention of the previous `latest` and the backwards rollback switch (D4), and the `lock-pinned-digests.py` reading of `buildHostSets` (core) | no |
 | P7 | Memex | the `buildHosts` block on `mesh/Deployments/control.json`, through the record's approval path | **yes** |
 | P8 | core | `.github/build-hosts.json` `enabled: true`, AFTER P7 (the order `BuildHosts.md` §4 fixes) | **yes** |
 | P9 | control | the roll that renders the first `build-<v>`, then the first green switch. Verify by reading `GET /api/builds/hosts` and the run nodes' recorded version, never the CD job's green | **yes** |
+| P10 | MeshWeaver.Plugins + satellites | adopt `--from-build-hosts` in Plugins `ci.yml` and the satellites, ONLY after P9 is verified, because §4 refuses a missing alias with no fallback and adopting earlier would red every consumer's CI | no |
 
 `deploy-test-switch-latest` and `package-mesh-version-cap` are `in force` as decisions, with
-P1 to P9 listed as owed on their register rows. When P9 is verified, `build-hosts-follow-latest`
-is retired in the register.
+P1 to P10 listed as owed on their register rows.
+When P9 is verified and P10 has landed, `build-hosts-follow-latest` is retired in the register.
 
 ## 9. Cost
 
