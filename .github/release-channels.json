@@ -321,14 +321,15 @@
         },
         {
           "workflow": "hosting-operator.yml",
-          "job": "publish",
+          "repo": "Systemorph/MeshWeaver.Plugins",
+          "job": "operator",
           "repositories": [
             "hosting-operator"
           ],
           "registries": [
             "meshweaver.azurecr.io"
           ],
-          "state": "every merge that touches the operator image"
+          "state": "every merge there that touches the operator, and hourly when core's chart or drift scripts moved (the operator moved to MeshWeaver.Plugins)"
         }
       ]
     },

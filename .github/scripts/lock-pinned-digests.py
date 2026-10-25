@@ -80,8 +80,8 @@ reddens rather than silently splitting the fleet's idea of a pin in two.
 Axis 2 is a different subject with a different shape (a TAG, in a helm overlay, not a digest in a
 workflow) and it necessarily has its own reader. Its scope is deliberately narrow, and the boundary
 is measured rather than guessed: `values*.yml` / `values*.yaml` under a `deploy/` or `deployments/`
-path segment. Widening it to every YAML/JSON under `deploy/` was tried and rejected — core's
-`deploy/aks/operator/test/fixtures/**` carry image references to tags that never existed
+path segment. Widening it to every YAML/JSON under `deploy/` was tried and rejected — the hosting
+operator's `deploy/hosting-operator/test/fixtures/**` (MeshWeaver.Plugins; core's `deploy/aks/operator` until it moved) carry image references to tags that never existed
 (`memex-portal-ai:3.0.0-rc8.ci.5000`), which would red this job nightly over test fixtures, and
 `deploy/aks/manifests/observability/log-watcher.yaml` names the FLOATING tag `:latest`, which has
 no fixed manifest to protect.
@@ -5490,7 +5490,7 @@ def self_test() -> int:
           "ARM 13: Memex's real overlay path was rejected")
     check(is_overlay_path("deploy/whisper/helm/values.yaml"),
           "ARM 13: this repository's whisper chart values file was rejected")
-    check(not is_overlay_path("deploy/aks/operator/test/fixtures/audit/clean/manifest.json"),
+    check(not is_overlay_path("deploy/hosting-operator/test/fixtures/audit/clean/manifest.json"),
           "ARM 13: a TEST FIXTURE was accepted as a deployment overlay — those name tags that "
           "never existed and would red this job nightly")
     check(not is_overlay_path("deploy/aks/manifests/observability/log-watcher.yaml"),

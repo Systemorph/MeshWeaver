@@ -445,7 +445,7 @@ There are **three** sides to chart drift, not two:
 | **L** | the live cluster objects | `kubectl get …` |
 | **M** | the last-deployed release manifest | `helm get manifest <release> -n <ns>` |
 
-Everything above this section is **D vs L**. `hosting-audit` (`deploy/aks/operator/bin`) computes
+Everything above this section is **D vs L**. `hosting-audit` (`MeshWeaver.Plugins/deploy/hosting-operator/bin`) computes
 **M vs L** — plus ONE record-vs-live comparison the manifest cannot carry: a PersistentVolumeClaim
 whose live capacity is below the `size` the Deployment record declares (the record's `volumes[]`
 reach helm as the release's `persistence` values), because on this fleet the portal's claims are

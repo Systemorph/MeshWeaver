@@ -17,7 +17,7 @@ name: s1-extract image
 # takes most of a runner's disk, and the service's own tests run INSIDE the image build
 # (app/test_server.py, offline). A PR that does not touch deploy/s1-extract has nothing to build.
 #
-# Auth is the OIDC federated credential main-cd.yml and hosting-operator.yml use, scoped to this
+# Auth is the OIDC federated credential main-cd.yml uses (and hosting-operator.yml used before the operator moved to MeshWeaver.Plugins), scoped to this
 # repository's main branch — which is the only ref the push job runs on.
 
 on:

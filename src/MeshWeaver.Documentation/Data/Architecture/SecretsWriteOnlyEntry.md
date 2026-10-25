@@ -296,7 +296,7 @@ Systemorph/Memex `docs/control-instance.md` → *Secrets and identities*.
 
 ## Related
 
-- [Operator Credentials Travel by Name](../OperatorCredentialsByName): the operator is handed a vault
+- [Operator Credentials Travel by Name](/Hosting/OperatorCredentialsByName): the operator is handed a vault
   object's name, never a value
 - [Self-Update Announcement Key](../SelfUpdateAnnouncementKey): a per-deployment key, set through the
   deployment's Secrets page
