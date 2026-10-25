@@ -22,11 +22,12 @@ RUN rm -rf /usr/lib/ollama/cuda_* /usr/lib/ollama/rocm* /usr/lib/ollama/vulkan* 
     && /usr/bin/ollama --version || true
 
 # ── The image that ships: same Ubuntu as upstream, the binary + CPU libs, the models in one layer ────────
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 ENV DEBIAN_FRONTEND=noninteractive
-# curl is for the probes, the smoke and `kubectl exec` diagnosis; ca-certificates for the build-time pull.
+# curl + jq are for the probes and the smoke (jq DECODES the JSON answers — a grep would stop at the first
+# escaped quote); ca-certificates for the build-time pull.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl jq \
     && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man
 COPY --from=engine /usr/bin/ollama /usr/bin/ollama
 COPY --from=engine /usr/lib/ollama /usr/lib/ollama

@@ -22,8 +22,8 @@ name: ollama image
 # default. The VISION model (~26 GiB resident) does not fit a hosted runner's 16 GB of RAM; its proof is
 # the chart's in-cluster `helm test` (deploy/ollama/helm/templates/tests/smoke.yaml).
 #
-# DISK: the image is ~25 GB (23.8 GB of weights). Docker's data root moves to the runner's /mnt disk,
-# after the unused toolchains are removed, so the pull, the layer and its export fit.
+# DISK: the image is ~25 GB (23.8 GB of weights). The unused toolchains are removed and Docker's data root
+# moves to /mnt, so the pull, the layer and its export fit (measured: 118 GB free; the PR build took 7.5 min).
 #
 # Auth is the OIDC federated credential main-cd.yml and ocr-image.yml use, scoped to this repository's
 # main branch — which is the only ref the push job runs on.
@@ -69,7 +69,8 @@ jobs:
         with:
           tool-cache: true
           docker-images: true
-      # The runner's second disk (/mnt) holds the ~25 GB image; / alone does not after the base images.
+      # The image is ~25 GB (25,090 MiB measured). /mnt is the runner's temporary disk where it has one
+      # (on the 2026-10-25 runner it was part of the 145 GB root, 118 GB free after the clean-up).
       - name: Move Docker's data root to /mnt
         run: |
           set -euo pipefail
@@ -171,7 +172,8 @@ jobs:
         with:
           tool-cache: true
           docker-images: true
-      # The runner's second disk (/mnt) holds the ~25 GB image; / alone does not after the base images.
+      # The image is ~25 GB (25,090 MiB measured). /mnt is the runner's temporary disk where it has one
+      # (on the 2026-10-25 runner it was part of the 145 GB root, 118 GB free after the clean-up).
       - name: Move Docker's data root to /mnt
         run: |
           set -euo pipefail
@@ -182,12 +184,6 @@ jobs:
           sudo systemctl start docker
           [ "$(docker info --format '{{.DockerRootDir}}')" = "/mnt/docker" ] \
             || { echo "::error::Docker did not move its data root to /mnt/docker"; exit 1; }
-      # The build pulls the pinned models and runs the capability + embedding smoke (deploy/ollama/Dockerfile).
-      - name: Build
-        run: |
-          set -euo pipefail
-          short="${GITHUB_SHA::7}"
-          docker build --progress=plain -t "$ACR/$REPO:${LINE}-${short}" -t "$ACR/$REPO:${LINE}" deploy/ollama
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
@@ -198,7 +194,31 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
         run: bash .github/scripts/acr-login.sh
+      # 🚨 WRITE-ONCE. The <line>-<sha> tag is what an approved ApplyChart binds, and pods pull it with
+      # IfNotPresent. A rerun or a dispatch on an already-published commit must never rebuild over it: the
+      # apt layer and the build's file timestamps are not reproducible, so a second push would put different
+      # bytes under the approved name, and nodes that cached the first build would keep serving it.
+      - name: Is this commit already published?
+        id: published
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          if digest=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}-${short}" --query digest -o tsv 2>/dev/null) \
+             && [ -n "$digest" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$REPO:${LINE}-${short} is already published as $digest — not rebuilt, not re-pushed (write-once)"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      # The build pulls the pinned models and runs the capability + embedding smoke (deploy/ollama/Dockerfile).
+      - name: Build
+        if: steps.published.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker build --progress=plain -t "$ACR/$REPO:${LINE}-${short}" -t "$ACR/$REPO:${LINE}" deploy/ollama
       - name: Push ollama:<line>-<sha> and :<line>
+        if: steps.published.outputs.exists == 'false'
         run: |
           set -euo pipefail
           short="${GITHUB_SHA::7}"
@@ -210,7 +230,10 @@ jobs:
           short="${GITHUB_SHA::7}"
           immutable=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}-${short}" --query digest -o tsv)
           moving=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}" --query digest -o tsv)
-          [ -n "$immutable" ] && [ "$immutable" = "$moving" ] \
+          # A fresh push moves the line onto this build; a write-once skip leaves the line wherever the
+          # newest publish put it, so only the immutable tag is required then.
+          [ -n "$immutable" ] || { echo "::error::$REPO:${LINE}-${short} is not in the registry"; exit 1; }
+          [ "${{ steps.published.outputs.exists }}" = "true" ] || [ "$immutable" = "$moving" ] \
             || { echo "::error::$REPO:${LINE}-${short} (${immutable:-absent}) and :${LINE} (${moving:-absent}) do not name one pushed manifest"; exit 1; }
           echo "published $ACR/$REPO:${LINE}-${short} = ${immutable} (+ :${LINE})"
           echo "### ollama published" >> "$GITHUB_STEP_SUMMARY"

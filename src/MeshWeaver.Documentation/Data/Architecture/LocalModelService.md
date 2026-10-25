@@ -98,16 +98,25 @@ overwritten, and egress is denied, so nothing can be pulled.
 
 ## Worked examples
 
-All examples assume a shell that can reach the service. From a laptop, use
-`kubectl -n <ns> port-forward svc/ollama 11434` and call `localhost:11434`. Inside the namespace,
-use `kubectl -n <ns> exec deploy/ollama -- curl …` (the image carries `curl`). On a Mac with
-Ollama, the same commands run against the local server unchanged.
+The examples call `$OLLAMA`, a base that answers the service:
+
+- **On a laptop** (Ollama, or this image under `docker run -p 11434:11434`), it is
+  `OLLAMA=http://localhost:11434`, and every command below runs as written.
+- **In the instance's namespace**, the portal, a job or a script calls the Service directly at
+  `OLLAMA=http://ollama:11434`. That is the normal path, and the one the configuration keys below
+  use.
+- **On a fleet cluster, from outside**, there is no supported path, and that is deliberate. The
+  service has no Ingress, and operating a fleet instance goes through the control instance's
+  Hosting surfaces ([Operating from the Portal](../OperatingFromThePortal)). The in-cluster proof
+  is the chart's `helm test` (see *Proof*). A `kubectl exec` or
+  `port-forward` into a fleet namespace is **break-glass**, for when the control plane itself
+  cannot act, and is recorded as such. It is never the way to use or check this service.
 
 ### 1. Read an image (OCR, a screenshot, a photo)
 
 ```bash
 img=$(base64 < screenshot.png | tr -d '\n')
-curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' -d @- <<EOF | jq -r '.choices[0].message.content'
+curl -s $OLLAMA/v1/chat/completions -H 'Content-Type: application/json' -d @- <<EOF | jq -r '.choices[0].message.content'
 {"model": "qwen3.6", "temperature": 0, "reasoning_effort": "none", "max_tokens": 1500,
  "messages": [{"role": "user", "content": [
    {"type": "text", "text": "Transcribe all text in this image exactly, line by line. Output only the text."},
@@ -119,7 +128,7 @@ To extract values for computing, ask for JSON with `response_format`, then do th
 code:
 
 ```bash
-curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' -d @- <<EOF \
+curl -s $OLLAMA/v1/chat/completions -H 'Content-Type: application/json' -d @- <<EOF \
   | jq -r '.choices[0].message.content' | jq '[.tiles[].count] | add'      # ← the TOTAL is computed here
 {"model": "qwen3.6", "temperature": 0, "reasoning_effort": "none", "response_format": {"type": "json_object"},
  "messages": [{"role": "user", "content": [
@@ -145,7 +154,7 @@ where Tesseract fails: photos, screenshots, tables, handwriting, mixed layouts.
 ### 2. Translate
 
 ```bash
-curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' -d '{
+curl -s $OLLAMA/v1/chat/completions -H 'Content-Type: application/json' -d '{
   "model": "qwen3.6", "temperature": 0, "reasoning_effort": "none",
   "messages": [
     {"role": "system", "content": "Translate the user text to English. Answer with the translation only."},
@@ -160,7 +169,7 @@ curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application
 jq -n --rawfile text report.txt '{model: "qwen3.6", temperature: 0, reasoning_effort: "none", max_tokens: 300,
   messages: [{role: "system", content: "Summarise the user text in three sentences, in the language of the text."},
              {role: "user", content: $text}]}' \
-  | curl -s http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' -d @- \
+  | curl -s $OLLAMA/v1/chat/completions -H 'Content-Type: application/json' -d @- \
   | jq -r '.choices[0].message.content'
 ```
 
@@ -171,7 +180,7 @@ in the instance's values, which costs memory (see *Capacity*).
 ### 4. Embed
 
 ```bash
-curl -s http://localhost:11434/v1/embeddings -H 'Content-Type: application/json' \
+curl -s $OLLAMA/v1/embeddings -H 'Content-Type: application/json' \
   -d '{"model": "bge-m3", "input": ["Das Haus ist groß.", "The house is big.", "Rumah itu besar."]}' \
   | jq '[.data[].embedding | length]'
 # → [1024, 1024, 1024]
@@ -213,11 +222,14 @@ created by hand (policy `declared-not-derived`):
 ```yaml
 Features__Ai__Providers__OpenAICompatible: "true"
 OpenAICompatible__Endpoint: "http://ollama:11434/v1"
+OpenAICompatible__ApiKey: "ollama"       # Ollama ignores it; the provider requires a non-empty key
 OpenAICompatible__Models__0: "qwen3.6"
 OpenAICompatible__DataResidency: "Eu"     # it runs in the instance's own cluster
 ```
 
-`Embedding:Model` is kept out of the chat catalogue automatically (`OpenAICompatibleModelSync`).
+The placeholder key is the same one the Mac local stack sets ([Mac Local Stack](../MacLocalStack)):
+the chat-client factory refuses an empty key even though Ollama reads none. `Embedding:Model` is
+kept out of the chat catalogue automatically (`OpenAICompatibleModelSync`).
 To route background jobs to it, label the model with the `utility` tier
 ([Model Tiers](/Doc/AI/ModelTiers)). Utility covers thread names, descriptions, classification
 and triage. Agents that declare `modelTier: utility` then run locally, and everything else keeps
@@ -245,9 +257,9 @@ var openAi = new OpenAIClient(new ApiKeyCredential("ollama"),
 IChatClient chat = openAi.GetChatClient("qwen3.6").AsIChatClient();
 ```
 
-A script running in the portal's namespace reaches the service directly. Anything outside the
-cluster reaches it only through `kubectl port-forward` by an operator. There is no Ingress, and
-there will not be one.
+A script running in the portal's namespace reaches the service directly. Nothing outside the
+cluster does: there is no Ingress, and there will not be one. An operator's `port-forward` into a
+fleet namespace is break-glass (see the start of this section).
 
 ## Capacity — what the cluster has, and what this needs
 
@@ -356,7 +368,7 @@ including `--vision`) were also run end to end on a laptop with a small variant
   request may still ask for a different `num_ctx` through Ollama's native API.
 - **Quiet.** Ollama logs request lines (method, path, status, duration), never prompt or image
   content. The pod stores nothing.
-- **Recycle-free.** The service holds no mesh state. A new image is a chart apply with a new
+- **No recycle needed.** The service holds no mesh state. A new image is a chart apply with a new
   immutable tag; nothing in the portal needs a recycle. A portal picks up **configuration** changes
   (the keys above) only through its own roll.
 
@@ -376,8 +388,11 @@ follow the whisper and OCR precedents:
 3. **Record the chart release.** Add a `Hosting/ChartRelease` record `Deployments/<env>-ollama` that
    names the chart, the values file and the release `ollama`. The owner approves the `ApplyChart`
    InstanceAction that installs it.
-4. **Prove it in the cluster.** Run `helm test ollama` (or read the test pod's log) and record the
-   timings it prints.
+4. **Prove it in the cluster.** Run the chart's test (`helm test ollama`) and record the timings it
+   prints. 🚨 The estate's chart lane (`aks-ops-chart.py` / `ApplyChart`) does **not** run chart tests
+   today (searched 2026-10-25: no `helm test` in Systemorph/Memex's workflows). Until a lane step
+   does, running it is a break-glass `helm test` by an operator, recorded as such. The lane step is
+   listed under *What is not built yet*.
 5. **Point the consumers at it**, one at a time, on the instance's deployment record
    (`extraPortalConfig`). Each key reaches the portal through the chart's pass-through:
    - OCR: `Ocr__Engine`, `Ocr__OllamaVision__Endpoint`, `Ocr__OllamaVision__Model` (example 1;
@@ -400,6 +415,9 @@ follow the whisper and OCR precedents:
 - **A translation or summary service contract of its own.** Today those are chat completions with a
   system prompt (examples 2 and 3). A typed `ITranslator` / `ISummarizer` that defaults to this
   service would make the choice declarative per partition. That is a Plugins design, not started.
+- **The chart lane does not run `helm test`.** The vision half of the proof, and with it the
+  latency reading, exists only once the estate's `ApplyChart` lane runs the release's tests and
+  returns their log (Systemorph/Memex, `aks-ops-chart.py`).
 - **No instance runs it yet.** Enabling it on memex is the owner's record change (*Enabling it*).
 
 ## Related
