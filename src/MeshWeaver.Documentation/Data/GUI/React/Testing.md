@@ -51,7 +51,7 @@ The server side of the split has its own C# round-trip test: `MeshGrpcTransportT
 
 ## 3. The E2E scorecard — `ReactDocViewsTest`
 
-`test/MeshWeaver.Portal.E2E.Test/ReactDocViewsTest.cs` is the **doc-views-through-React scorecard**: it drives Playwright at `{E2E_BASE_URL}/app/#/{docPath}` for every documentation page with embedded interactive examples — the same page list the Blazor-side `DocExamplesRenderTest` covers — and asserts each page reaches real rendered content through the React SPA over live gRPC-web.
+`src/MeshWeaver.Portal.E2E.Test/ReactDocViewsTest.cs` in MeshWeaver.Plugins (the browser suite moved there with the portal GUI — [Core Carries No GUI Technology](/Doc/Architecture/CoreCarriesNoGuiTechnology)) is the **doc-views-through-React scorecard**: it drives Playwright at `{E2E_BASE_URL}/app/#/{docPath}` for every documentation page with embedded interactive examples — the same page list the Blazor-side `DocExamplesRenderTest` covers — and asserts each page reaches real rendered content through the React SPA over live gRPC-web.
 
 - **Opt-in**: the whole class skips unless `E2E_REACT=true`. The React renderer is *expected* to fail on some of these pages while parity catches up — the suite measures the gap rather than gating CI.
 - **Auth**: the SPA mints its short-lived API token off the fixture's DevLogin session cookie (`POST /api/tokens`) — the test context needs nothing beyond what the Blazor E2E tests use.
@@ -64,8 +64,10 @@ The server side of the split has its own C# round-trip test: `MeshGrpcTransportT
 One Playwright detail worth knowing when writing similar tests: never wait for `NetworkIdle` against the SPA — it holds the gRPC-web `Connect` stream open for its whole life, so the network never goes idle.
 
 ```bash
-E2E_REACT=true dotnet test test/MeshWeaver.Portal.E2E.Test \
-  --filter "FullyQualifiedName~ReactDocViewsTest" --no-restore
+# from the MeshWeaver (core) checkout: only it has the global.json that selects
+# Microsoft.Testing.Platform (xunit.v3 4.x refuses VSTest), and the suite builds against it
+E2E_REACT=true dotnet test ../MeshWeaver.Plugins/src/MeshWeaver.Portal.E2E.Test -p:MeshWeaverRoot="$PWD/" \
+  --filter "FullyQualifiedName~ReactDocViewsTest"
 ```
 
 ## Related

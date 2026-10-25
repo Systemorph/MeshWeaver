@@ -202,7 +202,7 @@ public sealed class QueryCompleter
     /// <summary>
     /// The content properties of <paramref name="nodeType"/>, from its CLR content type as the mesh-wide
     /// <see cref="IMeshContentTypeRegistry"/> knows it, read through the generator the mesh publishes its
-    /// schemas with (<see cref="ContentSchemaFacts.FromType"/>).
+    /// schemas with (<see cref="ContentSchemaFacts.FromType(Type, System.Text.Json.JsonSerializerOptions, MeshWeaver.Messaging.Serialization.XmlDocsReader)"/>).
     /// <para>A type is registered when a hub of that NodeType ACTIVATES in this process. When it is not
     /// known yet, the completer reads ONE instance of the type through <c>GetMeshNodeStream</c> — the
     /// sanctioned node read — which activates that instance's hub and so registers its content type, and
@@ -232,7 +232,7 @@ public sealed class QueryCompleter
             .Concat(Observable.Defer(() => registered.Merge(activate)))
             .Take(1)
             .Timeout(SourceBudget)
-            .Select(type => ContentSchemaFacts.FromType(type, hub.JsonSerializerOptions));
+            .Select(type => ContentSchemaFacts.FromType(type, hub.JsonSerializerOptions, MeshWeaver.Messaging.Serialization.XmlDocsExtensions.XmlDocs(hub)));
     }
 
     private IObservable<IReadOnlyList<QueryNodeFact>> NodeTypes(string prefix)

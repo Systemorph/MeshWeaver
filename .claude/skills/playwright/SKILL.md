@@ -26,7 +26,7 @@ runs against its **own** database (`memex_e2e`) with **DevLogin on**, behind the
 > Canonical references:
 > - [LocalColimaMac.md](../../../src/MeshWeaver.Documentation/Data/Architecture/LocalColimaMac.md) — the Colima k3s stack this builds on (§15 = the e2e portal).
 > - `deploy/homebrew/bin/memex-local` — the CLI; the `e2e` subcommand is the whole flow.
-> - `test/MeshWeaver.Portal.E2E.Test/PortalFixture.cs` — the DevLogin fixture every E2E uses.
+> - `src/MeshWeaver.Portal.E2E.Test/PortalFixture.cs` in **MeshWeaver.Plugins** — the DevLogin fixture every E2E uses (the suite moved there with the portal GUI; core carries no GUI technology — [CoreCarriesNoGuiTechnology.md](../../../src/MeshWeaver.Documentation/Data/Architecture/CoreCarriesNoGuiTechnology.md)).
 
 ## The flow (one CLI, three steps)
 
@@ -70,12 +70,14 @@ exports `E2E_BASE_URL=https://e2e.memex.localhost:8444` and `E2E_USER=Roland` fo
 by hand:
 
 ```bash
+# from the MeshWeaver checkout: only it has the global.json that selects Microsoft.Testing.Platform
 E2E_BASE_URL=https://e2e.memex.localhost:8444 E2E_USER=Roland \
-  dotnet test test/MeshWeaver.Portal.E2E.Test --filter "FullyQualifiedName~<TestName>"
+  dotnet test ../MeshWeaver.Plugins/src/MeshWeaver.Portal.E2E.Test -p:MeshWeaverRoot="$PWD/" \
+    --filter "FullyQualifiedName~<TestName>"
 ```
 
 When writing a new browser test, follow the existing ones:
-- Put it in `test/MeshWeaver.Portal.E2E.Test`, `[Collection("portal-e2e")]`, ctor takes `PortalFixture`.
+- Put it in MeshWeaver.Plugins' `src/MeshWeaver.Portal.E2E.Test`, `[Collection("portal-e2e")]`, ctor takes `PortalFixture`.
 - First line: `Assert.SkipUnless(fixture.Available, fixture.SkipReason)` — so it no-ops when E2E is off.
 - `await fixture.NewAuthenticatedContextAsync()` for a logged-in browser context; seed mesh content
   it can't create via the UI with `MintTokenAsync` + `CreateNodeAsync`.
