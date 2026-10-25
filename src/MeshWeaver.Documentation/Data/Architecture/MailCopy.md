@@ -72,33 +72,34 @@ appended — the old `{owner}/_MailCopy` with the slash replaced (`MailCopyNodeT
 - **Attachment files follow the node**: the `attachments` collection of `{owner}_MailCopy/{key}/{id}` is
   stored under `attachments/{owner}_MailCopy/…` on the content store, never under the person's home folder.
 
-### Copies filed before 2026-10-25 are moved, not downloaded again
+### Copies filed before 2026-10-25 are retired and downloaded fresh
 
-Before the change the copies lived at `{owner}/_MailCopy/…`. Every sync — and every switch-on and switch-off — first
-runs `IMailCopyStore.MoveLegacy(owner, key)`, which moves what is still there into the copy partition. 🚨 The move is
-FENCED, because replicas still running the previous image keep syncing the legacy place during a roll:
+Before the change the copies lived at `{owner}/_MailCopy/…`. They are **not moved**: the owner decided
+(2026-10-25) to delete them and download fresh, because moving a live copy — while replicas on the previous image
+keep syncing and serving it during a roll, and the index trails every write — kept producing races, each a way to
+lose mail or bring a switched-off copy back. Every sync, switch-on and switch-off first runs
+`IMailCopyStore.RetireLegacy(owner, key)`:
 
-1. **Fence.** The legacy source is read from its stream (the index can trail a cursor) and a generation-checked
-   commit at its owning hub takes its lease for this mover (`MoveLease`, 2 h). A sync of the legacy place, of either
-   image, then stands down; a lease that is held already refuses the move, and the next sync repeats it.
-2. **Hold the destination.** `{owner}_MailCopy/{key}` is created with the legacy generation and cursor but **not
-   backfilled** and leased to the mover, so nothing serves a half-moved copy (the inbox reads live meanwhile) and
-   nothing syncs it.
-3. **Move each copy** from complete listing frames only (an incomplete frame is a fault, never "empty"): written at
-   its new path, its attachment files copied (`IMailAttachmentStore.CopyLegacy`) and its stored paths re-rooted
-   (`MailCopyNodeTypes.Relocated`), and only then its legacy files (`DeleteLegacy`) and node deleted.
-4. **Finish only while still fenced.** The legacy source is deleted, then the destination released with its real
-   backfill state, so the next sync resumes from the cursor. A legacy source that vanished meanwhile was switched off
-   (by an old replica): what the move brought over is deleted again instead of turning the copy back on.
+1. **Fence.** The legacy source is read from its stream and a generation-checked commit at its owning hub takes its
+   lease for this attempt (`retire:{guid}`, `RetireLease` 2 h) **and marks it not backfilled**: a sync of the legacy
+   place, of either image, stands down on the lease, and a reader of either image reads the inbox live (readers honor
+   `Backfilled`). A lease held already refuses the attempt; the next sync repeats it.
+2. **Delete the switch-off way.** Every legacy copy, from complete listing frames only: its attachment files and
+   index first (`IMailAttachmentStore.DeleteLegacy`), then its node; the legacy source last. A file that cannot be
+   deleted stops the retirement, and the node keeps the only handle on it.
+3. **Switch a fresh copy on** — only when THIS attempt's delete removed the legacy source, and not for a switch-off:
+   a new generation in `{owner}_MailCopy/{key}` with the legacy copy's window and account, no cursor, not backfilled.
+   The next sync downloads it; with the generation rebuild (#7166) the inbox reads live meanwhile, never blank. A
+   legacy source that vanished before this attempt's delete was switched off by an old-image replica, and nothing is
+   switched on.
 
-Every step is an overwrite or a no-op when repeated, so a move that stops anywhere finishes on the next sync; a
-failure stops before any legacy file goes, and **a failed move fails the sync** — no provider work runs over a
-half-moved copy. A destination of ANOTHER generation (switched on anew) is not the move's: the moved copies are its
-leftovers, and its sweep removes them with their files. A partition called `{owner}_MailCopy` that exists and is
-NOT a copy partition (a Space, a home) is never written to: the switch fails closed.
+However an attempt ends — an error, the sync's bound, a disposal — it releases a fence it still holds, so the next
+sync need not wait out the lease. `Disable` retires without switching a fresh copy on. The residual: an Undo or
+Delete applied by an old-image replica (which takes no lease) between the last complete pass and the legacy
+source's delete leaves that one copy's files, if it had any, under the home folder.
 
-It is the portal, not the database migration Job, that moves them: the Job does not mount the content store, so it
-could move the rows but never the files.
+It is the portal, not the database migration Job, that retires them: the Job does not mount the content store, so
+it could delete the rows but never the files.
 
 ## Layout of an account's copy
 
