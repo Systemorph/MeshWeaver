@@ -71,7 +71,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
 
     /// <summary>The default state choice: only the open group — what the person sees until they tick Done.</summary>
     private static InboxPreferences OpenOnly(InboxPreferences p)
-        => p with { States = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, true).Add(InboxRows.DoneKey, false) };
+        => p with { ActivityStates = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, true).Add(InboxRows.DoneKey, false) };
 
     // ── 1 + 2: the approval is the row, and only while it awaits ───────────────────────────────
 
@@ -96,7 +96,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         var recordRequest = await Notify(owner, "n-record", NotificationType.ApprovalRequired, "TestApprovals/record", ct);
         await Notify(owner, "n-gone", NotificationType.ApprovalRequired, "TestActions/gone", ct);
         // Every kind and state: this test is about how each request is filed, not about the defaults.
-        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, InboxPrefs.EveryState, ct);
 
         var stream = Open(owner);
         var rows = RowStates(stream);
@@ -241,7 +241,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         var failed = await Request("failed", new TestActionContent { State = "Failed", Error = "boom" });
         var done = await Request("done", new TestActionContent { State = "Done", ApprovedBy = "someone-else" });
         var cancelled = await Request("cancelled", new TestActionContent { State = "Cancelled" });
-        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, InboxPrefs.EveryState, ct);
 
         var stream = Open(owner);
         var all = await RowsOf(stream).Where(r => r.Length >= 5).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
@@ -258,7 +258,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         await InboxPrefs.SetAsync(Mesh, owner, OpenOnly, ct);
         (await RowPaths(stream).Where(p => p.Length == 1).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Should().Equal([parked], "the default view lists only what still waits");
-        await InboxPrefs.SetAsync(Mesh, owner, p => p with { States = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, false).Add(InboxRows.DoneKey, true) }, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { ActivityStates = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, false).Add(InboxRows.DoneKey, true) }, ct);
         (await RowPaths(stream).Where(p => p.Length == 4).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Should().Equal(new[] { stale, failed, done, cancelled }.OrderBy(x => x, StringComparer.Ordinal), "ticking Done lists the closed ones");
     }
@@ -646,8 +646,8 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         defaults.Kinds[InboxRows.SourceKey("Notifications")].Should().BeTrue();
         defaults.Kinds[InboxRows.SourceKey("Mail")].Should().BeFalse("a provider's kind is one tick away");
         defaults.Kinds[InboxRows.SourceKey("Activities")].Should().BeFalse();
-        defaults.States[InboxRows.OpenKey].Should().BeTrue("only what is still open");
-        defaults.States[InboxRows.DoneKey].Should().BeFalse();
+        defaults.ActivityStates[InboxRows.OpenKey].Should().BeTrue("only what is still open");
+        defaults.ActivityStates[InboxRows.DoneKey].Should().BeFalse();
         defaults.Sources.Values.Should().OnlyContain(on => on, "every source is shown; the kinds and states narrow");
         defaults.ShowIgnorable.Should().BeFalse();
     }
@@ -716,7 +716,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         var stored = await InboxPrefs.ReadAsync(Mesh, owner, p => p.Kinds.Count > 0, ct);
         stored.Kinds[InboxRows.SourceKey("Approvals")].Should().BeTrue();
         stored.Kinds[InboxRows.SourceKey("Mail")].Should().BeFalse();
-        stored.States[InboxRows.OpenKey].Should().BeTrue();
+        stored.ActivityStates[InboxRows.OpenKey].Should().BeTrue();
     }
 
     /// <summary>
@@ -740,7 +740,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         await InboxPrefs.SetAsync(Mesh, owner, p => p with
         {
             Kinds = p.Kinds.SetItem(mailKey, true).SetItem(approvalsKey, false),
-            States = p.States.SetItem(InboxRows.OpenKey, true).SetItem(InboxRows.DoneKey, true),
+            ActivityStates = p.ActivityStates.SetItem(InboxRows.OpenKey, true).SetItem(InboxRows.DoneKey, true),
         }, ct);
 
         var first = RowPaths(Open(owner));
