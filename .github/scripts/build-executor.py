@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
@@ -97,8 +98,12 @@ def safe_url(raw: str) -> str:
     """`raw` when it is https (or plain http to localhost) with a host and NO credentials; '' otherwise.
     Both the API we read and the inbox we sign a request to are held to it: an http inbox would let
     an on-path party answer `signature: verified` and turn the Actions legs off with no host build."""
-    p = urllib.parse.urlparse((raw or "").strip())
-    host = (p.hostname or "").lower()
+    try:
+        p = urllib.parse.urlparse((raw or "").strip())
+        host = (p.hostname or "").lower()
+        p.port  # raises on a malformed port
+    except ValueError:
+        return ""          # malformed (`https://[invalid`) is unsafe, never an exception (review of #7153)
     local = p.scheme == "http" and host in ("localhost", "127.0.0.1", "::1")
     if "@" in p.netloc or not ((p.scheme == "https" and host) or local):
         return ""
@@ -109,8 +114,11 @@ def api_url_of(i: Inputs) -> str:
     """The build API base: the explicit override, else the inbox's origin + /api/builds. '' = none."""
     raw = (i.build_api or "").strip().rstrip("/")
     if not raw and i.queue_url:
-        p = urllib.parse.urlparse(i.queue_url.strip())
-        raw = f"{p.scheme}://{p.netloc}/api/builds" if p.scheme and p.netloc else ""
+        try:
+            p = urllib.parse.urlparse(i.queue_url.strip())
+            raw = f"{p.scheme}://{p.netloc}/api/builds" if p.scheme and p.netloc else ""
+        except ValueError:
+            raw = ""
     return safe_url(raw) if raw else ""
 
 
@@ -210,25 +218,38 @@ def decide(i: Inputs, get: Get, post: Post) -> Decision:
         f"::notice title=Heavy legs on a build host::{repo_name}@{i.sha[:12]} is queued on build-{i.channel} — every heavy leg is followed from the host ({', '.join(stages)})"])
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is ANSWERED, never followed (review of #7153): urllib would follow it to an unchecked
+    destination — and turn a signed POST into a GET on a 302/303 — so an https endpoint redirecting to
+    plain http could answer a forged `verified`. The 3xx comes back as the status, which is not 2xx."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _http_get(url: str) -> tuple[int, str]:
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "meshweaver-build-executor"})
     try:
-        with urllib.request.urlopen(req, timeout=QUEUE_TIMEOUT_SECONDS) as r:
+        with _OPENER.open(req, timeout=QUEUE_TIMEOUT_SECONDS) as r:
             return r.status, r.read(65536).decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, ""
-    except (urllib.error.URLError, OSError, ValueError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as e:
+        # a truncated chunked body (IncompleteRead) is a transport failure too — `actions`, never a crash
         return 0, type(e).__name__
 
 
 def _http_post(url: str, payload: bytes, headers: dict) -> tuple[int, str]:
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=POST_TIMEOUT_SECONDS) as r:
+        with _OPENER.open(req, timeout=POST_TIMEOUT_SECONDS) as r:
             return r.status, r.read(65536).decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, ""
-    except (urllib.error.URLError, OSError, ValueError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as e:
+        # a truncated chunked body (IncompleteRead) is a transport failure too — `actions`, never a crash
         return 0, type(e).__name__
 
 
@@ -370,6 +391,41 @@ def self_test() -> int:
     calls.clear()
     decide(base, get_answer(200, {"executor": "actions"}), ok_post)
     check("actions/an actions answer queues nothing", [c[0] for c in calls] == ["GET"], calls)
+    # 3b. malformed URLs are unsafe (actions), never an exception
+    for inp in (with_(build_api="https://[invalid"), with_(build_api="", queue_url="https://[invalid/api/hooks/x"),
+                with_(build_api="https://control.example.com:99999/api/builds")):
+        d = decide(inp, host_q, ok_post)
+        check(f"url/malformed {inp.build_api or inp.queue_url!r} is actions", d.executor == ACTIONS and "no build API" in d.why, d)
+    d = decide(with_(build_api="https://control.example.com/api/builds", queue_url="https://[invalid/x"), host_q, ok_post)
+    check("url/a malformed inbox is actions, never signed to", d.executor == ACTIONS and "not an https URL" in d.why, d)
+    # 3c. the real transport: a redirect is answered (not followed); a truncated body is a transport failure
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path.startswith("/trunc"):
+                self.send_response(200); self.send_header("Transfer-Encoding", "chunked"); self.end_headers()
+                self.wfile.write(b"ff\r\n{\"executor\"")   # promises 255 bytes, sends 11, closes
+                self.wfile.flush(); self.close_connection = True
+                return
+            self.send_response(302); self.send_header("Location", "http://evil.example.com/verified"); self.end_headers()
+
+        do_POST = do_GET
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base_url = f"http://127.0.0.1:{srv.server_address[1]}"
+    st, _ = _http_get(base_url + "/redirect")
+    check("transport/a GET redirect is answered as its status, not followed", st == 302, st)
+    st, _ = _http_post(base_url + "/redirect", b"{}", {"Content-Type": "application/json"})
+    check("transport/a POST redirect is answered as its status, not followed", st == 302, st)
+    st, why = _http_get(base_url + "/trunc")
+    check("transport/a truncated body is a transport failure", st == 0 and why, (st, why))
+    srv.shutdown()
     # 4. the override wins over the derived base
     d = decide(with_(build_api="https://ops.example.com/api/builds/"), host_q, ok_post)
     check("api/the explicit base wins, trailing slash dropped", d.api_url == "https://ops.example.com/api/builds", d)
