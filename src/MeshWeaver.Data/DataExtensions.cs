@@ -4406,7 +4406,7 @@ public static class DataExtensions
             }
         }
 
-        return ContentJsonSchema.Generate(typeDefinition!.Type, hub.JsonSerializerOptions).ToJsonString();
+        return ContentJsonSchema.Generate(typeDefinition!.Type, hub.JsonSerializerOptions, MeshWeaver.Messaging.Serialization.XmlDocsExtensions.XmlDocs(hub)).ToJsonString();
     }
 
     internal static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)

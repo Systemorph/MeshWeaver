@@ -19,6 +19,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Graph;
 
@@ -2363,7 +2364,7 @@ public static class MeshNodeLayoutAreas
             // is a template that needs no read of the node at all (Doc/GUI/DataBinding →
             // "Templates first, data later").
             return Observable.Return<UiControl?>(
-                RenderNodeSchema(ConfiguredContentType(host.Workspace), host.Hub.JsonSerializerOptions));
+                RenderNodeSchema(ConfiguredContentType(host.Workspace), host.Hub));
 
         // Try to get the type from the registry
         var typeRegistry = host.Hub.ServiceProvider.GetService<ITypeRegistry>();
@@ -2375,7 +2376,7 @@ public static class MeshNodeLayoutAreas
             return Observable.Return<UiControl?>(Controls.Markdown($"*Type '{typeName}' not found.*"));
 
         // Generate JSON schema for the type using hub's JSON options
-        var schema = GenerateJsonSchema(typeDef.Type, host.Hub.JsonSerializerOptions);
+        var schema = GenerateJsonSchema(typeDef.Type, host.Hub);
         return Observable.Return<UiControl?>(new MarkdownControl($"## JSON Schema: {typeName}\n\n```json\n{schema}\n```"));
     }
 
@@ -2389,7 +2390,7 @@ public static class MeshNodeLayoutAreas
             .Select(ds => ds.ContentType)
             .FirstOrDefault(t => t != null);
 
-    internal static UiControl RenderNodeSchema(Type? contentType, JsonSerializerOptions jsonOptions)
+    internal static UiControl RenderNodeSchema(Type? contentType, IMessageHub hub)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Schema");
@@ -2399,7 +2400,7 @@ public static class MeshNodeLayoutAreas
         sb.AppendLine("### MeshNode");
         sb.AppendLine();
         sb.AppendLine("```json");
-        sb.AppendLine(GenerateJsonSchema(typeof(MeshNode), jsonOptions));
+        sb.AppendLine(GenerateJsonSchema(typeof(MeshNode), hub));
         sb.AppendLine("```");
 
         // Content type schema if the hub declares one
@@ -2409,7 +2410,7 @@ public static class MeshNodeLayoutAreas
             sb.AppendLine($"### Content Type: {contentType.Name}");
             sb.AppendLine();
             sb.AppendLine("```json");
-            sb.AppendLine(GenerateJsonSchema(contentType, jsonOptions));
+            sb.AppendLine(GenerateJsonSchema(contentType, hub));
             sb.AppendLine("```");
         }
         else
@@ -2423,10 +2424,11 @@ public static class MeshNodeLayoutAreas
         return new MarkdownControl(sb.ToString());
     }
 
-    private static string GenerateJsonSchema(Type type, JsonSerializerOptions jsonOptions)
+    private static string GenerateJsonSchema(Type type, IMessageHub hub)
     {
         // Use the built-in JsonSchemaExporter from System.Text.Json.Schema
-        var options = jsonOptions;
+        var options = hub.JsonSerializerOptions;
+        var docs = hub.XmlDocs();
 
         var schema = options.GetJsonSchemaAsNode(type, new JsonSchemaExporterOptions
         {
@@ -2439,7 +2441,7 @@ public static class MeshNodeLayoutAreas
                     node["title"] = type.Name;
 
                     // Add description for the main type
-                    var typeDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type);
+                    var typeDescription = docs.Summary(type);
                     if (!string.IsNullOrEmpty(typeDescription))
                     {
                         node["description"] = typeDescription;
@@ -2455,7 +2457,7 @@ public static class MeshNodeLayoutAreas
                     var actualPropertyInfo = declaringType.GetProperty(propertyName.ToPascalCase()!);
                     if (actualPropertyInfo != null)
                     {
-                        var propertyDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(actualPropertyInfo);
+                        var propertyDescription = docs.Summary(actualPropertyInfo);
                         if (!string.IsNullOrEmpty(propertyDescription))
                         {
                             jsonObj["description"] = propertyDescription;

@@ -1,5 +1,7 @@
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
+using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -17,6 +19,7 @@ namespace MeshWeaver.Graph.Test;
 public sealed class XmlDocsCollectibleContextTest : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "xmldocs-" + Guid.NewGuid().ToString("N"));
+    private readonly XmlDocsReader docs = MessageHubExtensions.CreateTypeRegistry().XmlDocs();
 
     public void Dispose()
     {
@@ -56,8 +59,8 @@ public sealed class XmlDocsCollectibleContextTest : IDisposable
         var second = Emit("Rebuilt", "gen2", "Generation two.", out var secondContext);
         first.Assembly.GetName().FullName.Should().Be(second.Assembly.GetName().FullName, "CONTROL — the same identity, two generations");
 
-        XmlDocs.Summary(first).Should().Be("Generation one.");
-        XmlDocs.Summary(second).Should().Be("Generation two.");
+        docs.Summary(first).Should().Be("Generation one.");
+        docs.Summary(second).Should().Be("Generation two.");
 
         firstContext.Unload();
         secondContext.Unload();
@@ -67,16 +70,14 @@ public sealed class XmlDocsCollectibleContextTest : IDisposable
     private WeakReference ReadAndUnload(string node, string summary, out string typeSummary, out string propertySummary)
     {
         var type = Emit(node, "gen", summary, out var context);
-        typeSummary = XmlDocs.Summary(type);
-        propertySummary = XmlDocs.Summary(type.GetProperty("Label")!);
+        typeSummary = docs.Summary(type);
+        propertySummary = docs.Summary(type.GetProperty("Label")!);
         context.Unload();
         return new WeakReference(context);
     }
 
     private Type Emit(string node, string generation, string summary, out AssemblyLoadContext context)
     {
-        var directory = Directory.CreateDirectory(Path.Combine(root, generation)).FullName;
-        var assemblyName = "DynamicNode_" + node;
         var source = $$"""
             namespace Probe;
             /// <summary>
@@ -88,16 +89,33 @@ public sealed class XmlDocsCollectibleContextTest : IDisposable
                 public string Label { get; set; } = "";
             }
             """;
+        return XmlDocsFixtureAssembly.Emit(Path.Combine(root, generation), node, source, out context).GetType("Probe.Subject")
+            ?? throw new InvalidOperationException("Probe.Subject is not in the emitted assembly");
+    }
+}
+
+/// <summary>
+/// Compiles C# with XML documentation into a COLLECTIBLE context, laid out like a compiled NodeType:
+/// <c>{node}.dll</c> named <c>DynamicNode_{node}</c>, with <c>DynamicNode_{node}.xml</c> beside it.
+/// </summary>
+internal static class XmlDocsFixtureAssembly
+{
+    public static Assembly Emit(string directory, string node, string source, out AssemblyLoadContext context)
+    {
+        Directory.CreateDirectory(directory);
+        var assemblyName = "DynamicNode_" + node;
         var compilation = CSharpCompilation.Create(assemblyName,
             [CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose))],
             PlatformReferences.Platform(), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var dllPath = Path.Combine(directory, node + ".dll");
         using (var dll = File.Create(dllPath))
         using (var xml = File.Create(Path.Combine(directory, assemblyName + ".xml")))
-            compilation.Emit(dll, xmlDocumentationStream: xml).Success.Should().BeTrue();
+        {
+            var result = compilation.Emit(dll, xmlDocumentationStream: xml);
+            result.Success.Should().BeTrue(string.Join("\n", result.Diagnostics));
+        }
 
-        context = new AssemblyLoadContext(assemblyName + "-" + generation, isCollectible: true);
-        return context.LoadFromAssemblyPath(dllPath).GetType("Probe.Subject")
-            ?? throw new InvalidOperationException("Probe.Subject is not in the emitted assembly");
+        context = new AssemblyLoadContext(assemblyName + "-" + Path.GetFileName(directory), isCollectible: true);
+        return context.LoadFromAssemblyPath(dllPath);
     }
 }

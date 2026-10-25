@@ -7,6 +7,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Layout.Domain;
 
@@ -275,7 +276,7 @@ public static class DataModelLayoutArea
 
         var details = Controls.Stack.WithWidth("100%")
             .WithView(DomainViews.TitleRow(Controls.H1(type.Name).WithStyle("margin: 0;"), links.ToArray()));
-        if (DomainViews.Description(MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type)) is { } descriptionLine)
+        if (DomainViews.Description(typeDef.XmlDocsSummary(type)) is { } descriptionLine)
             details = details.WithView(descriptionLine);
         return details.WithView(new MarkdownControl(TypeDetailsMarkdown(typeDef, allDomainTypes, linkBase)));
     }
@@ -307,7 +308,7 @@ public static class DataModelLayoutArea
                 IsInherited = p.DeclaringType != type,
                 Declaring = p.DeclaringType?.Name ?? "Base",
                 TypeName = GetPropertyTypeDisplayName(p),
-                Summary = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(p)
+                Summary = typeDef.XmlDocsSummary(p)
             })
             .OrderByDescending(x => x.IsInherited) // inherited (from base) first; keep original declared order
             .ToList();

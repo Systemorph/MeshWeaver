@@ -19,15 +19,34 @@ public sealed class XmlDocsTest
 {
     private const BindingFlags Any = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
+    // The mesh-owned reader as a mesh's root type registry creates it.
+    private readonly XmlDocsReader Docs = MessageHubExtensions.CreateTypeRegistry().XmlDocs();
+
+    /// <summary>
+    /// The reader is owned by the MESH: every registry in one chain shares the root's instance, and a
+    /// second mesh gets its own — so neither its snapshots nor its cached misses outlive the mesh.
+    /// <b>Should fail if</b> the reader goes back to a static, or a hub registry creates its own.
+    /// </summary>
+    [Fact]
+    public void TheReader_IsOnePerMesh_SharedDownTheRegistryChain()
+    {
+        var mesh = MessageHubExtensions.CreateTypeRegistry();
+        var hub = MessageHubExtensions.CreateTypeRegistry(mesh);
+        var nested = MessageHubExtensions.CreateTypeRegistry(hub);
+        hub.XmlDocs().Should().BeSameAs(mesh.XmlDocs());
+        nested.XmlDocs().Should().BeSameAs(mesh.XmlDocs());
+        MessageHubExtensions.CreateTypeRegistry().XmlDocs().Should().NotBeSameAs(mesh.XmlDocs(), "another mesh owns another reader");
+    }
+
     [Fact]
     public void AMethodSummary_RendersLikeNamotion()
-        => XmlDocs.Summary(typeof(ObjectPolymorphicConverter).GetMethod(nameof(ObjectPolymorphicConverter.CanConvert))!)
+        => Docs.Summary(typeof(ObjectPolymorphicConverter).GetMethod(nameof(ObjectPolymorphicConverter.CanConvert))!)
             .Should().Be("Determines whether this converter applies. It only handles the open object\ntype; concrete types are handled by their own type info.");
 
     [Fact]
     public void ASeeCref_RendersAsItsLastNameSegment()
         // <see cref="F:...WellKnownUsers.System"/> → "System"; <c>…</c> renders as its text.
-        => XmlDocs.Summary(typeof(AccessService).GetField("SystemObjectId", Any)!)
+        => Docs.Summary(typeof(AccessService).GetField("SystemObjectId", Any)!)
             .Should().Be("The identity the platform writes as (WellKnownUsers.System; Messaging.Hub sits below\nMesh.Contract, so the value is mirrored here once).");
 
     [Fact]
@@ -35,41 +54,41 @@ public sealed class XmlDocsTest
     {
         // ExceptionCallback has no <summary> of its own: the record documents it as <param>, and a
         // <paramref name="Action"/> inside renders as the name.
-        XmlDocs.Summary(typeof(ExecutionRequest).GetProperty(nameof(ExecutionRequest.ExceptionCallback))!)
+        Docs.Summary(typeof(ExecutionRequest).GetProperty(nameof(ExecutionRequest.ExceptionCallback))!)
             .Should().Be("Invoked with the exception when Action faults, giving the poster a chance to handle the failure.");
 
         // A PRIVATE NESTED record: the nested type's ID joins with '.', and the continuation line
         // keeps its indentation because only the FIRST line's indentation is stripped.
         var teardown = typeof(MessageHub).GetNestedType("TeardownCause", Any)!;
-        XmlDocs.Summary(teardown.GetProperty("Reason", Any)!)
+        Docs.Summary(teardown.GetProperty("Reason", Any)!)
             .Should().Be("WHY. For a cascade this is the ORIGINATING cause, passed to children\n            unchanged so the chain names the event that started it however deep the tree is.");
-        XmlDocs.Summary(teardown).Should().StartWith("🚨 The ONE claim on this hub's teardown cause — FIRST CAUSE WINS, atomically.\n");
+        Docs.Summary(teardown).Should().StartWith("🚨 The ONE claim on this hub's teardown cause — FIRST CAUSE WINS, atomically.\n");
     }
 
     [Fact]
     public void AConstructedGenericType_ReadsItsDefinitionsDocs()
         // <typeparamref name="T"/> renders as nothing (Namotion did the same: "of type .").
-        => XmlDocs.Summary(typeof(MessageDelivery<string>))
+        => Docs.Summary(typeof(MessageDelivery<string>))
             .Should().Be("Strongly-typed delivery envelope carrying a payload of type .\nConcrete implementation of the abstract MessageDelivery base.");
 
     [Fact]
     public void ANestedGenericType_AndACrefToAGenericMethod()
-        => XmlDocs.Summary(typeof(BoundedMergeExtensions).GetNestedType("BoundedMerge`1", Any)!)
+        => Docs.Summary(typeof(BoundedMergeExtensions).GetNestedType("BoundedMerge`1", Any)!)
             .Should().Be("One subscription of MergeBounded``1.");
 
     [Fact]
     public void AConstructor()
-        => XmlDocs.Summary(typeof(AccessService).GetConstructor([typeof(Microsoft.Extensions.Logging.ILoggerFactory)])!)
+        => Docs.Summary(typeof(AccessService).GetConstructor([typeof(Microsoft.Extensions.Logging.ILoggerFactory)])!)
             .Should().Be("Creates an access service that logs context transitions and leak\ndiagnostics through the MeshWeaver.AccessContext category.");
 
     [Fact]
     public void AnInheritDoc_ResolvesFromTheInterface()
     {
-        var property = XmlDocs.Summary(typeof(MessageHub).GetProperty(nameof(MessageHub.ShuttingDown))!);
+        var property = Docs.Summary(typeof(MessageHub).GetProperty(nameof(MessageHub.ShuttingDown))!);
         property.Should().StartWith("IsShuttingDown as a SOURCE: fires Unit exactly once — at the\nFIRST instant this hub becomes part of a shutdown — then completes.");
-        property.Should().Be(XmlDocs.Summary(typeof(IMessageHub).GetProperty(nameof(IMessageHub.ShuttingDown))!));
+        property.Should().Be(Docs.Summary(typeof(IMessageHub).GetProperty(nameof(IMessageHub.ShuttingDown))!));
 
-        var method = XmlDocs.Summary(typeof(MeshWeaver.Mesh.Completion.AddressCatalogAutocompleteProvider).GetMethod("GetItems")!);
+        var method = Docs.Summary(typeof(MeshWeaver.Mesh.Completion.AddressCatalogAutocompleteProvider).GetMethod("GetItems")!);
         method.Should().StartWith("Gets autocomplete suggestions from this provider as a progressive snapshot stream. Each\nemission is the provider's current best IReadOnlyCollection`1, sorted by\nPriority descending;");
     }
 
@@ -87,26 +106,26 @@ public sealed class XmlDocsTest
         var nonGeneric = typeof(MeshWeaver.Mesh.Services.IMeshService).GetMethods()
             .Single(m => m is { Name: "Query", IsGenericMethodDefinition: false });
         XmlDocs.DocumentationId(generic).Should().Be("M:MeshWeaver.Mesh.Services.IMeshService.Query``1(MeshWeaver.Mesh.Services.MeshQueryRequest)");
-        XmlDocs.Summary(generic).Should().NotBeNullOrEmpty().And.NotBe(XmlDocs.Summary(nonGeneric));
+        Docs.Summary(generic).Should().NotBeNullOrEmpty().And.NotBe(Docs.Summary(nonGeneric));
 
         // By-ref parameter: Namotion spelled it "System.Type&" and found nothing.
         var byRef = typeof(MeshWeaver.Mesh.Services.IMeshContentTypeRegistry).GetMethod("TryResolveByDiscriminator")!;
         XmlDocs.DocumentationId(byRef).Should().Be("M:MeshWeaver.Mesh.Services.IMeshContentTypeRegistry.TryResolveByDiscriminator(System.String,System.Type@)");
-        XmlDocs.Summary(byRef).Should().NotBeNullOrEmpty();
+        Docs.Summary(byRef).Should().NotBeNullOrEmpty();
 
         // <inheritdoc cref="NodeTypeNotRegisteredKey"/> on a private const.
         var extensions = typeof(MeshWeaver.Mesh.MeshNode).Assembly.GetType("MeshWeaver.Mesh.MeshExtensions")!;
-        var inheriting = XmlDocs.Summary(extensions.GetField("ValidationFailedKey", Any)!);
+        var inheriting = Docs.Summary(extensions.GetField("ValidationFailedKey", Any)!);
         inheriting.Should().NotBeNullOrEmpty();
-        inheriting.Should().Be(XmlDocs.Summary(extensions.GetField("NodeTypeNotRegisteredKey", Any)!));
+        inheriting.Should().Be(Docs.Summary(extensions.GetField("NodeTypeNotRegisteredKey", Any)!));
     }
 
     [Fact]
     public void AnUndocumentedOrUnaddressableMember_ReadsEmpty()
     {
-        XmlDocs.Summary(typeof(XmlDocsTest)).Should().BeEmpty("the test assembly ships no XML documentation");
-        XmlDocs.Summary(typeof(List<>).GetGenericArguments()[0]).Should().BeEmpty("a generic parameter has no documentation ID");
-        XmlDocs.Summary(typeof(int[])).Should().BeEmpty();
+        Docs.Summary(typeof(XmlDocsTest)).Should().BeEmpty("the test assembly ships no XML documentation");
+        Docs.Summary(typeof(List<>).GetGenericArguments()[0]).Should().BeEmpty("a generic parameter has no documentation ID");
+        Docs.Summary(typeof(int[])).Should().BeEmpty();
     }
 
     [Theory]

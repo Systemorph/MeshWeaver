@@ -200,22 +200,22 @@ internal static class DocCommentId
     }
 
     /// <summary>
-    /// Whether <paramref name="assembly"/> defines the type a cref names. A cref joins nested
-    /// types with <c>.</c> where the CLR uses <c>+</c>, so the trailing dots are tried as nesting.
+    /// The type a cref names, if <paramref name="assembly"/> defines it. A cref joins nested types
+    /// with <c>.</c> where the CLR uses <c>+</c>, so the trailing dots are tried as nesting.
     /// </summary>
     /// <param name="assembly">The candidate assembly.</param>
     /// <param name="dottedName">The type name from <see cref="TypeNameOfCref"/>.</param>
-    /// <returns>Whether the type is defined there.</returns>
-    public static bool DefinesType(Assembly assembly, string dottedName)
+    /// <returns>The type, or <c>null</c>.</returns>
+    public static Type? FindType(Assembly assembly, string dottedName)
     {
         var candidate = dottedName;
         while (true)
         {
-            if (assembly.GetType(candidate, throwOnError: false) is not null)
-                return true;
+            if (assembly.GetType(candidate, throwOnError: false) is { } type)
+                return type;
             var dot = candidate.LastIndexOf('.');
             if (dot <= 0)
-                return false;
+                return null;
             candidate = candidate[..dot] + "+" + candidate[(dot + 1)..];
         }
     }

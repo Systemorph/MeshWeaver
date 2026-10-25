@@ -8,16 +8,21 @@ Description: How the platform reads XML-doc summaries for types and members — 
 
 Type and property descriptions shown in the portal — the data-model and domain-catalog views, the
 edit forms, layout-area descriptions, the JSON schema handed to agents (`ContentJsonSchema`) — come
-from the `<summary>` the author wrote in C#. Every read goes through ONE entry point:
+from the `<summary>` the author wrote in C#. Every read goes through the MESH's reader:
 
 ```csharp
-MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeof(MyContent));          // a type
-MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeof(MyContent).GetProperty("Title")!); // a member
-MeshWeaver.Messaging.Serialization.XmlDocs.DocumentationId(member);              // "P:Ns.MyContent.Title"
+hub.XmlDocs().Summary(typeof(MyContent));                        // a type
+hub.XmlDocs().Summary(typeof(MyContent).GetProperty("Title")!);  // a member
+typeRegistry.XmlDocs().Summary(member);                          // from a hub's ITypeRegistry
+typeDefinition.XmlDocsSummary(member);                           // through a definition's registry
+XmlDocs.DocumentationId(member);                                 // "P:Ns.MyContent.Title"
 ```
 
-The implementation lives in `src/MeshWeaver.Messaging.Hub/Serialization/` (`XmlDocs`, `XmlDocFile`,
-`DocCommentId`). It replaced the third-party Namotion.Reflection package, of which the platform used
+The implementation lives in `src/MeshWeaver.Messaging.Hub/Serialization/` (`XmlDocsReader`,
+`XmlDocFile`, `DocCommentId`, and the `XmlDocs`/`XmlDocsExtensions` entry points). The old static
+`XmlDocs.Summary(...)`, `ContentJsonSchema.Generate(type, options)` and
+`ContentSchemaFacts.FromType(type, options)` remain as `[Obsolete]` forwarders for compiled callers
+(in-mesh sources included); they own no cache, so each call parses the file again. It replaced the third-party Namotion.Reflection package, of which the platform used
 exactly one capability, `GetXmlDocsSummary`.
 
 ## Why it was replaced
@@ -56,13 +61,23 @@ rendered to text immediately, and the `XDocument` is dropped. What remains is an
 whether the member carries `<inheritdoc/>` (and its `cref`). Nothing read concurrently is a live
 XLinq tree, so there is no lock.
 
-**The cache.** `ConditionalWeakTable<Assembly, XmlDocFile>`. The callers are display-metadata reads
-that hold a `Type` and no hub or service provider, so a mesh-owned singleton is not reachable from
-them; a `ConditionalWeakTable` does not keep its key alive, so an entry lives exactly as long as its
-assembly and an unloaded NodeType generation is collected with its docs. Keying by the `Assembly`
-instance (not its name) gives each recompiled generation its own docs.
-`XmlDocsCollectibleContextTest` pins both, with a negative control: a strong reference to the
-assembly in the cache makes the generation-collected assertion fail.
+**The cache is owned by the mesh.** One `XmlDocsReader` per mesh, created by the root
+`TypeRegistry` of the mesh's registry chain beside its `TypeDisplayMetadataCache` and handed down to
+every hub's registry — never a `static`, so neither a snapshot nor a cached MISS outlives the mesh
+(`XmlDocsTest.TheReader_IsOnePerMesh_SharedDownTheRegistryChain`). Inside it the per-assembly
+snapshots sit in a `ConditionalWeakTable<Assembly, XmlDocFile>`, which does not keep its key alive,
+so an unloaded NodeType generation is collected with its docs; keying by the `Assembly` instance
+(not its name) gives each recompiled generation its own docs. `XmlDocsCollectibleContextTest` pins
+both, with a negative control: a strong reference to the assembly in the cache makes the
+generation-collected assertion fail. Every call site reaches the reader through a hub, a hub's
+`ITypeRegistry`/service provider, or an `ITypeDefinition`; a definition built outside any registry
+(the public `TypeDefinition` constructor) owns a reader of its own.
+
+**The first read is synchronous.** A cold lookup reads and parses the file on the caller's thread,
+exactly as Namotion did. It is not warmed through the IO pool: `IIoPool` lives in
+`MeshWeaver.Mesh.Contract`, which depends on the assembly the reader lives in, and a warm-up the
+synchronous description then waited for would be a blocking bridge. Moving it off the render path
+means making the description a data-bound value rather than a string read during rendering.
 
 **Rendering** matches what the platform has always shown (Namotion's formatting-free mode):
 `<see>`/`<seealso>` render as their text, else the `langword`, else the cref's last name segment
@@ -90,7 +105,14 @@ A constructed generic type or a member of one reads the generic definition's doc
 declaring type (a positional record). An `<inheritdoc/>` without `cref` resolves from the base class
 chain, then the interfaces (by interface map for a method); with `cref` it resolves the referenced
 ID in the member's assembly, its type hierarchy's assemblies, or the assembly that defines the
-referenced type. Namotion only handled the immediate base and matched by name alone, so an
+referenced type, then reads the referenced MEMBER like any other — so its own `<inheritdoc/>`
+continues in its declaring type's context. Through an interface map when the declaring type has one
+(methods directly, properties and events through their accessors), so an explicit `IB.Name` reads
+`IB`'s summary even when `IA` also declares `Name`; an open generic type has no map and matches by
+name, restricted to the interface an explicit implementation names. Signatures compare generic arity
+as well as parameters (`M()` is not `M<T>()`), and every hop — crefs included — counts against one
+depth bound, so a cref cycle reads empty instead of overflowing the stack
+(`XmlDocsInheritDocTest`). Namotion only handled the immediate base and matched by name alone, so an
 overloaded base member made it read nothing.
 
 ## Parity evidence
@@ -112,6 +134,6 @@ member shape.
 
 ## Rules
 
-- Read docs only through `XmlDocs`. Do not add another reader or a second cache.
+- Read docs only through the mesh's `XmlDocsReader` (`hub.XmlDocs()`). Do not add another reader, a second cache, or a `static` one.
 - Keep the read OFF hub construction: `TypeDisplayMetadata.Description` is lazy for the #613 reason
   above — the lookup still reflects over the type.

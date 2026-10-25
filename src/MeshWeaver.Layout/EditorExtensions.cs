@@ -17,6 +17,7 @@ using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
+using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Layout;
 
@@ -576,13 +577,14 @@ public static class EditorExtensions
         // The viewer's language, read off the AccessContext rather than ambient culture (see
         // ViewerLocaleOf). Resolved once here so the per-skin lambda does no repeated DI lookup.
         var viewerLocale = serviceProvider.GetService<AccessService>().ViewerLocale();
+        var xmlDocs = serviceProvider.GetRequiredService<ITypeRegistry>().XmlDocs();
 
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
             skin with
             {
                 Name = propertyInfo.Name.ToCamelCase(),
                 Description = propertyInfo.LocalizedDescription(viewerLocale)
-                              ?? MeshWeaver.Messaging.Serialization.XmlDocs.Summary(propertyInfo),
+                              ?? xmlDocs.Summary(propertyInfo),
                 Label = propertySkinLabel
             };
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);

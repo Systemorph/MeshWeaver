@@ -22,7 +22,7 @@ public record TypeDefinition : ITypeDefinition
     /// Registries use the internal overload instead, which takes the mesh's shared description.
     /// </remarks>
     public TypeDefinition(Type elementType, string typeName, KeyFunctionBuilder keyFunctionBuilder)
-        : this(elementType, typeName, keyFunctionBuilder, new TypeDisplayMetadata(elementType))
+        : this(elementType, typeName, keyFunctionBuilder, new TypeDisplayMetadata(elementType, new XmlDocsReader()))
     {
     }
 

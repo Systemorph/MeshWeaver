@@ -159,7 +159,7 @@ public static class EditLayoutArea
             .WithView(DomainViews.TitleRow(Controls.H1(typeDefinition.DisplayName).WithStyle("margin: 0;"), links.ToArray()));
 
         // Description if available
-        if (DomainViews.Description(MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type)) is { } descriptionLine)
+        if (DomainViews.Description(host.Hub.XmlDocs().Summary(typeDefinition.Type)) is { } descriptionLine)
             stack = stack.WithView(descriptionLine);
 
         // Use Overview with startInEditMode=true for the form
