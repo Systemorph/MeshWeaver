@@ -134,7 +134,7 @@ public class InboxKindFiltersTest
         var once = InboxPreferencesNodeType.Effective(legacy);
         Flat(once.ActivityStates).Should().Equal("done=True", "open=False");
         once.States.Should().BeEmpty();
-        Flat(InboxPreferencesNodeType.Effective(once).ActivityStates).Should().Equal("done=True", "open=False", "the next read finds the same choice");
+        Flat(InboxPreferencesNodeType.Effective(once).ActivityStates).Should().Equal("done=True", "open=False");
     }
 
     /// <summary>A mail or chat box ticked before the node was seeded leaves a partial map; the untouched key keeps its default.</summary>
