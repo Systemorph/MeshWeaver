@@ -238,7 +238,12 @@ public class MailCopyEngineSeamsTest(ITestOutputHelper output) : MonolithMeshTes
         var served = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
 
         rig.Feed.Account = "";
-        await SyncAsync(rig, ct);
+        rig.Feed.Pending = [Message("m9", "New while unnamed", "Body", 0)];
+        var stepsBefore = rig.Feed.StepCalls;
+        for (var i = 0; i < 3; i++)
+            await rig.Engine.Sync(rig.Owner).Timeout(Bound).Await(ct);
+        rig.Feed.StepCalls.Should().Be(stepsBefore, "no feed step runs while the account cannot be named");
+        (await rig.Store.Read(rig.Owner, "outlook", served.Generation, "m9").Timeout(Bound).Await(ct)).Should().BeNull("nothing lands on the bound account's generation");
 
         var after = (await rig.Engine.Source(rig.Owner).Timeout(Bound).Await(ct))!;
         after.Generation.Should().Be(served.Generation, "an unknown account is not another account");
@@ -246,6 +251,32 @@ public class MailCopyEngineSeamsTest(ITestOutputHelper output) : MonolithMeshTes
         after.MailboxId.Should().Be("acct-1");
         (await rig.Engine.ServesFromCopy(rig.Owner).Timeout(Bound).Await(ct)).Should().BeNull("an unnamed account is read live, not served");
         (await rig.Store.Read(rig.Owner, "outlook", served.Generation, "m1").Timeout(Bound).Await(ct)).Should().NotBeNull();
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task ADeleteDuringARebuild_IsCarriedIntoTheNewGeneration_SoItIsNotResurrectedAtTheFlip()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rig = await Rig(ct);
+        rig.Feed.Messages["m1"] = Message("m1", "Hello", "Body", 1);
+        rig.Feed.Messages["m2"] = Message("m2", "Lunch", "Pizza", 2);
+        await Enable(rig, ct);
+        await InterruptedRebuild(rig, ct);
+
+        await rig.Engine.FollowMove(rig.Owner, "m1", removed: true).Timeout(Bound).Await(ct);
+        rig.Feed.FailOnCursor = null;
+        await SyncAsync(rig, ct);
+
+        (await rig.Engine.StoredCopy(rig.Owner, "m1").Timeout(Bound).Await(ct)).Should().BeNull("the Delete reached the pending generation too");
+        (await rig.Engine.StoredCopy(rig.Owner, "m2").Timeout(Bound).Await(ct)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void OnlyAnAbsentNode_IsReadAsGone_NotAnyDeliveryFailure()
+    {
+        MeshMailCopyStore.IsGone(new InvalidOperationException("boom"), "u/_MailCopy/outlook/x").Should().BeFalse();
+        MeshMailCopyStore.IsGone(new MeshNodeReadEndedWithDeleteException("u/_MailCopy/outlook/x"), "u/_MailCopy/outlook/x").Should().BeTrue();
+        MeshMailCopyStore.IsGone(new MeshNodeReadEndedWithDeleteException("u/other"), "u/_MailCopy/outlook/x").Should().BeFalse("another path says nothing about this one");
     }
 
     // Marks the backfilled copy as made before the projection (so the next sync must rebuild it), then runs the sync

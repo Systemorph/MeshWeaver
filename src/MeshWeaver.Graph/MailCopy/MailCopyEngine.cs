@@ -300,9 +300,13 @@ public sealed partial class MailCopyEngine(
     private IObservable<MailCopySource?> Bind(string owner, MailCopySource source)
         => feed.AccountId(owner).Take(1).Timeout(ReadBudget).SelectMany(id =>
             // 🚨 An account the feed cannot name right now (an empty id: a token that is no readable JWT, a host without the
-            // Executive Assistant) is UNKNOWN, not "another account": it never rebuilds a healthy copy. Reads still
-            // serve only for an id that equals the bound one (ServesFromCopy), so an unknown account reads live.
-            string.IsNullOrEmpty(id) || source.MailboxId == id
+            // Executive Assistant) is UNKNOWN, not "another account": it never rebuilds a healthy copy, and the sync PAUSES
+            // (no feed step runs) so nothing lands on the bound account's generation. Reads serve only for an id that
+            // equals the bound one (ServesFromCopy), so an unknown account reads live.
+            string.IsNullOrEmpty(id)
+                // Nothing is applied to the bound account's generation until the account can be identified again.
+                ? Observable.Return<MailCopySource?>(null)
+                : source.MailboxId == id
                 ? Observable.Return<MailCopySource?>(source)
                 : source.MailboxId is null
                     ? copies.Commit(owner, Provider, source.Generation, UnderLease(current => current with { MailboxId = id }))

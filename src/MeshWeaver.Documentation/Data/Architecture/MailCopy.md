@@ -156,8 +156,9 @@ when the connected mailbox is another account. What is served meanwhile depends 
 - **A mailbox-account change rebuilds IN PLACE.** The old account's mail must never be shown under the new one, so the
   generation rotates at once, `Backfilled` is false, the copy is not served (the inbox reads live) and the old and any
   pending generation are removed. Readers are never failed: a copy that disappears between the index answer and the
-  node read (`DeliveryFailureException`) reads as absent. A copy that was never served is rebuilt in place too.
+  node read (the stream ended with that path's delete, or the failure is stamped `NodeAbsent`) reads as absent; any other failure propagates. A copy that was never served is rebuilt in place too.
 - **An account the feed cannot name right now** (an empty id) is *unknown*, not *another account*: it never rebuilds a
-  healthy copy, and it is not served (reads need an id equal to the bound one).
+  healthy copy, the sync pauses (no feed step runs, so nothing lands on the bound account's generation), and it is not
+  served (reads need an id equal to the bound one).
 - **Switching off** (`Disable`) is unchanged: the generation rotates (and any pending one is dropped from the source),
   every copy of every generation under the source is deleted with its files, then the source.
