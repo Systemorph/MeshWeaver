@@ -64,9 +64,10 @@ The server side of the split has its own C# round-trip test: `MeshGrpcTransportT
 One Playwright detail worth knowing when writing similar tests: never wait for `NetworkIdle` against the SPA — it holds the gRPC-web `Connect` stream open for its whole life, so the network never goes idle.
 
 ```bash
-# from a MeshWeaver.Plugins checkout
-E2E_REACT=true dotnet test src/MeshWeaver.Portal.E2E.Test \
-  --filter "FullyQualifiedName~ReactDocViewsTest" --no-restore
+# from the MeshWeaver (core) checkout: only it has the global.json that selects
+# Microsoft.Testing.Platform (xunit.v3 4.x refuses VSTest), and the suite builds against it
+E2E_REACT=true dotnet test ../MeshWeaver.Plugins/src/MeshWeaver.Portal.E2E.Test -p:MeshWeaverRoot="$PWD/" \
+  --filter "FullyQualifiedName~ReactDocViewsTest"
 ```
 
 ## Related
