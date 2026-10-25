@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -117,28 +118,44 @@ public class ContentTypeRegistrationFanOutTest
 
     /// <summary>The waited type is still delivered — off the registering thread (the registry's
     /// contract: <c>Register</c> runs inside a hub configuration build) and exactly once per
-    /// registration.</summary>
+    /// registration.
+    ///
+    /// <para>"Off the registering thread" means NOT INLINE, inside the <c>Register</c> call — not "on a
+    /// different managed thread id". The delivery is a pool work item and the test method's own thread
+    /// is a pool thread: once the test awaits, that thread goes back to the pool and may well be the one
+    /// that runs the delivery, which is the contract being KEPT. Comparing thread ids failed exactly
+    /// then. So the test marks the window in which <c>Register</c> is on the stack and asks whether the
+    /// delivery ran inside it.</para></summary>
     [Fact]
     public async Task TheWaitedType_IsStillDelivered_OffTheRegisteringThread()
     {
         var registry = new MeshContentTypeRegistry();
         var waited = EmitType("FanOut_Waited2", "Waited2");
-        var registeringThread = Environment.CurrentManagedThreadId;
+        var registeringOn = new StrongBox<int>();
 
         var delivery = registry
             .RegistrationsMatching(r => string.Equals(r.NodeTypePath, "Waited/Type2", StringComparison.OrdinalIgnoreCase))
-            .Select(r => (r.ContentType, Thread: Environment.CurrentManagedThreadId))
+            .Select(r => (r.ContentType,
+                InsideRegister: Environment.CurrentManagedThreadId == Volatile.Read(ref registeringOn.Value)))
             .Replay(1);
         using var connection = delivery.Connect();
 
-        registry.Register(EmitType("FanOut_Other", "Other"), "Other/Type");
-        registry.Register(waited, "Waited/Type2");
+        Volatile.Write(ref registeringOn.Value, Environment.CurrentManagedThreadId);
+        try
+        {
+            registry.Register(EmitType("FanOut_Other", "Other"), "Other/Type");
+            registry.Register(waited, "Waited/Type2");
+        }
+        finally
+        {
+            Volatile.Write(ref registeringOn.Value, 0);
+        }
 
-        var (contentType, thread) = await delivery.Should().Within(TestTimeouts.Convergence)
+        var (contentType, insideRegister) = await delivery.Should().Within(TestTimeouts.Convergence)
             .Emit(cancellationToken: TestContext.Current.CancellationToken);
         contentType.Should().BeSameAs(waited);
-        thread.Should().NotBe(registeringThread,
-            because: "a waiter re-types a node and emits into whatever is bound to it; doing that on the " +
-                     "registering thread would re-enter the hub construction that is registering the type");
+        insideRegister.Should().BeFalse(
+            because: "a waiter re-types a node and emits into whatever is bound to it; doing that inline in " +
+                     "Register would re-enter the hub construction that is registering the type");
     }
 }
