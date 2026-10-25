@@ -1,4 +1,4 @@
-# The loader beside a DIFFERENT profile — refused (it would load a profile nobody runs under).
+# The chart creates the build cache.
 buildHosts:
   enabled: true
   apiUrl: "http://memex-portal-service:8080/api/builds"
@@ -11,4 +11,7 @@ buildHosts:
     testerDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     portalDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     runnerDigest: "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-  sandbox: { appArmorLoader: true, appArmorProfile: "Localhost", appArmorLocalhostProfile: "other" }
+  imagePullSecret: "control-pull"
+  nodeSelector: { workload: "ci-build" }
+  tolerations: [{ key: "ci", operator: "Equal", value: "build", effect: "NoSchedule" }]
+  cache: { create: true, storageClass: "azurefile-memex", size: "100Gi" }

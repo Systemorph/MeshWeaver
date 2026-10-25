@@ -16,9 +16,7 @@ The refusals, and why each one exists:
   * the API URL must be https, or http to a cluster-local host (no dot, or *.svc / *.cluster.local)
     — the worker token rides on it;
   * at least one channel must be enabled — an enabled block that renders no host is a typo;
-  * `cache.create` needs its storageClass and size — the chart never guesses a volume's tier or size;
-  * `sandbox.appArmorLoader` loads the chart's OWN profile, so the pods must name exactly that profile
-    (Localhost / mw-build-host) — a loader beside a different profile loads something nobody uses.
+  * `cache.create` needs its storageClass and size — the chart never guesses a volume's tier or size.
 */ -}}
 {{- define "memex.buildHosts" -}}
 {{- $b := (.Values.buildHosts | default dict) -}}
@@ -67,18 +65,8 @@ The refusals, and why each one exists:
 {{- fail (printf "buildHosts.runDeadlineSeconds %d must be within [600, 43200] — the RUN budget (the contract's budgetMinutes is 10..720), which must cover the stages a repository declares (they run sequentially)" $runDeadline) -}}
 {{- end -}}
 {{- $sb := ($b.sandbox | default dict) -}}
-{{- $loader := ($sb.appArmorLoader | default false) -}}
-{{- $aaType := ($sb.appArmorProfile | default "") -}}
-{{- $aaName := ($sb.appArmorLocalhostProfile | default "") -}}
-{{- if $loader -}}
-{{- if or (and $aaType (ne $aaType "Localhost")) (and $aaName (ne $aaName "mw-build-host")) -}}
-{{- fail (printf "buildHosts.sandbox.appArmorLoader loads the chart's profile mw-build-host, but the pods name %q/%q — leave both unset or name Localhost/mw-build-host" $aaType $aaName) -}}
-{{- end -}}
-{{- $aaType = "Localhost" -}}
-{{- $aaName = "mw-build-host" -}}
-{{- end -}}
 {{- $sandbox := dict "seccompProfile" ($sb.seccompProfile | default "") "seccompLocalhostProfile" ($sb.seccompLocalhostProfile | default "")
-      "appArmorProfile" $aaType "appArmorLocalhostProfile" $aaName "appArmorLoader" $loader -}}
+      "appArmorProfile" ($sb.appArmorProfile | default "") "appArmorLocalhostProfile" ($sb.appArmorLocalhostProfile | default "") -}}
 {{- range $kind := (list "seccomp" "appArmor") -}}
 {{- $t := index $sandbox (printf "%sProfile" $kind) -}}
 {{- if and $t (not (has $t (list "RuntimeDefault" "Unconfined" "Localhost"))) -}}

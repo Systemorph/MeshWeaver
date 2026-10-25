@@ -19,10 +19,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash python3 git bubblewrap ca-certificates postgresql apparmor \
+ && apt-get install -y --no-install-recommends bash python3 git bubblewrap ca-certificates postgresql \
  && rm -rf /var/lib/apt/lists/* \
  && bwrap --version && python3 --version && git --version && dotnet --version \
- && apparmor_parser --version | grep -q 'version 4' \
  && find /usr/lib/postgresql -maxdepth 3 -name initdb | grep -q initdb
 
 # The runner and the composer, from the SAME commit as the rest of this platform build — one

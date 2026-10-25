@@ -222,10 +222,10 @@ else
   report "the build-host fixture does not render:"; sed 's/^/    /' "$WORK/hosts.err"
 fi
 
-# 3b. the cache claim and the AppArmor loader (opt-in; absent from the fixture above)
-if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/values.build-hosts-loader.yaml" --namespace check \
-     > "$WORK/loader.yaml" 2> "$WORK/loader.err"; then
-  if python3 - "$WORK/loader.yaml" "$WORK/hosts.yaml" <<'PY'
+# 3b. the cache claim (opt-in; absent from the fixture above)
+if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/values.build-hosts-cache.yaml" --namespace check \
+     > "$WORK/cache.yaml" 2> "$WORK/cache.err"; then
+  if python3 - "$WORK/cache.yaml" "$WORK/hosts.yaml" <<'PY'
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
 plain = [d for d in yaml.safe_load_all(open(sys.argv[2])) if d]
@@ -242,43 +242,18 @@ else:
         problems.append(f"the build-cache claim is not RWX on the stated class and size: {spec}")
     if (pvc["metadata"].get("annotations") or {}).get("helm.sh/resource-policy") != "keep":
         problems.append("the build-cache claim is not kept on uninstall (helm.sh/resource-policy: keep)")
-if find(plain, "PersistentVolumeClaim", "build-cache") or find(plain, "DaemonSet", "build-host-apparmor"):
-    problems.append("without cache.create / appArmorLoader the chart still renders the claim or the loader")
-cm = find(docs, "ConfigMap", "build-host-apparmor")
-prof = (cm or {}).get("data", {}).get("mw-build-host", "")
-if "profile mw-build-host" not in prof or "userns," not in prof:
-    problems.append(f"the loader's profile is not mw-build-host granting userns: {prof!r}")
-ds = find(docs, "DaemonSet", "build-host-apparmor")
-if not ds:
-    problems.append("appArmorLoader renders no loader DaemonSet")
-else:
-    pod = ds["spec"]["template"]["spec"]
-    c = pod["containers"][0]
-    if c.get("image") != "cr.example.com/mw-build-host@sha256:" + "5" * 64:
-        problems.append(f"the loader does not run the channel's runner image: {c.get('image')}")
-    if "apparmor_parser --replace" not in " ".join(c.get("command", [])):
-        problems.append("the loader does not run apparmor_parser --replace")
-    if pod.get("nodeSelector") != {"workload": "ci-build"} or not any(t.get("key") == "ci" for t in pod.get("tolerations", [])):
-        problems.append(f"the loader does not run on the hosts' pools: {pod.get('nodeSelector')} {pod.get('tolerations')}")
-    mounts = {m["name"]: m["mountPath"] for m in c.get("volumeMounts", [])}
-    if mounts.get("securityfs") != "/sys/kernel/security":
-        problems.append(f"the loader does not mount the node's securityfs: {mounts}")
-    if pod.get("automountServiceAccountToken") is not False:
-        problems.append("the loader mounts a service-account token")
-    if pod.get("imagePullSecrets") != [{"name": "control-pull"}]:
-        problems.append(f"the loader does not pull with the hosts' pull Secret: {pod.get('imagePullSecrets')}")
-dep = find(docs, "Deployment", "build-host-latest")
-build = next((c for c in (dep or {}).get("spec", {}).get("template", {}).get("spec", {}).get("containers", []) if c["name"] == "build"), {})
-if build.get("securityContext", {}).get("appArmorProfile") != {"type": "Localhost", "localhostProfile": "mw-build-host"}:
-    problems.append(f"with the loader, the host must run under Localhost/mw-build-host: {build.get('securityContext')}")
+if find(plain, "PersistentVolumeClaim", "build-cache"):
+    problems.append("without cache.create the chart still renders the claim")
+if any(d["kind"] == "DaemonSet" for d in docs if (d.get("metadata", {}).get("labels") or {}).get("app.kubernetes.io/component", "").startswith("build-host")):
+    problems.append("the chart renders a node-level DaemonSet — node setup is the platform lane's, never an instance release's")
 if problems:
     print("\n".join(problems)); sys.exit(1)
 PY
-  then ok "cache.create renders the kept RWX build-cache claim; appArmorLoader loads mw-build-host (userns only) on the hosts' pools and the host runs under it; neither renders when not asked for"
-  else report "the cache claim / AppArmor loader render a wrong shape (see above)"
+  then ok "cache.create renders the kept RWX build-cache claim, and nothing without it; the chart renders no node-level DaemonSet"
+  else report "the cache claim renders a wrong shape (see above)"
   fi
 else
-  report "the loader fixture does not render:"; sed 's/^/    /' "$WORK/loader.err"
+  report "the cache fixture does not render:"; sed 's/^/    /' "$WORK/cache.err"
 fi
 
 # 4. refusals
@@ -290,8 +265,7 @@ for entry in \
   "values.build-hosts-localhost-no-profile.yaml|names no profile" \
   "values.build-hosts-run-deadline-too-long.yaml|RUN budget" \
   "values.build-hosts-run-deadline-zero.yaml|RUN budget" \
-  "values.build-hosts-cache-no-class.yaml|buildHosts.cache.storageClass is required" \
-  "values.build-hosts-loader-other-profile.yaml|loads the chart's profile mw-build-host"; do
+  "values.build-hosts-cache-no-class.yaml|buildHosts.cache.storageClass is required"; do
   f="${entry%%|*}"; phrase="${entry#*|}"
   if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" > "$WORK/refusal.yaml" 2> "$WORK/refusal.err"; then
     report "refusal $f RENDERED — the chart must refuse it"
