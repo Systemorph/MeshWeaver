@@ -170,7 +170,14 @@ public class FileContentProvider : IFileContentProvider
 
                 var directory = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
                 var fileName = Path.GetFileName(filePath);
+                // The writer's identity, taken before the pool hop the save makes.
+                var caller = collection.CallerSnapshot();
+                var folder = directory.Trim('/');
+                var written = folder.Length == 0 ? fileName : $"{folder}/{fileName}";
                 return collection.SaveFile(directory, fileName, content)
+                    // Announced once the bytes are committed, so the content index picks the file up —
+                    // an AI file write or a data-extension write used to reach no observer at all.
+                    .Do(_ => collection.AnnounceWritten([written], caller))
                     .Select(_ => FileOperationResult.Ok());
             })
             .Catch((Exception ex) => Observable.Return(

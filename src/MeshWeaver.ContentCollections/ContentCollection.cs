@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
@@ -676,6 +677,32 @@ public class ContentCollection : IDisposable
         using var _ = caller is null ? null : AccessService?.SwitchAccessContext(caller);
         Hub.RaiseContentDeleted(QualifiedPath, NormaliseFilePath(filePath));
     }
+
+    /// <summary>
+    /// Announces ONE bulk write into this collection to the content observers
+    /// (<see cref="ContentUploadObserverExtensions.RaiseContentFilesWritten"/>), keyed by
+    /// <see cref="QualifiedPath"/> — the key an upload and a delete of the same files use — and raised
+    /// under <paramref name="caller"/>, the identity that made the write, so whatever a reactor
+    /// derives is attributed to it. The paths are normalised to the index's key shape and
+    /// de-duplicated; nothing is raised for an empty set.
+    /// </summary>
+    /// <param name="filePaths">The collection-relative paths the write put into this collection.</param>
+    /// <param name="caller">The writer's identity, snapshotted where the write was composed.</param>
+    internal void AnnounceWritten(IEnumerable<string> filePaths, AccessContext? caller)
+    {
+        var paths = filePaths
+            .Select(NormaliseFilePath)
+            .Where(path => path.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToImmutableList();
+        if (paths.Count == 0)
+            return;
+        using var _ = caller is null ? null : AccessService?.SwitchAccessContext(caller);
+        Hub.RaiseContentFilesWritten(QualifiedPath, paths);
+    }
+
+    /// <summary>The identity a write composed NOW would run under — see <see cref="AnnounceWritten"/>.</summary>
+    internal AccessContext? CallerSnapshot() => SnapshotCallerContext();
 
     private static string NormaliseFilePath(string filePath)
         => filePath.Replace('\\', '/').TrimStart('/');

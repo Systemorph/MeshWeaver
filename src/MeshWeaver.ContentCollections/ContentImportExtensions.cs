@@ -228,9 +228,12 @@ public static class ContentImportExtensions
 
         // The hub action block only subscribes + returns; every I/O leaf runs on the
         // collection's own pool — this layer is pure reactive composition.
+        // The writer's identity, taken HERE on the handler's turn (where the delivery's identity is
+        // ambient): the announcement below fires on a pool thread, after the writes commit.
         SyncFiles(contentService, request,
                 hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger(typeof(ContentImportExtensions).FullName!))
+                    ?.CreateLogger(typeof(ContentImportExtensions).FullName!),
+                hub.ServiceProvider.GetService<AccessService>()?.Context)
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
                 ex => hub.Post(FailureFor(delivery, ex), o => o.ResponseFor(delivery)));
@@ -266,9 +269,15 @@ public static class ContentImportExtensions
     /// carries only a handle), then — when <c>Mirror</c> — deletes any file already under
     /// <c>TargetPath</c> that the incoming set does not carry, so the folder mirrors the supplied set
     /// exactly. Returns the number of files written.
+    ///
+    /// <para>Once everything has committed — the writes and the prune — the sync is announced to the
+    /// content observers ONCE (<see cref="IContentUploadObserver.OnFilesWritten"/>), with every file
+    /// it wrote, so the content index re-indexes what changed in one activity instead of never
+    /// (the sync used to announce nothing) or once per file. A delivery of a split sync defers its
+    /// announcement to the last one (<see cref="SyncContentFilesRequest.DeferWrittenAnnouncement"/>).</para>
     /// </summary>
     private static IObservable<int> SyncFiles(
-        IContentService contentService, SyncContentFilesRequest request, ILogger? logger)
+        IContentService contentService, SyncContentFilesRequest request, ILogger? logger, AccessContext? caller)
         => contentService.GetCollection(request.CollectionName)
             .Select(target => target
                 ?? throw new InvalidOperationException($"Target content collection '{request.CollectionName}' not found"))
@@ -344,8 +353,20 @@ public static class ContentImportExtensions
                     ? Observable.Return(0)
                     : writeOps.Concat().Sum();
 
+                // What this delivery announces once it has committed: its own writes plus those the
+                // earlier deliveries of a split sync deferred to it — or nothing, when a later
+                // delivery announces for it.
+                var announced = request.DeferWrittenAnnouncement
+                    ? ImmutableList<string>.Empty
+                    : request.Files.Select(f => FullPath(f.Path))
+                        .Concat(stagedFiles.Select(s => FullPath(s.Path)))
+                        .Concat((request.AnnounceWrittenPaths ?? []).Select(NormalizePath))
+                        .ToImmutableList();
+                IObservable<int> Announcing(IObservable<int> committed)
+                    => committed.Do(_ => target.AnnounceWritten(announced, caller));
+
                 if (!request.Mirror)
-                    return writes;
+                    return Announcing(writes);
 
                 // 🚨 issue #2885: the WRITES are chunked so no delivery ever carries a whole asset
                 // tree, but the PRUNE is not chunkable — it asks "what is under this folder that the
@@ -370,7 +391,7 @@ public static class ContentImportExtensions
                 // Prune AFTER writing: enumerate the folder's current files, delete those not kept.
                 // EnumerateAllFiles yields collection-relative paths; a delete of an absent file is
                 // tolerated (best-effort) so a concurrent external delete never fails the mirror.
-                return writes.SelectMany(written =>
+                return Announcing(writes.SelectMany(written =>
                     EnumerateAllFiles(target, baseDir)
                         // 🚨 #3233: the staging folder is FRAMEWORK STATE, not content, and the
                         // prune rides the FIRST delivery — so pruning it would delete the very
@@ -384,7 +405,7 @@ public static class ContentImportExtensions
                             .Catch<int, Exception>(_ => Observable.Return(0)))
                         .Concat()
                         .Sum()
-                        .Select(_ => written));
+                        .Select(_ => written)));
             });
 
     /// <summary>
@@ -515,7 +536,7 @@ public static class ContentImportExtensions
 
         // The hub action block only subscribes + returns; every I/O leaf runs on the
         // collections' own pools — this layer is pure reactive composition.
-        Copy(contentService, request)
+        Copy(contentService, request, hub.ServiceProvider.GetService<AccessService>()?.Context)
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
                 ex => hub.Post(ImportContentResponse.Fail(ex.Message), o => o.ResponseFor(delivery)));
@@ -523,7 +544,13 @@ public static class ContentImportExtensions
         return delivery.Processed();
     }
 
-    private static IObservable<int> Copy(IContentService contentService, ImportContentRequest request)
+    /// <summary>
+    /// Copies the files of the source folder into the target folder, one at a time, and once every
+    /// copy has committed announces the import to the content observers ONCE
+    /// (<see cref="IContentUploadObserver.OnFilesWritten"/>) with every file it wrote — the import used
+    /// to announce nothing, so imported content was never indexed.
+    /// </summary>
+    private static IObservable<int> Copy(IContentService contentService, ImportContentRequest request, AccessContext? caller)
         => contentService.GetCollection(request.SourceCollection!)
             .Select(source => source
                 ?? throw new InvalidOperationException($"Source content collection '{request.SourceCollection}' not found"))
@@ -540,12 +567,14 @@ public static class ContentImportExtensions
                 return pair.source.GetFiles(request.SourcePath)
                     .Select(file => pair.source.GetContent(file.Path)
                         .SelectMany(stream => stream is null
-                            ? Observable.Return(0)
+                            ? Observable.Empty<string>()
                             : pair.target.SaveFile(targetDir, file.Name, stream)
-                                .Select(_ => 1)
+                                .Select(_ => targetDir.Length == 0 ? file.Name : $"{targetDir}/{file.Name}")
                                 .Finally(stream.Dispose)))
                     .Concat()
-                    .Sum();
+                    .ToList()
+                    .Do(written => pair.target.AnnounceWritten(written, caller))
+                    .Select(written => written.Count);
             });
 }
 
@@ -1050,8 +1079,18 @@ public sealed class SyncContentFilesBuilder
         {
             // The mirror is ONE pass and it is the FIRST — see the remark on Post().
             var prunes = _mirror && index == 0;
+            var last = index == deliveries.Count - 1;
             return new SyncContentFilesRequest(_targetCollection, _targetPath, delivery.Inline)
             {
+                // ONE announcement for the whole sync: every delivery but the last defers, and the
+                // last names what the earlier ones wrote (see SyncContentFilesRequest).
+                DeferWrittenAnnouncement = split && !last,
+                AnnounceWrittenPaths = split && last
+                    ? deliveries.Take(index)
+                        .SelectMany(d => d.Inline.Select(f => CombineTargetPath(f.Path))
+                            .Concat(d.Staged.Select(st => CombineTargetPath(st.Path))))
+                        .ToImmutableList()
+                    : null,
                 Mirror = prunes,
                 // An additive chunk prunes nothing, so it carries neither prune input.
                 SourceOwnedPaths = prunes ? _sourceOwnedPaths : null,

@@ -122,6 +122,31 @@ nothing embedded.
 grouped **by partition** — one activity per partition, never one global call. A Space's collection
 path is `{spacePath}/content`.
 
+## What a bulk write announces
+
+An upload is announced per file (`IContentUploadObserver.OnUploaded`, raised by the caller —
+`MeshOperations.Upload`, the file browser, mail-copy attachments). The paths that write MANY files at
+once announce **once per write** instead, through `IContentUploadObserver.OnFilesWritten(collectionPath,
+filePaths)`, raised by the collection after everything has committed and under the writer's identity:
+
+| Write | Raised by | One announcement covers |
+|---|---|---|
+| Collection→collection import (`ImportContentRequest`) | the import handler, after the last copy | every file the import copied |
+| Repository/GitSync content mirror (`SyncContentFilesRequest`) | the sync handler, after the writes and the prune | every file the SYNC wrote — a sync the producer split across deliveries (`SyncContentFilesBuilder`) defers each delivery's announcement to the last (`DeferWrittenAnnouncement`, `AnnounceWrittenPaths`), so it is still one |
+| `IFileContentProvider.SaveFileContent` (AI file writes, data-extension writes) | `FileContentProvider`, after the save | the one file |
+| A node picture (`NodeImageUpload.Replace`) | after the node points at it | the one new picture (every upload is a fresh generated name) |
+
+🚨 **Once per write, never once per file.** A boot re-import re-sends every content file of a
+repository, and the content index opens an activity per announcement, so a per-file raise would turn
+every boot into the node-CRUD burst [Content Route 503](/Doc/Architecture/ContentRoute503) describes (Cause B). The
+observer receives the whole set and decides what changed; the content index's observer
+(MeshWeaver.Plugins) opens ONE indexing activity for the files whose bytes it does not already hold,
+and none at all when a re-import changed nothing. A refused write announces nothing, and a split sync
+whose later delivery is refused never announces the files its earlier deliveries wrote — the daily
+backfill (MeshWeaver.Plugins `Indexing/ContentIndexingCoverage`) picks those up. The default
+implementation is empty, so an observer that does not care about bulk writes is unchanged. Proven by
+`ContentBulkWriteAnnouncementTest` and `PictureUploadIsAnnouncedTest`.
+
 ## What a delete removes
 
 Indexing is change-driven in BOTH directions. `ContentCollection.DeleteFile` — the surface every
