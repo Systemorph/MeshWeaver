@@ -161,19 +161,31 @@ whose authored upper cap (§5) forbids `latest` builds against the **highest ret
 cap allows**.
 
 - **The source of `latest` is the control record's alias**, read through a public read endpoint
-  on the build API (`GET /api/builds/hosts`, the §2a shape: `aliases.latest` plus `versions[]`).
-  It is no longer "the newest sealed main-cd run". `resolve-platform.py` (core-owned, fetched by
-  every satellite at core `main`) gains `--from-build-hosts <api>`, which resolves the alias to
-  its set and takes the digests from the record, not from a tag lookup. 🚨 The §2a shape as
-  implemented carries NO digests and no set token, so P3 adds each version's set token to its
-  `versions[]` entry; until it does, P5 has nothing record-backed to read and stays inert. A missing or unreadable
-  alias, or one naming a version that is not `complete`, is a RED job naming what was looked for. It never falls back to "newest sealed",
-  because that set may be untested (resolve-platform.py's own rule: *"never a fallback to a moving
-  tag nobody named"*).
+  on the build API. It is no longer "the newest sealed main-cd run". `resolve-platform.py`
+  (core-owned, fetched by every satellite at core `main`) reads it with `--from-build-hosts <api>`,
+  ONCE per run, so the alias and the versions cannot disagree about a switch that happened between
+  two reads. The fields it reads are exactly these (the §2a shape):
+
+  ```text
+  GET /api/builds/hosts
+  { "aliases":  { "latest": "<v>", … },
+    "versions": [ { "version": "<v>", "complete": true|false, … } ] }
+  ```
+
+  `latest` is `aliases.latest`, never a field at the response root, and it must name a row of
+  `versions` whose `complete` is `true`. `complete` is RECORD completeness (the record holds that
+  version's full set, so the chart renders its Deployment); it is not pod readiness, and the
+  resolver reads no `ready` field. A complete version scaled to zero is a valid target. **The
+  digests do not come from this answer**: the resolver takes the version `aliases.latest` names and
+  resolves it through the existing freeze path, exactly like a pinned `MW_PLATFORM_REF` — that one
+  sealed CD run, its images present, never a substitute. A missing or unreadable answer, a missing
+  alias, or an alias naming a version that is absent or not `complete`, is a RED job naming what
+  was looked for. It never falls back to "newest sealed", because that set may be untested
+  (resolve-platform.py's own rule: *"never a fallback to a moving tag nobody named"*).
 - **With a cap**, the resolver takes the highest version in `versions` that satisfies BOTH bounds:
   at or above the package's `minMeshVersion` and at or below its cap, compared by the one
-  comparator `PlatformFloor`, among versions that are `complete` (an incomplete version is skipped;
-  a complete one scaled to zero is a valid target). If no such version lies in that range, the result is
+  comparator `PlatformFloor`, among versions that are `complete` (record completeness, never pod readiness: an incomplete
+  version is skipped; a complete one scaled to zero is a valid target). If no such version lies in that range, the result is
   RED, naming the floor, the cap and the retained versions, and never a silent pick of `latest` or
   of a version below the floor. Once a cap is admitted (§5) retention holds its deployment (§6),
   so a red after admission is a retention defect; a red before the cap's deployment is `complete` is
@@ -303,7 +315,7 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 | P0 | core | this design, the owner's answers (§10) and the two register rows | no |
 | P1 | core | contract: init-only additions to `BuildHostsBlock` (`Retention`, the per-version default), the `v/` and `alias/` key forms, `Package.MaxMeshVersion` + `CapReason` + `CapTracking`, and the cap validator in `node-repo-validate.yml` | no |
 | P2 | MeshWeaver.Deploy | chart (it owns the build-host chart; core's is frozen, `BuildHosts.md` §3): render one Deployment and one ScaledObject per `v/` entry (with `minReplicaCount: 1` while the entry is `warming`, §2), plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
-| P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, the stage-log endpoint answering by recorded version, `GET /api/builds/hosts` with each version's set token (§4), the retention computation. **Follow-up (plugins-e6): the switch accepts a SET of runs.** e6's switch receiver checks a single `run` today; it must take every run the event names (or a parent that lists them), re-read each, and refuse when any is not `Succeeded` or did not record the candidate version (§2 step 4) | no |
+| P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, the stage-log endpoint answering by recorded version, `GET /api/builds/hosts` in the §2a shape (§4 lists the fields the resolver reads), the retention computation. **Follow-up (plugins-e6): the switch accepts a SET of runs.** e6's switch receiver checks a single `run` today; it must take every run the event names (or a parent that lists them), re-read each, and refuse when any is not `Succeeded` or did not record the candidate version (§2 step 4) | no |
 | P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, the follow lane's `version` input (§4), and the `mw-core-tests` image as the set's fifth digest (D3). `build-host-test` submits ONE pinned run per shard and owns the COMBINED verdict over the shard runs and the dependents' gate runs; the switch event names all of them or their parent (§2 steps 3–4) | no |
 | P5 | core | `resolve-platform.py --from-build-hosts`, including per-package resolution under a cap, IMPLEMENTED and self-tested but INERT: no consumer passes the flag, so Plugins and the satellites stay on today's newest-sealed path | no |
 | P6 | MeshWeaver.Plugins + core | the daily cap-debt job (control), the capped-run publish path (D2), the retention of the previous `latest` and the backwards rollback switch (D4), and the `lock-pinned-digests.py` reading of `buildHostSets` (core) | no |
@@ -311,6 +323,16 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 | P8 | core | `.github/build-hosts.json` `enabled: true`, AFTER P7 (the order `BuildHosts.md` §4 fixes) | **yes** |
 | P9 | control | the roll that renders the first `build-<v>`, then the first green switch. Verify by reading `GET /api/builds/hosts` and the run nodes' recorded version, never the CD job's green | **yes** |
 | P10 | MeshWeaver.Plugins + satellites | adopt `--from-build-hosts` in Plugins `ci.yml` and the satellites, ONLY after P9 is verified, because §4 refuses a missing alias with no fallback and adopting earlier would red every consumer's CI | no |
+
+### Status of the module-facing phases (the cap half of P1, P5, P6's cap debt, P10)
+
+| phase | status | where |
+|---|---|---|
+| P1, cap half | **implemented.** `Package.MaxMeshVersion`, `CapReason` and `CapTracking` are carried by the node-repo listing. `resolve-platform.py --check-caps` is the validator, and `node-repo-validate.yml` runs it for every satellite. | core #7192 |
+| P5 | **implemented, inert.** `resolve-platform.py --from-build-hosts <api> [--packages-root .]` reads `GET /api/builds/hosts` (`{aliases:{latest, …}, versions:[{version, complete, …}]}`; no `ready` is read). It resolves `aliases.latest` through the freeze path and writes `partitions`. It is RED on a missing or unreadable answer, or on an alias naming a version that is absent or not `complete`, and it never falls back. No consumer passes the flag. | core #7192 |
+| P6, cap debt | **implemented, not called.** `node-repo-cap-debt.yml` publishes the repository's whole cap set as one signed `build-caps` event, then files one `Feedback/Feedback` "migrate to latest" item per capped package. The control intake keeps `Hosting/BuildCaps/<package>` (`{package, floor, cap, version, reason}`), written as System, for retention's `capVersions`. It deletes the node of a removed cap, and it computes the `BuildHostDeploy(reason: cap:<package>)` request for an undeployed cap but does not send it until P3 has the action. No satellite calls the lane until its service-user token is provisioned. | core #7192, MeshWeaver.Plugins (intake) |
+| P6, capped publish (D2) | **owed with P10.** It is the publish lanes consuming `partitions`, and nothing produces partitions until a consumer adopts `--from-build-hosts`. | — |
+| P10 | **blocked on P9.** | — |
 
 `deploy-test-switch-latest` and `package-mesh-version-cap` are decided and stay `proposed` on
 their register rows, with P1 to P10 listed as owed; each moves to `in force` once its wiring has
