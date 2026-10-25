@@ -46,19 +46,18 @@ bld/
 .env
 !deploy/.env.example
 
-# Per-tenant AKS deploy envs are PRIVATE — keep ONLY the placeholder template;
-# every real tenant env directory is ignored in full (directory names are tenant
-# identities and must not enter this public repo). Placed after the !/deploy/** re-include
+# Per-tenant AKS deploy envs are PRIVATE — every env directory is ignored in full, and the
+# placeholder template that used to be the one exception now lives in Systemorph/Memex
+# (deployments/aks/example/, moved with the core-slimming carve). Directory names are tenant
+# identities and must not enter this public repo. Placed after the !/deploy/** re-include
 # above so this re-exclusion wins.
 #
-# The re-include used to name `memex-cloud/` — a TENANT directory, and by 2026-08-08 one
+# History: the re-include once named `memex-cloud/` — a TENANT directory, and by 2026-08-08 one
 # that had already been moved to the private Systemorph/Memex repo. So the rule was both
 # dead and pointed the wrong way: it re-admitted the one kind of directory the comment
 # above says must never enter this repo, and it left `example/` — the template operators
 # copy from — ignored, which is why that folder could never grow a new file.
 /deploy/aks/envs/*/
-!/deploy/aks/envs/example/
-!/deploy/aks/envs/example/**
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/

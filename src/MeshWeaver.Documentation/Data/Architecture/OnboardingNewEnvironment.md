@@ -18,7 +18,7 @@ sign-in — running on the **shared AKS cluster** (`<aks-cluster>` / `<aks-resou
 > authoritative wherever this page and it disagree. What remains here is the part that is genuinely
 > public: what is shared vs separate, the chart's config pass-through rule, the self-update model,
 > and the gotchas. The only env folder still in this repository is the reference template
-> `deploy/aks/envs/example/`, kept as a shape to copy — **not** as the place a real environment lives.
+> `deployments/aks/example/` (in Systemorph/Memex), kept as a shape to copy — **not** as the place a real environment lives.
 
 The shared platform (cluster, ingress, Postgres server, Key Vault, ACR) is brought up once — see
 the AKS deployment sample (`deploy/aks/README.md` in the repository); this guide adds an
@@ -39,7 +39,7 @@ environment on top of it.
 
 ## 1. Scaffold the env folder
 
-Copy the reference template `deploy/aks/envs/example/` — the real env folder is created in the
+Copy the reference template `deployments/aks/example/` (in Systemorph/Memex) — the real env folder is created in the
 **private ops repository**, not here (see the note above). These are the files it contains and what
 each one carries:
 
@@ -78,7 +78,7 @@ az ad app credential reset --id <appId> --display-name <env> --years 1   # -> cl
 #    Deployments/<env> → "Set Key Vault secrets…" on the control instance (write-only).
 # 5. Self-update (ACR polling): federate the SHARED portal UAMI to THIS namespace's memex-portal-sa
 #    so the in-pod self-updater can list ACR tags. Preferred: add the namespace to `portalNamespaces`
-#    in infra/main.bicep and re-run the (idempotent) infra deploy. Quick out-of-band equivalent:
+#    in Systemorph/Memex infra/platform/main.bicep and re-run the (idempotent) infra deploy. Quick out-of-band equivalent:
 ISSUER=$(az aks show -g $RG -n <aks-cluster> --query oidcIssuerProfile.issuerURL -o tsv)
 az identity federated-credential create -g $RG --identity-name <portal-identity> \
   --name "memex-portal-<env>" --issuer "$ISSUER" \

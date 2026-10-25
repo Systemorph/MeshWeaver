@@ -41,17 +41,6 @@ public class ReleaseDeliveryChainGuard
     private const string Workflow = ".github/workflows/main-cd.yml";
     private const string ContractDoc =
         "src/MeshWeaver.Documentation/Data/Architecture/ContinuousDeliveryContract.md";
-    private const string SecretTemplate = "deploy/aks/envs/example/secretproviderclass.yaml";
-
-    /// <summary>
-    /// The shared HMAC's env key. A literal, unlike every other key here, and the exception is
-    /// worth naming rather than hiding: the constant that reads it
-    /// (<c>PlatformBuildInboxWatcher.SecretConfigKey</c>) lives in MeshWeaver.Plugins, so this
-    /// repository cannot reference it. What this repository DOES own is the template every
-    /// environment's SecretProviderClass is copied from — so that is what is pinned.
-    /// </summary>
-    private const string WebhookSecretEnvKey = "Hosting__PlatformWebhookSecret";
-
     /// <summary>
     /// One joint of the delivery chain: the configuration key that switches it on, in the
     /// double-underscore environment form a deployment actually sets, plus what silently does not
@@ -185,48 +174,11 @@ public class ReleaseDeliveryChainGuard
         }
     }
 
-    /// <summary>
-    /// 🚨 THE THIRD JOINT, which is provisioned through the OTHER path — a Key Vault secret mounted
-    /// by the CSI driver, not a ConfigMap entry — and is therefore invisible to the ledger above. It
-    /// is the one joint CD structurally cannot see: the inbox stores the delivery and answers 2xx
-    /// whatever the secret is, and the watcher then drops an unverifiable delivery in silence. Every
-    /// environment's SecretProviderClass is copied from this template, so an entry quietly lost here
-    /// propagates into the next environment stood up, and its only symptom is a release wave that
-    /// never starts.
-    /// </summary>
-    [Fact]
-    public void TheSharedHmacIsProvisionedByTheSecretTemplate()
-    {
-        var root = RepoPaths.Root;
-        var template = File.ReadAllText(
-            Path.Combine(root, SecretTemplate.Replace('/', Path.DirectorySeparatorChar)));
-
-        // Both halves: the Key Vault object must be FETCHED, and it must be PROJECTED onto the env
-        // key the watcher reads. Either alone is a secret that is mounted nowhere or a key that
-        // names nothing — and both render as a perfectly healthy pod.
-        //
-        // 🚨 Two ways this assertion was written wrong before the reverts were actually RUN, and
-        // both left it permanently green:
-        //   * `Contains` on a key name is satisfied by any LONGER key starting with it, so
-        //     `key: Hosting__PlatformWebhookSecretRENAMED` passed the projection check. Hence
-        //     whole-line matching.
-        //   * the SAME `objectName:` line appears in BOTH blocks, so searching the whole document
-        //     let the projection block satisfy the fetch check — deleting the Key Vault fetch
-        //     outright still passed. Hence each half is searched in its OWN section.
-        // A guard that cannot be shown failing is not a guard.
-        var fetch = SectionBefore(template, "secretObjects:");
-        var projection = SectionFrom(template, "secretObjects:");
-
-        Assert.True(HasLine(fetch, "objectName: Hosting-PlatformWebhookSecret"),
-            $"{SecretTemplate} no longer fetches the platform-build webhook secret from Key Vault. "
-            + "Every environment's SecretProviderClass is copied from this template; without the "
-            + "secret the Hosting watcher drops every release delivery as unverifiable while CD's "
-            + "POST still answers 2xx, so the wave stops with nothing red anywhere (#2235).");
-        Assert.True(HasLine(projection, "key: " + WebhookSecretEnvKey),
-            $"{SecretTemplate} fetches the platform-build webhook secret but no longer projects it "
-            + $"onto {WebhookSecretEnvKey}, so it reaches the container under no name the watcher "
-            + "reads — a mounted secret and an unset one are indistinguishable from inside the pod.");
-    }
+    // 🚨 THE THIRD JOINT — the platform-build webhook secret, provisioned through a Key Vault
+    // SecretProviderClass rather than the ConfigMap — was pinned here against the example
+    // environment's template. That template moved to Systemorph/Memex
+    // (deployments/aks/example/) with the core-slimming carve, and its guard moved with it:
+    // scripts/check-example-secret-template.py, in that repository's required Build (Release).
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -246,32 +198,6 @@ public class ReleaseDeliveryChainGuard
                    && t.StartsWith(key + ":", StringComparison.Ordinal)
                    && t.Contains("config.memex_portal." + key, StringComparison.Ordinal);
         });
-
-    /// <summary>Everything BEFORE the <paramref name="marker"/> line — the CSI driver's Key Vault
-    /// fetch list, which is a different question from what the fetched objects are projected onto.</summary>
-    private static string SectionBefore(string text, string marker)
-    {
-        var i = text.IndexOf("\n  " + marker, StringComparison.Ordinal);
-        Assert.True(i >= 0, $"'{marker}' is gone from {SecretTemplate} — the template's shape changed "
-                            + "and this guard is no longer reading what it claims to read.");
-        return text[..i];
-    }
-
-    /// <summary>Everything from the <paramref name="marker"/> line on — the env projections.</summary>
-    private static string SectionFrom(string text, string marker)
-    {
-        var i = text.IndexOf("\n  " + marker, StringComparison.Ordinal);
-        Assert.True(i >= 0, $"'{marker}' is gone from {SecretTemplate}.");
-        return text[i..];
-    }
-
-    /// <summary>
-    /// The text carries <paramref name="line"/> as a COMPLETE line (whitespace and any YAML list
-    /// dash aside). Whole-line, because <c>Contains</c> on a key name is satisfied by any longer
-    /// key that starts with it — which is precisely the rename these assertions exist to catch.
-    /// </summary>
-    private static bool HasLine(string text, string line) =>
-        text.Split('\n').Any(l => l.Trim().TrimStart('-').Trim() == line);
 
     /// <summary>A values file declares the slot when it carries the key as a mapping key.</summary>
     private static bool DeclaresKey(string values, string key) =>

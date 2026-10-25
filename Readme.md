@@ -60,7 +60,8 @@ Production deployment recipes live under [`deploy/`](deploy/):
 - [`deploy/compose`](deploy/compose) · [`deploy/compose-ha`](deploy/compose-ha) — Docker Compose (single-node / HA)
 
 **These are recipes, not the configuration of any running service.** Point them at your own
-infrastructure: copy [`deploy/aks/envs/example`](deploy/aks/envs/example) to your own environment
+infrastructure: copy the example environment (`deployments/aks/example/` in the private Systemorph/Memex
+deployments repository; it left this repository with the core-slimming carve) to your own environment
 folder and fill in your values. The files that carry real per-environment values —
 `values.<env>.yaml`, `secretproviderclass.yaml` — are git-ignored and never committed here.
 
