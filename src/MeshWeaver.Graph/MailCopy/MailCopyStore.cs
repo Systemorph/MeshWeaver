@@ -117,7 +117,25 @@ public interface IMailCopyStore
     /// </summary>
     IObservable<ImmutableList<MailMessageCopy>> ReadPage(
         string owner, string provider, string generation, long? from, int size, bool oldestFirst = false);
+
+    /// <summary>
+    /// The keys (<c>outlook</c>, <c>outlook.{accountId}</c>, <c>gmail</c>) of the copies <paramref name="owner"/> has
+    /// ON, whether or not their account is still connected — so a copy whose account is gone can still be listed
+    /// and deleted. A store that cannot list answers none.
+    /// </summary>
+    IObservable<ImmutableList<string>> SourceKeys(string owner) => Observable.Return(ImmutableList<string>.Empty);
+
+    /// <summary>
+    /// Every copy that is ON on this installation, across owners — what the keeper resumes after a restart.
+    /// Platform scope: refused to in-mesh code. A store that cannot list answers none.
+    /// </summary>
+    IObservable<ImmutableList<MailCopySourceRef>> EnabledSources() => Observable.Return(ImmutableList<MailCopySourceRef>.Empty);
 }
+
+/// <summary>One copy that is on: whose it is and its key.</summary>
+/// <param name="Owner">The user id that owns the copy.</param>
+/// <param name="Key">The copy's key (<see cref="MailCopySource.Provider"/>).</param>
+public sealed record MailCopySourceRef(string Owner, string Key);
 
 /// <summary>
 /// The copies as mesh nodes in the OWNER's partition.
@@ -591,6 +609,39 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                            && copy.MessageId.Length > 0
                            // A tombstone is never listed nor opened.
                            && !copy.Removed);
+
+    /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IObservable<ImmutableList<string>> SourceKeys(string owner)
+        => Gated(Assembly.GetCallingAssembly(), nameof(SourceKeys), owner, Permission.Read, () => Mesh().SelectMany(m => m.Mesh
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{MailCopyNodeTypes.NamespaceFor(owner)} nodeType:{MailCopyNodeTypes.SourceNodeType}", owner) with { Limit = 50 })
+            .Take(1)
+            .Select(change => change.Items
+                .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
+                               && string.Equals(node.Namespace, MailCopyNodeTypes.NamespaceFor(owner), StringComparison.Ordinal))
+                .Select(node => node.Id)
+                .ToImmutableList())));
+
+    /// <summary>The most copies one resume reads — one source per owner and account.</summary>
+    public const int MaxEnabledSources = 5000;
+
+    /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IObservable<ImmutableList<MailCopySourceRef>> EnabledSources()
+        => MailCopyAuthority.GatedPlatform(hub(), Assembly.GetCallingAssembly(), $"{nameof(MeshMailCopyStore)}.{nameof(EnabledSources)}",
+            () => Mesh().SelectMany(m => m.Access
+                .RunAsSystem(() => m.Mesh
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MailCopyNodeTypes.SourceNodeType} partitions:all") with { Limit = MaxEnabledSources })
+                    .Take(1)
+                    .Select(change => change.Items
+                        .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
+                                       && node.Namespace is { } ns && ns.EndsWith("/" + MailCopyNodeTypes.Segment, StringComparison.Ordinal))
+                        .Select(node => new MailCopySourceRef(node.Namespace![..^(MailCopyNodeTypes.Segment.Length + 1)], node.Id))
+                        .Where(r => !string.IsNullOrWhiteSpace(r.Owner) && !r.Owner.Contains('/'))
+                        .ToImmutableList()))));
 
     private IObservable<T> Gated<T>(Assembly caller, string surface, string owner, Permission permission, Func<IObservable<T>> work)
         => MailCopyAuthority.Gated(hub(), caller, $"{nameof(MeshMailCopyStore)}.{surface}", owner, permission, work);
