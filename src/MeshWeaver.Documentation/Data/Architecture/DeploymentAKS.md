@@ -232,7 +232,7 @@ is `volumes[].size` on the instance's `Hosting/Deployment` record, and the opera
 | a bigger share (`/data` full, content growing) | edit `volumes[].size` on the record (`128Gi`), then `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` — or a `Provision`, which carries the same step | `hosting-pv-resize --namespace <ns> --claim <claimName> --size <size>` once per declared claim, ordered FIRST in a Reconcile: a full `/data` blocks the rollout the re-apply then waits on |
 | to know whether the cluster has caught up | `{ "requestedAction": "Audit" }` | the report's `volumeCapacityBelowRecord` — the claim, the declared size and the live capacity |
 
-What the command does, and refuses, is the whole contract (`deploy/aks/operator/bin/hosting-pv-resize`):
+What the command does, and refuses, is the whole contract (`MeshWeaver.Plugins/deploy/hosting-operator/bin/hosting-pv-resize`):
 
 - it **grows** one claim to the declared size and reports the capacity it **read back** from the
   claim's `status`, never the request (`::hosting:: pv_capacity=<quantity>`, `pv_resized=0|1`);
@@ -329,8 +329,8 @@ in the mesh, executed on the `aks-ops` lane. `az aks upgrade`, `az aks nodepool 
   template. Measured 2026-09-25: the control instance's template named `3.0.0-ci.9260` (deadlocks at bake) while
   its serving pods were `3.0.0-ci.9218`, alive only because nothing had evicted them.
 
-The operator half is `deploy/aks/operator/bin/hosting-aks-upgrade` (behaviour-tested in
-`deploy/aks/operator/test/run-tests.sh`); the plan, the approval binding and the continuation are the
+The operator half is `MeshWeaver.Plugins/deploy/hosting-operator/bin/hosting-aks-upgrade` (behaviour-tested in
+`MeshWeaver.Plugins/deploy/hosting-operator/test/run-tests.sh`); the plan, the approval binding and the continuation are the
 Hosting plugin's — the full manual, with the exact action JSON, is `Hosting/ClusterUpgrade` in
 MeshWeaver.Plugins (`get Hosting/ClusterUpgrade` on the control instance's MCP).
 
@@ -404,11 +404,11 @@ Operational facts about the in-pod updater (learned the hard way — each cost a
 
 ## Portal self-update — Workload Identity for ACR polling
 
-Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy)): the portal polls ACR and patches its own Deployment to a newer image. The in-cluster PATCH uses the `memex-portal-sa` service-account token (RBAC ships in the Helm chart and works everywhere). **Listing the ACR tags** to discover a newer image needs an Azure credential — that is wired with **AKS Workload Identity**, mirroring the existing pgBackRest wiring (`deploy/aks/infra/modules/storage.bicep`).
+Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy)): the portal polls ACR and patches its own Deployment to a newer image. The in-cluster PATCH uses the `memex-portal-sa` service-account token (RBAC ships in the Helm chart and works everywhere). **Listing the ACR tags** to discover a newer image needs an Azure credential — that is wired with **AKS Workload Identity**, mirroring the existing pgBackRest wiring (`infra/platform/modules/storage.bicep` in Systemorph/Memex).
 
 **What the Helm chart already does** (no edits needed): when `selfUpdate.azureClientId` is set it annotates `memex-portal-sa` with `azure.workload.identity/client-id`, labels the pod `azure.workload.identity/use: "true"`, and sets `AZURE_CLIENT_ID`. The self-updater (`AcrTagLister`) then uses `ManagedIdentityCredential(AZURE_CLIENT_ID)` → AAD token → ACR token.
 
-**What the Azure side provides** (`deploy/aks/infra/modules/portal-identity.bicep`, wired from `deploy/aks/infra/main.bicep`): a **single shared** user-assigned managed identity (`<namePrefix>-portal-mi`) with **one federated credential per portal namespace** — subject `system:serviceaccount:<ns>:memex-portal-sa`, issuer = the cluster OIDC issuer, audience `api://AzureADTokenExchange` — for every namespace in the `portalNamespaces` param (every portal namespace, customer portals included). The UAMI gets **AcrPull** on `meshweaver.azurecr.io` (AcrPull includes the `metadata_read` the tag-list call needs). One UAMI → one AcrPull grant → the **same** `portalIdentityClientId` wired into `selfUpdate.azureClientId` for every namespace.
+**What the Azure side provides** (`infra/platform/modules/portal-identity.bicep` (Systemorph/Memex), wired from `infra/platform/main.bicep`): a **single shared** user-assigned managed identity (`<namePrefix>-portal-mi`) with **one federated credential per portal namespace** — subject `system:serviceaccount:<ns>:memex-portal-sa`, issuer = the cluster OIDC issuer, audience `api://AzureADTokenExchange` — for every namespace in the `portalNamespaces` param (every portal namespace, customer portals included). The UAMI gets **AcrPull** on `meshweaver.azurecr.io` (AcrPull includes the `metadata_read` the tag-list call needs). One UAMI → one AcrPull grant → the **same** `portalIdentityClientId` wired into `selfUpdate.azureClientId` for every namespace.
 
 ### One-time setup
 
@@ -424,7 +424,7 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
    az role assignment create --subscription <subscription> --assignee-object-id "$PORTAL_MI_OID" --assignee-principal-type ServicePrincipal \
      --role AcrPull --scope $(az acr show --subscription <subscription> -n meshweaver --query id -o tsv)
    ```
-   (IaC alternative: deploy with `grantSharedAcrPull=true` — authors this via `infra/modules/acr-role-assignment.bicep` in the registry's RG; needs User Access Administrator on `meshweaver-shared`. A *per-deployment* ACR instead of the shared one is granted in-bicep automatically.)
+   (IaC alternative: deploy with `grantSharedAcrPull=true` — authors this via `infra/platform/modules/acr-role-assignment.bicep` (Systemorph/Memex) in the registry's RG; needs User Access Administrator on `meshweaver-shared`. A *per-deployment* ACR instead of the shared one is granted in-bicep automatically.)
 3. **Set `selfUpdate.azureClientId`** to `portalIdentityClientId` for each environment (the in-pod patch works without it; this only authenticates the tag-list). Same value everywhere:
    - an instance deployed from the staging dir → the git-ignored `values.deploy.yaml` in the staging dir (template: `deploy/aks/scripts/values.deploy.example.yaml`), or `helm upgrade --set selfUpdate.azureClientId=<clientId>`.
    - an env-directory instance (customer portals included) → the git-ignored `deploy/aks/envs/<env>/values.<env>.yaml`.
@@ -708,7 +708,7 @@ restart (see "KeyVault CSI env timing" above).
 
 `deploy/aks/envs/<env>/deploy.sh` provisions a **new** environment: `helm upgrade --install` of the chart, PVCs, the Key Vault `SecretProviderClass` (legacy hand-made shape — a new environment declares its secrets under `keyVaultSecrets` in values instead), ingress, and the connection-string patch. **Do not run it for a code update** — it re-applies the whole chart and can reset live ConfigMaps (e.g. the email config). Use it only when standing up a brand-new namespace.
 
-Only the reference env `deploy/aks/envs/example/` is in this repo; per-tenant env directories are git-ignored (`.gitignore`: "directory names are tenant identities and must not enter this public repo"), so the real ones live outside it. Copy `example/` as the template.
+No env folder is in this repo any more — the reference env is `deployments/aks/example/` in Systemorph/Memex; per-tenant env directories are git-ignored (`.gitignore`: "directory names are tenant identities and must not enter this public repo"), so the real ones live outside it. Copy `example/` as the template.
 
 Note the tension with §2: because the chart's migration is a Job created per Helm revision, `helm upgrade` is also the *only* in-repo path that runs a migration. A schema change consequently needs this script (or a bare `helm upgrade`) even though a plain code update must not use it.
 

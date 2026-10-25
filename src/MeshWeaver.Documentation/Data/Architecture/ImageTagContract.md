@@ -15,13 +15,14 @@ actually promises, and the account of the one that was promised by nobody.
 ## What `promote` publishes
 
 `main-cd.yml`'s `promote` job is the only writer of consumer-visible tags in **continuous
-delivery**, and it writes exactly this set across the three repositories of the image set:
+delivery**, and it writes exactly this set across the repositories of the image set (`mw-core-tests`, core's built test
+assemblies, joined them as the set's fifth digest — the deploy-test-switch design in core PR #7182, decision D3):
 
 | Tag | On | Written in | Kind |
 |---|---|---|---|
-| `<short-sha>` | `memex-portal-ai`, `memex-migration`, `mw-plugin-test` | phase A | immutable identity |
-| `<version>` e.g. `3.0.0-ci.8079` | `memex-migration`, `mw-plugin-test` | phase A | immutable pointer |
-| `main` | all three | phase B | moving pointer |
+| `<short-sha>` | `memex-portal-ai`, `memex-migration`, `mw-plugin-test`, `mw-core-tests` | phase A | immutable identity |
+| `<version>` e.g. `3.0.0-ci.8079` | `memex-migration`, `mw-plugin-test`, `mw-core-tests` | phase A | immutable pointer |
+| `main` | all four | phase B | moving pointer |
 | `latest` | `mw-plugin-test` **only** | phase B | moving pointer, repo-scoped |
 | `<version>` | `memex-portal-ai` | **phase C — in `arm`, not `promote`** | immutable pointer — *the arming write*, made only once MeshWeaver.Plugins' dependent suites passed against this set's pair (policy `one-promotion-gate`, [One Promotion Gate](/Doc/Architecture/OnePromotionGate)) |
 | `<major>-latest`, `<major.minor>-latest`, `<major.minor.patch>-latest` | `memex-portal-ai`, `memex-migration` | **phase D — in `arm`** | moving line pointers; never moved backwards |

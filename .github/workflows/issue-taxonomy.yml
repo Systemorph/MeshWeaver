@@ -75,7 +75,7 @@ jobs:
           owner: Systemorph
           repositories: >-
             MeshWeaver,MeshWeaver.Plugins,Memex,MeshWeaver.Crm,MeshWeaver.Education,MeshWeaver.Reinsurance,
-            MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,MeshWeaver.FundReporting
+            MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,MeshWeaver.FundReporting,MeshWeaver.Deploy
           permission-issues: read
           permission-metadata: read
       - name: Check
@@ -85,7 +85,7 @@ jobs:
           python3 scripts/check-issue-taxonomy.py check \
             --repo Systemorph/MeshWeaver --repo Systemorph/MeshWeaver.Plugins --repo Systemorph/Memex \
             --repo Systemorph/MeshWeaver.Crm --repo Systemorph/MeshWeaver.Education --repo Systemorph/MeshWeaver.Reinsurance \
-            --repo Systemorph/MeshWeaver.SocialMedia --repo Systemorph/MeshWeaver.Manufacturing --repo Systemorph/MeshWeaver.FundReporting \
+            --repo Systemorph/MeshWeaver.SocialMedia --repo Systemorph/MeshWeaver.Manufacturing --repo Systemorph/MeshWeaver.FundReporting --repo Systemorph/MeshWeaver.Deploy \
             --older-than-hours 24
 
   report:

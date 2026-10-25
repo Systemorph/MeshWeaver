@@ -21,7 +21,7 @@ So there are three principals:
 | `hosting-operator` (the Job's SA) | namespaces, releases, ingresses, and via Workload Identity the Azure control plane | the seconds a run takes |
 
 The mesh decides and orders; the Job executes. `manifests/hosting-operator/` has the RBAC,
-`operator/` has the image, and `infra/modules/backups.bicep` has the storage and the identity.
+`operator/` has the image, and `infra/platform/modules/backups.bicep` (Systemorph/Memex) has the storage and the identity.
 
 ## The lifecycle
 
@@ -64,7 +64,7 @@ reason — which is asserted in the plugin's tests.
 ```bash
 # 1. Storage + the operator identity.
 az deployment group create -g "$RG" \
-  --template-file infra/modules/backups.bicep \
+  --template-file infra/platform/modules/backups.bicep \
   --parameters location=swedencentral backupAccountName=<globally-unique> \
                oidcIssuerUrl="$(az aks show -g "$RG" -n "$CLUSTER" --query oidcIssuerProfile.issuerURL -o tsv)" \
                postgresServerId="$(az postgres flexible-server show -g "$RG" -n "$PG" --query id -o tsv)"
@@ -79,13 +79,11 @@ az role assignment create --assignee "<operatorIdentityPrincipalId>" \
 # 3. RBAC (edit the client-id annotation first — see manifests/hosting-operator/README.md).
 kubectl apply -f manifests/hosting-operator/
 
-# 4. Build and push the operator image.
-#    🚨 The build context is `deploy/`, NOT the operator directory: the image carries the CHART
-#    (/opt/hosting/chart) as well as the scripts, so the image tag is also the chart version a
-#    provision deploys. Building from operator/ produces an image with no chart, which fails at
-#    the "Deploy release" step rather than at build time.
-docker build -f deploy/aks/operator/Dockerfile -t "$ACR/hosting-operator:1" deploy/ \
-  && docker push "$ACR/hosting-operator:1"
+# 4. The operator image. It is PUBLISHED, not built by hand: MeshWeaver.Plugins'
+#    hosting-operator.yml builds it from its deploy/hosting-operator (the scripts) and this
+#    repository's deploy/ (the CHART, /opt/hosting/chart), and moves `hosting-operator:main`.
+#    The image tag is also the chart version a provision deploys — MeshWeaver.Plugins
+#    Hosting/HostingOperator describes how the two halves are staged into one build context.
 
 # 5. Mount the jobrunner token into the portal and set Hosting:Operator:* — README.md in
 #    manifests/hosting-operator/ has the exact values.

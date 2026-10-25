@@ -187,8 +187,14 @@
     },
     "Systemorph/MeshWeaver": {
       "role": "chart",
-      "reason": "This repository. Its `deploy/` tree carries the platform CHART's own values files (measured 2026-09-15: 14 files that match the overlay path filter), not an installation — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. It is named here because the unit of this table is a repository whose tree carries overlay FILES: a repository that contributes pins and is absent from the table would be exactly the silent one this table exists to refuse.",
+      "reason": "This repository. Its `deploy/` tree carries chart values files of its own (measured at the chart's move to MeshWeaver.Deploy: 2 files that match the overlay path filter — the s1-extract and whisper charts), not an installation; the platform chart and memex-local left for Systemorph/MeshWeaver.Deploy (core slimming) — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. It is named here because the unit of this table is a repository whose tree carries overlay FILES: a repository that contributes pins and is absent from the table would be exactly the silent one this table exists to refuse.",
       "declaredAt": "2026-09-15",
+      "issue": "MeshWeaver#3438"
+    },
+    "Systemorph/MeshWeaver.Deploy": {
+      "role": "chart",
+      "reason": "The PUBLIC deployment reference that received this repository's deploy material (MeshWeaver.Deploy#1-#3, MeshWeaver#7158): the portal Helm chart (`deploy/helm`), the per-instance PostgreSQL chart (`deploy/helm-db`), an EXAMPLE AKS overlay with the cluster manifests and the chart / drift / observability tooling (`deploy/aks`), memex-local, and the chart guards. Its README states the scope: defaults, placeholders and example values only — an installation's own values live in its operator's private deployments repository, never there. Measured 2026-10-25 over its `main` tree (untruncated): the lane counts 45 files matching the overlay path filter — chart values, `values.*.example.yaml` and `deploy/aks/scripts/testdata/values.*.yaml` render fixtures — and NOT ONE declares an installation (`deploy/helm/values.yaml` sets no `Hosting__Deployment`; the example AKS overlay's host is `portal.example.com`), so it yields nothing on AXIS 3. Its chart defaults pin `ghcr.io/systemorph/memex-portal-ai:latest` and `memex-migration:latest` exactly as this repository's `deploy/helm/values.yaml` does, which the lane reports as `published by us` rather than as a running set. Named here for the same reason as `Systemorph/MeshWeaver`: a repository that contributes pin sites and is absent from the table is the silent one this table exists to refuse. The day it gains a real installation's overlay, that is a client or operator estate in a public repository and is itself the defect.",
+      "declaredAt": "2026-10-25",
       "issue": "MeshWeaver#3438"
     }
   },
@@ -206,6 +212,7 @@
         "design": "Doc/Architecture/FleetRegistryRetention",
         "reason": "Measured 2026-09-14 over core origin/main 192bb073b8, read-only: NOTHING deletes a manifest, a tag or a referenced blob from cr.meshweaver.cloud, and nothing collects its garbage — so the registry grows without bound. That is the safe direction to be wrong in; the hazard is the FIX. 🚨 `distribution` HAS NO LOCK: ACR's `changeableAttributes.deleteEnabled` is an ACR feature, so there is no object here that a protected set can be written INTO ahead of a deleter. A cleanup's own derivation would therefore be the entire safety margin, with nothing behind it — where on the ACR an incomplete run merely writes fewer locks and last night's still hold. Until a cleanup can derive a protected set over what this registry HOLDS (and nothing enumerates that as data today — MeshWeaver#4066), none may be added.",
         "chart": "deploy/helm/templates/registry",
+        "chartRepository": "Systemorph/MeshWeaver.Deploy",
         "deleteGrantedTo": "publisherUsername",
         "maintenance": {
           "uploadpurging": "168h"
@@ -258,6 +265,7 @@
         "repositories": [
           "systemorph/memex-portal-ai",
           "systemorph/memex-migration",
+          "systemorph/mw-core-tests",
           "systemorph/mw-plugin-test"
         ],
         "producedBy": [

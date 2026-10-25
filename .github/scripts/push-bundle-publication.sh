@@ -69,7 +69,7 @@
 # Callers: main-cd.yml (`publish-bake`, the platform's own content) and node-repo-publish-bake.yml
 # (MeshWeaver.Plugins and every satellite), after the share seal succeeds,
 # on the directory publish-bake-bundles.sh materialises (BAKE_PUBLICATION_DIR). Behaviour tests:
-# .github/scripts/test-bundle-registry.py (chart-gate's `Bundle registry scripts (executed)`).
+# MeshWeaver.Deploy .github/scripts/test-bundle-registry.py (its chart-gate's `Bundle registry scripts (executed)`).
 set -euo pipefail
 
 usage() {

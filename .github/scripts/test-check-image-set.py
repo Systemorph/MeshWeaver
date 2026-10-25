@@ -14,10 +14,10 @@ INDEX = {"manifests": [
     for architecture in ("amd64", "arm64")
 ]}
 EXPECTED_TAGS = {
-    "memex-portal-ai:abcdef1", "memex-migration:abcdef1", "mw-plugin-test:abcdef1",
-    "memex-portal-ai:main", "memex-migration:main", "mw-plugin-test:main",
+    "memex-portal-ai:abcdef1", "memex-migration:abcdef1", "mw-plugin-test:abcdef1", "mw-core-tests:abcdef1",
+    "memex-portal-ai:main", "memex-migration:main", "mw-plugin-test:main", "mw-core-tests:main",
     "mw-plugin-test:latest",
-    "memex-migration:3.0.0-ci.42", "mw-plugin-test:3.0.0-ci.42",
+    "memex-migration:3.0.0-ci.42", "mw-plugin-test:3.0.0-ci.42", "mw-core-tests:3.0.0-ci.42",
 }
 # 🚨 The portal's version tag is the ARMING write (main-cd `arm`, policy `one-promotion-gate`): the
 # set's verification must never ask for it, or every promoted set waiting for its dependent-suites
@@ -57,7 +57,7 @@ print(os.environ['INDEX'])
     def test_full_set_checks_every_identity_and_pointer(self):
         result, calls = self.check()
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertEqual(len(calls), 9)
+        self.assertEqual(len(calls), len(EXPECTED_TAGS))
         self.assertEqual(set(calls), EXPECTED_TAGS)
         self.assertIn("All images exist", result.stdout)
 
@@ -74,7 +74,7 @@ print(os.environ['INDEX'])
                     self.assertNotIn("is MISSING", result.stdout)
                     self.assertNotIn("was NOT built", result.stdout)
                     self.assertEqual(calls.count(tag), 1, "a failed read must not be retried")
-                    self.assertEqual(len(calls), 9, "a failed read must not hide later checks")
+                    self.assertEqual(len(calls), len(EXPECTED_TAGS), "a failed read must not hide later checks")
                     self.assertEqual(set(calls), EXPECTED_TAGS)
 
     def test_the_portal_version_tag_is_never_asserted_it_is_the_arming_write(self):

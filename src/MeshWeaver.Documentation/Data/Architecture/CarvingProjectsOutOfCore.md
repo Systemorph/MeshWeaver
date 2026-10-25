@@ -325,6 +325,33 @@ So the conversion, not a copy:
    one. And any `Add<Name>()` helper in `SampleDataExtensions` leaves with the content — the moved
    suites call `IncludePartition("<Name>")`, the primitive it wrapped.
 
+## Deployment material: each piece goes where its consumer is
+
+The deployment material under `memex/aspire`, `deploy/aspire` and `deploy/aks` is not one thing. Each
+piece is decided by **who reads it**. The guard that pinned a piece moves with it, and nothing is
+deleted in core until the receiving half has merged.
+
+| Piece | Went to | Why there |
+|---|---|---|
+| `memex/aspire/Memex.Aspire.Hosting` (packed as `MeshWeaver.Aspire.Hosting.Memex`) | MeshWeaver.Plugins `src/Memex.Aspire.Hosting` | Its only in-fleet consumer, `Memex.AppHost`, already lived there and pinned core's copy through `$(MeshWeaverRoot)`; nothing in core read it. The package is published from there now (`publish-aspire-package.yml`). The guard `TheAspireHostStatesTheStorageType` became Plugins' `Memex.Hosts.Test/AspireHostStatesTheStorageTypeTest`, beside its image-side counterpart. |
+| `deploy/aspire/Memex.Deploy.AppHost` | MeshWeaver.Plugins `src/Memex.Deploy.AppHost` | It builds only against the integration, so it goes where the integration goes. |
+| `deploy/aks/envs/example` | Systemorph/Memex `deployments/aks/example/` | It is the template for the environment folders, and every real one already lives in `deployments/aks/<env>/` there. The secret-template guard became Memex's `scripts/check-example-secret-template.py`, in its required Build (Release). |
+| `deploy/aks/infra` (AKS platform Bicep) | Systemorph/Memex `infra/platform/` | Estate provisioning already lives there (`infra/estate.bicep`, the client-estate Bicep and bootstrap). |
+| `deploy/helm`, `deploy/aks/manifests`, `deploy/aks/scripts`, `deploy/aks/values.aks.yaml` | **not moved by this change** — the chart is frozen in core and moves to Systemorph/MeshWeaver.Deploy in its own change | The operator image already takes the chart from MeshWeaver.Deploy (see the hosting-operator section below). For the trade-offs, see [Chart Ownership and the Runner Pool](../ChartOwnershipAndRunnerPool), "Moving the chart into a private repository". |
+
+🚨 **Survivors packed in another repository must be DECLARED to the retirement sweep.**
+`scripts/orphaned-nuget-packages.py` derives "orphaned" as *published minus packed in this tree*.
+After the Aspire integration left core, that derivation reads `MeshWeaver.Aspire.Hosting.Memex` (and
+`MeshWeaver.MemexTemplate`) as orphaned, and an apply would unlist a package we still publish. Both
+are therefore in `PACKED_ELSEWHERE`, which the self-test pins. A stale entry errs toward sparing a
+package, which is the safe direction.
+
+🚨 **Moving a packed project moves its publishing credential.** nuget.org Trusted Publishing
+policies name a repository **and a workflow file**. The policy for core's `publish-packages.yml` does
+not cover MeshWeaver.Plugins' `publish-aspire-package.yml`. The package owner has to add the new
+policy, and set `vars.NUGET_TRUSTED_USER` there, before the next Aspire package release. Until then
+that lane's `preflight` is red by name.
+
 ## The product demo samples
 
 ACME, FutuRe, Northwind and PensionFund were product demos sitting in the framework's
@@ -383,6 +410,36 @@ The `PensionFund idempotence intermittent` entry left `.github/samples-gate.allo
 The defect it named is not fixed. Re-installing PensionFund rewrites `Currency/{CHF,EUR,USD}` without
 `decimalPlaces`, because default-suppression drops a value equal to the C# initializer. That defect is
 now only reachable through the moved tree.
+
+## Moving a tool whose IMAGE carries core bytes — the hosting operator
+
+`deploy/aks/operator` (the `hosting-*` scripts, their behaviour suite and the Dockerfile) moved to
+MeshWeaver.Plugins `deploy/hosting-operator`, beside `Hosting/InstanceAction`, the plan that emits
+the commands. Three things made it different from a source move:
+
+1. **The image is two repositories' bytes.** It bakes core's chart, db chart and drift scripts beside
+   the scripts, because `hosting-deploy` installs the chart it carries. The chart stays in core. The
+   new lane stages core's `deploy/` at the declared platform ref with the scripts overlaid where
+   core's own build had them, so the Dockerfile's `COPY` lines are unchanged. A core chart change
+   reaches `:main` through an hourly rebuild that runs only when the input fingerprint moved.
+2. **The tag is a consumer contract.** `hosting-operator:main` keeps its meaning. The old immutable
+   tag (`<core sha7>`) was read as a core COMMIT by the estate's aks-ops lane, which checks the
+   scripts out of core at that commit. The new tag is `<plugins sha7>-<core sha7>`, and
+   `<plugins sha7>-<core sha7>-<deploy sha7>` once the chart came from MeshWeaver.Deploy. So core's
+   copy may only be deleted after that lane checks the scripts out of the new home. The deleting
+   half waits for the estate repository as well as for the adding half. The trap was the MOVING
+   tag: every record pins `:main`, which the lane had always resolved in core, so supporting the
+   new immutable tags was not enough — `main` itself had to resolve to the new homes (Memex#819).
+3. **The equivalence was measured, not argued.** The two images were built from the same core
+   commit and compared. The `/opt/hosting` tree and `/usr/local/bin` were byte-identical, and the
+   entrypoint, user and env were identical. The new lane asserts the entrypoint, the user and the
+   command set on every run. Moving also exposed drift: core's hand-copied list of planned commands
+   had fallen out of step with the plan. The lane in the plan's repository reads the plan instead.
+
+The guards that covered these files moved with them: the `secrets-write-only-entry` allow entries,
+and the `.gitignore` re-include for `bin/`. Their release-channel writer is now declared across
+repositories (`"repo"` on a binding in `.github/release-channels.json`), which keeps
+`hosting-operator:main` protected. MeshWeaver.Plugins `Hosting/HostingOperator` is the manual.
 
 ## Related
 

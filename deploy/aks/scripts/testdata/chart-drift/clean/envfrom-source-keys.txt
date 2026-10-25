@@ -1,1 +1,0 @@
-configmap/portal-extra	Commerce__BaseUrl

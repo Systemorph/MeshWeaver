@@ -6,9 +6,11 @@ Description: The target build shape. Each platform set is deployed as its own ve
 
 # Deploy, Test the Deploy, Switch Latest
 
-> **Status: DECIDED DESIGN — nothing on this page is wired yet.** It is the target shape for
-> policy `deploy-test-switch-latest` and policy `package-mesh-version-cap`, both `in force` in
-> [Policy Not Prose](../PolicyNotProse) as decisions, with the wiring listed as owed (§8). The
+> **Status: DECIDED DESIGN — nothing on this page is wired yet, except the readiness contract
+> (§2a).** It is the target shape for
+> policy `deploy-test-switch-latest` and policy `package-mesh-version-cap`. Both are DECIDED and
+> both stay `proposed` in [Policy Not Prose](../PolicyNotProse) until their wiring (§8) lands,
+> because the register marks a row `in force` only once its mechanism exists. The
 > owner's answers are recorded in §10; four questions there are still open. Today's mechanism is [Build Hosts](../BuildHosts), with
 > its design of record in MeshWeaver.Plugins at `Hosting/StandingBuildHosts`, under the in-force
 > policy `build-hosts-follow-latest`. Every *today* claim below cites a file and line on `main`.
@@ -24,7 +26,7 @@ green, switch `latest` to it. A set is available to modules only once `latest` p
                                     │
                                     ├─▶ build-host-deploy ──▶ InstanceAction BuildHostDeploy(v)
                                     │                           └─▶ record: buildHostSets["v/<v>"]
-                                    │                                 └─▶ Deployment build-<v> Ready
+                                    │                                 └─▶ build-<v> complete, pinned probe CLAIMED
                                     ├─▶ build-host-test ─────▶ follow lane ◀── core suites + dependents'
                                     │                                          affected gates run here
                                     └─▶ build-host-switch ───▶ green: alias latest := <v>
@@ -36,13 +38,13 @@ green, switch `latest` to it. A set is available to modules only once `latest` p
 | fact | where |
 |---|---|
 | Build hosts are merged and switched off in core's CD | `.github/build-hosts.json:3` (`"enabled": false`) |
-| The chart renders nothing by default | `deploy/helm/values.yaml:1108-1109` (`buildHosts.enabled: false`) |
+| The chart renders nothing by default | MeshWeaver.Deploy `deploy/helm/values.yaml:1113-1114` (`buildHosts.enabled: false`); the build-host chart lives there, core's is frozen (`BuildHosts.md` §3) |
 | The control record declares no hosts | Memex `mesh/Deployments/control.json` holds no `buildHosts` block |
 | The host model is per CHANNEL (`latest`, `stable`), never per version | `src/MeshWeaver.Deployment.Contract/BuildHosts.cs:25-41`; MeshWeaver.Plugins `Hosting/StandingBuildHosts.md:52-69` |
 | A channel's set is one mesh-owned token per channel, and it never moves backwards | `BuildHosts.cs:90-101`; MeshWeaver.Plugins `Hosting/Deployment/Source/BuildHostUpdates.cs:105-136` |
 | CD's order is gate → images → promote → ladder → control-first → arm | `.github/workflows/main-cd.yml:402,1350,2675,4658,2329,2908` (`arm` needs `platform-ladder-compat`, line 2910) |
 | `build-host-latest` moves the channel to the armed set. Nothing exercises that set ON a host before the move | `main-cd.yml:4038-4177` (needs `arm, build-host-image`, line 4045) |
-| Core's tests run on GitHub-hosted `ubuntu-latest`, against binaries the run builds itself, in 6 shards | `.github/workflows/dotnet-test.yml:5,658-733,928-959` |
+| Core's tests run on GitHub-hosted `ubuntu-latest`, against binaries the run builds itself, in the suite's shards (as many as `CI_SHARD_TOTAL` declares) | `.github/workflows/dotnet-test.yml:5,253,658-733,928-965` |
 | A host composes an already-built image and runs a repository's checks against it. Core's own CI is a different workload and is not wired | `BuildHosts.md` §5, *Status* |
 | Plugins resolves its platform at run time: the newest SEALED main-cd set, then the images by tag in ACR. The resolver is core's script, which Plugins fetches at core `main` | `.github/scripts/resolve-platform.py:24-45`; MeshWeaver.Plugins `.github/workflows/ci.yml:488-723` |
 | Plugins' gates run inside the `mw-plugin-test` container on the `aks-silos` / `aks-silos-dind` runner pools | MeshWeaver.Plugins `ci.yml:46-49,723` |
@@ -66,27 +68,65 @@ skipped on missing input (§6).
    receiver turns the event into a **governed `Hosting/InstanceAction`**, `BuildHostDeploy`, on
    control. The in-cluster operator executes it. Never `kubectl`, never a hand-edited Deployment,
    never `helm` by hand. The action writes the version's entry in the mesh-owned set (§3). The
-   record change applies itself (policy `record-change-applies-itself`). The action completes when
-   the new Deployment reports Ready, and Ready already means the plugins layer is staged
-   (`BuildHosts.md` §3).
-3. **Test the deployment.** Job `build-host-test` queues a run whose claim names the CANDIDATE
+   record change applies itself (policy `record-change-applies-itself`). 🚨 **Readiness is
+   `complete` plus a CLAIMED probe — there is no `ready` field** (the contract below, §2a). The
+   deploy step waits until `GET /api/builds/hosts` lists the version with `complete: true`, then
+   submits a probe pinned to that version (`POST /probes` with `version`) and waits for a host to
+   CLAIM it. A claim proves a host of that version is up and serving; no claim inside the deploy
+   window is a deploy FAILURE (§7). The probe's verdict is a test like any other. 🚨 **A deploy
+   carries its own warm-up demand.** Scaling demand comes only from attempts (§3) and an idle
+   version scales to zero (§9), so before any test attempt exists nothing would keep a replica up
+   while the deploy step waits for the claim. The `v/<version>` entry the action writes is
+   therefore marked `warming`, and the chart renders a `warming` version's ScaledObject with
+   `minReplicaCount: 1`. Step 3 admits the test attempts BEFORE the action clears `warming`, so
+   the floor drops back to zero only once the attempts' own demand holds the replica.
+
+### 2a. The readiness contract
+
+Implemented in MeshWeaver.Deploy#8 and core #7200; the design of record is MeshWeaver.Plugins
+`Hosting/StandingBuildHosts.md` §7b.
+
+```text
+GET /api/builds/hosts
+{ "aliases":  { "latest": "<v>", "candidate": "<v>", "previous": "<v>" },
+  "versions": [ { "version": "<v>", "deploymentName": "build-<v>", "maxReplicas": N,
+                  "aliases": ["latest", …], "pinned": N, "complete": true|false } ] }
+```
+
+- **A version is deployable once it is `complete`** — its set is whole and its Deployment and
+  ScaledObject are rendered. `complete` says nothing about a running replica: a complete version
+  scaled to zero is a valid target, and a pinned attempt scales it up.
+- **There is NO `ready` field.** What proves a ready host is a CLAIM: a probe pinned to the version
+  (`POST /probes` with `version`) that a host of that version claimed. Nothing reads a readiness
+  flag, so nothing can trust a stale one.
+- `pinned` counts the attempts recorded against the version (the retention rule 4 input, §6);
+  `aliases` lists every alias that names it.
+3. **Test the deployment.** Job `build-host-test` queues runs whose claims name the CANDIDATE
    version, never a channel. It follows each stage through the existing follow lane
    (`build-follow.yml`: only `succeeded` is green, a timeout is red, an unreadable endpoint is
-   red). The run executes:
+   red). The runs execute:
    - **the core suites**, as stages of a new core declaration `.github/build-stages.json`, run
-     from the set's `mw-core-tests` image: today's 6 shards, the doc gate and the ladder's link
-     probe;
+     from the set's `mw-core-tests` image: the suite's shards (as many as `dotnet-test.yml`
+     declares in `CI_SHARD_TOTAL`), the doc gate and the ladder's link probe. 🚨 **One pinned run
+     PER SHARD, never one run holding every shard.** A host runs one run's stages one after
+     another (`.github/scripts/build-run.py:1682-1699`: a `for st in stages` loop, each stage
+     awaited before the next), so shards declared as stages of ONE run would execute serially on
+     one replica and `MaxReplicas` would parallelise nothing. Each shard is therefore its own run,
+     pinned to the candidate version, and the runs spread across the version's replicas (§9);
    - **the dependents' affected gates**: MeshWeaver.Plugins' and each satellite's `compile-check`
      and `gate` stages (H7, `BuildHosts.md` §5), for the modules the platform delta affects,
-     against the same candidate. Their verdict GATES the switch (§10, D1). That is a register
-     exception to `dependents-verify-on-their-side`, scoped to the module-facing `latest` switch
-     only.
-4. **Switch `latest`.** On a run where the core suites AND every affected dependents' gate are
-   green, job `build-host-switch` sends
-   `build-host-switch-requested`. Its InstanceAction `BuildHostSwitch` moves the alias `latest`
-   to the candidate version in ONE record write, never backwards, and only to a version whose run
-   is recorded green for every planned stage. The receiver re-reads that run node; the event's
-   claim alone is not trusted.
+     against the same candidate. Their verdict GATES the switch (§10, D1). Once the policy is in
+     force, that is a register exception to `dependents-verify-on-their-side`, scoped to the
+     module-facing `latest` switch only; until then that policy holds unexcepted.
+4. **Switch `latest`.** The verdict is COMBINED over the candidate's runs: every shard run, the
+   doc-gate run and every affected dependents' gate run must be `Succeeded`, and one run that is
+   red, missing or unfinished holds the switch. The P4 deploy workflow's `build-host-test` job owns that verdict (§8). When it
+   is green, job `build-host-switch` sends `build-host-switch-requested`, naming EVERY run the
+   verdict covered (or one parent node that lists them). Its InstanceAction `BuildHostSwitch` moves
+   the alias `latest` to the candidate version in ONE record write, never backwards, and only when
+   each named run is recorded green for every planned stage AND recorded the candidate version.
+   The receiver re-reads every one of those run nodes; the event's claim alone is not trusted, and
+   an event that names fewer runs than the plan is red.
 5. **Available to modules.** Whatever builds "against latest" (§4) resolves the alias at the
    moment it runs. So the switch is the publication of the set to modules. Nothing before it
    offers the candidate to any module build, and a red set is never offered.
@@ -121,19 +161,34 @@ whose authored upper cap (§5) forbids `latest` builds against the **highest ret
 cap allows**.
 
 - **The source of `latest` is the control record's alias**, read through a public read endpoint
-  on the build API (`GET /api/builds/hosts` → `{latest, versions:[{version, digests, ready}]}`).
-  It is no longer "the newest sealed main-cd run". `resolve-platform.py` (core-owned, fetched by
-  every satellite at core `main`) gains `--from-build-hosts <api>`, which resolves the alias to
-  its set and takes the digests from the record, not from a tag lookup. A missing, unreadable or
-  not-Ready alias is a RED job naming what was looked for. It never falls back to "newest sealed",
-  because that set may be untested (resolve-platform.py's own rule: *"never a fallback to a moving
-  tag nobody named"*).
+  on the build API. It is no longer "the newest sealed main-cd run". `resolve-platform.py`
+  (core-owned, fetched by every satellite at core `main`) reads it with `--from-build-hosts <api>`,
+  ONCE per run, so the alias and the versions cannot disagree about a switch that happened between
+  two reads. The fields it reads are exactly these (the §2a shape):
+
+  ```text
+  GET /api/builds/hosts
+  { "aliases":  { "latest": "<v>", … },
+    "versions": [ { "version": "<v>", "complete": true|false, … } ] }
+  ```
+
+  `latest` is `aliases.latest`, never a field at the response root, and it must name a row of
+  `versions` whose `complete` is `true`. `complete` is RECORD completeness (the record holds that
+  version's full set, so the chart renders its Deployment); it is not pod readiness, and the
+  resolver reads no `ready` field. A complete version scaled to zero is a valid target. **The
+  digests do not come from this answer**: the resolver takes the version `aliases.latest` names and
+  resolves it through the existing freeze path, exactly like a pinned `MW_PLATFORM_REF` — that one
+  sealed CD run, its images present, never a substitute. A missing or unreadable answer, a missing
+  alias, or an alias naming a version that is absent or not `complete`, is a RED job naming what
+  was looked for. It never falls back to "newest sealed", because that set may be untested
+  (resolve-platform.py's own rule: *"never a fallback to a moving tag nobody named"*).
 - **With a cap**, the resolver takes the highest version in `versions` that satisfies BOTH bounds:
   at or above the package's `minMeshVersion` and at or below its cap, compared by the one
-  comparator `PlatformFloor`. If no retained, Ready deployment lies in that range, the result is
+  comparator `PlatformFloor`, among versions that are `complete` (record completeness, never pod readiness: an incomplete
+  version is skipped; a complete one scaled to zero is a valid target). If no such version lies in that range, the result is
   RED, naming the floor, the cap and the retained versions, and never a silent pick of `latest` or
   of a version below the floor. Once a cap is admitted (§5) retention holds its deployment (§6),
-  so a red after admission is a retention defect; a red before the cap's deployment is Ready is
+  so a red after admission is a retention defect; a red before the cap's deployment is `complete` is
   the admission still in progress, and says so.
 - **Per package, not per repository.** A repository's run partitions its modules by the version
   each one resolves to. Uncapped modules run on `latest`. Capped modules run on their cap's
@@ -166,11 +221,11 @@ case. A cap carries two companion fields, both required when the cap is present:
 - a cap cannot be added without `capReason` and `capTracking`;
 - **admission reserves the deployment.** A new cap usually names a version that `latest` has just
   left, so its deployment may already be gone. The validator reads `GET /api/builds/hosts`: if the
-  highest version in the cap's range is retained and Ready, the cap is admitted and rule 5 of §6
+  highest version in the cap's range is retained and `complete`, the cap is admitted and rule 5 of §6
   holds it from the moment the cap is on a default branch. If it is not deployed, the cap's
   admission requests `BuildHostDeploy(<v>)` for that SEALED set, followed by the same test run a
   candidate gets (§2 step 3) and NO switch; capped builds of the package are red, naming the
-  pending deployment, until it is Ready and green. If the set's images are no longer in the
+  pending deployment, until it is `complete`, its pinned probe has been claimed, and its run is green. If the set's images are no longer in the
   registry, the cap cannot be admitted, and the validator says so by name.
 
 **Runtime.** This design gives the cap BUILD-and-TEST meaning only: it selects the deployment a
@@ -182,8 +237,10 @@ and a cap must not either.
 (*"or migrate to latest"*). A daily job on the control instance reads every package that declares a
 cap in the registry catalog. For each one it files, or refreshes, ONE triage item: a
 `Feedback/Feedback` node whose message names the package, the cap, `latest`, the distance in
-platform builds, the age of the cap and `capTracking`. The item is keyed by (package, cap), so a
-second day updates the same item and never files a duplicate. Removing the cap closes it. The job
+platform builds, the age of the cap and `capTracking`. The item is keyed by the package's stable
+identity alone, never by its cap: a second day updates the same item, and a cap that is RAISED but
+still forbids `latest` updates the cap named in that same item in place, so neither ever files a
+duplicate. Removing the cap closes it. The job
 runs as System after the platform-action check (policy `authorize-as-caller-execute-as-system`),
 and triage decides the rest, as for every finding ([Incidental Findings](../IncidentalFindings)).
 
@@ -234,8 +291,8 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
   reported on ONE open `build-host-candidate` issue, which is closed only by a run that switched
   `latest`, the same pattern as today's `build-host-report` (`main-cd.yml:4184`). The next set
   that passes supersedes.
-- **A deploy that fails** (the action fails, is refused, or the Deployment is not Ready inside the
-  job's window) is RED. It is never "skipped" and never a pass that the next run repairs. The
+- **A deploy that fails** (the action fails, is refused, the version is not `complete`, or no
+  host CLAIMS the version-pinned probe inside the job's window, §2a) is RED. It is never "skipped" and never a pass that the next run repairs. The
   candidate's partial record entry is torn down.
 - **No skip-trapdoors.** Once the hosts are declared on (`.github/build-hosts.json`), a `preflight`
   job asserts the webhook URL and secret and the build API. The deploy, test and switch jobs
@@ -257,9 +314,9 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 |---|---|---|---|
 | P0 | core | this design, the owner's answers (§10) and the two register rows | no |
 | P1 | core | contract: init-only additions to `BuildHostsBlock` (`Retention`, the per-version default), the `v/` and `alias/` key forms, `Package.MaxMeshVersion` + `CapReason` + `CapTracking`, and the cap validator in `node-repo-validate.yml` | no |
-| P2 | core | chart: render one Deployment and one ScaledObject per `v/` entry, plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
-| P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, the stage-log endpoint answering by recorded version, `GET /api/builds/hosts`, the retention computation | no |
-| P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, the follow lane's `version` input (§4), and the `mw-core-tests` image as the set's fifth digest (D3) | no |
+| P2 | MeshWeaver.Deploy | chart (it owns the build-host chart; core's is frozen, `BuildHosts.md` §3): render one Deployment and one ScaledObject per `v/` entry (with `minReplicaCount: 1` while the entry is `warming`, §2), plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
+| P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, the stage-log endpoint answering by recorded version, `GET /api/builds/hosts` in the §2a shape (§4 lists the fields the resolver reads), the retention computation. **Follow-up (plugins-e6): the switch accepts a SET of runs.** e6's switch receiver checks a single `run` today; it must take every run the event names (or a parent that lists them), re-read each, and refuse when any is not `Succeeded` or did not record the candidate version (§2 step 4) | no |
+| P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, the follow lane's `version` input (§4), and the `mw-core-tests` image as the set's fifth digest (D3). `build-host-test` submits ONE pinned run per shard and owns the COMBINED verdict over the shard runs and the dependents' gate runs; the switch event names all of them or their parent (§2 steps 3–4) | no |
 | P5 | core | `resolve-platform.py --from-build-hosts`, including per-package resolution under a cap, IMPLEMENTED and self-tested but INERT: no consumer passes the flag, so Plugins and the satellites stay on today's newest-sealed path | no |
 | P6 | MeshWeaver.Plugins + core | the daily cap-debt job (control), the capped-run publish path (D2), the retention of the previous `latest` and the backwards rollback switch (D4), and the `lock-pinned-digests.py` reading of `buildHostSets` (core) | no |
 | P7 | Memex | the `buildHosts` block on `mesh/Deployments/control.json`, through the record's approval path | **yes** |
@@ -272,25 +329,29 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 | phase | status | where |
 |---|---|---|
 | P1, cap half | **implemented.** `Package.MaxMeshVersion`, `CapReason` and `CapTracking` are carried by the node-repo listing. `resolve-platform.py --check-caps` is the validator, and `node-repo-validate.yml` runs it for every satellite. | core #7192 |
-| P5 | **implemented, inert.** `resolve-platform.py --from-build-hosts <api> [--packages-root .]` reads `GET /api/builds/hosts` (`{aliases:{latest, previous}, versions:[{version, ready, maxReplicas, pinnedBy}]}`). It resolves `aliases.latest` through the freeze path and writes `partitions`. It is RED on a missing, unreadable or not-ready answer, and it never falls back. No consumer passes the flag. | core #7192 |
+| P5 | **implemented, inert.** `resolve-platform.py --from-build-hosts <api> [--packages-root .]` reads `GET /api/builds/hosts` (`{aliases:{latest, …}, versions:[{version, complete, …}]}`; no `ready` is read). It resolves `aliases.latest` through the freeze path and writes `partitions`. It is RED on a missing or unreadable answer, or on an alias naming a version that is absent or not `complete`, and it never falls back. No consumer passes the flag. | core #7192 |
 | P6, cap debt | **implemented, not called.** `node-repo-cap-debt.yml` publishes the repository's whole cap set as one signed `build-caps` event, then files one `Feedback/Feedback` "migrate to latest" item per capped package. The control intake keeps `Hosting/BuildCaps/<package>` (`{package, floor, cap, version, reason}`), written as System, for retention's `capVersions`. It deletes the node of a removed cap, and it computes the `BuildHostDeploy(reason: cap:<package>)` request for an undeployed cap but does not send it until P3 has the action. No satellite calls the lane until its service-user token is provisioned. | core #7192, MeshWeaver.Plugins (intake) |
 | P6, capped publish (D2) | **owed with P10.** It is the publish lanes consuming `partitions`, and nothing produces partitions until a consumer adopts `--from-build-hosts`. | — |
 | P10 | **blocked on P9.** | — |
 
-`deploy-test-switch-latest` and `package-mesh-version-cap` are `in force` as decisions, with
-P1 to P10 listed as owed on their register rows.
+`deploy-test-switch-latest` and `package-mesh-version-cap` are decided and stay `proposed` on
+their register rows, with P1 to P10 listed as owed; each moves to `in force` once its wiring has
+landed.
 When P9 is verified and P10 has landed, `build-hosts-follow-latest` is retired in the register.
 
 ## 9. Cost
 
-- **CPU moves from GitHub to the cluster.** Core's 6 test shards run on GitHub-hosted runners today
-  (`dotnet-test.yml:959`). On a host they consume `cibuild` pool vCPU, and each shard is a
-  replica of the candidate (its `MaxReplicas` must cover the shard count plus the dependents'
-  gates). Per CD run that adds one full core test pass plus the dependents' affected gates. The
+- **CPU moves from GitHub to the cluster.** Core's test shards (as many as `CI_SHARD_TOTAL`
+  declares) run on GitHub-hosted runners today (`dotnet-test.yml:253,965`). On a host they
+  consume `cibuild` pool vCPU. A host runs one run's stages serially
+  (`build-run.py:1682-1699`), so the shards parallelise only because each is its OWN pinned run
+  (§2 step 3), and KEDA spreads those runs across the candidate's replicas. The version's
+  `MaxReplicas` therefore bounds how many shard runs and dependents' gate runs execute at once; a
+  smaller value serialises them and lengthens the test step, it never drops one. Per CD run that adds one full core test pass plus the dependents' affected gates. The
   PR-time `dotnet-test.yml` is unchanged, so this is an ADDED pass, not a moved one, until Q6
   decides otherwise.
 - **Idle cost is low.** KEDA scales every version to zero (`minReplicaCount: 0`, `BuildHosts.md`
-  §3). A retained but idle deployment costs its record entry, its locked images and its cache
+  §3), except a version still `warming` under its deploy (§2 step 2), which holds one replica. A retained but idle deployment costs its record entry, its locked images and its cache
   entries, not a node. The price is a cold start when a capped package's run arrives.
 - **Staging per version.** Each deploy copies the tester and portal `/app` by digest into the
   composed host, and builds the reference set once. One extra deploy per armed set.
@@ -309,8 +370,8 @@ When P9 is verified and P10 has landed, `build-hosts-follow-latest` is retired i
 ### Decided
 
 - **D1 — the switch gate.** `latest` moves only when core's suites AND the affected
-  MeshWeaver.Plugins and satellite gates are green on the deployed build server. This is a
-  register exception to `dependents-verify-on-their-side`, scoped to the module-facing `latest`
+  MeshWeaver.Plugins and satellite gates are green on the deployed build server. Once the policy
+  is in force, this is a register exception to `dependents-verify-on-their-side`, scoped to the module-facing `latest`
   switch ONLY: core pull requests still merge on core's own checks, and no other core job waits
   on a dependent. `platform-module-deploy-separate` stays in force: a platform roll never waits
   on a module verdict (§7).

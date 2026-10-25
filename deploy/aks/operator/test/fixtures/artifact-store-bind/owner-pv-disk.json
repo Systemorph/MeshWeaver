@@ -1,1 +1,0 @@
-{"metadata":{"name":"pvc-owner"},"spec":{"capacity":{"storage":"512Gi"},"csi":{"driver":"disk.csi.azure.com","volumeHandle":"/subscriptions/x/disks/y"}}}

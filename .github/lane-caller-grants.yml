@@ -648,13 +648,29 @@ repos:
   # `--assert-fleet-row Systemorph/MeshWeaver.Deploy` and the row prints under "NOT COVERED".
   Systemorph/MeshWeaver.Deploy:
     asserted-by: none — MeshWeaver.Deploy is a chart repository with no node-repo-validate caller to run
-      --assert-fleet-row, so this row is a snapshot of its request-review-on-change.yml caller.
+      --assert-fleet-row, so this row is a snapshot of its platform-lane callers (MeshWeaver.Deploy#6).
     callers:
-      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # ── Request review on real change (policy review-on-real-change). With the ruleset's Copilot rule at
       # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
       # one GraphQL requestReviews needs `pull-requests: write`.
       - workflow: request-review-on-change.yml
         job: request
         lane: node-repo-request-review.yml
         grants: {contents: read, pull-requests: write}
-        pending: this repository's thin request-review-on-change.yml caller lands after this row is on core main (policy review-on-real-change)
+      # ── The review gate, the arm and the transient retry — ARRIVING with MeshWeaver.Deploy#6. The review
+      # context becomes required only once it has been seen published on live pull requests there.
+      - workflow: review-answered.yml
+        job: review-answered
+        lane: node-repo-review-answered.yml
+        grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+        pending: the thin review-answered.yml caller lands in MeshWeaver.Deploy#6
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}
+        pending: the thin auto-arm.yml caller lands in MeshWeaver.Deploy#6
+      - workflow: retry-known-transients.yml
+        job: retry
+        lane: node-repo-retry-transients.yml
+        grants: {actions: write, checks: read, contents: read}
+        pending: the thin retry-known-transients.yml caller lands in MeshWeaver.Deploy#6

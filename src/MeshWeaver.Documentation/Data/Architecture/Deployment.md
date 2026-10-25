@@ -167,13 +167,23 @@ dotnet user-secrets set "Parameters:azure-foundry-key" "<your-key>"
 
 # Project Structure
 
+The portal hosts and the Aspire projects live in **MeshWeaver.Plugins** `src/`; this repository keeps
+only what they share from `memex/`:
+
 ```
-memex/aspire/
-├── Memex.AppHost/                  # Aspire orchestrator — defines all resources
+MeshWeaver.Plugins/src/
+├── Memex.AppHost/                  # Source-building Aspire orchestrator — defines all resources
 ├── Memex.Aspire.Hosting/           # The Aspire adapter (builder.AddMemex) — derives everything from the Deployment record
+├── Memex.Deploy.AppHost/           # Image-based AppHost over the adapter (aspire publish / --record-out)
 ├── Memex.Portal.Distributed/       # Portal with co-hosted Orleans silo
-├── Memex.Portal.ServiceDefaults/   # Shared service defaults (health, telemetry)
+├── Memex.Portal.Monolith/          # The standalone dev portal
+├── Memex.LocalMesh/                # The local mesh sidecar
 └── Memex.Database.Migration/       # Database migration project (runs MigrationRegistry.All)
+
+MeshWeaver/memex/
+├── Memex.Portal.Shared/            # Shared portal code, including the self-update poller
+└── aspire/Memex.Portal.ServiceDefaults/   # Shared service defaults (health, telemetry)
 ```
 
-Outside `aspire/`, `memex/` also holds `Memex.Portal.Monolith` (the standalone dev portal), `Memex.Portal.Shared` (shared portal code, including the self-update poller), `Memex.Client`, and `Memex.LocalMesh`.
+`Memex.Aspire.Hosting` and `Memex.Deploy.AppHost` moved from `memex/aspire` and `deploy/aspire` with the
+core-slimming carve ([Carving Projects Out Of Core](../CarvingProjectsOutOfCore)).

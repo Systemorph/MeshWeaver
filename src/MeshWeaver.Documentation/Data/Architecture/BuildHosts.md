@@ -23,7 +23,7 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 [Module Build Architecture](../ModuleBuildArchitecture) and [Build Server](../BuildServer).
 
 > **Target shape:** [Deploy, Test the Deploy, Switch Latest](../DeployTestSwitchLatest) (DECIDED
-> DESIGN, not wired; policy `deploy-test-switch-latest`, in force with its wiring owed) generalises the channels on this page into one
+> DESIGN, not wired; policy `deploy-test-switch-latest`, decided and `proposed` until its wiring lands) generalises the channels on this page into one
 > versioned deployment per platform set plus a `latest` alias that moves only after the set passed
 > its tests ON its deployment. Until that wiring lands, this page describes what runs.
 
@@ -349,6 +349,26 @@ Dockerfile copies `.github/scripts`' scripts, installs bubblewrap, runs the self
 shape above for both channels, and the refusals hold; the fixture also runs through every portal
 invariant in `check-chart-invariants.sh`.
 
+### Versioned build servers (contract and chart)
+
+Besides the channel hosts, the chart renders one **versioned build server** per entry in
+`buildHosts.versions` (the chart half lands in MeshWeaver.Deploy). The entries come from the record's mesh-owned `buildHostSets`, never typed by
+hand. The design is Deploy, Test the Deploy, Switch Latest (the design page in core PR #7182; linked once it lands) §3.
+
+- **Keys.** `v/<version>` holds that version's set token. `alias/<name>` holds the VERSION an alias
+  names (`latest`, `candidate`, `previous`; one scalar leaf). `BuildHostSetKeys` parses both;
+  `DeploymentContent.BuildHostAliasSet` / `BuildHostVersionSet` resolve them.
+- **Token.** The token gains an optional fifth part, the `mw-core-tests` digest. A four-part token
+  reads back byte-identically.
+- **Chart** (the build-host chart lives in Systemorph/MeshWeaver.Deploy; core's is frozen). Each entry renders Deployment `build-<v>` (dots as dashes, a DNS label) and ScaledObject
+  `build-<v>-scaler`, with demand from `/queue?version=<v>`. Its runner (which moves to MeshWeaver.Deploy
+  along with the chart) claims, reports and requests its token by `MW_BUILD_VERSION`, never by channel. The selector and pod labels carry the version
+  ONLY; the aliases label the Deployment, so a switch moves a label and restarts nothing. An alias
+  that names two versions, a repeated version, or a malformed version is refused.
+- **Retention.** `BuildHostRetention.Keep` holds every alias target (`previous` while
+  `KeepPreviousLatest`), every attempt's recorded version, and every capped package's version;
+  `Teardown` is the rest.
+
 ## 4. Core's CD deploys the host
 
 **The runner image.** `main-cd.yml` job `build-host-image` builds `deploy/build-host/Dockerfile`
@@ -493,8 +513,33 @@ declaration claims it yet: MeshWeaver.Plugins owes the seven items in its `Hosti
 (H7), and the satellites declare no stages. **This repository's own CI is NOT wired**, and must not be
 until its heavy legs can be stated as stages: they build the platform from source and test it
 (`dotnet-test.yml`'s build and shards), while a host composes an already-built platform image and
-runs a repository's checks against it — a different workload, not a missing switch. Core declares
-no `.github/build-stages.json`, so `build-executor.py` would answer `actions` for it regardless.
+runs a repository's checks against it — a different workload, not a missing switch.
+
+**Core's stages run on a DEPLOYMENT, not on its pull requests.** Core declares
+`.github/build-stages.json` for the deploy-test-switch shape (the design page in core PR #7182, P4):
+`test-shard-0` … `test-shard-<N-1>`, one per shard of `dotnet-test.yml`'s suite (N =
+`CI_SHARD_TOTAL`), and `doc-gate`. Each runs from the set's **`mw-core-tests`** image, the set's
+fifth digest (`BuildHostChannel.CoreTestsDigest`): main-cd's `core-tests-image-arch` builds core's
+tests with CI's flags once PER ARCHITECTURE, on a runner of that architecture — a test bin carries
+the build machine's native `mw-plugin-test` apphost and its SDK's ReadyToRun Razor generator, so an
+x64 tree cannot serve the arm64 image — `deploy/core-tests/core-tests.py pack` stores every shard's
+bins content-addressed with a manifest, `core-tests-image` joins the two platform images into the
+set's index, and `promote` tags it with the set. A stage runs
+`python3 /core-tests/core-tests.py run --shard <i> --total <N>`, which copies that shard's bins out
+of the read-only image tree into the run's checkout and runs them as CI's shard loop does — each
+unit in its own process group, ended whole at the wall clock, and judged on a trx written by THAT
+invocation; `doc-gate` runs the doc and samples gates with the image's plugin tester against the
+checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI's doc-gate job.
+- **The list is GENERATED**: `.github/scripts/core-build-stages.py --write` derives it from
+  `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
+  reds any drift. The runner also refuses a `--total` the image was not packed for.
+- **No `ciEquivalent`.** Core's pull-request CI stays on runners, so `build-executor.py` still
+  answers `actions` for it; `--check` refuses the claim.
+- **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
+  `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
+  and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
+  suites run inside a host's sandbox — the shards' Testcontainers projects need a Docker daemon a
+  host does not have, and the shards' browser tests need the font set CI stages.
 
 **The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
 credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`

@@ -402,7 +402,7 @@ join, ARM 20d reproduces the production line verbatim.
 base64-encoded inside Azure, with no source repository; an org-wide code search for
 `purge-old-images` returns zero hits outside this page; and the deployment repo's tree carries no
 bicep, terraform or task definition for them. The shared registry itself is out-of-band —
-`deploy/aks/infra/main.bicep` treats `meshweaver.azurecr.io` as an existing `sharedAcrLoginServer`
+`infra/platform/main.bicep` (Systemorph/Memex) treats `meshweaver.azurecr.io` as an existing `sharedAcrLoginServer`
 and only creates a registry when that is empty.
 
 So the reasoning that keeps two incidents from recurring lived in comments that existed in exactly
@@ -582,8 +582,8 @@ plus the release candidates — the shape the design predicts, measured rather t
 re-running after any change to either extractor: a fixture can be made to agree, a fleet cannot.
 
 **Axis 2's scope is narrow, and the boundary was measured rather than guessed.** Widening it to
-every YAML/JSON under `deploy/` was tried and rejected: this repository's
-`deploy/aks/operator/test/fixtures/**` carry image references to tags that never existed
+every YAML/JSON under `deploy/` was tried and rejected: the hosting operator's
+`MeshWeaver.Plugins/deploy/hosting-operator/test/fixtures/**` carry image references to tags that never existed
 (`memex-portal-ai:3.0.0-rc8.ci.5000`), which would red the job nightly over test fixtures, and
 `deploy/aks/manifests/observability/log-watcher.yaml` names the floating tag `:latest`, which has no
 fixed manifest to protect. Floating tags are reported and never locked, for the same reason.

@@ -248,6 +248,26 @@ public record PackageManifest
     public string? MinMeshVersion { get; init; }
 
     /// <summary>
+    /// The package's authored upper platform CAP (<c>content.maxMeshVersion</c>, policy
+    /// <c>package-mesh-version-cap</c>, <c>Doc/Architecture/ModuleVersioning</c> → "The upper cap"):
+    /// the newest platform set its modules may be BUILT and TESTED against. A capped package builds
+    /// on the highest ready build-server deployment at or above <see cref="MinMeshVersion"/> and at
+    /// or below this cap instead of <c>latest</c>. It has no runtime meaning: no install, update or
+    /// landing decision reads it, and it never holds a platform roll. Null = none (the normal case:
+    /// the package builds against <c>latest</c>). Validated by <c>resolve-platform.py
+    /// --check-caps</c>.
+    /// </summary>
+    public string? MaxMeshVersion { get; init; }
+
+    /// <summary>Why the package is capped (<c>content.capReason</c>, one line) — required beside
+    /// <see cref="MaxMeshVersion"/>, null without one.</summary>
+    public string? CapReason { get; init; }
+
+    /// <summary>The node path of the item tracking the package's migration to <c>latest</c>
+    /// (<c>content.capTracking</c>) — required beside <see cref="MaxMeshVersion"/>, null without one.</summary>
+    public string? CapTracking { get; init; }
+
+    /// <summary>
     /// The package is part of the platform's DEFAULT INSTALL: every instance that can see it in a
     /// catalog installs it automatically at startup (<see cref="InstanceAutoRegistrationService"/>),
     /// with public read established by the installer

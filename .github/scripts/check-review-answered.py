@@ -187,8 +187,9 @@ GREEN while the pull request stayed BLOCKED on the older `pull_request` run's re
 re-ran it by hand. So after a GREEN verdict on any event other than `pull_request` (and never for a
 `merge_group` entry, which is its own commit), the lane re-runs the failed jobs of the newest
 `pull_request` run of the SAME workflow for the current head — once per (head, answered state):
-`refresh_action` (pure, self-tested) skips a run that is in flight, already green, or started
-at/after this verdict (it judged a state no older than ours). The re-run decides nothing by itself:
+`refresh_action` (pure, self-tested) skips a run that is already green or started at/after this
+verdict (it judged a state no older than ours), and WAITS for a run still in flight, then judges
+what it left (#7187: an `in_progress` run may already have published its red). The re-run decides nothing by itself:
 it applies the whole predicate to live state, so a thread that is really unanswered is red there
 too. No loop: a re-run of a `pull_request` run is a `pull_request` event, which never refreshes, and
 a GITHUB_TOKEN re-run raises no new workflow event.
@@ -196,7 +197,10 @@ a GITHUB_TOKEN re-run raises no new workflow event.
 `--as-of` evaluates the pull request as it stood at that instant (reviews, comments and waiver
 events created later are ignored) — the controls in Doc/Architecture/ReviewFindingsAnswered use it
 to replay a merge. Every GitHub call is `gh api` (REST) with the token in GH_TOKEN. Exit 0 = GREEN,
-1 = RED, 2 = usage error.
+1 = RED, 2 = usage error, 3 = API OUTAGE — no verdict was taken (see ApiOutage, MeshWeaver#7187).
+
+`--retry-outage --run-id R --attempt N` is the outage retry listener: it re-runs a completed run of
+the review-answered lane only when its red was an outage (`retry_outage_action`), never a verdict.
 """
 from __future__ import annotations
 
@@ -1239,6 +1243,9 @@ def run_arm_generated(repo: str, number: int) -> int:
         print(f"::error::cannot read #{number}, so it is NOT armed: {e}")
         _append("GITHUB_OUTPUT", "arm=false\nhead=\n")
         return 1
+    except ApiOutage as e:
+        _append("GITHUB_OUTPUT", "arm=false\nhead=\n")
+        return report_outage(e)
     print(f"{'ARM' if arm else 'not armed'} #{number}: {why}")
     _append("GITHUB_OUTPUT", f"arm={'true' if arm else 'false'}\nhead={head}\n")
     _append("GITHUB_STEP_SUMMARY", f"{'✅ arming' if arm else 'ℹ️ not arming'} #{number}: {why}\n")
@@ -1394,6 +1401,10 @@ def lost_rerun_race(readback) -> bool:
     return isinstance(readback, dict) and bool(readback.get("status")) and readback.get("status") != "completed"
 
 
+#: Run statuses of a run none of whose jobs has started: it read nothing yet (`pending` = held by a
+#: concurrency group, `queued` = waiting for a runner, `waiting` = an environment gate, `requested`).
+NOT_STARTED_RUN_STATUSES = ("requested", "pending", "queued", "waiting")
+
 #: The event whose run of this check branch protection is KNOWN to read and that is re-run for the
 #: pull request's head (measured on #4649; the manual remedy measured on #4652 and #4662).
 PROTECTION_READ_EVENT = "pull_request"
@@ -1433,8 +1444,23 @@ def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dic
         return "none", f"run {candidate.get('id')} is for {str(candidate.get('head_sha'))[:10]}, not the current head {head[:10]}"
     if str(candidate.get("id")) == str(own_run_id):
         return "none", f"run {candidate.get('id')} is this run"
+    if candidate.get("status") in NOT_STARTED_RUN_STATUSES:
+        # 🚨 Never "wait" here (MeshWeaver#7203 review): a `pull_request` run that has not STARTED is
+        # very often pending in this very run's concurrency group (`…-gate`, review-answered.yml), so it
+        # cannot start until this run ends — waiting for it would hold it back for the whole wait and
+        # then fail. Nothing needs refreshing: no job of it has read anything yet, so every verdict it
+        # publishes reads live state AFTER this verdict was taken.
+        return "none", (f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} is {candidate.get('status')} — it has not "
+                        "started, so it reads live state after this verdict; nothing to refresh, and waiting for it "
+                        "could hold it back in the shared concurrency group")
     if candidate.get("status") != "completed":
-        return "none", f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} is still {candidate.get('status')} — it reads live state itself"
+        # 🚨 NOT "it reads live state itself" (MeshWeaver#7187): a run is `in_progress` until its LAST
+        # job ends, and the job whose check-run branch protection reads may have finished — red, on a
+        # read taken before this verdict's state — while the lane or refresh job of the same run is
+        # still going (measured on #7198: run 40194864793's gate job completed 13:00:58Z, the run was
+        # still `in_progress` at 13:01:31Z when the refresh skipped it). A skip there left that red
+        # standing with nothing to refresh it. So the refresh lets the run finish and then judges it.
+        return "wait", f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} is still {candidate.get('status')} — letting it finish, then judging what it left"
     if candidate.get("conclusion") == "success":
         return "none", f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} already reads success — nothing to refresh"
     started, judged = parse_stamp(candidate.get("run_started_at")), parse_stamp(evaluated_at)
@@ -1568,17 +1594,144 @@ class ReadError(RuntimeError):
     pass
 
 
+# ─────────────────────────────── AN API OUTAGE IS NOT A VERDICT (MeshWeaver#7187) ───────────────────────────────
+#
+# 🚨 A call GitHub REFUSED for capacity — the installation's rate limit (403/429 "API rate limit
+# exceeded for installation"), a secondary limit, a 5xx, a dropped connection — says NOTHING about the
+# pull request. Until #7187 it raised the same ReadError as a malformed answer, and every lane turned
+# it into its ordinary red: `Automatic review answered` read "cannot read the review … so it cannot say
+# it was answered" on pull requests whose every thread WAS answered (core #7173, run 40187547005
+# attempt 1, 11:07:30Z; #7182, run 40197206860, 13:21:22Z), the review-on-change lane never requested
+# a review (Plugins #4195, 12:44Z) — and nothing re-evaluated any of them, because the self-refresh
+# follows only a GREEN verdict. Worse, three readers CATCH ReadError and degrade (`read_diff_carry`,
+# `read_carry`, `read_required_contexts`), so an outage in the middle of a read would have become a
+# VERDICT ("the head owes a fresh review").
+#
+# So an outage is its own exception, deliberately NOT a ReadError — no reader that degrades on
+# ReadError can swallow it. The adapter RETRIES it, waiting for the limit's own reset (read off
+# `GET /rate_limit`, which does not count against the limit) or backing off, inside a bounded
+# per-process budget (`MW_API_OUTAGE_WAIT_MINUTES`, default API_OUTAGE_WAIT_MINUTES). Past the budget
+# it raises ApiOutage, and `main` reports it as INFRA (exit OUTAGE_EXIT, `outcome=api-outage` on
+# $GITHUB_OUTPUT) — never as a verdict — for the lane's automatic later retry (review answered:
+# node-repo-review-answered-retry.yml; the request and stage lanes: their scheduled sweeps).
+# Doc/Architecture/ReviewFindingsAnswered → "An API outage is not a verdict".
+
+class ApiOutage(Exception):
+    """GitHub refused a call for capacity and this run's retry budget ran out. NOT a ReadError, on purpose."""
+
+    def __init__(self, what: str, kind: str, retry_at: float | None):
+        super().__init__(what)
+        self.kind, self.retry_at = kind, retry_at
+
+
+API_OUTAGE_WAIT_MINUTES = 5
+OUTAGE_EXIT = 3
+#: The step every review-answered lane job runs after its verdict step when the verdict step reported an
+#: outage. The retry listener finds an outage by this exact step name (`outage_marked`), so the self-test
+#: asserts the workflows carry it whenever they are beside this file.
+OUTAGE_STEP_NAME = "API outage: no verdict was taken (retried automatically)"
+
+_OUTAGE_SIGNATURES = (
+    ("secondary-rate-limit", re.compile(r"secondary rate limit|abuse detection", re.IGNORECASE)),
+    ("rate-limit", re.compile(r"API rate limit exceeded|HTTP 429", re.IGNORECASE)),
+    ("server", re.compile(r"\bHTTP 5\d\d\b", re.IGNORECASE)),
+    ("network", re.compile(r"connection reset by peer|connection refused|i/o timeout|TLS handshake timeout|"
+                           r"timeout awaiting response headers|unexpected EOF", re.IGNORECASE)),
+)
+
+
+def classify_api_failure(text: str | None) -> str | None:
+    """The outage kind a failed `gh api` call's output names, or None for a real answer (404, 422, a
+    plain 403 permission refusal, a malformed request). Pure. A 403 is an outage ONLY when its text
+    names a rate limit."""
+    for kind, pattern in _OUTAGE_SIGNATURES:
+        if pattern.search(text or ""):
+            return kind
+    return None
+
+
+def outage_delay(kind: str, attempt: int, reset_epoch: float | None, now_epoch: float) -> float:
+    """Seconds to wait before retry `attempt` (0-based) of an outage of `kind`. Pure.
+    A primary limit waits for its own reset (+5 s). Without a readable reset, and for a secondary limit
+    (GitHub: "wait at least one minute"), 60 s doubling to 300 s; a 5xx or a dropped connection 10 s
+    doubling to 120 s."""
+    if kind == "rate-limit" and reset_epoch is not None and reset_epoch > now_epoch:
+        return reset_epoch - now_epoch + 5
+    if kind in ("rate-limit", "secondary-rate-limit"):
+        return float(min(60 * 2 ** attempt, 300))
+    return float(min(10 * 2 ** attempt, 120))
+
+
+def outage_budget_seconds() -> float:
+    """`MW_API_OUTAGE_WAIT_MINUTES` (0–40), else API_OUTAGE_WAIT_MINUTES — in seconds."""
+    raw = os.environ.get("MW_API_OUTAGE_WAIT_MINUTES", "")
+    try:
+        minutes = float(raw) if raw.strip() else API_OUTAGE_WAIT_MINUTES
+    except ValueError:
+        minutes = API_OUTAGE_WAIT_MINUTES
+    return max(0.0, min(minutes, 40.0)) * 60
+
+
 class Gh:
-    def __init__(self, repo: str):
+    """REST over `gh api`. `runner`, `sleep`, `clock` and `budget_s` are injectable so the self-test
+    drives the outage path through a FAKE `gh` — nothing in a self-test reaches GitHub."""
+
+    def __init__(self, repo: str, runner=None, sleep=None, clock=None, budget_s: float | None = None):
         self.repo = repo
+        self._run = runner or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, check=False))
+        self._sleep, self._clock = sleep or time.sleep, clock or time.time
+        self.budget_s = outage_budget_seconds() if budget_s is None else budget_s
+        self.waited_s = 0.0
+
+    def sleep(self, seconds: float) -> None:
+        self._sleep(seconds)
+
+    def now(self) -> float:
+        return self._clock()
+
+    def rate_limit(self, resource: str = "core") -> tuple[int | None, float | None]:
+        """(remaining, reset epoch) of a primary limit, or (None, None) when unreadable.
+        `GET /rate_limit` does not count against the limit it reports."""
+        p = self._run(["gh", "api", "rate_limit"])
+        if p.returncode != 0:
+            return None, None
+        try:
+            r = ((json.loads(p.stdout) or {}).get("resources") or {}).get(resource) or {}
+            return int(r.get("remaining")), float(r.get("reset"))
+        except (ValueError, TypeError, AttributeError):
+            return None, None
+
+    def _call(self, cmd: list, what: str, resource: str):
+        attempt = 0
+        while True:
+            p = self._run(cmd)
+            if p.returncode == 0:
+                return p
+            text = ((p.stderr or "") + "\n" + (p.stdout or "")).strip()
+            kind = classify_api_failure(text)
+            if kind is None:
+                return p
+            now = self._clock()
+            reset = self.rate_limit(resource)[1] if kind == "rate-limit" else None
+            delay = outage_delay(kind, attempt, reset, now)
+            if self.waited_s + delay > self.budget_s:
+                at = datetime.datetime.fromtimestamp(now + delay, datetime.UTC).strftime("%H:%M:%SZ")
+                raise ApiOutage(f"{what}: GitHub refused it for capacity ({kind}) — {text[:300]} — after "
+                                f"{int(self.waited_s)}s of this run's {int(self.budget_s)}s outage budget; "
+                                f"the next attempt can succeed from ~{at}", kind, now + delay)
+            print(f"  {what}: GitHub API outage ({kind}) — retrying in {int(delay)}s (attempt {attempt + 2}; "
+                  f"{int(self.waited_s)}s of {int(self.budget_s)}s spent). Not a verdict.", flush=True)
+            self._sleep(delay)
+            self.waited_s += delay
+            attempt += 1
 
     def api(self, path: str, paginate: bool = False):
         cmd = ["gh", "api", "-H", "Accept: application/vnd.github+json", f"repos/{self.repo}/{path}"]
         if paginate:
             cmd[2:2] = ["--paginate", "--slurp"]
-        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        p = self._call(cmd, f"GET repos/{self.repo}/{path}", "core")
         if p.returncode != 0:
-            raise ReadError(f"GET repos/{self.repo}/{path} failed ({p.returncode}): {p.stderr.strip()[:600]}")
+            raise ReadError(f"GET repos/{self.repo}/{path} failed ({p.returncode}): {(p.stderr or '').strip()[:600]}")
         try:
             data = json.loads(p.stdout)
         except json.JSONDecodeError as e:
@@ -1590,19 +1743,19 @@ class Gh:
         return data
 
     def post(self, path: str) -> None:
-        p = subprocess.run(["gh", "api", "-X", "POST", "-H", "Accept: application/vnd.github+json", f"repos/{self.repo}/{path}"],
-                           capture_output=True, text=True, check=False)
+        p = self._call(["gh", "api", "-X", "POST", "-H", "Accept: application/vnd.github+json", f"repos/{self.repo}/{path}"],
+                       f"POST repos/{self.repo}/{path}", "core")
         if p.returncode != 0:
             raise ReadError(f"POST repos/{self.repo}/{path} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:600]}")
 
     def graphql(self, query: str, variables: dict) -> dict:
         """ONE GraphQL call — used for what REST cannot express (requesting a BOT reviewer), never in a
         loop. gh exits non-zero when the response carries `errors`; that, and an `errors` key on a
-        zero exit, are both a ReadError."""
+        zero exit, are both a ReadError. A capacity refusal is an outage like any other."""
         cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
         for k, v in variables.items():
             cmd += ["-f", f"{k}={v}"]
-        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        p = self._call(cmd, "GraphQL call", "graphql")
         if p.returncode != 0:
             raise ReadError(f"GraphQL call failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:600]}")
         try:
@@ -1821,6 +1974,11 @@ def run_arm_gate(repo: str, number: int, carry: bool = True) -> int:
     except (ReadError, KeyError) as e:
         verdict = ArmVerdict(False, f"cannot read #{number}'s review state, so it is not armed on a guess: {e}")
         print(f"::warning::{verdict.missing}")
+    except ApiOutage as e:
+        # Not ready is still the answer (never armed on a guess) — but named as an OUTAGE, not a review
+        # state, so a reader does not go looking for an unanswered thread (#7187).
+        verdict = ArmVerdict(False, f"API outage, not a review state — #{number} is not armed on a guess and is judged again on the next pass: {e}")
+        print(f"::warning title=API outage — no verdict was taken::{verdict.missing}")
     for n in verdict.notes:
         print(f"  {n}")
     # Name the review that released the gate from the verdict's own notes — Copilot, carried or
@@ -2014,13 +2172,24 @@ def run_stage_advance(repo: str, workflow: str, *, pr: int | None, head_sha: str
     return 1 if errors else 0
 
 
-def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: str, gh=None) -> int:
+#: How long the refresh lets an in-flight read run finish (`refresh_action` → "wait"). The read run
+#: started BEFORE this green verdict, whose review had landed, so it is past its review wait within one
+#: POLL_SECONDS; what remains is at most the settle wait (SETTLE_ROUNDS minutes), an outage budget and
+#: its lane job. 30 minutes covers that inside the refresh job's 45-minute cap.
+REFRESH_WAIT_SECONDS = 30 * 60
+REFRESH_POLL_SECONDS = 30
+
+
+def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: str, gh=None,
+                wait_s: float = REFRESH_WAIT_SECONDS) -> int:
     """The self-refresh job: exit 0 when it re-ran the read run or had nothing to do (both printed),
     1 (RED, named) when it could not read or could not re-run. It never changes a verdict itself.
     `gh` is the REST adapter (`Gh(repo)` when omitted); the self-test injects a stub so the POST this
-    caller actually issues — the whole-run `rerun`, never `rerun-failed-jobs` — is asserted end to end."""
+    caller actually issues — the whole-run `rerun`, never `rerun-failed-jobs` — is asserted end to end.
+    A read run still in flight is waited for (up to `wait_s`), then judged — never skipped (#7187)."""
     try:
         gh = gh if gh is not None else Gh(repo)
+        sleep, clock = getattr(gh, "sleep", time.sleep), getattr(gh, "now", time.monotonic)
         own = gh.api(f"actions/runs/{run_id}")
         workflow_id = own.get("workflow_id") if isinstance(own, dict) else None
         if not workflow_id:
@@ -2031,12 +2200,31 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
         head = str((pr.get("head") or {}).get("sha") or "")
         if not re.fullmatch(r"[0-9a-f]{40}", head):
             raise ReadError(f"pulls/{number} reported no head sha")
-        listing = gh.api(f"actions/workflows/{workflow_id}/runs?head_sha={head}&event={PROTECTION_READ_EVENT}&per_page=50")
-        runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
-        if not isinstance(runs, list):
-            raise ReadError(f"actions/workflows/{workflow_id}/runs?head_sha={head[:10]} did not return a run listing")
-        candidate = max(runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if runs else None
-        action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
+        deadline = clock() + wait_s
+        while True:
+            listing = gh.api(f"actions/workflows/{workflow_id}/runs?head_sha={head}&event={PROTECTION_READ_EVENT}&per_page=50")
+            runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+            if not isinstance(runs, list):
+                raise ReadError(f"actions/workflows/{workflow_id}/runs?head_sha={head[:10]} did not return a run listing")
+            candidate = max(runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if runs else None
+            action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
+            if action != "wait":
+                break
+            if clock() + REFRESH_POLL_SECONDS > deadline:
+                action, why = "fail", (f"{why} — and it did not finish within {int(wait_s)}s, so whether it carries a red "
+                                       "older than this verdict could not be judged; re-run this run once it has finished")
+                break
+            print(f"  #{number}: {why}", flush=True)
+            sleep(REFRESH_POLL_SECONDS)
+        if action == "rerun":
+            # 🚨 Re-read the pull request and judge again immediately before the POST (MeshWeaver#7203
+            # review): the snapshot above can be 30 minutes old, and a push or a closure since then
+            # makes the candidate an OBSOLETE evaluation — re-running it would queue it in the
+            # pull request's `…-gate` group, where it can displace the current head's pending run.
+            pr = gh.api(f"pulls/{number}")
+            if not isinstance(pr, dict) or pr.get("number") != number:
+                raise ReadError(f"pulls/{number} did not return pull request #{number}")
+            action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
         if action == "rerun" and not post_rerun(gh, candidate["id"], RERUN_WHOLE_RUN):
             action, why = "none", f"run {candidate['id']} was already re-run by another invocation"
     except (ReadError, KeyError, TypeError) as e:
@@ -2053,6 +2241,177 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
         print(f"  #{number}: {why}")
     _append("GITHUB_STEP_SUMMARY", f"Refresh of the protection-read verdict for #{number}: {action} — {why}\n")
     return 0
+
+
+# ─────────────────────────────── THE OUTAGE RETRY (MeshWeaver#7187) ───────────────────────────────
+#
+# A run of `Review answered` whose verdict step reported an API outage (OUTAGE_STEP_NAME failed) took NO
+# verdict, and nothing else re-evaluates it: the refresh follows only a GREEN verdict, and a person was
+# the only remedy (#7173, #7180, #7178 re-run by hand at 11:47Z on 2026-10-25). The retry listener
+# (node-repo-review-answered-retry.yml, on `workflow_run: completed`) re-runs exactly such a run once
+# the limit has reset. It is bounded: an outage that survives MAX_OUTAGE_ATTEMPTS attempts is RED here,
+# named, and a run whose red was a VERDICT is never touched.
+
+MAX_OUTAGE_ATTEMPTS = 3
+#: Remaining primary-limit calls below which the retry waits for the reset before re-running: one
+#: evaluation costs ~10 calls per job, two jobs, plus the refresh.
+RETRY_MIN_REMAINING = 50
+RETRY_WAIT_SECONDS = 35 * 60
+
+
+def outage_marked(jobs) -> list:
+    """The names of the jobs whose OUTAGE_STEP_NAME step FAILED — the marker that the job's red is an
+    API outage and not a verdict. Pure. A job red for any other step is not listed."""
+    return [j.get("name") for j in jobs or () if isinstance(j, dict)
+            and any(isinstance(s, dict) and s.get("name") == OUTAGE_STEP_NAME and s.get("conclusion") == "failure"
+                    for s in j.get("steps") or ())]
+
+
+def outage_streak(marked_by_attempt) -> int:
+    """How many attempts IN A ROW, newest first, met an outage. Pure. `marked_by_attempt` is one boolean
+    per attempt, newest FIRST (`bool(outage_marked(jobs))`). Only outage-marked attempts count: a verdict
+    red or a refresh re-run before them consumes none of the retry allowance (MeshWeaver#7203 review —
+    `run_attempt` alone counted those too, so a FIRST outage on attempt 3 was never retried)."""
+    n = 0
+    for marked in marked_by_attempt:
+        if not marked:
+            break
+        n += 1
+    return n
+
+
+def retry_outage_action(run: dict, attempt: int, jobs, pr: dict | None, streak: int | None = None) -> tuple[str, str]:
+    """('rerun' | 'none' | 'manual' | 'fail', why) for a completed run of `Review answered`. Pure.
+    `streak` is `outage_streak` over this run's attempts ending at `attempt` (1 when omitted — this
+    attempt alone); the bound MAX_OUTAGE_ATTEMPTS applies to it, never to `attempt`."""
+    rid = run.get("id")
+    if run.get("conclusion") != "failure":
+        return "none", f"run {rid} concluded {run.get('conclusion')} — only a failed run can carry an outage"
+    marked = outage_marked(jobs)
+    if not marked:
+        return "none", f"run {rid} attempt {attempt} is red on a VERDICT (no `{OUTAGE_STEP_NAME}` step failed) — never retried"
+    if run.get("status") != "completed" or int(run.get("run_attempt") or attempt) != attempt:
+        return "none", f"run {rid} has been re-run since attempt {attempt} (now attempt {run.get('run_attempt')}, {run.get('status')})"
+    if pr is None:
+        return "manual", (f"run {rid} names no pull request of this repository (a fork's run lists none) — a maintainer "
+                          f"re-runs it once the API answers")
+    head = str((pr.get("head") or {}).get("sha") or "")
+    if pr.get("state") != "open":
+        return "none", f"#{pr.get('number')} is {pr.get('state')}"
+    if run.get("head_sha") != head:
+        return "none", f"run {rid} judged {str(run.get('head_sha'))[:10]}, the head is now {head[:10]} — a run of its own judges it"
+    streak = max(1, streak or 1)
+    if streak >= MAX_OUTAGE_ATTEMPTS:
+        return "fail", (f"run {rid} met an API outage on {streak} attempts in a row, up to attempt {attempt} "
+                        f"({', '.join(marked)}) — the "
+                        "automatic retry stops here; re-run it by hand once the API answers")
+    return "rerun", f"run {rid} attempt {attempt} took no verdict (API outage in {', '.join(marked)}) — re-running the whole run"
+
+
+def wait_for_capacity(gh, deadline: float) -> None:
+    """Sleep until the primary limit has RETRY_MIN_REMAINING calls left, its reset has passed, or
+    `deadline`. Reads only `GET /rate_limit`, which does not count against the limit it reports."""
+    while True:
+        remaining, reset = gh.rate_limit("core")
+        if remaining is None or remaining >= RETRY_MIN_REMAINING or reset is None:
+            return
+        pause = min(reset + 10, deadline) - gh.now()
+        if pause <= 0:
+            return
+        print(f"  {remaining} calls left until the limit resets at "
+              f"{datetime.datetime.fromtimestamp(reset, datetime.UTC):%H:%M:%SZ} — waiting {int(pause)}s before reading",
+              flush=True)
+        gh.sleep(pause)
+
+
+def run_retry_outage(repo: str, run_id: str, attempt: int, gh=None, wait_s: float = RETRY_WAIT_SECONDS) -> int:
+    """The retry listener: exit 0 when every outage run it judged was re-run or needed nothing (each
+    printed), 1 when it could not read, could not re-run, or an outage outlasted MAX_OUTAGE_ATTEMPTS
+    (named).
+
+    🚨 ORDER (MeshWeaver#7203 review). It FIRST waits for capacity — through the free `GET /rate_limit`
+    only — and only THEN makes its metered reads, decides, and posts at once. Reading first failed both
+    ways: with the limit spent the very first read raised ApiOutage under the five-minute budget, so the
+    listener died and nothing ever re-ran the run; and a decision read BEFORE a wait of up to 35 minutes
+    re-ran a run whose pull request had since closed, moved its head or been re-run by a newer attempt.
+
+    🚨 SCOPE: EVERY outage-failed run of this check on the head, from ANY event — not only the run that
+    woke it. Branch protection keeps reading a FAILED check-run of a `pull_request_review` or
+    `pull_request_review_comment` run that met the limit, and a newer success from another run does not
+    clear it (measured on two plugin-repository pull requests: reds taken 12:48–12:52Z still blocked the
+    merge after successes at 13:53Z and 14:27Z). So the listener lists this workflow's FAILED runs for
+    the pull request's current head and applies `retry_outage_action` — the same per-run outage streak
+    bound and the same fresh read — to each. A listener that died, or a run whose listener never ran,
+    is recovered by the next failure on that head."""
+    try:
+        gh = gh if gh is not None else Gh(repo)
+        wait_for_capacity(gh, gh.now() + wait_s)
+        run = gh.api(f"actions/runs/{run_id}")
+        if not isinstance(run, dict) or str(run.get("id")) != str(run_id):
+            raise ReadError(f"actions/runs/{run_id} did not return that run")
+
+        def attempt_jobs(rid, n: int) -> list:
+            listing = gh.api(f"actions/runs/{rid}/attempts/{n}/jobs?per_page=100")
+            jobs_ = listing.get("jobs") if isinstance(listing, dict) else None
+            if not isinstance(jobs_, list):
+                raise ReadError(f"actions/runs/{rid}/attempts/{n}/jobs did not return a job listing")
+            return jobs_
+
+        def judge(run_: dict, n: int, pr_: dict | None) -> tuple[str, str]:
+            rid = run_.get("id")
+            jobs = attempt_jobs(rid, n)
+            streak = 1
+            if outage_marked(jobs):
+                # The earlier attempts, newest first, only as far as the bound needs and only while
+                # they were outages too: a verdict attempt ends the streak.
+                marks = [True]
+                for k in range(n - 1, max(0, n - MAX_OUTAGE_ATTEMPTS), -1):
+                    marks.append(bool(outage_marked(attempt_jobs(rid, k))))
+                    if not marks[-1]:
+                        break
+                streak = outage_streak(marks)
+            action_, why_ = retry_outage_action(run_, n, jobs, pr_, streak)
+            if action_ == "rerun" and not post_rerun(gh, rid, RERUN_WHOLE_RUN):
+                action_, why_ = "none", f"run {rid} was already re-run by another invocation"
+            return action_, why_
+
+        numbers = [p.get("number") for p in run.get("pull_requests") or () if isinstance(p, dict) and p.get("number")]
+        pr = None
+        if numbers:
+            pr = gh.api(f"pulls/{numbers[0]}")
+            if not isinstance(pr, dict) or pr.get("number") != numbers[0]:
+                raise ReadError(f"pulls/{numbers[0]} did not return pull request #{numbers[0]}")
+        results = [(run_id, attempt) + judge(run, attempt, pr)]
+        head = str(((pr or {}).get("head") or {}).get("sha") or "")
+        workflow_id = run.get("workflow_id")
+        if pr is not None and pr.get("state") == "open" and re.fullmatch(r"[0-9a-f]{40}", head) and workflow_id:
+            listing = gh.api(f"actions/workflows/{workflow_id}/runs?head_sha={head}&status=failure&per_page=100")
+            others = listing.get("workflow_runs") if isinstance(listing, dict) else None
+            if not isinstance(others, list):
+                raise ReadError(f"actions/workflows/{workflow_id}/runs?head_sha={head[:10]} did not return a run listing")
+            for other in sorted(others, key=lambda r: (r.get("created_at") or "", r.get("id") or 0), reverse=True):
+                if not isinstance(other, dict) or str(other.get("id")) == str(run_id) or other.get("head_sha") != head:
+                    continue
+                if other.get("status") != "completed" or other.get("conclusion") != "failure":
+                    continue
+                n = int(other.get("run_attempt") or 1)
+                results.append((other.get("id"), n) + judge(other, n, pr))
+    except ApiOutage as e:
+        print(f"::error::the outage retry of run {run_id} could not read even after waiting up to {int(wait_s)}s "
+              f"for the limit to reset: {e} — re-run run {run_id} by hand once the API answers")
+        return 1
+    except (ReadError, KeyError, TypeError, ValueError) as e:
+        print(f"::error::the outage retry of run {run_id} could not complete: {e}")
+        return 1
+    failed = False
+    for rid, n, action, why in results:
+        if action == "fail":
+            failed = True
+            print(f"::error::{why}")
+        else:
+            print(f"::notice::{why}" if action == "rerun" else (f"::warning::{why}" if action == "manual" else f"  {why}"))
+        _append("GITHUB_STEP_SUMMARY", f"Outage retry of run {rid} attempt {n}: {action} — {why}\n")
+    return 1 if failed else 0
 
 
 def run_request_review(repo: str, number: int, before: str | None, gh=None, sweep: bool = False) -> int:
@@ -2271,14 +2630,53 @@ SETTLE_POLL_SECONDS = 10
 SETTLE_ROUNDS = 3
 
 
+def review_wait_fingerprint(reviews, check_runs, labels=()) -> tuple:
+    """What can END the review wait, and nothing else: the pull request's reviews (one landing, or a
+    refusal), the head's `internal-review` check runs (the degradation) and whether the WAIVER_LABEL is
+    on the pull request (a maintainer's waiver). Pure. `labels` are label objects (`{"name": …}`).
+
+    🚨 The waiver is probed too (MeshWeaver#7203 review): its own `labeled` run cannot judge sooner in
+    core, because it queues in this run's non-cancelling `…-gate` concurrency group, so without it a
+    valid waiver applied during the wait was honoured only at the final read, ~15 minutes later.
+
+    🚨 WHY THE WAIT PROBES INSTEAD OF RE-READING (MeshWeaver#7187). The wait used to re-run the WHOLE
+    read every POLL_SECONDS — the pull request, reviews, review comments, issue events, collaborator
+    roles, the degradation listing and, once Copilot had reviewed an earlier head, the carry-over
+    compares: 7–10 calls a poll, 30 polls in a 15-minute wait, and core runs the evaluation TWICE per
+    event (the gate job and the lane) — up to ~600 calls of the repository's shared 5,000/hour
+    installation budget for ONE push whose review is slow, while its answer can change in only the
+    inputs fingerprinted here (a push or a reply each start a run of their own). The probe reads those
+    three (3 calls) and the full read runs again only when one changed, and once
+    more at the deadline — so the final verdict is still taken on a fresh, complete read."""
+    rv = tuple(sorted((r.get("id"), r.get("state"), r.get("submitted_at"), r.get("commit_id"))
+                      for r in reviews if isinstance(r, dict)))
+    cr = tuple(sorted((c.get("id"), c.get("status"), c.get("conclusion")) for c in check_runs if isinstance(c, dict)))
+    waived = any(isinstance(l, dict) and l.get("name") == WAIVER_LABEL for l in labels or ())
+    return rv, cr, waived
+
+
+def probe_review_wait(gh, number: int, head_sha: str) -> tuple:
+    """The three reads `review_wait_fingerprint` needs — reviews and check runs from the SAME endpoints
+    `read_inputs` reads them from, and the pull request's labels (the issue's label listing, one call)."""
+    reviews = gh.api(f"pulls/{number}/reviews?per_page=100", paginate=True)
+    listing = gh.api(f"commits/{head_sha}/check-runs?check_name={DEGRADATION_CHECK_NAME}&filter=all&per_page=100")
+    check_runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
+    labels = gh.api(f"issues/{number}/labels?per_page=100")
+    if not isinstance(reviews, list) or not isinstance(check_runs, list) or not isinstance(labels, list):
+        raise ReadError(f"the review-wait probe of #{number} did not return its three listings")
+    return review_wait_fingerprint(reviews, check_runs, labels)
+
+
 def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
-        settle_seconds: int = 0) -> int:
-    gh = Gh(repo)
-    deadline = time.monotonic() + wait_minutes * 60
+        settle_seconds: int = 0, gh=None) -> int:
+    """`gh` defaults to `Gh(repo)`; the self-test injects a fake adapter (its `sleep`/`now` included)."""
+    gh = gh if gh is not None else Gh(repo)
+    sleep, clock = getattr(gh, "sleep", time.sleep), getattr(gh, "now", time.monotonic)
+    deadline = clock() + wait_minutes * 60
     # The settle wait gets its OWN cap, so it can never be spent twice or chain behind the review
-    # wait into the job's 20-minute timeout: a person answering steadily for longer than this is a
+    # wait into the job's timeout: a person answering steadily for longer than this is a
     # separate round of work and gets its own evaluation.
-    settle_deadline = time.monotonic() + max(settle_seconds, 0) * SETTLE_ROUNDS
+    settle_deadline = clock() + max(settle_seconds, 0) * SETTLE_ROUNDS
     settled_for = 0.0
     while True:
         try:
@@ -2287,21 +2685,31 @@ def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
             print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
             return 1
         verdict = evaluate(pr, reviews, comments, waiver, as_of, check_runs, files, commits, copilot_carry)
-        left = deadline - time.monotonic()
+        left = deadline - clock()
         if waiting_would_help(verdict) and left > POLL_SECONDS:
             print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
-                  f"(its own event cannot start a run here — see waiting_would_help)", flush=True)
-            time.sleep(POLL_SECONDS)
+                  f"(its own event cannot start a run here — see waiting_would_help); probing reviews and "
+                  f"the degradation only, the full read runs again when either changes", flush=True)
+            seen = review_wait_fingerprint(reviews, check_runs, pr.get("labels"))
+            head_sha = str((pr.get("head") or {}).get("sha") or "")
+            while deadline - clock() > POLL_SECONDS:
+                sleep(POLL_SECONDS)
+                try:
+                    if probe_review_wait(gh, number, head_sha) != seen:
+                        break
+                except (ReadError, KeyError) as e:
+                    print(f"  the review-wait probe failed ({e}) — taking the full read now", flush=True)
+                    break
             continue
         if replies_still_landing(verdict, comments, settle_seconds, as_of) \
-                and time.monotonic() < settle_deadline:
+                and clock() < settle_deadline:
             newest = newest_person_reply(comments, as_of)
             age = reply_age_seconds(newest) or 0
             print(f"  a person replied {int(age)}s ago and {len(verdict.unanswered)} thread(s) are "
                   f"still unanswered — the answering is in progress, so this evaluation would be a "
                   f"snapshot of a moving target. Waiting for {settle_seconds}s of quiet before "
                   f"judging (see replies_still_landing).", flush=True)
-            time.sleep(SETTLE_POLL_SECONDS)
+            sleep(SETTLE_POLL_SECONDS)
             settled_for += SETTLE_POLL_SECONDS
             continue
         break
@@ -3450,8 +3858,12 @@ def self_test() -> int:
              says="whole run")
     ref_case("this run IS the pull_request run -> none (no loop)", "none", "pull_request", red_read, says="IS a `pull_request`")
     ref_case("merge_group entry -> none", "none", "merge_group", red_read, says="merge-queue")
-    ref_case("read run already re-run, in flight -> none (idempotent)", "none", "pull_request_review_comment",
-             dict(red_read, status="in_progress", conclusion=None), says="still in_progress")
+    ref_case("#7187: read run in flight -> WAIT for it, never skip", "wait", "pull_request_review_comment",
+             dict(red_read, status="in_progress", conclusion=None), says="letting it finish")
+    for status in NOT_STARTED_RUN_STATUSES:
+        ref_case(f"read run {status} (not started, maybe held by THIS run's group) -> none, never wait", "none",
+                 "pull_request_review", dict(red_read, status=status, conclusion=None, run_started_at=None),
+                 says="has not started")
     ref_case("read run already green -> none", "none", "pull_request_review_comment",
              dict(red_read, conclusion="success"), says="already reads success")
     ref_case("read run red but started AFTER this verdict -> none", "none", "pull_request_review_comment",
@@ -3501,6 +3913,8 @@ def self_test() -> int:
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} posted={stub.posted}")
 
+    failures += outage_self_test(HEAD, ref_pr, red_read)
+
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
     for name, ref, expect in [
@@ -3526,7 +3940,403 @@ def self_test() -> int:
     return 0
 
 
+def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
+    """MeshWeaver#7187 — an API outage is retried, then reported as INFRA, never as a verdict; the review
+    wait probes instead of re-reading; the refresh waits for an in-flight read run; the retry listener
+    re-runs an outage run and never a verdict. Every case drives the code through a FAKE `gh` (a scripted
+    runner or a stub adapter): nothing here reaches GitHub. Returns the number of failed cases."""
+    failures = 0
+
+    def check(name, ok, detail=""):
+        nonlocal failures
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} outage: {name:62} {detail}")
+
+    # ── classification, on the texts GitHub actually returned
+    RATE_403 = ("gh: API rate limit exceeded for installation. If you reach out to GitHub Support for help, please include "
+                "the request ID EC20:BE7EC:3A01:C326:6ADDE2F2 and timestamp 2026-10-25 11:07:30 UTC. (HTTP 403)")
+    for name, text, expect in [
+        ("#7173's 403 'API rate limit exceeded for installation'", RATE_403, "rate-limit"),
+        ("a 429", "gh: Too Many Requests (HTTP 429)", "rate-limit"),
+        ("a secondary limit", "gh: You have exceeded a secondary rate limit. (HTTP 403)", "secondary-rate-limit"),
+        ("a 502", "gh: HTTP 502: Bad Gateway", "server"),
+        ("a dropped connection", "Post \"https://api.github.com/graphql\": read tcp: connection reset by peer", "network"),
+        ("NEG: a 404 is an answer", "gh: Not Found (HTTP 404)", None),
+        ("NEG: a permission 403 is an answer", "gh: Resource not accessible by integration (HTTP 403)", None),
+        ("NEG: a refused re-run 403 is an answer", "gh: This workflow run cannot be retried (HTTP 403)", None),
+    ]:
+        got = classify_api_failure(text)
+        check(f"classify: {name}", got == expect, f"expected={expect} got={got}")
+    for name, args, expect in [
+        ("primary limit waits for its own reset (+5 s)", ("rate-limit", 0, 1000.0, 400.0), 605.0),
+        ("primary limit, reset unreadable -> 60 s", ("rate-limit", 0, None, 400.0), 60.0),
+        ("secondary limit backs off 60, 120, 240, 300", ("secondary-rate-limit", 3, None, 0.0), 300.0),
+        ("a 5xx backs off from 10 s", ("server", 0, None, 0.0), 10.0),
+    ]:
+        got = outage_delay(*args)
+        check(f"delay: {name}", got == expect, f"expected={expect} got={got}")
+
+    # ── the adapter, through a scripted fake `gh`
+    class _Clock:
+        def __init__(self, t=1000.0):
+            self.t, self.slept = t, []
+        def now(self):
+            return self.t
+        def sleep(self, s):
+            self.slept.append(s)
+            self.t += s
+
+    def runner_of(script, reset_in=120):
+        """`script`: a list of (rc, stdout, stderr) the fake answers in order to every NON-rate_limit call."""
+        calls = []
+        def run_(cmd):
+            if cmd[-1] == "rate_limit":
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"resources": {"core": {
+                    "remaining": 0, "reset": clock.t + reset_in}, "graphql": {"remaining": 0, "reset": clock.t + reset_in}}}), "")
+            calls.append(cmd)
+            rc, out, err = script.pop(0) if script else (0, "{}", "")
+            return subprocess.CompletedProcess(cmd, rc, out, err)
+        return run_, calls
+
+    clock = _Clock()
+    run_, calls = runner_of([(1, "", RATE_403), (0, json.dumps({"number": 7}), "")])
+    gh = Gh("o/r", runner=run_, sleep=clock.sleep, clock=clock.now, budget_s=300)
+    try:
+        got = gh.api("pulls/7")
+    except (ReadError, ApiOutage) as e:
+        got = e
+    check("a rate-limited GET waits for the reset, then answers", got == {"number": 7} and clock.slept == [125.0] and len(calls) == 2,
+          f"got={got!r} slept={clock.slept}")
+    clock = _Clock()
+    run_, calls = runner_of([(1, "", RATE_403)] * 5, reset_in=1800)
+    gh = Gh("o/r", runner=run_, sleep=clock.sleep, clock=clock.now, budget_s=300)
+    try:
+        gh.api("pulls/7")
+        got = "answered"
+    except ApiOutage as e:
+        got = f"ApiOutage({e.kind})"
+    except ReadError:
+        got = "ReadError"
+    check("NEG: a reset beyond the budget is an ApiOutage, never a ReadError", got == "ApiOutage(rate-limit)" and clock.slept == [],
+          f"got={got} slept={clock.slept}")
+    clock = _Clock()
+    run_, calls = runner_of([(1, "", "gh: Not Found (HTTP 404)")])
+    gh = Gh("o/r", runner=run_, sleep=clock.sleep, clock=clock.now, budget_s=300)
+    try:
+        gh.api("pulls/7")
+        got = "answered"
+    except ApiOutage:
+        got = "ApiOutage"
+    except ReadError:
+        got = "ReadError"
+    check("NEG: a 404 is a ReadError at once — never waited for", got == "ReadError" and clock.slept == [], f"got={got} slept={clock.slept}")
+    # The degrading reader cannot swallow it: read_diff_carry turns a ReadError into "the head owes a review"
+    # (a VERDICT) — an outage must pass through it instead.
+    clock = _Clock()
+    run_, calls = runner_of([(1, "", RATE_403)] * 5, reset_in=1800)
+    gh = Gh("o/r", runner=run_, sleep=clock.sleep, clock=clock.now, budget_s=0)
+    try:
+        got = read_diff_carry(gh, {"head": {"sha": HEAD}, "base": {"ref": "main"}}, "b" * 40, {"id": 1})
+        got = f"a Carry ({got.why[:60]}…) — the outage became a verdict"
+    except ApiOutage:
+        got = "ApiOutage"
+    check("an outage passes THROUGH a reader that degrades on ReadError", got == "ApiOutage", f"got={got}")
+
+    # ── the verdict path end to end: run() on an outage -> exit OUTAGE_EXIT + outcome=api-outage, never 1
+    out_path = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", f"cra-selftest-{os.getpid()}.out")
+    saved = {k: os.environ.get(k) for k in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
+    os.environ["GITHUB_OUTPUT"] = out_path
+    os.environ.pop("GITHUB_STEP_SUMMARY", None)
+    try:
+        clock = _Clock()
+        run_, calls = runner_of([(1, "", RATE_403)] * 5, reset_in=1800)
+        gh = Gh("o/r", runner=run_, sleep=clock.sleep, clock=clock.now, budget_s=300)
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            try:
+                rc = run("o/r", 7173, None, 0, 0, gh=gh)
+            except ApiOutage as e:
+                rc = report_outage(e)
+        written = ""
+        if os.path.exists(out_path):
+            with open(out_path, encoding="utf-8") as f:
+                written = f.read()
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(out_path)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    text = printed.getvalue()
+    check("#7173: an outage on the verdict read -> INFRA exit 3, not RED 1",
+          rc == OUTAGE_EXIT and "outcome=api-outage" in written and "no verdict was taken" in text
+          and "cannot say it was answered" not in text, f"rc={rc} output={written.strip()!r}")
+
+    # ── the review wait PROBES (2 calls) and re-reads in full only when the review lands
+    MAINTAINER = {"login": "maintainer-x", "type": "User", "id": 7}
+    class _WaitGh:
+        def __init__(self, land_after_probes, waive_after_probes=10_000):
+            self.clock, self.calls, self.probes, self.land = _Clock(), [], 0, land_after_probes
+            self.waive = waive_after_probes
+        def waived(self):
+            return self.probes >= self.waive
+        def sleep(self, s):
+            self.clock.sleep(s)
+        def now(self):
+            return self.clock.now()
+        def reviews(self):
+            landed = dict(_review(), id=5, commit_id=HEAD, submitted_at="2026-10-25T11:00:00Z")
+            return [landed] if self.probes >= self.land else []
+        def role(self, login):
+            return self.api(f"collaborators/{login}/permission")["role_name"]
+        def api(self, path, paginate=False):
+            self.calls.append(path)
+            if path == "pulls/7":
+                return dict(_pr(0, [WAIVER_LABEL] if self.waived() else []), number=7, base={"ref": "main"})
+            if path.startswith("pulls/7/reviews"):
+                if self.calls[-2:-1] != ["pulls/7"]:   # a probe, not the full read (which reads pulls/7 first)
+                    self.probes += 1
+                return self.reviews()
+            if path.startswith("pulls/7/comments"):
+                return []
+            if path.startswith("issues/7/events"):
+                return [_labeled(MAINTAINER)] if self.waived() else []
+            if path.startswith("collaborators/"):
+                return {"role_name": "admin" if path.startswith(f"collaborators/{MAINTAINER['login']}/") else "write"}
+            if path.startswith(f"commits/{HEAD}/check-runs"):
+                return {"total_count": 0, "check_runs": []}
+            if path.startswith("issues/7/labels"):
+                return [{"name": WAIVER_LABEL}] if self.waived() else []
+            raise ReadError(f"unexpected GET {path}")
+    wg = _WaitGh(land_after_probes=3)
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run("o/r", 7, None, 15, 0, gh=wg)
+    full_reads = wg.calls.count("pulls/7")
+    check("review wait: probes 3 calls a poll, re-reads in full when it lands -> GREEN",
+          rc == 0 and full_reads == 2 and wg.probes == 3, f"rc={rc} full reads={full_reads} probes={wg.probes} calls={len(wg.calls)}")
+    wg = _WaitGh(land_after_probes=10_000)
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run("o/r", 7, None, 15, 0, gh=wg)
+    full_reads = wg.calls.count("pulls/7")
+    check("review wait NEG: no review in 15 min -> RED after ONE final full read",
+          rc == 1 and full_reads == 2, f"rc={rc} full reads={full_reads} calls={len(wg.calls)}")
+    wg = _WaitGh(land_after_probes=10_000, waive_after_probes=2)
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run("o/r", 7, None, 15, 0, gh=wg)
+    check("#7203: a maintainer's waiver during the wait ends it at the next probe -> GREEN",
+          rc == 0 and wg.probes == 2 and wg.clock.t - 1000.0 <= 2 * POLL_SECONDS,
+          f"rc={rc} probes={wg.probes} waited={wg.clock.t - 1000.0}s")
+
+    # ── the refresh WAITS for an in-flight read run, then re-runs the red it left
+    class _FlightGh:
+        def __init__(self, states, pr_after_wait=None):
+            self.states, self.posted, self.clock = list(states), [], _Clock()
+            self.pr, self.pr_after_wait = ref_pr, pr_after_wait
+        def sleep(self, s):
+            self.clock.sleep(s)
+            self.pr = self.pr_after_wait or self.pr
+        def now(self):
+            return self.clock.now()
+        def api(self, path):
+            if path == "actions/runs/99":
+                return {"id": 99, "workflow_id": 5}
+            if path == "pulls/4649":
+                return self.pr
+            if path.startswith("actions/workflows/5/runs?"):
+                state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
+                return {"workflow_runs": [state]}
+            raise ReadError(f"unexpected GET {path}")
+        def post(self, path):
+            self.posted.append(path)
+    flying = dict(red_read, status="in_progress", conclusion=None)
+    for name, states, wait_s, expect_rc, expect_posted, pr_after in [
+        ("#7203: in flight, a PUSH during the wait, then RED -> the obsolete run is NOT re-run",
+         [flying, flying, red_read], 600, 0, [], dict(ref_pr, head=dict(ref_pr["head"], sha="c" * 40))),
+        ("#7203: in flight, PR CLOSED during the wait, then RED -> not re-run",
+         [flying, red_read], 600, 0, [], dict(ref_pr, state="closed")),
+        ("#7198: in flight, then RED -> waits, then re-runs it", [flying, flying, red_read], 600, 0, ["actions/runs/7/rerun"], None),
+        ("in flight, then GREEN -> waits, posts nothing", [flying, dict(red_read, conclusion="success")], 600, 0, [], None),
+        ("NEG: never finishes within the wait -> RED, named, nothing posted", [flying], 90, 1, [], None),
+    ]:
+        stub = _FlightGh(states, pr_after)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request_review_comment", "99", "2026-10-07T10:00:00Z",
+                             gh=stub, wait_s=wait_s)
+        check(f"refresh: {name}", rc == expect_rc and stub.posted == expect_posted, f"rc={rc} posted={stub.posted}")
+
+    # ── the retry listener: an outage run is re-run after the reset; a verdict never is
+    outage_job = {"name": "Automatic review answered", "conclusion": "failure", "steps": [
+        {"name": "Judge the pull request's automatic review", "conclusion": "failure"},
+        {"name": OUTAGE_STEP_NAME, "conclusion": "failure"}]}
+    verdict_job = {"name": "Automatic review answered", "conclusion": "failure", "steps": [
+        {"name": "Judge the pull request's automatic review", "conclusion": "failure"},
+        {"name": OUTAGE_STEP_NAME, "conclusion": "skipped"}]}
+    failed_run = {"id": 40187547005, "workflow_id": 55, "status": "completed", "conclusion": "failure", "run_attempt": 1,
+                  "head_sha": HEAD, "pull_requests": [{"number": 7173}]}
+    open_pr = {"number": 7173, "state": "open", "head": {"sha": HEAD}}
+
+    class _RetryGh:
+        """A fake adapter. While the primary limit is spent (`remaining` 0 and no wait has happened
+        yet) every METERED read raises ApiOutage, as `Gh._call` does past its five-minute budget; a low
+        but non-zero `remaining` still answers. `rate_limit` is free. `after_wait` replaces the run / pull
+        request once the listener has slept — the world moving on during the wait. `others` are further
+        runs of the workflow on the head, as (run, jobs by attempt); the failed-run listing returns the
+        waking run and those, as GitHub does."""
+        def __init__(self, run_, jobs, pr=open_pr, remaining=0, after_wait=None, refuse_after_wait=False, others=()):
+            self.run_, self.pr, self.remaining, self.posted, self.clock = run_, pr, remaining, [], _Clock()
+            self.jobs = {(run_["id"], k): v for k, v in
+                         (jobs if isinstance(jobs, dict) else {int(run_.get("run_attempt") or 1): jobs}).items()}
+            self.others = [o for o, _ in others]
+            for o, by_attempt in others:
+                self.jobs.update({(o["id"], k): v for k, v in by_attempt.items()})
+            self.after_wait, self.refuse_after_wait, self.reads = after_wait or {}, refuse_after_wait, []
+        def sleep(self, s):
+            self.clock.sleep(s)
+            self.run_ = self.after_wait.get("run", self.run_)
+            self.pr = self.after_wait.get("pr", self.pr)
+        def now(self):
+            return self.clock.now()
+        def rate_limit(self, resource="core"):
+            return (self.remaining if not self.clock.slept else 4000), self.clock.t + 600
+        def api(self, path):
+            self.reads.append(path)
+            if self.refuse_after_wait or (self.remaining == 0 and not self.clock.slept):
+                raise ApiOutage(f"GET {path}: API rate limit exceeded (HTTP 403)", "rate-limit", self.clock.t + 600)
+            runs = {r["id"]: r for r in [self.run_] + self.others}
+            m = re.fullmatch(r"actions/runs/(\d+)", path)
+            if m and int(m.group(1)) in runs:
+                return runs[int(m.group(1))]
+            m = re.fullmatch(r"actions/runs/(\d+)/attempts/(\d+)/jobs\?per_page=100", path)
+            if m:
+                return {"jobs": self.jobs[(int(m.group(1)), int(m.group(2)))]}
+            if path.startswith(f"actions/workflows/{self.run_.get('workflow_id')}/runs?head_sha="):
+                head = path.split("head_sha=")[1].split("&")[0]
+                return {"workflow_runs": [r for r in runs.values() if r.get("head_sha") == head
+                                          and r.get("conclusion") == "failure"]}
+            if path == "pulls/7173":
+                return self.pr
+            raise ReadError(f"unexpected GET {path}")
+        def post(self, path):
+            self.posted.append(path)
+    RERUN = ["actions/runs/40187547005/rerun"]
+    for name, stub, attempt, expect_rc, expect_posted, expect_slept in [
+        ("#7173: outage run, limit spent -> waits for the reset BEFORE reading, re-runs the WHOLE run",
+         _RetryGh(failed_run, [outage_job]), 1, 0, RERUN, [610.0]),
+        ("outage run, budget left -> re-runs at once", _RetryGh(failed_run, [outage_job], remaining=900), 1, 0, RERUN, []),
+        ("NEG: a VERDICT red (marker skipped) -> never re-run", _RetryGh(failed_run, [verdict_job], remaining=900), 1, 0, [], []),
+        ("NEG: the head moved -> not re-run", _RetryGh(failed_run, [outage_job], pr=dict(open_pr, head={"sha": "c" * 40})), 1, 0, [], [610.0]),
+        ("#7203: head moved DURING the wait -> decided on the fresh read, not re-run",
+         _RetryGh(failed_run, [outage_job], after_wait={"pr": dict(open_pr, head={"sha": "c" * 40})}), 1, 0, [], [610.0]),
+        ("#7203: limit LOW (reads still answer), head moved during the wait -> not re-run",
+         _RetryGh(failed_run, [outage_job], remaining=20, after_wait={"pr": dict(open_pr, head={"sha": "c" * 40})}),
+         1, 0, [], [610.0]),
+        ("#7203: PR closed DURING the wait -> not re-run",
+         _RetryGh(failed_run, [outage_job], after_wait={"pr": dict(open_pr, state="closed")}), 1, 0, [], [610.0]),
+        ("#7203: a newer attempt started DURING the wait -> not re-run",
+         _RetryGh(failed_run, [outage_job], after_wait={"run": dict(failed_run, run_attempt=2, status="in_progress")}),
+         1, 0, [], [610.0]),
+        ("#7203: the limit is still spent after the wait -> RED, named, no traceback",
+         _RetryGh(failed_run, [outage_job], refuse_after_wait=True), 1, 1, [], [610.0]),
+        ("#7203: FIRST outage on attempt 3 (1-2 were verdicts) -> re-run, not 'three in a row'",
+         _RetryGh(dict(failed_run, run_attempt=3), {3: [outage_job], 2: [verdict_job], 1: [verdict_job]}, remaining=900),
+         3, 0, RERUN, []),
+        ("outage on attempts 2-3 after a verdict on 1 -> re-run (streak 2)",
+         _RetryGh(dict(failed_run, run_attempt=3), {3: [outage_job], 2: [outage_job], 1: [verdict_job]}, remaining=900),
+         3, 0, RERUN, []),
+        ("NEG: outage on 3 attempts in a row -> RED, named, stops",
+         _RetryGh(dict(failed_run, run_attempt=3), {3: [outage_job], 2: [outage_job], 1: [outage_job]}, remaining=900),
+         3, 1, [], []),
+        ("NEG: outage streak of 3 after a verdict (attempt 4) -> RED, stops",
+         _RetryGh(dict(failed_run, run_attempt=4), {4: [outage_job], 3: [outage_job], 2: [outage_job], 1: [verdict_job]},
+                  remaining=900), 4, 1, [], []),
+    ]:
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = run_retry_outage("Systemorph/MeshWeaver", str(stub.run_["id"]), attempt, gh=stub)
+        except Exception as e:  # the negative control of the bootstrap case: an uncaught ApiOutage
+            rc = f"raised {type(e).__name__}"
+        check(f"retry: {name}", rc == expect_rc and stub.posted == expect_posted and stub.clock.slept == expect_slept,
+              f"rc={rc} posted={stub.posted} slept={stub.clock.slept}")
+    # ── the listener re-runs EVERY outage-failed run of the check on the head, from any event: branch
+    # protection kept reading the failed check-runs of review and review-comment runs that met the limit
+    # although newer runs had succeeded (measured on two plugin-repository pull requests).
+    review_run = dict(failed_run, id=501, event="pull_request_review", created_at="2026-10-25T12:48:00Z")
+    comment_run = dict(failed_run, id=502, event="pull_request_review_comment", created_at="2026-10-25T12:52:00Z")
+    verdict_pr_run = dict(failed_run, id=503, event="pull_request", created_at="2026-10-25T12:40:00Z")
+    green_run = dict(failed_run, id=504, conclusion="success", created_at="2026-10-25T13:53:00Z")
+    for name, stub, expect_rc, expect_posted in [
+        ("#7203: woken by one outage run, a SECOND outage run of another event on the head -> both re-run",
+         _RetryGh(review_run, [outage_job], remaining=900, others=[(comment_run, {1: [outage_job]}),
+                                                                    (verdict_pr_run, {1: [verdict_job]}),
+                                                                    (green_run, {1: []})]),
+         0, ["actions/runs/501/rerun", "actions/runs/502/rerun"]),
+        ("#7203: woken by a VERDICT red, two stranded outage runs on the head -> both re-run, the verdict never",
+         _RetryGh(verdict_pr_run, [verdict_job], remaining=900, others=[(review_run, {1: [outage_job]}),
+                                                                         (comment_run, {1: [outage_job]})]),
+         0, ["actions/runs/502/rerun", "actions/runs/501/rerun"]),
+        ("#7203: a stranded run at its 3rd outage in a row -> RED, named; the others are still re-run",
+         _RetryGh(review_run, [outage_job], remaining=900,
+                  others=[(dict(comment_run, run_attempt=3), {3: [outage_job], 2: [outage_job], 1: [outage_job]})]),
+         1, ["actions/runs/501/rerun"]),
+        ("NEG: the head moved -> the waking run is not re-run and no other run is swept",
+         _RetryGh(review_run, [outage_job], remaining=900, pr=dict(open_pr, head={"sha": "c" * 40}),
+                  others=[(comment_run, {1: [outage_job]})]), 0, []),
+        ("NEG: closed pull request -> nothing swept",
+         _RetryGh(review_run, [outage_job], remaining=900, pr=dict(open_pr, state="closed"),
+                  others=[(comment_run, {1: [outage_job]})]), 0, []),
+    ]:
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = run_retry_outage("Systemorph/MeshWeaver", str(stub.run_["id"]), 1, gh=stub)
+        except Exception as e:
+            rc = f"raised {type(e).__name__}"
+        check(f"retry sweep: {name}", rc == expect_rc and stub.posted == expect_posted,
+              f"rc={rc} posted={stub.posted}")
+    for marks, want in [([True], 1), ([True, True, False, True], 2), ([False, True], 0), ([], 0)]:
+        check(f"outage_streak({marks}) = {want}", outage_streak(marks) == want, f"got {outage_streak(marks)}")
+
+    # ── the marker step the listener keys on is in every workflow that judges, by this exact name
+    here = os.path.dirname(os.path.abspath(__file__))
+    wf_dir = os.path.join(os.path.dirname(here), "workflows")
+    if os.path.isdir(wf_dir) and os.path.exists(os.path.join(wf_dir, "node-repo-review-answered.yml")):
+        for wf, need in [("node-repo-review-answered.yml", 2), ("review-answered.yml", 1)]:
+            with open(os.path.join(wf_dir, wf), encoding="utf-8") as f:
+                n = f.read().count(f'name: "{OUTAGE_STEP_NAME}"')
+            check(f"marker step in {wf}", n == need, f"expected {need} got {n}")
+        # The listener reads `pulls/{n}`; with an explicit `permissions:` block `pull-requests` is `none`
+        # unless granted, and a private repository then refuses the read (MeshWeaver#7203 review). The
+        # lane's job, its caller contract (workflow + job level) and core's caller all grant it.
+        for wf, need in [("node-repo-review-answered-retry.yml", 3), ("review-answered-retry.yml", 2)]:
+            with open(os.path.join(wf_dir, wf), encoding="utf-8") as f:
+                n = len(re.findall(r"^[#\s]*pull-requests:\s*read\b", f.read(), re.MULTILINE))
+            check(f"pull-requests: read granted in {wf}", n == need, f"expected {need} got {n}")
+    else:
+        print(f"self-test note outage: the workflows are not beside this copy ({wf_dir}) — the marker-step check runs in core's tree")
+    return failures
+
+
+def report_outage(e: ApiOutage) -> int:
+    """An outage that outlasted this run's retry budget: INFRA, never a verdict (MeshWeaver#7187).
+    Exit OUTAGE_EXIT and `outcome=api-outage` on $GITHUB_OUTPUT, which the lane's marker step
+    (OUTAGE_STEP_NAME) reads and the retry listener keys on."""
+    print(f"::error title=API outage — no verdict was taken::INFRA, not a finding about this pull request: {e}. "
+          "Nothing was judged — no thread was found unanswered and no review was found missing. This run is "
+          "re-run automatically once the API answers again (review answered: the retry listener; the "
+          "request and stage lanes: their scheduled sweeps).")
+    _append("GITHUB_OUTPUT", f"outcome=api-outage\noutage-kind={e.kind}\n")
+    _append("GITHUB_STEP_SUMMARY", f"⚠️ **API outage — no verdict was taken** ({e.kind}): {e}\n")
+    return OUTAGE_EXIT
+
+
 def main(argv=None) -> int:
+    try:
+        return _main(argv)
+    except ApiOutage as e:
+        return report_outage(e)
+
+
+def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true", help="prove the predicate is non-vacuous and exit")
     ap.add_argument("--repo", default=os.environ.get("GH_REPO"), help="owner/name (default: $GH_REPO)")
@@ -3579,12 +4389,21 @@ def main(argv=None) -> int:
     ap.add_argument("--evaluated-at", help="--refresh-read-run: when the GREEN verdict was taken (ISO-8601 UTC)")
     ap.add_argument("--wait-minutes", type=int, default=20,
                     help="--stage-advance: how long to let an in-flight held run finish before re-running it")
+    ap.add_argument("--retry-outage", action="store_true",
+                    help="the outage retry listener: re-run a completed `Review answered` run (--run-id, --attempt) "
+                         "iff its red was an API outage, never a verdict (retry_outage_action)")
+    ap.add_argument("--attempt", type=int, help="--retry-outage: the run attempt that completed (workflow_run.run_attempt)")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
     if not args.repo:
         print("::error::--repo (or GH_REPO) is required")
         return 2
+    if args.retry_outage:
+        if not re.fullmatch(r"[1-9]\d*", args.run_id or "") or not args.attempt or args.attempt < 1:
+            print(f"::error::--retry-outage needs --run-id <number> and --attempt <n>, got {args.run_id!r} / {args.attempt!r}")
+            return 2
+        return run_retry_outage(args.repo, args.run_id, args.attempt)
     if not 5 <= args.fallback_minutes <= 240:
         print(f"::error::--fallback-minutes must be between 5 and 240, got {args.fallback_minutes}")
         return 2
