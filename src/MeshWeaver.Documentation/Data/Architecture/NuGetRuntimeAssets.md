@@ -141,16 +141,22 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    runtime helpers behind one compile stub never share a key.
    An installed MODULE counts as host-shipped too: the NodeType context binds a module that satisfies
    the requested version AHEAD of a package's copy of the same name, matching the compile's choice.
-3. **A package's reference assembly is the compile surface where the toolchain carries one.** In-mesh
-   C# compiles against the host's implementation assemblies, and System.Interactive's implementation
-   keeps `EnumerableEx.MaxBy`/`MinBy` (namespace `System.Linq`) for binary compatibility while its
-   reference assembly hides them from every net6+ compile — so the BCL's `Enumerable.MaxBy` was
-   ambiguous in every NodeType, `#r` or not. `MeshWeaver.Compiler` embeds the `ref/` assembly of each
-   `CompileSurfacePackage` (the build fails if one stops reaching its compile), and
-   `CompileReferences.HostReference` compiles against it in place of the host file of the SAME identity
-   (name, version, public key token), materialised as a content-addressed file holding exactly those
-   bytes (so the emit-failure capture rereads the image Roslyn used); a host carrying another build
-   keeps its own file.
+3. **The host ships no assembly whose implementation is wider than its reference assembly.** In-mesh
+   C# compiles against the host's IMPLEMENTATION assemblies (TPA), never against reference
+   assemblies, so a package that keeps members in its `lib/` for binary compatibility while its
+   `ref/` hides them leaks those members into every NodeType compile and into no `src/` project.
+   System.Interactive (Ix.NET) was the measured case (an enterprise client portal, 2026-10-15): its
+   implementation keeps `EnumerableEx.MaxBy`/`MinBy` (namespace `System.Linq`) while its reference
+   assembly hides them from every net6+ compile — so the BCL's `Enumerable.MaxBy` was ambiguous
+   (CS0121) in every NodeType, `#r` or not, and `TakeLast`/`SkipLast`/`MinBy` workarounds spread
+   through in-mesh sources across the fleet. It was first answered by compiling against the package's
+   embedded `ref/` assembly in place of the same-identity host file (a `CompileSurfacePackage` list in
+   `MeshWeaver.Compiler`); the **package is now gone from the platform** — .NET 10's BCL covers what
+   MeshWeaver used of it, nothing in `src/` called an Ix API, and a sweep of every node repository
+   found no in-mesh caller — so the compile-surface substitution was removed with it, and
+   `CompileReferences` references each host file as it is. Before adding a dependency to a platform
+   project, check that its `lib/` and `ref/` expose the same surface; a mismatch is a CS0121 or a
+   CS0433 waiting in somebody's NodeType.
 
 ## Every load path: the build carries its package closure
 
