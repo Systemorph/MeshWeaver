@@ -330,8 +330,9 @@ resolve `net8.0`.
 **One trap worth knowing, in the sibling product.** Ix.NET's `System.Linq.Async` v7 removed its LINQ
 implementation from the reference assemblies in favour of .NET 10's own
 `System.Linq.AsyncEnumerable`. A project still on `System.Linq.Async` **v6** that moves to .NET 10
-gets ambiguity errors from two LINQ implementations. We pin `System.Interactive` 7.0.1, so this does
-not reach us — but it is the shape to check if an Ix reference is ever added.
+gets ambiguity errors from two LINQ implementations. The platform references no Ix.NET package at
+all any more (`System.Interactive` was removed — see [NuGet Runtime Assets](../NuGetRuntimeAssets)),
+so this does not reach us — but it is the shape to check if an Ix reference is ever added.
 
 **What this bump changes for MeshWeaver.Plugins.** `MeshWeaver.Blazor`, `MeshWeaver.Blazor.Views`,
 `MeshWeaver.InstanceSync` and `MeshWeaver.LogWatcher` reference `System.Reactive` versionless off
