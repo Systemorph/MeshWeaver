@@ -5,8 +5,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <summary>
 /// Suppresses a benign in-process Orleans <c>TestCluster</c> shutdown race.
 ///
-/// <para>When a test class's <c>TestCluster</c> is disposed, the silo's the DI container
-/// DI container (<c>LifetimeScope</c>) is torn down while the silo's network
+/// <para>When a test class's <c>TestCluster</c> is disposed, the silo's DI container (its service scope) is torn down while the silo's network
 /// <c>Orleans.Runtime.Messaging.Connection</c> is still draining in-flight
 /// <c>Memory</c>-stream messages on a ThreadPool task. Deserializing those
 /// (<c>MemoryMessageBodySerializerFactory.GetOrCreateSerializer</c> /
@@ -38,9 +37,8 @@ internal static class OrleansShutdownRaceSuppressor
         };
     }
 
-    private static bool IsDisposedServiceScope(Exception ex)
-    {
-        return MeshWeaver.Messaging.HubDisposingException.IsDisposedContainer(ex)
-               || MeshWeaver.Messaging.HubDisposingException.IsDisposedContainerReason(ex.Message);
-    }
+    private static bool IsDisposedServiceScope(Exception ex) =>
+        // Every branch, through wrappers — a wrapper over a disposed scope beside a real defect is not
+        // the shutdown race.
+        MeshWeaver.Messaging.FaultClassifier.EveryBranchIsDisposedContainer(ex);
 }

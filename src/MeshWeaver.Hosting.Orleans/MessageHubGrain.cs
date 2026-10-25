@@ -929,7 +929,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <param name="ex">The activation fault; may be null.</param>
     /// <returns><c>true</c> when the fault is a teardown race.</returns>
     internal static bool IsActivationTeardownRace(Exception? ex) =>
-        HubDisposingException.IsHubDisposal(ex) || HubDisposingException.IsDisposedContainer(ex);
+        FaultClassifier.Classify(ex).IsTeardown;
 
     /// <summary>
     /// The level the activation-fault line is logged at — a TICKETING decision, not a verbosity

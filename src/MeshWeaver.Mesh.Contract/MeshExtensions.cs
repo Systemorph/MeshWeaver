@@ -7244,8 +7244,7 @@ public static class MeshExtensions
     private static bool IsTeardownOfThisHub(IMessageHub hub, Exception ex)
         => hub.IsShuttingDown
            || hub.RunLevel > MessageHubRunLevel.Started
-           || ActivityControlPlaneExtensions.IsOwnHubDisposing(ex, hub.Address)
-           || hub.IsTerminatedByScopeTeardown(ex);
+           || FaultClassifier.Classify(ex, new TeardownContext(hub.IsServiceScopeDisposed, hub.Address)).IsTeardown;
 
     /// <summary>
     /// Posts the answer to <paramref name="request"/> from this hub while it can still post, and

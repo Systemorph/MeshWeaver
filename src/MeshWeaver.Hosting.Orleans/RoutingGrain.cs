@@ -1744,17 +1744,13 @@ internal class RoutingGrain(
     /// itself is correct and is pinned by tests that read it as a statement about the FAULT.</para>
     /// </summary>
     internal static bool IsTransientFailure(Exception ex) =>
-        ex is TimeoutException
-            or global::Orleans.Runtime.OrleansMessageRejectionException
-        // 🚨 THE BARE OrleansException THE TYPE TEST ABOVE CANNOT SEE — issue #1742 / #2357. Orleans
-        // rejects an un-addressable call with the DIRECTORY's exception attached, and the caller-side
-        // resolution is `rejection?.Exception ?? new OrleansMessageRejectionException(…)` — the
-        // carried one wins — so a grain call made while the directory is mid-handoff arrives here as
-        // a bare Orleans.Runtime.OrleansException whose own text ends "Retry later.". Nothing matched
-        // it, so it was never retried and became a TERMINAL DeliveryFailure for the sender. Full
-        // reasoning (and why this is a message match, and what pins it) on IsDirectoryUnstable.
-        || OrleansRoutingService.IsDirectoryUnstable(ex)
-        || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
+        // 🚨 The SAME predicate as OrleansRoutingService.IsTransientFailure, not a near-copy of it.
+        // The two used to differ by exactly SocketException/HttpRequestException — this copy lacked
+        // them, so a grain call that failed at the socket was a TERMINAL DeliveryFailure here and a
+        // retried one there — and this one walked only InnerException, missing a rejection at any
+        // aggregate index but 0. The bare-OrleansException-from-the-directory case (#1742 / #2357)
+        // is IsDirectoryUnstable's, inside the forwarded predicate.
+        OrleansRoutingService.IsTransientFailure(ex);
 
     /// <summary>
     /// How a routing failure that arrived as an EXCEPTION should be classified for the sender.

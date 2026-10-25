@@ -1619,9 +1619,7 @@ public static class DataExtensions
     /// delivery failure carrying it belongs here rather than in the <c>Unknown</c> bucket.</para>
     /// </summary>
     internal static bool IsOwnerTeardown(Exception? ex)
-        => ExceptionChain.Contains<ObjectDisposedException>(ex)
-           || ExceptionChain.Contains(ex, static e =>
-               e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown });
+        => FaultClassifier.Classify(ex, TeardownContext.DisposedIsOwnTeardown).IsTeardown;
 
     /// <summary>
     /// 🚨 Totality for a one-shot watcher: runs <paramref name="onEmptyCompletion"/> when

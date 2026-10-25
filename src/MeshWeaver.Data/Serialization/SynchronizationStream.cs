@@ -1200,11 +1200,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// <see cref="ObjectDisposedException"/> — i.e. a benign teardown artifact.
     /// </summary>
     private static bool IsObjectDisposed(Exception? error)
-    {
-        for (var e = error; e != null; e = e.InnerException)
-            if (e is ObjectDisposedException) return true;
-        return false;
-    }
+        => FaultClassifier.Classify(error, TeardownContext.DisposedIsOwnTeardown).Kind == FaultKind.ScopeTeardown;
 
     /// <summary>
     /// True if <paramref name="error"/> (or any exception in its chain) is a
@@ -1214,15 +1210,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// a stack-trace-bearing Warning per occurrence.
     /// </summary>
     private static bool IsTransientHubTimeout(Exception? error)
-    {
-        for (var e = error; e != null; e = e.InnerException)
-        {
-            if (e is TimeoutException) return true;
-            if (e is TaskCanceledException) return true;
-            if (e is OperationCanceledException) return true;
-        }
-        return false;
-    }
+        // A timeout (TimeoutException, a cancellation carrying one, a routed timeout banner), a
+        // cooperative cancellation, or a transient dependency fault — FaultClassifier's verdict, the
+        // same one every other layer reads. A hub teardown is NOT in this set: it is logged at Warning
+        // here as before, its own handling lives at the subscribe site.
+        => FaultClassifier.Classify(error).Kind
+            is FaultKind.Timeout or FaultKind.CooperativeCancel or FaultKind.Transient;
 
     /// <summary>
     /// Couples the lifetime of <paramref name="disposable"/> to this stream: it is disposed when the stream

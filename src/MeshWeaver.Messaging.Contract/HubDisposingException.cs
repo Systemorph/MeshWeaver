@@ -136,16 +136,5 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// </summary>
     /// <param name="exception">The exception to classify; may be null.</param>
     public static bool IsDisposedContainer(Exception? exception)
-        => ExceptionChain.Contains(exception, static e =>
-            e is ObjectDisposedException disposed
-            && (string.Equals(disposed.ObjectName, DisposedContainerObjectName, StringComparison.Ordinal)
-                || (disposed.Message?.Contains(DisposedContainerPhrase, StringComparison.OrdinalIgnoreCase) ?? false)));
-
-    /// <summary>As <see cref="IsDisposedContainer(Exception?)"/>, for a REASON string — an outcome that
-    /// carries the failure as text.</summary>
-    /// <param name="reason">The reason text; may be null.</param>
-    public static bool IsDisposedContainerReason(string? reason)
-        => reason is not null
-           && (reason.Contains(DisposedContainerPhrase, StringComparison.OrdinalIgnoreCase)
-               || reason.Contains(DisposedContainerObjectName, StringComparison.Ordinal));
+        => FaultClassifier.IsDisposedContainer(exception);
 }

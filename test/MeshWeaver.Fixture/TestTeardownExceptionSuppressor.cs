@@ -70,9 +70,10 @@ internal static class TestTeardownExceptionSuppressor
     {
         var msg = ex.Message ?? string.Empty;
 
-        // (1) a disposed service scope during in-flight (de)serialization
-        if (MeshWeaver.Messaging.HubDisposingException.IsDisposedContainer(ex)
-            || MeshWeaver.Messaging.HubDisposingException.IsDisposedContainerReason(msg))
+        // (1) a disposed service scope during in-flight (de)serialization — the platform's one
+        // definition of that fact (FaultClassifier), not a third copy of its text match. EVERY branch,
+        // through wrappers: a wrapper over a disposed scope beside a real defect is not benign.
+        if (MeshWeaver.Messaging.FaultClassifier.EveryBranchIsDisposedContainer(ex))
             return true;
 
         // (2) xUnit "no currently active test" — a continuation ran after teardown

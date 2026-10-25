@@ -2120,91 +2120,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// failures are worth a retry rather than a suppress.
     /// </summary>
     internal static bool IsTransientOwnerFailure(Exception? error)
-    {
-        for (var e = error; e != null; e = e.InnerException)
-        {
-            if (e is TimeoutException) return true;
-            // A mirror that gave up re-asking a recycling owner (#6602): the node exists, its
-            // address kept refusing as ShuttingDown. Same verdict as the "is shutting down" text
-            // below, carried by type; the faulted entry is evicted and the next read re-probes.
-            if (e is MeshWeaver.Data.Serialization.SyncStreamOwnerRefusedException) return true;
-            // OrleansMessageRejectionException lives in Orleans.Core, which this project does
-            // not (and must not) reference — match by type name so the classifier stays free
-            // of the Orleans dependency while still catching the raw grain-reject that reaches
-            // the cache from the silo-side routing grain.
-            if (e.GetType().Name == "OrleansMessageRejectionException") return true;
-            var msg = e.Message ?? string.Empty;
-            // The routing grain surfaces the exhausted-forward reject as a DeliveryFailure whose
-            // message is "Delivery to '{path}' failed: Forwarding failed: tried to forward … to
-            // invalid activation. Rejecting now." — a TRANSIENT reactivation miss, not a real
-            // missing node. The 60 s hub-request timeout banner adds the "… hub was not found" /
-            // "undeliverable" / "No response received in hub" forms.
-            if (msg.Contains("invalid activation", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("Rejecting now", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("Forwarding failed", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("target hub was not found", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("undeliverable", StringComparison.OrdinalIgnoreCase)) return true;
-            // MessageService.ScheduleNotify's shutdown-drop NACK (ErrorType.ShuttingDown):
-            // a delivery raced the target hub's DisposeRequest (recycle / delete / restart).
-            // Transient by design — the address may reactivate (recycle), and if the node is
-            // genuinely gone the NEXT probe gets the authoritative routing NotFound.
-            if (msg.Contains("is shutting down", StringComparison.OrdinalIgnoreCase)) return true;
-            // A silo that momentarily lost its Postgres connection (host reboot, network
-            // blackout, admin restart/failover, pool exhaustion) surfaces the owner READ as
-            // an Npgsql/Postgres fault. This is a node-EXISTS-but-DB-unreachable miss — the
-            // node is fine, the connection is not, so a later read succeeds and the transient
-            // breaker's ≤60s re-probe self-heals it. Without this the fault fell through to
-            // the un-broker'd "faulted forever" bucket and permanently wedged EVERY
-            // re-activation until a manual recycle (memex AgenticEngineering, 2026-07-23:
-            // Azure emergency host repair rebooted the node → PG unreachable ~2 min → course
-            // dead until an admin recycle). See IsTransientDatabaseFailure.
-            if (IsTransientDatabaseFailure(msg)) return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Canonical markers of a TRANSIENT database-connectivity fault — the connection
-    /// dropped or the endpoint was momentarily unreachable, not a query/schema error
-    /// (a real error such as <c>42P01</c> undefined_table must NOT match — it is a
-    /// legitimate "no such relation", handled elsewhere as an empty read).
-    /// <para>Matched by MESSAGE, not exception type, on purpose: across the Orleans grain
-    /// boundary the typed <c>NpgsqlException</c>/<c>PostgresException</c> is flattened to
-    /// its message string (the inner <see cref="TimeoutException"/> object does not survive
-    /// serialization), so the same string is what reaches the cache whether the read faulted
-    /// in-process (monolith) or cross-silo (Orleans portal). Kept in sync with the mirrored
-    /// classifiers <c>AreaErrorClassifier.IsTransientHubFailure</c>,
-    /// <c>RoutingGrain.IsTransientFailure</c> and
-    /// <c>SynchronizationStream.IsTransientHubTimeout</c>.</para>
-    /// </summary>
-    internal static readonly string[] TransientDatabaseFailureMarkers =
-    [
-        "Failed to connect",                                    // Npgsql: endpoint unreachable
-        "Timeout during connection attempt",                    // Npgsql: connect timed out
-        "error connecting",                                     // Npgsql connect wrapper
-        "connection reset",                                     // socket reset by peer
-        "existing connection was forcibly closed",              // Windows socket reset
-        "server closed the connection unexpectedly",            // backend gone mid-query
-        "connection pool has been exhausted",                   // pool starvation during a blackout
-        "terminating connection due to administrator command",  // 57P01 admin_shutdown / failover
-        "the database system is starting up",                   // 57P03 — post-restart warmup
-        "the database system is shutting down",                 // 57P03
-        "the database system is in recovery mode",              // crash recovery
-        "no connection could be made",                          // socket refused
-        "connection refused",                                   // socket refused
-    ];
-
-    /// <summary>
-    /// True when <paramref name="message"/> is a transient database-connectivity fault
-    /// (see <see cref="TransientDatabaseFailureMarkers"/>) rather than a real query/schema
-    /// error — so the storm/transient breaker treats it as a retryable miss that self-heals
-    /// instead of caching it as a permanent owner failure.
-    /// </summary>
-    internal static bool IsTransientDatabaseFailure(string? message) =>
-        !string.IsNullOrEmpty(message)
-        && Array.Exists(TransientDatabaseFailureMarkers,
-            m => message.Contains(m, StringComparison.OrdinalIgnoreCase));
+        // A forwarder onto the ONE classifier (FaultClassifier): a timeout, a hub or scope teardown,
+        // or a transient fault of the transport (the Orleans grain reject, "invalid activation",
+        // "Rejecting now", "Forwarding failed", "target hub was not found", "undeliverable"), of the
+        // store (typed, or flattened to the Npgsql/Postgres connect banners across the grain
+        // boundary — memex AgenticEngineering, 2026-07-23) or of the network. A COOPERATIVE
+        // cancellation is not an owner failure at all, and a fault stays a fault.
+        => FaultClassifier.Classify(error).Kind is not (FaultKind.Fault or FaultKind.CooperativeCancel);
 
     /// <summary>
     /// Returns a per-user access-gated view of the cached shared stream. The

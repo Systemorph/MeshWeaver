@@ -135,8 +135,10 @@ internal static class TeardownStragglerCapturer
     private static bool IsTeardownDisposedStraggler(Exception? ex) =>
         IsDisposedServiceScope(ex) || IsDisposedMemoryCache(ex);
 
+    // The FRAME only, never the graph: this runs in the first-chance handler, which then formats the
+    // exception — and an aggregate admitted here would have its (exponential) message composed.
     private static bool IsDisposedServiceScope(Exception? ex) =>
-        ex is ObjectDisposedException && MeshWeaver.Messaging.HubDisposingException.IsDisposedContainer(ex);
+        MeshWeaver.Messaging.FaultClassifier.IsDisposedContainerFrame(ex);
 
     private static bool IsDisposedMemoryCache(Exception? ex) =>
         ex is ObjectDisposedException ode

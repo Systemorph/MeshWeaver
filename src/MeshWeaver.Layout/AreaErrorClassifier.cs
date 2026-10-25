@@ -23,50 +23,22 @@ public static class AreaErrorClassifier
     /// self-heal once the upstream catches up.
     /// </summary>
     public static bool IsTransientHubFailure(Exception? ex)
-    {
-        for (var e = ex; e != null; e = e.InnerException)
-        {
-            if (e is TimeoutException) return true;
-            if (e is OperationCanceledException) return true;
-            // The router's own TYPED transient verdict (RoutingGrain.ClassifyDeliveryException):
-            // a silo leaving, a directory mid-handoff, an activation mid-DeactivateOnIdle. Its text
-            // is Orleans' ("Forwarding failed … invalid activation. Rejecting now."), which none of
-            // the wording below matched — so the one verdict the producer had already classified was
-            // re-read here as permanent.
-            if (e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }) return true;
-            // A sync stream that gave up re-asking a RECYCLING owner (#6602). Every refusal it counted
-            // was the ShuttingDown verdict above, so it is the same statement — "the address is
-            // coming back" — and a view re-subscribes on a new stream, bounded by RetryAreaWithBackoff.
-            // Before the give-up was a terminal, the view simply froze on its last value.
-            if (e is MeshWeaver.Data.Serialization.SyncStreamOwnerRefusedException) return true;
-            var msg = e.Message ?? string.Empty;
-            // 🚨 The two TRANSPORT timeouts, flattened to text by the routed NACK (issues #5599,
-            // #5605, #5624). Across the grain boundary the TimeoutException OBJECT does not survive —
-            // the router posts "Delivery to 'Store' failed: Response did not arrive on time in
-            // 00:00:30 …" (Orleans' ResponseTimeout) or "… Grain placement operation timed out for
-            // grain messagehub/Store." as a DeliveryFailure{Failed} — so the typed check above never
-            // sees them. Both say "the hub did not answer IN TIME", never "the hub cannot serve this":
-            // the same statement as "No response received in hub" below, which is already retried.
-            // Unmatched, they fell through NamedAreaView to its generic arm: logged at Error (one
-            // incident per occurrence), NOT retried, and the raw Orleans banner rendered as the
-            // area's permanent content until a reload. Re-subscribing a VIEW is a new request, so
-            // #1172's "never re-send a timed-out delivery" (a grain-layer rule about the SAME
-            // delivery) does not apply here, and the retry stays bounded by RetryAreaWithBackoff.
-            if (msg.Contains(TransportTimeout.ResponseTimeoutPhrase, StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains(TransportTimeout.PlacementTimeoutPhrase, StringComparison.OrdinalIgnoreCase)) return true;
-            // Framework undeliverable / timeout banners reach the GUI wrapped in a
-            // DeliveryFailureException, so the typed checks above don't always catch them.
-            if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("target hub was not found", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("undeliverable", StringComparison.OrdinalIgnoreCase)) return true;
-            // MessageService's shutdown-drop NACK ("Hub X is shutting down … Rejecting now."):
-            // the delivery raced the target hub's DisposeRequest (recycle / restart) — retry-
-            // worthy, the address typically reactivates on the next probe. Mirrors
-            // MeshNodeStreamCache.IsTransientOwnerFailure so the layers agree.
-            if (msg.Contains("is shutting down", StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
-    }
+        // 🚨 A forwarder onto the ONE classifier (FaultClassifier). For a VIEW every verdict that is
+        // not a fault means "ask again": a timeout (the owner did not answer in time — the routed
+        // ResponseTimeout / placement-timeout banners, #5599/#5605/#5624, included), a cooperative
+        // cancellation, a hub recycling (ShuttingDown, its "is shutting down" banner, the router's
+        // typed transient verdict, a sync stream that gave up re-asking a recycling owner — #6602),
+        // a disposed DI scope, and a transient fault of the transport, the store or the network.
+        // Re-subscribing a view is a NEW request, bounded by RetryAreaWithBackoff, so #1172's "never
+        // re-send a timed-out delivery" (a grain-layer rule about the SAME delivery) does not apply.
+        //
+        // The one exclusion is a stalled query PROVIDER (FaultLayer.StoreStall): it must be fixed,
+        // never resubscribed behind the caller's back — IsStorageUnavailable renders it instead. It
+        // is refused in ANY branch: a stall beside a socket fault combines to a layer-less transient,
+        // and a stall beside a timeout loses on severity, so the combined verdict alone would retry it.
+        => FaultClassifier.Classify(ex) is { Kind: not FaultKind.Fault } verdict
+           && !verdict.Branches.Any(static branch =>
+               branch.Kind == FaultKind.Transient && branch.Layer == FaultLayer.StoreStall);
 
     /// <summary>
     /// 🚨 True when the error is a DEADLINE MISS — the owner did not answer within the transport's
@@ -348,8 +320,7 @@ public static class AreaErrorClassifier
     /// behind the caller's back.
     /// </remarks>
     public static bool IsStorageUnavailable(Exception? ex)
-        => StorageFaults.IsTransientConnectFault(ex)
-           || ex is MeshWeaver.Mesh.QueryProviderStalledException;
+        => FaultClassifier.Classify(ex).EveryBranchTypedTransientIn(FaultLayer.Store, FaultLayer.StoreStall);
 
     /// <summary>
     /// True when the failure is a routing <b>NotFound</b> — the target node/hub no longer exists
