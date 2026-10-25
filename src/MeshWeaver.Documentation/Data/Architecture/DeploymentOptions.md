@@ -78,7 +78,7 @@ The real `AzureFoundry` key lives in Key Vault, mounted by the CSI add-on and sy
 
 1. Enter the secret on the control instance: `Deployments/<id>` → **Set Key Vault secrets…** — a write-only paste box the governed writer identity stores as `AzureFoundry-ApiKey` (policy `secrets-write-only-entry`, [Secrets: Write-Only Entry](../SecretsWriteOnlyEntry)). Nobody runs a vault command by hand.
 2. The add-on identity's read access is the fleet's READER grant (`get` only), provisioned as infrastructure-as-code through the governed `InfraDeploy` action — never a hand-run role assignment.
-3. Declare it under `keyVaultSecrets:` in the environment's values (`vaultName`, `tenantId`, `identityClientId`, and `secrets: [{vaultSecret: AzureFoundry-ApiKey, key: AzureFoundry__ApiKey}]`) — the chart renders the `SecretProviderClass`, the CSI volume, its mount and the `envFrom`, so steps 3–4 of the legacy path below are no longer hand-applied. See [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Key Vault secrets are DECLARED in values". *(Legacy, hand-made shape — template at [`deploy/aks/envs/example/secretproviderclass.yaml`](https://github.com/Systemorph/MeshWeaver/blob/main/deploy/aks/envs/example/secretproviderclass.yaml); the real one is per-environment and git-ignored.)*
+3. Declare it under `keyVaultSecrets:` in the environment's values (`vaultName`, `tenantId`, `identityClientId`, and `secrets: [{vaultSecret: AzureFoundry-ApiKey, key: AzureFoundry__ApiKey}]`) — the chart renders the `SecretProviderClass`, the CSI volume, its mount and the `envFrom`, so steps 3–4 of the legacy path below are no longer hand-applied. See [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Key Vault secrets are DECLARED in values". *(Legacy, hand-made shape — template at `deployments/aks/example/secretproviderclass.yaml` in the private Systemorph/Memex deployments repository; the real one is per-environment and git-ignored.)*
 4. *(Legacy only)* Patch the portal Deployment to mount it + read the synced secret:
 
 ```yaml
@@ -125,7 +125,7 @@ Anything in `.cs` (e.g. the Claude Code PTY fix, the static-catalog behaviour) o
 ```bash
 # config/manifest changes (works against the CURRENT image). The SecretProviderClass is
 # per-environment and NOT in this repo — take it from the environment's own folder (template:
-# deploy/aks/envs/example/secretproviderclass.yaml):
+# Systemorph/Memex deployments/aks/example/secretproviderclass.yaml):
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command "kubectl apply -f secretproviderclass.yaml && kubectl rollout restart deploy/memex-portal-deployment -n <ns>" \
   --file <env-dir>/secretproviderclass.yaml
