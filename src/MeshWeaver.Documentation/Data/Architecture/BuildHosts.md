@@ -388,10 +388,24 @@ itself on the one open `build-host` issue — from its OWN job (`build-host-stab
 `if: always()`), because a step inside the job it monitors dies with that job's timeout.
 
 **The receiver** (the operations instance, MeshWeaver.Plugins) writes the event's set into
-`DeploymentContent.BuildHosts.Channels[<channel>]` (the typed record block,
-`MeshWeaver.Deployment.Contract` `BuildHostsBlock` / `BuildHostChannel`) — only when the record's
-`BuildHosts.Enabled` is already true, and never backwards — and the record change then applies
-itself (policy `record-change-applies-itself`); the roll is ordinary Deployment semantics.
+`DeploymentContent.BuildHostSets[<channel>]` — the record's MESH-OWNED member, never the authored
+`BuildHosts` block (`MeshWeaver.Deployment.Contract` `BuildHostsBlock` / `BuildHostChannel`) — only
+when the record's `BuildHosts.Enabled` is already true and the block runs that channel, and never
+backwards; the record change then applies itself (policy `record-change-applies-itself`); the roll is
+ordinary Deployment semantics.
+
+🚨 **Why a mesh-owned member, not the authored block.** The record is GitSynced ONE-WAY from its
+estate's repository, and the estate's NO PINS rule forbids a record in git from naming a build. So
+the set follows the ownership rule a NodeType's compile bookkeeping follows
+(`NodeTypeOperationalContent.DeploymentMemberNames`): an export strips `buildHostSets`, an import keeps
+the LIVE value — a later authored change to the record can neither roll a host back nor blank it —
+and a create starts without it. The author states only `Enabled` and each channel's `MaxReplicas`;
+set fields written into the authored block are not read. The claim barrier and the chart both read
+the mesh-owned set. 🚨 Each channel's set is stored as ONE scalar token
+(`<platformVersion>;<testerDigest>;<portalDigest>;<runnerDigest>`, `BuildHostChannel.ToSetToken`), never
+as separate fields: a cross-hub write is a three-way merge that decides every leaf on its own, so with
+separate fields a stale hand-over whose version is refused could still land a digest the newer one did
+not change. As one leaf, a stale write conflicts as a whole and its retry is refused as older.
 `recordFields` is informative. 🚨 **Never `kubectl set image`, never a hand-edited Deployment.**
 
 **A no-op until declared, twice.** `.github/build-hosts.json` `enabled: false` (the shipped value)
