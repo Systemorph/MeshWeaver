@@ -123,7 +123,7 @@ public sealed partial class MailCopyEngine(
     public IObservable<MailCopySource?> Source(string owner) => store.Source(owner, Provider).Take(1).DefaultIfEmpty(null);
 
     /// <summary>
-    /// The copy's source in the copy partition, else a copy still at the LEGACY place that its next sync moves — what
+    /// The copy's source in the copy partition, else a copy still at the LEGACY place that its next sync retires — what
     /// the account switch shows and switches off by. 🚨 Never what the inbox serves from: a legacy source names no
     /// copies in the copy partition. Both reads are composed HERE, at the call, under the caller's identity. Cold;
     /// emits once.
@@ -244,17 +244,12 @@ public sealed partial class MailCopyEngine(
             OnBehalfOf = owner,
         });
 
-    // 🚨 A copy still filed at the legacy place in the owner's home partition is moved into the owner's copy
-    // partition FIRST (MeshMailCopyStore.MoveLegacy), and a move that fails FAILS the sync: no provider work runs
-    // over a copy that is half moved (the cursor would advance, the sweep would judge generations mid-move). The
-    // next sync repeats the move — every step of it is an overwrite or a no-op when repeated.
-    // 🚨 A sync that MOVED copies stops there: the sweep would judge the just-moved copies against a source read from
-    // the index, which may not show the moved source yet — and an absent source makes every copy a leftover. The next
-    // sync (the keeper's, or the next inbox read's) runs the sweep once the index has caught up.
+    // 🚨 A copy still filed at the legacy place in the owner's home partition is RETIRED first
+    // (MeshMailCopyStore.RetireLegacy: its copies and files deleted, a fresh copy switched on in the owner's copy
+    // partition), and a retirement that fails FAILS the sync — no provider work runs while legacy mail remains. The
+    // next sync repeats it. The fresh copy holds no copies yet, so the sweep that follows has nothing to misjudge.
     private IObservable<MailCopySource?> SyncCore(string owner)
-        => copies.MoveLegacy(owner, Provider).SelectMany(moved => moved > 0
-            ? Observable.Return<MailCopySource?>(null)
-            : SyncSource(owner));
+        => copies.RetireLegacy(owner, Provider).SelectMany(_ => SyncSource(owner));
 
     private IObservable<MailCopySource?> SyncSource(string owner)
         => copies.Source(owner, Provider).Take(1).Timeout(ReadBudget).SelectMany(source => source is null
@@ -701,7 +696,7 @@ public sealed class MailFeedAccountCopy(MailCopyEngine engine, IMailCopyFeed fee
     /// <inheritdoc />
     public IObservable<ImmutableList<MailCopyAccount>> Accounts(string owner)
     {
-        // Either place: a copy not yet moved out of the home partition is still on.
+        // Either place: a copy not yet retired out of the home partition is still on.
         var isOn = engine.SourceAnywhere(owner).Select(source => source is not null);
         return feed.Accounts(owner).Take(1).SelectMany(accounts => accounts.Count == 0
             ? Observable.Return(ImmutableList<MailCopyAccount>.Empty)
@@ -728,7 +723,7 @@ public sealed class MailFeedAccountCopy(MailCopyEngine engine, IMailCopyFeed fee
     /// <inheritdoc />
     public IObservable<bool> Disable(string owner, string accountId)
     {
-        // Either place: a copy not yet moved is switched off too — the store's Disable moves it first, then deletes it.
+        // Either place: a copy not yet retired is switched off too — the store's Disable deletes it with its files.
         var source = engine.SourceAnywhere(owner);
         var disable = engine.Disable(owner);
         // Only the copy OF THIS ACCOUNT: a different account id deletes nothing.
