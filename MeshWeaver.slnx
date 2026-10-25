@@ -91,16 +91,13 @@
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Test/MeshWeaver.Hosting.Test.csproj" />
     <Project Path="test/MeshWeaver.PluginTester.Test/MeshWeaver.PluginTester.Test.csproj" />
-    <Project Path="test/MeshWeaver.Portal.E2E.Test/MeshWeaver.Portal.E2E.Test.csproj" />
     <Project Path="test/MeshWeaver.Testing.Xunit/MeshWeaver.Testing.Xunit.csproj" />
     <Project Path="test/MeshWeaver.Testing.Xunit.Test/MeshWeaver.Testing.Xunit.Test.csproj" />
-    <Project Path="test/MeshWeaver.ThumbnailGenerator.Test/MeshWeaver.ThumbnailGenerator.Test.csproj" />
     <Project Path="test/MeshWeaver.Updates.Test/MeshWeaver.Updates.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.ComboAssembler/MeshWeaver.ComboAssembler.csproj" />
     <Project Path="tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj" />
     <Project Path="tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj" />
-    <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
   </Folder>
 </Solution>

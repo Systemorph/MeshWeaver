@@ -154,6 +154,16 @@ USAGE
     python3 resolve-platform.py --no-registry       # core sha + set name only
     python3 resolve-platform.py --freeze 3.0.0-ci.8195
     python3 resolve-platform.py --self-test         # prove every branch, offline
+    # OFF by default (Doc/Architecture/DeployTestSwitchLatest phase P5; consumers adopt it at P10):
+    python3 resolve-platform.py --from-build-hosts https://<control>/api/builds [--packages-root .]
+    python3 resolve-platform.py --check-caps --root . --build-api https://<control>/api/builds
+
+`--from-build-hosts` resolves the set the control instance's `latest` build-server DEPLOYMENT names,
+through the freeze path (that set, sealed, images present — or RED), and additionally writes
+`latest-deployment` and, with `--packages-root`, `partitions` (JSON `{set: [package, …]}`: each package's
+set under its `minMeshVersion` floor and `maxMeshVersion` cap). A missing or unreadable answer is RED
+naming what to provision; it NEVER falls back to the newest sealed set. Env: MW_BUILD_API_TOKEN.
+`--check-caps` is the cap validator node-repo-validate.yml runs (see "build hosts" below).
 
 Env: GH_TOKEN (or GITHUB_TOKEN); ACR_USERNAME / ACR_PASSWORD unless --no-registry;
 PLATFORM_BASELINE (optional JSON, see FRESHNESS). The registry credential supports ACR and the
@@ -1950,7 +1960,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
            sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
            now: Callable[[], float] = time.time, migration: str | None = None,
            passed_ceiling: int | None = None, verify_source: bool = False,
-           armed: bool = False) -> Chosen:
+           armed: bool = False, freeze_source: str | None = None) -> Chosen:
     """`passed_ceiling` — OPTIONAL, and `None` (every caller that does not ask for it) leaves this
     function on exactly the path it took before the option existed. When given, it is the highest
     core-CD run number the CALLING repository's own `main` has passed on: a sealed set NEWER than
@@ -1962,11 +1972,16 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
     keeps taking the run's `head_sha` plus the version `Directory.Build.props` declares at it. When
     set, the set's sha and release come from the platform bake's own final publication receipt
     instead, and a set whose receipt is missing, duplicated, malformed or inconsistent is PASSED
-    OVER with the reason recorded rather than taken unattributed (see `publication_source`)."""
+    OVER with the reason recorded rather than taken unattributed (see `publication_source`).
+
+    `freeze_source` — OPTIONAL: who named the freeze, when it is not the repo variable. The build
+    hosts' `latest` (`--from-build-hosts`) resolves through the freeze path, because a deployment
+    names ONE set and a freeze is exactly "that set or RED, never a substitute"."""
     freeze_kind = freeze_value = None
     if freeze:
         freeze_kind, freeze_value = parse_freeze(freeze)
-        log(f"freeze requested: {freeze_kind} {freeze_value} (repo VARIABLE MW_PLATFORM_REF)")
+        log(f"freeze requested: {freeze_kind} {freeze_value} "
+            f"({freeze_source or 'repo VARIABLE MW_PLATFORM_REF'})")
 
     deadline = now() + wait_for_seal
     examined = 0
@@ -2201,7 +2216,8 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             else:
                 log(f"  {label} = {set_name}: sealed (registry not consulted)")
 
-            source = (f"frozen by the repo VARIABLE MW_PLATFORM_REF={freeze}" if freeze
+            source = (freeze_source if freeze and freeze_source
+                      else f"frozen by the repo VARIABLE MW_PLATFORM_REF={freeze}" if freeze
                       else "the newest sealed platform set this repo's `main` has passed"
                       if passed_ceiling is not None
                       else "the newest sealed platform set")
@@ -2401,6 +2417,617 @@ def write_outputs(chosen: Chosen, tester: str, portal: str, migration: str | Non
     emit(output_rows(chosen, tester, portal, migration))
 
 
+# ───────────────────── build hosts: the `latest` DEPLOYMENT, and package caps ─────────────────────
+#
+# Doc/Architecture/DeployTestSwitchLatest §4-§5 (policies `deploy-test-switch-latest`,
+# `package-mesh-version-cap`), phase P5: IMPLEMENTED and self-tested, and INERT. Nothing below runs
+# unless a caller passes `--from-build-hosts` (resolution) or `--check-caps` (the cap validator).
+# Phase P10 is the consumers adopting the flag, and only after phase P9 is verified — this mode has
+# NO fallback to the newest-sealed path, so adopting it before the control instance serves a
+# `latest` deployment reds that consumer by name, on purpose.
+#
+#   ONE read, `GET <api>/hosts` on the control instance (phase P3 serves it):
+#     {aliases:{latest:"<v>", previous:"<v>"}, versions:[{version, ready, maxReplicas, pinnedBy:[…]}]}
+#   * `latest` is `aliases.latest`, and it must name a retained version whose `ready` is true. The
+#     set it names is then resolved EXACTLY like a freeze: that one CD run, sealed, its images
+#     present — never a substitute.
+#   * for a package whose cap forbids `latest`, the version is the highest `version` with
+#     `ready == true` at or above the package's floor and at or below its cap.
+#   Alias and versions come from the same answer, so they cannot disagree about a switch that
+#   happened between two reads. `MW_BUILD_API_TOKEN` is sent as a bearer when set.
+#
+# 🚨 A missing, unreadable or malformed answer is RED naming what to provision. It is NEVER "use
+# the newest sealed set instead": that set may be one no deployment tested, which is the one thing
+# the switch exists to prevent.
+
+BUILD_API_TOKEN_ENV = "MW_BUILD_API_TOKEN"
+LATEST_ALIAS = "latest"
+BUILD_API_TIMEOUT_S = 30
+CAP_FIELD = "maxMeshVersion"
+FLOOR_FIELD = "minMeshVersion"
+CAP_REASON_FIELD = "capReason"
+CAP_TRACKING_FIELD = "capTracking"
+NO_FALLBACK = ("It is never answered from the newest sealed set instead: that set may be one no "
+               "build-server deployment tested (Doc/Architecture/DeployTestSwitchLatest §4).")
+
+
+class Deployed(NamedTuple):
+    """One retained build-server deployment as `GET <api>/hosts` reports it."""
+    version: str
+    run: int
+    ready: bool
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx is an answer, never followed: urllib would re-send the bearer token to `Location`."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401, ANN001
+        return None
+
+
+def build_api_base(api: str) -> str:
+    """The build API base, validated: https (plain http only on loopback, where the self-test's fake
+    server lives), no credentials in the URL, no query. Raises ResolutionError naming the fault."""
+    value = (api or "").strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(value)
+    loopback = parsed.hostname in ("127.0.0.1", "localhost", "::1")
+    if not value or not parsed.netloc or parsed.scheme not in ("https", "http") \
+            or (parsed.scheme == "http" and not loopback):
+        raise ResolutionError(
+            f"the build API `{api}` is not an https URL (e.g. https://<control instance>/api/builds). "
+            "Provision the repository/organisation variable MW_BUILD_API and pass it as "
+            "--from-build-hosts / --build-api.")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ResolutionError(f"the build API `{api}` carries credentials, a query or a fragment — "
+                              f"pass the bare base URL and the token in {BUILD_API_TOKEN_ENV}.")
+    return value
+
+
+class HttpBuildHosts:
+    """The control instance's build API, read over HTTP. The INTERFACE the resolver codes against is
+    the two methods; the self-test drives this same class against a fake server."""
+
+    def __init__(self, api: str, token: str = "", timeout: float = BUILD_API_TIMEOUT_S):
+        self.base = build_api_base(api)
+        self.token = token
+        self.timeout = timeout
+        self._opener = urllib.request.build_opener(_NoRedirect)
+        self.requests: list[str] = []
+        self._doc: dict | None = None
+
+    def _get(self, route: str, what: str, provision: str) -> dict:
+        url = f"{self.base}/{route}"
+        self.requests.append(route)
+        headers = {"Accept": "application/json", "User-Agent": "resolve-platform"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        try:
+            with self._opener.open(urllib.request.Request(url, headers=headers), timeout=self.timeout) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as error:
+            if error.code in (401, 403):
+                raise ResolutionError(
+                    f"{what}: {url} answered HTTP {error.code}. Provision {BUILD_API_TOKEN_ENV} (a "
+                    f"credential the build API accepts for this read). {NO_FALLBACK}") from error
+            if error.code == 404:
+                raise ResolutionError(f"{what}: {url} answered HTTP 404 — {provision} {NO_FALLBACK}") from error
+            raise ResolutionError(f"{what}: {url} answered HTTP {error.code}. {NO_FALLBACK}") from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise ResolutionError(f"{what}: {url} is unreachable ({type(error).__name__}). {NO_FALLBACK}") from error
+        try:
+            doc = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ResolutionError(f"{what}: {url} answered something that is not JSON. {NO_FALLBACK}") from error
+        if not isinstance(doc, dict):
+            raise ResolutionError(f"{what}: {url} answered JSON that is not an object. {NO_FALLBACK}")
+        return doc
+
+    def _hosts(self) -> dict:
+        """`GET <api>/hosts`, read ONCE per instance: `{aliases:{latest, previous}, versions:[{version,
+        ready, maxReplicas, pinnedBy}]}` — the alias and the versions come from one answer, so they
+        can never disagree about a switch that happened between two reads."""
+        if self._doc is None:
+            self._doc = self._get("hosts", "the build hosts",
+                                  "this control instance does not serve `GET /api/builds/hosts` yet "
+                                  "(Doc/Architecture/DeployTestSwitchLatest §4, phase P3).")
+        return self._doc
+
+    def latest(self) -> str:
+        """The set `aliases.latest` names, canonical spelling. RED when the alias is absent, is not a
+        platform set, or names a version that is not retained and READY (§4: "a missing, unreadable or
+        not-Ready alias is a RED job")."""
+        doc = self._hosts()
+        aliases = doc.get("aliases")
+        value = aliases.get(LATEST_ALIAS) if isinstance(aliases, dict) else None
+        name = canonical_set_name(value if isinstance(value, str) else None)
+        if not name:
+            raise ResolutionError(
+                f"the build hosts' `latest`: {self.base}/hosts names no platform set as "
+                f"aliases.{LATEST_ALIAS} (got {value!r}) — no deployment is switched to `latest` yet "
+                f"(Doc/Architecture/DeployTestSwitchLatest phases P7-P9). {NO_FALLBACK}")
+        row = next((d for d in self.deployed() if d.version == name), None)
+        if row is None or not row.ready:
+            raise ResolutionError(
+                f"the build hosts' `latest`: aliases.{LATEST_ALIAS} names {name}, but "
+                f"{'no retained deployment carries it' if row is None else 'its deployment is not ready'} "
+                f"(retained: {retained_text(self.deployed())}). {NO_FALLBACK}")
+        return name
+
+    def deployed(self) -> list[Deployed]:
+        """Every retained deployment `GET /hosts` lists."""
+        rows = self._hosts().get("versions")
+        if not isinstance(rows, list):
+            raise ResolutionError(f"the build hosts: {self.base}/hosts carries no `versions` list. {NO_FALLBACK}")
+        out: list[Deployed] = []
+        for row in rows:
+            version = row.get("version") if isinstance(row, dict) else None
+            name = canonical_set_name(version if isinstance(version, str) else None)
+            if not name:
+                raise ResolutionError(f"the build hosts: {self.base}/hosts lists {version!r}, which is "
+                                      f"not a platform set. {NO_FALLBACK}")
+            out.append(Deployed(name, int(match_set_name(name).group(2)), row.get("ready") is True))
+        return out
+
+
+def set_run(text: str | None) -> int | None:
+    """The CD run number a platform set names (both notations), or None — the run number is what
+    `PlatformFloor` orders two published builds by (`PlatformReleaseOrder.BuildOrdinal`)."""
+    m = match_set_name((text or "").strip())
+    return int(m.group(2)) if m else None
+
+
+class PackageBounds(NamedTuple):
+    """A package's authored platform bounds, from `<Package>/index.json` `content`."""
+    package: str
+    floor: str | None
+    cap: str | None
+    reason: str | None
+    tracking: str | None
+
+
+def read_package_bounds(root: str) -> list[PackageBounds]:
+    """Every top-level package of the tree at `root` (`<Package>/index.json`). An index.json that is
+    not JSON is RED — a bound nobody can read is not "no bound"."""
+    out: list[PackageBounds] = []
+    for name in sorted(os.listdir(root)):
+        path = os.path.join(root, name, "index.json")
+        if name.startswith(".") or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8-sig") as handle:
+                doc = json.load(handle)
+        except ValueError as error:
+            raise ResolutionError(f"{name}/index.json is not readable JSON ({error}) — its platform "
+                                  "bounds cannot be read, and an unreadable cap is not 'no cap'.")
+        content = doc.get("content") if isinstance(doc, dict) else None
+        content = content if isinstance(content, dict) else {}
+
+        def text(key: str) -> str | None:
+            value = content.get(key)
+            return value.strip() if isinstance(value, str) and value.strip() else None
+        out.append(PackageBounds(name, text(FLOOR_FIELD), text(CAP_FIELD),
+                                 text(CAP_REASON_FIELD), text(CAP_TRACKING_FIELD)))
+    return out
+
+
+def highest_in_range(floor_run: int | None, cap_run: int, deployed: list[Deployed]) -> Deployed | None:
+    """The highest READY deployment at or above the floor and at or below the cap, or None."""
+    fits = [d for d in deployed if d.ready and d.run <= cap_run and (floor_run is None or d.run >= floor_run)]
+    return max(fits, key=lambda d: d.run) if fits else None
+
+
+def retained_text(deployed: list[Deployed]) -> str:
+    """The retained deployments as one readable list. Pure."""
+    return ", ".join(d.version + ("" if d.ready else " (not ready)") for d in deployed) or "none"
+
+
+def cap_shape_errors(bounds: list[PackageBounds]) -> list[str]:
+    """The cap rules that need no build API: companions, shape, cap ≥ floor. Pure."""
+    errors: list[str] = []
+    for b in bounds:
+        where = f"{b.package}/index.json"
+        if b.cap is None:
+            if b.reason or b.tracking:
+                errors.append(f"{where}: `{CAP_REASON_FIELD}`/`{CAP_TRACKING_FIELD}` without a "
+                              f"`{CAP_FIELD}` — remove them (a cap's companions describe a cap).")
+            continue
+        cap_run = set_run(b.cap)
+        if cap_run is None:
+            errors.append(f"{where}: `{CAP_FIELD}: {b.cap}` is not a platform set (`3.1.<run>`, or a "
+                          "retired `3.0.0-ci.<run>`) — a cap must name a CD run the lineage can order.")
+        if not b.reason:
+            errors.append(f"{where}: `{CAP_FIELD}` needs `{CAP_REASON_FIELD}` — one line saying why "
+                          "this package cannot build against `latest`.")
+        if not b.tracking:
+            errors.append(f"{where}: `{CAP_FIELD}` needs `{CAP_TRACKING_FIELD}` — the node path of the "
+                          "item tracking the migration to `latest`.")
+        if cap_run is not None and b.floor is not None:
+            floor_run = set_run(b.floor)
+            if floor_run is None:
+                errors.append(f"{where}: `{FLOOR_FIELD}: {b.floor}` is not a platform set, so the cap "
+                              f"`{b.cap}` cannot be ordered against it.")
+            elif cap_run < floor_run:
+                errors.append(f"{where}: `{CAP_FIELD}: {b.cap}` is BELOW `{FLOOR_FIELD}: {b.floor}` — "
+                              "no platform satisfies both.")
+    return errors
+
+
+def check_caps(bounds: list[PackageBounds], hosts: "HttpBuildHosts | None") -> list[str]:
+    """Every cap rule (Doc/Architecture/DeployTestSwitchLatest §5). A tree with no cap needs no build
+    API and is never read against one; a tree WITH a cap and no API is RED, naming it."""
+    errors = cap_shape_errors(bounds)
+    capped = [b for b in bounds if b.cap is not None and set_run(b.cap) is not None]
+    if not capped:
+        return errors
+    if hosts is None:
+        errors.append(f"{len(capped)} package(s) declare `{CAP_FIELD}` ({', '.join(b.package for b in capped)}), "
+                      "and admitting a cap is read against the build API (is it stale? is its "
+                      "deployment retained?). Provision MW_BUILD_API and pass it as --build-api.")
+        return errors
+    try:
+        latest = hosts.latest()
+    except ResolutionError as error:
+        return errors + [str(error)]
+    latest_run = set_run(latest)
+    stale = [b for b in capped if set_run(b.cap) >= latest_run]
+    for b in stale:
+        errors.append(f"{b.package}/index.json: `{CAP_FIELD}: {b.cap}` admits `latest` ({latest}) — the "
+                      "cap is stale, remove it (a cap that restricts nothing becomes a pin the day "
+                      "`latest` overtakes it).")
+    binding = [b for b in capped if b not in stale]
+    if not binding:
+        return errors
+    try:
+        deployed = hosts.deployed()
+    except ResolutionError as error:
+        return errors + [str(error)]
+    for b in binding:
+        if highest_in_range(set_run(b.floor), set_run(b.cap), deployed) is None:
+            errors.append(
+                f"{b.package}/index.json: no READY build-server deployment lies in "
+                f"[{b.floor or 'no floor'}, {b.cap}] (retained: "
+                f"{retained_text(deployed)}). "
+                "The cap is not admitted: its deployment must be requested and tested first "
+                "(the daily cap-debt lane publishes the cap as Hosting/BuildCaps/<package> and asks for "
+                "BuildHostDeploy of that sealed set, §5; the deployment then appears here).")
+    return errors
+
+
+def partition_packages(bounds: list[PackageBounds], hosts: "HttpBuildHosts", latest: str) -> dict[str, list[str]]:
+    """`{set: [package, …]}` — the version each package builds against: `latest`, unless its cap
+    forbids it, then the highest retained READY deployment inside its floor and cap. Any package with
+    no fit is RED (ResolutionError naming floor, cap and what is retained). The per-version lookup is
+    read only when some cap forbids `latest`."""
+    latest_run = set_run(latest)
+    shape = cap_shape_errors(bounds)
+    if shape:
+        raise ResolutionError("the package caps are malformed:\n  " + "\n  ".join(shape))
+    out: dict[str, list[str]] = {}
+    deployed: list[Deployed] | None = None
+    problems: list[str] = []
+    for b in bounds:
+        floor_run = set_run(b.floor)
+        cap_run = set_run(b.cap)
+        if cap_run is None or cap_run >= latest_run:
+            if floor_run is not None and floor_run > latest_run:
+                problems.append(f"{b.package}: its floor {b.floor} is above `latest` ({latest}) — it "
+                                "waits for a newer switch.")
+                continue
+            out.setdefault(latest, []).append(b.package)
+            continue
+        if deployed is None:
+            deployed = hosts.deployed()
+        fit = highest_in_range(floor_run, cap_run, deployed)
+        if fit is None:
+            problems.append(f"{b.package}: no READY deployment in [{b.floor or 'no floor'}, {b.cap}] "
+                            f"(retained: {retained_text(deployed)}).")
+            continue
+        out.setdefault(fit.version, []).append(b.package)
+    if problems:
+        raise ResolutionError("a package has no build-server deployment to build against — never a "
+                              "silent pick of `latest` or of a version below its floor:\n  "
+                              + "\n  ".join(problems))
+    return out
+
+
+def check_caps_main(root: str, api: str, token: str) -> int:
+    """`--check-caps`: the cap validator `node-repo-validate.yml` runs on every satellite. Exit 1 on
+    any finding, each printed as an error annotation; a tree with no cap is green and reads no API."""
+    try:
+        bounds = read_package_bounds(root)
+        hosts = HttpBuildHosts(api, token) if api.strip() else None
+    except ResolutionError as error:
+        print(f"::error title=Package caps could not be checked::{error}")
+        return 1
+    capped = [b for b in bounds if b.cap is not None]
+    errors = check_caps(bounds, hosts)
+    for error in errors:
+        print("::error title=Package platform cap::" + error.replace("\n", "%0A"))
+    if errors:
+        print(f"✗ {len(errors)} cap finding(s) over {len(bounds)} package(s) — "
+              "Doc/Architecture/DeployTestSwitchLatest §5")
+        return 1
+    if not capped:
+        print(f"✓ no package declares `{CAP_FIELD}` ({len(bounds)} package(s) read) — every package "
+              "builds against `latest`; the build API was not needed")
+    else:
+        print(f"✓ {len(capped)} cap(s) admitted over {len(bounds)} package(s): "
+              + ", ".join(f"{b.package} ≤ {b.cap}" for b in capped))
+    return 0
+
+
+def resolve_build_hosts(api: str, token: str, packages_root: str | None) -> tuple[str, dict[str, list[str]] | None]:
+    """`(latest set, partitions or None)` for `--from-build-hosts`. Raises ResolutionError (RED)."""
+    hosts = HttpBuildHosts(api, token)
+    latest = hosts.latest()
+    partitions = (partition_packages(read_package_bounds(packages_root), hosts, latest)
+                  if packages_root else None)
+    return latest, partitions
+
+
+class _FakeBuildApi:
+    """A real HTTP server on loopback answering canned build-API routes, recording every request
+    and the Authorization header it carried (the self-test's fake control instance)."""
+
+    def __init__(self, routes: dict[str, tuple[int, str, dict[str, str]]]):
+        import http.server
+        import threading
+        self.routes = routes
+        self.seen: list[tuple[str, str]] = []
+        fake = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 — the stdlib's name
+                route = self.path.split("/api/builds/", 1)[-1]
+                fake.seen.append((route, self.headers.get("Authorization") or ""))
+                status, body, headers = fake.routes.get(route, (404, '{"error":"no route"}', {}))
+                self.send_response(status)
+                for key, value in headers.items():
+                    self.send_header(key, value)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+
+            def log_message(self, *args):  # silence the stdlib's access log
+                return
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/api/builds"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self) -> "_FakeBuildApi":
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def self_test_build_hosts() -> tuple[int, list[str]]:
+    """`--from-build-hosts` and the cap rules, against a fake build API serving `GET /hosts` in the
+    shape the control instance answers (`{aliases:{latest, previous}, versions:[{version, ready,
+    maxReplicas, pinnedBy}]}`), and, for the end-to-end case, the fake GitHub and registry the rest
+    of the self-test uses. Every rule has a NEGATIVE control: the input that must make it fire, and
+    the one that must not."""
+    import subprocess
+    import tempfile
+    failures: list[str] = []
+    total = 0
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        nonlocal total
+        total += 1
+        if not ok:
+            failures.append(f"build hosts: {name} — {detail}")
+
+    def red(fn: Callable[[], object]) -> str:
+        try:
+            fn()
+        except ResolutionError as error:
+            return str(error)
+        return ""
+
+    def hosts(latest: object, *rows: tuple[str, bool]) -> tuple[int, str, dict[str, str]]:
+        return 200, json.dumps({"aliases": {"latest": latest, "previous": None},
+                                "versions": [{"version": v, "ready": r, "maxReplicas": 2, "pinnedBy": []}
+                                             for v, r in rows]}), {}
+
+    route = "hosts"
+    ready_latest = hosts("3.1.10412", ("3.1.10412", True))
+
+    # ── `latest` ──
+    with _FakeBuildApi({route: ready_latest}) as api:
+        built = HttpBuildHosts(api.url, "tok")
+        got = built.latest()
+        built.deployed()
+        check("latest is the set aliases.latest names", got == "3.1.10412", got)
+        check("the token is presented as a bearer, and /hosts is read ONCE for alias and versions",
+              api.seen == [(route, "Bearer tok")], api.seen)
+    with _FakeBuildApi({route: ready_latest}) as api:
+        HttpBuildHosts(api.url, "").latest()
+        check("NEGATIVE: no token, no Authorization header", api.seen == [(route, "")], api.seen)
+    with _FakeBuildApi({}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).latest())
+        check("an absent endpoint (404) is RED and says it never falls back",
+              "HTTP 404" in text and "never answered from the newest sealed set" in text, text)
+    with _FakeBuildApi({route: (401, "{}", {})}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).latest())
+        check("a refused read names the credential to provision", BUILD_API_TOKEN_ENV in text, text)
+    with _FakeBuildApi({route: hosts(None)}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).latest())
+        check("no switched deployment yet is RED, naming the phases", "P7-P9" in text, text)
+    with _FakeBuildApi({route: hosts("main", ("3.1.10412", True))}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).latest())
+        check("an alias that is no set is RED", "names no platform set" in text, text)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", False))}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).latest())
+        check("a not-Ready `latest` is RED", "not ready" in text, text)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10398", True))}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).latest())
+        check("a `latest` no retained deployment carries is RED", "no retained deployment" in text, text)
+    with _FakeBuildApi({route: (200, "<html>", {})}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).latest())
+        check("a non-JSON answer is RED", "not JSON" in text, text)
+    with _FakeBuildApi({route: (302, "", {"Location": "/api/builds/elsewhere"}),
+                        "elsewhere": ready_latest}) as api:
+        text = red(lambda: HttpBuildHosts(api.url, "tok").latest())
+        check("a redirect is never followed (the token would travel with it)",
+              "HTTP 302" in text and [r for r, _ in api.seen] == [route], (text, api.seen))
+    with _FakeBuildApi({}) as api:
+        dead = api.url
+    text = red(lambda: HttpBuildHosts(dead).latest())
+    check("an unreachable endpoint is RED", "unreachable" in text, text)
+    check("plain http off loopback is refused",
+          "not an https URL" in red(lambda: build_api_base("http://control.example.com/api/builds")))
+    check("credentials in the URL are refused",
+          "credentials" in red(lambda: build_api_base("https://u:p@control.example.com/api/builds")))
+    check("NEGATIVE: an https base is accepted",
+          build_api_base("https://control.example.com/api/builds/") == "https://control.example.com/api/builds")
+
+    # ── the cap's shape (no build API) ──
+    B = PackageBounds
+    ok = B("Pkg", "3.1.10300", "3.1.10400", "needs the old Foo API", "acme/Feedback/migrate-pkg")
+    check("NEGATIVE: a well-formed cap has no shape error", cap_shape_errors([ok]) == [], cap_shape_errors([ok]))
+    check("a cap below its floor is RED",
+          any("BELOW" in e for e in cap_shape_errors([ok._replace(floor="3.1.10500")])))
+    check("a cap equal to its floor is accepted", cap_shape_errors([ok._replace(floor="3.1.10400")]) == [])
+    check("a cap that is no platform set is RED",
+          any("not a platform set" in e for e in cap_shape_errors([ok._replace(cap="1.0.0")])))
+    check("a cap without capReason is RED",
+          any(CAP_REASON_FIELD in e for e in cap_shape_errors([ok._replace(reason=None)])))
+    check("a cap without capTracking is RED",
+          any(CAP_TRACKING_FIELD in e for e in cap_shape_errors([ok._replace(tracking=None)])))
+    check("companions without a cap are RED",
+          any("without a" in e for e in cap_shape_errors([B("Pkg", None, None, "why", None)])))
+    check("NEGATIVE: an uncapped package with a floor has no error",
+          cap_shape_errors([B("Pkg", "3.1.1", None, None, None)]) == [])
+    check("the two notations order by run number (3.0.0-ci.N below 3.1.M)",
+          cap_shape_errors([ok._replace(floor="3.0.0-ci.9000", cap="3.1.10400")]) == [])
+
+    # ── admission (check_caps) ──
+    uncapped = [B("A", "3.1.10300", None, None, None)]
+    with _FakeBuildApi({}) as api:
+        check("NEGATIVE: a tree with no cap passes and reads NOTHING",
+              check_caps(uncapped, HttpBuildHosts(api.url)) == [] and api.seen == [], api.seen)
+    check("a cap with no build API is RED naming MW_BUILD_API",
+          any("MW_BUILD_API" in e for e in check_caps([ok], None)))
+    with _FakeBuildApi({route: hosts("3.1.10400", ("3.1.10400", True))}) as api:
+        errors = check_caps([ok], HttpBuildHosts(api.url))
+        check("a cap that admits `latest` is stale — RED", any("stale" in e for e in errors), errors)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10390", True))}) as api:
+        errors = check_caps([ok], HttpBuildHosts(api.url))
+        check("NEGATIVE: a binding cap with a READY deployment in range is admitted", errors == [], errors)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10390", False),
+                                     ("3.1.10200", True))}) as api:
+        errors = check_caps([ok], HttpBuildHosts(api.url))
+        check("a binding cap with no READY deployment in range is not admitted",
+              any("not admitted" in e and "(not ready)" in e for e in errors), errors)
+
+    # ── partitions ──
+    capped = ok._replace(package="Capped")
+    pkgs = [B("Free", "3.1.10300", None, None, None), capped]
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10405", False),
+                                     ("3.1.10398", True), ("3.1.10390", True), ("3.1.10420", True))}) as api:
+        built = HttpBuildHosts(api.url)
+        parts = partition_packages(pkgs, built, built.latest())
+        check("an uncapped package builds on `latest`; a capped one on the HIGHEST READY version in "
+              "its range (out-of-range 10420 skipped)",
+              parts == {"3.1.10412": ["Free"], "3.1.10398": ["Capped"]}, parts)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10399", False),
+                                     ("3.1.10398", True))}) as api:
+        built = HttpBuildHosts(api.url)
+        parts = partition_packages([capped], built, built.latest())
+        check("a NOT-ready version inside the range is never taken (10399 skipped for 10398)",
+              parts == {"3.1.10398": ["Capped"]}, parts)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True))}) as api:
+        built = HttpBuildHosts(api.url)
+        text = red(lambda: partition_packages(pkgs, built, built.latest()))
+        check("a capped package with no deployment in range is RED, never `latest`",
+              "never a silent pick of `latest`" in text and "Capped" in text, text)
+    with _FakeBuildApi({route: ready_latest}) as api:
+        built = HttpBuildHosts(api.url)
+        text = red(lambda: partition_packages([B("Ahead", "3.1.10500", None, None, None)], built, built.latest()))
+        check("a floor above `latest` is RED, never a pick below the floor", "above `latest`" in text, text)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10290", True))}) as api:
+        built = HttpBuildHosts(api.url)
+        text = red(lambda: partition_packages([capped], built, built.latest()))
+        check("a deployment below the floor is never taken for a capped package", "Capped" in text, text)
+
+    # ── end to end: `latest` resolves through the freeze path — that set or RED ──
+    sha_a, sha_b = "a" * 40, "b" * 40
+    d1, d2 = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+    runs = [_run(8207, sha_a), _run(8203, sha_b)]
+    registry = _registry({("mw-plugin-test", "3.0.0-ci.8207"): d1, ("memex-portal-ai", "3.0.0-ci.8207"): d2,
+                          ("mw-plugin-test", "3.0.0-ci.8203"): d1, ("memex-portal-ai", "3.0.0-ci.8203"): d2,
+                          ("mw-plugin-test", sha_a[:7]): d1, ("memex-portal-ai", sha_a[:7]): d2,
+                          ("mw-plugin-test", sha_b[:7]): d1, ("memex-portal-ai", sha_b[:7]): d2})
+    jobs = {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}
+    quiet: list[str] = []
+    newest = choose(_fetch_for(runs, jobs), registry, DEFAULT_TESTER_IMAGE, DEFAULT_PORTAL_IMAGE, log=quiet.append)
+    with _FakeBuildApi({route: hosts("3.0.0-ci.8203", ("3.0.0-ci.8203", True))}) as api:
+        latest, _ = resolve_build_hosts(api.url, "", None)
+        took = choose(_fetch_for(runs, jobs), registry, DEFAULT_TESTER_IMAGE, DEFAULT_PORTAL_IMAGE,
+                      freeze=latest, log=quiet.append, freeze_source="the build hosts' `latest` deployment")
+    check("NEGATIVE CONTROL: without the mode the newest sealed set (8207) is taken", newest.run_number == 8207, newest)
+    check("with the mode the set `latest` names (8203) is taken, not the newer sealed 8207, and says so",
+          took.run_number == 8203 and took.source == "the build hosts' `latest` deployment", took)
+    unsealed = {1000 + 8207: _jobs(), 1000 + 8203: _jobs(bake="failure")}
+    text = red(lambda: choose(_fetch_for(runs, unsealed), registry, DEFAULT_TESTER_IMAGE, DEFAULT_PORTAL_IMAGE,
+                              freeze="3.0.0-ci.8203", log=quiet.append, freeze_source="x"))
+    check("a `latest` whose set is not sealed is RED — never a substitute", bool(text), text)
+
+    # ── the CLI: OFF by default, RED with no fallback when on ──
+    script = os.path.abspath(__file__)
+
+    def cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+        base = {k: v for k, v in os.environ.items()
+                if k not in ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", BASELINE_ENV,
+                             BUILD_API_TOKEN_ENV, "MW_BUILD_API")}
+        return subprocess.run([sys.executable, "-I", script, *args], capture_output=True, text=True,
+                              env={**base, **(env or {})}, timeout=120)
+
+    with _FakeBuildApi({route: ready_latest}) as api:
+        proc = cli("--no-registry", env={"MW_BUILD_API": api.url})
+        check("OFF by default: without --from-build-hosts the build API is never read (even with "
+              "MW_BUILD_API set)", api.seen == [] and proc.returncode == 1 and "No GitHub token" in proc.stdout,
+              (api.seen, proc.stdout[-300:]))
+    with _FakeBuildApi({}) as api:
+        proc = cli("--no-registry", "--from-build-hosts", api.url, env={"GH_TOKEN": "x"})
+        check("ON with an absent endpoint: exit 1 before any GitHub read, naming the no-fallback rule",
+              proc.returncode == 1 and "never answered from the newest sealed set" in proc.stdout
+              and "Platform for this run" not in proc.stdout, proc.stdout[-500:])
+    proc = cli("--no-registry", "--from-build-hosts", "https://control.example.com/api/builds",
+               "--passed-on-main", "Systemorph/MeshWeaver.Plugins", env={"GH_TOKEN": "x"})
+    check("--from-build-hosts with the main ceiling is refused (one names a deployment, the other a "
+          "listing)", proc.returncode == 1 and "cannot be combined" in proc.stdout, proc.stdout[-300:])
+    proc = cli("--no-registry", "--packages-root", ".", env={"GH_TOKEN": "x"})
+    check("--packages-root without --from-build-hosts is refused",
+          proc.returncode == 1 and "--packages-root" in proc.stdout, proc.stdout[-300:])
+    with tempfile.TemporaryDirectory() as root:
+        def write(package: str, text: str) -> None:
+            os.makedirs(os.path.join(root, package), exist_ok=True)
+            with open(os.path.join(root, package, "index.json"), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        write("Free", json.dumps({"id": "Free", "content": {FLOOR_FIELD: "3.1.10300"}}))
+        proc = cli("--check-caps", "--root", root)
+        check("NEGATIVE: --check-caps on a tree with no cap is green with no build API",
+              proc.returncode == 0 and "no package declares" in proc.stdout, proc.stdout[-300:])
+        write("Capped", json.dumps({"id": "Capped", "content": {FLOOR_FIELD: "3.1.10300", CAP_FIELD: "3.1.10400",
+                                                                CAP_REASON_FIELD: "r", CAP_TRACKING_FIELD: "t"}}))
+        proc = cli("--check-caps", "--root", root)
+        check("--check-caps on a capped tree with no build API is RED",
+              proc.returncode == 1 and "MW_BUILD_API" in proc.stdout, proc.stdout[-300:])
+        with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10399", True))}) as api:
+            proc = cli("--check-caps", "--root", root, "--build-api", api.url)
+            check("--check-caps admits a cap whose deployment is retained and ready",
+                  proc.returncode == 0 and "1 cap(s) admitted" in proc.stdout, proc.stdout[-300:])
+        write("Broken", "{not json")
+        proc = cli("--check-caps", "--root", root)
+        check("an unreadable index.json is RED, never 'no cap'",
+              proc.returncode == 1 and "not readable JSON" in proc.stdout, proc.stdout[-300:])
+    return total, failures
+
+
 # ───────────────────────────────── self-test ──────────────────────────────────────────────
 
 def _run(number: int, sha: str, status: str = "completed", conclusion: str = "success",
@@ -2487,7 +3114,8 @@ def self_test() -> int:
     two = [_run(8207, A), _run(8203, B)]
     failures: list[str] = []
     logs: list[str] = []
-    total = 0
+    # `--from-build-hosts` and the package caps (Doc/Architecture/DeployTestSwitchLatest §4-§5).
+    total, failures = self_test_build_hosts()
 
     # ── the SemVer notation (policy `platform-semver-versioning`): both notations, ONE lineage ──
     def _parsed(text: str):
@@ -4499,10 +5127,60 @@ def main() -> int:
                              "fetches, and only with this flag). A set whose receipt is missing, "
                              "duplicated, malformed or inconsistent is passed over, never taken "
                              "unattributed.")
+    parser.add_argument("--from-build-hosts", default="", metavar="BUILD_API",
+                        help="OPTIONAL, OFF by default (Doc/Architecture/DeployTestSwitchLatest, phase "
+                             "P5; adopted by consumers only at P10): resolve the set the control "
+                             "instance's `latest` build-server DEPLOYMENT names "
+                             "(aliases.latest of <BUILD_API>/hosts; optional bearer in MW_BUILD_API_TOKEN) "
+                             "instead of the newest sealed set. A missing or unreadable answer is RED "
+                             "— never a fallback to the newest sealed set.")
+    parser.add_argument("--packages-root", default="",
+                        help="with --from-build-hosts: also resolve each package under this root "
+                             "against its authored floor/cap (`minMeshVersion`/`maxMeshVersion`) and "
+                             "write `partitions` ({set: [package, …]}).")
+    parser.add_argument("--check-caps", action="store_true",
+                        help="validate every package cap under --root (shape, cap ≥ floor, "
+                             "companions, not stale, deployment retained) and exit; reads the build "
+                             "API only when a cap is declared.")
+    parser.add_argument("--root", default=".", help="with --check-caps: the repository root")
+    parser.add_argument("--build-api", default="",
+                        help="with --check-caps: the build API base (vars.MW_BUILD_API)")
     arguments = parser.parse_args()
 
     if arguments.self_test:
         return self_test()
+
+    if arguments.check_caps:
+        return check_caps_main(arguments.root, arguments.build_api,
+                               os.environ.get(BUILD_API_TOKEN_ENV, ""))
+
+    # 🚨 THE BUILD HOSTS' `latest`, read FIRST and outside the freshness path: in this mode an
+    # unreadable answer is RED even where a baseline exists, so nothing downstream can turn it into
+    # "keep what we had" or "take the newest sealed set" (DeployTestSwitchLatest §4).
+    hosts_latest: str | None = None
+    hosts_partitions: dict[str, list[str]] | None = None
+    if arguments.packages_root and not arguments.from_build_hosts:
+        print("::error title=--packages-root needs --from-build-hosts::the per-package resolution "
+              "reads the build-server deployments; pass --from-build-hosts <build API> as well")
+        return 1
+    if arguments.from_build_hosts:
+        if arguments.passed_on_main or arguments.passed_ceiling.strip():
+            print("::error title=--from-build-hosts cannot be combined with the main ceiling::the "
+                  "build hosts' `latest` names ONE tested deployment; --passed-on-main / "
+                  "--passed-ceiling choose from the sealed-run listing. Pass one or the other.")
+            return 1
+        try:
+            hosts_latest, hosts_partitions = resolve_build_hosts(
+                arguments.from_build_hosts, os.environ.get(BUILD_API_TOKEN_ENV, ""),
+                arguments.packages_root or None)
+        except ResolutionError as error:
+            print("::error title=The build hosts' latest deployment did not resolve::"
+                  + str(error).replace("\n", "%0A"))
+            return 1
+        print(f"build hosts: `latest` names {hosts_latest}")
+        if arguments.freeze:
+            print(f"::notice title=Freeze wins over the build hosts::MW_PLATFORM_REF={arguments.freeze} "
+                  f"is an incident instruction; `latest` ({hosts_latest}) is not taken this run")
 
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     if not token:
@@ -4561,9 +5239,21 @@ def main() -> int:
         if ceiling is not None:
             print(f"following main: the newest set main has passed is core CD #{ceiling}")
     choose_fn = lambda: choose(fetch, resolve, tester, portal,  # noqa: E731 — one call, two callers
-                               wait_for_seal=arguments.wait_for_seal, freeze=arguments.freeze or None,
+                               wait_for_seal=arguments.wait_for_seal,
+                               freeze=arguments.freeze or hosts_latest or None,
                                migration=migration or None, passed_ceiling=ceiling,
-                               verify_source=arguments.verify_source, armed=arguments.armed)
+                               verify_source=arguments.verify_source, armed=arguments.armed,
+                               freeze_source=(None if arguments.freeze or not hosts_latest else
+                                              f"the build hosts' `latest` deployment ({hosts_latest}, "
+                                              f"{arguments.from_build_hosts})"))
+
+    def hosts_rows(rows: dict[str, str]) -> dict[str, str]:
+        """The build-hosts keys, written only in that mode (a consumer that adopts it reads them)."""
+        if hosts_latest is not None:
+            rows["latest-deployment"] = hosts_latest
+            if hosts_partitions is not None:
+                rows["partitions"] = json.dumps(hosts_partitions, sort_keys=True, separators=(",", ":"))
+        return rows
     # 🚨 THE FLOOR BINDS EVERY PATH — read BEFORE the choice so a malformed declaration is a red
     # here and not a surprise after a successful resolution, and applied to whatever set was
     # chosen, by whatever route (newest sealed, ceiling, freeze, or a kept baseline).
@@ -4597,7 +5287,7 @@ def main() -> int:
             refused = below_floor(rows.get("set", "?"), int(rows.get("run-number") or 0))
             if refused is not None:
                 return refused
-            emit(rows, title="Platform for this job")
+            emit(hosts_rows(rows), title="Platform for this job")
             return 0
         chosen = choose_fn()
     except ResolutionError as error:
@@ -4612,7 +5302,7 @@ def main() -> int:
     refused = below_floor(chosen.set_name, chosen.run_number)
     if refused is not None:
         return refused
-    write_outputs(chosen, tester, portal, migration or None)
+    emit(hosts_rows(output_rows(chosen, tester, portal, migration or None)))
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         # Always written (empty without the option) so a downstream job can pass it back as
