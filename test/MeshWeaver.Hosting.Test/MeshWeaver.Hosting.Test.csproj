@@ -32,7 +32,6 @@
          IHostBuilder path the Orleans TestCluster silos/clients are built on). -->
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <!-- PathResolutionCachePoisonTest stubs IMessageHub / IMeshQueryCore. -->
-    <PackageReference Include="NSubstitute" />
     <!-- MeshQueryTransientRetryTest drives the transient-connect retry backoff on virtual time. -->
     <PackageReference Include="Microsoft.Reactive.Testing" />
   </ItemGroup>
