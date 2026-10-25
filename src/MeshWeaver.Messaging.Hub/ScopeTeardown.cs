@@ -41,8 +41,8 @@ public static class ScopeTeardown
     /// still resolve? See <see cref="IsServiceScopeDisposed"/>.</param>
     public static bool IsScopeTeardown(Exception? exception, Func<bool>? scopeDisposed)
         => scopeDisposed is not null
-           && ExceptionChain.Contains<ObjectDisposedException>(exception)
-           && scopeDisposed();
+           && FaultClassifier.Classify(exception, new TeardownContext(scopeDisposed)).Kind
+              == FaultKind.ScopeTeardown;
 
     /// <summary>
     /// Probes whether <paramref name="hub"/>'s own DI scope still resolves. The probe is a lookup
