@@ -224,7 +224,15 @@ public sealed partial class MailCopyEngine
             : removed
                 // A tombstone dated when the Delete was ASKED, decided at the owner: it replaces only an older copy.
                 ? Tombstoned(owner, source.Generation, messageId, asked)
-                : Restored(owner, source, messageId, asked));
+                    .SelectMany(done => Pending(source) is { } pending ? Tombstoned(owner, pending, messageId, asked).Select(_ => done) : Observable.Return(done))
+                : Restored(owner, source, messageId, asked)
+                    // A rebuild filling beside the served copy gets the same action: its provider snapshot may predate it.
+                    .SelectMany(done => Pending(source) is { } pending
+                        ? Restored(owner, source with { Generation = pending }, messageId, asked).Select(_ => done)
+                        : Observable.Return(done)));
+
+    private static string? Pending(MailCopySource source)
+        => source.PendingGeneration is { } pending && MailCopyNodeTypes.IsValidGeneration(pending) ? pending : null;
 
     private IObservable<bool> Restored(string owner, MailCopySource source, string messageId, DateTimeOffset asked)
         => !Feed.CanReread
@@ -243,7 +251,7 @@ public sealed partial class MailCopyEngine
                         .SelectMany(written => !written ? Observable.Return(true) : copies.Source(owner, Provider)
                             .Take(1)
                             .Timeout(SourceReadBudget)
-                            .Select(now => now is not null && now.Generation == source.Generation)
+                            .Select(now => IsLive(now, source.Generation))
                             .DefaultIfEmpty(false)
                             // A re-check that cannot be read proves nothing: keep what the Undo wrote (a generation
                             // dropped later removes it whole) rather than clean up on a guess.
@@ -253,5 +261,5 @@ public sealed partial class MailCopyEngine
                                 // The copy was switched off (or rebuilt) while the Undo waited on the provider: its
                                 // generation is obsolete, so it is removed whole — no tombstone is left standing
                                 // in a generation nobody reads.
-                                : Lost(owner, source).Select(_ => false))));
+                                : Lost(owner, source.Generation).Select(_ => false))));
 }
