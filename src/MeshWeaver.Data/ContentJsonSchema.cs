@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using MeshWeaver.Domain;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Data;
@@ -22,11 +23,23 @@ public static class ContentJsonSchema
     /// </summary>
     public const string MeshNodeExtension = "x-meshNode";
 
-    /// <summary>The schema of <paramref name="type"/>.</summary>
+    /// <summary>
+    /// Retired form: it has no mesh reader, so it parses the documentation files again on every
+    /// call. Use <see cref="Generate(Type, JsonSerializerOptions, XmlDocsReader)"/> with <c>hub.XmlDocs()</c>.
+    /// </summary>
     /// <param name="type">The content type.</param>
     /// <param name="options">The serializer options its instances are written with (names, enums, polymorphism).</param>
     /// <returns>The schema document.</returns>
+    [Obsolete("Pass the mesh's reader: Generate(type, options, hub.XmlDocs()).")]
     public static JsonNode Generate(Type type, JsonSerializerOptions options)
+        => Generate(type, options, new XmlDocsReader());
+
+    /// <summary>The schema of <paramref name="type"/>.</summary>
+    /// <param name="type">The content type.</param>
+    /// <param name="options">The serializer options its instances are written with (names, enums, polymorphism).</param>
+    /// <param name="docs">The mesh's XML-docs reader (<c>hub.XmlDocs()</c>) the descriptions come from.</param>
+    /// <returns>The schema document.</returns>
+    public static JsonNode Generate(Type type, JsonSerializerOptions options, XmlDocsReader docs)
         => options.GetJsonSchemaAsNode(type, new()
         {
             TransformSchemaNode = (ctx, node) =>
@@ -34,7 +47,7 @@ public static class ContentJsonSchema
                 if (ctx.TypeInfo.Type == type)
                 {
                     node["title"] = type.Name;
-                    var typeDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type);
+                    var typeDescription = docs.Summary(type);
                     if (!string.IsNullOrEmpty(typeDescription))
                         node["description"] = typeDescription;
                 }
@@ -44,7 +57,7 @@ public static class ContentJsonSchema
                     var actualPropertyInfo = ctx.PropertyInfo.DeclaringType.GetProperty(ctx.PropertyInfo.Name.ToPascalCase()!);
                     if (actualPropertyInfo != null)
                     {
-                        var propertyDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(actualPropertyInfo);
+                        var propertyDescription = docs.Summary(actualPropertyInfo);
                         if (!string.IsNullOrEmpty(propertyDescription))
                             jsonObj["description"] = propertyDescription;
 
