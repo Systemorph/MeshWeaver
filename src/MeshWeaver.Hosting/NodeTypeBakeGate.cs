@@ -844,7 +844,7 @@ public static class NodeTypeBakeGateExtensions
     /// alive and out of the Service. What must cover a cold bake instead is the rollout's
     /// <c>progressDeadlineSeconds</c> — ~2.4 s per NodeType, strictly sequential (measured
     /// 2026-08-10), ~10 minutes on the largest mesh we run — which the chart derives from
-    /// <c>probes.rollGate.bakeSeconds</c> when the gate is armed; see <c>deploy/helm/values.yaml</c>.</para>
+    /// <c>probes.rollGate.bakeSeconds</c> when the gate is armed; see MeshWeaver.Deploy <c>deploy/helm/values.yaml</c>.</para>
     /// </summary>
     /// <param name="gatesReadiness">
     /// Pass <c>true</c> ONLY when the host also registers a readiness check that consumes this state.
