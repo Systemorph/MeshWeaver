@@ -24,6 +24,8 @@ internal sealed partial class YamlParser
     private int lineStart;
     private ImmutableDictionary<string, JsonNode?> anchors = ImmutableDictionary<string, JsonNode?>.Empty;
     private int depth;
+    private ImmutableDictionary<string, string> tagHandles = ImmutableDictionary<string, string>.Empty;
+    private int continuationMinColumn;
     private long expansionBudget = MaxExpandedNodes;
 
     /// <summary>
@@ -66,41 +68,44 @@ internal sealed partial class YamlParser
             throw Error($"collections nest deeper than {MaxDepth} levels");
     }
 
-    /// <summary>A deep copy of an anchored node, charged against <see cref="MaxExpandedNodes"/>.</summary>
+    /// <summary>
+    /// A deep copy of an anchored node, charged against <see cref="MaxExpandedNodes"/>, and placed
+    /// under the collections open at the cursor — so its own depth counts toward
+    /// <see cref="MaxDepth"/> as well (aliases of aliases must not build a tree deeper than the
+    /// reader would parse).
+    /// </summary>
     private JsonNode? Expand(JsonNode? target, Mark mark)
     {
         if (target is null) return null;
-        var size = CountNodes(target, expansionBudget + 1);
+        var (size, levels) = Measure(target, expansionBudget + 1);
         if (size > expansionBudget)
             throw ErrorAt($"alias expansion exceeds {MaxExpandedNodes} copied nodes", mark);
+        if (depth + levels > MaxDepth)
+            throw ErrorAt($"alias expansion nests deeper than {MaxDepth} levels", mark);
         expansionBudget -= size;
         return target.DeepClone();
     }
 
-    private static long CountNodes(JsonNode root, long cap)
+    /// <summary>The node count (every null slot included — DeepClone allocates it) and collection depth of a tree, counting stops past <paramref name="cap"/>.</summary>
+    private static (long Count, int Levels) Measure(JsonNode root, long cap)
     {
         var count = 0L;
-        var pending = ImmutableStack.Create(root);
+        var levels = 0;
+        var pending = ImmutableStack.Create((Node: root, Level: 0));
         while (!pending.IsEmpty && count <= cap)
         {
-            pending = pending.Pop(out var node);
+            pending = pending.Pop(out var item);
             count++;
-            switch (node)
-            {
-                // A null child still costs the slot DeepClone allocates for it.
-                case JsonObject o:
-                    foreach (var (_, child) in o)
-                        if (child is not null) pending = pending.Push(child);
-                        else count++;
-                    break;
-                case JsonArray a:
-                    foreach (var child in a)
-                        if (child is not null) pending = pending.Push(child);
-                        else count++;
-                    break;
-            }
+            if (item.Node is not (JsonObject or JsonArray))
+                continue;
+            var level = item.Level + 1;
+            if (level > levels) levels = level;
+            var children = item.Node is JsonObject o ? o.Select(kv => kv.Value) : (JsonArray)item.Node;
+            foreach (var child in children)
+                if (child is not null) pending = pending.Push((child, level));
+                else count++;
         }
-        return count;
+        return (count, levels);
     }
 
     /// <summary>Reads every document in <paramref name="text"/>.</summary>
@@ -215,30 +220,34 @@ internal sealed partial class YamlParser
         while (true)
         {
             SkipToNextContent();
-            // Directives (%YAML, %TAG) carry nothing a JSON tree can use.
-            while (!AtEnd && Column == 0 && Cur == '%')
-            {
-                SkipToEndOfLine();
-                SkipToNextContent();
-            }
             if (AtEnd) break;
+            var sawDirective = ParseDirectives();
+            if (AtEnd)
+            {
+                if (sawDirective && strict)
+                    throw Error("a directive must be followed by a '---' document");
+                break;
+            }
 
             JsonNode? root;
+            anchors = ImmutableDictionary<string, JsonNode?>.Empty;
             if (AtDocumentMarker('-'))
             {
                 Advance(3);
-                anchors = ImmutableDictionary<string, JsonNode?>.Empty;
                 root = ParseBlockNode(-1, sequenceAtParentIndent: false);
             }
             else if (AtDocumentMarker('.'))
             {
-                Advance(3);
-                SkipToEndOfLine();
+                if (sawDirective && strict)
+                    throw Error("a directive must be followed by a '---' document");
+                EndDocumentMarker();
                 continue;
             }
             else
             {
-                root = ParseNodeAtLineStart(Column, -1);
+                if (sawDirective && strict)
+                    throw Error("a directive must be followed by a '---' document");
+                root = ParseNodeAtLineStart(Column, -1, null, sequenceAtParentIndent: false);
             }
             documents = documents.Add(root);
 
@@ -246,15 +255,75 @@ internal sealed partial class YamlParser
             if (AtEnd) break;
             if (AtDocumentMarker('.'))
             {
-                Advance(3);
-                SkipToEndOfLine();
+                EndDocumentMarker();
+                tagHandles = ImmutableDictionary<string, string>.Empty;
                 continue;
             }
             if (AtDocumentMarker('-'))
+            {
+                tagHandles = ImmutableDictionary<string, string>.Empty;
                 continue;
+            }
             throw Error("unexpected content after the end of the document");
         }
         return documents;
+    }
+
+    /// <summary>A <c>...</c> marker: only a comment may follow it on its line.</summary>
+    private void EndDocumentMarker()
+    {
+        Advance(3);
+        SkipInlineSpaces();
+        if (!(Cur is '\n' or '\0' or '#'))
+            throw Error("unexpected content after the '...' document end marker");
+        SkipToEndOfLine();
+    }
+
+    /// <summary>
+    /// Reads the directives before a document. <c>%TAG</c> declares a tag handle for that document
+    /// (a JSON tree has no use for the tags themselves, but a handle decides whether <c>!!int</c> is
+    /// the core <c>int</c>); <c>%YAML</c> is checked in strict mode (one version, at most once).
+    /// Unknown directives are reserved and skipped. Returns whether any directive was read.
+    /// </summary>
+    private bool ParseDirectives()
+    {
+        var saw = false;
+        var yamlSeen = false;
+        while (!AtEnd && Column == 0 && Cur == '%')
+        {
+            var mark = Save();
+            Advance();
+            var lineEnd = s.IndexOf('\n', pos);
+            if (lineEnd < 0) lineEnd = s.Length;
+            var content = s[pos..lineEnd];
+            var hash = content.IndexOf(" #", StringComparison.Ordinal);
+            var tabHash = content.IndexOf("\t#", StringComparison.Ordinal);
+            var cut = hash < 0 ? tabHash : tabHash < 0 ? hash : Math.Min(hash, tabHash);
+            if (cut >= 0) content = content[..cut];
+            var words = content.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+            var name = words.Length > 0 ? words[0] : string.Empty;
+            if (name == "YAML" && strict)
+            {
+                if (yamlSeen)
+                    throw ErrorAt("a document may carry only one %YAML directive", mark);
+                if (words.Length != 2 || !System.Text.RegularExpressions.Regex.IsMatch(words[1], @"^[0-9]+\.[0-9]+$"))
+                    throw ErrorAt("%YAML takes exactly one version, such as 1.2", mark);
+                yamlSeen = true;
+            }
+            else if (name == "TAG")
+            {
+                if (words.Length != 3)
+                {
+                    if (strict) throw ErrorAt("%TAG takes a handle and a prefix", mark);
+                }
+                else
+                    tagHandles = tagHandles.SetItem(words[1], words[2]);
+            }
+            saw = true;
+            SkipToEndOfLine();
+            SkipToNextContent();
+        }
+        return saw;
     }
 
     // ───────────────────────────── block structure ─────────────────────────────
@@ -271,9 +340,9 @@ internal sealed partial class YamlParser
         SkipInlineSpaces();
         JsonNode? node;
         if (AtLineEndOrComment)
-            node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent, props.Tag);
+            node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent, props.Tag, props.Anchor is not null);
         else
-            node = ParseInlineNode(parentIndent, props.Tag);
+            node = ParseInlineNode(parentIndent, props.Tag, props.HasAny);
         return Apply(node, props);
     }
 
@@ -282,14 +351,14 @@ internal sealed partial class YamlParser
     /// written before the line break (<c>key: !!str</c>): the scalar must not be resolved before it
     /// applies, or <c>007</c> would already be the number 7.
     /// </summary>
-    private JsonNode? ParseNodeOnFollowingLines(int parentIndent, bool sequenceAtParentIndent, string? inheritedTag)
+    private JsonNode? ParseNodeOnFollowingLines(int parentIndent, bool sequenceAtParentIndent, string? inheritedTag, bool inheritedAnchor)
     {
         SkipToNextContent();
         if (AtEnd || AtAnyDocumentMarker)
             return null;
         var col = Column;
         if (col > parentIndent)
-            return ParseNodeAtLineStart(col, parentIndent, inheritedTag);
+            return ParseNodeAtLineStart(col, parentIndent, inheritedTag, sequenceAtParentIndent, inheritedAnchor);
         if (col == parentIndent && sequenceAtParentIndent && IsSequenceEntry)
             return ParseBlockSequence(col);
         // Nothing nested: the value is empty, and the cursor is where the caller sees the next
@@ -298,10 +367,19 @@ internal sealed partial class YamlParser
     }
 
     /// <summary>Reads a node whose first character is the first content on its line, at column <paramref name="col"/>.</summary>
-    private JsonNode? ParseNodeAtLineStart(int col, int parentIndent, string? inheritedTag = null)
+    private JsonNode? ParseNodeAtLineStart(int col, int parentIndent, string? inheritedTag, bool sequenceAtParentIndent, bool inheritedAnchor = false)
     {
+        // A key line — its properties, alias or flow collection belong to the KEY.
+        if (ScanKey(pos) != KeyKind.None)
+            return ParseBlockMapping(col);
+        if (IsSequenceEntry)
+            return ParseBlockSequence(Column);
         var props = ParseProperties();
         SkipInlineSpaces();
+        // Properties on the line before belong to this same node: it may not get a second anchor
+        // or a second tag here (an anchor on one line and a tag on the next is fine).
+        if (strict && ((props.Anchor is not null && inheritedAnchor) || (props.Tag is not null && inheritedTag is not null)))
+            throw Error("a node can carry only one anchor and one tag");
         var tag = props.Tag ?? inheritedTag;
         JsonNode? node;
         if (props.HasAny && AtLineEndOrComment)
@@ -310,51 +388,85 @@ internal sealed partial class YamlParser
             EnterCollection();
             try
             {
-                node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent: false, tag);
+                node = ParseNodeOnFollowingLines(parentIndent, sequenceAtParentIndent, tag, inheritedAnchor || props.Anchor is not null);
             }
             finally
             {
                 depth--;
             }
         }
+        else if (props.HasAny && ScanKey(pos) != KeyKind.None)
+            node = ParseBlockMapping(Column);
         else if (IsSequenceEntry)
+        {
+            if (strict)
+                throw Error("a block sequence cannot start on the line of its properties");
             node = ParseBlockSequence(Column);
-        else if (LineIsMappingKey())
-            node = ParseBlockMapping(col);
+        }
         else
-            node = ParseInlineNode(parentIndent, tag);
+            node = ParseInlineNode(parentIndent, tag, props.HasAny);
         return Apply(node, props);
     }
 
+    private enum KeyKind { None, Implicit, Explicit }
+
     /// <summary>
-    /// Whether the text from the cursor to the end of the line is <c>key: …</c> — a quoted or
-    /// plain key followed by a <c>:</c> that is itself followed by a blank or the line end.
+    /// Whether the line from <paramref name="i"/> opens a mapping entry: an explicit <c>? key</c>,
+    /// or an implicit key — plain, quoted, an alias or a one-line flow collection, after any
+    /// properties — followed by a <c>:</c> that is itself followed by a blank or the line end.
+    /// It reads ahead only; nothing is consumed.
     /// </summary>
-    private bool LineIsMappingKey()
+    private KeyKind ScanKey(int i)
     {
-        var i = pos;
-        if (i >= s.Length) return false;
-        var c = s[i];
-        if (c is '"' or '\'')
+        // Properties: &anchor, !tag, !<verbatim>.
+        while (i < s.Length && s[i] is '&' or '!')
         {
-            i = SkipQuotedOnLine(i);
-            if (i < 0) return false;
+            if (s[i] == '!' && i + 1 < s.Length && s[i + 1] == '<')
+            {
+                var close = s.IndexOf('>', i);
+                var eol = s.IndexOf('\n', i);
+                if (close < 0 || (eol >= 0 && close > eol)) return KeyKind.None;
+                i = close + 1;
+            }
+            else
+                while (i < s.Length && !IsBlankOrEnd(s[i])) i++;
             while (i < s.Length && IsBlank(s[i])) i++;
-            return i < s.Length && s[i] == ':' && (i + 1 >= s.Length || IsBlankOrEnd(s[i + 1]));
         }
-        if (c is '[' or '{' or '#' or '|' or '>' or '*' or '&' or '!')
-            return false;
-        if (c == '?' && (i + 1 >= s.Length || IsBlankOrEnd(s[i + 1])))
-            throw Error("explicit '?' mapping keys are not supported");
-        for (; i < s.Length && s[i] != '\n'; i++)
+        if (i >= s.Length) return KeyKind.None;
+        var c = s[i];
+        if (c is '\n' or '#') return KeyKind.None;
+        if (c == '?' && (i + 1 >= s.Length || IsBlankOrEnd(s[i + 1]))) return KeyKind.Explicit;
+        if (c == '-' && (i + 1 >= s.Length || IsBlankOrEnd(s[i + 1]))) return KeyKind.None;
+        if (c is '|' or '>') return KeyKind.None;
+        int after;
+        if (c is '"' or '\'')
+            after = SkipQuotedOnLine(i);
+        else if (c == '*')
         {
-            if (s[i] == ':' && (i + 1 >= s.Length || IsBlankOrEnd(s[i + 1])))
-                return true;
-            if (s[i] == '#' && i > pos && IsBlank(s[i - 1]))
-                return false;
+            after = i;
+            while (after < s.Length && !IsBlankOrEnd(s[after])) after++;
         }
-        return false;
+        else if (c is '[' or '{')
+            after = SkipFlowOnLine(i);
+        else
+        {
+            for (var j = i; j < s.Length && s[j] != '\n'; j++)
+            {
+                if (s[j] == ':' && (j + 1 >= s.Length || IsBlankOrEnd(s[j + 1])))
+                    return KeyKind.Implicit;
+                if (s[j] == '#' && j > i && IsBlank(s[j - 1]))
+                    return KeyKind.None;
+            }
+            return KeyKind.None;
+        }
+        if (after < 0) return KeyKind.None;
+        while (after < s.Length && IsBlank(s[after])) after++;
+        return after < s.Length && s[after] == ':' && (after + 1 >= s.Length || IsBlankOrEnd(s[after + 1]))
+            ? KeyKind.Implicit
+            : KeyKind.None;
     }
+
+    private bool LineIsMappingKey() => ScanKey(pos) != KeyKind.None;
 
     /// <summary>Index just past the quoted scalar starting at <paramref name="start"/>, or -1 when it does not close on that line.</summary>
     private int SkipQuotedOnLine(int start)
@@ -382,6 +494,32 @@ internal sealed partial class YamlParser
         return -1;
     }
 
+    /// <summary>Index just past the flow collection starting at <paramref name="start"/>, or -1 when it does not close on that line.</summary>
+    private int SkipFlowOnLine(int start)
+    {
+        var nesting = 0;
+        var i = start;
+        while (i < s.Length && s[i] != '\n')
+        {
+            var c = s[i];
+            if (c is '"' or '\'')
+            {
+                var next = SkipQuotedOnLine(i);
+                if (next < 0) return -1;
+                i = next;
+                continue;
+            }
+            if (c is '[' or '{') nesting++;
+            else if (c is ']' or '}')
+            {
+                nesting--;
+                if (nesting == 0) return i + 1;
+            }
+            i++;
+        }
+        return -1;
+    }
+
     private JsonObject ParseBlockMapping(int indent)
     {
         EnterCollection();
@@ -403,8 +541,29 @@ internal sealed partial class YamlParser
         while (true)
         {
             var keyMark = Save();
-            var (key, isMergeKey) = ParseMappingKey();
-            var value = ParseBlockNode(indent, sequenceAtParentIndent: true);
+            string key;
+            bool isMergeKey;
+            JsonNode? value;
+            if (Cur == '?' && IsBlankOrEnd(PeekAt(1)))
+            {
+                // An explicit entry: '? key' and, on a line of its own at the same indentation, ': value'.
+                Advance();
+                key = KeyText(ParseCompactNode(indent, sequenceAtParentIndent: true));
+                isMergeKey = false;
+                SkipToNextContent();
+                if (!AtEnd && !AtAnyDocumentMarker && Column == indent && Cur == ':' && IsBlankOrEnd(PeekAt(1)))
+                {
+                    Advance();
+                    value = ParseCompactNode(indent, sequenceAtParentIndent: true);
+                }
+                else
+                    value = null;
+            }
+            else
+            {
+                (key, isMergeKey) = ParseMappingKey();
+                value = ParseBlockNode(indent, sequenceAtParentIndent: true);
+            }
             if (isMergeKey)
                 merges = merges.Add(value);
             else
@@ -431,27 +590,77 @@ internal sealed partial class YamlParser
         return ApplyMerges(map, merges, start);
     }
 
+    /// <summary>The JSON key a key node becomes: a scalar's text, a collection's JSON text, "" for an empty key.</summary>
+    private static string KeyText(JsonNode? node) => node switch
+    {
+        null => string.Empty,
+        JsonValue => YamlScalars.Text(node) ?? string.Empty,
+        _ => node.ToJsonString(),
+    };
+
+    /// <summary>
+    /// Reads an implicit key and its <c>:</c>: properties first (an anchor names the KEY), then a
+    /// quoted scalar, an alias, a one-line flow collection or a plain scalar. A plain key keeps its
+    /// written text; only an untagged plain <c>&lt;&lt;</c> is a merge key.
+    /// </summary>
     private (string Key, bool IsMergeKey) ParseMappingKey()
     {
+        var props = ParseProperties();
+        SkipInlineSpaces();
+        JsonNode? keyNode;
         string key;
-        var plain = false;
-        if (Cur == '"')
-            key = ParseDoubleQuoted();
-        else if (Cur == '\'')
-            key = ParseSingleQuoted();
-        else
+        var merge = false;
+        switch (Cur)
         {
-            var start = pos;
-            while (!AtEnd && !(Cur == ':' && IsBlankOrEnd(PeekAt(1))))
-                Advance();
-            key = s[start..pos].TrimEnd(' ', '\t');
-            plain = true;
+            case '"':
+                key = ParseDoubleQuoted();
+                keyNode = JsonValue.Create(key);
+                break;
+            case '\'':
+                key = ParseSingleQuoted();
+                keyNode = JsonValue.Create(key);
+                break;
+            case '*':
+                {
+                    if (props.HasAny && strict)
+                        throw Error("an alias cannot carry properties");
+                    var mark = Save();
+                    Advance();
+                    var name = ReadName();
+                    if (!anchors.TryGetValue(name, out var target))
+                        throw ErrorAt($"unknown alias '*{name}'", mark);
+                    keyNode = Expand(target, mark);
+                    key = KeyText(keyNode);
+                    break;
+                }
+            case '[':
+            case '{':
+                keyNode = ParseFlowNode();
+                key = KeyText(keyNode);
+                break;
+            case ':' when IsBlankOrEnd(PeekAt(1)):
+                // An empty key (': value').
+                keyNode = null;
+                key = string.Empty;
+                break;
+            default:
+                {
+                    RefuseReservedPlainStart();
+                    var start = pos;
+                    while (!AtEnd && !(Cur == ':' && IsBlankOrEnd(PeekAt(1))))
+                        Advance();
+                    key = s[start..pos].TrimEnd(' ', '\t');
+                    keyNode = DefersResolution(props.Tag) ? JsonValue.Create(key) : YamlScalars.Resolve(key);
+                    merge = !props.HasAny && key == "<<";
+                    break;
+                }
         }
+        Apply(keyNode, props);
         SkipInlineSpaces();
         if (Cur != ':')
             throw Error("expected ':' after a mapping key");
         Advance();
-        return (key, plain && key == "<<");
+        return (key, merge);
     }
 
     private JsonObject ApplyMerges(JsonObject map, ImmutableList<JsonNode?> merges, Mark mark)
@@ -459,12 +668,14 @@ internal sealed partial class YamlParser
         // Explicit keys win; among merged sources, the first that names a key wins.
         foreach (var merge in merges)
         {
+            // Every source must be a mapping: a non-mapping element is refused, never filtered out.
+            // An empty '<<:' merges nothing in the tolerant reader; strict mode refuses it.
             ImmutableList<JsonObject> sources = merge switch
             {
-                null => [],
+                null when !strict => [],
                 JsonObject single => [single],
-                JsonArray many => many.OfType<JsonObject>().ToImmutableList(),
-                _ => throw Error("a '<<' merge key needs a mapping or a sequence of mappings"),
+                JsonArray many when many.All(m => m is JsonObject) => many.Cast<JsonObject>().ToImmutableList(),
+                _ => throw ErrorAt("a '<<' merge key needs a mapping or a sequence of mappings", mark),
             };
             foreach (var source in sources)
                 foreach (var (k, v) in source)
@@ -493,7 +704,7 @@ internal sealed partial class YamlParser
         while (true)
         {
             Advance(); // '-'
-            sequence.Add(ParseSequenceItem(indent));
+            sequence.Add(ParseCompactNode(indent, sequenceAtParentIndent: false));
 
             SkipToNextContent();
             if (AtEnd || AtAnyDocumentMarker)
@@ -509,27 +720,41 @@ internal sealed partial class YamlParser
         return sequence;
     }
 
-    private JsonNode? ParseSequenceItem(int indent)
+    /// <summary>
+    /// The node after a <c>-</c>, <c>?</c> or explicit <c>:</c> indicator at <paramref name="indent"/>:
+    /// inline it may be a COMPACT collection (<c>- key: v</c>, <c>- - a</c>), otherwise it starts on the
+    /// following lines. A block sequence may sit at the indicator's own column after <c>?</c>/<c>:</c>.
+    /// </summary>
+    private JsonNode? ParseCompactNode(int indent, bool sequenceAtParentIndent)
     {
         SkipInlineSpaces();
-        var col = Column;
+        if (!AtLineEndOrComment)
+        {
+            if (ScanKey(pos) != KeyKind.None)
+                return ParseBlockMapping(Column);
+            if (IsSequenceEntry)
+                return ParseBlockSequence(Column);
+        }
         var props = ParseProperties();
         SkipInlineSpaces();
         JsonNode? node;
         if (AtLineEndOrComment)
-            node = ParseNodeOnFollowingLines(indent, sequenceAtParentIndent: false, props.Tag);
+            node = ParseNodeOnFollowingLines(indent, sequenceAtParentIndent, props.Tag, props.Anchor is not null);
         else if (IsSequenceEntry)
+        {
+            if (strict)
+                throw Error("a block sequence cannot start on the line of its properties");
             node = ParseBlockSequence(Column);
-        else if (LineIsMappingKey())
-            node = ParseBlockMapping(props.HasAny ? col : Column);
+        }
         else
-            node = ParseInlineNode(indent, props.Tag);
+            node = ParseInlineNode(indent, props.Tag, props.HasAny);
         return Apply(node, props);
     }
 
     // ───────────────────────────── node properties ─────────────────────────────
 
-    private readonly record struct Properties(string? Anchor, string? Tag)
+    /// <summary>A node's anchor and its RESOLVED tag (handles expanded: <c>!!int</c> → <c>tag:yaml.org,2002:int</c>).</summary>
+    private readonly record struct Properties(string? Anchor, string? Tag, Mark TagMark)
     {
         public bool HasAny => Anchor is not null || Tag is not null;
     }
@@ -537,16 +762,22 @@ internal sealed partial class YamlParser
     private Properties ParseProperties()
     {
         string? anchor = null, tag = null;
+        var tagMark = Save();
         while (true)
         {
             if (Cur == '&')
             {
+                if (anchor is not null && strict)
+                    throw Error("a node can carry only one anchor");
                 Advance();
                 anchor = ReadName();
                 if (anchor.Length == 0) throw Error("an anchor needs a name");
             }
             else if (Cur == '!')
             {
+                if (tag is not null && strict)
+                    throw Error("a node can carry only one tag");
+                tagMark = Save();
                 var start = pos;
                 if (PeekAt(1) == '<')
                 {
@@ -558,14 +789,43 @@ internal sealed partial class YamlParser
                 }
                 else
                     while (!IsBlankOrEnd(Cur) && !IsFlowIndicator(Cur)) Advance();
-                tag = s[start..pos];
+                tag = ResolveTag(s[start..pos], tagMark);
             }
             else
                 break;
             SkipInlineSpaces();
         }
-        return new Properties(anchor, tag);
+        return new Properties(anchor, tag, tagMark);
     }
+
+    /// <summary>
+    /// Expands a written tag with the document's handles: <c>!</c> alone is the non-specific tag,
+    /// <c>!&lt;uri&gt;</c> is verbatim, <c>!!x</c> uses the secondary handle (the core schema
+    /// unless a <c>%TAG !!</c> redefines it), <c>!h!x</c> a named handle a <c>%TAG</c> must declare
+    /// (strict mode refuses an undeclared one), and <c>!x</c> the primary handle.
+    /// </summary>
+    private string ResolveTag(string written, Mark mark)
+    {
+        if (written == "!")
+            return "!";
+        if (written.StartsWith("!<", StringComparison.Ordinal))
+            return written[2..^1];
+        if (written.StartsWith("!!", StringComparison.Ordinal))
+            return (tagHandles.TryGetValue("!!", out var secondary) ? secondary : CoreTagPrefix) + written[2..];
+        var second = written.IndexOf('!', 1);
+        if (second > 0)
+        {
+            var handle = written[..(second + 1)];
+            if (tagHandles.TryGetValue(handle, out var prefix))
+                return prefix + written[(second + 1)..];
+            if (strict)
+                throw ErrorAt($"tag handle '{handle}' is not declared by a %TAG directive in this document", mark);
+            return written;
+        }
+        return (tagHandles.TryGetValue("!", out var primary) ? primary : "!") + written[1..];
+    }
+
+    private const string CoreTagPrefix = "tag:yaml.org,2002:";
 
     private string ReadName()
     {
@@ -577,29 +837,56 @@ internal sealed partial class YamlParser
     private JsonNode? Apply(JsonNode? node, Properties props)
     {
         if (props.Tag is not null)
-            node = ApplyTag(node, props.Tag);
+            node = ApplyTag(node, props.Tag, props.TagMark);
         if (props.Anchor is not null)
             anchors = anchors.SetItem(props.Anchor, node);
         return node;
     }
 
-    private static JsonNode? ApplyTag(JsonNode? node, string tag)
+    /// <summary>The core-schema type a RESOLVED tag names (<c>tag:yaml.org,2002:int</c> → <c>int</c>), or null for any other tag.</summary>
+    private static string? CoreTagName(string tag) =>
+        tag.StartsWith(CoreTagPrefix, StringComparison.Ordinal) ? tag[CoreTagPrefix.Length..] : null;
+
+    /// <summary>
+    /// Whether a plain scalar under <paramref name="tag"/> must stay UNRESOLVED until the tag
+    /// applies: the non-specific <c>!</c> (a string by definition) and every core tag. An
+    /// application tag (<c>!Ref</c>) carries nothing a JSON tree can use, so its scalar resolves
+    /// exactly as the untagged one would.
+    /// </summary>
+    private static bool DefersResolution(string? tag) => tag is not null && (tag == "!" || CoreTagName(tag) is not null);
+
+    /// <summary>
+    /// Applies a core tag: the scalar is resolved AS the named type and refused, with the tag's
+    /// position, when its text is not that type (<c>!!int true</c>) or when a scalar tag sits on a
+    /// collection (and the reverse). Application tags and the other core types (binary, timestamp, …)
+    /// leave the node as it is.
+    /// </summary>
+    private JsonNode? ApplyTag(JsonNode? node, string tag, Mark mark)
     {
-        var name = tag switch
+        var name = CoreTagName(tag);
+        if (name is null)
+            return node;
+        var isCollection = node is JsonObject or JsonArray;
+        switch (name)
         {
-            _ when tag.StartsWith("!!", StringComparison.Ordinal) => tag[2..],
-            _ when tag.StartsWith("tag:yaml.org,2002:", StringComparison.Ordinal) => tag["tag:yaml.org,2002:".Length..],
-            _ when tag.StartsWith("!<tag:yaml.org,2002:", StringComparison.Ordinal) => tag["!<tag:yaml.org,2002:".Length..].TrimEnd('>'),
-            _ => null,
-        };
-        if (name is null || node is JsonObject or JsonArray)
-            return node; // application tags carry nothing a JSON tree can use
+            case "map":
+                return node is JsonObject || node is null ? node ?? new JsonObject() : throw ErrorAt("!!map on a node that is not a mapping", mark);
+            case "seq":
+                return node is JsonArray || node is null ? node ?? new JsonArray() : throw ErrorAt("!!seq on a node that is not a sequence", mark);
+            case "str" or "null" or "bool" or "int" or "float" when isCollection:
+                throw ErrorAt($"!!{name} on a collection", mark);
+        }
         var text = YamlScalars.Text(node);
         return name switch
         {
             "str" => JsonValue.Create(text ?? string.Empty),
-            "null" => null,
-            "bool" or "int" or "float" when text is not null => YamlScalars.Resolve(text) ?? node,
+            "null" => text is null || YamlScalars.Resolve(text) is null ? null : throw ErrorAt($"'{text}' is not a null", mark),
+            "bool" => text is not null && YamlScalars.Resolve(text) is JsonValue b && b.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False
+                ? b : throw ErrorAt($"'{text}' is not a boolean", mark),
+            "int" => text is not null && YamlScalars.IsInteger(text)
+                ? YamlScalars.Resolve(text) : throw ErrorAt($"'{text}' is not an integer", mark),
+            "float" => text is not null && YamlScalars.IsFloat(text)
+                ? YamlScalars.Resolve(text) : throw ErrorAt($"'{text}' is not a float", mark),
             _ => node,
         };
     }
@@ -611,12 +898,14 @@ internal sealed partial class YamlParser
     /// scalar, a flow collection, a quoted scalar or a plain scalar. Continuation lines of a
     /// multi-line scalar must be indented deeper than <paramref name="parentIndent"/>.
     /// </summary>
-    private JsonNode? ParseInlineNode(int parentIndent, string? tag)
+    private JsonNode? ParseInlineNode(int parentIndent, string? tag, bool hasProperties)
     {
         switch (Cur)
         {
             case '*':
                 {
+                    if (hasProperties && strict)
+                        throw Error("an alias cannot carry properties");
                     var mark = Save();
                     Advance();
                     var name = ReadName();
@@ -631,29 +920,58 @@ internal sealed partial class YamlParser
             case '[':
             case '{':
                 {
-                    var node = ParseFlowNode();
+                    var node = WithContinuationIndent(parentIndent, ParseFlowNode);
                     ExpectLineEnd("a flow collection");
                     return node;
                 }
             case '"':
                 {
-                    var text = ParseDoubleQuoted();
+                    var text = WithContinuationIndent(parentIndent, ParseDoubleQuoted);
                     ExpectLineEnd("a quoted scalar");
                     return JsonValue.Create(text);
                 }
             case '\'':
                 {
-                    var text = ParseSingleQuoted();
+                    var text = WithContinuationIndent(parentIndent, ParseSingleQuoted);
                     ExpectLineEnd("a quoted scalar");
                     return JsonValue.Create(text);
                 }
             default:
                 {
+                    if (strict && IsSequenceEntry)
+                        throw Error("a block sequence cannot start on the line of its key");
                     RefuseReservedPlainStart();
                     var text = ParsePlainBlock(parentIndent);
-                    return tag is null ? YamlScalars.Resolve(text) : JsonValue.Create(text);
+                    return DefersResolution(tag) ? JsonValue.Create(text) : YamlScalars.Resolve(text);
                 }
         }
+    }
+
+    /// <summary>
+    /// Runs a flow-collection or quoted-scalar reader with its continuation lines required (in strict
+    /// mode) to be indented deeper than the enclosing block node, as the grammar requires.
+    /// </summary>
+    private T WithContinuationIndent<T>(int parentIndent, Func<T> read)
+    {
+        var saved = continuationMinColumn;
+        continuationMinColumn = Math.Max(saved, parentIndent + 1);
+        try
+        {
+            return read();
+        }
+        finally
+        {
+            continuationMinColumn = saved;
+        }
+    }
+
+    /// <summary>The checks at the first content of a continuation line inside a flow collection or a quoted scalar.</summary>
+    private void CheckContinuationLine()
+    {
+        if (Column == 0 && AtAnyDocumentMarker)
+            throw Error("a document marker cannot appear inside a flow collection or a quoted scalar");
+        if (strict && !AtEnd && Cur != '\n' && Column < continuationMinColumn)
+            throw Error("a continuation line must be indented deeper than its block");
     }
 
     /// <summary>
@@ -670,6 +988,8 @@ internal sealed partial class YamlParser
     private void ExpectLineEnd(string after)
     {
         SkipInlineSpaces();
+        if (Cur == '#' && strict && pos > 0 && !IsBlank(s[pos - 1]))
+            throw Error("a comment must be separated from the content by a space");
         if (!AtLineEndOrComment)
             throw Error($"unexpected content after {after}");
     }
@@ -774,7 +1094,11 @@ internal sealed partial class YamlParser
         }
         SkipInlineSpaces();
         if (Cur == '#')
+        {
+            if (strict && !IsBlank(s[pos - 1]))
+                throw Error("a comment must be separated from the block scalar header by a space");
             SkipToEndOfLine();
+        }
         if (!(Cur is '\n' or '\0'))
             throw ErrorAt("invalid block scalar header", headerMark);
         Advance();
@@ -790,10 +1114,9 @@ internal sealed partial class YamlParser
             {
                 var j = i;
                 while (j < s.Length && s[j] == ' ') j++;
-                // Indentation is spaces only; a tab after them is CONTENT (a line of blanks is empty).
-                var k = j;
-                while (k < s.Length && IsBlank(s[k])) k++;
-                if (k < s.Length && s[k] != '\n')
+                // Indentation is spaces only; a tab after them is CONTENT, even alone on its line.
+                // Only a line of spaces is empty.
+                if (j < s.Length && s[j] != '\n')
                 {
                     contentIndent = j - i;
                     break;
@@ -823,7 +1146,8 @@ internal sealed partial class YamlParser
                 // l-nb-literal-text) — except before the first content line, where a longer blank
                 // line is an error in the grammar and read as empty by the tolerant reader.
                 var extra = spaces < contentIndent ? string.Empty : s[restStart..pos];
-                if (extra.Length > 0 && lastContentEnd < 0)
+                // A tab past the indentation is CONTENT even with nothing after it.
+                if (extra.Length > 0 && lastContentEnd < 0 && !extra.Contains('\t'))
                 {
                     if (strict)
                         throw ErrorAt("a leading empty line of a block scalar is indented past its content", leadingMark);
@@ -921,8 +1245,16 @@ internal sealed partial class YamlParser
                 var e = Cur;
                 if (e == '\n')
                 {
+                    // An escaped line break joins without a space; each EMPTY line after it is
+                    // still one line break.
                     Advance();
                     SkipInlineSpaces();
+                    while (Cur == '\n')
+                    {
+                        sb.Append('\n');
+                        Advance();
+                        SkipInlineSpaces();
+                    }
                     continue;
                 }
                 Advance();
@@ -1028,6 +1360,7 @@ internal sealed partial class YamlParser
             }
             break;
         }
+        CheckContinuationLine();
         sb.Append(emptyLines == 0 ? " " : new string('\n', emptyLines));
         return true;
     }
@@ -1075,20 +1408,33 @@ internal sealed partial class YamlParser
 
     private void SkipFlowWhitespace()
     {
+        var crossedLine = false;
         while (!AtEnd)
         {
-            if (IsBlank(Cur) || Cur == '\n')
+            if (IsBlank(Cur))
             {
                 Advance();
                 continue;
             }
-            if (Cur == '#' && (pos == 0 || IsBlankOrEnd(s[pos - 1])))
+            if (Cur == '\n')
             {
+                crossedLine = true;
+                Advance();
+                continue;
+            }
+            if (Cur == '#')
+            {
+                // A comment needs a blank before it; '#' straight after a token is refused in strict
+                // mode and read as a comment by the tolerant reader.
+                if (strict && pos > 0 && !IsBlankOrEnd(s[pos - 1]))
+                    throw Error("a comment must be separated from the content by a space");
                 SkipToEndOfLine();
                 continue;
             }
             break;
         }
+        if (crossedLine)
+            CheckContinuationLine();
     }
 
     private JsonNode? ParseFlowNode() => ParseFlowNode(out _);
@@ -1116,6 +1462,8 @@ internal sealed partial class YamlParser
                 break;
             case '*':
                 {
+                    if (props.HasAny && strict)
+                        throw Error("an alias cannot carry properties");
                     var mark = Save();
                     Advance();
                     var name = ReadName();
@@ -1126,7 +1474,12 @@ internal sealed partial class YamlParser
                 }
             default:
                 {
-                    RefuseReservedPlainStart();
+                    // A tagged or anchored EMPTY node ([!!str , z]) has no scalar to check.
+                    if (!(props.HasAny && Cur is ',' or ']' or '}' or ':'))
+                        RefuseReservedPlainStart();
+                    // '-' starts a plain scalar only when a safe character follows ([-, -] is not YAML).
+                    if (strict && Cur == '-' && (IsBlankOrEnd(PeekAt(1)) || IsFlowIndicator(PeekAt(1))))
+                        throw Error("'-' alone is not a scalar in a flow collection (quote it)");
                     var text = ParsePlainFlow();
                     // An entry with nothing in it ([a,,b], {,}) is not YAML. An empty KEY before ':'
                     // ({: v}) and a tagged or anchored empty node are.
@@ -1134,7 +1487,7 @@ internal sealed partial class YamlParser
                         throw Error("a flow collection entry is empty");
                     if (props.Tag is null)
                         plainText = text;
-                    node = props.Tag is null ? YamlScalars.Resolve(text) : JsonValue.Create(text);
+                    node = DefersResolution(props.Tag) ? JsonValue.Create(text) : YamlScalars.Resolve(text);
                     break;
                 }
         }
@@ -1154,6 +1507,8 @@ internal sealed partial class YamlParser
         }
     }
 
+    private bool AtExplicitKeyIndicator => Cur == '?' && (IsBlankOrEnd(PeekAt(1)) || IsFlowIndicator(PeekAt(1)));
+
     private JsonArray ParseFlowSequenceEntries()
     {
         var open = Save();
@@ -1168,16 +1523,45 @@ internal sealed partial class YamlParser
                 Advance();
                 return sequence;
             }
-            var jsonLike = Cur is '"' or '\'' or '[' or '{';
-            var item = ParseFlowNode(out var itemText);
-            SkipFlowWhitespace();
-            if (Cur == ':' && (jsonLike || IsBlankOrEnd(PeekAt(1)) || IsFlowIndicator(PeekAt(1))))
+            var explicitKey = AtExplicitKeyIndicator;
+            if (explicitKey)
             {
-                // A single-pair mapping inside a sequence: [a: 1, b: 2].
                 Advance();
                 SkipFlowWhitespace();
-                var value = Cur is ',' or ']' ? null : ParseFlowNode();
-                item = new JsonObject { [itemText ?? FlowKey(item)] = value };
+            }
+            var keyLine = line;
+            var jsonLike = Cur is '"' or '\'' or '[' or '{';
+            JsonNode? item = null;
+            string? itemText;
+            if (explicitKey && Cur is ':' or ',' or ']')
+                itemText = string.Empty; // '? ' with an empty key
+            else
+                item = ParseFlowNode(out itemText);
+            SkipFlowWhitespace();
+            var pair = Cur == ':' && (explicitKey || jsonLike || IsBlankOrEnd(PeekAt(1)) || IsFlowIndicator(PeekAt(1)));
+            if (pair || explicitKey)
+            {
+                // A single-pair mapping inside a sequence: [a: 1, b: 2]. An implicit key must sit on
+                // one line. The pair is a collection level of its own, so its value is read one level
+                // deeper.
+                if (pair && !explicitKey && strict && line != keyLine)
+                    throw Error("an implicit key must be on a single line");
+                JsonNode? value = null;
+                if (pair)
+                {
+                    Advance();
+                    SkipFlowWhitespace();
+                    EnterCollection();
+                    try
+                    {
+                        value = Cur is ',' or ']' ? null : ParseFlowNode();
+                    }
+                    finally
+                    {
+                        depth--;
+                    }
+                }
+                item = new JsonObject { [itemText ?? KeyText(item)] = value };
                 SkipFlowWhitespace();
             }
             sequence.Add(item);
@@ -1223,11 +1607,24 @@ internal sealed partial class YamlParser
                 Advance();
                 return ApplyMerges(map, merges, open);
             }
+            var explicitKey = AtExplicitKeyIndicator;
+            if (explicitKey)
+            {
+                Advance();
+                SkipFlowWhitespace();
+            }
             var keyMark = Save();
             var plainKey = !(Cur is '"' or '\'' or '[' or '{');
             // A plain key keeps its written text, as in a block mapping: {null: a, '': b} has two keys.
-            var keyNode = ParseFlowNode(out var keyText);
-            var key = keyText ?? FlowKey(keyNode);
+            // An empty key is ': v', or '?' with nothing after it; an empty ENTRY ({,}) is refused.
+            string key;
+            if (Cur == ':' || (explicitKey && Cur is ',' or '}'))
+                key = string.Empty;
+            else
+            {
+                var keyNode = ParseFlowNode(out var keyText);
+                key = keyText ?? KeyText(keyNode);
+            }
             SkipFlowWhitespace();
             JsonNode? value = null;
             if (Cur == ':')
@@ -1261,13 +1658,6 @@ internal sealed partial class YamlParser
         }
     }
 
-    private static string FlowKey(JsonNode? node) => node switch
-    {
-        null => string.Empty,
-        JsonValue => YamlScalars.Text(node) ?? string.Empty,
-        _ => node.ToJsonString(),
-    };
-
     /// <summary>A plain scalar inside a flow collection: it also ends at <c>, [ ] { }</c> and folds line breaks.</summary>
     private string ParsePlainFlow()
     {
@@ -1300,6 +1690,7 @@ internal sealed partial class YamlParser
                     Restore(before);
                     break;
                 }
+                CheckContinuationLine();
                 TrimEndBlanks(sb);
                 sb.Append(emptyLines == 0 ? " " : new string('\n', emptyLines));
                 start = pos;
@@ -1364,6 +1755,15 @@ internal static partial class YamlScalars
         }
         return JsonValue.Create(text);
     }
+
+    /// <summary>Whether <paramref name="text"/> is a core-schema integer (decimal, <c>0o</c> octal, <c>0x</c> hex).</summary>
+    internal static bool IsInteger(string text) =>
+        DecimalInt().IsMatch(text) || OctalInt().IsMatch(text) || HexInt().IsMatch(text);
+
+    /// <summary>Whether <paramref name="text"/> is a core-schema float (an integer form included, and the <c>.inf</c>/<c>.nan</c> spellings).</summary>
+    internal static bool IsFloat(string text) =>
+        IsInteger(text) || Float().IsMatch(text)
+        || text is ".inf" or ".Inf" or ".INF" or "+.inf" or "+.Inf" or "+.INF" or "-.inf" or "-.Inf" or "-.INF" or ".nan" or ".NaN" or ".NAN";
 
     /// <summary>A number node that keeps its digits exactly as written (no double round-trip).</summary>
     private static JsonNode Number(string json) => JsonNode.Parse(json)!;

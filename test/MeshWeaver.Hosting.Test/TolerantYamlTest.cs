@@ -935,6 +935,130 @@ public class TolerantYamlTest
         }
     }
 
+    // ───────────────────────────── third review of #7180 ─────────────────────────────
+
+    [Fact]
+    public void AliasesOfAliases_CannotBuildATreeDeeperThanTheLimit()
+    {
+        var yaml = "a0: &a0 []\n" + string.Concat(Enumerable.Range(1, 64).Select(i => $"a{i}: &a{i} [*a{i - 1}]\n"));
+        RefusedPromptly(() => TolerantYaml.Parse(yaml));
+        // Shallow aliasing is untouched, and whatever parses can be written back.
+        var ok = TolerantYaml.Parse("a0: &a0 []\na1: &a1 [*a0]\na2: [*a1]\n");
+        Assert.NotNull(TolerantYaml.Serialize(ok));
+    }
+
+    [Fact]
+    public void ImplicitFlowPairs_CountTowardTheDepthLimit()
+    {
+        var yaml = string.Concat(Enumerable.Repeat("[k: ", 33)) + "[]" + new string(']', 33) + "\n";
+        RefusedPromptly(() => TolerantYaml.Parse(yaml));
+        var shallow = TolerantYaml.Parse(string.Concat(Enumerable.Repeat("[k: ", 20)) + "[]" + new string(']', 20) + "\n");
+        Assert.NotNull(TolerantYaml.Serialize(shallow));
+    }
+
+    [Theory]
+    [InlineData("name: valid\n@invalid: value\n")]
+    [InlineData("name: valid\n`x`: value\n")]
+    [InlineData("- ,k: v\n")]
+    public void StrictMode_RefusesReservedStartersInPlainKeysToo(string yaml)
+    {
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml, YamlParseOptions.StrictSpec));
+        Assert.NotNull(TolerantYaml.Parse(yaml));
+        Assert.Equal("value", Text(TolerantYaml.Parse("\"@quoted\": value\n", YamlParseOptions.StrictSpec)!["@quoted"]));
+    }
+
+    [Theory]
+    [InlineData("cfg: {<<: [{a: 1}, 2]}\n")]
+    [InlineData("cfg:\n  <<: [{a: 1}, [b]]\n")]
+    [InlineData("cfg:\n  <<: text\n")]
+    public void AMergeSourceThatIsNotAMapping_IsRefused(string yaml)
+    {
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml));
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml, YamlParseOptions.StrictSpec));
+    }
+
+    [Fact]
+    public void ApplicationTags_ResolveLikeTheUntaggedScalar()
+    {
+        var map = Map("a: !Ref 123\nb: !Ref true\nc: [!Ref 1.5, !Ref null]\nd: !Ref \"123\"\ne: !Ref name\n");
+        Assert.Equal(123, map["a"]!.GetValue<int>());
+        Assert.Equal(JsonValueKind.True, Kind(map["b"]));
+        Assert.Equal(1.5, map["c"]![0]!.GetValue<double>());
+        Assert.Null(map["c"]![1]);
+        Assert.Equal(JsonValueKind.String, Kind(map["d"])); // quoted stays a string
+        Assert.Equal("name", Text(map["e"]));
+        // The non-specific '!' makes a plain scalar a string.
+        Assert.Equal(JsonValueKind.String, Kind(Map("a: ! 12\n")["a"]));
+    }
+
+    [Theory]
+    [InlineData("a: !!int true\n")]
+    [InlineData("a: !!bool 123\n")]
+    [InlineData("a: !!int \"abc\"\n")]
+    [InlineData("a: !!float yes\n")]
+    [InlineData("a: !!null x\n")]
+    [InlineData("a: !!str [x]\n")]
+    [InlineData("a: !!map [x]\n")]
+    [InlineData("a: !!seq {x: 1}\n")]
+    public void ACoreTagOnTextOfAnotherType_IsRefusedWithItsPosition(string yaml)
+    {
+        var ex = Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml));
+        Assert.Equal(1, ex.Line);
+        Assert.Equal(4, ex.Column);
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse(yaml, YamlParseOptions.StrictSpec));
+    }
+
+    [Fact]
+    public void ACoreTag_ResolvesAsItsType()
+    {
+        var map = Map("a: !!int \"12\"\nb: !!float 1\nc: !!bool \"false\"\nd: !!null ''\ne: !!int 0x1F\nf: !<tag:yaml.org,2002:int> \"7\"\n");
+        Assert.Equal(12, map["a"]!.GetValue<int>());
+        Assert.Equal(1, map["b"]!.GetValue<int>());
+        Assert.Equal(JsonValueKind.False, Kind(map["c"]));
+        Assert.Null(map["d"]);
+        Assert.Equal(31, map["e"]!.GetValue<int>());
+        Assert.Equal(7, map["f"]!.GetValue<int>());
+        // A %TAG that redefines !! makes !!int an application tag (yaml-test-suite P76L).
+        Assert.Equal("1 - 3", Text(TolerantYaml.Parse("%TAG !! tag:example.com,2000:app/\n---\n!!int 1 - 3\n", YamlParseOptions.StrictSpec)));
+    }
+
+    [Fact]
+    public void BlockScalar_ATabOnlyLineAfterTheIndentation_IsContent()
+    {
+        const string yaml = "a: |\n  \t\n  x\n";
+        Assert.Equal("\t\nx\n", Text(Map(yaml)["a"]));
+        Assert.Equal("\t\nx\n", Text(TolerantYaml.Parse(yaml, YamlParseOptions.StrictSpec)!["a"]));
+    }
+
+    [Fact]
+    public void DoubleQuoted_EscapedLineBreak_KeepsTheEmptyLinesAfterIt()
+    {
+        Assert.Equal("one\ntwo", Text(Map("a: \"one\\\n\n  two\"\n")["a"]));
+        Assert.Equal("one\n\ntwo", Text(Map("a: \"one\\\n\n\n  two\"\n")["a"]));
+        Assert.Equal("onetwo", Text(Map("a: \"one\\\n  two\"\n")["a"]));
+    }
+
+    [Fact]
+    public void StrictMode_AcceptsATaggedEmptyFlowNode_AndStillRefusesAnEmptyEntry()
+    {
+        var strict = TolerantYaml.Parse("a: [!!str , z]\nb: {k: !!str , l: x}\n", YamlParseOptions.StrictSpec)!;
+        Assert.Equal("", Text(strict["a"]![0]));
+        Assert.Equal("", Text(strict["b"]!["k"]));
+        Assert.Throws<YamlParseException>(() => TolerantYaml.Parse("a: [a,,b]\n", YamlParseOptions.StrictSpec));
+    }
+
+    [Fact]
+    public void ExplicitKeys_AndPropertiesOnKeys_Read()
+    {
+        var map = Map("? a\n: 1\n? b\n&k c: 2\n!!str 3: x\nd: *k\n");
+        Assert.Equal(1, map["a"]!.GetValue<int>());
+        Assert.Null(map["b"]);
+        Assert.Equal(2, map["c"]!.GetValue<int>());
+        Assert.Equal("x", Text(map["3"]));
+        Assert.Equal("c", Text(map["d"]));
+        Assert.Equal("baz", Text(TolerantYaml.Parse("[? foo bar : baz]\n")![0]!["foo bar"]));
+    }
+
     [Fact]
     public void ParseThenSerialize_IsStable()
     {

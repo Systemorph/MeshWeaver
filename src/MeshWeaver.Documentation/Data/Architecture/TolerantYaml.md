@@ -61,13 +61,19 @@ several lines, single-quoted (`''`) and double-quoted scalars with every YAML es
 `\uXXXX`, `\UXXXXXXXX`, an escaped line break), literal `|` and folded `>` block scalars with the `-`/`+`
 chomping indicators and an explicit indentation digit (chomping keeps only the line breaks that were actually there, so a
 block at the end of the text without a final break gains none), full-line and trailing `#` comments, `---` and
-`...` document markers, `%` directives (skipped), verbatim tags (`!<tag:yaml.org,2002:str>`), anchors `&a` and aliases `*a` (an alias is a deep copy),
-merge keys `<<: *a` and `<<: [*a, *b]` (explicit keys win, then the first source that names a key), and
-the core tags `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. Any other tag (`!Ref`) is ignored and the
-value read as if it were untagged. A CRLF line ending and a leading byte-order mark are normalised away.
+`...` document markers, `%YAML` and `%TAG` directives (a `%TAG` handle decides what a tag means),
+verbatim tags (`!<tag:yaml.org,2002:str>`), explicit `? key` / `: value` entries in block and flow
+collections, properties, aliases and one-line flow collections as implicit keys (`&k key: v`,
+`*a : v`, `[a, b]: v` — a key that is not a scalar becomes its JSON text), anchors `&a` and aliases `*a`
+(an alias is a deep copy), and merge keys `<<: *a` and `<<: [*a, *b]` (explicit keys win, then the
+first source that names a key; every source must be a mapping). A CRLF line ending and a leading
+byte-order mark are normalised away.
 
-Not covered: explicit `? key` entries (refused with a position) and a collection used as a mapping key
-inside a flow mapping (read as its JSON text).
+**Tags.** A core tag — `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!map`, `!!seq`, spelled
+`!!x`, verbatim or through a `%TAG` handle — resolves the node AS that type, and text of another type
+is refused with the tag's position (`!!int "12"` is 12, `!!int true` is an error). The non-specific `!`
+makes a plain scalar a string. An application tag (`!Ref`) carries nothing a JSON tree can use: the
+node resolves exactly as it would untagged (`!Ref 123` is the number 123).
 
 ## Limits — hostile input fails fast, with a position
 
@@ -124,12 +130,60 @@ PascalCase keys in declaration order, which keeps every existing mirrored file b
 
 ## Strict mode — for files strict readers also read
 
-`YamlParseOptions.StrictSpec` refuses the two reader tolerances above, a plain scalar starting with
-`@`, a backtick, `%`, `,`, `]` or `}`, and a leading empty line of a block scalar indented past its
-content — exactly where the YAML grammar does. The platform's own reads are tolerant; strict mode is for guards over files that OTHER readers
+`YamlParseOptions.StrictSpec` refuses what the grammar refuses where the tolerant reader reads on: the
+two reader tolerances above, a plain scalar (or plain key) starting with `@`, a backtick, `%`, `,`, `]`
+or `}`, a lone `-` in a flow collection, a leading empty line of a block scalar indented past its
+content, a `#` comment not separated from the content by a space, a block sequence on the line of its
+key or properties, two anchors or two tags on one node, properties on an alias, an implicit flow key
+spanning lines, continuation lines of a flow collection or quoted scalar not indented past their
+block, and invalid directives (a directive without a `---` document, a malformed or repeated `%YAML`,
+a tag handle no `%TAG` declares). The test-suite section below lists every case where the tolerant
+reader accepts what strict mode refuses. The platform's own reads are tolerant; strict mode is for guards over files that OTHER readers
 also consume — `SkillFrontMatterGuard` (`.claude/skills`, read by the coding harnesses) and
 `DocumentationFrontMatterGuard` (the doc tree, read by GitHub and editors) hold their trees to it, so
 the platform's tolerance never turns a file another reader would drop into a green guard.
+
+## Conformance — the official YAML test suite
+
+The reader is checked against the official YAML test suite (`yaml/yaml-test-suite`, release
+`data-2022-01-17`, MIT licence), vendored under `test/MeshWeaver.Hosting.Test/YamlTestSuite/` and run by
+`YamlTestSuiteConformanceTest` in both modes. Of its 402 cases, strict mode produces exactly the
+expected JSON for **274**, refuses all **85** error cases it is expected to refuse, and parses the **27**
+valid cases that have no JSON form (complex keys) without an error — **386 of 402**. The remaining
+**16** are the reasoned exceptions below. The test is a two-way ratchet: a listed case that starts
+passing fails the test until its line is removed, so a reviewer finding can always be answered against
+the suite.
+
+**Known unsupported (strict mode):**
+
+- **Tabs** — `6CA3`, `DK95/00`, `DK95/01`, `Q5MG`, `Y79Y/000`, `Y79Y/003`–`Y79Y/009`. The reader refuses
+  any tab in the leading whitespace of a content line and accepts tabs between tokens; YAML 1.2 allows a
+  tab after the indentation in some positions and forbids it in others, and that finer rule is not
+  implemented.
+- **End of input without a final line break** — `JEF9/02`, `L24T/01`. The suite's reference output
+  treats the end of the text as a line break that clip and keep chomping keep; this reader, like libyaml
+  (Ruby's Psych) and YamlDotNet, adds no break that is not in the text.
+- **Duplicate keys** — `2JQS`, `X38W`. Strict mode refuses a repeated key, because a JSON object cannot
+  hold two; the suite treats key uniqueness as a check above the syntax.
+
+**Error cases the tolerant reader deliberately accepts (44):**
+
+| Leniency | Cases |
+|---|---|
+| a `: ` inside a plain value is text | `2CMS`, `9KBC`, `CXX2`, `EW3V`, `HU3P`, `ZCZ6` |
+| a block sequence on the line of its key or properties | `5U3A`, `SY6V` |
+| repeated properties (the last wins), properties on an alias | `4JVG`, `SR86`, `SU74` |
+| an unknown escape is kept verbatim | `55WF`, `HRE5` |
+| a leading block-scalar line indented past the content is empty | `5LLU`, `S98Z`, `W9L4` |
+| continuation lines need no extra indentation | `9C9N`, `QB6E`, `VJP3/00` |
+| `#` straight after a token is a comment | `9JBA`, `CVW2`, `SU5Z`, `X4QW` |
+| directives are not validated | `9MMA`, `B63P`, `H7TQ`, `MUS6/00`, `SF5V`, `QLJ7` |
+| a plain scalar may start with `%` or `,` | `MUS6/01`, `U99R` |
+| an implicit flow key may span lines | `DK4H`, `ZXT5` |
+| a lone `-` in a flow collection is the string `-` | `G5U8`, `YJV2` |
+| tabs (see above) | `DK95/01`, `Y79Y/000`, `Y79Y/003`–`Y79Y/009` |
+
+On every VALID case the tolerant reader gives the same answer as strict mode.
 
 ## Writing
 
