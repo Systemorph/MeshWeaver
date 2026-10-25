@@ -55,9 +55,9 @@ public static class InMeshImpersonationReferences
     // Every member of IMailCopyStore / IMailAttachmentStore: each runs as System on the owner's behalf.
     private static readonly string[] MailCopyStoreMembers =
         ["Source", "Create", "Commit", "Disable", "Upsert", "WriteIfNewer", "ReplaceIfNewer", "Revision",
-         "WriteIfUnchanged", "SetAttachments", "Remove", "RemoveGeneration", "List", "Read", "ReadPage", "SourceKeys", "EnabledSources", "MoveLegacy", "LegacySource"];
+         "WriteIfUnchanged", "SetAttachments", "Remove", "RemoveGeneration", "List", "Read", "ReadPage", "SourceKeys", "EnabledSources", "RetireLegacy", "LegacySource"];
 
-    private static readonly string[] MailAttachmentStoreMembers = ["Save", "DeleteAll", "CopyLegacy", "DeleteLegacy"];
+    private static readonly string[] MailAttachmentStoreMembers = ["Save", "DeleteAll", "DeleteLegacy"];
 
     /// <summary>
     /// Members whose mere reference is reported, keyed by <c>Namespace.TypeName</c> (no arity).

@@ -306,7 +306,7 @@ public static class MailCopyNodeTypes
     /// <summary>
     /// The suffix that names an owner's copy partition, <c>{owner}_MailCopy</c> — NOT the reserved virtual
     /// <c>_Mailbox</c>. Before 2026-10-25 the same word was a SEGMENT inside the owner's home partition
-    /// (<see cref="LegacyNamespaceFor"/>); <see cref="MeshMailCopyStore.MoveLegacy"/> moves what is still there.
+    /// (<see cref="LegacyNamespaceFor"/>); <see cref="MeshMailCopyStore.RetireLegacy"/> retires what is still there.
     /// </summary>
     public const string Segment = "_MailCopy";
 
@@ -333,7 +333,7 @@ public static class MailCopyNodeTypes
 
     /// <summary>
     /// Where the copies were filed before they had a partition of their own: <c>{owner}/_MailCopy</c>, in the
-    /// owner's home partition. Read only to move what is still there (<see cref="MeshMailCopyStore.MoveLegacy"/>). Pure.
+    /// owner's home partition. Read only to retire what is still there (<see cref="MeshMailCopyStore.RetireLegacy"/>). Pure.
     /// </summary>
     public static string LegacyNamespaceFor(string owner) => $"{owner}/{Segment}";
 
@@ -466,21 +466,6 @@ public static class MailCopyNodeTypes
                 Roles = [new MeshWeaver.Mesh.Security.RoleAssignment { Role = MeshWeaver.Mesh.Security.Role.Viewer.Id, Denied = false }],
             },
         };
-
-    /// <summary>
-    /// <paramref name="copy"/> as it reads once moved from the copy node <paramref name="from"/> to
-    /// <paramref name="to"/>: every stored attachment path under <c>{from}/</c> re-rooted at <c>{to}/</c>, nothing
-    /// else changed. A path that is not under <paramref name="from"/> is left as it is. Pure.
-    /// </summary>
-    public static MailMessageCopy Relocated(MailMessageCopy copy, string from, string to)
-        => copy.Attachments is not { Count: > 0 } list
-            ? copy
-            : copy with
-            {
-                Attachments = list.Select(a => a.StoredPath is { } stored && stored.StartsWith(from + "/", StringComparison.Ordinal)
-                    ? a with { StoredPath = to + stored[from.Length..] }
-                    : a).ToImmutableList(),
-            };
 
     /// <summary>The source node. Pure.</summary>
     public static MeshNode BuildSource(string owner, MailCopySource source) =>
