@@ -240,7 +240,9 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --quiet origin main
-          newest=$(git log -1 --format=%H origin/main -- deploy/ollama .github/workflows/ollama-image.yml)
+          # --first-parent: main's own history, so a merged pull request answers with the MERGE commit that
+          # landed (GITHUB_SHA), never the feature-branch commit a path-filtered log would simplify to.
+          newest=$(git log -1 --first-parent --format=%H origin/main -- deploy/ollama .github/workflows/ollama-image.yml)
           if [ "$newest" != "$GITHUB_SHA" ]; then
             echo "moved=false" >> "$GITHUB_OUTPUT"
             echo "::notice::$GITHUB_SHA is not the newest publication (main's is $newest) — the line stays where the newer run put it"
