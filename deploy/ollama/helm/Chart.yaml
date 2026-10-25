@@ -1,0 +1,10 @@
+apiVersion: v2
+name: ollama
+description: >-
+  The fleet's self-hosted model service: Ollama on CPU with qwen3.6 (vision, translation, summary) and
+  bge-m3 (embeddings) baked into the image, OpenAI-compatible at /v1, cluster-internal only, no egress.
+  Renders NOTHING unless `enabled: true`. See deploy/ollama/ and Doc/Architecture/LocalModelService.
+type: application
+version: 0.1.0
+# The engine and the models the image bakes in (deploy/ollama/Dockerfile).
+appVersion: "0.33.2-qwen3.6-bge-m3"

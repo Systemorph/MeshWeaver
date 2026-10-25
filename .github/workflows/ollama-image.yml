@@ -1,0 +1,279 @@
+name: ollama image
+
+# Builds deploy/ollama — the fleet's self-hosted model service: Ollama (CPU) with qwen3.6 (vision,
+# translation, summary) and bge-m3 (embeddings) baked in, OpenAI-compatible at /v1 — and, on main, pushes
+# it to ACR, the ONE channel the cluster pulls it from, built exactly as ocr-image.yml and
+# whisper-image.yml build theirs. Nothing is ever pushed by hand. Design: Doc/Architecture/LocalModelService.
+#
+# 🚨 THE TAGS, and which one an overlay names.
+#   0.33.2-qwen3.6-bge-m3-<short sha>  immutable — what an estate's values file names. The chart values an
+#                                      approved ApplyChart binds carry this tag, so the approval binds the
+#                                      bytes (engine AND weights) that run.
+#   0.33.2-qwen3.6-bge-m3              moving — the line, for a laptop `docker pull`. Never name it in an
+#                                      overlay: IfNotPresent + a moving tag is two nodes serving two models.
+# The line names the engine release and the models; a bump of either is a new line
+# (.github/release-channels.json declares it so retention never prunes it).
+#
+# 🚨 NOT A GATE, so the path filter is correct here. A PR that does not touch deploy/ollama has nothing to
+# build. The Dockerfile pulls the pinned models, refuses a manifest that is not the pinned bytes, and runs
+# app/smoke.sh (capabilities + the multilingual embedding check with its negative control) in the stage
+# that ships. The steps below add what a build cannot show: that the smoke can go RED, that the image's
+# own CMD serves the contract as uid 10001 on a read-only root, and that the chart renders nothing by
+# default. The VISION model (~26 GiB resident) does not fit a hosted runner's 16 GB of RAM; its proof is
+# the chart's in-cluster `helm test` (deploy/ollama/helm/templates/tests/smoke.yaml).
+#
+# DISK: the image is ~25 GB (23.8 GB of weights). The unused toolchains are removed and Docker's data root
+# moves to /mnt, so the pull, the layer and its export fit (measured: 118 GB free; the PR build took 7.5 min).
+#
+# Auth is the OIDC federated credential main-cd.yml and ocr-image.yml use, scoped to this repository's
+# main branch — which is the only ref the push job runs on.
+
+on:
+  pull_request:
+    paths:
+      - deploy/ollama/**
+      - .github/workflows/ollama-image.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/ollama/**
+      - .github/workflows/ollama-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a PR branch supersedes its build; a main run is never cancelled (each main push is
+# its own group, keyed on the commit — check-main-runs-not-cancelled.py).
+concurrency:
+  group: ollama-image-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  ACR: meshweaver.azurecr.io
+  REPO: ollama
+  LINE: 0.33.2-qwen3.6-bge-m3
+
+jobs:
+  # Pull requests: build and prove — nothing from a PR reaches ACR, and this job holds no secret
+  # (check-pr-secret-preflight.py: a PR-reachable job consuming a secret needs a preflight).
+  build:
+    name: Build ollama (pinned models + embedding smoke in the image)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          docker-images: true
+      # The image is ~25 GB (25,090 MiB measured). /mnt is the runner's temporary disk where it has one
+      # (on the 2026-10-25 runner it was part of the 145 GB root, 118 GB free after the clean-up).
+      - name: Move Docker's data root to /mnt
+        run: |
+          set -euo pipefail
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          sudo mkdir -p /mnt/docker
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl start docker
+          [ "$(docker info --format '{{.DockerRootDir}}')" = "/mnt/docker" ] \
+            || { echo "::error::Docker did not move its data root to /mnt/docker"; exit 1; }
+      - name: Build
+        run: docker build --progress=plain -t ollama:ci deploy/ollama
+      # The image's OWN CMD (entrypoint.sh as uid 10001, read-only root, no capabilities, no network
+      # beyond the sibling), called from a sibling container exactly as the portal calls the Service.
+      # OLLAMA_PRELOAD=bge-m3: the vision model is not loaded on a 16 GB runner (see the header).
+      - name: Smoke the running service over HTTP (catalog, capabilities, embeddings)
+        run: |
+          set -euo pipefail
+          docker network create --internal ollama-ci
+          docker run -d --name ollama-svc --network ollama-ci --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges -e OLLAMA_PRELOAD=bge-m3 ollama:ci
+          trap 'docker logs ollama-svc 2>&1 | tail -n 40; docker rm -f ollama-svc >/dev/null; docker network rm ollama-ci >/dev/null' EXIT
+          for _ in $(seq 1 120); do docker exec ollama-svc test -f /tmp/ready 2>/dev/null && break; sleep 2; done
+          docker exec ollama-svc test -f /tmp/ready || { echo "::error::the service never became ready (no /tmp/ready)"; exit 1; }
+          docker run --rm --network ollama-ci --entrypoint /app/smoke.sh ollama:ci http://ollama-svc:11434
+      # The same smoke told to expect 768-dimensional vectors MUST fail, on the dimension assertion — a
+      # smoke that cannot go red proves nothing. The red must be the ASSERTION (its FAIL line and its own
+      # failure count as the exit code), never a container that did not start (docker's 125/126/127).
+      - name: Negative control — the smoke goes RED on the wrong embedding dimension
+        run: |
+          set -euo pipefail
+          docker network create --internal ollama-neg
+          docker run -d --name ollama-neg --network ollama-neg --read-only --tmpfs /tmp -e OLLAMA_PRELOAD=bge-m3 ollama:ci
+          trap 'docker rm -f ollama-neg >/dev/null; docker network rm ollama-neg >/dev/null' EXIT
+          for _ in $(seq 1 120); do docker exec ollama-neg test -f /tmp/ready 2>/dev/null && break; sleep 2; done
+          code=0
+          docker run --rm --network ollama-neg -e MW_EMBED_DIMENSIONS=768 --entrypoint /app/smoke.sh ollama:ci \
+            http://ollama-neg:11434 > negative.log 2>&1 || code=$?
+          cat negative.log
+          [ "$code" -ne 0 ] || { echo "::error::smoke.sh PASSED expecting 768 dims from a 1024-dim model — its assertions cannot fail"; exit 1; }
+          [ "$code" -lt 125 ] || { echo "::error::the negative-control container failed to run (exit $code), not the assertion"; exit 1; }
+          grep -q '^FAIL embeddings: 768 dims' negative.log \
+            || { echo "::error::smoke.sh exited $code, but not on the dimension assertion — the control proves nothing"; exit 1; }
+          grep -q "^$code failure(s)$" negative.log \
+            || { echo "::error::smoke.sh exited $code without reporting that many assertion failures — it crashed"; exit 1; }
+          echo "negative control: smoke.sh exited $code (assertion failures) on the wrong dimension, as it must"
+      - name: Image size
+        run: |
+          set -euo pipefail
+          bytes=$(docker image inspect ollama:ci --format '{{.Size}}')
+          echo "ollama:ci is $((bytes / 1024 / 1024)) MiB uncompressed"
+          echo "### ollama image: $((bytes / 1024 / 1024)) MiB uncompressed" >> "$GITHUB_STEP_SUMMARY"
+          df -h / /mnt
+      - name: Install helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.3
+      # Disabled by default: the chart renders NOTHING. Enabled: Deployment + Service + NetworkPolicy (+ the
+      # helm-test Pod), with all egress denied; and enabling it without an immutable tag is refused.
+      - name: Chart renders nothing by default, the objects when enabled
+        run: |
+          set -euo pipefail
+          off=$(helm template ollama deploy/ollama/helm)
+          [ -z "$(printf '%s' "$off" | grep -E '^kind:' || true)" ] \
+            || { echo "::error::the chart rendered objects with enabled: false"; printf '%s\n' "$off"; exit 1; }
+          on=$(helm template ollama deploy/ollama/helm --set enabled=true --set image.repository=$ACR/$REPO \
+                 --set image.tag=$LINE-0000000 --set 'networkPolicy.allowedNamespaces[0]=memex')
+          kinds=$(printf '%s\n' "$on" | grep -E '^kind:' | sort | tr '\n' ' ')
+          [ "$kinds" = "kind: Deployment kind: NetworkPolicy kind: Pod kind: Service " ] \
+            || { echo "::error::enabled chart rendered [$kinds]"; exit 1; }
+          printf '%s\n' "$on" | grep -q '^  egress: \[\]' || { echo "::error::the NetworkPolicy does not deny egress"; exit 1; }
+          # The helm-test pod must NOT carry the Service's selector labels (the Service would route to it).
+          printf '%s\n' "$on" | awk '/^kind: Pod/{p=1} p&&/app.kubernetes.io\/name:/{print; exit}' | grep -q 'ollama-smoke' \
+            || { echo "::error::the helm-test pod carries the Deployment's selector name"; exit 1; }
+          if helm template ollama deploy/ollama/helm --set enabled=true --set image.repository=$ACR/$REPO >/dev/null 2>&1; then
+            echo "::error::enabled without image.tag rendered — the immutable-tag refusal is gone"; exit 1
+          fi
+          for moving in "$LINE" latest "$LINE-main" "$LINE-0a8189"; do
+            if helm template ollama deploy/ollama/helm --set enabled=true --set image.repository=$ACR/$REPO \
+                 --set "image.tag=$moving" >/dev/null 2>&1; then
+              echo "::error::enabled with the moving tag '$moving' rendered — the immutable-tag refusal is gone"; exit 1
+            fi
+          done
+          echo "chart: nothing by default; enabled → $kinds; egress denied; no tag or a moving tag → refused"
+
+  # main (push or dispatch): build the same way, push both tags, read them back.
+  publish:
+    name: Build and push ollama to ACR
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write   # OIDC to Azure (the federated credential is scoped to main)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          docker-images: true
+      # The image is ~25 GB (25,090 MiB measured). /mnt is the runner's temporary disk where it has one
+      # (on the 2026-10-25 runner it was part of the 145 GB root, 118 GB free after the clean-up).
+      - name: Move Docker's data root to /mnt
+        run: |
+          set -euo pipefail
+          df -h / /mnt
+          sudo systemctl stop docker docker.socket
+          sudo mkdir -p /mnt/docker
+          echo '{"data-root":"/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl start docker
+          [ "$(docker info --format '{{.DockerRootDir}}')" = "/mnt/docker" ] \
+            || { echo "::error::Docker did not move its data root to /mnt/docker"; exit 1; }
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      # 🚨 WRITE-ONCE. The <line>-<sha> tag is what an approved ApplyChart binds, and pods pull it with
+      # IfNotPresent. A rerun or a dispatch on an already-published commit must never rebuild over it: the
+      # apt layer and the build's file timestamps are not reproducible, so a second push would put different
+      # bytes under the approved name, and nodes that cached the first build would keep serving it.
+      # Absence is CONFIRMED POSITIVELY — from the registry's own repository and tag listings — never
+      # inferred from a failed lookup: any listing that fails is a red run with its diagnostics, so a
+      # transient registry error can never read as "not published" and license a rebuild.
+      - name: Is this commit already published?
+        id: published
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          tag="${LINE}-${short}"
+          repos=$(az acr repository list --name meshweaver -o tsv) \
+            || { echo "::error::could not list the registry's repositories — refusing to decide whether $REPO:$tag exists"; exit 1; }
+          exists=false
+          if printf '%s\n' "$repos" | grep -qx "$REPO"; then
+            tags=$(az acr repository show-tags --name meshweaver --repository "$REPO" -o tsv) \
+              || { echo "::error::could not list $REPO's tags — refusing to decide whether $tag exists"; exit 1; }
+            printf '%s\n' "$tags" | grep -qx "$tag" && exists=true
+          fi
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+          if [ "$exists" = true ]; then
+            echo "$REPO:$tag is already published — not rebuilt, not re-pushed (write-once)"
+          else
+            echo "$REPO:$tag is confirmed absent (repository and tag listings read) — building it"
+          fi
+      # The build pulls the pinned models and runs the capability + embedding smoke (deploy/ollama/Dockerfile).
+      - name: Build
+        if: steps.published.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          docker build --progress=plain -t "$ACR/$REPO:${LINE}-${GITHUB_SHA::7}" deploy/ollama
+      - name: Push ollama:<line>-<sha>
+        if: steps.published.outputs.exists == 'false'
+        run: docker push "$ACR/$REPO:${LINE}-${GITHUB_SHA::7}"
+      # The moving line follows the NEWEST publication only. It is moved by a registry-side retag of the
+      # already-published manifest (no rebuild, no re-upload), so a run whose line push was interrupted
+      # completes it on rerun — and a rerun of an OLDER commit never moves the line back over a newer one.
+      - name: Move :<line> onto this build (only if this is the newest publication)
+        id: line
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          # --first-parent: main's own history, so a merged pull request answers with the MERGE commit that
+          # landed (GITHUB_SHA), never the feature-branch commit a path-filtered log would simplify to.
+          newest=$(git log -1 --first-parent --format=%H origin/main -- deploy/ollama .github/workflows/ollama-image.yml)
+          if [ "$newest" != "$GITHUB_SHA" ]; then
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GITHUB_SHA is not the newest publication (main's is $newest) — the line stays where the newer run put it"
+            exit 0
+          fi
+          # The manifest is copied BYTE FOR BYTE over the registry API (GET by the immutable tag, PUT under
+          # the line with the same media type), so both tags name ONE digest. `buildx imagetools create`
+          # was rejected: it wraps a single-platform manifest in a new index, a different digest.
+          refresh=$(az acr login --name meshweaver --expose-token --output tsv --query accessToken)
+          bearer=$(curl -fsS -u "00000000-0000-0000-0000-000000000000:$refresh" \
+            "https://$ACR/oauth2/token?service=$ACR&scope=repository:$REPO:pull,push" | jq -r '.access_token // empty')
+          [ -n "$bearer" ] || { echo "::error::could not exchange the ACR token for push on $REPO"; exit 1; }
+          accept='application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+          curl -fsS -H "Authorization: Bearer $bearer" -H "Accept: $accept" -D manifest.headers -o manifest.json \
+            "https://$ACR/v2/$REPO/manifests/${LINE}-${GITHUB_SHA::7}"
+          type=$(awk -F': ' 'tolower($1)=="content-type" { gsub("\r", "", $2); print $2 }' manifest.headers | tail -1)
+          [ -n "$type" ] || { echo "::error::the registry returned no Content-Type for $REPO:${LINE}-${GITHUB_SHA::7}"; exit 1; }
+          curl -fsS -X PUT -H "Authorization: Bearer $bearer" -H "Content-Type: $type" --data-binary @manifest.json \
+            "https://$ACR/v2/$REPO/manifests/${LINE}"
+          echo "moved=true" >> "$GITHUB_OUTPUT"
+      - name: Verify the tags exist in the registry (read back, never the green tick)
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          immutable=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}-${short}" --query digest -o tsv)
+          [ -n "$immutable" ] || { echo "::error::$REPO:${LINE}-${short} is not in the registry"; exit 1; }
+          if [ "${{ steps.line.outputs.moved }}" = "true" ]; then
+            moving=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}" --query digest -o tsv)
+            [ "$immutable" = "$moving" ] \
+              || { echo "::error::$REPO:${LINE}-${short} (${immutable}) and :${LINE} (${moving:-absent}) do not name one manifest"; exit 1; }
+          fi
+          echo "published $ACR/$REPO:${LINE}-${short} = ${immutable} (line moved: ${{ steps.line.outputs.moved }})"
+          echo "### ollama published" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ACR/$REPO:${LINE}-${short}\` — \`${immutable}\`. An estate overlay names this immutable tag." >> "$GITHUB_STEP_SUMMARY"

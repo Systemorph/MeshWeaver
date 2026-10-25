@@ -1,0 +1,116 @@
+{{- if .Values.enabled }}
+{{- if not .Values.image.repository }}
+{{- fail "image.repository is required (<registry>/ollama) — the image carries the models" }}
+{{- end }}
+{{- if not .Values.image.tag }}
+{{- fail "image.tag is required — name the immutable <line>-<short sha> tag, never the moving line" }}
+{{- end }}
+{{- /* Only the SHA-suffixed tag CI publishes is immutable; the line (`0.33.2-qwen3.6-bge-m3`), `latest` or any
+       other moving tag under pullPolicy IfNotPresent lets two nodes run two different cached builds — and
+       here that means two different MODELS answering the same name. */}}
+{{- if not (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+-[a-z0-9.-]+-[0-9a-f]{7,40}$" (toString .Values.image.tag)) }}
+{{- fail (printf "image.tag %q is not an immutable <ollama version>-<models>-<short sha> tag (e.g. 0.33.2-qwen3.6-bge-m3-0a81895) — a moving tag runs whatever build a node cached" (toString .Values.image.tag)) }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ollama.fullname" . }}
+  labels:
+    {{- include "ollama.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # One replica holds ~26 GiB. A surge would need a SECOND node with that much free during every roll;
+  # Recreate trades a short gap (the callers fall back or retry) for never needing it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ollama.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ollama.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      # The service calls nothing — not even the API server — so it carries no token.
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      # No volume over /models: the models are BAKED INTO THE IMAGE (an empty volume would shadow them).
+      containers:
+        - name: ollama
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Read-only root: /models cannot be pulled into, deleted from or overwritten through Ollama's
+            # management API (/api/pull, /api/delete, /api/create), whatever a caller sends.
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            - name: OLLAMA_PRELOAD
+              value: {{ printf "%s %s" .Values.models.vision .Values.models.embedding | quote }}
+            - name: MW_VISION_MODEL
+              value: {{ .Values.models.vision | quote }}
+            - name: MW_EMBED_MODEL
+              value: {{ .Values.models.embedding | quote }}
+            - name: MW_EMBED_DIMENSIONS
+              value: {{ .Values.models.embeddingDimensions | int64 | quote }}
+            - name: OLLAMA_CONTEXT_LENGTH
+              value: {{ .Values.ollama.contextLength | int64 | quote }}
+            - name: OLLAMA_NUM_PARALLEL
+              value: {{ .Values.ollama.numParallel | int64 | quote }}
+            - name: OLLAMA_MAX_QUEUE
+              value: {{ .Values.ollama.maxQueue | int64 | quote }}
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+          # Startup and liveness ask whether the SERVER answers (/api/version); readiness additionally
+          # requires the preload to have finished (entrypoint.sh writes /tmp/ready only then).
+          startupProbe:
+            httpGet: { path: /api/version, port: http }
+            {{- with .Values.startupProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "test -f /tmp/ready && curl -fsS --max-time 4 http://127.0.0.1:11434/api/version >/dev/null"]
+            {{- with .Values.readinessProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet: { path: /api/version, port: http }
+            {{- with .Values.livenessProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
