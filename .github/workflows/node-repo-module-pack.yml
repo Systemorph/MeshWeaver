@@ -413,10 +413,45 @@ name: node-repo module pack
 # are striped as above. Measured on MeshWeaver.Plugins#1736: MeshWeaver.AI was ~6 of the 8.6 min
 # of the leg it shared with five modules whose suites run in seconds. Same per-module semantics —
 # a solo leg IS the singleton shape a batch-size of 1 gives every module.
+#
+# ─────────────────── ON A STANDING BUILD HOST (H7; Doc/Architecture/BuildHosts §5) ───────────────────
+# `executor: host` — the run was queued on a build host (`build-executor.py` said so at admission),
+# the caller FOLLOWED the host's `modules` stage with `build-follow.yml`, and passes that follow job's
+# result as `host-verdict`. Then `select` still runs (it is light, and it is the INDEPENDENT selection
+# a host run's records are checked against), while `prepare` ("Warm the shared build environment
+# (once)"), `build-workspace`, the `pack` legs and the `tests` legs do NOT run, the build ledger is not
+# consulted (a claim no leg of this run would ever finish), and the required `All selected bundles
+# built` carries the HOST's verdict — green only for a followed `success`, and RED when a pack or
+# tests leg ran anyway (the two executors would disagree). A publishing host run must be
+# `publish-mode: staged`: a host holds no publication credential, so its bytes reach the registry
+# through `build-host-publication.yml` and the caller's `node-repo-module-publish.yml` job
+# (`module-publication.py check-callers` holds that graph). `bundles-built` is `false` on a host run —
+# nothing composable was uploaded into THIS run — and `executed-on` says which executor answered.
+# With the defaults (`actions`, no verdict) the lane behaves exactly as before.
 
 on:
   workflow_call:
     inputs:
+      executor:
+        description: >-
+          WHO RUNS THIS LANE'S WORK (MeshWeaver.Plugins Hosting/StandingBuildHosts §7 H7;
+          Doc/Architecture/BuildHosts): `actions` (the default — everything below runs here, exactly as
+          before) or `host` — the run was queued on a standing build host, the caller FOLLOWED the
+          host's `modules` stage with `build-follow.yml`, and passes that follow job's result as
+          `host-verdict`. With `host` the warm job, the workspace build, the pack legs and the tests legs
+          do not run; the required `All selected bundles built` carries the HOST's verdict, green only
+          when `host-verdict` is `success`. Any other value is RED, named.
+        required: false
+        type: string
+        default: actions
+      host-verdict:
+        description: >-
+          With `executor: host` only: the caller's follow job's `result` (`needs.<follow>.result`).
+          Only `success` is green; `failure`, `cancelled`, `skipped` and empty are RED — a follow job
+          that did not run is a stage nobody judged, never a pass.
+        required: false
+        type: string
+        default: ''
       merge-main-sha:
         description: >-
           Pull requests only (policy suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest): the
@@ -572,6 +607,24 @@ on:
           That last one is measured against the whole repository, never against a narrowed
           selection, so an ordinary PR run never mistakes "not compiled here" for "no longer
           needed". Omitted, nothing is dropped and the lane behaves exactly as before.
+        type: string
+        required: false
+        default: ''
+      module-libraries-project:
+        description: >
+          A csproj in the caller's repository (path relative to its root) whose PUBLISH is the
+          module-libraries shelf for this run: the additional libraries a container-built module
+          may bind beyond what the platform image supplies (provider SDKs, import/export helpers,
+          GUI component packages). The build-workspace job publishes it against the platform
+          checkout at `platform-ref` and hands it to `build-project` as `--module-libs`, which
+          REPLACES the shelf the tester image ships.
+
+
+          The repository that owns the modules owns their library list, so the platform carries
+          none of it (core Doc/Architecture/CoreCarriesNoGuiTechnology, "The module-library
+          shelf"). The publish fails closed: no single deps.json beside the assemblies, or no
+          assemblies at all, is RED — the deps.json is the record every ride's closure is derived
+          from. Omitted, the tester image's own shelf is used and the lane behaves exactly as before.
         type: string
         required: false
         default: ''
@@ -882,7 +935,14 @@ on:
           output exists to not have (Plugins#1077). The lane's own stable context (`All selected
           bundles built`) still asserts the receipts AND the pack job's result, so a failed suite
           keeps the lane red wherever the lane itself is required.
+          With `executor: host` it is "false": the bundles were built on the host and nothing
+          composable was uploaded into this run (read `executed-on`).
         value: ${{ jobs.verify.outputs.bundles-built }}
+      executed-on:
+        description: >
+          `actions` or `host` — who built this call's bundles (the `executor` input, once `verify` has
+          accepted it). A caller branching on a host run reads this, never `bundles-built`'s absence.
+        value: ${{ jobs.verify.outputs.executed-on }}
       lane:
         description: >
           THIS call's lane key — the artifact namespace every marker, receipt and staged
@@ -985,6 +1045,27 @@ jobs:
       # (MeshWeaver#3878) — and a value neither arm recognises must never fall through to either.
       # Falling through to `direct` would publish before the source verdict, which is the defect;
       # falling through to `staged` would publish nothing at all while every step ticked green.
+      # 🏗️ H7: who runs the heavy legs — read FIRST, and refused when unreadable. A publishing host run
+      # must stage: the host holds no publication credential and no pack leg runs here, so `direct`
+      # would hand the registry nothing while `verify` followed a green host.
+      - name: The executor is one this lane knows
+        env:
+          EXECUTOR: ${{ inputs.executor }}
+          MODE: ${{ inputs.publish-mode }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          case "$EXECUTOR" in
+            actions) echo "executor: actions — every job of this lane runs here." ;;
+            host)
+              if [ "$PUBLISH" = "true" ] && [ "$MODE" != "staged" ]; then
+                echo "::error title=Build executor::executor is 'host' and this run publishes with publish-mode '$MODE'. A build host holds no publication credential and no pack leg runs here, so an in-leg (direct) publication would hand the registry NOTHING. Publish a host run with publish-mode: staged through build-host-publication.yml and node-repo-module-publish.yml (Doc/Architecture/BuildHosts §5)."
+                exit 1
+              fi
+              echo "executor: host — select runs here; the warm job, the workspace build, the pack and tests legs run on the build host, and 'All selected bundles built' carries its followed verdict."
+              echo "- 🏗️ \`executor: host\` — the pack and tests legs run on a standing build host" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who ran this lane's work"; exit 1 ;;
+          esac
       - name: Read the publication mode
         env:
           MODE: ${{ inputs.publish-mode }}
@@ -1219,6 +1300,8 @@ jobs:
           # today (no repo here has a queue) and kept correct so enabling one narrows rather than
           # silently falling back to the full set.
           QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          # A shelf edit reaches every container-built module, though none references the shelf.
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
         run: |
           set -euo pipefail
           printf '%s' "$MODULES" > "$RUNNER_TEMP/matrix.json"
@@ -1233,10 +1316,12 @@ jobs:
           if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
             publication_args=(--publication-base "$PUBLICATION_BASE")
           fi
+          shelf_args=()
+          [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
           python3 build-logic/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \
-            "${publication_args[@]}" > "$RUNNER_TEMP/scope.json"
+            "${publication_args[@]}" "${shelf_args[@]}" > "$RUNNER_TEMP/scope.json"
       # ───────────── THE LEDGER: what of this selection is ALREADY BUILT, and who builds the rest ─────────────
       # 🚨 "we should not start the same build multiple times ⇒ coordinate which packages are in
       # progress; track progress through memex … if Plugin X was built against Platform version Y,
@@ -1274,9 +1359,22 @@ jobs:
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
           PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
           PLATFORM_REF: ${{ inputs.platform-ref }}
+          # The caller's own shelf is a compiler input, so it is part of every key when named.
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXECUTOR: ${{ inputs.executor }}
         run: |
           set -euo pipefail
           printf '%s' "${SCOPE_MODULES:-[]}" > "$RUNNER_TEMP/selection.json"
+          # 🏗️ H7: on a build host no leg of THIS run builds anything, so a ledger claim taken here
+          # would never be finished — every other run would wait on it until it went stale. The
+          # selection passes through unchanged (it is what the host's records are checked against).
+          if [ "$EXECUTOR" = "host" ]; then
+            echo "module build ledger: NOT consulted — executor is 'host', the build host builds this selection (${COUNT:-0} module(s))"
+            modules="$(cat "$RUNNER_TEMP/selection.json")"
+            echo "modules=$modules" >> "$GITHUB_OUTPUT"
+            echo "build=$modules" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           case "$LEDGER" in
             off)
               echo "module build ledger: OFF — every selected module is built (set ledger: required on the caller to coordinate builds across runs)"
@@ -1294,10 +1392,14 @@ jobs:
                 exit 0
               fi
               echo "module build ledger: REQUIRED — keying $COUNT selected module(s) against $MW_LEDGER_URL"
+              # The shelf enters the key only when the caller names one, so a caller without it keys
+              # exactly as before and keeps its recorded builds.
+              shelf_arg=()
+              [ -z "${SHELF_PROJECT:-}" ] || shelf_arg=(--module-libraries-project "$SHELF_PROJECT")
               python3 build-logic/.github/scripts/module-build-key.py --root repo \
                 --modules "@$RUNNER_TEMP/selection.json" \
                 --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
-                > "$RUNNER_TEMP/keys.json"
+                "${shelf_arg[@]}" > "$RUNNER_TEMP/keys.json"
               # Waits at most 40 of this job's 45 minutes on a live holder; a holder still busy then is
               # built anyway (a duplicate build, flagged), never a red. Exit 1 ONLY for a key the same
               # inputs already compiled RED elsewhere — that is a verdict, not the ledger's outage.
@@ -1436,7 +1538,9 @@ jobs:
   prepare:
     name: Warm the shared build environment (once)
     needs: select
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0'
+    # 🏗️ `executor != 'host'`: on a build host this warm-up is the host's (H7, header). `verify` refuses
+    # a run in which this job ran anyway, so the skip is asserted, never assumed.
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && inputs.executor != 'host'
     runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     timeout-minutes: 45
     # Deliberately inherit the caller's token permissions. `basic` callers grant only the reads
@@ -1747,7 +1851,7 @@ jobs:
   build-workspace:
     name: Build the workspace (one global build)
     needs: [select, prepare]
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && inputs.executor != 'host'
     # `workspace-runner` (inputs): a Docker-capable label — the compiler is the platform image.
     runs-on: ${{ inputs.workspace-runner }}
     timeout-minutes: 30
@@ -1868,6 +1972,46 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends zstd || { echo "::error::apt-get could not install zstd on $RUNNER_NAME. Bake it into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
           fi
           zstd --version
+      # ───────── THE CALLER'S OWN MODULE-LIBRARIES SHELF (module-libraries-project) ─────────
+      # Published here, not in `prepare`: this is the job whose compiler reads it, and the shelf is
+      # small. The platform checkout it restores against lands in a hidden directory and is
+      # REMOVED before the build below mounts this workspace at /repo — anything left beside the
+      # content tree would become compiler input. The publish output goes to RUNNER_TEMP for the
+      # same reason.
+      - name: Check out the platform for the shelf publish
+        if: inputs.module-libraries-project != ''
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: .module-libs-platform
+      - uses: actions/setup-dotnet@v6
+        if: inputs.module-libraries-project != ''
+        with:
+          dotnet-version: "10.0.x"
+      - name: Publish the caller's module-libraries shelf
+        id: shelf
+        if: inputs.module-libraries-project != ''
+        env:
+          PROJECT: ${{ inputs.module-libraries-project }}
+        run: |
+          set -euo pipefail
+          [ -f "$PROJECT" ] || { echo "::error::module-libraries-project '$PROJECT' does not exist in this checkout — the caller named a shelf this repository does not have."; exit 1; }
+          root="$RUNNER_TEMP/module-libs"
+          rm -rf "$root"
+          dotnet publish "$PROJECT" -c Release -o "$root" \
+            -p:MeshWeaverRoot="$GITHUB_WORKSPACE/.module-libs-platform"
+          # 🚨 Fail closed, exactly as main-cd does for the image's shelf: the deps.json IS the record
+          # every ride's closure is derived from, and a shelf without one resolves nothing truthfully.
+          deps=$(find "$root" -maxdepth 1 -name '*.deps.json' | wc -l | tr -d ' ')
+          [ "$deps" = "1" ] || { echo "::error::the shelf publish of $PROJECT produced $deps deps.json file(s) — exactly one is the closure record build-project reads."; exit 1; }
+          count=$(find "$root" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
+          [ "$count" -gt 0 ] || { echo "::error::the shelf publish of $PROJECT staged no assemblies — not a shelf."; exit 1; }
+          # Nothing of the publish may stay in the mounted source tree.
+          projdir="$(dirname "$PROJECT")"
+          rm -rf "${GITHUB_WORKSPACE:?}/.module-libs-platform" "${projdir:?}/obj" "${projdir:?}/bin"
+          echo "shelf: $count assemblies from $PROJECT"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -1879,6 +2023,7 @@ jobs:
           TESTER_IMAGE: ${{ inputs.tester-image }}
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
           SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
+          SHELF: ${{ steps.shelf.outputs.root }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           ACR_LOGIN: ${{ inputs.acr-login }}
@@ -1983,6 +2128,17 @@ jobs:
             echo "::error::the pinned tester (tester-image-digest $TESTER_DIGEST) has no 'build-project --bind-to-image' (its usage is above), so it cannot stamp modules with the image's own AssemblyVersion — every module would fail the binding-identity check, or bind to a literal that is wrong for this platform. Move tester-image-digest and platform-image-digest TOGETHER to a set built from MeshWeaver main after the flag landed."
             exit 1
           fi
+          # The caller's own shelf, when it named one. Empty ⇒ no flag, no mount ⇒ byte-identical
+          # invocation to before module-libraries-project existed.
+          shelf_mount=(); shelf_flag=()
+          if [ -n "${SHELF:-}" ]; then
+            if ! printf '%s\n' "$usage" | grep -q -- '--module-libs'; then
+              echo "::error::module-libraries-project is set but the pinned tester (tester-image-digest $TESTER_DIGEST) has no 'build-project --module-libs', so it would build against the image's own shelf instead of the one this repository published. Move tester-image-digest and platform-image-digest TOGETHER to a set built from MeshWeaver main after the flag landed."
+              exit 1
+            fi
+            shelf_mount=(-v "$SHELF:/module-libs:ro"); shelf_flag=(--module-libs /module-libs)
+            echo "module-libraries shelf: the caller's own publish ($SHELF), replacing the tester image's"
+          fi
           echo "global build: ${#projects[@]} container entr(y|ies) in ONE workspace — ${projects[*]}"
           # AS THE RUNNER'S UID (a root-owned /out is unwritable to later steps); HOME=/tmp keeps
           # runtime probes off read-only image paths. No --extra-refs, ever, on this lane.
@@ -1994,8 +2150,9 @@ jobs:
             -v "$GITHUB_WORKSPACE:/repo:ro" \
             -v "$tester_app:/tester:ro" \
             -v "$out:/out" \
+            ${shelf_mount[@]+"${shelf_mount[@]}"} \
             --entrypoint dotnet "$img" \
-            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out --bind-to-image ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} 2>&1 | tee "$out/workspace-build.log"
+            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out --bind-to-image ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} ${shelf_flag[@]+"${shelf_flag[@]}"} 2>&1 | tee "$out/workspace-build.log"
           echo "built=true" >> "$GITHUB_OUTPUT"
       # 🚨 THE TOOLING CHECKOUT LANDS **AFTER** THE BUILD, ON PURPOSE. This job mounts
       # `$GITHUB_WORKSPACE` at `/repo:ro` for the container build, so anything checked out beside
@@ -2182,7 +2339,7 @@ jobs:
     # (An explicit `if:` replaces the implicit all-needs-succeeded check, so prepare's result
     # is asserted by name — a failed prepare must stop the matrix, not strand 30 jobs at their
     # artifact downloads.)
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && needs.build-workspace.result == 'success'
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && needs.build-workspace.result == 'success' && inputs.executor != 'host'
     strategy:
       # One leg's failure must not hide the rest — a sweep wants every verdict in one run. (Inside a
       # leg, the same rule holds per MODULE: see the batch state above.)
@@ -3967,9 +4124,13 @@ jobs:
         env:
           CONTENT_REPOSITORY: ${{ inputs.content-repository }}
           TRUNK: ${{ github.event.repository.default_branch }}
+          # A newer commit that edits only the shelf still reaches every module.
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
+          shelf_args=()
+          [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
           [ -z "$CONTENT_REPOSITORY" ] || { echo "::error::publish-newest-only reads THIS repository's trunk, but content-repository is '$CONTENT_REPOSITORY' — a lane packing another repository's content cannot say whether a newer commit of it exists. Turn one of the two off."; exit 1; }
           [ -n "$TRUNK" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
           git fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
@@ -3995,7 +4156,7 @@ jobs:
                 GITHUB_OUTPUT="$RUNNER_TEMP/mods/$MODULE/newer-scope.out" GITHUB_STEP_SUMMARY=/dev/null \
                   python3 build-logic/.github/scripts/node-repo-scope.py --for modules --root . \
                     --modules "@$RUNNER_TEMP/mods/$MODULE/newer-entry.json" --event pull_request \
-                    --publication-reach \
+                    --publication-reach "${shelf_args[@]}" \
                     --changed-list "$changed" > "$RUNNER_TEMP/mods/$MODULE/newer-scope.json"
                 if [ "$(jq -r '.count' "$RUNNER_TEMP/mods/$MODULE/newer-scope.json")" != "0" ]; then
                   newer=true
@@ -4510,6 +4671,7 @@ jobs:
       !inputs.publish
       && needs.select.result == 'success'
       && needs.select.outputs.test-count != '0'
+      && inputs.executor != 'host'
     # `runner` — the other job that honours it; see "Where the heavy legs run" in the header. This
     # job runs no `docker` at all: a checkout, setup-dotnet, `dotnet test`, `jq`, `python3`.
     runs-on: ${{ inputs.runner }}
@@ -5004,15 +5166,56 @@ jobs:
   # reading as "agrees" is this gate's own failure mode, not an edge case.
   verify:
     name: All selected bundles built
-    needs: [select, pack, tests]
+    # `prepare` and `build-workspace` are here for the host arm alone: on a build host it must SEE that
+    # they did not run (a skip asserted, never assumed). The Actions arm reads them through `pack`.
+    needs: [select, prepare, build-workspace, pack, tests]
     if: always()
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     outputs:
-      bundles-built: ${{ steps.verify.outputs.bundles_built }}
+      bundles-built: ${{ steps.host.outputs.bundles_built || steps.verify.outputs.bundles_built }}
+      executed-on: ${{ steps.host.outputs.executed_on || steps.on-actions.outputs.executed_on }}
     steps:
+      # 🏗️ ON A BUILD HOST (H7): the heavy legs ran on the host and the caller followed them. This
+      # REQUIRED context then carries the HOST's verdict — never a skipped job (a skipped required
+      # context reads as satisfied) and never a green no follow job produced. A leg that ran here
+      # anyway means the two executors disagree about who built this run, and that is RED too.
+      - name: "On a build host: the caller's follow job carries the stage's verdict"
+        id: host
+        if: ${{ always() && inputs.executor == 'host' }}
+        env:
+          HOST_VERDICT: ${{ inputs.host-verdict }}
+          SELECT_RESULT: ${{ needs.select.result }}
+          LANE: ${{ needs.select.outputs.lane }}
+          COUNT: ${{ needs.select.outputs.count }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          WORKSPACE_RESULT: ${{ needs.build-workspace.result }}
+          PACK_RESULT: ${{ needs.pack.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+        run: |
+          set -euo pipefail
+          echo "bundles_built=false" >> "$GITHUB_OUTPUT"
+          problems=0
+          if [ "$SELECT_RESULT" != "success" ] || [ -z "${LANE:-}" ]; then
+            echo "::error title=Module bundles incomplete::the selection job reported '${SELECT_RESULT:-<nothing>}' (lane '${LANE:-<none>}') — on a build host the selection is still made here and is what the host's records are checked against; without it nothing says what the host owed."
+            problems=1
+          fi
+          for pair in "prepare=$PREPARE_RESULT" "build-workspace=$WORKSPACE_RESULT" "pack=$PACK_RESULT" "tests=$TESTS_RESULT"; do
+            if [ "${pair#*=}" != "skipped" ]; then
+              echo "::error title=Build executor::executor is 'host' but this lane's ${pair%%=*} job reported '${pair#*=}' — the two executors disagree about who built this run; refusing to answer"
+              problems=1
+            fi
+          done
+          if [ "$HOST_VERDICT" != "success" ]; then
+            echo "::error title=Build host::this lane ran on a standing build host and its follow job reported '${HOST_VERDICT:-<nothing>}' — only a followed 'success' is green (a follow job that did not run judged nothing). Read the caller's follow job for the host's log."
+            problems=1
+          fi
+          [ "$problems" -eq 0 ] || exit 1
+          echo "executed_on=host" >> "$GITHUB_OUTPUT"
+          echo "the build host's modules stage succeeded for lane $LANE ($COUNT selected) — followed by the caller, carried here"
+          echo "- 🏗️ Ran on a standing build host; the followed verdict is \`success\` ($COUNT module(s) selected, lane \`$LANE\`)" >> "$GITHUB_STEP_SUMMARY"
       - name: Check out the verifier at the build-logic ref
-        if: needs.select.result == 'success'
+        if: needs.select.result == 'success' && inputs.executor != 'host'
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
@@ -5020,6 +5223,7 @@ jobs:
           path: build-logic
           sparse-checkout: .github/scripts
       - uses: actions/setup-python@v7
+        if: inputs.executor != 'host'
         with:
           python-version: "3.12"
       # Absent receipts are the finding, so a download that matches nothing must NOT fail here —
@@ -5038,6 +5242,7 @@ jobs:
       # A pattern that matches nothing still reaches the verifier as ZERO evidence, which is
       # `bundles-built=false` for any non-empty selection — never a silent true.
       - name: Collect the receipts
+        if: inputs.executor != 'host'
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5046,6 +5251,7 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/receipts
       - name: Collect the built markers
+        if: inputs.executor != 'host'
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5057,6 +5263,7 @@ jobs:
       # a pattern matching nothing must REACH the verifier as zero evidence, never fail here — a
       # delegated suite with no receipt is precisely the finding.
       - name: Collect the test receipts
+        if: inputs.executor != 'host'
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5066,6 +5273,7 @@ jobs:
           path: ${{ runner.temp }}/test-receipts
       - name: Exactly the selected bundles were built
         id: verify
+        if: inputs.executor != 'host'
         env:
           EXPECTED: ${{ needs.select.outputs.selected }}
           PACK_RESULT: ${{ needs.pack.result }}
@@ -5128,6 +5336,10 @@ jobs:
             --test-receipts "$RUNNER_TEMP/test-receipts" \
             --tests-result "$TESTS_RESULT" \
             --github-output "$GITHUB_OUTPUT"
+      - name: Executed on Actions
+        id: on-actions
+        if: inputs.executor == 'actions'
+        run: echo "executed_on=actions" >> "$GITHUB_OUTPUT"
 
       # ───── ONE BUILD PER ASSEMBLY NAME, over the PUBLICATION's whole module set (#3732) ─────
       # 🚨 THE DENOMINATOR THE EXISTING ASSERTION COULD NOT REACH. The gate and the bake already
@@ -5159,8 +5371,11 @@ jobs:
       # 15-copies/3-builds measurement this reading exists for spanned exactly those calls. Filtering
       # by lane would make each verifier drop the other call's receipts and print a confident zero.
       # The verdict names the lanes it folded so "publication-wide" is checkable, not assumed.
+      # 🏗️ Not on a build host: no pack leg of this run wrote a receipt, so the reading would be a
+      # confident zero over an empty population. The census of a host run is owed by the host's
+      # modules stage (Doc/Architecture/BuildHosts §5).
       - name: Collect every receipt in this run (the publication spans calls)
-        if: always()
+        if: ${{ always() && inputs.executor != 'host' }}
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5169,7 +5384,7 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/receipts-run
       - name: The publication's module set, read at one build per assembly name
-        if: always()
+        if: ${{ always() && inputs.executor != 'host' }}
         # 🚨 NO `continue-on-error`. This is a REPORT about divergence — the script exits 0 when it
         # FINDS divergence, because no lane passes `--enforce` yet — so the only way this step can
         # fail is that the reading did not happen: a malformed receipt, a helper the build-logic ref
@@ -5191,7 +5406,7 @@ jobs:
       # just accounted for, filtered to THIS call's declared matrix (artifacts are run-wide). It is
       # a report, never a gate: `if: always()` so a red verifier does not also hide the number.
       - name: Report the compiler split
-        if: always()
+        if: ${{ always() && inputs.executor != 'host' }}
         # A REPORT, not a gate: it must never be the reason this required context goes red, and it
         # must still print when the verifier above failed.
         continue-on-error: true

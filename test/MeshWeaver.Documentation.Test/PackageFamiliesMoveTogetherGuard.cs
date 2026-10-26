@@ -65,9 +65,10 @@ public class PackageFamiliesMoveTogetherGuard
             "Roslyn: .Features and .Scripting pin .CSharp and .Common EXACTLY — a split is NU1107"),
         ("NuGet.",
             "the NuGet client: Packaging/Protocol/Resolver require Versioning at their own version — a split is NU1605"),
-        ("Aspire.",
-            "Aspire: a split restores cleanly but changes the TRANSITIVE set — 13.5.3 reintroduces the "
-            + "json-everything family (OSMF-maintenance-fee) that #1231 removed"),
+        // 🚨 Aspire is no longer listed: core restores no Aspire package, so its fourteen pins live
+        // in MeshWeaver.Plugins' src/Directory.Packages.Plugins.props (#7262 deleted them here,
+        // Plugins#4297 added them there), and the Aspire family check belongs beside those pins.
+        // A prefix this file cannot see would make TheScannerSeesEveryFamilyItPolices fail.
     ];
 
     /// <summary>
@@ -166,7 +167,10 @@ public class PackageFamiliesMoveTogetherGuard
     public void TheScannerSeesEveryFamilyItPolices()
     {
         var pins = Pins();
-        Assert.True(pins.Count > 100, $"expected the full CPM pin list; saw {pins.Count}");
+        // A floor, not a census: it catches a regex that silently reads a handful of entries.
+        // Core pins only what core restores (97 entries on 2026-10-26, after #7262), so the floor
+        // sits well below that and does not move every time a pin leaves for the repo that uses it.
+        Assert.True(pins.Count > 50, $"expected the full CPM pin list; saw {pins.Count}");
 
         foreach (var (prefix, _) in Families)
         {

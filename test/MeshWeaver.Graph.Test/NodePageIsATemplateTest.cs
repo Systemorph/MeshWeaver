@@ -190,20 +190,22 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
         slot.Reference.Id?.ToString().Should().Be(OverviewLayoutArea.ContentFormOverview);
     }
 
+    /// <summary>
+    /// A landing page registered through <c>WithNodePage</c> with no verdict renders AS IT IS: the
+    /// provenance line moved into the portal shell's breadcrumb tooltip, so the framework composes
+    /// no strip above it (2026-10-26).
+    /// </summary>
     [Fact]
-    public async Task TheProvenanceStrip_IsBound()
+    public async Task TheDefaultLandingPage_RendersWithoutAComposedStrip()
     {
         var stream = Open(LandingPath, MeshNodeLayoutAreas.OverviewArea);
-        var strip = await Find<StackControl>(stream, MeshNodeLayoutAreas.OverviewArea,
-            s => s.DataContext?.Contains(MeshNodeLayoutAreas.ProvenanceDataId) == true,
-            "the composed provenance strip is a template bound to its projection");
-
-        await Bound(stream, ContextOf(strip), "meta/typeText").Should().Within(TestTimeouts.Convergence).Match(
-            t => t == ProvenanceType,
-            "the provenance line is computed on the hub and bound into the strip");
         await Find<MarkdownControl>(stream, MeshNodeLayoutAreas.OverviewArea,
             m => m.Markdown?.ToString() == "the landing page's own body",
-            "the page itself is composed below the strip, unchanged");
+            "the page itself renders, unchanged");
+        var root = await stream.GetControlStream(MeshNodeLayoutAreas.OverviewArea)
+            .Where(c => c is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        root.Should().BeOfType<MarkdownControl>(
+            "nothing wraps the page — the provenance line lives in the shell's breadcrumb tooltip");
     }
 
     [Fact]
