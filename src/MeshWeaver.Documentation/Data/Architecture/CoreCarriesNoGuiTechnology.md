@@ -169,33 +169,49 @@ in, so the change can be staged per repository.
 
 ### The Razor source generator in the tester image
 
-**Today.** `tools/MeshWeaver.PluginTester` stages the .NET SDK's Razor source generator per RID
-(`razor-generators/`, from `stage-razor-generators.py`, main-cd's tester leg) so `build-project` can
-compile `.razor`/`.cshtml`; `RazorBuildTest` pins it against core's Roslyn; the shared lane's static
-asset assertions know the Razor asset conventions.
+**Today.** Razor is a BUILD EXTENSION of `mw-plugin-test build-project`, not part of the builder.
+`tools/MeshWeaver.PluginTester.Extensibility` is the contract: an extension claims item types (their
+`Include`/`Remove` operations reach it in declaration order) and source suffixes, contributes a
+source-generator run — its additional texts, global and per-file analyzer-config options — which the
+builder executes BEFORE the generic `--generators` ones, writes the static assets its inputs imply
+after the builder's verbatim `wwwroot/` copy (a refusal is RED), names the cause of compile errors
+that point at it, and indexes the type names its files declare for the superseded-entry staleness
+check. The builder loads extensions from `build-extensions/<name>/` beside itself (or from
+`--extensions <dir>`, which replaces that search) into a host-first load context, so Roslyn and the
+contract are one type on both sides. A project carrying `.razor`/`.cshtml` that no loaded extension
+claims is refused by name.
 
-**Proposal.** Make the tester's generator loading generic, and let the GUI repository supply the
-Razor one.
+`tools/MeshWeaver.PluginTester.Razor` is the Razor extension: the Razor SDK's item rules, the CSS
+scope (`ScopedCss`), the generator lookup (`razor-generators/<rid>/` beside the extension, or its
+option `--razor-generators <dir>`), collocated JS modules and the `.styles.css` aggregate. The tester
+builds it without referencing it and stages its output — with the per-RID generator
+`stage-razor-generators.py` and main-cd provide, as before — under `build-extensions/razor/`, so the
+image behaves exactly as it did. `RazorBuildTest`, `ScopedCssTest` and `CollocatedJsModuleTest` run
+against it; `BuildExtensionSeamTest` holds the seam itself with a fake extension.
 
-1. **Core (addition)** — generalise `razor-generators/` to `generators/<name>/<rid>/`: the tester
-   loads every staged Roslyn source generator through the same load context, with the same
-   per-RID, PE-machine and provenance checks `stage-razor-generators.py` performs today. The Razor
-   generator keeps being staged by default, so the image does not change.
-2. **Plugins** — a small `tester-gui` image (`FROM` the platform tester at the pinned digest) adds
-   the Razor generator layer, plus `RazorBuildTest` and the static-asset assertions
-   (`check-bundle-static-assets.py`, `test-module-asset-landing.py`) as Plugins-side gates, and the
-   module lane runs Razor modules on it.
-3. **Core (deletion, last)** — stops staging the Razor generator, deletes
-   `stage-razor-generators.py`, `RazorBuildTest` and the static-asset scripts, and removes the
-   Razor-specific branches from `ProjectFile` (the `.razor`/`.cshtml` item resolution and CSS-scope
-   computation move with the generator as a plugin to the builder, or stay as a generic
-   "additional files for a generator" hook).
+**What is left in core.** The extension's source still lives here, and so do the static-asset
+assertions (`check-bundle-static-assets.py`, `test-module-asset-landing.py`) and the staging script.
+`check-bundle-static-assets.py` still encodes the Razor asset conventions (kinds 2 and 3) directly;
+it moves with the extension rather than being parameterised, because its only producer of those
+assets is the extension.
 
-**Risk.** This is the larger change: Razor compilation is wired into `ProjectFile` (`RazorItem`,
-`ScopedCss`), not only into staging, so step 3 needs that seam first; and a Razor-compiler
-regression against a new platform Roslyn would surface on Plugins' side at its next run against a
-sealed platform set rather than in core's own CI — the documented compatibility lag
-(policy `dependents-verify-on-their-side`). Step 1 is safe on its own and worth doing first.
+**Next.**
+
+1. ~~**Core (addition)** — a generic extension seam.~~ In place, as above.
+2. **Plugins** — takes `tools/MeshWeaver.PluginTester.Razor` (and its tests and the static-asset
+   checks) and ships it: a small tester image built `FROM` the platform tester at the pinned digest
+   that adds `build-extensions/razor/`, or `--extensions` pointing at a published extension directory,
+   and the module lane runs Razor modules with it.
+3. **Core (deletion, last)** — stops staging the Razor extension, deletes
+   `tools/MeshWeaver.PluginTester.Razor`, `stage-razor-generators.py` and the Razor tests. The
+   unclaimed-source refusal stays: it is what turns "no Razor extension loaded" into a named failure
+   instead of a smaller assembly.
+
+**Risk.** Once step 3 lands, a Razor-compiler regression against a new platform Roslyn surfaces
+on Plugins' side at its next run against a sealed platform set rather than in core's own CI — the
+documented compatibility lag (policy `dependents-verify-on-their-side`). The extension binds the
+contract by identity through the host-first context, so a contract change in core is a pair change
+with Plugins like any other public surface.
 
 ## See also
 

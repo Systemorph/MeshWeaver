@@ -31,7 +31,7 @@ mw-compiler build-project <csproj|dir>     # BUILD A .csproj: no dotnet SDK, no 
 
 ```
 mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] [--extra-refs <dir>]... \
-    [--generators <dir|dll>]... [--razor-generators <dir>] \
+    [--generators <dir|dll>]... [--extensions <dir>]... [--<extension option> <value>]... \
     [--accept <construct>]... [-p:Name=Value]... [--allow-warnings] [--max-parallel <n>]
 ```
 
@@ -117,26 +117,38 @@ for no doc file — which is when csc would not raise it either. The SDK's defau
 (`ActivityCategory.Compilation`) and pushed to the caller's observer the moment it is produced; the
 console is a rendering of that stream, which is why nothing is batched to the end.
 
-**Razor/Blazor compiles** (2026-08-31). `.razor` and `.cshtml` are turned into C# by the SDK's
-Roslyn **source generator**, which the image now ships in `razor-generators/<rid>/` beside the
-builder: `Microsoft.CodeAnalysis.Razor.Compiler.dll` + `Microsoft.AspNetCore.Razor.Utilities.Shared.dll`
-— the measured closure, everything else the compiler references binds to the host.
+**Build extensions.** A source kind the builder does not know itself is compiled by a BUILD
+EXTENSION (`tools/MeshWeaver.PluginTester.Extensibility` is the contract): the image ships each one
+in `build-extensions/<name>/` beside the builder, `--extensions <dir>` (repeatable) names the set to
+use instead and REPLACES the search, and any other `--<name> <value>` is an option of a loaded
+extension — one no extension declares is refused. An extension claims item types (their
+Include/Remove operations reach it in declaration order) and source suffixes; it contributes a
+source generator run, which the builder executes BEFORE the generic `--generators` ones, and the
+static assets its inputs imply, written after the builder's verbatim `wwwroot/` copy — an asset
+refusal is RED. A project carrying `.razor`/`.cshtml` that NO loaded extension claims is refused by
+name (`--accept unclaimed-sources` acknowledges it).
+
+**Razor/Blazor compiles** through the Razor extension (`tools/MeshWeaver.PluginTester.Razor`,
+staged to `build-extensions/razor/`). `.razor` and `.cshtml` are turned into C# by the SDK's Roslyn
+**source generator**, which the extension ships in `razor-generators/<rid>/` beside itself:
+`Microsoft.CodeAnalysis.Razor.Compiler.dll` + `Microsoft.AspNetCore.Razor.Utilities.Shared.dll` —
+the measured closure, everything else the compiler references binds to the host.
 
 - 🚨 **Per RID.** The SDK crossgens its Razor compiler for the SDK's own runtime identifier, so ONE
   copy cannot serve a multi-arch image: the same 10.0.400 file carries PE machine `0xFD1D` on
   linux-x64 and `0xD11D` on linux-arm64, and the wrong one throws `BadImageFormatException`. CD
-  stages both; `--razor-generators <dir>` names another copy and REPLACES the search rather than
-  heading it.
-- 🚨 **Loaded into a host-first load context.** The generator is built against the SDK's Roslyn
-  (10.0.400's wants `Microsoft.CodeAnalysis` 5.9.0.0) and the image carries this repo's pin (5.6.0);
-  the default context refuses the lower version, so every assembly the host already has is bound to
-  the host's copy with the version ignored — which is also the only way the generator and the driver
-  agree on the identity of `ISourceGenerator`.
+  stages both; the extension's option `--razor-generators <dir>` names another copy and REPLACES
+  the search rather than heading it.
+- 🚨 **Loaded into a host-first load context** (the extension AND the generator). The generator is
+  built against the SDK's Roslyn and the image carries this repo's pin; the default context refuses
+  the lower version, so every assembly the host already has is bound to the host's copy with the
+  version ignored — which is also the only way the generator, the extension and the driver agree on
+  the identity of `ISourceGenerator` and `IBuildExtension`.
 - **Refused by name rather than skipped:** a project with Razor files and no generator (it says what
-  the CS0115 wall would have been); a generator that runs and emits nothing; `*.razor.css` CSS
-  isolation, whose `b-…` scope comes from an MSBuild task this builder does not run
-  (`--accept razor-css-scope` builds without it); and `.razor` files under a project whose `Sdk`
-  does not process them (`--accept razor-not-compiled`).
+  the CS0115 wall would have been); a generator that runs and emits nothing; an unpaired
+  `*.razor.js` (the SDK's BLAZOR106); and `.razor` files under a project whose `Sdk` does not process
+  them (`--accept razor-not-compiled`). CSS isolation is reproduced: `*.razor.css` gets the SDK's
+  scope and the `<Assembly>.styles.css` aggregate is emitted.
 
 **Still not supported, and each says so:** SDK source generators (they live in the SDK, not the
 runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild `<Target>`s and

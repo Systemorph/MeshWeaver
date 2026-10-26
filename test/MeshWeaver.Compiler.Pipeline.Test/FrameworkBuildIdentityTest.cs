@@ -262,7 +262,11 @@ public class FrameworkBuildIdentityTest
             root!, "tools", "MeshWeaver.PluginTester", "MeshWeaver.PluginTester.csproj"));
         var expected = closure
             .Where(n => n.StartsWith("MeshWeaver.", StringComparison.Ordinal))
-            .Where(n => n is not "MeshWeaver.PluginTester" and not "MeshWeaver.Hosting.Monolith")
+            // The tester's own host assemblies: the tester itself, its build-extension contract
+            // (MeshWeaver.PluginTester.Extensibility — how the builder loads an extension, nothing
+            // shipped content compiles against), and the Monolith host.
+            .Where(n => !n.StartsWith("MeshWeaver.PluginTester", StringComparison.Ordinal)
+                        && n is not "MeshWeaver.Hosting.Monolith")
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToList();
 

@@ -1,5 +1,6 @@
 using System.Reactive;
 using MeshWeaver.Data;
+using MeshWeaver.PluginTester.Razor;
 using Xunit;
 
 namespace MeshWeaver.PluginTester.Test;
