@@ -241,7 +241,8 @@ static async Task<int> RunBuildProject(string[] args)
     var verbose = false;
     var extraRefs = new List<string>();
     var generatorPaths = new List<string>();
-    string? razorGenerators = null;
+    var extensionDirectories = new List<string>();
+    var extensionOptions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     var accept = new List<string>();
     var superseded = new List<string>();
     var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -284,10 +285,11 @@ static async Task<int> RunBuildProject(string[] args)
             case "--generators" when i + 1 < args.Length:
                 generatorPaths.Add(args[++i]);
                 break;
-            // The RAZOR generator is found automatically beside the builder (the image ships it in
-            // razor-generators/); this names a different copy — a newer SDK's, or a mount.
-            case "--razor-generators" when i + 1 < args.Length:
-                razorGenerators = args[++i];
+            // BUILD EXTENSIONS are found automatically beside the builder (the image ships them in
+            // build-extensions/); this names the set to use instead — repeatable, and it replaces the
+            // search rather than adding to it.
+            case "--extensions" when i + 1 < args.Length:
+                extensionDirectories.Add(args[++i]);
                 break;
             case "--accept" when i + 1 < args.Length:
                 accept.Add(args[++i]);
@@ -332,6 +334,13 @@ static async Task<int> RunBuildProject(string[] args)
                 Console.Error.WriteLine($"mw-plugin-test build-project: unknown option {flag}");
                 Console.Error.WriteLine(BuildProjectUsage());
                 return 2;
+            // Any other `--name <value>` is an option a build extension declares (the Razor
+            // extension's `--razor-generators <dir>`). Which extension reads it is known only once
+            // they are loaded, so the build refuses one nothing declares rather than ignoring it.
+            case var option when option.StartsWith("--", StringComparison.Ordinal) && option.Length > 2
+                                 && i + 1 < args.Length:
+                extensionOptions[option[2..]] = args[++i];
+                break;
             default:
                 entries.Add(args[i]);
                 break;
@@ -351,7 +360,8 @@ static async Task<int> RunBuildProject(string[] args)
         PrebuiltDirectories = prebuilt,
         ExtraReferenceDirectories = extraRefs,
         GeneratorPaths = generatorPaths,
-        RazorGeneratorDirectory = razorGenerators,
+        ExtensionDirectories = extensionDirectories,
+        ExtensionOptions = extensionOptions,
         Accept = accept,
         SupersededImageAssemblies = superseded,
         Properties = properties,
@@ -381,7 +391,8 @@ static bool TryAddProperty(Dictionary<string, string> properties, string assignm
 static string BuildProjectUsage() =>
     "usage: mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] "
     + "[--shared-frameworks <dir>] [--prebuilt <dir>]... "
-    + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--razor-generators <dir>] "
+    + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--extensions <dir>]... "
+    + "[--<extension option> <value>]... (e.g. --razor-generators <dir>) "
     + "[--accept <construct>]... [--superseded-image-assembly <name>]... "
     + "[-p:Name=Value]... [--bind-to-image] [--allow-warnings] [--max-parallel <n>]\n"
     + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
@@ -389,10 +400,14 @@ static string BuildProjectUsage() =>
     + "ProjectReferences inside the source root are built first in dependency order, and Roslyn runs "
     + "with the SDK's diagnostic standard (nullable analysis, DocumentationMode.Diagnose). Warnings "
     + "fail the build unless --allow-warnings. A construct the evaluator cannot reproduce fails the "
-    + "run by name; --accept <construct> acknowledges one. .razor/.cshtml are compiled by the Razor "
-    + "source generator the image ships in razor-generators/ beside this builder; --razor-generators "
-    + "<dir> names another copy, and a project with Razor files and no generator FAILS rather than "
-    + "quietly emitting an assembly with no components in it. The emitted assembly carries the "
+    + "run by name; --accept <construct> acknowledges one. A source kind the builder does not know "
+    + "itself is compiled by a BUILD EXTENSION: the image ships them in build-extensions/<name>/ "
+    + "beside this builder, and --extensions <dir> (repeatable) names the set to use instead. "
+    + ".razor/.cshtml are compiled by the Razor extension through the Razor source generator it "
+    + "ships; its option --razor-generators <dir> names another copy. A project carrying a source "
+    + "kind no loaded extension compiles, or Razor files and no generator, FAILS rather than "
+    + "quietly emitting an assembly with no components in it; an option no loaded extension "
+    + "declares is refused. The emitted assembly carries the "
     + "identity GenerateAssemblyInfo would have given it (AssemblyVersion/FileVersion/"
     + "InformationalVersion and the rest); -p:Name=Value supplies the properties it is derived "
     + "from, SourceRevisionId included — this builder runs no git. --bind-to-image stamps "

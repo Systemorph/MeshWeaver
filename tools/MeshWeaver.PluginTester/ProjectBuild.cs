@@ -6,6 +6,7 @@ using System.Text;
 using MeshWeaver.Compiler;
 using MeshWeaver.Data;
 using MeshWeaver.Plugin.Packaging;
+using MeshWeaver.PluginTester.Extensibility;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
@@ -130,14 +131,25 @@ public static class ProjectBuild
         public IReadOnlyList<string> GeneratorPaths { get; init; } = [];
 
         /// <summary>
-        /// Where the RAZOR source generator lives. Null means the standard search —
-        /// <c>razor-generators/</c> beside this builder, then under <see cref="AppDirectory"/> —
-        /// which is where the image build lays it. Named separately from
-        /// <see cref="GeneratorPaths"/> because it is not optional in the same way: a project with
-        /// <c>.razor</c> files and no Razor compiler is a FAILURE, never a build that quietly
-        /// omits every component.
+        /// The BUILD EXTENSIONS to compile with (<c>--extensions</c>). Empty means the standard search
+        /// — <c>build-extensions/*/</c> beside this builder, then under <see cref="AppDirectory"/> —
+        /// which is where the image build lays them; named directories REPLACE that search
+        /// (<see cref="BuildExtensions"/>).
         /// </summary>
-        public string? RazorGeneratorDirectory { get; init; }
+        public IReadOnlyList<string> ExtensionDirectories { get; init; } = [];
+
+        /// <summary>
+        /// Values for the options the loaded extensions declare (<see cref="IBuildExtension.OptionNames"/>),
+        /// keyed without the leading <c>--</c> — e.g. <c>razor-generators</c>, where the Razor
+        /// extension looks for its generator. An option no loaded extension declares is a refusal.
+        /// </summary>
+        public IReadOnlyDictionary<string, string> ExtensionOptions { get; init; } =
+            ImmutableDictionary<string, string>.Empty;
+
+        /// <summary>
+        /// The extensions this run loaded — set by the run itself from <see cref="ExtensionDirectories"/>.
+        /// </summary>
+        public ImmutableArray<LoadedBuildExtension> LoadedExtensions { get; init; } = [];
 
         /// <summary>Concurrency cap across independent projects.</summary>
         public int MaxParallel { get; init; } = Math.Max(1, Environment.ProcessorCount);
@@ -246,7 +258,8 @@ public static class ProjectBuild
         string? Failure)
     {
         /// <summary>
-        /// How many <c>.razor</c>/<c>.cshtml</c> documents the Razor generator produced.
+        /// How many documents the build extensions' generators produced (the Razor extension: one per
+        /// <c>.razor</c>/<c>.cshtml</c> file).
         ///
         /// <para>🚨 An <c>init</c> PROPERTY, not a primary-constructor parameter. Adding a
         /// parameter — even with a default — REPLACES the record's constructor signature, and
@@ -254,7 +267,7 @@ public static class ProjectBuild
         /// every assembly compiled against the old arity calls a constructor that no longer
         /// exists.</para>
         /// </summary>
-        public int RazorCount { get; init; }
+        public int ExtensionGeneratedSources { get; init; }
 
         /// <summary>
         /// How many managed resources were embedded in the emitted assembly.
@@ -400,6 +413,30 @@ public static class ProjectBuild
             + $"deps.json; platform AssemblyVersion {container.PlatformAssemblyVersion}");
 
         sink.Info(UncarriedRefusalEnforcedLine);
+
+        ImmutableArray<LoadedBuildExtension> extensions;
+        try
+        {
+            extensions = BuildExtensions.Load(options.ExtensionDirectories, options.AppDirectory);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Observable.Return(Fatal(options, sink, wall, container.PlatformAssemblyVersion, ex.Message));
+        }
+        var undeclared = options.ExtensionOptions.Keys
+            .Where(k => !extensions.Any(e => e.Extension.OptionNames.Contains(k, StringComparer.OrdinalIgnoreCase)))
+            .Order(StringComparer.Ordinal)
+            .ToImmutableArray();
+        if (!undeclared.IsEmpty)
+            return Observable.Return(Fatal(options, sink, wall, container.PlatformAssemblyVersion,
+                $"{string.Join(", ", undeclared.Select(k => "--" + k))} is not an option of build-project or of "
+                + "any loaded build extension ("
+                + (extensions.IsEmpty ? "none loaded" : string.Join(", ", extensions.Select(e => e.Extension.Name)))
+                + "). An option nothing reads would build as if it had not been given."));
+        sink.Info(extensions.IsEmpty
+            ? "build extensions: none loaded — a project carrying a source kind only an extension compiles is refused by name"
+            : "build extensions: " + string.Join(", ", extensions.Select(e => $"{e.Extension.Name} ({e.Directory})")));
+        options = options with { LoadedExtensions = extensions };
 
         if (options.BindToImage)
         {
@@ -730,7 +767,8 @@ public static class ProjectBuild
             {
                 var current = pending.Pop();
                 if (models.ContainsKey(current)) continue;
-                var model = ProjectFile.Load(current, options.Accept, options.Properties);
+                var model = ProjectFile.Load(
+                    current, options.Accept, options.Properties, [.. options.LoadedExtensions.Select(e => e.Extension)]);
                 models[current] = model;
                 foreach (var target in model.UnexecutedTargets)
                     sink.Warn($"{Path.GetFileName(current)}: target not executed — {target}");
@@ -844,7 +882,8 @@ public static class ProjectBuild
         // compilations as the source side would red ordinary narrowed PRs during exactly the wave
         // the entry exists to serve.
         var indexClock = Stopwatch.StartNew();
-        var source = SupersededEntryStaleness.ForSourceRoot(graph.SourceRoot);
+        var source = SupersededEntryStaleness.ForSourceRoot(
+            graph.SourceRoot, [.. options.LoadedExtensions.Select(e => e.Extension)]);
         sink.Info(
             $"superseded: indexed {source.FilesScanned} source file(s) under {source.SourceRoot} — "
             + $"{source.DeclaredTypeCount} top-level C# type name(s) in {indexClock.ElapsedMilliseconds} ms "
@@ -908,9 +947,12 @@ public static class ProjectBuild
                 + (model.CompileItems.Length > 100
                     ? " (nullable flow analysis dominates large projects)" : "")));
         var name = Path.GetFileNameWithoutExtension(model.ProjectPath);
-        var razorGenerated = 0;
+        var extensionGenerated = 0;
+        var extensionInputs = string.Concat(model.Extensions.Values
+            .Where(c => c.Summary.Length > 0)
+            .Select(c => $" + {c.Summary}"));
         sink.Info($"[{name}] start — {model.CompileItems.Length} source file(s)"
-                  + (model.RazorItems.IsEmpty ? "" : $" + {model.RazorItems.Length} Razor file(s)") + ", "
+                  + extensionInputs + ", "
                   + $"target {(model.TargetFramework.Length > 0 ? model.TargetFramework : "(unset)")}, "
                   + $"nullable {model.NullableOptions}, "
                   + $"warnings-as-errors {(model.TreatWarningsAsErrors ? "on" : "off")}");
@@ -1149,31 +1191,51 @@ public static class ProjectBuild
         var compilation = CSharpCompilation.Create(
             model.AssemblyName, trees, references, compilationOptions);
 
-        // 🚨 RAZOR FIRST. `.razor` becomes C# through a Roslyn source generator, so a Blazor project
-        // whose components have not been generated is not "a project with errors" — it is a project
-        // that was never fully read. Running it before any other generator also means an ordinary
-        // `--generators` generator sees the component partials, exactly as csc does.
-        if (!model.RazorItems.IsEmpty)
+        // 🚨 EXTENSIONS FIRST. A build extension's source kind becomes C# through a Roslyn source
+        // generator (Razor: `.razor` → component partials), so a project whose extension inputs have
+        // not been generated is not "a project with errors" — it is a project that was never fully
+        // read. Running them before any other generator also means an ordinary `--generators`
+        // generator sees their output, exactly as csc does.
+        foreach (var loaded in options.LoadedExtensions)
         {
+            if (!model.Extensions.TryGetValue(loaded.Extension.Name, out var contribution))
+                continue;
             try
             {
-                var directory = RazorGenerators.Locate(options.RazorGeneratorDirectory, options.AppDirectory)
-                    ?? throw new RazorGenerators.MissingRazorCompilerException(
-                        RazorGenerators.MissingCompilerMessage(
-                            name, model.RazorItems.Length,
-                            RazorGenerators.SearchPath(options.RazorGeneratorDirectory, options.AppDirectory)));
-                var razor = RazorGenerators.Load(directory, sink.Logger);
+                var run = contribution.Generators(new GeneratorContext(
+                    name,
+                    loaded.Directory,
+                    options.AppDirectory,
+                    options.ExtensionOptions
+                        .Where(o => loaded.Extension.OptionNames.Contains(o.Key, StringComparer.OrdinalIgnoreCase))
+                        .ToImmutableDictionary(o => o.Key, o => o.Value, StringComparer.OrdinalIgnoreCase),
+                    sink.Logger));
+                if (run is null)
+                    continue;
                 sink.Info(
-                    $"[{name}] Razor: {model.RazorItems.Length} file(s) through "
-                    + $"{razor.Generators.Length} generator(s) from {razor.Directory} ({razor.Provenance})");
-                var outcome = RazorGenerators.Run(compilation, model, razor, parseOptions, CancellationToken.None);
-                compilation = outcome.Compilation;
-                razorGenerated = outcome.GeneratedSources;
-                foreach (var diagnostic in outcome.Diagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning))
-                    sink.Warn($"[{name}] razor: {Render(diagnostic)}");
-                sink.Info($"[{name}] Razor: {razorGenerated} generated document(s)");
+                    $"[{name}] {run.Label}: {run.AdditionalTexts.Length} file(s) through "
+                    + $"{run.Generators.Length} generator(s) from {run.Description}");
+                var driver = CSharpGeneratorDriver.Create(run.Generators, run.AdditionalTexts, parseOptions, run.Options);
+                driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out var generatorDiagnostics);
+                var generated = updated.SyntaxTrees.Count() - compilation.SyntaxTrees.Count();
+                if (generated <= 0 && run.MustProduceOutput)
+                    // 🚨 A generator that ran and produced nothing is the WORST outcome available: the
+                    // build goes on to fail as if the inputs were broken, and the real answer — "the
+                    // generator saw no input it recognised" — is nowhere. So it is a failure here.
+                    throw new BuildExtensionException(
+                        $"{Path.GetFileNameWithoutExtension(model.ProjectPath)}: the {run.Label} generator ran over "
+                        + $"{run.AdditionalTexts.Length} file(s) and emitted NOTHING. That is not a compile error, "
+                        + $"it is a generator that did not recognise its input — {run.NothingProducedHint}"
+                        + (generatorDiagnostics.IsDefaultOrEmpty
+                            ? "; the generator reported no diagnostic of its own."
+                            : ": " + string.Join("; ", generatorDiagnostics.Select(d => d.ToString()))));
+                compilation = (CSharpCompilation)updated;
+                extensionGenerated += Math.Max(generated, 0);
+                foreach (var diagnostic in generatorDiagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning))
+                    sink.Warn($"[{name}] {run.Label.ToLowerInvariant()}: {Render(diagnostic)}");
+                sink.Info($"[{name}] {run.Label}: {generated} generated document(s)");
             }
-            catch (RazorGenerators.MissingRazorCompilerException ex)
+            catch (BuildExtensionException ex)
             {
                 sink.Error($"[{name}] {ex.Message}");
                 return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
@@ -1196,7 +1258,7 @@ public static class ProjectBuild
         var errors = 0;
         var warnings = 0;
         var missingGeneratorPartials = 0;
-        var missingComponentOverrides = 0;
+        var errorDiagnostics = new List<Diagnostic>();
         // 🚨 ONE body pass, like csc. GetDiagnostics() binds and flow-analyzes every method body,
         // and the Emit below then lowers them ALL AGAIN — measured on MeshWeaver.AI (168
         // nullable-heavy files): 82s analysis + 79s emit locally, 559s inside the CI container,
@@ -1213,11 +1275,7 @@ public static class ProjectBuild
                     errors++;
                     if (diagnostic.Id is "CS8795" or "CS8785" or "CS9248")
                         missingGeneratorPartials++;
-                    // CS0115 "no suitable method found to override" is what a Razor component looks
-                    // like when its generated half is absent: the .razor.cs declares
-                    // BuildRenderTree, the generator never produced the partial that has it.
-                    if (diagnostic.Id is "CS0115")
-                        missingComponentOverrides++;
+                    errorDiagnostics.Add(diagnostic);
                     sink.Error($"[{name}] {Render(diagnostic)}");
                     break;
                 case DiagnosticSeverity.Warning:
@@ -1246,21 +1304,16 @@ public static class ProjectBuild
                     + "built-in generators (GeneratedRegex, LoggerMessage, JsonSerializable) ship in "
                     + "the .NET SDK, not in a runtime image, so this container has none. Supply them "
                     + "with --generators <dir>, or the project cannot be built in this mode.");
-            if (model.RazorItems.IsEmpty && missingComponentOverrides > 0)
-                // 🚨 The other half of the same rule. CS0115 in a project this builder found NO
-                // Razor items in means the components were never offered to the generator at all —
-                // the item glob, not the compile, is what went wrong. Say which.
-                sink.Error(
-                    $"[{name}] {missingComponentOverrides} of those errors are overrides with nothing "
-                    + "to override — the signature of Razor components whose generated partial is "
-                    + "missing. This build found NO .razor/.cshtml items in the project, so the "
-                    + "generator was never asked to produce them: check the project's Sdk (Razor "
-                    + "items are compiled only under Microsoft.NET.Sdk.Razor/.Web) and its Content "
-                    + "items, rather than reading these as broken source.");
+            // A build extension names its own cause (the Razor extension reads CS0115 in a project it
+            // found no components in as "the components were never offered to the generator").
+            foreach (var loaded in options.LoadedExtensions)
+                if (loaded.Extension.DiagnoseErrors(
+                        name, model.Extensions.GetValueOrDefault(loaded.Extension.Name), errorDiagnostics) is { } hint)
+                    sink.Error(hint);
             sink.Error($"[{name}] RED — {errors} error(s), {warnings} warning(s) in {clock.Elapsed.TotalMilliseconds:F0} ms");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, errors, warnings, null, [],
-                $"{errors} compile error(s)") { RazorCount = razorGenerated };
+                $"{errors} compile error(s)") { ExtensionGeneratedSources = extensionGenerated };
         }
         if (warnings > 0 && !options.AllowWarnings)
         {
@@ -1310,7 +1363,7 @@ public static class ProjectBuild
                     $"{warnings} warning(s) under the no-warn policy");
             }
             NameTheDocumentationFile(outputDirectory, model);
-            var staticAssets = EmitStaticAssets(outputDirectory, model, sink, name);
+            var staticAssets = EmitStaticAssets(outputDirectory, model, options.LoadedExtensions, sink, name);
             if (staticAssets.Refusal is { } assetRefusal)
             {
                 // 🚨 RED, not a warning. The SDK makes this an ERROR (BLAZOR106) and the reason is
@@ -1320,19 +1373,17 @@ public static class ProjectBuild
                 return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                     model.CompileItems.Length, 1, warnings, null, [], assetRefusal);
             }
-            var scopedCssCount = staticAssets.ScopedStylesheets;
             sink.Info(
                 $"[{name}] OK — {model.CompileItems.Length} source file(s)"
-                + (razorGenerated == 0 ? "" : $" + {model.RazorItems.Length} Razor file(s)")
+                + (extensionGenerated == 0 ? "" : extensionInputs)
                 + (model.EmbeddedResources.IsEmpty ? "" : $" + {model.EmbeddedResources.Length} resource(s)")
-                + (scopedCssCount == 0 ? "" : $" + {scopedCssCount} scoped stylesheet(s)")
-                + (staticAssets.JsModules == 0 ? "" : $" + {staticAssets.JsModules} JS module(s)")
+                + string.Concat(staticAssets.Summaries.Select(s => $" + {s}"))
                 + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null)
             {
-                RazorCount = razorGenerated,
+                ExtensionGeneratedSources = extensionGenerated,
                 ResourceCount = model.EmbeddedResources.Length,
                 Rides = privateClosure.Rides,
                 NativeRides = privateClosure.Natives,
@@ -1375,41 +1426,27 @@ public static class ProjectBuild
     ];
 
     /// <summary>What <see cref="EmitStaticAssets"/> produced, or why it refused.</summary>
-    /// <param name="ScopedStylesheets">How many scoped stylesheets went into the aggregate.</param>
-    /// <param name="JsModules">How many collocated JS modules were emitted.</param>
+    /// <param name="Summaries">The extensions' asset phrases (<c>2 JS module(s)</c>), for the OK line.</param>
     /// <param name="Refusal">Non-null when the project's asset set cannot be reproduced.</param>
-    private readonly record struct StaticAssetResult(
-        int ScopedStylesheets, int JsModules, string? Refusal);
+    private sealed record StaticAssetResult(ImmutableArray<string> Summaries, string? Refusal);
 
     /// <summary>
-    /// The static-asset half of the module — the Razor SDK's THREE asset kinds, reproduced, in the
-    /// order this method emits them and the order
-    /// <see href="/Doc/Architecture/ModuleStaticAssets">the architecture page</see> numbers them:
-    /// <list type="number">
-    /// <item><b>Kind 1</b> — the project's own <c>wwwroot/**</c>, copied verbatim;</item>
-    /// <item><b>Kind 2</b> — each collocated <b>JS module</b>, a <c>Foo.razor.js</c> beside
-    /// <c>Foo.razor</c>, copied to <c>wwwroot/&lt;path relative to the project&gt;</c>;</item>
-    /// <item><b>Kind 3</b> — the CSS-isolation aggregate <c>wwwroot/&lt;AssemblyName&gt;.styles.css</c>
-    /// — each <c>*.razor.css</c> rewritten under the SAME scope the generator stamped into the
-    /// markup (<see cref="ScopedCss"/>), concatenated in item order.</item>
-    /// </list>
-    /// The packer sweeps <c>wwwroot/</c> into the bundle's <c>staticAssets</c>, the landing writes
-    /// it module-relative, and the host mounts it at <c>_content/&lt;Name&gt;/…</c>.
+    /// The static-asset half of the module, in the order
+    /// <see href="/Doc/Architecture/ModuleStaticAssets">the architecture page</see> numbers it:
+    /// <b>kind 1</b>, the project's own <c>wwwroot/**</c>, copied verbatim here; then whatever each
+    /// build extension's inputs imply (the Razor extension: kind 2, collocated JS modules, and kind 3,
+    /// the CSS-isolation aggregate). The packer sweeps <c>wwwroot/</c> into the bundle's
+    /// <c>staticAssets</c>, the landing writes it module-relative, and the host mounts it at
+    /// <c>_content/&lt;Name&gt;/…</c>.
     ///
-    /// <para>🚨 Kinds 2 and 3 are COMPUTED: neither file exists under the project's <c>wwwroot/</c>,
-    /// so a directory walk cannot see them and every producer of a module bundle has to reproduce
-    /// them. <b>Kind 3 was missing until #2221</b> and a converted pack landed, loaded and rendered
-    /// UNSTYLED with nothing in any log. <b>Kind 2 was missing until #2384</b> and did the same
-    /// thing one step further along: <c>OpenStreetMapView.razor.js</c> 404'd for three weeks, so
-    /// every map in every container-built view pack — OpenStreetMap, GoogleMaps, AppleMaps, Chat —
-    /// threw <c>Failed to fetch dynamically imported module</c> in <c>OnAfterRenderAsync</c> and
-    /// rendered nothing. The real SDK lays kind 2 at the project-relative path
-    /// (<c>publish/wwwroot/Components/Badge.razor.js</c> for <c>Components/Badge.razor.js</c> —
-    /// measured against SDK 10.0.400, 2026-09-15), which is exactly what
-    /// <c>MeshModuleStaticAssetExtensions</c> re-bases onto <c>_content/&lt;Name&gt;/…</c>.</para>
+    /// <para>🚨 An extension's assets are COMPUTED: they do not exist under the project's
+    /// <c>wwwroot/</c>, so a directory walk cannot see them and every producer of a module bundle has
+    /// to reproduce them — a missing one is a pack that loads and renders unstyled or 404s in a
+    /// browser (#2221, #2384). An extension's refusal is therefore RED, never a warning.</para>
     /// </summary>
     private static StaticAssetResult EmitStaticAssets(
-        string outputDirectory, ProjectFile.Model model, Sink sink, string name)
+        string outputDirectory, ProjectFile.Model model, ImmutableArray<LoadedBuildExtension> extensions,
+        Sink sink, string name)
     {
         var projectDirectory = Path.GetDirectoryName(model.ProjectPath)!;
         var wwwroot = Path.Combine(projectDirectory, "wwwroot");
@@ -1426,91 +1463,18 @@ public static class ProjectBuild
                 + $"({Directory.GetFiles(wwwroot, "*", SearchOption.AllDirectories).Length} file(s))");
         }
 
-        var jsModules = EmitJsModules(target, model, sink, name);
-        if (jsModules.Refusal is not null)
-            return jsModules;
-
-        var scoped = model.RazorItems
-            .Where(item => item.CssScope is { Length: > 0 })
-            .Select(item => (
-                RelativePath: item.TargetPath + ".css",
-                Rewritten: ScopedCss.Rewrite(File.ReadAllText(item.Path + ".css"), item.CssScope!)))
-            .ToImmutableArray();
-        if (scoped.IsEmpty)
-            return jsModules;
-        Directory.CreateDirectory(target);
-        var aggregatePath = Path.Combine(target, model.AssemblyName + ".styles.css");
-        File.WriteAllText(aggregatePath, ScopedCss.Aggregate(scoped.Select(s => (s.RelativePath, s.Rewritten))));
-        sink.Info($"[{name}] css isolation: {scoped.Length} scoped stylesheet(s) → "
-            + $"wwwroot/{model.AssemblyName}.styles.css (scopes match the generated markup)");
-        return jsModules with { ScopedStylesheets = scoped.Length };
-    }
-
-    /// <summary>
-    /// The SDK's JS MODULE asset kind: <c>Foo.razor.js</c> beside <c>Foo.razor</c> (and
-    /// <c>Foo.cshtml.js</c> beside <c>Foo.cshtml</c>), emitted at the same project-relative path
-    /// under <c>wwwroot/</c> that <c>dotnet publish</c> lays it at.
-    ///
-    /// <para>🚨 An UNPAIRED JS module is a REFUSAL, by name — the SDK's own <c>BLAZOR106</c>
-    /// ("was defined but no associated razor component or view was found for it"), measured to be
-    /// an error on SDK 10.0.400 and to fire for a file under <c>wwwroot/</c> as well as beside a
-    /// component. Reproducing the refusal matters more than reproducing the copy: the shape that
-    /// reaches production is a component RENAMED without its JS, and passing that silently is the
-    /// same 404 this method exists to prevent, arriving from the other direction.</para>
-    ///
-    /// <para>A JS module whose Razor item lives under <c>wwwroot/</c> already rode verbatim above;
-    /// copying it again would put it at <c>wwwroot/wwwroot/…</c>, so it is counted as paired and
-    /// skipped. A Razor item from OUTSIDE the project directory (a <c>..\Shared</c> link) is a
-    /// refusal rather than a write that escapes the output folder.</para>
-    /// </summary>
-    private static StaticAssetResult EmitJsModules(
-        string target, ProjectFile.Model model, Sink sink, string name)
-    {
-        if (model.JsModuleFiles.IsEmpty)
-            return new StaticAssetResult(0, 0, null);
-
-        var paired = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var emitted = 0;
-        foreach (var item in model.RazorItems)
+        var summaries = ImmutableArray.CreateBuilder<string>();
+        foreach (var loaded in extensions)
         {
-            var source = item.Path + ".js";
-            if (!File.Exists(source))
+            if (!model.Extensions.TryGetValue(loaded.Extension.Name, out var contribution))
                 continue;
-            paired.Add(Path.GetFullPath(source));
-            // Already carried by the verbatim wwwroot copy — emitting it again would nest it.
-            var segments = item.TargetPath.Split(
-                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (segments is [var first, ..] && first.Equals("wwwroot", StringComparison.OrdinalIgnoreCase))
-                continue;
-            var destination = Path.GetFullPath(Path.Combine(target, item.TargetPath + ".js"));
-            if (!destination.StartsWith(Path.GetFullPath(target) + Path.DirectorySeparatorChar,
-                    StringComparison.Ordinal))
-                return new StaticAssetResult(0, 0,
-                    $"the JS module '{source}' belongs to a Razor item OUTSIDE the project directory "
-                    + $"('{item.TargetPath}'), so the path the SDK would publish it at escapes the "
-                    + "module's own wwwroot. Link the component into the project, or give the file "
-                    + "a home under it.");
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(source, destination, overwrite: true);
-            emitted++;
+            var outcome = contribution.EmitAssets(target, line => sink.Info($"[{name}] {line}"));
+            if (outcome.Refusal is not null)
+                return new StaticAssetResult([], outcome.Refusal);
+            if (outcome.Summary.Length > 0)
+                summaries.Add(outcome.Summary);
         }
-
-        var orphans = model.JsModuleFiles
-            .Where(file => !paired.Contains(Path.GetFullPath(file)))
-            .ToImmutableArray();
-        if (!orphans.IsEmpty)
-            return new StaticAssetResult(0, 0,
-                $"{orphans.Length} JS module file(s) were defined but no associated Razor component "
-                + "or view was found for them — the SDK's BLAZOR106, which is an error there too: "
-                + string.Join(", ", orphans.Select(f => Path.GetRelativePath(model.Directory, f)))
-                + ". A JS module that pairs with nothing never ships, and the only place that shows "
-                + "up is a browser's `Failed to fetch dynamically imported module` (#2384). Rename "
-                + "the file to match its component, or delete it.");
-
-        if (emitted > 0)
-            sink.Info($"[{name}] js modules: {emitted} collocated *.razor.js → wwwroot/<relative> "
-                + "(the path the SDK publishes them at, which the host serves at _content/<Name>/…)");
-        return new StaticAssetResult(0, emitted, null);
+        return new StaticAssetResult(summaries.ToImmutable(), null);
     }
 
     /// <summary>
