@@ -440,15 +440,26 @@ await disposalCompleted
     .Timeout(TestTimeouts.Convergence)
     .Await(TestContext.Current.CancellationToken);
 
-GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
-GC.WaitForPendingFinalizers();
-weak.IsAlive.Should().BeFalse();              // ✅ after this, only a kept reference can hold it
+// then wait for the RELEASE within a bound far below the retention you guard against
+await Collected.Of(weak).Should().Within(TestTimeouts.Convergence).Emit(because);   // ✅
 ```
 
-That is not a bigger wait — it is a *different kind* of wait, and it is what turns the probe from a
-sample into a proof. [Negative Controls](/Doc/Architecture/NegativeControls) is right that a
-`WeakReference` whose truth depends on *when* it is evaluated pins nothing; gating it on
-`DisposalCompleted` is precisely what removes the *when*.
+Joining `DisposalCompleted` removes the first *when*: the teardown has finished. 🚨 **It does not
+remove the second one.** The hub signals `DisposalCompleted` from INSIDE its own ShutDown turn
+(`SignalDisposalCompleted` → `ReplaySubject.OnNext`) and goes on running that turn afterwards, so at
+the moment the waiter wakes, the signalling thread's stack still holds the hub. On an idle machine
+that stack unwinds before the waiter collects. On a loaded one the thread can be pre-empted right
+after the signal, and ONE immediate collection then finds the hub alive although nothing retains it.
+`CopyMoveDeadlineReleasesHubTest` failed exactly that way, once, in a combined local run, and passed
+alone. `TheDisposalSignalFiresBeforeTheDisposingTurnLetsGoTest` pins the window deterministically: an
+observer of `DisposalCompleted` parks the signalling thread, the hub is alive while it is parked, and
+it is collected once released.
+
+So the assertion is a bounded wait for collectability (`Collected.Of` in `MeshWeaver.Hosting.Test`:
+a full blocking collection every 50 ms until the weak reference clears). The GC verdict has no push
+signal, so here a re-check on an interval IS the instrument. The bound is not headroom: choose it far
+below the retention the test pins (the deadline tests guard a ten-minute operation budget and wait
+seconds), and the negative control still fails.
 
 Two details that decide whether the test can fail for the right reason:
 
