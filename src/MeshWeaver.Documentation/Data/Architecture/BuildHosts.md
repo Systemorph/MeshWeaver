@@ -433,11 +433,14 @@ separate fields a stale hand-over whose version is refused could still land a di
 not change. As one leaf, a stale write conflicts as a whole and its retry is refused as older.
 `recordFields` is informative. 🚨 **Never `kubectl set image`, never a hand-edited Deployment.**
 
-**A no-op until declared, twice.** `.github/build-hosts.json` `enabled: false` (the shipped value)
-makes both jobs write one summary line and send nothing, using no credential; `stable` must also be
-listed in its `channels`. The receiver guards the same fact on the record. Turning the hosts on is
-two acts, in order: the record's `BuildHosts` block through its approval path, then
-`enabled: true` here.
+**Declared, twice.** `.github/build-hosts.json` `enabled` gates both jobs: while `false` they write one
+summary line and send nothing, using no credential; `stable` must also be listed in its `channels`. The
+receiver guards the same fact on the record. Turning the hosts on is two acts, in order: the record's
+`BuildHosts` block through its approval path, then `enabled: true` here. **Both are done for `latest`
+(2026-10-26):** the operations record declares `buildHosts.enabled` with the `latest` channel, and
+`enabled` is `true`, so every CD run hands the newest armed set to `build-latest`. Starting a host is not
+running builds on it: the operations instance's build queue has its own switch
+(`Hosting__Builds__QueueEnabled`), and until it is on a running host claims nothing.
 
 `build-host-image` and `build-host-latest` are outside `delivery-verdict` (the fleet's delivery does
 not depend on a build host) and outside `alert-on-failure` (whose `ci-failure` issue recovers on
@@ -556,9 +559,9 @@ whole workflow (the admission queues a new attempt).
 
 - **The receiver of `build-host-update-available`** (the record write) EXISTS: MeshWeaver.Plugins
   #4166 shipped it (`Hosting/Deployment/Source/BuildHostUpdates.cs`), and it changes a record only
-  when that record's `BuildHosts.Enabled` is already true. The event still stays unsent while
-  `enabled: false` here, and no record enables build hosts yet (the control record carries no
-  `buildHosts` block), so turning the hosts on remains the two declared acts of §4. The
+  when that record's `BuildHosts.Enabled` is already true. Both declared acts of §4 are done for `latest`
+  (2026-10-26), so the event is sent on every CD run; enabling the build QUEUE on the operations instance
+  (`Hosting__Builds__QueueEnabled`) is a separate, later act. The
   **`POST /token` route** (minting `GetScopedInstallationToken(owner, [repo], {"contents":"read"})`
   for the ONE repository of the run, only for the host that holds its claim) is the operations
   instance's, in MeshWeaver.Plugins.
