@@ -338,7 +338,8 @@ public static class DefaultNodeNavigation
     /// The lines of ONE folder of the index, opened on demand (<see cref="SuppliedNavigationRail.FolderArea"/>):
     /// its first <see cref="LevelCap"/> children in the default order, each probed for children of
     /// its own, then "Show all" when it holds more. Emits an empty list at once, and a fault reads
-    /// as an empty folder after <paramref name="logger"/> has seen it.
+    /// as an empty folder after <paramref name="logger"/> has seen it. A folder that mixes kinds of
+    /// node reads as sections headed in <paramref name="viewer"/>'s locale (<see cref="IndexSections"/>).
     /// </summary>
     /// <param name="meshService">The unified mesh service.</param>
     /// <param name="folder">The folder whose children are listed.</param>
@@ -350,7 +351,7 @@ public static class DefaultNodeNavigation
         IMeshService meshService, string folder, string currentPath, string showAllLabel,
         AccessContext? viewer, ILogger? logger = null)
         => ObserveFolder(meshService, folder, currentPath, showAllLabel,
-            nodeType => IndexSections.Label(nodeType, null), viewer, logger);
+            nodeType => IndexSections.Label(nodeType, viewer?.Locale), viewer, logger);
 
     /// <summary>
     /// <see cref="ObserveFolder(IMeshService, string, string, string, AccessContext?, ILogger?)"/>

@@ -36,7 +36,13 @@ public class DefaultNodeNavigationProbeTest(ITestOutputHelper output) : Monolith
                 new MeshNode(Space) { Name = "Probe Docs", NodeType = "Markdown" },
                 new MeshNode("A", Space) { Name = "A", NodeType = "Markdown", Order = 1 },
                 new MeshNode("A1", Space + "/A") { Name = "A1", NodeType = "Markdown" },
-                new MeshNode("B", Space) { Name = "B", NodeType = "Markdown", Order = 2 });
+                new MeshNode("B", Space) { Name = "B", NodeType = "Markdown", Order = 2 },
+                new MeshNode(Mixed) { Name = "Mixed", NodeType = "Markdown" },
+                new MeshNode("Notes", Mixed) { Name = "Notes", NodeType = "Markdown", Order = 1 },
+                new MeshNode("Loose", Mixed) { Name = "Loose", Order = 2 });
+
+    /// <summary>A folder that mixes a document with an untyped node, so it reads as sections.</summary>
+    private const string Mixed = "ProbeMixed";
 
     private IMeshService RealMeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -129,6 +135,22 @@ public class DefaultNodeNavigationProbeTest(ITestOutputHelper output) : Monolith
         recording.Subscribed.Count(r => r.Query == ProbeOf(Space + "/C")).Should().Be(1, "the new sibling is probed once");
         seen.Skip(marked).Should().OnlyContain(e => e.Single(x => x.Path == Space + "/A").HasUnloadedChildren,
             "an open folder is never re-rendered as a link while a sibling's probe is pending");
+    }
+
+    [Fact]
+    public async Task TheViewerOnlyOverloadHeadsSectionsInTheViewersLocale()
+    {
+        // Review finding on Systemorph/MeshWeaver#7263: the overload that predates section labels
+        // still receives the viewer, so a German reader must not be handed English headings.
+        var viewer = new AccessContext { ObjectId = WellKnownUsers.System, Locale = "de" };
+
+        var entries = await Next(
+            DefaultNodeNavigation.ObserveFolder(RealMeshService, Mixed, "Elsewhere/Page", "Alle anzeigen", viewer),
+            e => e.Count == 2);
+
+        entries.Should().OnlyContain(e => e.IsSection, "the folder mixes a document with an untyped node");
+        entries.Select(e => e.Label).Should().Equal(["Dokumente", "Weitere"],
+            "the section headings follow the viewer's locale, as the show-all label does");
     }
 
     [Fact]
