@@ -38,6 +38,11 @@ its whole validation set, and it is deliberately built so that "the validation d
                 publisher reading its `lane`/`selected`/`declared` outputs, and that publisher runs
                 on exactly the events the pack call stages on. A staged pack call nobody publishes
                 would hand the registry NOTHING, silently — the FrameworkDeclined outage of #2088.
+                H7: a pack call that may run on a build host (`executor:` anything but `actions`)
+                is published THROUGH its one build-host-publication.yml call — the host graph,
+                Doc/Architecture/BuildHosts §5 — and every other shape of that graph is refused.
+  lane-key      The lane key a pack call stamps on its evidence, for a host's modules stage to stamp
+                its publication records with.
   publish       The staged evidence is matched against the selection before ONE byte is POSTed:
                 exactly one publication record per selected module, stamped with THIS call's lane,
                 naming the bytes by sha256 and the framework identity read back off those bytes.
@@ -53,6 +58,9 @@ USAGE
   module-publication.py check-callers --root .
   module-publication.py publish --staged DIR --lane L --declared @modules.json \\
         --selected "MeshWeaver.AI" --registry https://memex.meshweaver.cloud --source Plugins
+  module-publication.py publish --check-only --staged DIR --lane L --declared @modules.json \\
+        --selected "MeshWeaver.AI"        # build-host-publication.yml: the publisher's checks, no POST
+  module-publication.py lane-key --lane-id catalog --modules @modules.json
   module-publication.py --self-test
 """
 from __future__ import annotations
@@ -324,8 +332,46 @@ def check_caller(workflow: Path, uses_suffix: str, required_raw: str, unrelated_
 # ══════════════════════════════════ check-callers ══════════════════════════════════
 PACK_LANE = "node-repo-module-pack.yml"
 PUBLISH_LANE = "node-repo-module-publish.yml"
+#: H7 (Doc/Architecture/BuildHosts §5): the lane that stages a HOST-executed run's bundles and
+#: records for the publisher. When a pack call runs with `executor: host`, its pack legs stage
+#: nothing — this call does — so the publisher reads its lane/selection through it.
+HOST_PUBLICATION_LANE = "build-host-publication.yml"
 #: The only values the pack lane accepts (its `select` job refuses anything else at run time).
 PUBLISH_MODES = ("direct", "staged")
+
+
+def _executor(with_: dict) -> str:
+    """A lane call's `executor` in comparable form; absent is the lanes' own default, `actions`."""
+    raw = with_.get("executor")
+    if raw is None:
+        return "actions"
+    return _norm_condition(raw) if "${{" in str(raw) else str(raw)
+
+
+def _executor_needs_problem(wf_name: str, jid: str, job: dict) -> str | None:
+    """An `executor` expression may read only jobs in the call's OWN `needs:`.
+
+    `needs.<job>` resolves only for a direct need; any other reference evaluates EMPTY, so an
+    `|| 'actions'` fallback silently answers `actions`. Two calls spelling the same expression would
+    then disagree at run time — the pack call on `host`, its host-publication call on `actions`,
+    fetching nothing — and the static spelling check above could not see it."""
+    raw = str((job.get("with") or {}).get("executor") or "")
+    refs = set(re.findall(r"\bneeds\.([A-Za-z0-9_-]+)\.", raw))
+    need = job.get("needs") or []
+    need = {need} if isinstance(need, str) else set(need)
+    missing = sorted(refs - need)
+    if not missing:
+        return None
+    return (f"{wf_name}: `{jid}`'s `executor` reads needs.{', needs.'.join(missing)} but its own `needs:` "
+            f"does not name {', '.join(f'`{m}`' for m in missing)} — that context is EMPTY for a job it is "
+            "not a direct need of, so the expression falls back (to `actions`) while a sibling call "
+            "spelling the same expression resolves `host`.")
+
+
+def _may_run_on_host(executor: str) -> bool:
+    """Anything but the literal `actions` may resolve to `host` at run time (an expression is read
+    as "may"): this static check cannot evaluate it, so it holds the call to the host graph."""
+    return executor != "actions"
 
 
 def _norm_condition(value) -> str:
@@ -390,7 +436,7 @@ def check_callers(root: Path) -> int:
             "nothing must never pass.")
     files = sorted(list(wf_dir.glob("*.yml")) + list(wf_dir.glob("*.yaml")))
     problems: list[str] = []
-    n_pack = n_pub = 0
+    n_pack = n_pub = n_host = 0
     for wf in files:
         try:
             doc = yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
@@ -402,8 +448,69 @@ def check_callers(root: Path) -> int:
         if not isinstance(jobs, dict):
             continue
         packs, pubs = _calls(jobs, PACK_LANE), _calls(jobs, PUBLISH_LANE)
+        hosts = _calls(jobs, HOST_PUBLICATION_LANE)
         n_pack += len(packs)
         n_pub += len(pubs)
+        n_host += len(hosts)
+
+        def publisher_pack(pj: dict, hosts=hosts) -> str | None:
+            """The pack call a publisher publishes — directly, or through a host-publication call."""
+            src = _needs_output((pj.get("with") or {}).get("lane"), "lane")
+            if src in hosts:
+                return _needs_output((hosts[src].get("with") or {}).get("lane"), "lane")
+            return src
+
+        # ── H7: every build-host-publication call belongs to ONE pack call's host graph ──
+        # 🚨 Its lane AND its selection come from the pack call's `select`, never from the host's own
+        # records: a selection read off what the host staged would accept whatever the host staged.
+        for hid, hj in sorted(hosts.items()):
+            hw = hj.get("with") or {}
+            pack_id = _needs_output(hw.get("lane"), "lane")
+            if pack_id is None or pack_id not in packs:
+                problems.append(
+                    f"{wf.name}: `{hid}` ({HOST_PUBLICATION_LANE}) must pass `lane` as the lane output "
+                    f"of a {PACK_LANE} call in this workflow (needs.<call>.outputs.lane) — got "
+                    f"{hw.get('lane')!r}. The pack call's `select` is the independent selection a host "
+                    "run's records are checked against; without it nothing says what the host owed.")
+                continue
+            pw = packs[pack_id].get("with") or {}
+            for key, output in (("selected", "selected"), ("declared", "declared")):
+                if _needs_output(hw.get(key), output) != pack_id:
+                    problems.append(f"{wf.name}: `{hid}` must pass `{key}` as needs.{pack_id}.outputs."
+                                    f"{output} — the SAME call whose lane it stages — got {hw.get(key)!r}.")
+            missing = _executor_needs_problem(wf.name, hid, hj)
+            if missing:
+                problems.append(missing)
+            if _executor(hw) != _executor(pw):
+                problems.append(
+                    f"{wf.name}: `{hid}` passes `executor: {_executor(hw)}` but `{pack_id}` runs with "
+                    f"`executor: {_executor(pw)}` — pass the SAME value, so the bytes are fetched from "
+                    "the host exactly when the pack legs did not build them.")
+            if not _may_run_on_host(_executor(pw)):
+                problems.append(
+                    f"{wf.name}: `{hid}` stages host-built bytes for `{pack_id}`, which always runs on "
+                    "Actions (`executor: actions`) — no host builds for it, so there is nothing to fetch.")
+            if _publish_mode(pw) != "staged":
+                problems.append(
+                    f"{wf.name}: `{hid}` stages host-built bytes for `{pack_id}`, whose publish-mode is "
+                    f"`{_publish_mode(pw)}`, not `staged` — no publisher reads a direct call's lane.")
+            hneed = hj.get("needs") or []
+            hneed = [hneed] if isinstance(hneed, str) else hneed
+            if pack_id not in hneed:
+                problems.append(f"{wf.name}: `{hid}` reads needs.{pack_id}.outputs but `{pack_id}` is not "
+                                "in its own `needs:` — that context resolves only for a job named there.")
+            fn = _status_function_in(hj.get("if"))
+            if fn:
+                problems.append(f"{wf.name}: `{hid}`'s `if:` uses the status function `{fn}()` — it "
+                                "would stage bytes after the pack call FAILED or was SKIPPED.")
+            stage_on, host_on = _norm_condition(pw.get("publish", False)), _norm_condition(hj.get("if"))
+            if stage_on != host_on:
+                problems.append(
+                    f"{wf.name}: `{pack_id}` stages on `{stage_on}` but `{hid}` runs on `{host_on}` — give "
+                    "the host-publication call exactly the pack call's condition, as its publisher has.")
+            # Who READS it is accounted in the pack loop below: a publisher reading through this call
+            # counts as that pack call's publisher, so "staged and nobody publishes" and "published
+            # twice" are refused there, once, for both graphs.
 
         for pid, pj in sorted(pubs.items()):
             w = pj.get("with") or {}
@@ -428,9 +535,18 @@ def check_callers(root: Path) -> int:
                                 "Artifacts are run-wide; without the lane key a sibling call's bundles "
                                 "could answer this publication.")
                 continue
-            if src not in packs:
-                problems.append(f"{wf.name}: `{pid}` reads its lane from `{src}`, which is not a "
-                                f"{PACK_LANE} call in this workflow.")
+            # H7: the publisher may read its lane THROUGH the pack call's build-host-publication call
+            # — the host graph. Anything else is refused, exactly as before.
+            if src in hosts:
+                pack_id = _needs_output((hosts[src].get("with") or {}).get("lane"), "lane")
+                if pack_id not in packs:
+                    # The host call's own wiring is refused (by name) in the host loop below.
+                    continue
+            elif src in packs:
+                pack_id = src
+            else:
+                problems.append(f"{wf.name}: `{pid}` reads its lane from `{src}`, which is neither a "
+                                f"{PACK_LANE} call nor a {HOST_PUBLICATION_LANE} call in this workflow.")
                 continue
             for key, output in (("selected", "selected"), ("modules", "declared")):
                 if _needs_output(w.get(key), output) != src:
@@ -442,19 +558,25 @@ def check_callers(root: Path) -> int:
             if src not in need:
                 problems.append(f"{wf.name}: `{pid}` reads needs.{src}.outputs but `{src}` is not in "
                                 "its own `needs:` — that context resolves only for a job named there.")
-            pw = packs[src].get("with") or {}
+            pw = packs[pack_id].get("with") or {}
             mode = _publish_mode(pw)
             if mode in PUBLISH_MODES and mode != "staged":
-                problems.append(f"{wf.name}: `{pid}` publishes `{src}`, whose publish-mode is "
+                problems.append(f"{wf.name}: `{pid}` publishes `{pack_id}`, whose publish-mode is "
                                 f"`{mode}`, not `staged` — that call POSTs in-leg itself and stages "
                                 "nothing, so this lane would refuse on an empty staged set.")
             stage_on, publish_on = _norm_condition(pw.get("publish", False)), _norm_condition(pj.get("if"))
             if stage_on != publish_on:
                 problems.append(
-                    f"{wf.name}: `{src}` stages on `{stage_on}` but `{pid}` runs on `{publish_on}`. A "
+                    f"{wf.name}: `{pack_id}` stages on `{stage_on}` but `{pid}` runs on `{publish_on}`. A "
                     "run that stages and does not publish hands the registry NOTHING while every tick "
                     "is green (every portal then reads FrameworkDeclined, #2088); a run that publishes "
                     "without staging refuses. Give the publisher exactly the pack call's condition.")
+            if src == pack_id and _may_run_on_host(_executor(pw)):
+                problems.append(
+                    f"{wf.name}: `{pid}` reads its lane straight from `{pack_id}`, whose executor is "
+                    f"`{_executor(pw)}` — on a build host that call's pack legs stage NOTHING; the bytes "
+                    f"are staged by its {HOST_PUBLICATION_LANE} call. Read `lane`/`selected`/`modules` "
+                    "through that call's outputs, so the publisher waits for the bytes it publishes.")
 
         for kid, kj in sorted(packs.items()):
             kw = kj.get("with") or {}
@@ -466,8 +588,27 @@ def check_callers(root: Path) -> int:
                     "could not tell whether the call stages (and needs a publisher) or POSTs in-leg; "
                     "a staged call nobody publishes would then pass here and hand the registry nothing.")
                 continue
-            wired = sorted(pid for pid, pj in pubs.items()
-                           if _needs_output((pj.get("with") or {}).get("lane"), "lane") == kid)
+            wired = sorted(pid for pid, pj in pubs.items() if publisher_pack(pj) == kid)
+            executor = _executor(kw)
+            missing = _executor_needs_problem(wf.name, kid, kj)
+            if missing:
+                problems.append(missing)
+            if mode == "direct" and executor == "host" and _norm_condition(kw.get("publish", False)) != "false":
+                problems.append(
+                    f"{wf.name}: `{kid}` runs on a build host (`executor: host`) and publishes IN-LEG "
+                    "(publish-mode: direct). A host holds no publication credential and its pack legs "
+                    "do not run, so a publishing run would hand the registry NOTHING; the lane refuses "
+                    f"it at run time. Use `publish-mode: staged` with a {HOST_PUBLICATION_LANE} call "
+                    f"and a {PUBLISH_LANE} job reading through it.")
+            hosted = sorted(hid for hid, hj in hosts.items()
+                            if _needs_output((hj.get("with") or {}).get("lane"), "lane") == kid)
+            if mode == "staged" and _may_run_on_host(executor) and len(hosted) != 1:
+                problems.append(
+                    f"{wf.name}: `{kid}` stages its bundles and may run on a build host (`executor: "
+                    f"{executor}`), so exactly ONE {HOST_PUBLICATION_LANE} call must stage a host run's "
+                    f"bytes for it — found {len(hosted)} ({', '.join(hosted) or 'none'}). Without it a "
+                    "host run stages nothing and its publisher refuses; with two, the same bytes would be "
+                    "staged twice under one lane.")
             if mode == "staged" and not wired:
                 problems.append(
                     f"{wf.name}: `{kid}` stages its bundles (publish-mode: staged) and NO "
@@ -490,9 +631,10 @@ def check_callers(root: Path) -> int:
                       f"Not refused; `publish-mode: staged` plus a {PUBLISH_LANE} job is the opt-in for "
                       "one verdict per run (MeshWeaver#3878).")
 
-    print(f"module-publication check-callers: {n_pack} {PACK_LANE} call(s) and {n_pub} {PUBLISH_LANE} "
-          f"call(s) across {len(files)} workflow file(s) under {wf_dir}")
-    if not n_pack and not n_pub:
+    print(f"module-publication check-callers: {n_pack} {PACK_LANE} call(s), {n_pub} {PUBLISH_LANE} "
+          f"call(s) and {n_host} {HOST_PUBLICATION_LANE} call(s) across {len(files)} workflow file(s) "
+          f"under {wf_dir}")
+    if not n_pack and not n_pub and not n_host:
         print("  this repository calls neither lane — nothing here hands module bundles to a registry, "
               "so there is no hand-over to order.")
     for p in problems:
@@ -641,6 +783,14 @@ def publish(a: argparse.Namespace) -> int:
                   + [f"- {p}" for p in problems])
         return 1
 
+    # H7: build-host-publication.yml runs THIS check — the very one the publisher will run — over a
+    # host run's fetched records before it stages them, so a host set the publisher would refuse is
+    # red where it was fetched, and the lane's outputs are emitted only over a set that passed.
+    if getattr(a, "check_only", False):
+        print(f"check-only: {len(mine)} staged record(s) for lane `{lane}` match the selection "
+              f"({len(selected)} selected), {len(plan)} owe a hand-over — nothing was POSTed.")
+        return 0
+
     if not plan:
         print("nothing owes a hand-over in this call: "
               f"{len(mine)} staged record(s), {len(selected)} selected, 0 to publish.")
@@ -705,6 +855,72 @@ def publish(a: argparse.Namespace) -> int:
         print(f"::error title=Publication failed::{f}", file=sys.stderr)
     print(f"published {len(published)} of {len(plan)} module bundle(s)")
     return 1 if failed else 0
+
+
+# ══════════════════════════════════ partition ══════════════════════════════════
+def partition(staged: Path, lane: str, aside: Path) -> int:
+    """Set aside, BY NAME, every host record stamped with ANOTHER lane, and the bundle it names.
+
+    A host's receipts are keyed by repository, sha and stage — not by lane — so when two pack calls
+    of one run share a host stage, each build-host-publication call fetches BOTH calls' records
+    (review of #7271). This keeps only what is provably another call's: a record whose `lane` is a
+    different non-empty string. A record with no readable lane STAYS, so the check that follows
+    refuses it rather than this step hiding it, and the check's completeness rule (one record per
+    SELECTED module) still decides whether THIS call's set is whole. A bundle a kept record names is
+    never moved, even if a foreign record names it too.
+    """
+    lane = (lane or "").strip()
+    if not lane:
+        die("partition: the lane key is empty — nothing could be told apart from a sibling call's records.")
+    if not staged.is_dir():
+        print(f"partition: `{staged}` does not exist — nothing fetched, nothing to set aside.")
+        return 0
+    foreign: list[tuple[Path, dict]] = []
+    kept_bundles: set[Path] = set()
+    for path in sorted(staged.rglob("*.publication.json")):
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — unreadable stays, and the check refuses it by name
+            continue
+        other = rec.get("lane") if isinstance(rec, dict) else None
+        name = ((rec.get("bundle") or {}).get("name") if isinstance(rec, dict) else None) or ""
+        if isinstance(other, str) and other.strip() and other != lane:
+            foreign.append((path, rec))
+        elif name:
+            kept_bundles.add((path.parent / name).resolve())
+    for path, rec in foreign:
+        rel = path.relative_to(staged)
+        dest = aside / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        path.rename(dest)
+        name = (rec.get("bundle") or {}).get("name") or ""
+        bundle = path.parent / name
+        if name and bundle.is_file() and bundle.resolve() not in kept_bundles:
+            bundle.rename(dest.parent / name)
+        print(f"  set aside: `{rec.get('module') or rel}` is stamped lane `{rec.get('lane')}` — another "
+              f"pack call's record, never published by lane `{lane}`")
+    print(f"partition: {len(foreign)} record(s) of another lane set aside; the rest is lane `{lane}`'s to check.")
+    return 0
+
+
+# ══════════════════════════════════ lane-key ══════════════════════════════════
+#: node-repo-module-pack.yml's `This call's lane key` step, byte for byte:
+#:   slug = printf '%s' "$LANE" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-24
+#:   id   = "${slug:-lane}-$(printf '%s' "$DECLARED" | sha256sum | cut -c1-12)"
+#: test-module-pack-host.py pins the step's text, so the two cannot drift apart unnoticed.
+LANE_SLUG_ALPHABET = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+
+
+def lane_key(lane_id: str, modules_raw: str) -> str:
+    """The lane key a pack call stamps on every marker, receipt and publication record.
+
+    A build host's module stage stamps its `<module>.publication.json` records with it (H9: "in the
+    module pack lane's format"), so the publisher's foreign-lane refusal holds for host-built bytes
+    exactly as for Actions-built ones. `modules_raw` is the call's `modules` input VERBATIM.
+    """
+    slug = bytes(b if b in LANE_SLUG_ALPHABET else ord("-") for b in lane_id.encode("utf-8"))[:24]
+    fingerprint = hashlib.sha256(modules_raw.encode("utf-8")).hexdigest()[:12]
+    return f"{slug.decode('ascii') or 'lane'}-{fingerprint}"
 
 
 # ══════════════════════════════════ self-test ══════════════════════════════════
@@ -937,6 +1153,124 @@ jobs:
         rc, out = run(check_callers, repo / "missing")
         check("a root with no workflow directory refuses — it read nothing", rc == 1, out)
 
+        # ── H7: the HOST graph — pack (executor host) → build-host-publication → publisher ──
+        hosted = wired.replace(
+            "      publish-mode: staged\n",
+            "      publish-mode: staged\n"
+            "      executor: ${{ needs.validate.outputs.executor || 'actions' }}\n"
+            "      host-verdict: ${{ needs.validate.result }}\n", 1).replace(
+            "  publish-modules:",
+            "  host-publication:\n"
+            "    if: >\n"
+            "      github.event_name == 'push' ||\n"
+            "      github.event_name == 'schedule'\n"
+            "    needs: [modules, validate]\n"
+            "    uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main\n"
+            "    with:\n"
+            "      executor: ${{ needs.validate.outputs.executor || 'actions' }}\n"
+            "      api-url: https://ops.example.com/api/builds\n"
+            "      lane: ${{ needs.modules.outputs.lane }}\n"
+            "      selected: ${{ needs.modules.outputs.selected }}\n"
+            "      declared: ${{ needs.modules.outputs.declared }}\n"
+            "      artifact-store: file:/ci-artifacts\n"
+            "      artifact-store-id: abc\n"
+            "  publish-modules:", 1).replace(
+            "    needs: [validate, modules, gate]\n", "    needs: [validate, modules, gate, host-publication]\n", 1).replace(
+            "required-jobs: validate modules gate", "required-jobs: validate modules gate host-publication", 1).replace(
+            "      lane: ${{ needs.modules.outputs.lane }}\n      selected: ${{ needs.modules.outputs.selected }}\n"
+            "      modules: ${{ needs.modules.outputs.declared }}\n",
+            "      lane: ${{ needs.host-publication.outputs.lane }}\n"
+            "      selected: ${{ needs.host-publication.outputs.selected }}\n"
+            "      modules: ${{ needs.host-publication.outputs.declared }}\n", 1)
+        check("the host fixture really is the host graph (a control on the fixture itself)",
+              hosted.count("build-host-publication.yml") == 1
+              and "needs.host-publication.outputs.lane" in hosted and "executor:" in hosted, hosted)
+        rc, out = callers(hosted)
+        check("H7: pack (executor host) → build-host-publication → publisher passes", rc == 0, out)
+        literal_host = hosted.replace("${{ needs.validate.outputs.executor || 'actions' }}", "host")
+        rc, out = callers(literal_host)
+        check("H7: …and with a literal `executor: host` on both calls", rc == 0, out)
+        rc, out = callers(hosted.split("  host-publication:", 1)[0] + "  publish-modules:"
+                          + hosted.split("  publish-modules:", 1)[1])
+        check("MUTATION H7: a host-run pack call with NO build-host-publication call is caught",
+              rc == 1 and "exactly ONE" in out, out)
+        rc, out = callers(hosted.replace("needs.host-publication.outputs.lane", "needs.modules.outputs.lane")
+                          .replace("needs.host-publication.outputs.selected", "needs.modules.outputs.selected")
+                          .replace("needs.host-publication.outputs.declared", "needs.modules.outputs.declared"))
+        check("MUTATION H7: a publisher reading a host-run pack call's lane DIRECTLY is caught",
+              rc == 1 and "stage NOTHING" in out, out)
+        rc, out = callers(hosted.replace("      executor: ${{ needs.validate.outputs.executor || 'actions' }}\n      api-url",
+                                         "      executor: host\n      api-url", 1))
+        check("MUTATION H7: a build-host-publication executor that differs from the pack call's is caught",
+              rc == 1 and "SAME value" in out, out)
+        rc, out = callers(hosted.replace("      lane: ${{ needs.modules.outputs.lane }}\n      selected: ${{ needs.modules.outputs.selected }}\n      declared",
+                                         "      lane: ${{ needs.validate.outputs.lane }}\n      selected: ${{ needs.modules.outputs.selected }}\n      declared", 1))
+        check("MUTATION H7: a build-host-publication lane not read from a pack call is caught",
+              rc == 1 and "independent selection" in out, out)
+        rc, out = callers(hosted.replace("      selected: ${{ needs.modules.outputs.selected }}\n      declared",
+                                         "      selected: MeshWeaver.AI\n      declared", 1))
+        check("MUTATION H7: a build-host-publication selection that is not the pack call's is caught",
+              rc == 1 and "`selected`" in out, out)
+        rc, out = callers(hosted.replace("  host-publication:\n    if: >\n      github.event_name == 'push' ||\n",
+                                         "  host-publication:\n    if: >\n", 1))
+        check("MUTATION H7: a build-host-publication running on fewer events than the pack call stages on is caught",
+              rc == 1 and "host-publication call exactly" in out, out)
+        rc, out = callers(hosted.replace("  host-publication:\n    if: >\n      github.event_name == 'push' ||\n"
+                                         "      github.event_name == 'schedule'\n",
+                                         "  host-publication:\n    if: ${{ always() }}\n", 1))
+        check("MUTATION H7: a status function on build-host-publication's `if:` is caught",
+              rc == 1 and "status function" in out, out)
+        rc, out = callers(hosted.replace("${{ needs.validate.outputs.executor || 'actions' }}", "actions"))
+        check("MUTATION H7: a build-host-publication for a pack call that always runs on Actions is caught",
+              rc == 1 and "always runs on" in out, out)
+        rc, out = callers(hosted.replace("    needs: [modules, validate]\n    uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml",
+                                         "    needs: [validate]\n    uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml", 1))
+        check("MUTATION H7: a build-host-publication that does not need its pack call is caught",
+              rc == 1 and "not in its own `needs:`" in out, out)
+        # Review of #7271: an identical executor EXPRESSION resolves differently when a call does not
+        # directly need the job it reads (`needs.X` is EMPTY there) — the pack on host, this on actions.
+        rc, out = callers(hosted.replace("    needs: [modules, validate]\n    uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml",
+                                         "    needs: [modules]\n    uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml", 1))
+        check("MUTATION H7: a build-host-publication whose executor reads a job it does not directly need is caught",
+              rc == 1 and "`host-publication`'s `executor` reads needs.validate" in out, out)
+        rc, out = callers(hosted.replace("needs.validate.outputs.executor", "needs.admission.outputs.executor"))
+        check("MUTATION H7: a pack call whose executor reads a job it does not directly need is caught",
+              rc == 1 and "`modules`'s `executor` reads needs.admission" in out, out)
+        rc, out = callers(hosted.replace("      modules: ${{ needs.host-publication.outputs.declared }}",
+                                         "      modules: ${{ needs.modules.outputs.declared }}", 1))
+        check("MUTATION H7: a publisher mixing the host call's lane with the pack call's catalog is caught",
+              rc == 1 and "SAME call" in out, out)
+        rc, out = callers(hosted.replace("    needs: [validate, modules, gate, host-publication]\n",
+                                         "    needs: [validate, modules, gate]\n", 1)
+                          .replace("required-jobs: validate modules gate host-publication",
+                                   "required-jobs: validate modules gate", 1))
+        check("MUTATION H7: a publisher that does not wait for the build-host-publication call is caught",
+              rc == 1 and "host-publication" in out, out)
+        host_block = "  host-publication:" + hosted.split("  host-publication:", 1)[1].split("  publish-modules:", 1)[0]
+        two = hosted.replace("  publish-modules:",
+                             host_block.replace("  host-publication:", "  host-publication-2:", 1) + "  publish-modules:", 1)
+        rc, out = callers(two)
+        check("MUTATION H7: two build-host-publication calls for one pack call are caught",
+              rc == 1 and "found 2" in out, out)
+        orphan = wired + ("  stray-host:\n    needs: [validate]\n"
+                          "    uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main\n"
+                          "    with:\n      api-url: https://ops.example.com/api/builds\n"
+                          "      lane: ${{ needs.validate.outputs.lane }}\n"
+                          "      artifact-store: file:/ci-artifacts\n      artifact-store-id: abc\n")
+        rc, out = callers(orphan)
+        check("MUTATION H7: a build-host-publication call outside any pack call's host graph is caught",
+              rc == 1 and "stray-host" in out, out)
+        rc, out = callers(direct.replace("publish-mode: direct", "publish-mode: direct\n      executor: host"))
+        check("MUTATION H7: a literal `executor: host` that publishes IN-LEG is caught (a host holds no "
+              "publication credential)", rc == 1 and "no publication credential" in out, out)
+        rc, out = callers(direct.replace("publish-mode: direct", "publish-mode: direct\n      executor: host")
+                          .replace("${{ github.event_name == 'push'\n        || github.event_name == 'schedule' }}", "false"))
+        check("…but a NON-publishing `executor: host` call with direct mode passes", rc == 0, out)
+        rc, out = callers(direct.replace("publish-mode: direct",
+                                         "publish-mode: direct\n      executor: ${{ needs.validate.outputs.executor }}"))
+        check("an executor EXPRESSION on an in-leg call passes statically (the lane refuses a publishing "
+              "host run at run time)", rc == 0 and "IN-LEG" in out, out)
+
     print("== publish")
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -969,7 +1303,7 @@ jobs:
             base = dict(staged=str(root / "staged"), lane="L1",
                         declared=json.dumps([{"module": "MeshWeaver.AI"}, {"module": "MeshWeaver.Mcp"}]),
                         selected="MeshWeaver.AI", registry="https://registry.invalid",
-                        source="Plugins", ledger="off", ledger_script="", dry_run=True)
+                        source="Plugins", ledger="off", ledger_script="", dry_run=True, check_only=False)
             base.update(kw)
             return argparse.Namespace(**base)
 
@@ -1019,6 +1353,69 @@ jobs:
         rc, out = run(publish, args(staged=str(root / "undeclared"), selected="MeshWeaver.Other"))
         check("a record outside the declared matrix refuses", rc == 1 and "declared matrix" in out, out)
 
+        # H7: --check-only is the publisher's own check, run by build-host-publication.yml over a
+        # host run's fetched records. It must refuse what the publisher refuses and POST nothing.
+        os.environ.pop(PUBLISH_TOKEN_ENV, None)
+        rc, out = run(publish, args(check_only=True, dry_run=False, registry="check-only", source="check-only"))
+        check("H7 check-only: a whole, lane-stamped host set passes with NO token and POSTs nothing",
+              rc == 0 and "check-only" in out and "->" not in out, out)
+        rc, out = run(publish, args(check_only=True, dry_run=False, selected="MeshWeaver.AI MeshWeaver.Mcp"))
+        check("H7 check-only: a SELECTED module the host staged no record for refuses",
+              rc == 1 and "MeshWeaver.Mcp" in out, out)
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(root / "foreign"),
+                                    selected="MeshWeaver.Mcp"))
+        check("H7 check-only: a host record stamped with another lane refuses", rc == 1 and "another call" in out, out)
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(root / "swapped")))
+        check("H7 check-only: substituted host bytes refuse", rc == 1 and "NOT the validated bytes" in out, out)
+
+        # Review of #7271: two pack calls sharing one host stage — each host-publication call fetches
+        # BOTH calls' records (receipts are keyed by repo/sha/stage, not lane). `partition` sets the
+        # sibling's aside by name; the completeness check still runs against THIS call's selection.
+        stage("mixed", "MeshWeaver.AI", lane="L1")
+        stage("mixed", "MeshWeaver.Mcp", lane="L2")
+        mixed = root / "mixed"
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(mixed)))
+        check("H7 partition (control): WITHOUT it a sibling lane's record refuses the whole host set",
+              rc == 1 and "another call" in out, out)
+        rc, out = run(partition, mixed, "L1", root / "mixed-aside")
+        check("H7 partition: the sibling lane's record and its bundle are set aside BY NAME",
+              rc == 0 and "MeshWeaver.Mcp" in out
+              and (root / "mixed-aside" / "MeshWeaver.Mcp.publication.json").is_file()
+              and (root / "mixed-aside" / "MeshWeaver.Mcp.module.nupkg").is_file()
+              and not (mixed / "MeshWeaver.Mcp.module.nupkg").exists(), out)
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(mixed)))
+        check("H7 partition: …and this call's own set then passes the publisher's check", rc == 0, out)
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(mixed),
+                                    selected="MeshWeaver.AI MeshWeaver.Mcp"))
+        check("H7 partition: completeness still holds — a SELECTED module only the sibling staged refuses",
+              rc == 1 and "MeshWeaver.Mcp" in out, out)
+        d = stage("nolane", "MeshWeaver.AI", lane="")
+        rc, out = run(partition, d, "L1", root / "nolane-aside")
+        check("H7 partition: a record with NO lane stays (the check refuses it; partition never hides it)",
+              rc == 0 and (d / "MeshWeaver.AI.publication.json").is_file(), out)
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(d)))
+        check("H7 partition: …and the check then refuses it", rc == 1, out)
+        stage("wronglane", "MeshWeaver.AI", lane="L1")
+        rc, out = run(partition, root / "wronglane", "L9", root / "wronglane-aside")
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(root / "wronglane"), lane="L9"))
+        check("H7 partition NEGATIVE CONTROL: partitioning under the WRONG lane leaves the selection unanswered — RED",
+              rc == 1 and "MeshWeaver.AI" in out, out)
+        rc, out = run(partition, root / "never-fetched", "L1", root / "x-aside")
+        check("H7 partition: a directory that was never fetched is nothing to set aside", rc == 0, out)
+        rc, out = run(partition, mixed, "", root / "x-aside")
+        check("H7 partition: an EMPTY lane refuses", rc == 1, out)
+
+    print("== lane-key (the pack lane's `This call's lane key` step, in Python)")
+    # Vectors computed with the step's own commands (tr -c … | cut -c1-24; sha256sum | cut -c1-12).
+    for lane_id, modules, want in (
+            ("catalog", '[{"module": "MeshWeaver.AI"}]', "catalog-481e1ec92571"),
+            ("", "", "lane-e3b0c44298fc"),
+            ("mod ule/über:lane-with-a-very-long-label", "", "mod-ule---ber-lane-with--e3b0c44298fc")):
+        got = lane_key(lane_id, modules)
+        check(f"lane-key({lane_id!r}) == {want}", got == want, got)
+    check("lane-key: a different matrix is a different lane (the fingerprint discriminates)",
+          lane_key("catalog", '[{"module": "A"}]') != lane_key("catalog", '[{"module": "B"}]'))
+
     print()
     if failures:
         print(f"::error::{len(failures)} self-test case(s) FAILED: " + "; ".join(failures))
@@ -1029,7 +1426,8 @@ jobs:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", nargs="?", choices=("verdict", "check-caller", "check-callers", "publish"))
+    p.add_argument("command", nargs="?",
+                   choices=("verdict", "check-caller", "check-callers", "publish", "lane-key", "partition"))
     p.add_argument("--root", default="")
     p.add_argument("--verdicts", default="")
     p.add_argument("--required", default="")
@@ -1045,6 +1443,11 @@ def main() -> int:
     p.add_argument("--ledger", default="off")
     p.add_argument("--ledger-script", dest="ledger_script", default="")
     p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p.add_argument("--check-only", dest="check_only", action="store_true",
+                   help="publish: run every check the hand-over runs, then stop before any POST")
+    p.add_argument("--lane-id", dest="lane_id", default="")
+    p.add_argument("--aside", default="", help="partition: where another lane's records are set aside")
+    p.add_argument("--modules", default="", help="lane-key: the pack call's `modules` input, verbatim (or @file)")
     p.add_argument("--self-test", dest="self_test", action="store_true")
     a = p.parse_args()
     if a.self_test:
@@ -1061,7 +1464,20 @@ def main() -> int:
         if not a.root:
             p.error("check-callers needs --root")
         return check_callers(Path(a.root))
+    if a.command == "partition":
+        if not a.staged or not a.aside:
+            p.error("partition needs --staged and --aside")
+        return partition(Path(a.staged), a.lane, Path(a.aside))
+    if a.command == "lane-key":
+        if not a.modules:
+            p.error("lane-key needs --modules (the pack call's `modules` input, verbatim)")
+        raw = Path(a.modules[1:]).read_text(encoding="utf-8") if a.modules.startswith("@") else a.modules
+        print(lane_key(a.lane_id, raw))
+        return 0
     if a.command == "publish":
+        if a.check_only:
+            a.registry = a.registry or "check-only"
+            a.source = a.source or "check-only"
         for needed in ("staged", "registry", "source"):
             if not getattr(a, needed):
                 p.error(f"publish needs --{needed}")
