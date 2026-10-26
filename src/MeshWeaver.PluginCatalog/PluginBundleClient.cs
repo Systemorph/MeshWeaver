@@ -617,7 +617,13 @@ public sealed class PluginBundleClient
                         };
                         if (verdict.Action != ModuleUpdateAction.Land)
                         {
-                            _logger?.LogInformation(
+                            // SkipUpToDate is the steady state — one line per module per bundle
+                            // pass, every pass (measured 2026-10-26: ~180 lines/h on the build
+                            // instance, 7-10 per module per hour on every namespace). It is Debug;
+                            // every OTHER non-landing verdict (a floor hold, a framework decline)
+                            // is a decision an operator reads and stays Information.
+                            _logger?.Log(
+                                verdict.Action == ModuleUpdateAction.SkipUpToDate ? LogLevel.Debug : LogLevel.Information,
                                 "Module '{Module}' of {Plugin}: {Action} — {Reason}",
                                 moduleName, pluginId, verdict.Action, verdict.Reason);
                             return Observable.Return(decided);
