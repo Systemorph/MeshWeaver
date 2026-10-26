@@ -3148,8 +3148,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             Cause = cause,
                             Shape = shape,
                         },
-                        "MeshNodeStreamCache.GetStream: Content for {Path} (nodeType {NodeType}) stayed an "
-                        + "untyped JsonElement after deserialization ({Cause}) — downstream "
+                        "MeshNodeStreamCache.GetStream: Content for {Path} (nodeType {NodeType}) "
+                        + "stayed an untyped JsonElement after deserialization ({Cause}) — downstream "
                         + "'Content is X'/'as X' consumers will fail (renders empty, reactive waits time out). "
                         + "Shape: {ContentShape}",
                         node.Path, node.NodeType, cause, shape);
@@ -4008,8 +4008,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         Cause = cause,
                         Shape = shape,
                     },
-                    "MeshNodeStreamCache.GetQuery: Content for {Path} (nodeType {NodeType}) stayed an "
-                    + "untyped JsonElement after deserialization ({Cause}) — downstream "
+                    "MeshNodeStreamCache.GetQuery: Content for {Path} (nodeType {NodeType}) "
+                    + "stayed an untyped JsonElement after deserialization ({Cause}) — downstream "
                     + "'Content is X'/'as X' consumers will fail (renders empty). Shape: {ContentShape}",
                     node.Path, node.NodeType, cause, shape);
                 return node;
