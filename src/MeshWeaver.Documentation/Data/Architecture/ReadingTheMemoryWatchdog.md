@@ -197,6 +197,24 @@ control, plus `TestLoggerDoesNotRootTheTestTest` (`MeshWeaver.Hosting.Test`) and
 `AccessScopeDoesNotRootTheServiceTest` (`MeshWeaver.Messaging.Hub.Test`). Each of the last two
 fails with its fix reverted.
 
+### After both fixes (retention, plus the shared XML-doc text of MeshWeaver#7213)
+
+The same suite, now run 4-way parallel (its `xunit.runner.json`), against a core that carries both
+the retention fix and #7213's shared, interned doc text. It ran 3163 tests with none failing. Peak
+RSS was sampled every 5 s in a run with no dump attached.
+
+| | peak RSS | wall time | live heap ~3 min | strings | `XmlMemberDoc` | readers / mesh-root registries / running meshes |
+|---|---:|---:|---:|---:|---:|---:|
+| before | 7941 MiB | 10 min 40 s | 1.14 GB | 835 MB | 1,032,764 | — / 84 / 23 |
+| retention fix only | 4858 MiB | 10 min 6 s | 456 MB | 298 MB | ~357k | 30 / 30 / 29 |
+| both fixes | 1199 MiB | 5 min 56 s | 159 MB | 32.8 MB | ~348k | 29 / 29 / 28 |
+
+The rows are not strictly like-for-like: the earlier two ran serially and the last one 4-way
+parallel. Readers now track running meshes one to one, so no disposed mesh holds its docs. What
+remains is the doc index of each running mesh: its dictionary nodes and entries, about 1.3 MB per
+mesh. A production portal runs one mesh, so a lazier per-member snapshot would save about 1.3 MB
+there at the cost of a cache and a second parse path. It was therefore not built.
+
 ## The rule
 
 > A guard's message states what it MEASURED and where the cause can be read. It does not name the
