@@ -8128,6 +8128,47 @@ public static class MeshExtensions
     private static IMessageHub ResolveMeshHub(IMessageHub hub) => hub.GetMeshHub();
 
     /// <summary>
+    /// Retires what this process still holds for a path a removal has just taken out of storage:
+    /// the node-stream cache entry, and the per-node hub activated under that address, if there
+    /// is one. Never builds a hub (<see cref="HostedHubCreation.Never"/>), so a cold address costs
+    /// nothing.
+    ///
+    /// <para>🚨 The hub executing the removal is never disposed HERE, from inside its own handler: a
+    /// dying hub cannot deliver its own last frame, and that frame is the operation's reply. The
+    /// method answers <c>true</c> instead, and the caller retires that hub only after its reply has
+    /// been posted from a hub that outlives it (#7171: <c>MeshOperations.Move</c> targets the
+    /// SOURCE node's own hub, so the executing hub is exactly the one the move leaves behind).</para>
+    ///
+    /// <para>The disposal is the same best-effort step the delete commit takes: the row is gone and
+    /// its cache entry is invalidated, so a hub that refuses to dispose still re-reads storage on
+    /// its next activation. The refusal is logged with the operation that asked, never dropped.</para>
+    /// </summary>
+    /// <returns><c>true</c> when the hub hosted at <paramref name="path"/> IS
+    /// <paramref name="executingHub"/>, which the caller must retire after its reply.</returns>
+    private static bool RetireRemovedPath(
+        IMessageHub meshHub,
+        IMessageHub executingHub,
+        IMeshNodeStreamCache? streamCache,
+        ILogger logger,
+        string path,
+        string operation)
+    {
+        streamCache?.Invalidate(path);
+        try
+        {
+            var hosted = meshHub.GetHostedHub(new Address(path), c => c, HostedHubCreation.Never);
+            if (ReferenceEquals(hosted, executingHub))
+                return true;
+            hosted?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "[{Operation}] best-effort hub disposal failed for {Path}", operation, path);
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Sync-friendly observable variant of the deletion-validator runner. Iterates
     /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
     /// stops at the first failure); emits the first failure as a tuple or <c>null</c>
@@ -9700,6 +9741,13 @@ public static class MeshExtensions
         var moveRequest = request.Message;
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        // Resolved at handler entry, like the delete's (#5064): the delete leg runs several stages
+        // deep, and it RETIRES the source's per-node hubs, so nothing it needs is resolved there.
+        var meshHub = ResolveMeshHub(hub);
+        var streamCache = meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+        // Set when the delete leg removed the path this very hub is hosted at. See the success
+        // continuation for why that hub is retired only after its reply.
+        var executingHubRemoved = 0;
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var sourcePath = moveRequest.SourcePath;
         var targetPath = moveRequest.TargetPath;
@@ -10006,8 +10054,8 @@ public static class MeshExtensions
                 movedNode =>
                 {
                     changeFeed?.Publish(MeshChangeEvent.Created(movedNode));
-                    hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
                     logger.LogInformation("Node moved {Source} -> {Target}", sourcePath, targetPath);
+                    Reply(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
                 },
                 ex =>
                 {
@@ -10015,7 +10063,7 @@ public static class MeshExtensions
                     {
                         logger.LogWarning("[MoveNode] {Source} -> {Target} refused: {Error}",
                             sourcePath, targetPath, refused.Message);
-                        hub.Post(MoveNodeResponse.Fail(refused.Message, refused.Reason), o => o.ResponseFor(request));
+                        Reply(MoveNodeResponse.Fail(refused.Message, refused.Reason), o => o.ResponseFor(request));
                         return;
                     }
                     if (ex is MoveCopyLegFailedException copyLeg)
@@ -10025,7 +10073,7 @@ public static class MeshExtensions
                         // successful copy.
                         logger.LogError("[MoveNode] {Source} -> {Target} failed in its copy leg ({Reason}): {Error}",
                             sourcePath, targetPath, copyLeg.Reason, copyLeg.Message);
-                        hub.Post(MoveNodeResponse.Fail(copyLeg.Message, copyLeg.Reason) with { Log = copyLeg.Log },
+                        Reply(MoveNodeResponse.Fail(copyLeg.Message, copyLeg.Reason) with { Log = copyLeg.Log },
                             o => o.ResponseFor(request));
                         return;
                     }
@@ -10033,7 +10081,7 @@ public static class MeshExtensions
                     {
                         logger.LogError("[MoveNode] {Source} -> {Target} failed ({Reason}): {Error}",
                             sourcePath, targetPath, moveFailed.Reason, moveFailed.Message);
-                        hub.Post(MoveNodeResponse.Fail(moveFailed.Message, moveFailed.Reason)
+                        Reply(MoveNodeResponse.Fail(moveFailed.Message, moveFailed.Reason)
                                 with { Log = MoveTranscript(moveFailed.Text, sourcePath, moveFailed.InnerLog) },
                             o => o.ResponseFor(request));
                         return;
@@ -10054,7 +10102,7 @@ public static class MeshExtensions
                             MoveCaseRenameStalledKey,
                             ("source", sourcePath), ("target", targetPath), ("staging", stagingPath),
                             ("stage", renameStalled.Stage), ("seconds", renameStalled.BudgetSeconds));
-                        hub.Post(MoveNodeResponse.Fail(renameText.English, NodeMoveRejectionReason.Unknown)
+                        Reply(MoveNodeResponse.Fail(renameText.English, NodeMoveRejectionReason.Unknown)
                                 with { Log = NodeCreationFailure.Transcript("NodeMove", renameText, sourcePath) },
                             o => o.ResponseFor(request));
                         return;
@@ -10075,7 +10123,7 @@ public static class MeshExtensions
                             : LocalizableText.Keyed(stalled.Message, MoveStalledKey,
                                 ("path", $"{sourcePath} -> {targetPath}"), ("stage", stalled.Stage),
                                 ("seconds", stalled.BudgetSeconds));
-                        hub.Post(MoveNodeResponse.Fail(text.English,
+                        Reply(MoveNodeResponse.Fail(text.English,
                                     inDelete ? NodeMoveRejectionReason.Unknown : NodeMoveRejectionReason.Unavailable)
                                 with { Log = NodeCreationFailure.Transcript("NodeMove", text, sourcePath) },
                             o => o.ResponseFor(request));
@@ -10090,10 +10138,34 @@ public static class MeshExtensions
                                 ? NodeMoveRejectionReason.SourceNotFound
                                 : NodeMoveRejectionReason.Unknown;
                     logger.LogError(ex, "Move {Source} -> {Target} failed", sourcePath, targetPath);
-                    hub.Post(MoveNodeResponse.Fail(msg, reason), o => o.ResponseFor(request));
+                    Reply(MoveNodeResponse.Fail(msg, reason), o => o.ResponseFor(request));
                 });
 
         return request.Processed();
+
+        // 🚨 EVERY TERMINAL REPLY GOES THROUGH HERE (#7171). When the delete leg removed the path this
+        // very hub is hosted at (MeshOperations.Move targets the SOURCE node's own hub), the hub must
+        // be retired, and that holds whatever the verdict: a case-only rename that moved the subtree
+        // to staging and then failed its second leg leaves the source address naming no node just as
+        // a success does. The reply then goes first, from the mesh hub, which outlives this one (the
+        // delete commit answers from there for the same reason), and ResponseFor carries the
+        // request's AccessContext. Only then is this hub disposed; left alive it would go on serving
+        // every subscriber it had, under an address that names no node. A hub whose path the move did
+        // not remove answers from itself, as before.
+        void Reply(MoveNodeResponse response, Func<PostOptions, PostOptions> options)
+        {
+            if (System.Threading.Volatile.Read(ref executingHubRemoved) == 0)
+            {
+                hub.Post(response, options);
+                return;
+            }
+            meshHub.Post(response, options);
+            logger.LogInformation(
+                "[MoveNode] {Source} -> {Target} answered (success={Success}); retiring the hub {Address} that "
+                + "executed it, because the move removed the path it is hosted at",
+                sourcePath, targetPath, response.Success, hub.Address);
+            hub.Dispose();
+        }
 
         IObservable<MeshNode> MoveWithinScope(string from, string to) =>
             Observable.Defer(() =>
@@ -10148,7 +10220,24 @@ public static class MeshExtensions
                                 .Do(deleted =>
                                 {
                                     foreach (var p in deleted)
+                                    {
                                         changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                                        // 🚨 A MOVED-AWAY ADDRESS IS RETIRED, exactly as a deleted
+                                        // one is (#7171). The delete commit invalidates the stream
+                                        // cache and disposes the per-node hub of every path it
+                                        // removes; this leg removed the source rows and did
+                                        // neither, so the source's activation went on serving
+                                        // under an address that names no node — fanning frames
+                                        // out to its old subscribers, while the router, which
+                                        // resolves that address to "no node", could carry neither
+                                        // forward traffic nor the terminal NACK that would have
+                                        // made it evict a dead circuit. Measured on memex,
+                                        // 2026-10-26: after `BusinessPlan2026/Plyona` moved, the
+                                        // router logged hundreds of undeliverable NACKs a minute
+                                        // to sender `BusinessPlan2026/Plyona`.
+                                        if (RetireRemovedPath(meshHub, hub, streamCache, logger, p, "MoveNode"))
+                                            System.Threading.Interlocked.Exchange(ref executingHubRemoved, 1);
+                                    }
                                 })
                                 .Select(_ => copied);
                         }));
