@@ -242,6 +242,7 @@ static async Task<int> RunBuildProject(string[] args)
     var extraRefs = new List<string>();
     var generatorPaths = new List<string>();
     string? razorGenerators = null;
+    string? moduleLibs = null;
     var accept = new List<string>();
     var superseded = new List<string>();
     var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -288,6 +289,11 @@ static async Task<int> RunBuildProject(string[] args)
             // razor-generators/); this names a different copy — a newer SDK's, or a mount.
             case "--razor-generators" when i + 1 < args.Length:
                 razorGenerators = args[++i];
+                break;
+            // The module-libraries shelf is found beside the builder (the image ships module-libs/);
+            // this names the caller's own publish instead, and replaces that search.
+            case "--module-libs" when i + 1 < args.Length:
+                moduleLibs = args[++i];
                 break;
             case "--accept" when i + 1 < args.Length:
                 accept.Add(args[++i]);
@@ -352,6 +358,7 @@ static async Task<int> RunBuildProject(string[] args)
         ExtraReferenceDirectories = extraRefs,
         GeneratorPaths = generatorPaths,
         RazorGeneratorDirectory = razorGenerators,
+        ModuleLibrariesDirectory = moduleLibs,
         Accept = accept,
         SupersededImageAssemblies = superseded,
         Properties = properties,
@@ -381,7 +388,7 @@ static bool TryAddProperty(Dictionary<string, string> properties, string assignm
 static string BuildProjectUsage() =>
     "usage: mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] "
     + "[--shared-frameworks <dir>] [--prebuilt <dir>]... "
-    + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--razor-generators <dir>] "
+    + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--razor-generators <dir>] [--module-libs <dir>] "
     + "[--accept <construct>]... [--superseded-image-assembly <name>]... "
     + "[-p:Name=Value]... [--bind-to-image] [--allow-warnings] [--max-parallel <n>]\n"
     + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
