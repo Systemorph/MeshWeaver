@@ -652,6 +652,17 @@ required checks and merges, the resulting `main` run sees the settled locks and 
 what `--settle` derives. MeshWeaver.Plugins' `settle-locks` job and its `own` output are the reference
 shape.
 
+**The floor stamp rides the settle** (policy [`floor-stamp-rides-the-settle`](../PolicyNotProse)). A
+repo that stamps package floors — `content.minMeshVersion` plus a `<Package>/mesh-floor.lock` witness,
+written by `main`'s run once it has compiled and tested the sources — lands that stamp IN the same bot
+settlement PR rather than in a second one. The validator therefore also accepts, for an enumerated
+package, its `mesh-floor.lock` and an `index.json` whose only change is `content.minMeshVersion` (an
+added, deleted or otherwise edited `index.json` is still refused), and the locks must still be exactly
+what `--settle` derives for the PR's tree, stamp included. Landing the stamp separately cost a whole
+extra merge and main run per source change, because the stamp's own `index.json` edit unsettled the
+lock beside it. A lock-only settlement is accepted exactly as before. MeshWeaver.Plugins'
+`Hosting/PackageFloors.md` is the caller's manual.
+
 🚨 **A run that withholds its publication must say so, or it becomes the next run's baseline.**
 `node-repo-publication-base.py` narrows a push's selection to `git log <baseline>..HEAD`, where the
 baseline is the newest *successful* main push. An unsettled merge's run is successful and publishes
