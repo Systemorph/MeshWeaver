@@ -1341,6 +1341,18 @@ refresh re-runs the next red, which also started before that verdict. A group th
 pending run gets no re-run: that run is the next link. A re-run that stays red stops the chain there,
 and that red is true. The self-test replays such a chain to convergence.
 
+Two more shapes are covered (#7257 review):
+
+- **A re-run replaced while pending.** Its latest attempt is cancelled with ZERO jobs, while the
+  EARLIER attempt's red check-run still stands. So the refresh judges the newest attempt that did
+  create jobs.
+- **A run whose review jobs DISAGREE.** This happens only in core, which runs both `answered` and
+  `lane`: say the bare job is red and the lane job is green. The green job's refresh cannot re-run
+  its own run, and an older refresh does not wait on it. A newer run whose review jobs are ALL red
+  IS waited for, because its refresh is skipped and it waits on nothing. The **retry listener**
+  re-runs the disagreeing run when it completes (`self_contradicting`), under the same
+  three-attempts-in-a-row bound as an API outage.
+
 A re-run
 softens nothing: it applies the whole predicate to live state, so a thread that is really unanswered
 is red there too.

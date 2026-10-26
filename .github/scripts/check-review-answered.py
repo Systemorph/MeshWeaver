@@ -1552,8 +1552,17 @@ def in_flight_policy(run: dict, jobs: list | None, own_created_at: str) -> tuple
     red = f"`{reds[0].get('name')}` concluded {reds[0].get('conclusion')}"
     if str(run.get("created_at") or "") < str(own_created_at or ""):
         return "wait", f"run {rid} ({ev}): {red}, but the run is still {run.get('status')} — a re-run needs it completed"
-    return "none", (f"run {rid} ({ev}): {red} while the run is still {run.get('status')}; it is NEWER than this "
-                    "run, so it is not waited for (only older runs are — no two refreshes wait on each other)")
+    if not any(j.get("conclusion") in PASSING_CONCLUSIONS for j in review):
+        # Every review job of it is red, so its refresh (`needs` a GREEN verdict) is skipped: it waits on
+        # nothing and finishes promptly. Waiting for it cannot cycle.
+        return "wait", (f"run {rid} ({ev}): {red}; it is newer, but none of its review jobs is green, so its refresh "
+                        "is skipped and it waits on nothing — letting it finish")
+    # A newer run whose review jobs DISAGREE (core runs two — `answered` and `lane`): its own refresh is
+    # running and may wait on this run, so it is not waited for. It cannot re-run itself either; the
+    # retry listener re-runs it when it completes (`self_contradicting`, #7257 review).
+    return "none", (f"run {rid} ({ev}): {red} while the run is still {run.get('status')}, and another of its review "
+                    "jobs is green; it is NEWER than this run, so it is not waited for (no two refreshes wait on each "
+                    "other) — the retry listener re-runs it once it completes")
 
 
 #: The caller's concurrency group is split by event class (review-answered.yml, and the lane header's
@@ -2346,6 +2355,9 @@ def run_stage_advance(repo: str, workflow: str, *, pr: int | None, head_sha: str
 #: POLL_SECONDS; what remains is at most the settle wait (SETTLE_ROUNDS minutes), an outage budget and
 #: its lane job. 30 minutes covers that inside the refresh job's 45-minute cap.
 REFRESH_WAIT_SECONDS = 30 * 60
+#: How many EARLIER attempts the refresh reads back past attempts that created no job (a re-run replaced
+#: while pending) to find the attempt whose check-run still stands.
+MAX_ATTEMPT_LOOKBACK = 5
 REFRESH_POLL_SECONDS = 30
 
 
@@ -2391,6 +2403,18 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
             jobs = listing.get("jobs") if isinstance(listing, dict) else None
             if not isinstance(jobs, list):
                 raise ReadError(f"actions/runs/{run.get('id')}/jobs did not return a job listing")
+            if run.get("status") == "completed" and not jobs:
+                # 🚨 A RE-RUN replaced while pending (#7257 review): the latest attempt was cancelled with
+                # ZERO jobs, so it published no check-run — and the EARLIER attempt's red check-run still
+                # stands on the head. Judge the newest attempt that did create jobs.
+                attempt = int(run.get("run_attempt") or 1)
+                for k in range(attempt - 1, max(0, attempt - 1 - MAX_ATTEMPT_LOOKBACK), -1):
+                    earlier = gh.api(f"actions/runs/{run.get('id')}/attempts/{k}/jobs?per_page=100")
+                    jobs = earlier.get("jobs") if isinstance(earlier, dict) else None
+                    if not isinstance(jobs, list):
+                        raise ReadError(f"actions/runs/{run.get('id')}/attempts/{k}/jobs did not return a job listing")
+                    if jobs:
+                        break
             if run.get("status") == "completed":
                 jobs_cache[key] = jobs
             return jobs
@@ -2535,14 +2559,30 @@ def outage_streak(marked_by_attempt) -> int:
     return n
 
 
+def self_contradicting(jobs) -> bool:
+    """True when one attempt's review jobs DISAGREE — one red, one green, all completed. Pure. Only core
+    runs two (`Automatic review answered` and `lane / …`), each judging live state at its own instant.
+    The green one's refresh cannot re-run its own run, and an older run's refresh does not wait on it
+    (`in_flight_policy`), so without this its red stands on the head (#7257 review). Re-running it
+    judges live state again; the outage bound limits how often."""
+    review = [j for j in jobs or () if isinstance(j, dict) and is_review_check_job(j.get("name"))]
+    if len(review) < 2 or any(j.get("status") not in (None, "completed") for j in review):
+        return False
+    passing = [j.get("conclusion") in PASSING_CONCLUSIONS for j in review]
+    return any(passing) and not all(passing)
+
+
 def retry_outage_action(run: dict, attempt: int, jobs, pr: dict | None, streak: int | None = None) -> tuple[str, str]:
     """('rerun' | 'none' | 'manual' | 'fail', why) for a completed run of `Review answered`. Pure.
     `streak` is `outage_streak` over this run's attempts ending at `attempt` (1 when omitted — this
-    attempt alone); the bound MAX_OUTAGE_ATTEMPTS applies to it, never to `attempt`."""
+    attempt alone); the bound MAX_OUTAGE_ATTEMPTS applies to it, never to `attempt`. Besides an
+    outage, a SELF-CONTRADICTING attempt (`self_contradicting`) is retried under the same bound."""
     rid = run.get("id")
     if run.get("conclusion") != "failure":
         return "none", f"run {rid} concluded {run.get('conclusion')} — only a failed run can carry an outage"
     marked = outage_marked(jobs)
+    if not marked and self_contradicting(jobs):
+        marked = ["its review jobs DISAGREE (one red, one green) — a verdict its own refresh cannot re-take"]
     if not marked:
         return "none", f"run {rid} attempt {attempt} is red on a VERDICT (no `{OUTAGE_STEP_NAME}` step failed) — never retried"
     if run.get("status") != "completed" or int(run.get("run_attempt") or attempt) != attempt:
@@ -2616,12 +2656,14 @@ def run_retry_outage(repo: str, run_id: str, attempt: int, gh=None, wait_s: floa
             rid = run_.get("id")
             jobs = attempt_jobs(rid, n)
             streak = 1
-            if outage_marked(jobs):
+            def retryable(jobs_) -> bool:
+                return bool(outage_marked(jobs_)) or self_contradicting(jobs_)
+            if retryable(jobs):
                 # The earlier attempts, newest first, only as far as the bound needs and only while
-                # they were outages too: a verdict attempt ends the streak.
+                # they were retryable too: a verdict attempt ends the streak.
                 marks = [True]
                 for k in range(n - 1, max(0, n - MAX_OUTAGE_ATTEMPTS), -1):
-                    marks.append(bool(outage_marked(attempt_jobs(rid, k))))
+                    marks.append(retryable(attempt_jobs(rid, k)))
                     if not marks[-1]:
                         break
                 streak = outage_streak(marks)
@@ -4236,8 +4278,13 @@ def duplicate_sweep_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
         ("red in an OLDER run still finishing -> wait (acyclic)", dict(dup, status="in_progress", conclusion=None,
                                                                    created_at="2026-10-26T14:40:00Z"), [red_job],
          "wait", "needs it completed"),
-        ("red in a NEWER run still finishing -> none, never a mutual wait", dict(dup, status="in_progress", conclusion=None),
-         [red_job], "none", "not waited for"),
+        ("red+green in a NEWER run still finishing -> none, never a mutual wait",
+         dict(dup, status="in_progress", conclusion=None),
+         [red_job, dict(green_job, name="lane / Automatic review answered")], "none", "retry listener"),
+        ("only-red NEWER run still finishing (its refresh is skipped) -> wait, cannot cycle",
+         dict(dup, status="in_progress", conclusion=None), [red_job], "wait", "waits on nothing"),
+        ("#7257: a re-run replaced while pending — the EARLIER attempt's red is judged -> rerun",
+         dict(dup, run_attempt=2, conclusion="cancelled"), [red_job], "rerun", "re-running"),
         ("not started -> none", dict(dup, status="pending", conclusion=None), [], "none", "has not started"),
     ]:
         action, why = duplicate_red_action(run, jobs, 99, own_created, verdict_at, HEAD)
@@ -4317,6 +4364,14 @@ def duplicate_sweep_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
     # X = an OLDER comment run (core shape): its bare review job RED, its lane review job GREEN, its lane
     # refresh running. P = a NEWER `pull_request` run: review jobs GREEN, refresh running. P may wait on X
     # (older, red, still finishing); X must NOT wait on P, whose review check-runs are done.
+    class _TwoGh(_SweepGh):
+        def __init__(self, own_run, runs, jobs_by_id):
+            super().__init__(runs, jobs_by_id)
+            self.own_run = own_run
+        def api(self, path):
+            if path == f"actions/runs/{self.own_run['id']}":
+                return dict(self.own_run, workflow_id=5)
+            return super().api(path)
     x = dict(dup, id=601, event="pull_request_review_comment", status="in_progress", conclusion=None,
              created_at="2026-10-26T14:40:00Z")
     p_run = dict(red_read, id=602, status="in_progress", conclusion=None, created_at="2026-10-26T14:50:00Z",
@@ -4332,17 +4387,40 @@ def duplicate_sweep_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
     check("cycle: P (newer) may wait on X (older, red, finishing)", p_side is not None and p_side[0] == "wait", f"{p_side}")
     check("NEG cycle: a review job still in flight IS waited for", (in_flight_policy(
         p_run, [dict(green_job, status="in_progress", conclusion=None)], x["created_at"]) or ("",))[0] == "wait")
-    check("NEG cycle: a NEWER run with a finished RED review job is NOT waited for", (in_flight_policy(
-        p_run, [red_job], x["created_at"]) or ("",))[0] == "none")
+    check("NEG cycle: a NEWER run whose review jobs disagree is NOT waited for", (in_flight_policy(
+        p_run, [red_job, dict(green_job, name="lane / Automatic review answered")], x["created_at"]) or ("",))[0] == "none")
+    check("a NEWER run whose review jobs are ALL red is waited for (its refresh is skipped)", (in_flight_policy(
+        p_run, [red_job], x["created_at"]) or ("",))[0] == "wait")
+    # The INVERSE (#7257 review): X older with both review jobs GREEN, P newer with bare RED + lane GREEN.
+    # X's refresh must neither wait on P nor pretend P is fine: it decides at once, and P is the retry
+    # listener's on completion (`self_contradicting`, covered under `retry:`).
+    p_inv = [dict(red_job, name="Automatic review answered"), dict(green_job, name="lane / Automatic review answered"),
+             lane_refresh]
+    x_green = dict(x, id=611)
+    stub = _TwoGh(x_green, [x_green, dict(p_run, id=612)], {612: p_inv})
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request_review_comment", "611", verdict_at, gh=stub, wait_s=0)
+    check("inverse: X's refresh decides at once (P is the retry listener's)", rc == 0 and stub.posted == [],
+          f"rc={rc} posted={stub.posted}")
+    check("inverse: P completed with its jobs disagreeing IS what the listener re-runs",
+          self_contradicting(p_inv[:2]) and not self_contradicting([red_job, red_job]) and not self_contradicting([green_job]))
 
-    class _TwoGh(_SweepGh):
-        def __init__(self, own_run, runs, jobs_by_id):
-            super().__init__(runs, jobs_by_id)
-            self.own_run = own_run
-        def api(self, path):
-            if path == f"actions/runs/{self.own_run['id']}":
-                return dict(self.own_run, workflow_id=5)
-            return super().api(path)
+    # The cancelled SECOND attempt end to end: the latest attempt has zero jobs, attempt 1 is red.
+    replaced = dict(dup, id=620, run_attempt=2, conclusion="cancelled")
+    stub = _SweepGh([green_pr, replaced], {620: []})
+    stub.api_base = stub.api
+    stub.api = lambda path: ({"jobs": [red_job]} if path.startswith("actions/runs/620/attempts/1/jobs")
+                             else stub.api_base(path))
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request", "99", verdict_at, gh=stub, wait_s=0)
+    check("#7257: cancelled 2nd attempt, red 1st attempt -> re-run", rc == 0 and stub.posted == ["actions/runs/620/rerun"],
+          f"rc={rc} posted={stub.posted}")
+    stub = _SweepGh([green_pr, dict(replaced, run_attempt=1)], {620: []})
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request", "99", verdict_at, gh=stub, wait_s=0)
+    check("NEG: a cancelled FIRST attempt (never ran) holds no red -> nothing re-run", rc == 0 and stub.posted == [],
+          f"rc={rc} posted={stub.posted}")
+
     # X's refresh, end to end with NO wait budget: before the fix it waited on P and went RED at the deadline.
     stub = _TwoGh(x, [x, p_run], {602: p_jobs, 601: x_jobs})
     with contextlib.redirect_stdout(io.StringIO()):
@@ -4756,6 +4834,23 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
             rc = f"raised {type(e).__name__}"
         check(f"retry sweep: {name}", rc == expect_rc and stub.posted == expect_posted,
               f"rc={rc} posted={stub.posted}")
+    # ── #7257 review, the INVERSE case: a run whose two review jobs DISAGREE (core: bare red, lane green).
+    # Its own refresh cannot re-run it and an older refresh does not wait on it, so the listener does,
+    # on its completion — under the same bound as an outage.
+    lane_green = {"name": "lane / Automatic review answered", "status": "completed", "conclusion": "success"}
+    for name, stub, attempt, expect_rc, expect_posted in [
+        ("#7257: review jobs DISAGREE (bare red, lane green) -> re-run on completion",
+         _RetryGh(failed_run, [verdict_job, lane_green], remaining=900), 1, 0, RERUN),
+        ("NEG: both review jobs red (a verdict) -> never re-run",
+         _RetryGh(failed_run, [verdict_job, dict(verdict_job, name="lane / Automatic review answered")], remaining=900),
+         1, 0, []),
+        ("NEG: a disagreement on 3 attempts in a row -> RED, stops",
+         _RetryGh(dict(failed_run, run_attempt=3), {k: [verdict_job, lane_green] for k in (1, 2, 3)}, remaining=900),
+         3, 1, []),
+    ]:
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = run_retry_outage("Systemorph/MeshWeaver", str(stub.run_["id"]), attempt, gh=stub)
+        check(f"retry: {name}", rc == expect_rc and stub.posted == expect_posted, f"rc={rc} posted={stub.posted}")
     for marks, want in [([True], 1), ([True, True, False, True], 2), ([False, True], 0), ([], 0)]:
         check(f"outage_streak({marks}) = {want}", outage_streak(marks) == want, f"got {outage_streak(marks)}")
 
