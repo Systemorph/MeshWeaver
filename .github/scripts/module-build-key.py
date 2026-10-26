@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -112,10 +113,23 @@ GLOBAL_INPUTS = (
 SKIP_DIRS = {"bin", "obj", ".vs", "node_modules", "TestResults", "test-logs"}
 
 _INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
-_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
-# The project-relative MSBuild properties a linked item may start with; any other $(…) names a
-# location outside this repository (the platform's), whose bytes the platform digest already keys.
-_PROJECT_DIR_PROPS = ("$(MSBuildThisFileDirectory)", "$(MSBuildProjectDirectory)")
+
+
+def _load_scope():
+    """node-repo-scope.py, the sibling that owns the linked-source parser and the glob matcher.
+
+    Loaded, never copied: the scope decides WHETHER a module is rebuilt from the same reading of a
+    `<Compile Include>` this key uses to decide WHICH build it is, so the two cannot drift."""
+    path = Path(__file__).resolve().with_name("node-repo-scope.py")
+    spec = importlib.util.spec_from_file_location("node_repo_scope", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path} — module-build-key.py needs its linked-source matcher")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_SCOPE = _load_scope()
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -165,41 +179,31 @@ def compile_includes(root: Path, csproj: Path) -> list[Path]:
     """In-repo files a project's explicit `<Compile Include>` items name, wildcards expanded.
 
     A project compiles more than its own directory: `<Compile Include="../Shared/Emitter.cs" />`
-    links a file from elsewhere, and a directory tree hash never sees it."""
-    text = csproj.read_text(encoding="utf-8", errors="replace")
-    rroot = root.resolve()
+    links a file from elsewhere, and a directory tree hash never sees it. The patterns and the
+    matcher are node-repo-scope.py's (`linked_compile_patterns`, `msbuild_glob_matches`)."""
+    root = root.resolve()
     found: set[Path] = set()
-    for a, b in re.findall(_COMPILE, text):
-        for include in (a or b).split(";"):
-            include = include.strip().replace("\\", "/")
-            if not include:
-                continue
-            for prop in _PROJECT_DIR_PROPS:
-                if include.startswith(prop):
-                    include = include[len(prop):].lstrip("/")
-                    break
-            if "$(" in include or "@(" in include or "%(" in include:
-                continue
-            if any(c in include for c in "*?["):
-                base = csproj.parent
-                parts = Path(include).parts
-                # walk the literal prefix (it may climb with ..) before handing the rest to glob
-                i = 0
-                while i < len(parts) and not any(c in parts[i] for c in "*?["):
-                    base = base / parts[i]
-                    i += 1
-                rest = "/".join(parts[i:])
-                candidates = list(base.resolve().glob(rest)) if base.is_dir() else []
-            else:
-                candidates = [csproj.parent / include]
-            for c in candidates:
-                c = c.resolve()
-                try:
-                    rel = c.relative_to(rroot)
-                except ValueError:
-                    continue  # outside this checkout — not this repo's bytes
-                if c.is_file() and not any(part in SKIP_DIRS for part in rel.parts):
-                    found.add(c)
+    for pattern in _SCOPE.linked_compile_patterns(root, csproj):
+        if not _SCOPE.is_msbuild_glob(pattern):
+            f = root / pattern
+            if f.is_file() and not any(part in SKIP_DIRS for part in Path(pattern).parts):
+                found.add(f)
+            continue
+        segs = pattern.split("/")
+        prefix: list[str] = []
+        for seg in segs:
+            if _SCOPE.is_msbuild_glob(seg):
+                break
+            prefix.append(seg)
+        base = root.joinpath(*prefix) if prefix else root
+        if not base.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            for name in filenames:
+                f = Path(dirpath) / name
+                if _SCOPE.msbuild_glob_matches(f.relative_to(root).as_posix(), pattern):
+                    found.add(f)
     return sorted(found)
 
 
@@ -654,11 +658,38 @@ def self_test() -> int:
                   sorted(with_ext()["inputs"]["buildExtension"].get("linked", {}))
                   == ["tools/Shared/Emitter.cs", "tools/Shared/Unlinked.cs"],
                   str(with_ext()["inputs"]["buildExtension"].get("linked")))
+            # `**/` matches ZERO or more directories — the same matcher node-repo-scope.py selects with.
+            (shared / "Deep").mkdir()
+            (shared / "Deep" / "Nested.cs").write_text("// nested v1\n", encoding="utf-8")
+            (shared / "notes.txt").write_text("not a source\n", encoding="utf-8")
+            ext_proj.write_text('<Project><ItemGroup><ProjectReference Include="../Acme.ShelfKit/Acme.ShelfKit.csproj" />'
+                                '<Compile Include="../Shared/**/*.cs" /></ItemGroup></Project>\n', encoding="utf-8")
+            g0 = with_ext()
+            check("`../Shared/**/*.cs` keys the DIRECT child and the nested file alike",
+                  sorted(g0["inputs"]["buildExtension"].get("linked", {}))
+                  == ["tools/Shared/Deep/Nested.cs", "tools/Shared/Emitter.cs", "tools/Shared/Unlinked.cs"],
+                  str(g0["inputs"]["buildExtension"].get("linked")))
+            (shared / "Emitter.cs").write_text("// emitter v3\n", encoding="utf-8")
+            check("editing the direct child `**/` matches changes the key", with_ext()["key"] != g0["key"])
+            (shared / "Emitter.cs").write_text("// emitter v1\n", encoding="utf-8")
+            (shared / "Deep" / "Nested.cs").write_text("// nested v2\n", encoding="utf-8")
+            check("editing the nested file `**/` matches changes the key", with_ext()["key"] != g0["key"])
+            (shared / "Deep" / "Nested.cs").unlink()
+            check("DELETING a file `**/` matched changes the key", with_ext()["key"] != g0["key"])
+            (shared / "Deep" / "Nested.cs").write_text("// nested v1\n", encoding="utf-8")
+            check("…and restoring it restores the key", with_ext()["key"] == g0["key"])
+            (shared / "notes.txt").write_text("changed, still not a source\n", encoding="utf-8")
+            check("a non-.cs file under `**/` leaves the key unchanged (negative control)",
+                  with_ext()["key"] == g0["key"])
+            scope_dirs = _SCOPE.shelf_dirs(root, "tools/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj")
+            for f in ("tools/Shared/Emitter.cs", "tools/Shared/Deep/Nested.cs"):
+                check(f"node-repo-scope selects on {f} — the file this key hashes (no drift)",
+                      any(f.startswith(d + "/") or _SCOPE.msbuild_glob_matches(f, d) for d in scope_dirs),
+                      str(sorted(scope_dirs)))
         finally:
             ext_proj.write_text(ext_old, encoding="utf-8")
-            for f in shared.iterdir():
-                f.unlink()
-            shared.rmdir()
+            import shutil
+            shutil.rmtree(shared)
         check("a project that links nothing carries no `linked` input (keys recorded before stay valid)",
               "linked" not in with_ext()["inputs"]["buildExtension"] and with_ext()["key"] == e0["key"])
         try:

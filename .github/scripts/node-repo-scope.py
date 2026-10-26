@@ -80,7 +80,6 @@ OUTPUT — JSON on stdout, the human report on stderr, plus $GITHUB_OUTPUT / $GI
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import os
 import re
@@ -360,7 +359,65 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 
 _SHELF_INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
 _SHELF_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+# The project-relative MSBuild properties a linked item may start with; any other $(…) names a
+# location outside this repository (the platform's), whose bytes the platform digest already keys.
 _PROJECT_DIR_PROPS = ("$(MSBuildThisFileDirectory)", "$(MSBuildProjectDirectory)")
+
+
+# 🚨 The ONE reading of a project's linked `<Compile Include>` items and the ONE matcher for them.
+# module-build-key.py LOADS both from this file (it never re-implements them), so the scope that
+# decides WHETHER a module is rebuilt and the key that decides WHICH build it is cannot disagree on
+# what a pattern names. They did once: scope used fnmatch, whose `**/` cannot match zero
+# directories, while the key's pathlib glob could — so `../Shared/**/*.cs` keyed
+# `Shared/Emitter.cs` and an edit to it selected no module. This file stays importable on its own
+# (node-repo-validate fetches it as a single file), which is why the matcher lives HERE.
+
+def linked_compile_patterns(root: Path, csproj: Path) -> list[str]:
+    """Repository-relative paths / MSBuild globs of the project's explicit `<Compile Include>` items.
+
+    Platform-relative (`$(…)` other than the project's own directory) and out-of-checkout entries
+    are dropped: their bytes are the platform's, keyed by its digest."""
+    root = root.resolve()
+    text = csproj.read_text(encoding="utf-8", errors="replace")
+    rel_dir = csproj.resolve().parent.relative_to(root).as_posix()
+    found: set[str] = set()
+    for a, b in re.findall(_SHELF_COMPILE, text):
+        for include in (a or b).split(";"):
+            include = include.strip().replace("\\", "/")
+            for prop in _PROJECT_DIR_PROPS:
+                if include.startswith(prop):
+                    include = include[len(prop):].lstrip("/")
+                    break
+            if not include or "$(" in include or "@(" in include or "%(" in include:
+                continue
+            norm = os.path.normpath(f"{rel_dir}/{include}").replace("\\", "/")
+            if norm.startswith("../") or norm == ".." or os.path.isabs(norm):
+                continue  # outside this checkout — not this repository's
+            found.add(norm)
+    return sorted(found)
+
+
+def is_msbuild_glob(pattern: str) -> bool:
+    return "*" in pattern or "?" in pattern
+
+
+def msbuild_glob_matches(path: str, pattern: str) -> bool:
+    """MSBuild item-glob semantics over '/'-separated relative paths.
+
+    `**` as a whole segment matches ZERO or more directories (`a/**/*.cs` matches `a/x.cs`);
+    `*` and `?` never cross a '/'. A pattern without wildcards matches only itself."""
+    if not is_msbuild_glob(pattern):
+        return path == pattern
+    segs = pattern.split("/")
+    rx = ""
+    for i, seg in enumerate(segs):
+        last = i == len(segs) - 1
+        if seg == "**":
+            rx += ".*" if last else "(?:[^/]+/)*"
+            continue
+        rx += "".join("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c) for c in seg)
+        rx += "" if last else "/"
+    return re.fullmatch(rx, path) is not None
 
 
 def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
@@ -400,21 +457,7 @@ def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
     # keys the same files, and a key nobody computes because nothing was selected is no key).
     linked: set[str] = set()
     for csproj in seen:
-        text = csproj.read_text(encoding="utf-8", errors="replace")
-        rel_dir = csproj.parent.relative_to(root).as_posix()
-        for a, b in re.findall(_SHELF_COMPILE, text):
-            for include in (a or b).split(";"):
-                include = include.strip().replace("\\", "/")
-                for prop in _PROJECT_DIR_PROPS:
-                    if include.startswith(prop):
-                        include = include[len(prop):].lstrip("/")
-                        break
-                if not include or "$(" in include or "@(" in include or "%(" in include:
-                    continue
-                norm = os.path.normpath(f"{rel_dir}/{include}").replace("\\", "/")
-                if norm.startswith("../") or norm == ".." or os.path.isabs(norm):
-                    continue  # outside this checkout — not this repository's
-                linked.add(norm)
+        linked.update(linked_compile_patterns(root, csproj))
     return frozenset({p.parent.relative_to(root).as_posix() for p in seen} | linked)
 
 
@@ -519,7 +562,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             return full(f"{input_name} {project} is not in this checkout, so whether this diff "
                         f"changes the {label} cannot be decided — running the full set.")
         touched = [f for f in files
-                   if any(f.startswith(d + "/") or fnmatch.fnmatchcase(f, d) for d in dirs_)]
+                   if any(f.startswith(d + "/") or msbuild_glob_matches(f, d) for d in dirs_)]
         if touched:
             return full(f"{len(touched)} changed file(s) are in the caller's {label} "
                         f"({project} and the projects it reaches) — first: {touched[0]}. "
@@ -1155,7 +1198,11 @@ def self_test() -> int:
             '<Compile Include="$(MSBuildThisFileDirectory)../Acme.Other/Gen/**/*.cs" /></ItemGroup></Project>\n',
             encoding="utf-8")
         for label, path in (("a linked <Compile Include> source", "src/Acme.Other/Emitter.cs"),
-                            ("a file a linked wildcard matches", "src/Acme.Other/Gen/Deep/G.cs")):
+                            ("a file a linked `**/` matches one level down", "src/Acme.Other/Gen/Deep/G.cs"),
+                            # `**/` matches ZERO directories — the case fnmatch missed
+                            ("a DIRECT child a linked `**/` matches", "src/Acme.Other/Gen/G.cs"),
+                            # a diff can name a file that no longer exists: matching is on the path
+                            ("a DELETED path a linked `**/` matches", "src/Acme.Other/Gen/Gone/Removed.cs")):
             got = _run(root, "modules", "pull_request", [path], extra=ext_arg)
             check(f"[modules] {label} changed, extension named ⇒ ALL",
                   got["scope"] == "full" and got["count"] == 2 and "build extension" in got["reason"],
@@ -1163,6 +1210,21 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=ext_arg)
         check("[modules] negative control — a file beside the linked one that no Compile item names narrows",
               got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/Gen/notes.txt"], extra=ext_arg)
+        check("[modules] negative control — a non-.cs file under the linked `**/` narrows",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        print("the MSBuild glob matcher (shared with module-build-key.py):")
+        for path, pattern, want in (
+                ("src/Shared/Emitter.cs", "src/Shared/**/*.cs", True),
+                ("src/Shared/a/b/Emitter.cs", "src/Shared/**/*.cs", True),
+                ("src/Shared/Emitter.cs", "src/Shared/*.cs", True),
+                ("src/Shared/a/Emitter.cs", "src/Shared/*.cs", False),
+                ("src/Shared/x/notes.txt", "src/Shared/**", True),
+                ("src/SharedX/Emitter.cs", "src/Shared/**/*.cs", False),
+                ("src/Shared/Emitter.cs", "src/Shared/Emitter.cs", True),
+                ("src/Shared/Emitter.csx", "src/Shared/Emitter.cs", False)):
+            check(f"msbuild_glob_matches({path!r}, {pattern!r}) is {want}",
+                  msbuild_glob_matches(path, pattern) is want)
         (shelf_dir / "Acme.ModuleLibraries.csproj").unlink()
         shelf_dir.rmdir()
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "plugin-gate.allow"])
