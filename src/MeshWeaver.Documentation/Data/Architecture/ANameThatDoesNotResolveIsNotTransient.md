@@ -110,6 +110,57 @@ handler (pinned in both orders). `RejectedCertificateIsNotRetriedTest` runs the 
 defaults against a loopback TLS listener: an expired certificate is contacted once and arrives typed,
 and the control — a server that drops the handshake — is still retried.
 
+## A remote site giving up is not a platform incident
+
+The two carve-outs above stop retrying what no retry can fix. They leave a third shape untouched on
+purpose: a TLS handshake reset, a refused connect, an `EAGAIN` at connect. Those ARE transient-shaped,
+so the pipeline keeps retrying them, and when the last retry fails Polly reports the event at Error.
+
+```
+fail: Polly[3]
+  Execution attempt. Source: '-standard/(unnamed)/Standard-Retry', Result: 'The SSL connection could
+  not be established, see inner exception.', Handled: 'True', Attempt: '3'
+```
+
+The fleet's log watcher folds every Error line into a LogIncident. For a client that fetches whatever
+URL an agent or a document hands it, every remote site's bad day became a ticket against the platform:
+the one log site of [#7085](https://github.com/Systemorph/MeshWeaver/issues/7085) fanned out into
+46 fingerprints.
+
+**The rule** (policy `arbitrary-url-fetch-failure-is-warning`): a named client that fetches arbitrary,
+user-supplied URLs logs the pipeline's give-up at **Warning**. Every other client keeps **Error**,
+because a platform or service client giving up is an incident.
+
+**A client declares itself; the host keeps no list.** The module that registers the client says what
+it fetches:
+
+```csharp
+services.AddHttpClient(WebSearchPlugin.HttpClientName);
+services.DeclareArbitraryUrlFetcher(WebSearchPlugin.HttpClientName);
+```
+
+`DeclareArbitraryUrlFetcher` (in `MeshWeaver.Mesh.Contract`) registers an `IArbitraryUrlFetcher`. The
+host's resilience defaults install a Polly `TelemetryOptions.SeverityProvider` that reads the sending
+client's name off the request (the stamp `ClientNameOf` already reads, #4528) and lowers an Error to
+Warning only when a declaration names that client. Three details:
+
+- **Only Error is lowered.** Critical passes unchanged, and so does every severity of an undeclared
+  client.
+- **The default, unnamed client never qualifies.** Nothing can declare it, so a fetcher that still
+  rides the default client keeps Error. Giving a fetcher its own named client is the first step.
+- **The declarations are read when the event fires.** A module swapped live contributes its
+  declaration through a forwarder, so nothing is captured at boot.
+
+The level is a cost decision, not a cosmetic one. An Error line costs a person: an incident, triage and
+a ticket. A Warning still ships to Loki and still counts in a rate, so a site that fails constantly
+stays visible, but it no longer claims that the platform is broken. The caller still reports the failure
+in words the model can act on (the per-URL answers in `MeshWeaver.AI.WebSearch`).
+
+`AnArbitraryUrlFetcherGivingUpIsAWarningTest` (core, `MeshWeaver.Hosting.Test`) builds the real
+defaults and reads the level off the Polly line. A declared client's final attempt is Warning. The
+negative control is an undeclared platform client and the unnamed client failing the same way: both
+are still Error.
+
 ## The half this does not reach
 
 **The caller is still not told in words it can act on.** `FetchWebPageCore` already draws the right

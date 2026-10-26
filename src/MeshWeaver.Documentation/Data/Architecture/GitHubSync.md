@@ -737,7 +737,7 @@ Everything that is not bulk git transfer — repository lookup and creation, ref
 calls of the REST push path, compare, issues, pull requests, reviews and check runs — goes
 through `OctokitGitHubRepoClient` over `GitHubRestApi`: one `HttpClient`, System.Text.Json with
 GitHub's snake_case names, and wire records holding exactly the fields the client reads or
-writes. It replaced Octokit / Octokit.Reactive in the code (the bare Octokit package reference stays for one cycle — see "Removing the transitional Octokit reference" below); the type kept its name because
+writes. It replaced Octokit / Octokit.Reactive, and the platform no longer references Octokit at all (see "The transitional Octokit reference, removed" below); the type kept its name because
 satellite repositories construct it, resolve it from DI and call `ParseRepoUrl` by it.
 
 What the transport guarantees, because callers depend on it:
@@ -766,35 +766,30 @@ Classify by `StatusCode` or by the derived type, never by message text. The requ
 every endpoint and every row of the mapping are pinned by `GitHubRestTransportTest`
 (`MeshWeaver.Hosting.Test`) against a recorded-answer HTTP handler.
 
-#### Removing the transitional Octokit reference
+#### The transitional Octokit reference, removed
 
-No core code uses Octokit, yet `MeshWeaver.GitSync.csproj` still carries
-`<PackageReference Include="Octokit" />`, and `Directory.Packages.props` still pins it. That is
-deliberate, for one cycle, so the platform image keeps carrying `Octokit.dll`:
+After the code port, `MeshWeaver.GitSync` kept a bare `<PackageReference Include="Octokit" />` and
+`Directory.Packages.props` kept the pin for one cycle, so the image would keep carrying `Octokit.dll`.
+Two consumers outside core still needed it:
 
-- **Already-deployed module bundles bind the image's copy.** MeshWeaver.Plugins' Observability
-  module (`LogIncidentFiler.IsNotFound`) names `Octokit.ApiException`. It reached Octokit only
-  through the `MeshWeaver.GitSync` project reference, and a bundle's closure does not follow
-  `MeshWeaver.*` references ([Module Closure Accounting](../ModuleClosureAccounting)), so its
-  bundle does not carry the DLL. 🚨 **The [module link gate](../ModulePlatformLinkGate) would not
-  hold a roll for it.** A referenced assembly that neither the platform nor the bundle carries is
-  reported as unchecked, not refused (`ModulePlatformLink` → `UncheckedAssemblies`). Package
-  verdicts are advisory for a platform roll anyway (policy
-  `platform-rolls-independently-of-packages`). An image without Octokit would therefore roll and
-  then throw `FileNotFoundException` inside that module.
-- **MeshWeaver.Plugins compiles against Octokit transitively** until it is ported to
-  `GitHubApiException` (MeshWeaver.Plugins#4206).
+- MeshWeaver.Plugins' Observability module named `Octokit.ApiException` and reached the DLL only
+  through the image. A bundle's closure does not follow `MeshWeaver.*` references
+  ([Module Closure Accounting](../ModuleClosureAccounting)), and the
+  [module link gate](../ModulePlatformLinkGate) would not have held a roll for the missing assembly.
+- A transitional internal overload, `IsMissingOrEmptyRepo(Octokit.ApiException)`, served Plugins'
+  `EmptyRepoToleranceTest`.
 
-One transitional internal overload rides with the reference: `OctokitGitHubRepoClient.IsMissingOrEmptyRepo(Octokit.ApiException)` serves Plugins' `EmptyRepoToleranceTest` (an `InternalsVisibleTo` caller) until #4206 ports it.
+Both conditions for removing it held before the reference, the overload and the pin went together:
 
-**Remove the reference, the overload and the `PackageVersion` line in one core PR, and only when BOTH hold:**
+1. MeshWeaver.Plugins#4206 merged, so nothing in Plugins names an Octokit type.
+2. The Observability builds published after it are the ones instances run. The two
+   package-update holds that could keep an older bundle, on `pearl` and `build`, were resolved
+   when those instances rolled past the floor. A platform image without Octokit reaches an
+   instance only through such a roll, and the same roll lifts a floor hold.
 
-1. MeshWeaver.Plugins#4206 has merged, so nothing in Plugins names an Octokit type, and
-2. the Observability bundle has been rebuilt from that code, against a platform set built after
-   #4206 merged, and is the generation the instances have adopted.
-
-Before removing it, re-check every satellite for Octokit type names (a repository-wide search for
-`Octokit`). A satellite that names one needs the same port first.
+No satellite names an Octokit type. A repository-wide search of every satellite found only Memex's
+own unused `PackageVersion`. If an Octokit type ever has to come back, it rides in the module that
+names it, never in the platform.
 
 ---
 
