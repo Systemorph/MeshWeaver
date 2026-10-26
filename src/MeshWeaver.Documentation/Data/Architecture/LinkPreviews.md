@@ -301,6 +301,30 @@ else about that subtree, and the card is built by a pure function
 it carries no `MeshNode` and no `SeoPageData`, so the body the crawler-facing body component renders
 cannot be reached from a preview card at all.
 
+### Instance-wide: one declared root policy (`Seo:PublicPreview`)
+
+An owner can also opt a whole instance in. The portal setting `Seo:PublicPreview=true` (in the
+instance's deployment record, as `Seo__PublicPreview: "true"`) makes the portal declare ONE static
+`_Policy` at the mesh **root** that states only `PublicPreview = true` (MeshWeaver.Plugins
+`Memex.Portal.Shared/Seo/PublicPreviewSeed`). Because the flag resolves nearest-scope-first up to the
+root, every gated page on the instance then shares its own name, authored summary and icon. Everything
+above still holds:
+- the body stays gated;
+- a scope that states `publicPreview: false` opts its subtree back out;
+- the policy grants no read and caps nothing, because every other member is null or false.
+
+It is a **declaration**, not a hand-written node: the root scope is System's, and a global admin holds
+no data rights there, so a `create` of `_Policy` is refused.
+
+🚨 **A root flag reaches every scope, so the preview path refuses two shapes outright, whatever a
+policy states** (`SeoResolver.NeverPreviews`):
+- the platform's own partitions (`WellKnownPartitions.Platform`: Admin, Auth, User, ApiToken, Groups,
+  …), where node names are credentials, ledgers and grants;
+- any path with a `_` segment (`_Access`, `_Policy`, `_Thread`, …).
+
+Every other node's title and summary become readable to anyone holding or guessing a URL. That is the
+point of the setting, and the owner states it per instance knowing that.
+
 ## The inbound `OgCard` layout area
 
 The store package `OgCard` ships the opposite convenience: a markdown page embeds link-preview
