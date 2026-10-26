@@ -57,6 +57,24 @@ version: v1.1.0
 # (ARM 40) drives this file through a model of acr-cli's selection to prove the window picks only
 # unreferenced artifacts older than 30 days, never a locked or referenced one.
 #
+# 🚨 THE TAG HALF OF EVERY FILTER IS AN ALLOWLIST, NOT `.*` (MeshWeaver#3438, Memex#219). It reaches
+# only per-build IDENTITY tags: `staging-<sha>-<run>[-arch]`, a commit `<sha>`, the legacy pair
+# `<sha>-p<sha>`, and a pre-release build version `<x.y.z>-ci.…` / `-rc…` / `-next.…`. Everything else
+# is out of reach BY NAME, and three families of it must be:
+#   * a declared RELEASE CHANNEL (`.github/release-channels.json`: `3-latest`, `3.1-latest`, `main`,
+#     `latest`, `edge`, the reserved `3-mac` …). A channel MOVES, so the lock lane never locks it;
+#     under `.*` it was purged the night CD stopped rewriting it — `mw-plugin-test:latest` was seven
+#     weeks old on 2026-09-07, and a `declared` or `retired` channel is never rewritten at all.
+#   * the ARMING MARKER `arm-complete-<version>` on memex-portal-ai, which `arm` reads to decide
+#     whether the newest armed set's arming completed; purged, `arm` re-arms a set the fleet took.
+#   * an OFFICIAL / CD version `x.y.z` — kept for its support lifetime (and locked by the lane).
+# 🚨 acr-cli SEARCHES the tag regex (`filter.MatchString(tag)`) and anchors only the repository half
+# itself, so the `^…$` is load-bearing: without it `[0-9a-f]{7,40}` would reach any tag that merely
+# contains seven hex characters. An identity tag of a shape this list does not know is RETAINED —
+# storage, visible in the dry-run log — never deleted. `lock-pinned-digests.py
+# --check-retention-record` derives every name-protected tag from its reader and reds on a filter
+# that reaches one; self-test ARM 41 proves it over an unlocked, 400-day-old fixture.
+#
 # PROTECTION IS THE MANIFEST LOCK, not this policy. Live pinned digests carry
 # `--delete-enabled false`; `acr purge` skips locked manifests by default and neither step passes
 # `--include-locked`. Locking a digest is what makes a pin survive; this file only decides what is
@@ -69,9 +87,9 @@ version: v1.1.0
 # Doc: Doc/Architecture/PinnedImageRetention. Incidents: Memex#122, MeshWeaver#3438 (Education,
 # Manufacturing and SocialMedia CI down simultaneously 2026-09-05T15:29Z on a purged tester digest).
 steps:
-  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-bake:.*' --ago 30d --untagged --dry-run
+  - cmd: acr purge --filter 'mw-plugin-test:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --filter 'memex-migration:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --filter 'memex-portal-ai:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --filter 'memex-portal-next:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --filter 'memex-bake:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --ago 30d --untagged --dry-run
     disableWorkingDirectoryOverride: true
     timeout: 3600
-  - cmd: acr purge --filter 'memex-portal:.*' --ago 30d --untagged --dry-run
+  - cmd: acr purge --filter 'memex-portal:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --ago 30d --untagged --dry-run
     disableWorkingDirectoryOverride: true
     timeout: 3600

@@ -432,6 +432,60 @@ quarter walks off a 30-day window exactly as it walked off a 7-day one, and the 
 rarer, later and harder to attribute. The numbers are not the defect — the absence of any relation
 between retention and the pin set is.
 
+### 🚨 What the lock cannot protect: tags protected by NAME
+
+The lock protects what something PINS. Three families of tag are referenced by name instead, and
+no lock covers them:
+
+| Family | Example | Why no lock covers it |
+|---|---|---|
+| a declared **release channel** (`.github/release-channels.json`) | `3-latest`, `3.1-latest`, `main`, `latest`, `edge`, the reserved `3-mac` | it MOVES, so the lane never locks it (`is_floating_tag`); a lock would pin bytes the label has already left |
+| the **arming marker** | `arm-complete-<version>` on `memex-portal-ai` | `arm` reads it (`arm-promoted-set.py armed-state`) to decide whether the newest armed set's arming completed; nothing pins it |
+| an **official / CD version** | `3.1.0`, `3.1.9984` | kept for its support lifetime; the lane locks it, but only on nights the lane runs |
+
+With the record's tag filters at `<repo>:.*`, every one of them became eligible the night its tag
+aged past `--ago`. Age alone protected a channel, and only while CD kept rewriting it. A `declared`
+or `retired` channel is never rewritten. `mw-plugin-test:latest` was seven weeks old on the night
+the old 7-day task took `latest` from four other repositories.
+
+**So the tag half of every recorded filter is an allowlist of per-build identity shapes**, anchored
+`^…$`: `staging-<sha>-<run>[-arch]`, a commit `<sha>`, the legacy pair `<sha>-p<sha>`, and a
+pre-release build version `<x.y.z>-ci.…`, `-rc…` or `-next.…`. Anything else is out of reach by
+name. An identity tag of a shape the list does not know is **retained**. That costs storage and
+shows in the dry-run log. It never costs a fresh install its seed.
+
+🚨 **acr-cli searches the tag regex. It does not full-match it.** `CollectTagFilters` anchors the
+repository half itself (`"^"+repoRegex+"$"`), but `getTagsToDelete` tests the tag half with
+`filter.MatchString(tag)`. Without the `^…$`, `[0-9a-f]{7,40}` would reach any tag that merely
+contains seven hex characters. The purge model in `lock-pinned-digests.py` (`purge_selection`) used
+`fullmatch` for both halves, which under-selects what the tool deletes. It now searches the tag
+half too.
+
+**The allowlist is the proof, not the samples.** A finite sample set cannot prove that an arbitrary
+regex reaches no protected name: `^3[.]0[.][0-9]+$` misses every sample and still reaches every
+clean 3.0 release. So every recorded filter's tag half must be **exactly** `IDENTITY_TAG_REGEX` in
+`lock-pinned-digests.py`. Reaching more is a reviewed change to that constant. Every filter spelling
+acr-cli accepts (`--filter V`, `--filter=V`, `-f V`, `-f=V`, `-fV`) is read by one parser,
+`filter_values`, shared by the record check, the purge model and `--describe-purge-file`. A filter
+with no value, or one not shaped `repository:regex`, is a red.
+
+**Held on every pull request.** `--check-retention-record` holds the allowlist itself against every
+name-protected tag, derived from its reader: each declared channel rendered over several version lines, the floating words,
+`ARM_COMPLETE_PREFIX` read from `arm-promoted-set.py`, and official version shapes. It reds on any
+recorded filter that reaches one. A missing channel declaration or marker prefix, or zero samples,
+is a red, not a smaller check. Self-test **ARM 41** drives both committed records over an
+**unlocked** fixture where every subject is 400 days old, so nothing but the filter can spare it.
+It reaches no channel, marker or official version on any repository the record names. It still
+reaches every identity shape past 30 days and none under 30 days. The negative control: the old
+`.*` filters reach them, and the record check reds on them.
+
+**`verify` and a declared tag-filter change.** `acr-retention-tasks.sh verify` holds a declared
+drift (`recordAheadOfRegistry`) to the invariants the declaration does not excuse. It used to
+compare whole filters, so narrowing a tag half read as *"purges a different set of
+repositories"*. It now compares the **repository** halves, which a declaration never excuses, and
+prints a tag-half difference. The comparison is `lock-pinned-digests.py --declared-drift`, a pure
+function with its own arm (ARM 41b). It used to be a heredoc that no test drove.
+
 ### One task, two steps — as applied 2026-09-06
 
 There were two purge tasks and only one of them had learned Memex#122. They are now one:
