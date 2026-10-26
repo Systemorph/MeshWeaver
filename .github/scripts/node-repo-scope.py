@@ -241,12 +241,27 @@ def affected_packages(root: Path, changed: list[str], say) -> set[str] | None:
     return set(affected) if isinstance(affected, list) else None
 
 
-def project_hits(root: Path, entries: list[str], changed: list[str], say) -> dict | None:
-    """{entry → the changed project dirs its build+test closure contains} + `unclassified`."""
+def _accepts_base(root: Path) -> bool:
+    """Whether the caller's project-closure.py declares `--hits --base` (MeshWeaver.Plugins#4314:
+    a comment/whitespace-only MSBuild edit owes nothing against that ref). An older script would
+    REFUSE the flag (argparse exit 2 ⇒ "cannot narrow" ⇒ full), so it is passed only when declared."""
+    try:
+        return '"--base"' in (root / PROJECTS).read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def project_hits(root: Path, entries: list[str], changed: list[str], say,
+                 base: str | None = None) -> dict | None:
+    """{entry → the changed project dirs its build+test closure contains} + `unclassified`.
+    `base` is the ref the changed paths were diffed from (the PR base, or a push's publication
+    baseline); handed on as `--base` only to a project-closure.py that declares it."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
         fh.write("\n".join(changed) + "\n")
         listing = Path(fh.name)
     argv = ["--hits", "--changed", str(listing), "--json"]
+    if base and _accepts_base(root):
+        argv += ["--base", base]
     for e in entries:
         argv += ["--entry", e]
     try:
@@ -579,7 +594,10 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
 
     hits: dict[str, list[str]] = {e["project"]: [] for e in entries}
     if src_files:
-        answer = project_hits(root, sorted(hits), src_files, say)
+        # The ref the diff is FROM (`origin/<base>` of `origin/<base>...HEAD`, or a push's
+        # publication baseline) — so an inert MSBuild edit selects nothing here either.
+        diff_from = diff_range.split("..", 1)[0] if diff_range else None
+        answer = project_hits(root, sorted(hits), src_files, say, diff_from)
         if answer is None:
             return full(f"the caller repo's {PROJECTS} could not answer the compiled-half closure "
                         f"for {len(src_files)} src/ file(s) — packing every module.")
@@ -1179,6 +1197,35 @@ def self_test() -> int:
             got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
             check(f"[modules] {label} ⇒ ALL", got["scope"] == "full" and got["count"] == 2,
                   f"scope={got['scope']} — {got['reason'][:80]}")
+        projects.write_text(graph_src, encoding="utf-8")
+
+        # `--base` reaches a project graph that DECLARES it (MeshWeaver.Plugins#4314: an inert,
+        # comment-only MSBuild edit owes nothing) — and never one that does not, which would
+        # refuse the unknown flag and turn every src/ diff into ALL.
+        inert = ["src/Acme.Shared/Directory.Build.props"]
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n",
+            'a=sys.argv\nB="--base"\n'
+            "assert B not in a or a[a.index(B)+1]=='origin/main', a\n"
+            "_inert=B in a\n").replace(
+            "hit={own(f) for f in paths if own(f)}\n",
+            "hit={own(f) for f in paths if own(f) and not (_inert and f.endswith('.props'))}\n"),
+            encoding="utf-8")
+        got = _run(root, "modules", "pull_request", inert, extra=["--base-ref", "main"])
+        check("[modules] a base-aware project graph gets `--base origin/main` and its inert MSBuild "
+              "edit selects nothing", got["count"] == 0 and got["scope"] != "full",
+              f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", inert)
+        check("[modules] …with no base ref there is no `--base`: the edit still counts (Alpha)",
+              got["selected"] == ["Acme.Alpha"], f"selected={got['selected']}")
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n", "a=sys.argv\nimport sys as _s\n'--base' in a and _s.exit(2)\n"),
+            encoding="utf-8")
+        got = _run(root, "modules", "pull_request", inert, extra=["--base-ref", "main"])
+        check("[modules] NEGATIVE CONTROL: a project graph that does NOT declare `--base` is never "
+              "handed it — the edit narrows to Alpha, not ALL",
+              got["selected"] == ["Acme.Alpha"] and got["scope"] != "full",
+              f"scope={got['scope']} selected={got['selected']} — {got['reason'][:80]}")
         projects.write_text(graph_src, encoding="utf-8")
         projects.unlink()
         got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
