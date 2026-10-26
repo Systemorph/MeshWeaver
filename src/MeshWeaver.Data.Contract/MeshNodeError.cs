@@ -22,7 +22,7 @@ public enum MeshNodeErrorCode
     /// registered domain type. Typical cause: the discriminator (<c>$type</c>)
     /// names a type that isn't registered in the consumer hub's TypeRegistry,
     /// or the JSON shape doesn't match the registered type's contract. The
-    /// diagnostic carries (truncated) raw JSON and the registered type name.
+    /// diagnostic carries the content's shape (never its values) and the registered type name.
     /// </summary>
     Deserialization = 2,
     /// <summary>
@@ -92,7 +92,7 @@ public enum MeshNodeErrorCode
 /// <param name="Message">One-line human-readable summary.</param>
 /// <param name="Diagnostic">
 /// Code-specific payload: for <see cref="MeshNodeErrorCode.Deserialization"/>
-/// a truncated JSON snippet; for <see cref="MeshNodeErrorCode.AccessDenied"/>
+/// the content's shape (<see cref="ContentShapes.Describe"/> — never a value); for <see cref="MeshNodeErrorCode.AccessDenied"/>
 /// the missing permission + principal; for <see cref="MeshNodeErrorCode.Conflict"/>
 /// the expected/actual version pair. May be null when the code itself is
 /// self-describing.

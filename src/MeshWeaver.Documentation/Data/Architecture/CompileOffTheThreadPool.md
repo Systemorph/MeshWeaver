@@ -75,6 +75,29 @@ the same queue and the same cap, only the drain loops run on their own threads. 
 distinct-type compiles now QUEUES behind the cap instead of becoming hundreds of threads, and the OS
 time-slices the lane's threads fairly against the ThreadPool the grain turns run on.
 
+🚨 **The compile's time bound does not count the queue.** `CompilationCacheOptions.RoslynCompileTimeout`
+bounds the `roslyn-compile` leg so that a hung leaf cannot park a NodeType at `Compiling` for ever. Its
+clock used to start when the leg was subscribed, so a compile still WAITING for a lane slot when the
+bound elapsed failed terminally as "hung" although it had not started. Measured in the combo
+verification lane (#4413) on a CI runner: one package dispatched 47 types at once, the lane
+drained them over five minutes, and the ten still queued at the bound were parked at
+`CompilationStatus=Error`, which read as a red package. Now (`CpuLaneBound`) the bound has three
+phases, each with its own named expiry:
+
+- The IO prefix is bounded until the emit is QUEUED.
+- The queue carries no clock on the wait itself. A compile there fails only when the lane completes NO
+  leaf for two bounds (`IoPool.AdmissionsCompleted` does not move). That is a lane whose every slot is
+  held by work that ignores cancellation, such as a source generator's constructor. A draining queue,
+  however long, is healthy, but a stalled one must still end in a terminal state rather than park the
+  type at `Compiling`.
+- The emit is bounded afresh from the moment the lane ADMITS it, and is cancelled when that bound
+  fires, which frees its slot.
+
+A caller that joins a compile already in flight times against the leader's queue and admission.
+
+`CpuLaneBoundTest` pins each expiry against a real one-slot pool, and the draining case that must not
+expire. `CompileBoundExcludesCpuLaneQueueTest` runs the draining case through the real compile service.
+
 Its leaves:
 
 - a NodeType's `EmitCompiled` (generators, bind, emit, artifact write) and the failure-path

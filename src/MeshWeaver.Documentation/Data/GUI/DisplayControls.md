@@ -95,6 +95,38 @@ when the root declares none); paint is never rewritten, so colours the icon decl
 win. An icon without its own plate is unaffected, because plating already recolours `currentColor`
 to white.
 
+## The node-icon catalogue
+
+> The catalogue's new glyphs are Microsoft **Fluent UI System Icons** (MIT). Their notice ships with them in
+> `src/MeshWeaver.Graph/ThirdPartyNotices/fluentui-system-icons.txt`, embedded in the assembly, and lists each file it
+> covers.
+
+A node's `Icon` may be a Fluent icon name such as `"DocumentText"`, but not every surface can draw
+every Fluent name. The Blazor navigation renders any name through FluentUI; a link preview, an
+HTML card or a browser tab can only draw a name whose glyph the platform ships
+(`MeshNodeImageHelper.ShippedIconFor` → `/static/NodeTypeIcons/{name}.svg`).
+
+`NodeIconCatalog` (namespace `MeshWeaver.Graph`) is the fixed list of names that renders
+everywhere: about 150 broadly useful Fluent UI System Icons names (documents, people and
+organisations, finance, data and analytics, communication, time, development, security, places,
+science, education, media, tools, insurance and risk, legal, health, shopping), each shipped as a
+20 px tile in `MeshWeaver.Graph/Icons/`.
+
+| Member | What it is |
+|---|---|
+| `NodeIconCatalog.Entries` | `IReadOnlyList<NodeIconCatalog.Entry>`, each with a `Name` (the PascalCase Fluent name written to `Icon`) and a `Meaning` (a short keyword hint) |
+| `NodeIconCatalog.Contains(name)` | case-insensitive membership; null, empty and unknown names are not members |
+
+**Automatic icon assignment picks only from this catalogue.** A model choosing an icon for a node is
+given the `Name`/`Meaning` pairs and its answer is accepted only when `Contains` holds, so an
+automatically chosen icon can never be a name that some surface fails to draw. An icon a person
+sets by hand is not limited to the catalogue.
+
+Adding a name means adding its `Icons/{lowercase name}.svg` in the same change, drawn as the house
+tile (`viewBox="0 0 20 20"`, a full-bleed `rx="4"` rect in `#0078D4`, the official Fluent 20 px
+Regular path in white). `NodeIconCatalogTest` fails on an entry without its glyph, a duplicate
+name, or a glyph off the tile.
+
 ---
 
 # Image

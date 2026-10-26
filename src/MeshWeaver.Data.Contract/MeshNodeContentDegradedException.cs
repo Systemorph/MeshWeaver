@@ -48,8 +48,26 @@ public sealed class MeshNodeContentDegradedException : System.Exception
     /// <summary>The node's NodeType, which is the key the content-type registry recovery is attempted under.</summary>
     public string? NodeType { get; }
 
-    /// <summary>Truncated raw JSON of the content that could not be materialised.</summary>
-    public string? RawJson { get; }
+    private readonly string? rawJson;
+
+    /// <summary>
+    /// The raw JSON a caller passed to the constructor. 🚨 Never part of <see cref="Message"/>: the
+    /// message reaches Warning-level logs, which ship to the central log store outside row-level
+    /// security, so the stored content of a node must not travel with it. Kept as a forwarder only
+    /// so a compiled caller that reads it does not break; nothing in the platform reads it, and the
+    /// platform's own sites pass <c>null</c>.
+    /// </summary>
+    [System.Obsolete("Raw content is no longer logged or carried by the platform — read Shape, which describes "
+        + "the content's $type, keys, kind and length without its values.")]
+    public string? RawJson => rawJson;
+
+    /// <summary>
+    /// The SHAPE of the content that could not be materialised — its <c>$type</c> (or that it has
+    /// none), top-level property names, JSON kind and byte length, as
+    /// <see cref="ContentShapes.Describe"/> renders it. Never a value. <c>null</c> when the site
+    /// had no content to describe.
+    /// </summary>
+    public string? Shape { get; init; }
 
     /// <summary>
     /// WHY the content stayed untyped, as the site that observed it classified it — e.g. a
@@ -69,7 +87,9 @@ public sealed class MeshNodeContentDegradedException : System.Exception
     /// <param name="seam">The read seam that observed it.</param>
     /// <param name="nodePath">The node path.</param>
     /// <param name="nodeType">The node's NodeType.</param>
-    /// <param name="rawJson">Truncated raw JSON of the unreadable content.</param>
+    /// <param name="rawJson">Deprecated — never logged; pass <c>null</c> and set <see cref="Shape"/>.
+    /// The parameter stays because removing it would replace the constructor every already-compiled
+    /// caller binds to.</param>
     /// <param name="inner">The deserialization exception, when there was one.</param>
     public MeshNodeContentDegradedException(
         string seam, string? nodePath, string? nodeType, string? rawJson, System.Exception? inner = null)
@@ -78,7 +98,7 @@ public sealed class MeshNodeContentDegradedException : System.Exception
         Seam = seam;
         NodePath = nodePath;
         NodeType = nodeType;
-        RawJson = rawJson;
+        this.rawJson = rawJson;
     }
 
     /// <summary>
@@ -86,6 +106,9 @@ public sealed class MeshNodeContentDegradedException : System.Exception
     /// site classified it, otherwise a cause-neutral statement. Before #6674 this always said the
     /// discriminator resolved to no registered CLR type, so a bind failure the formatted line
     /// correctly named arrived with a second, contradicting cause attached.
+    /// <para>🚨 It carries the content's <see cref="Shape"/>, never its values (see
+    /// <see cref="ContentShapes"/>): this text is what every sink appends, and Warning-level sinks
+    /// leave row-level security behind.</para>
     /// </summary>
     public override string Message =>
         $"{Seam}: content for '{NodePath ?? "<unknown>"}' (nodeType '{NodeType ?? "<none>"}') "
@@ -93,5 +116,5 @@ public sealed class MeshNodeContentDegradedException : System.Exception
         + (Cause ?? "neither the reading hub's TypeRegistry nor the mesh-wide content-type registry "
                     + "produced a typed value (the cause was not classified at this site)")
         + ". Downstream 'Content is X' / 'as X' consumers read it as ABSENT: views render "
-        + $"empty and reactive waits never complete. Raw: {RawJson ?? "<none>"}";
+        + $"empty and reactive waits never complete. Shape: {Shape ?? "<not described>"}";
 }

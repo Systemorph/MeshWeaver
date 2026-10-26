@@ -391,6 +391,14 @@ public sealed class IoPool : IIoPool, IDisposable
     // subscribe path rather than to the drain.
     private long _admissionsCompleted;
 
+    /// <summary>
+    /// Monotone count of admissions that have FINISHED (the same signal <see cref="Drain"/>'s grace
+    /// measures progress on). Two equal readings a window apart mean the pool completed nothing in
+    /// between — with leaves waiting, a stalled pool rather than a busy one. The compile bound reads it
+    /// to fail a compile queued behind a lane that stopped draining (<c>CpuLaneBound</c>).
+    /// </summary>
+    public long AdmissionsCompleted => Interlocked.Read(ref _admissionsCompleted);
+
     /// <summary>Number of operations currently executing through this pool.</summary>
     public int CurrentInFlight => Volatile.Read(ref _inFlight);
 

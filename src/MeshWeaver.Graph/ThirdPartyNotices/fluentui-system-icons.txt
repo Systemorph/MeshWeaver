@@ -1,0 +1,161 @@
+Fluent UI System Icons — third-party notice
+
+The node-icon glyphs listed below, in src/MeshWeaver.Graph/Icons/, carry path data from
+Microsoft Fluent UI System Icons (https://github.com/microsoft/fluentui-system-icons),
+npm package @fluentui/svg-icons 1.1.344, 20 px Regular, re-plated on the MeshWeaver icon tile.
+They are used under the MIT License, reproduced in full below.
+
+Files:
+  accessibility.svg
+  airplane.svg
+  alert.svg
+  animaldog.svg
+  apps.svg
+  archive.svg
+  attach.svg
+  beaker.svg
+  bed.svg
+  bookmark.svg
+  bookopen.svg
+  braincircuit.svg
+  branch.svg
+  briefcase.svg
+  buildingbank.svg
+  buildingfactory.svg
+  buildingretail.svg
+  calculator.svg
+  calendar.svg
+  calendarclock.svg
+  call.svg
+  camera.svg
+  cart.svg
+  certificate.svg
+  chartmultiple.svg
+  chatmultiple.svg
+  checkmarkcircle.svg
+  clipboard.svg
+  clipboardtask.svg
+  clock.svg
+  cloud.svg
+  contactcard.svg
+  cube.svg
+  databarvertical.svg
+  datahistogram.svg
+  dataline.svg
+  datapie.svg
+  datatrending.svg
+  desktop.svg
+  diamond.svg
+  doctor.svg
+  documentpdf.svg
+  documentsignature.svg
+  documenttext.svg
+  drop.svg
+  earth.svg
+  edit.svg
+  errorcircle.svg
+  eye.svg
+  filter.svg
+  fingerprint.svg
+  fire.svg
+  flag.svg
+  flash.svg
+  flowchart.svg
+  food.svg
+  foodapple.svg
+  games.svg
+  gauge.svg
+  gavel.svg
+  gift.svg
+  globe.svg
+  grid.svg
+  handshake.svg
+  hatgraduation.svg
+  headphones.svg
+  heart.svg
+  heartpulse.svg
+  home.svg
+  hourglass.svg
+  image.svg
+  info.svg
+  layer.svg
+  leafthree.svg
+  learningapp.svg
+  lightbulb.svg
+  link.svg
+  map.svg
+  megaphone.svg
+  mic.svg
+  microscope.svg
+  money.svg
+  news.svg
+  note.svg
+  notebook.svg
+  options.svg
+  payment.svg
+  peopleteam.svg
+  phone.svg
+  pill.svg
+  pin.svg
+  plugconnected.svg
+  question.svg
+  receipt.svg
+  ribbon.svg
+  ruler.svg
+  savings.svg
+  scales.svg
+  search.svg
+  send.svg
+  server.svg
+  share.svg
+  shieldcheckmark.svg
+  shielderror.svg
+  shoppingbag.svg
+  slidetext.svg
+  sportsoccer.svg
+  star.svg
+  stethoscope.svg
+  table.svg
+  tag.svg
+  tasklistltr.svg
+  timer.svg
+  toolbox.svg
+  translate.svg
+  trophy.svg
+  umbrella.svg
+  vehiclebus.svg
+  vehiclecar.svg
+  vehicleship.svg
+  vehicletruck.svg
+  video.svg
+  wallet.svg
+  wand.svg
+  warning.svg
+  weathersunny.svg
+  weatherthunderstorm.svg
+  windowconsole.svg
+  wrench.svg
+
+----------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2020 Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
