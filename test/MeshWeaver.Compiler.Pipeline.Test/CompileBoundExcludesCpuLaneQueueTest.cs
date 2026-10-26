@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,9 +27,10 @@ namespace MeshWeaver.Compiler.Pipeline.Test;
 /// dispatched 47 types together, and the ten still queued after five minutes were parked at
 /// <c>CompilationStatus=Error</c>, which read as a red package (#4413).</para>
 ///
-/// <para>Here the lane has ONE slot, a parked leaf holds it for several bounds, and a compile queues
-/// behind it. The compile must neither settle while it is queued nor fail once admitted. The parked
-/// leaf is released in a <c>finally</c>, so a failing assertion cannot strand the lane.</para>
+/// <para>Here the lane has ONE slot and leaves ahead of the compile keep it queued for longer than the
+/// bound while the lane keeps draining. The compile must succeed once admitted. The bound's other
+/// guarantees (a prefix that never queues, an admitted emit past the bound, a stalled lane) are pinned
+/// by <see cref="CpuLaneBoundTest"/>.</para>
 /// </summary>
 public class CompileBoundExcludesCpuLaneQueueTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -74,64 +76,52 @@ public class CompileBoundExcludesCpuLaneQueueTest(ITestOutputHelper output) : Mo
         },
     ];
 
-    private sealed class Park
-    {
-        public volatile int Release;
-        public volatile int Running;
-    }
-
     [Fact(Timeout = 300_000)]
-    public async Task ACompileQueuedLongerThanTheBound_IsNotTimedOut_AndCompilesOnceAdmitted()
+    public async Task ACompileQueuedLongerThanTheBound_BehindADrainingLane_IsNotTimedOut()
     {
         var ct = TestContext.Current.CancellationToken;
         var lane = Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>().Get(IoPoolNames.CompileCpu);
         lane.Should().BeOfType<IoPool>().Which.MaxConcurrency.Should().Be(1,
-            "the lane must have ONE slot, so the parked leaf alone saturates it");
+            "the lane must have ONE slot, so the leaves ahead of the compile run one at a time");
 
-        var park = new Park();
-        var settled = 0;
-        Exception? fault = null;
+        // Leaves ahead of the compile: each finishes well inside the stall window, together they
+        // keep the compile queued for longer than the bound. A healthy, draining queue.
+        var leafRun = Bound * 0.6;
+        const int LeavesAhead = 3;
+        var service = Mesh.ServiceProvider.GetRequiredService<MeshNodeCompilationService>();
+        var queuedFor = TimeSpan.Zero;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        service.OnEmitStarting = _ => queuedFor = clock.Elapsed;
         try
         {
-            var parked = lane.InvokeBlocking(_ =>
-            {
-                park.Running = 1;
-                SpinWait.SpinUntil(() => park.Release != 0, TimeSpan.FromSeconds(120));
-                return 0;
-            }).Replay();
-            using var parkedConnection = parked.Connect();
-            SpinWait.SpinUntil(() => park.Running != 0, TimeSpan.FromSeconds(30))
-                .Should().BeTrue("the parked leaf must hold the lane's only slot before the compile starts");
+            var ahead = Enumerable.Range(0, LeavesAhead)
+                .Select(_ => lane.InvokeBlocking(_ =>
+                {
+                    SpinWait.SpinUntil(() => false, leafRun);
+                    return 0;
+                }).Replay())
+                .ToArray();
+            var connections = ahead.Select(a => a.Connect()).ToArray();
+            SpinWait.SpinUntil(() => ((IoPool)lane).CurrentlyWaiting >= LeavesAhead - 1, TimeSpan.FromSeconds(30))
+                .Should().BeTrue("the leaves after the first must be queued before the compile is");
 
-            var compile = Mesh.ServiceProvider.GetRequiredService<IMeshNodeCompilationService>()
+            clock.Restart();
+            var result = await Mesh.ServiceProvider.GetRequiredService<IMeshNodeCompilationService>()
                 .CompileAndGetConfigurations(TypeNode(), SourceNodes())
                 .Take(1)
-                .Replay();
-            using var compileConnection = compile.Connect();
-            using var watch = compile.Subscribe(
-                _ => Interlocked.Exchange(ref settled, 1),
-                ex => { fault = ex; Interlocked.Exchange(ref settled, 1); });
-
-            SpinWait.SpinUntil(() => ((IoPool)lane).CurrentlyWaiting > 0, TimeSpan.FromSeconds(60))
-                .Should().BeTrue("the compile's CPU half must be QUEUED behind the parked leaf — "
-                    + "otherwise the hold below measures nothing");
-
-            // Negative check, bounded: hold the lane for three bounds. Before the fix the compile
-            // failed with a roslyn-compile TimeoutException after ONE bound while still queued.
-            SpinWait.SpinUntil(() => Volatile.Read(ref settled) != 0, Bound * 3)
-                .Should().BeFalse("a compile that is only WAITING for a CPU-lane slot must not be "
-                    + $"timed out (fault: {fault?.Message ?? "none"})");
-
-            park.Release = 1;
-            var result = await compile
                 .Should().Within(TestTimeouts.Convergence)
-                .Emit("the compile must run once the lane admits it", cancellationToken: ct);
+                .Emit("a compile waiting in a draining queue must run once admitted", cancellationToken: ct);
+            foreach (var c in connections) c.Dispose();
+
             result.Should().NotBeNull();
-            result!.AssemblyLocation.Should().NotBeNullOrEmpty("Roslyn produced an assembly");
+            result!.AssemblyLocation.Should().NotBeNullOrEmpty(
+                "Roslyn produced an assembly — the compile was not timed out while it waited");
+            queuedFor.Should().BeGreaterThan(Bound,
+                "the compile must have waited for its slot LONGER than the bound, or this test proves nothing");
         }
         finally
         {
-            park.Release = 1;
+            service.OnEmitStarting = null;
         }
     }
 }

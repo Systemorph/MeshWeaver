@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -188,77 +187,6 @@ internal class MeshNodeCompilationService(
                 + "CompilationStatus=Compiling forever (where the single-flight status lock would "
                 + "absorb every later trigger); retry via the Compile button / a fresh "
                 + "RequestedReleaseAt once the cause is understood.")));
-
-    /// <summary>
-    /// <see cref="BoundLeg{T}"/> for the <c>roslyn-compile</c> leg, whose CPU half QUEUES on the
-    /// bounded CPU lane (<see cref="IoPoolNames.CompileCpu"/>). The bound measures the leg's OWN work,
-    /// never its wait for a lane slot: the IO prefix is bounded from subscription until the emit is
-    /// QUEUED, the emit is bounded afresh from the moment the lane ADMITS it, and the queue between
-    /// the two carries no clock.
-    ///
-    /// <para>Why: the lane is capped at the processor count, so a burst of distinct-type compiles (a
-    /// roll, a gate run over a whole package) waits in line. With the clock running from subscription,
-    /// a compile still queued when the bound elapsed failed TERMINALLY as a "hung" leg although it had
-    /// not started — measured on a CI runner: 47 types of one package dispatched together,
-    /// the lane draining them over five minutes, and the last ten parked at
-    /// <c>CompilationStatus=Error</c> with a timeout, which the combo verification read as a red
-    /// package. The queue is not unbounded in time: every ADMITTED emit is itself bounded and
-    /// cancelled when that bound fires, so the lane keeps draining.</para>
-    /// </summary>
-    private static IObservable<T> BoundLegExcludingLaneWait<T>(
-        Func<CancellationToken, CpuLaneWait, IObservable<T>> leg,
-        TimeSpan bound,
-        string legName,
-        string nodePath)
-        => Observable.Defer(() =>
-        {
-            var wait = new CpuLaneWait();
-            var deadline = Observable.Timer(bound)
-                .TakeUntil(wait.Queued)
-                .Concat(Observable.Never<long>())
-                .Merge(wait.Admitted.SelectMany(_ => Observable.Timer(bound)));
-            return Observable
-                .Using(() => new CancellationDisposable(), cancel => leg(cancel.Token, wait))
-                .Timeout(deadline, _ => Observable.Never<long>(), Observable.Throw<T>(new TimeoutException(
-                    $"Compile leg '{legName}' for '{nodePath}' did not complete within "
-                    + $"{bound.TotalSeconds:0}s of its own work (time queued for a CPU-lane slot is "
-                    + "not counted). The compile fails terminally instead of parking at "
-                    + "CompilationStatus=Compiling forever (where the single-flight status lock would "
-                    + "absorb every later trigger); retry via the Compile button / a fresh "
-                    + "RequestedReleaseAt once the cause is understood.")));
-        });
-
-    /// <summary>
-    /// The two moments of a compile's CPU half that <see cref="BoundLegExcludingLaneWait{T}"/> times
-    /// against: QUEUED for a CPU-lane slot, and ADMITTED to one. Each fires at most once and replays to
-    /// a late subscriber. A caller that joins a compile already in flight (single-flight) follows the
-    /// leader's moments, so its bound also excludes the leader's queue wait.
-    /// </summary>
-    private sealed class CpuLaneWait
-    {
-        private readonly ReplaySubject<Unit> _queued = new(1);
-        private readonly ReplaySubject<Unit> _admitted = new(1);
-
-        public IObservable<Unit> Queued => _queued;
-        public IObservable<Unit> Admitted => _admitted;
-
-        public void MarkQueued() => Mark(_queued);
-        public void MarkAdmitted() => Mark(_admitted);
-
-        /// <summary>Mirror the moments of the compile this caller joined.</summary>
-        public void Follow(CpuLaneWait leader)
-        {
-            leader.Queued.Take(1).Subscribe(_ => MarkQueued());
-            leader.Admitted.Take(1).Subscribe(_ => MarkAdmitted());
-        }
-
-        // A second mark is inert: a completed subject ignores OnNext.
-        private static void Mark(ReplaySubject<Unit> moment)
-        {
-            moment.OnNext(Unit.Default);
-            moment.OnCompleted();
-        }
-    }
 
     private JsonSerializerOptions JsonOptions => hub.JsonSerializerOptions;
     private readonly DynamicMeshNodeAttributeGenerator _attributeGenerator = new();
@@ -1180,10 +1108,11 @@ internal class MeshNodeCompilationService(
                 // BoundLeg hands in is tripped when the bound fires, so NuGet/Roslyn actually
                 // stop; the TimeoutException propagates (it is not a CompilationException, so the
                 // Catch below leaves it alone) to RunCompile's terminal Error write.
-                return BoundLegExcludingLaneWait(
+                return CpuLaneBound.Bound(
                         (ct, laneWait) => OnThreadPool(() =>
                             CompileAsync(codeFile, configuration, contentCollections, node, laneWait, ct)),
-                        _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path)
+                        _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path,
+                        _cpuLane is IoPool lanePool ? () => lanePool.AdmissionsCompleted : null)
                     .Select(emit =>
                     {
                         var actualPath = emit.Path;
@@ -2326,7 +2255,7 @@ internal class MeshNodeCompilationService(
         // mesh read — so it can never wait on another lane leaf (the nested-gate deadlock the Compile
         // pool hit). Doc/Architecture/CompileOffTheThreadPool.
         //
-        // The two marks tell the roslyn-compile bound (BoundLegExcludingLaneWait) where the queue
+        // The two marks tell the roslyn-compile bound (CpuLaneBound) where the queue
         // starts and ends, so a compile waiting its turn for a slot is never timed out as "hung".
         laneWait.MarkQueued();
         return await _cpuLane

@@ -81,12 +81,22 @@ clock used to start when the leg was subscribed, so a compile still WAITING for 
 bound elapsed failed terminally as "hung" although it had not started. Measured in the combo
 verification lane (#4413) on a CI runner: one package dispatched 47 types at once, the lane
 drained them over five minutes, and the ten still queued at the bound were parked at
-`CompilationStatus=Error`, which read as a red package. Now (`BoundLegExcludingLaneWait`) the IO
-prefix is bounded until the emit is QUEUED, the emit is bounded afresh from the moment the lane ADMITS
-it, and the queue in between carries no clock. The queue still drains: every admitted emit is bounded
-and cancelled when its bound fires. A caller that joins a compile already in flight times against the
-leader's queue and admission. `CompileBoundExcludesCpuLaneQueueTest` holds a one-slot lane for three
-bounds and requires the queued compile to succeed once admitted.
+`CompilationStatus=Error`, which read as a red package. Now (`CpuLaneBound`) the bound has three
+phases, each with its own named expiry:
+
+- The IO prefix is bounded until the emit is QUEUED.
+- The queue carries no clock on the wait itself. A compile there fails only when the lane completes NO
+  leaf for two bounds (`IoPool.AdmissionsCompleted` does not move). That is a lane whose every slot is
+  held by work that ignores cancellation, such as a source generator's constructor. A draining queue,
+  however long, is healthy, but a stalled one must still end in a terminal state rather than park the
+  type at `Compiling`.
+- The emit is bounded afresh from the moment the lane ADMITS it, and is cancelled when that bound
+  fires, which frees its slot.
+
+A caller that joins a compile already in flight times against the leader's queue and admission.
+
+`CpuLaneBoundTest` pins each expiry against a real one-slot pool, and the draining case that must not
+expire. `CompileBoundExcludesCpuLaneQueueTest` runs the draining case through the real compile service.
 
 Its leaves:
 
