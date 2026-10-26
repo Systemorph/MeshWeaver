@@ -1237,6 +1237,8 @@ jobs:
           # today (no repo here has a queue) and kept correct so enabling one narrows rather than
           # silently falling back to the full set.
           QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          # A shelf edit reaches every container-built module, though none references the shelf.
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
         run: |
           set -euo pipefail
           printf '%s' "$MODULES" > "$RUNNER_TEMP/matrix.json"
@@ -1251,10 +1253,12 @@ jobs:
           if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
             publication_args=(--publication-base "$PUBLICATION_BASE")
           fi
+          shelf_args=()
+          [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
           python3 build-logic/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \
-            "${publication_args[@]}" > "$RUNNER_TEMP/scope.json"
+            "${publication_args[@]}" "${shelf_args[@]}" > "$RUNNER_TEMP/scope.json"
       # ───────────── THE LEDGER: what of this selection is ALREADY BUILT, and who builds the rest ─────────────
       # 🚨 "we should not start the same build multiple times ⇒ coordinate which packages are in
       # progress; track progress through memex … if Plugin X was built against Platform version Y,
@@ -4044,9 +4048,13 @@ jobs:
         env:
           CONTENT_REPOSITORY: ${{ inputs.content-repository }}
           TRUNK: ${{ github.event.repository.default_branch }}
+          # A newer commit that edits only the shelf still reaches every module.
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
+          shelf_args=()
+          [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
           [ -z "$CONTENT_REPOSITORY" ] || { echo "::error::publish-newest-only reads THIS repository's trunk, but content-repository is '$CONTENT_REPOSITORY' — a lane packing another repository's content cannot say whether a newer commit of it exists. Turn one of the two off."; exit 1; }
           [ -n "$TRUNK" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
           git fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
@@ -4072,7 +4080,7 @@ jobs:
                 GITHUB_OUTPUT="$RUNNER_TEMP/mods/$MODULE/newer-scope.out" GITHUB_STEP_SUMMARY=/dev/null \
                   python3 build-logic/.github/scripts/node-repo-scope.py --for modules --root . \
                     --modules "@$RUNNER_TEMP/mods/$MODULE/newer-entry.json" --event pull_request \
-                    --publication-reach \
+                    --publication-reach "${shelf_args[@]}" \
                     --changed-list "$changed" > "$RUNNER_TEMP/mods/$MODULE/newer-scope.json"
                 if [ "$(jq -r '.count' "$RUNNER_TEMP/mods/$MODULE/newer-scope.json")" != "0" ]; then
                   newer=true

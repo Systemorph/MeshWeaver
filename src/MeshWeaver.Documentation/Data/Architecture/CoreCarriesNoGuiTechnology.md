@@ -146,7 +146,9 @@ modules: the shelf becomes a declaration the module lane receives, not a hard-co
    not advertise the flag, naming the pin to move. The named shelf is also part of every module's
    build-ledger key (`module-build-key.py --module-libraries-project`): its project, every in-repo
    project it reaches and the `Directory.*.props|targets` it inherits, so a shelf edit is a new
-   build and never a reused bundle. Omitted, the tester image's shelf is used, the key is
+   build and never a reused bundle. Diff-scope selection (`node-repo-scope.py`) is told the
+   shelf too: no module references it, so a diff touching it or a project it reaches runs and
+   tests every module instead of narrowing to none. Omitted, the tester image's shelf is used, the key is
    byte-identical to before, and nothing changes for a caller that sets nothing.
 2. **Plugins** — adds its own shelf csproj under `src/` (only `src/` imports its package versions)
    carrying every entry only Plugins modules use, pins those packages in
