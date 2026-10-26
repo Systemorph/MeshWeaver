@@ -7,7 +7,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Tolerant YAML
 
-Front matter on agents, skills and doc pages, GitHub workflow files, helm output: the platform reads all of
+Front matter on agents, skills, slides and doc pages, GitHub workflow files, helm output: the platform reads all of
 it with **one** reader of its own, `MeshWeaver.Yaml` (`src/MeshWeaver.Yaml`). It has no third-party
 dependency and one rule:
 
@@ -211,6 +211,22 @@ the plugins repository when it was introduced — 28,405 files. Every file the p
 produced the same tree (scalar for scalar), every file re-serialized and re-read under strict mode came
 back equal, and the 70 files the previous reader refused were all the `: `-inside-a-value shape the
 tolerant reader now reads.
+
+## No third-party YAML library in the platform
+
+The platform image carries no other YAML library. The modules that used one — MeshWeaver.Plugins'
+`MeshWeaver.AI` (agent and skill front matter) and `MeshWeaver.Publish` (slide front matter) — read
+and write through `TolerantYaml` as well (MeshWeaver.Plugins#4227), so YamlDotNet left the platform's
+package list. Before that port it was checked differentially over every front-matter block in this
+repository, the plugins repository and every satellite (7,872 blocks): every block the previous
+reader accepted bound to identical objects, the 13 it refused were the `: `-inside-a-value shape, and
+the writers differ only in writing non-BMP characters literally and single-quoting where the previous
+writer double-quoted.
+
+A module bundle built while it still referenced YamlDotNet ships its own copy in its closure. On an
+image without YamlDotNet that copy is outside the link gate's denominator (the platform does not carry
+the name — [Module Platform Link Gate](../ModulePlatformLinkGate)), so the module links and loads its
+own copy, as any private dependency does.
 
 ## Related
 

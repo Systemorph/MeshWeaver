@@ -3231,6 +3231,160 @@ def check_one_invocation(where: str, step: str, tokens: list[str]) -> list[str]:
     return problems
 
 
+# ── Tags protected by NAME: what no recorded purge filter may REACH ────────────────────────────
+#
+# 🚨 A MOVING LABEL AND A MARKER ARE PROTECTED BY NAME, AND UNTIL MeshWeaver#3438's NAME ARM THE
+# PURGE NAMED THEM ALL. `.github/release-channels.json` states the rule for every pruner: a declared
+# channel label (`3-latest`, `3.1-latest`, `main`, `latest`, `edge`, the reserved `3-mac` …) is
+# never deleted, and it is excluded BY NAME because it moves — the lock lane deliberately never
+# locks it (`is_floating_tag`). `arm-complete-<version>` is the marker `arm` reads to decide whether
+# the newest armed set's arming COMPLETED (`arm-promoted-set.py armed-state`); purge it and `arm`
+# re-arms a set the fleet already took. And a clean `x.y.z` is an official release, or since
+# policy `platform-semver-versioning` the version a CD set carries, which `OFFICIAL_RELEASE_*`
+# keeps for its support lifetime.
+#
+# The record's filters were `<repo>:.*`, so every one of those names was eligible the night its
+# tag aged past `--ago`: a label nobody moves for 30 days (a `declared` or `retired` channel, a
+# quiet repository's `latest` — `mw-plugin-test:latest` was seven weeks old on 2026-09-07), and
+# every `arm-complete-*` marker. Age alone protected them, and only while CD kept rewriting them.
+# The lock cannot help: a moving tag is never locked, and the lane may simply not have run.
+#
+# So the record's TAG half reaches only per-build IDENTITY tags — staging, commit, legacy pair and
+# pre-release build versions — and this check holds every name-protected sample against every
+# recorded filter. It is derived, never listed here: the channels come from their ONE reader, the
+# marker prefix from the script that reads it, so a new channel or a renamed marker is checked the
+# day it is declared. An identity tag of a shape the allowlist does not know is RETAINED, which
+# costs storage and is visible in the dry-run log; a name-protected tag the purge reaches costs a
+# fresh install its seed. The direction is chosen.
+# 🚨 THE ALLOWLIST IS THE PROOF; THE SAMPLES ONLY CHECK THE ALLOWLIST. A finite sample set cannot
+# prove that an arbitrary regex reaches no protected name — `^3[.]0[.][0-9]+$` misses every sample
+# below and still reaches every clean 3.0 release (review of #7238). So every recorded filter's TAG
+# half must be EXACTLY this reviewed expression, and the samples are held against THIS expression
+# once. Widening what the purge reaches is then a diff to this constant, reviewed as such.
+IDENTITY_TAG_REGEX = (r"^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?"
+                      r"|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$")
+OFFICIAL_RELEASE_SAMPLES = ("3.1.0", "v3.1.0", "3.1.9984", "10.0.0")
+
+
+def filter_values(tokens: list[str]) -> tuple[list[str], str]:
+    """Every `--filter` value of ONE `acr purge` invocation, in every spelling acr-cli (cobra)
+    accepts — `--filter V`, `--filter=V`, `-f V`, `-f=V`, `-fV` — plus why they could not be read.
+
+    🚨 ONE READER FOR EVERY CONSUMER: the record check, the purge model and `--describe-purge-file`.
+    Each used to scan for the literal token `--filter` alone, so a `-f 'repo:.*'` or
+    `--filter='repo:.*'` step reached every tag while every check read it as filtering nothing
+    (review of #7238). A flag with no value, or a value not shaped `repository:regex`, is an
+    ERROR — never a filter that is silently skipped."""
+    values: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        value: str | None = None
+        if token in ("--filter", "-f"):
+            if index + 1 >= len(tokens):
+                return values, f"`{token}` carries no value"
+            value = tokens[index + 1]
+            index += 1
+        elif token.startswith("--filter="):
+            value = token[len("--filter="):]
+        elif token.startswith("-f") and not token.startswith("--"):
+            value = token[3:] if token.startswith("-f=") else token[2:]
+        index += 1
+        if value is None:
+            continue
+        repo_part, colon, tag_part = value.partition(":")
+        if not colon or not repo_part or not tag_part:
+            return values, f"`{value}` is not a `repository:regex` filter"
+        values.append(value)
+    return values, ""
+CHANNEL_SAMPLE_LINES = ((3, 0, 0), (3, 1, 9984), (4, 12, 7), (10, 0, 123))
+ARM_COMPLETE_PREFIX_RE = re.compile(r'^ARM_COMPLETE_PREFIX\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
+
+
+def name_protected_samples(scripts_dir: Path | None = None) -> tuple[list[tuple[str, str]], list[str]]:
+    """(tag, why it is protected by name) samples no recorded purge filter may reach; plus why the
+    set could not be built. `scripts_dir` locates `arm-promoted-set.py` (the self-test points it at
+    a directory without one). 🚨 FAIL CLOSED: an unreadable source is a problem, never fewer
+    samples — a check over a shrunken sample set passes having checked less."""
+    here = scripts_dir or Path(__file__).resolve().parent
+    samples: list[tuple[str, str]] = []
+    problems: list[str] = []
+    try:
+        module, doc = _declared_channels()
+        entries = module.channels(doc)
+    except Exception as exc:  # noqa: BLE001 — any failure to read the declaration is a red, by name
+        return [], [f"the declared release channels could not be read ({exc}), so the purge "
+                    "filters were NOT checked against them"]
+    if not entries:
+        problems.append("release-channels.json declares ZERO channels — `main` and `latest` are "
+                        "written on every promote, so zero means the declaration was emptied")
+    for entry in entries:
+        template = str(entry.get("tag", ""))
+        rendered = {module.render(template, *line) for line in CHANNEL_SAMPLE_LINES}
+        rendered.discard(None)
+        if not rendered:
+            problems.append(f"channel `{entry.get('id')}` ({template!r}) renders no tag, so it "
+                            "was NOT checked against the purge filters")
+        for tag in sorted(rendered):
+            why = f"release channel `{entry.get('id')}` ({entry.get('status')})"
+            samples.extend([(tag, why), (tag.upper(), why + ", upper-cased")])
+    for word in sorted(FLOATING_TAGS):
+        samples.append((word, "a floating word (`FLOATING_TAGS`)"))
+    arm_script = here / "arm-promoted-set.py"
+    match = ARM_COMPLETE_PREFIX_RE.search(arm_script.read_text(encoding="utf-8")) \
+        if arm_script.is_file() else None
+    if match is None:
+        problems.append(f"{arm_script.name} declares no `ARM_COMPLETE_PREFIX`, so the arming "
+                        "marker was NOT checked against the purge filters")
+    else:
+        for version in ("3.1.9984", "3.0.0-ci.9564"):
+            samples.append((match.group(1) + version,
+                            "the arming-complete marker `arm` reads (`armed-state`)"))
+    for tag in OFFICIAL_RELEASE_SAMPLES:
+        samples.append((tag, "an official / CD version tag (`OFFICIAL_RELEASE_REPOSITORIES`)"))
+    return samples, problems
+
+
+def check_name_protected_reach(where: str, tokens: list[str],
+                               samples: list[tuple[str, str]]) -> list[str]:
+    """Can ONE `acr purge` invocation reach a tag protected by name?
+
+    🚨 STRUCTURAL, NOT SAMPLED. Every filter's TAG half must be exactly `IDENTITY_TAG_REGEX`; the
+    samples are then held against that one reviewed expression (acr-cli SEARCHES the tag half, see
+    `purge_selection`). Sampling an arbitrary regex proves nothing about the names the samples do
+    not spell. Every filter spelling is read (`filter_values`), and an invocation whose filters
+    cannot be read, or that has none, is a problem — never a step that reaches nothing."""
+    problems: list[str] = []
+    filters, error = filter_values(tokens)
+    if error:
+        return [f"{where}: a purge filter could not be read ({error}), so what the step reaches "
+                f"was NOT checked:\n      {' '.join(tokens)[:160]}"]
+    if not filters:
+        return [f"{where}: a purge step carries no filter, so what it reaches was NOT checked"]
+    for value in filters:
+        repo_part, _, tag_part = value.partition(":")
+        if tag_part != IDENTITY_TAG_REGEX:
+            problems.append(
+                f"{where}: the filter `{value}` does not use the reviewed identity allowlist as its "
+                f"tag half (`IDENTITY_TAG_REGEX`).\n"
+                "    A sampled check cannot prove an arbitrary regex reaches no protected name "
+                "(`^3[.]0[.][0-9]+$` misses every sample and reaches every clean 3.0 release). "
+                "Use the allowlist verbatim; widening it is a reviewed change to that constant.")
+    try:
+        regex = re.compile(IDENTITY_TAG_REGEX)
+    except re.error as exc:
+        return problems + [f"IDENTITY_TAG_REGEX does not compile ({exc})"]
+    reached = [(tag, why) for tag, why in samples if regex.search(tag)]
+    if reached:
+        shown = "; ".join(f"`{tag}` — {why}" for tag, why in reached[:6])
+        problems.append(
+            f"{where}: the identity allowlist itself reaches {len(reached)} tag(s) protected by "
+            f"NAME: {shown}{' …' if len(reached) > 6 else ''}\n"
+            "    A moving label is never locked (it would pin bytes it has left), so the purge "
+            "filter is the ONLY thing between it and `--ago`.")
+    return problems
+
+
 def check_in_force_is_boolean(manifest: dict, block: str) -> list[str]:
     """🚨 A DECLARATION WHOSE SWITCH IS NOT A BOOLEAN IS FAIL-OPEN, AND SILENTLY.
 
@@ -3333,7 +3487,8 @@ def retention_windows(root: str) -> tuple[list[str], str]:
             continue
         for step in re.findall(r"^\s*-\s+cmd:\s*(.+)$", yaml_path.read_text(encoding="utf-8"),
                                re.MULTILINE):
-            filters = " ".join(re.findall(r"--filter '([^']+)'", step)) or "?"
+            filters = " ".join(f for tokens in purge_invocations(step)[0]
+                               for f in filter_values(tokens)[0]) or "?"
             ago = (re.search(r"--ago (\S+)", step) or [None, "?"])[1]
             keep = (re.search(r"--keep (\S+)", step) or [None, "none"])[1]
             invocations, _ = purge_invocations(step)
@@ -3405,6 +3560,9 @@ def check_retention_record(root: str) -> int:
 
     tasks = manifest.get("tasks") or []
     steps_seen = 0
+    samples, sample_problems = name_protected_samples()
+    problems.extend(sample_problems)
+    name_checked = 0
     for task in tasks:
         yaml_path = record / task.get("file", "")
         if not yaml_path.is_file():
@@ -3447,10 +3605,24 @@ def check_retention_record(root: str) -> int:
             # a 7-day window one command away from running — which is exactly the state this
             # record was in while the pause held it off.
             problems.extend(check_window_policy(yaml_path.name, step))
+            # …and no step may REACH a tag protected by name (MeshWeaver#3438): every moving
+            # label, the arming marker and every official version, derived from their readers.
+            for tokens in purges:
+                problems.extend(check_name_protected_reach(yaml_path.name, tokens, samples))
+                name_checked += 1
 
     # 🚨 THE DENOMINATOR. Zero recorded tasks, or zero steps across them, reads exactly like a
     # clean record while having inspected nothing — the confusion #3438 is made of.
     print(f"retention record: {len(tasks)} task(s), {steps_seen} purge step(s) inspected.")
+    print(f"  name protection: {name_checked} purge invocation(s) held against {len(samples)} "
+          "name-protected tag sample(s) (release channels, floating words, the arming marker, "
+          "official versions).")
+    if steps_seen and not name_checked:
+        problems.append("ZERO purge invocations were held against the name-protected tags, so "
+                        "what the filters reach was NOT checked.")
+    if not samples:
+        problems.append("ZERO name-protected tag samples were derived, so every filter 'reaches "
+                        "none of them' by construction — the name check inspected nothing.")
     if not tasks:
         problems.append("tasks.json records ZERO tasks. The registry had two on 2026-09-07, so "
                         "zero means the record was emptied, not that retention stopped.")
@@ -3470,6 +3642,8 @@ def check_retention_record(root: str) -> int:
     print(f"  every recorded step retains for at least {MINIMUM_PURGE_AGE_DAYS} days by age with "
           "no --keep build-count quota (#3842), and the record's pause declaration agrees with "
           "the statuses it is recorded beside.")
+    print("  no recorded filter reaches a tag protected by NAME — a release channel, the arming "
+          "marker or an official version (MeshWeaver#3438).")
     return 0
 
 
@@ -3579,7 +3753,10 @@ def purge_selection(tokens: list[str], subjects: list[PurgeSubject],
     if dry_error:
         selection.problem = dry_error
         return selection
-    filters = [tokens[i + 1] for i in range(len(tokens) - 1) if tokens[i] == "--filter"]
+    filters, filter_error = filter_values(tokens)
+    if filter_error:
+        selection.problem = f"a filter is unreadable ({filter_error}), so nothing was selected"
+        return selection
     has_ago, ago_value = option_value(tokens, "--ago")
     ago_days = parse_ago_days(ago_value or "") if has_ago else 0.0
     if ago_days is None:
@@ -3610,12 +3787,21 @@ def purge_selection(tokens: list[str], subjects: list[PurgeSubject],
     def eligible(subject: PurgeSubject) -> bool:
         return subject.age_days > ago_days and (include_locked or not subject.locked)
 
+    # 🚨 THE TWO HALVES OF A FILTER ARE MATCHED DIFFERENTLY BY acr-cli, AND THE MODEL MUST NOT BE
+    # KINDER THAN THE TOOL. `CollectTagFilters` anchors the REPOSITORY half itself
+    # (`GetMatchingRepos(allRepoNames, "^"+repoRegex+"$", …)`), but the TAG half is handed to
+    # `getTagsToDelete` as written and tested with `filter.MatchString(*tag.Name)` — a SEARCH, not a
+    # full match (Azure/acr-cli cmd/repository/image_functions.go, cmd/acr/purge.go). This model used
+    # `fullmatch` for both until MeshWeaver#3438's name-protection arm, which under-selects: an
+    # unanchored tag regex reaches every tag that merely CONTAINS a match, and a record proven safe
+    # against a full-match model would delete more than it was proven to. So: repository fullmatch,
+    # tag search — and the committed filters anchor their tag half with `^…$` themselves.
     repos = {s.acr_repo for s in subjects
              if any(repo.fullmatch(s.acr_repo) for repo, _ in patterns)}
     for acr_repo in sorted(repos):
         tag_regexes = [tag for repo, tag in patterns if repo.fullmatch(acr_repo)]
         tags = [s for s in subjects if s.acr_repo == acr_repo and s.tag is not None
-                and any(regex.fullmatch(s.tag) for regex in tag_regexes)]
+                and any(regex.search(s.tag) for regex in tag_regexes)]
         candidates = sorted((s for s in tags if eligible(s)), key=lambda s: s.age_days)
         for subject in candidates[keep:]:
             selection.tags.add((acr_repo, subject.tag or ""))
@@ -4883,16 +5069,23 @@ def describe_purge_file(path: str) -> int:
     `--include-"locked"` executes as `--include-locked` and matches no search for that string. The
     tokenizer above is the only thing in this repository that reads a purge step correctly, so the
     shell asks it rather than keeping a second, weaker copy."""
+    print(json.dumps(purge_file_description(path)))
+    return 0
+
+
+def purge_file_description(path: str) -> dict:
+    """What `--describe-purge-file` prints, as a value."""
     text = Path(path).read_text(encoding="utf-8")
     steps = [line for line in text.splitlines() if re.match(r"^\s*-\s+cmd:", line)]
     described = []
     for step in steps:
         invocations, parse_error = purge_invocations(step)
         for tokens in invocations:
+            filters, filter_error = filter_values(tokens)
             described.append({
-                "filters": sorted(value for name, value in (
-                    (tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1))
-                    if name == "--filter"),
+                # Every spelling (`--filter V`, `--filter=V`, `-f V`, `-fV`) — one reader.
+                "filters": sorted(filters),
+                "filterError": filter_error or None,
                 # Fail-closed: an unreadable `--include-locked` is reported as ON.
                 "includeLocked": include_locked_value(tokens)[0],
                 "untagged": bool_flag_value(tokens, "--untagged")[0],
@@ -4904,8 +5097,73 @@ def describe_purge_file(path: str) -> int:
         if not invocations:
             described.append({"notAPurge": step.strip()[:160],
                               "parseError": parse_error or None})
-    print(json.dumps({"steps": len(steps), "purges": described}))
-    return 0
+    return {"steps": len(steps), "purges": described}
+
+
+def declared_drift_problems(live: dict, recorded: dict, task: str) -> tuple[list[str], list[str]]:
+    """(problems, notes) for a task whose drift `tasks.json` DECLARES (`recordAheadOfRegistry`).
+    `live` and `recorded` are `purge_file_description` outputs. Pure.
+
+    🚨 A DECLARATION EXCUSES THE WINDOW AND THE TAG FILTERS MOVING, NEVER THE TASK BECOMING
+    SOMETHING ELSE. Keyed on the task NAME alone, the exemption would pass a live definition that
+    gained `--include-locked` (which deletes every manifest the lock protects), reached a repository
+    nobody decided to purge, or stopped being an `acr purge` at all. So the LIVE steps are held to
+    the invariants the declaration is not about.
+
+    🚨 THE REPOSITORY HALF IS NEVER EXCUSED; THE TAG HALF MAY BE. The tag half is how the record
+    keeps tags protected by NAME — release channels, the arming marker, official versions — out of
+    reach (MeshWeaver#3438), so a declared record may narrow it ahead of the registry; the record's
+    own check (`--check-retention-record`) holds that narrowing to every name-protected tag on every
+    pull request. Until #3438 this compared WHOLE filters, so narrowing a tag half was reported as
+    "purges a different set of repositories", which it is not. The difference is still printed."""
+    problems: list[str] = []
+    notes: list[str] = []
+    if live.get("steps", 0) == 0 or not live.get("purges"):
+        problems.append(f"the LIVE definition of {task!r} has no `cmd:` step, so the declared drift "
+                        "excused a task that no longer purges anything.")
+    for purge in live.get("purges", []):
+        if purge.get("notAPurge") is not None:
+            problems.append(f"the LIVE definition of {task!r} has a `cmd:` step that is not an "
+                            f"acr purge: {purge['notAPurge']}")
+        if purge.get("parseError"):
+            problems.append(f"a LIVE step of {task!r} could not be tokenized: {purge['parseError']}")
+        if purge.get("filterError"):
+            problems.append(f"a LIVE filter of {task!r} could not be read: {purge['filterError']}")
+        if purge.get("includeLocked"):
+            problems.append(
+                f"the LIVE definition of {task!r} passes --include-locked. That flag DELETES LOCKED "
+                "MANIFESTS — the entire protection the lock job provides. A recordAheadOfRegistry "
+                "declaration is about the retention WINDOW and does not excuse it.")
+    for purge in recorded.get("purges", []):
+        if purge.get("filterError"):
+            problems.append(f"a RECORDED filter of {task!r} could not be read: {purge['filterError']}")
+
+    def filters(description: dict) -> list[str]:
+        return sorted(f for p in description.get("purges", []) for f in p.get("filters", []))
+
+    def repositories(description: dict) -> list[str]:
+        return sorted({f.partition(":")[0] for f in filters(description)})
+
+    if repositories(live) != repositories(recorded):
+        problems.append(
+            f"the LIVE definition of {task!r} purges a different set of repositories than the "
+            "record does. A recordAheadOfRegistry declaration covers the WINDOW and the TAG "
+            f"filters, not WHICH repositories are purged. live: {repositories(live)} "
+            f"recorded: {repositories(recorded)}")
+    elif filters(live) != filters(recorded):
+        notes.append(f"{task}: tag filters differ (declared, `apply` closes it): live "
+                     f"{filters(live)} recorded {filters(recorded)}")
+    return problems, notes
+
+
+def declared_drift(live_path: str, recorded_path: str, task: str) -> int:
+    problems, notes = declared_drift_problems(purge_file_description(live_path),
+                                              purge_file_description(recorded_path), task)
+    for note in notes:
+        print(f"  {note}")
+    for problem in problems:
+        print(f"::error::{problem}")
+    return 1 if problems else 0
 
 
 # ── Self-test: both arms, offline ──────────────────────────────────────────────────────────────
@@ -8038,8 +8296,7 @@ env:
         # Every referenced TAG the record's filters REACH is past the window, so with no lock written
         # every one is selected — nothing referenced is spared by its age alone. (A repository no
         # filter names, e.g. the whisper image, is spared by the filter; that is not this question.)
-        _reached = {r for tokens in _recorded for i, tok in enumerate(tokens[:-1]) if tok == "--filter"
-                    for r in [tokens[i + 1].partition(":")[0]]}
+        _reached = {f.partition(":")[0] for tokens in _recorded for f in filter_values(tokens)[0]}
         _reachable_refs = {t for t in referenced_tags if t[0] in _reached}
         check(_reachable_refs and _reachable_refs <= unprotected.tags,
               f"ARM 40c: with NO lock written, referenced tag(s) "
@@ -8152,6 +8409,170 @@ env:
                             {"inForce": True, "tasks": ["t"]}),
               "ARM 40d: an in-force dry run with no `liftWhen` passed — nobody could say how it ends")
 
+    # ── ARM 41: a tag protected by NAME survives the committed record with NO lock at all ───────
+    # MeshWeaver#3438 / Memex#219. A moving label is never locked and the arming marker is pinned by
+    # nothing, so the ONLY thing between them and `--ago` is the filter. Every subject below is
+    # UNLOCKED and 400 days old, so nothing but the filter can spare it. The record is read from the
+    # repository, not restated here.
+    _named, _named_problems = name_protected_samples()
+    check(not _named_problems and len(_named) >= 20,
+          f"ARM 41: the name-protected samples could not be built ({_named_problems}) or are too "
+          f"few ({len(_named)}) — a check over a shrunken sample set passes having checked less")
+    _named_tags = {tag for tag, _ in _named}
+    check({"3-latest", "latest", "main", "edge", "3.1-stable", "3-mac", "3.1.9984",
+           "arm-complete-3.1.9984"} <= _named_tags,
+          f"ARM 41: a known name-protected tag is missing from the derived samples — the channel "
+          f"reader or the marker prefix was not read: {sorted(_named_tags)[:12]} …")
+    _identity = ["staging-1f652b7-34040888432", "staging-1f652b7-34040888432-amd64", "1f652b7",
+                 "afde4ea-p061976b", "3.0.0-ci.7903", "3.0.0-rc8.ci.6145", "3.0.0-next.43",
+                 "3.0.0-rc13"]
+    _recorded_all: list[list[str]] = []
+    for _file in ("purge-old-images.yaml", "purge-old-ci-releases.yaml"):
+        _inv, _err = recorded_purge_invocations(_root, _file)
+        check(not _err and _inv, f"ARM 41: {_file} could not be read ({_err}), so what it reaches "
+                                 "was NOT checked")
+        _recorded_all.extend(_inv)
+    _reached_repos = sorted({f.partition(":")[0] for tokens in _recorded_all
+                             for f in filter_values(tokens)[0]})
+    check(len(_reached_repos) >= 6,
+          f"ARM 41: the record reaches only {_reached_repos} — fewer repositories than it names")
+
+    def _named_subjects(age: float, tags: list[str]) -> list[PurgeSubject]:
+        out: list[PurgeSubject] = []
+        for repo in _reached_repos:
+            for index, tag in enumerate(tags):
+                digest = "sha256:" + f"{index:064x}"
+                out.append(PurgeSubject(repo, digest, tag, age, False))
+                out.append(PurgeSubject(repo, digest, None, age, False))
+        return out
+
+    def _union(invocations: list[list[str]], subjects: list[PurgeSubject]) -> PurgeSelection:
+        union = PurgeSelection()
+        for tokens in invocations:
+            one = purge_selection(tokens, subjects, {}, {})
+            check(not one.problem, f"ARM 41: an invocation could not be modelled: {one.problem}")
+            union.tags |= one.tags
+            union.manifests |= one.manifests
+        return union
+
+    _protected_subjects = _named_subjects(400.0, sorted(_named_tags))
+    _sel = _union(_recorded_all, _protected_subjects)
+    check(not _sel.tags,
+          f"ARM 41: the committed record SELECTS {len(_sel.tags)} tag(s) protected by name with no "
+          f"lock written, e.g. {sorted(_sel.tags)[:6]} — a fresh install loses its seed, `arm` "
+          "re-arms a set the fleet already took")
+    check(not _sel.manifests,
+          f"ARM 41: the committed record selects {len(_sel.manifests)} manifest(s) that only a "
+          f"name-protected tag names: {sorted(_sel.manifests)[:4]}")
+    # …while the window still WORKS on the identity tags: selected past 30 days, spared under it.
+    _old_ids = _union(_recorded_all, _named_subjects(31.0, _identity))
+    _young_ids = _union(_recorded_all, _named_subjects(29.0, _identity))
+    check({tag for _, tag in _old_ids.tags} == set(_identity),
+          f"ARM 41: the committed filters no longer reach a per-build identity tag past the window: "
+          f"{sorted(set(_identity) - {tag for _, tag in _old_ids.tags})} — a filter that reaches "
+          "nothing passes every assertion above")
+    check(not _young_ids.tags and not _young_ids.manifests,
+          "ARM 41: a 29-day-old identity tag was selected — under the decided floor")
+    # NEGATIVE CONTROL: the record as it stood before #3438's name arm (`<repo>:.*`) DOES select them.
+    _wide = [[(t.partition(":")[0] + ":.*") if i and tokens[i - 1] == "--filter" else t
+              for i, t in enumerate(tokens)] for tokens in _recorded_all]
+    _wide_sel = _union(_wide, _protected_subjects)
+    check({tag for _, tag in _wide_sel.tags} >= {"3-latest", "latest", "arm-complete-3.1.9984",
+                                                 "3.1.9984"},
+          "ARM 41: the pre-#3438 `.*` filters spared the name-protected tags too — so the assertion "
+          "above was measured over subjects no filter could reach")
+    # …and the record CHECK reds on that same wide step, and passes the committed one.
+    check(any(check_name_protected_reach("w", tokens, _named) for tokens in _wide),
+          "ARM 41: `--check-retention-record` passed a `<repo>:.*` filter that reaches every "
+          "release channel")
+    check(not any(check_name_protected_reach("c", tokens, _named) for tokens in _recorded_all),
+          "ARM 41: `--check-retention-record` refused the committed filters it was proven against")
+    # The MODEL searches the tag half (acr-cli `MatchString`) and anchors the repository half.
+    _probe = [PurgeSubject("memex-portal-ai", "sha256:" + "ab" * 32, "3.0.0-ci.1", 400.0, False)]
+    check(purge_selection(["acr", "purge", "--filter", "memex-portal-ai:ci[.]1", "--ago", "30d"],
+                          _probe, {}, {}).tags == {("memex-portal-ai", "3.0.0-ci.1")},
+          "ARM 41: an UNANCHORED tag regex did not reach a tag that merely contains it — the model "
+          "full-matches where acr-cli searches, and under-selects what the tool deletes")
+    check(not purge_selection(["acr", "purge", "--filter", "memex-portal:.*", "--ago", "30d"],
+                              _probe, {}, {}).tags,
+          "ARM 41: `memex-portal:` reached `memex-portal-ai` — acr-cli anchors the repository half")
+    # Fail closed: no arming-marker declaration is a problem, never fewer samples.
+    with tempfile.TemporaryDirectory() as _empty:
+        check(any("ARM_COMPLETE_PREFIX" in p for p in name_protected_samples(Path(_empty))[1]),
+              "ARM 41: a missing arming-marker declaration produced no problem — the marker would "
+              "silently stop being checked")
+
+    # ── ARM 41c: the proof is the ALLOWLIST, not the samples (review of #7238) ──────────────────
+    # `^3[.]0[.][0-9]+$` reaches no sample and every clean 3.0 release. The check must refuse it
+    # because it is not the reviewed allowlist — while the model shows it really reaches `3.0.7`.
+    _narrow_but_wrong = ["acr", "purge", "--filter", "memex-portal-ai:^3[.]0[.][0-9]+$",
+                         "--ago", "30d", "--untagged"]
+    check(not any(_named_tag == "3.0.7" for _named_tag, _ in _named)
+          and purge_selection(_narrow_but_wrong,
+                              [PurgeSubject("memex-portal-ai", "sha256:" + "cd" * 32, "3.0.7", 400.0,
+                                            False)], {}, {}).tags == {("memex-portal-ai", "3.0.7")},
+          "ARM 41c: the control is not a control — `3.0.7` is a sample, or the model does not "
+          "reach it")
+    check(check_name_protected_reach("n", _narrow_but_wrong, _named),
+          "ARM 41c: a filter that reaches every clean 3.0 release passed because no SAMPLE matched it")
+    check(not check_name_protected_reach(
+              "ok", ["acr", "purge", "--filter", "memex-portal-ai:" + IDENTITY_TAG_REGEX, "--ago", "30d"],
+              _named),
+          "ARM 41c: the reviewed allowlist itself was refused")
+
+    # ── ARM 41d: every filter SPELLING is read, by every consumer (review of #7238) ─────────────
+    _wide_value = "memex-portal-ai:.*"
+    _spellings = {"--filter V": ["--filter", _wide_value], "--filter=V": ["--filter=" + _wide_value],
+                  "-f V": ["-f", _wide_value], "-f=V": ["-f=" + _wide_value], "-fV": ["-f" + _wide_value]}
+    _latest = [PurgeSubject("memex-portal-ai", "sha256:" + "ef" * 32, "latest", 400.0, False)]
+    for _label, _flag in _spellings.items():
+        _tokens = ["acr", "purge", *_flag, "--ago", "30d"]
+        check(filter_values(_tokens) == ([_wide_value], ""),
+              f"ARM 41d: `{_label}` was not read as a filter: {filter_values(_tokens)}")
+        check(check_name_protected_reach("s", _tokens, _named),
+              f"ARM 41d: a `.*` filter spelled `{_label}` passed the name check")
+        check(purge_selection(_tokens, _latest, {}, {}).tags == {("memex-portal-ai", "latest")},
+              f"ARM 41d: the model did not apply a filter spelled `{_label}`")
+    # …and the description `verify` compares reads them too.
+    with tempfile.TemporaryDirectory() as _spell_dir:
+        _spell_file = Path(_spell_dir) / "t.yaml"
+        _spell_file.write_text(f"steps:\n  - cmd: acr purge -f '{_wide_value}' --ago 30d\n",
+                               encoding="utf-8")
+        check(purge_file_description(str(_spell_file))["purges"][0]["filters"] == [_wide_value],
+              "ARM 41d: `--describe-purge-file` dropped a `-f` filter, so `verify` would compare "
+              "a repository set that is missing it")
+    # A flag with no value, or a value that is not `repository:regex`, is an ERROR, never skipped.
+    for _bad in (["acr", "purge", "--ago", "30d", "--filter"], ["acr", "purge", "-f", "nocolon"],
+                 ["acr", "purge", "--filter=:.*"]):
+        check(bool(filter_values(_bad)[1]) and check_name_protected_reach("b", _bad, _named),
+              f"ARM 41d: an unreadable filter {_bad[2:]} was skipped instead of RED")
+        check(bool(purge_selection(_bad, _latest, {}, {}).problem),
+              f"ARM 41d: the model selected over an unreadable filter {_bad[2:]}")
+    check(check_name_protected_reach("none", ["acr", "purge", "--ago", "30d"], _named),
+          "ARM 41d: a purge step with NO filter passed the name check as reaching nothing")
+    # Control: the other options are not mistaken for filters.
+    check(filter_values(["acr", "purge", "--filter-timeout-seconds", "60", "--ago", "30d"]) == ([], ""),
+          "ARM 41d: `--filter-timeout-seconds` was read as a filter")
+
+    # ── ARM 41b: a DECLARED drift may narrow the TAG half, never move the REPOSITORY half ───────
+    def _desc(*filters: str, include_locked: bool = False) -> dict:
+        return {"steps": 1, "purges": [{"filters": sorted(filters), "includeLocked": include_locked}]}
+
+    _rec = _desc("memex-portal-ai:^(1f652b7)$", "mw-plugin-test:^(1f652b7)$")
+    _p, _n = declared_drift_problems(_desc("memex-portal-ai:.*", "mw-plugin-test:.*"), _rec, "t")
+    check(not _p and _n, f"ARM 41b: a declared TAG-half narrowing was refused or not printed: {_p}")
+    _p, _ = declared_drift_problems(_desc("memex-portal-ai:.*", "memex-website:.*"), _rec, "t")
+    check(any("different set of repositories" in p for p in _p),
+          "ARM 41b: a live task reaching a repository the record does not name was excused")
+    _p, _ = declared_drift_problems(_desc("memex-portal-ai:.*", "mw-plugin-test:.*",
+                                          include_locked=True), _rec, "t")
+    check(any("--include-locked" in p for p in _p),
+          "ARM 41b: a live `--include-locked` was excused by a declaration")
+    _p, _n = declared_drift_problems(_rec, _rec, "t")
+    check(not _p and not _n, "ARM 41b: identical definitions produced a problem or a note")
+    check(declared_drift_problems({"steps": 0, "purges": []}, _rec, "t")[0],
+          "ARM 41b: a live task with no step was excused")
+
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no
     # longer what runs. Compare the calls, mechanically.
@@ -8214,7 +8635,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to. WHAT THIS FLEET PUBLISHES TO IT (#4323, the THIRD question about the same unit): the push targets are DERIVED from the publishing lanes — every `--tag` and every mirror-image-to-registry.sh destination, shell continuations joined, with the two readers falsified SEPARATELY because disabling the mirror call loses a whole registry while disabling the join loses one repository — a `third-party` host this fleet pushes to with no `publishes` block is RED (that is the defect, and it validated green for a day), an undeclared push target is RED, the declared repositories are held to the derived set in BOTH directions, `operator-retained` is the only rule a publication may claim and may enumerate no deleters and authorize no cleanup, a `fleet-unlockable` host is NOT made to declare the same fact twice, a renamed lane REDS rather than deriving nothing — and the two arms that stop the block being prose: an overlay pinning one of OUR published repositories is RED while the bootstrap image on the SAME host is not, and the report never prints our own images under 'declared NOT ours to retain'. WHICH REPOSITORY DECLARES IT (#3438, the identity): an installation is `owner/name:id`, so TWO deployments repositories may each declare a `memex` and both are built, probed at their own hosts and protected against their own repository's pins — while ONE repository declaring an id in two overlays is still ambiguous and still RED, and two installations of the same id can never be LABELLED the same way. The roster resolves against that identity: an entry naming its `repo` reaches only that repository's installation, an unqualified entry for an id two repositories declare is RED rather than applied to either, and an `id` carrying a `:` or a `repo` that is not an `owner/name` is refused before it can exempt nobody while reading as a declaration. AND THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION: every repository whose tree carries deployment overlay FILES must be named in the `repositories` table — an undeclared one is RED on the real decision path, a stale name is RED, a repository whose tree could NOT be read is skipped there and still reds the run, and the control (a fully declared fleet) passes — while the STALE direction, which needs the WHOLE fleet as its denominator, is asserted only over a full discovery, so a `--repos` / `--root` scan neither reds on a record that is right nor stays silent about not having asked. Two roster entries that RESOLVE to one installation are RED rather than applied in key order with the loser invisible, and a DECLARED repository whose tree could not be read does not also produce the contradictory stale line. OUT OF ESTATE: our images in a registry outside this fleet's reach are declared rather than described falsely — the rule PRINTS on every run, may enumerate no deleters, must name its `estate` and must carry `cleanupAuthorized: false`, and it is REFUSED for any host this fleet's own publishing lanes push to and refused outright where that derivation cannot be trusted, which is what keeps it from being a trapdoor out of `nothing-deletes` — and the report calls its references a LIST rather than \"a protected set a cleanup must KEEP\", which would contradict the declaration printed beside it.")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`. ANOTHER REGISTRY: an installation whose overlay pins its images somewhere this lane cannot lock is NAMED rather than read as pinning zero (the real `build` overlay shape, whose two `cr.meshweaver.cloud` pins the ACR extractor sees as nothing), an UNDECLARED registry REDS wherever it appears, a declared `fleet-unlockable` one is counted on its own line saying protection there is UNVERIFIED, pinning in BOTH is RED because half covered is not covered, a `*.azurecr.io` that is not this registry is foreign, helm's split repository/tag shape is read, and a reference inside a COMMENT is prose. WHAT DELETES FROM IT (#4230, the SECOND question about the same unit): every declared registry must say what deletes from it or go RED, an empty table is zero-asked rather than clean, a `nothing-deletes` enumeration in which NOTHING is `present` inspected nothing, a `present` written as the STRING \"true\" is RED, the rule and the disposition are checked against EACH OTHER in both directions, a `derived-protected-set` axis that merely WARNS on an incomplete derivation is RED because on a registry with NO LOCK that deletes more rather than protecting less — and the arm that is not about JSON: the committed CHART is re-derived, so a `kind: Job`/`kind: CronJob` rendered beside the registry (quoted or bare), a `maintenance:` window that MOVED, a NEW key in that stanza, the stanza VANISHING, and an executable deletion anywhere in `deploy/`/`.github/` each go RED while the record still reads 'nothing deletes' — with the sweep's every spelling PROVEN to match on a synthetic control, and a deleter named inside a COMMENT proven NOT to. WHAT THIS FLEET PUBLISHES TO IT (#4323, the THIRD question about the same unit): the push targets are DERIVED from the publishing lanes — every `--tag` and every mirror-image-to-registry.sh destination, shell continuations joined, with the two readers falsified SEPARATELY because disabling the mirror call loses a whole registry while disabling the join loses one repository — a `third-party` host this fleet pushes to with no `publishes` block is RED (that is the defect, and it validated green for a day), an undeclared push target is RED, the declared repositories are held to the derived set in BOTH directions, `operator-retained` is the only rule a publication may claim and may enumerate no deleters and authorize no cleanup, a `fleet-unlockable` host is NOT made to declare the same fact twice, a renamed lane REDS rather than deriving nothing — and the two arms that stop the block being prose: an overlay pinning one of OUR published repositories is RED while the bootstrap image on the SAME host is not, and the report never prints our own images under 'declared NOT ours to retain'. WHICH REPOSITORY DECLARES IT (#3438, the identity): an installation is `owner/name:id`, so TWO deployments repositories may each declare a `memex` and both are built, probed at their own hosts and protected against their own repository's pins — while ONE repository declaring an id in two overlays is still ambiguous and still RED, and two installations of the same id can never be LABELLED the same way. The roster resolves against that identity: an entry naming its `repo` reaches only that repository's installation, an unqualified entry for an id two repositories declare is RED rather than applied to either, and an `id` carrying a `:` or a `repo` that is not an `owner/name` is refused before it can exempt nobody while reading as a declaration. AND THE HALF THAT STOPS THE QUALIFICATION BECOMING AN EXEMPTION: every repository whose tree carries deployment overlay FILES must be named in the `repositories` table — an undeclared one is RED on the real decision path, a stale name is RED, a repository whose tree could NOT be read is skipped there and still reds the run, and the control (a fully declared fleet) passes — while the STALE direction, which needs the WHOLE fleet as its denominator, is asserted only over a full discovery, so a `--repos` / `--root` scan neither reds on a record that is right nor stays silent about not having asked. Two roster entries that RESOLVE to one installation are RED rather than applied in key order with the loser invisible, and a DECLARED repository whose tree could not be read does not also produce the contradictory stale line. OUT OF ESTATE: our images in a registry outside this fleet's reach are declared rather than described falsely — the rule PRINTS on every run, may enumerate no deleters, must name its `estate` and must carry `cleanupAuthorized: false`, and it is REFUSED for any host this fleet's own publishing lanes push to and refused outright where that derivation cannot be trusted, which is what keeps it from being a trapdoor out of `nothing-deletes` — and the report calls its references a LIST rather than \"a protected set a cleanup must KEEP\", which would contradict the declaration printed beside it. NAME PROTECTION (#3438, Memex#219): with NO lock written and every subject 400 days old, the committed record reaches no release channel, no arming marker and no official version on any repository it names, still reaches every per-build identity shape past 30 days and none under it — the pre-#3438 `.*` filters proven to reach them as the negative control — the record check reds on such a filter, the purge model SEARCHES the tag half the way acr-cli does, and a declared drift may narrow a TAG half but never move a REPOSITORY.")
     return 0
 
 
@@ -8233,6 +8654,9 @@ def main() -> int:
     parser.add_argument("--describe-purge-file", metavar="PATH",
                         help="print, as JSON, the tokenized `acr purge` steps of one task "
                              "definition — the parser acr-retention-tasks.sh shares")
+    parser.add_argument("--declared-drift", nargs=3, metavar=("LIVE", "RECORDED", "TASK"),
+                        help="hold a DECLARED drift (recordAheadOfRegistry) to the invariants the "
+                             "declaration does not excuse — acr-retention-tasks.sh verify")
     parser.add_argument("--check-retention-record", metavar="ROOT",
                         help="assert the committed .github/acr-retention record still describes a "
                              "purge the lock can protect against; no credential, no network")
@@ -8254,6 +8678,8 @@ def main() -> int:
         return self_test()
     if args.describe_purge_file:
         return describe_purge_file(args.describe_purge_file)
+    if args.declared_drift:
+        return declared_drift(*args.declared_drift)
     if args.check_retention_record:
         return check_retention_record(args.check_retention_record)
     if args.check_registry_retention:
