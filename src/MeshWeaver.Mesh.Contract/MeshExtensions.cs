@@ -10729,7 +10729,10 @@ public static class MeshExtensions
             carried
                 .Select(p => MoveEntitlement(hub, p, targetPath + p[sourcePath.Length..], callerAccessContext)
                     .Select(outcome => (Path: p, Outcome: outcome)))
-                .Merge(8)
+                .ToObservable()
+                // Stack-safe bounded fan-out — a bare Merge(n) recurses per queued inner that
+                // completes synchronously (a warm permission cache), see MergeBoundedRatchetGuard.
+                .MergeBounded(8)
                 .Where(r => !r.Outcome.IsGranted)
                 .Select(r => ((LocalizableText, bool)?)AuthorshipRefusalFor(r.Path, r.Outcome))
                 .Take(1)
