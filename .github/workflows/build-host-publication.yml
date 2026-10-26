@@ -33,7 +33,7 @@ name: Build host — stage a host-executed run's modules for the publish lane
 #
 #   modules:            # node-repo-module-pack.yml with publish-mode: staged and an `executor:`
 #   host-publication:
-#     needs: [modules]
+#     needs: [modules, <every job the executor expression reads>]
 #     if: <the pack call's `publish:` condition, verbatim>
 #     uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main
 #     permissions: { contents: read, id-token: write }
@@ -256,7 +256,15 @@ jobs:
         run: |
           set -euo pipefail
           head -c 400 "$RUNNER_TEMP/s/module-publication.py" | grep -q "module-publication" || { echo "::error::the fetched module-publication.py does not look like the publication gate"; exit 1; }
+          # The self-test exercises the YAML caller checks; setup-python alone carries no PyYAML.
+          # Same bootstrap as node-repo-module-publish.yml.
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
           python3 "$RUNNER_TEMP/s/module-publication.py" --self-test
+          # Receipts are keyed by repo/sha/stage, not lane: when two pack calls share a host stage this
+          # fetch holds BOTH calls' records. Set the sibling's aside by name (never a record with no
+          # lane — the check refuses that); completeness is still judged against THIS call's selection.
+          python3 "$RUNNER_TEMP/s/module-publication.py" partition \
+            --staged "$RUNNER_TEMP/staged" --lane "$LANE" --aside "$RUNNER_TEMP/other-lanes"
           printf '%s' "$DECLARED" > "$RUNNER_TEMP/declared.json"
           python3 "$RUNNER_TEMP/s/module-publication.py" publish --check-only \
             --staged "$RUNNER_TEMP/staged" --lane "$LANE" \

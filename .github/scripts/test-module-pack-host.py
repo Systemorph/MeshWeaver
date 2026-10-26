@@ -257,6 +257,50 @@ def behaviour(doc: dict, hostpub: dict) -> None:
               names.index("The host's records answer the pack call's selection (the publisher's check, no POST)")
               < names.index("Stage them for the publish lane") < names.index("Hand the pack call's lane and selection to the publisher")
               and names[-1] == "Hand the pack call's lane and selection to the publisher", str(names))
+        # The check step, EXECUTED over a fetch that holds TWO pack calls' records (receipts are keyed
+        # by repo/sha/stage, not lane — review of #7271): it must set the sibling's aside and pass,
+        # and the same body without its `partition` line must refuse (the negative control).
+        check_body = step(hp, "The host's records answer the pack call's selection (the publisher's check, no POST)")["run"]
+        names_in_body = [check_body.find(s) for s in ('import yaml', '--self-test', ' partition ', '--check-only')]
+        check("the check step bootstraps PyYAML before the self-test, and partitions before --check-only",
+              all(i >= 0 for i in names_in_body) and names_in_body == sorted(names_in_body), str(names_in_body))
+        (tmp / "s").mkdir(exist_ok=True)
+        shutil.copy(ROOT / ".github" / "scripts" / "module-publication.py", tmp / "s" / "module-publication.py")
+
+        def fetched() -> None:
+            import hashlib as _h, json as _j, zipfile as _z
+            staged = tmp / "staged"
+            shutil.rmtree(staged, ignore_errors=True)
+            shutil.rmtree(tmp / "other-lanes", ignore_errors=True)
+            staged.mkdir()
+            for module, lane in (("MeshWeaver.AI", "L1"), ("MeshWeaver.Mcp", "L2")):
+                bundle = staged / f"{module}.module.nupkg"
+                with _z.ZipFile(bundle, "w") as zf:
+                    zf.writestr("meshweaver/manifest.json", _j.dumps(
+                        {"frameworkMvid": "mvid:aaaa", "module": {"assemblyName": module}}))
+                (staged / f"{module}.publication.json").write_text(_j.dumps(
+                    {"lane": lane, "package": module.split(".")[-1], "module": module, "version": "1.0.0",
+                     "frameworkIdentity": "mvid:aaaa", "owed": True,
+                     "bundle": {"name": bundle.name, "sha256": _h.sha256(bundle.read_bytes()).hexdigest()}}),
+                    encoding="utf-8")
+
+        env = {"LANE": "L1", "SELECTED": "MeshWeaver.AI",
+               "DECLARED": '[{"module":"MeshWeaver.AI"},{"module":"MeshWeaver.Mcp"}]'}
+        fetched()
+        rc, out, _ = run_bash(check_body, env, tmp)
+        check("EXECUTED: a fetch holding a sibling lane's records passes for THIS lane, the sibling set aside",
+              rc == 0 and (tmp / "other-lanes" / "MeshWeaver.Mcp.publication.json").is_file()
+              and not (tmp / "staged" / "MeshWeaver.Mcp.module.nupkg").exists(), out[-600:])
+        fetched()
+        no_partition = "\n".join(l for l in check_body.splitlines()
+                                 if " partition " not in l and "--staged \"$RUNNER_TEMP/staged\" --lane \"$LANE\" --aside" not in l)
+        rc, out, _ = run_bash(no_partition, env, tmp)
+        check("NEGATIVE CONTROL: the same step WITHOUT the partition refuses the mixed fetch",
+              rc == 1 and "another call" in out, out[-600:])
+        fetched()
+        rc, out, _ = run_bash(check_body, {**env, "SELECTED": "MeshWeaver.AI MeshWeaver.Mcp"}, tmp)
+        check("EXECUTED: completeness still holds — a selected module only the sibling staged is RED",
+              rc == 1 and "MeshWeaver.Mcp" in out, out[-600:])
         inputs = hostpub["on"]["workflow_call"]["inputs"]
         check("host-publication's executor defaults to `host` (its original behaviour for existing callers)",
               (inputs.get("executor") or {}).get("default") == "host")

@@ -508,6 +508,7 @@ request) refuses any other shape:
 
 ```yaml
 modules:                 # the pack call: its `select` runs here, its legs on the host
+  needs: [admission, modules-follow, …]      # every job its `executor`/`host-verdict` read
   uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-pack.yml@main
   with:
     executor: ${{ needs.admission.outputs.executor || 'actions' }}
@@ -515,7 +516,7 @@ modules:                 # the pack call: its `select` runs here, its legs on th
     publish-mode: staged
     publish: <the publishing condition>
 host-publication:        # the host graph's source for the publisher
-  needs: [modules]
+  needs: [modules, admission]                # the pack call AND every job its `executor` reads
   if: <the pack call's `publish:` condition, verbatim>
   uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main
   permissions: { contents: read, id-token: write }
@@ -544,6 +545,10 @@ publish:                 # unchanged lane, reading THROUGH the host-publication 
   back off them), stages them as `module-publication-<lane>-host`, and only then emits its outputs.
   With `executor: actions` it is a no-op success that hands the pack call's outputs through — never a
   skip, because a skipped ancestor skips the publisher. A zero selection is the one "nothing owed".
+  Receipts are keyed by repository, sha and stage, not lane, so before the check it sets aside, by
+  name, every record stamped with ANOTHER lane and its bundle (`module-publication.py partition`): two
+  pack calls sharing a host stage each publish their own. A record with no lane stays, and the check
+  refuses it.
 - **The selection is the pack call's `select`, never the host's records.** A selection read off what
   the host staged would accept whatever the host staged.
 - **`check-callers` refuses**: a host-capable staged pack call with no (or two) host-publication
@@ -551,7 +556,9 @@ publish:                 # unchanged lane, reading THROUGH the host-publication 
   selection or catalog does not come from one pack call, whose `executor` differs from that call's,
   whose `if:` differs from the pack call's `publish:` or carries a status function, or that does not
   need the pack call; a host-publication call for a pack call that always runs on Actions or is not
-  `staged`; and a literal `executor: host` that publishes in-leg. An `executor` expression counts as
+  `staged`; a call whose `executor` expression reads a job (`needs.<job>`) its own `needs:` does not
+  name — that context is EMPTY there, so the expression falls back to `actions` while a sibling call
+  spelling it identically resolves `host`; and a literal `executor: host` that publishes in-leg. An `executor` expression counts as
   "may run on a host".
 - **The host's modules stage owes the lane's format** (§2, step 7): a bundle and a
   `<module>.publication.json` per selected module, stamped with the pack call's lane key —
