@@ -135,7 +135,8 @@ public class UntypedContentDegradationReachesTheTraceSinkTest
         var degraded = Assert.IsType<MeshNodeContentDegradedException>(record.Exception);
         Assert.Equal(ProbePath, degraded.NodePath);
         Assert.Equal(ProbeNodeType, degraded.NodeType);
-        Assert.Contains("renders empty", degraded.RawJson);
+        Assert.Contains($"$type=\"{nameof(DegradationProbeContent)}\"", degraded.Shape);
+        Assert.Contains("\"title\"", degraded.Shape);
         Assert.Contains(seam, degraded.Seam);
 
         // …and the prose net still works, so a per-test file log (MESHWEAVER_TEST_FILE_LOGS, which
