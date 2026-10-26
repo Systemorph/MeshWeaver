@@ -55,6 +55,16 @@ public sealed record BuildHostsBlock
     /// <summary>Which versioned deployments are kept (Doc/Architecture/DeployTestSwitchLatest §6).</summary>
     [Description("Which versioned build servers are kept")]
     public BuildHostRetention Retention { get; init; } = new();
+
+    /// <summary>
+    /// The client id of the hosts' ONE cloud credential: a user-assigned identity granted AcrPull only, with which
+    /// the host pulls the sealed plugins publication (MeshWeaver.Plugins Hosting/BuildQueue §6). Rendered as the
+    /// chart's <c>buildHosts.workloadIdentity.clientId</c>, which annotates the hosts' ServiceAccount. Null → the
+    /// hosts carry no cloud credential, and a host offered a publication cannot pull it. Never the portal's identity:
+    /// a host runs untrusted pull-request code.
+    /// </summary>
+    [Description("Client id of the hosts' pull-only workload identity (AcrPull on the registry, nothing else)")]
+    public string? PullIdentityClientId { get; init; }
 }
 
 /// <summary>
