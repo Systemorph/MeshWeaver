@@ -608,7 +608,10 @@ public static class AccessControlPipeline
                         .SelectMany(outcome => outcome.IsUndetermined
                             ? Observable.Return(outcome)
                             : outcome.IsGranted
+                                // System is authorised before any rule, exactly as the delete handler
+                                // and RlsNodeValidator do — infrastructure deletion never meets a rule.
                                 ? CascadeRootOf(delivery.Message) is not null
+                                  && !string.Equals(effectiveUserId, WellKnownUsers.System, StringComparison.Ordinal)
                                     ? ReconsiderThroughNodeTypeRule(
                                         hub, delivery, hubPath, check, effectiveUserId, trustedCaller, logger,
                                         whenNoRule: outcome)

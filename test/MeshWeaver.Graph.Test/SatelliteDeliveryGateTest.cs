@@ -3,6 +3,10 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using MeshWeaver.Data;
+using Microsoft.Extensions.DependencyInjection;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Security;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -66,6 +70,10 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
     /// Delete) although the rule-less demand for its path would be Update.</summary>
     private const string PartitionRecordPath = Partition + "/Parts/PartX";
 
+    /// <summary>A node type whose Delete rule refuses everyone — and the node of it under test.</summary>
+    private const string DenyingType = "SatelliteGateDenyingType";
+    private const string DeniedNodePath = MainNodePath + "/Denied";
+
     /// <summary>The Editor's own grant — governance, not content.</summary>
     private const string GrantPath = Partition + "/_Access/" + EditorUser + "_Access";
     private const string ViewerUser = "satellite-viewer";
@@ -82,7 +90,14 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
     // would hold Delete outright and every assertion here would pass vacuously.
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
+            .ConfigureServices(services => services.AddSingleton<INodeTypeAccessRule>(new DenyingDeleteRule()))
             .AddMeshNodes(
+                new MeshNode(DenyingType)
+                {
+                    Name = "Denying Rule Type",
+                    HubConfiguration = config => config.AddMeshDataSource(source => source.WithContentType<AccessObject>()),
+                },
+                new MeshNode("Denied", MainNodePath) { Name = "Denied", NodeType = DenyingType, MainNode = MainNodePath },
                 new MeshNode(Partition) { Name = "Satellite Delete Gate", NodeType = "Markdown" },
                 new MeshNode("Doc", Partition) { Name = "Doc", NodeType = "Markdown" },
                 new MeshNode("Plain", MainNodePath) { Name = "Plain Child", NodeType = "Markdown" },
@@ -244,5 +259,39 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
             "the Partition type's rule demands Delete, which an Editor lacks — a grant of the rule-less "
             + "Update demand must not let the pre-flight take the owner's seal");
         failure!.ErrorType.Should().Be(ErrorType.Unauthorized, failure.Message ?? "a denial");
+    }
+
+    /// <summary>
+    /// System is authorised before any rule — as the delete handler and RlsNodeValidator do — so
+    /// re-deciding GRANTED deletes through a declared rule must not refuse infrastructure deletion.
+    /// Control: the DevLogin admin, who holds Delete outright, IS refused by the same rule.
+    /// </summary>
+    [Fact]
+    public async Task ASystemPreflight_IsNotRefusedByADenyingRule_ButAnAdminsIs()
+    {
+        var system = await RequestHub
+            .Observe(new ValidateDeleteRequest(DeniedNodePath),
+                o => o.WithTarget(new Address(DeniedNodePath)).WithAccessContext(new AccessContext { ObjectId = WellKnownUsers.System, Name = WellKnownUsers.System }))
+            .Take(1)
+            .Select(_ => (DeliveryFailure?)null)
+            .Catch((DeliveryFailureException ex) => Observable.Return<DeliveryFailure?>(ex.Failure))
+            .Should().Within(Budget).Emit();
+        system.Should().BeNull("System is authorised before any rule: " + (system?.Message ?? string.Empty));
+
+        var admin = await RequestHub
+            .Observe(new ValidateDeleteRequest(DeniedNodePath),
+                o => o.WithTarget(new Address(DeniedNodePath)).WithAccessContext(TestUsers.Admin))
+            .Take(1)
+            .Select(_ => (DeliveryFailure?)null)
+            .Catch((DeliveryFailureException ex) => Observable.Return<DeliveryFailure?>(ex.Failure))
+            .Should().Within(Budget).Emit();
+        admin.Should().NotBeNull("the type's Delete rule is the decision, and it refuses — even a Delete holder");
+    }
+
+    private sealed class DenyingDeleteRule : INodeTypeAccessRule
+    {
+        public string NodeType => DenyingType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId) => Observable.Return(false);
     }
 }

@@ -32,6 +32,10 @@ public class EarlyAbortMarkIsAuthorizedTest(ITestOutputHelper output) : Monolith
     /// Editor is a deleter the delete admits — and must be able to leave its early-abort mark.</summary>
     private const string EditorDeleter = "seal-marks-editor";
 
+    /// <summary>A comment's author, who holds only Comment: the Comment type's rule lets them delete it.</summary>
+    private const string CommentAuthor = "seal-marks-commenter";
+    private const string CommentPath = Path + "/_Comment/c1";
+
     private CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // ConfigureMeshBase: the default test configuration grants Public Admin, which would let the intruder delete.
@@ -41,13 +45,20 @@ public class EarlyAbortMarkIsAuthorizedTest(ITestOutputHelper output) : Monolith
             new MeshNode(Partition) { NodeType = "Markdown" },
             AssignmentNodeFactory.UserRole(Deleter, "Admin", Partition),
             AssignmentNodeFactory.UserRole(EditorDeleter, "Editor", Partition),
-            new MeshNode("Doc", Partition) { NodeType = "Markdown" });
+            AssignmentNodeFactory.UserRole(CommentAuthor, "Commenter", Partition),
+            new MeshNode("Doc", Partition) { NodeType = "Markdown" },
+            new MeshNode("c1", Path + "/_Comment")
+            {
+                NodeType = "Comment",
+                MainNode = Path,
+                Content = new Comment { Author = CommentAuthor, PrimaryNodePath = Path },
+            });
 
-    private async Task<bool> EarlyAbortFrom(string user, string sealId)
+    private async Task<bool> EarlyAbortFrom(string user, string sealId, string path = Path)
     {
         var answer = await ObserveNodeOperation(
-                new ReleaseDeleteSeal(Path, sealId, DeleteSealOutcome.Aborted),
-                o => o.WithTarget(new Address(Path)).WithAccessContext(new AccessContext { ObjectId = user, Name = user }))
+                new ReleaseDeleteSeal(path, sealId, DeleteSealOutcome.Aborted),
+                o => o.WithTarget(new Address(path)).WithAccessContext(new AccessContext { ObjectId = user, Name = user }))
             .Should().Within(TestTimeouts.Convergence).Emit("the owner answers the release", Ct);
         return answer.Message.Released;
     }
@@ -91,5 +102,19 @@ public class EarlyAbortMarkIsAuthorizedTest(ITestOutputHelper output) : Monolith
         registry.TakeOwnerDeleteSeal("editor-seal", Path, NoLifetime)
             .Should().BeFalse("the Editor's abort overtook the check, which now refuses the seal");
         registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The abort is authorised by the delete's OWN verdict, rule-aware: a comment's author holds no
+    /// Update, but the Comment type's rule lets them delete their comment — so their abort leaves the mark.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AnEarlyAbortFromACommentsAuthor_LeavesTheMark()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        (await EarlyAbortFrom(CommentAuthor, "author-seal", CommentPath)).Should().BeFalse("there was no seal to release");
+        registry.TakeOwnerDeleteSeal("author-seal", CommentPath, NoLifetime)
+            .Should().BeFalse("the author's abort overtook the check, which now refuses the seal");
     }
 }

@@ -953,6 +953,9 @@ public static class MeshExtensions
     private const string MoveAcrossPartitionsKey = "activity.node.move.acrossPartitionsRequiresDelete";
 
     /// <inheritdoc cref="CopyStalledKey"/>
+    private const string MoveAuthorshipRefusedKey = "activity.node.move.authorshipRefused";
+
+    /// <inheritdoc cref="CopyStalledKey"/>
     private const string MoveEntitlementUndeterminedKey = "activity.node.move.entitlementUndetermined";
 
     /// <inheritdoc cref="CopyStalledKey"/>
@@ -7040,9 +7043,20 @@ public static class MeshExtensions
             return request.Processed();
         }
         var bind = (Func<IDisposable, IDisposable>)hub.RegisterForDisposalDetachable;
-        // The same demand the delete itself makes (DeletePermission.RequiredFor), so a deleter the
-        // delete admits can always leave its early-abort mark.
-        hub.CheckPermissionOutcome(release.Path, userId, DeletePermission.RequiredFor(release.Path))
+        // 🚨 The SAME verdict the delete itself takes (CheckDeletePermissionForNode — the node type's
+        // Delete rule when it declares one, DeletePermission.RequiredFor otherwise), so every deleter
+        // the delete admits — a comment's author without Update included — can leave its early-abort
+        // mark, and nobody else can.
+        var abortPersistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        (abortPersistence is null
+                ? Observable.Return<MeshNode?>(null)
+                : ReadNodeAuthoritative(hub, abortPersistence, release.Path))
+            .SelectMany(node => node is null
+                ? hub.CheckPermissionOutcome(release.Path, userId, DeletePermission.RequiredFor(release.Path)).TakeDecisionOutsideGate()
+                : CheckDeletePermissionForNode(hub, userId, node, new DeleteNodeRequest(release.Path), request.AccessContext, logger)
+                    .Select(verdict => verdict.Verdict == DeletePreflight.Allowed
+                        ? PermissionCheckOutcome.Granted
+                        : PermissionCheckOutcome.Denied))
             .Take(1)
             .Subscribe(
                 outcome => Answer(outcome.IsGranted
@@ -10270,12 +10284,18 @@ public static class MeshExtensions
                                 ("source", from), ("reason", entitlement.UndeterminedReason ?? string.Empty)),
                             NodeMoveRejectionReason.Unavailable, null)
                         : new MoveFailedException(
-                            LocalizableText.Keyed(
-                                $"Cannot move '{from}' to '{to}': moving it into another partition requires the right to "
-                                + "delete it there as an administrator (Delete on its namespace). Nothing was moved; an "
-                                + "Editor can move it within its own partition, or copy it.",
-                                MoveAcrossPartitionsKey,
-                                ("source", from), ("target", to)),
+                            DeletePermission.SamePartition(from, to)
+                                ? LocalizableText.Keyed(
+                                    $"Cannot move '{from}': a move carries the node's authorship, which requires the right "
+                                    + "to edit and to delete it. Nothing was moved.",
+                                    MoveAuthorshipRefusedKey,
+                                    ("source", from))
+                                : LocalizableText.Keyed(
+                                    $"Cannot move '{from}' to '{to}': moving it into another partition requires the right to "
+                                    + "delete it there as an administrator (Delete on its namespace). Nothing was moved; an "
+                                    + "Editor can move it within its own partition, or copy it.",
+                                    MoveAcrossPartitionsKey,
+                                    ("source", from), ("target", to)),
                             NodeMoveRejectionReason.ValidationFailed, null)))
                 .Do(_ => EnterMoveStage(MoveStageCopy))
                 .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(CopyRequestFor(from, to), o =>
