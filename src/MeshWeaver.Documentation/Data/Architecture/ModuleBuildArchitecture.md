@@ -674,7 +674,8 @@ keeps the supersede model in the next section.
   the newest successful baseline (rule 2), so the waiting run builds only what landed after it. If
   it FAILED, or withheld its publication without naming the packages, it is walked past and its
   changes stay in the waiting run's union; if it withheld named packages, it is the baseline and
-  carries them (rule 2).
+  carries them (rule 2). A run that overlaps in time (a re-run, or the release lane) can still rebuild a
+  network that another run is building; rule 4 makes that harmless.
 * **A red newest leg.** When the newest run's leg for a module fails, rule 4 has already stood the
   older leg down, so the module stays at its previously published version until the fix lands. The
   red is on the trunk and names the module.
