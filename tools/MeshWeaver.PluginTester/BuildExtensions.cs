@@ -120,7 +120,28 @@ public static class BuildExtensions
                 $"build extension '{assemblyName}' in {directory} could not be loaded: {ex.Message}");
         }
 
-        var extensions = assembly.GetTypes()
+        // GetTypes resolves every type's dependencies, so an extension whose own dependency is
+        // missing from its directory fails HERE, not at the load above — name it, or the CLI's
+        // last-resort handler reports a bare exit with neither the extension nor the missing DLL.
+        Type[] types;
+        try
+        {
+            types = assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            var causes = ex.LoaderExceptions
+                .Where(e => e is not null)
+                .Select(e => e!.Message)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            throw new InvalidOperationException(
+                $"build extension '{assemblyName}' in {directory} could not be loaded: its types need "
+                + "an assembly that is not there — "
+                + (causes.Length == 0 ? ex.Message : string.Join("; ", causes)));
+        }
+
+        var extensions = types
             .Where(t => !t.IsAbstract && typeof(IBuildExtension).IsAssignableFrom(t) && t.GetConstructor(Type.EmptyTypes) is not null)
             .Select(t => (IBuildExtension)Activator.CreateInstance(t)!)
             .ToImmutableArray();

@@ -1245,9 +1245,26 @@ public static class ProjectBuild
                         + (generatorDiagnostics.IsDefaultOrEmpty
                             ? "; the generator reported no diagnostic of its own."
                             : ": " + string.Join("; ", generatorDiagnostics.Select(d => d.ToString()))));
+                // 🚨 An ERROR the generator reports is a failed build, exactly as csc treats it — and
+                // it is invisible anywhere else: generator-driver diagnostics are not part of the
+                // updated compilation's diagnostics, and a generator can report one (Razor's RZ
+                // errors) while still emitting C# that compiles. Logged as a warning, the project
+                // came out green with the input silently mis-generated.
+                var generatorErrors = generatorDiagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToImmutableArray();
+                if (!generatorErrors.IsEmpty)
+                {
+                    foreach (var diagnostic in generatorErrors)
+                        sink.Error($"[{name}] {run.Label.ToLowerInvariant()}: {Render(diagnostic)}");
+                    var failure = $"{Path.GetFileNameWithoutExtension(model.ProjectPath)}: the {run.Label} generator "
+                        + $"reported {generatorErrors.Length} error(s): "
+                        + string.Join("; ", generatorErrors.Take(5).Select(d => d.ToString()))
+                        + (generatorErrors.Length > 5 ? "; …" : "");
+                    return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
+                        model.CompileItems.Length, generatorErrors.Length, 0, null, [], failure);
+                }
                 compilation = (CSharpCompilation)updated;
                 extensionGenerated += Math.Max(generated, 0);
-                foreach (var diagnostic in generatorDiagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning))
+                foreach (var diagnostic in generatorDiagnostics.Where(d => d.Severity == DiagnosticSeverity.Warning))
                     sink.Warn($"[{name}] {run.Label.ToLowerInvariant()}: {Render(diagnostic)}");
                 sink.Info($"[{name}] {run.Label}: {generated} generated document(s)");
             }

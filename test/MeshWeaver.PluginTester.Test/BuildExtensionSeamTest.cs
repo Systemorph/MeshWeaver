@@ -161,6 +161,29 @@ public class BuildExtensionSeamTest : IDisposable
     }
 
     [Fact]
+    public async Task AnErrorTheExtensionsGeneratorReports_failsTheProject_evenWhenItsOutputCompiles()
+    {
+        var project = Write("Seam/Seam.csproj", Project("Seam.GenError"));
+        Write("Seam/Anchor.cs", "namespace Seam; public static class Anchor { }");
+        Write("Seam/Alpha.probe", "a");
+        Write("Seam/error.probe", "e");
+
+        var report = await Build(OptionsFor(project));
+
+        report.ExitCode.Should().NotBe(0);
+        var result = report.Projects.Single().Result!;
+        result.Failure.Should().Contain("PROBE001").And.Contain("generator reported 1 error");
+        result.AssemblyPath.Should().BeNull("no artifact is emitted for a project whose generator reported an error");
+
+        // Negative control: the same project without error.probe — the same generator, the same
+        // emitted source — builds green, so the failure is the reported error and nothing else.
+        File.Delete(Path.Combine(_root, "Seam", "error.probe"));
+        var clean = await Build(OptionsFor(project) with { OutputDirectory = Path.Combine(_root, "out-clean") });
+        clean.ExitCode.Should().Be(0);
+        clean.Projects.Single().Result!.Failure.Should().BeNull();
+    }
+
+    [Fact]
     public void AGeneratorCompiledSourceKindNoExtensionClaims_isRefusedByName()
     {
         var project = Write("Plain/Plain.csproj", Project("Seam.Unclaimed"));
@@ -257,10 +280,37 @@ public class BuildExtensionSeamTest : IDisposable
     /// Compiles a REAL extension assembly into <paramref name="directory"/> — an assembly this
     /// process has never seen, so the only way it can be found is the loader reading the directory.
     /// </summary>
-    private static string CompileExtension(string directory, string assemblyName)
+    private static string CompileExtension(string directory, string assemblyName) =>
+        CompileExtension(directory, assemblyName, ExtensionSource, []);
+
+    /// <summary>Compiles <paramref name="source"/> as <paramref name="assemblyName"/> into
+    /// <paramref name="directory"/> against the host's assemblies plus <paramref name="extraReferences"/>,
+    /// and writes the extension manifest naming it.</summary>
+    private static string CompileExtension(
+        string directory, string assemblyName, string source, IEnumerable<string> extraReferences)
     {
         Directory.CreateDirectory(directory);
-        var source = """
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Concat(extraReferences)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+            assemblyName,
+            [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(source,
+                new Microsoft.CodeAnalysis.CSharp.CSharpParseOptions(Microsoft.CodeAnalysis.CSharp.LanguageVersion.Latest))],
+            references,
+            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+        var dll = Path.Combine(directory, assemblyName + ".dll");
+        var emitted = compilation.Emit(dll);
+        emitted.Success.Should().BeTrue(string.Join(Environment.NewLine, emitted.Diagnostics));
+        File.WriteAllText(
+            Path.Combine(directory, BuildExtensions.ManifestName),
+            $$"""{ "assembly": "{{assemblyName}}" }""");
+        return dll;
+    }
+
+    private const string ExtensionSource = """
             using System;
             using System.Collections.Generic;
             using System.Collections.Immutable;
@@ -281,24 +331,6 @@ public class BuildExtensionSeamTest : IDisposable
                 public IDeclaredTypeScan BeginDeclaredTypeScan(string sourceRoot) => throw new NotSupportedException();
             }
             """;
-        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Select(path => MetadataReference.CreateFromFile(path));
-        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
-            assemblyName,
-            [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(source,
-                new Microsoft.CodeAnalysis.CSharp.CSharpParseOptions(Microsoft.CodeAnalysis.CSharp.LanguageVersion.Latest))],
-            references,
-            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(
-                OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
-        var dll = Path.Combine(directory, assemblyName + ".dll");
-        var emitted = compilation.Emit(dll);
-        emitted.Success.Should().BeTrue(string.Join(Environment.NewLine, emitted.Diagnostics));
-        File.WriteAllText(
-            Path.Combine(directory, BuildExtensions.ManifestName),
-            $$"""{ "assembly": "{{assemblyName}}" }""");
-        return dll;
-    }
 
     [Fact]
     public void AnExtensionDllIsLoadedFromTheNamedDirectory_andItsAbsenceIsAFailureByName()
@@ -332,6 +364,39 @@ public class BuildExtensionSeamTest : IDisposable
         var failure = Assert.Throws<InvalidOperationException>(
             () => BuildExtensions.Load([removedDirectory], appDirectory: string.Empty));
         failure.Message.Should().Contain(assemblyName).And.Contain("could not be loaded");
+    }
+
+    [Fact]
+    public void AnExtensionWhoseOwnDependencyIsMissing_failsNamingTheExtensionAndTheDependency()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var dependencyName = $"Mw.ProbeDependency.{suffix}";
+        var extensionName = $"Mw.DependentProbe.{suffix}";
+        var directory = Path.Combine(_root, "_dependent", "probe");
+        var dependency = CompileExtension(directory, dependencyName,
+            "namespace ProbeDependency; public abstract class ExtensionBase { }", []);
+        CompileExtension(directory, extensionName,
+            ExtensionSource.Replace(
+                "public sealed class CompiledExtension : IBuildExtension",
+                "public sealed class CompiledExtension : ProbeDependency.ExtensionBase, IBuildExtension",
+                StringComparison.Ordinal),
+            [dependency]);
+
+        // Positive control: with its dependency beside it, the extension loads.
+        BuildExtensions.Load([directory], appDirectory: string.Empty)
+            .Should().ContainSingle().Which.Extension.Name.Should().Be("compiled-probe");
+
+        // The dependency removed (in a copy, so the loaded one is untouched): the type cannot be
+        // resolved, and the failure names the extension and the missing assembly.
+        var broken = Path.Combine(_root, "_dependent", "broken");
+        Directory.CreateDirectory(broken);
+        File.Copy(Path.Combine(directory, extensionName + ".dll"), Path.Combine(broken, extensionName + ".dll"));
+        File.WriteAllText(
+            Path.Combine(broken, BuildExtensions.ManifestName),
+            $$"""{ "assembly": "{{extensionName}}" }""");
+        var failure = Assert.Throws<InvalidOperationException>(
+            () => BuildExtensions.Load([broken], appDirectory: string.Empty));
+        failure.Message.Should().Contain(extensionName).And.Contain(dependencyName);
     }
 
     [Fact]
@@ -457,6 +522,12 @@ public sealed class ProbeExtension : IBuildExtension
 /// extension.</summary>
 public sealed class ProbeGenerator : IIncrementalGenerator
 {
+#pragma warning disable RS2008 // a test probe, never shipped: no analyzer release tracking
+    private static readonly DiagnosticDescriptor ProbeError = new(
+        "PROBE001", "Probe error", "the probe generator reports an error for error.probe", "Probe",
+        DiagnosticSeverity.Error, isEnabledByDefault: true);
+#pragma warning restore RS2008
+
     /// <inheritdoc />
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -468,6 +539,13 @@ public sealed class ProbeGenerator : IIncrementalGenerator
             .Collect();
         var global = context.AnalyzerConfigOptionsProvider
             .Select((options, _) => options.GlobalOptions.TryGetValue("build_property.ProbeGlobal", out var value) ? value : "");
+        // A file named error.probe makes the generator REPORT an error while still emitting valid
+        // C# — the Razor shape (an RZ error beside generated code that compiles).
+        context.RegisterSourceOutput(files, (spc, seen) =>
+        {
+            if (seen.Any(f => f.StartsWith("error.probe=", StringComparison.Ordinal)))
+                spc.ReportDiagnostic(Diagnostic.Create(ProbeError, Location.None));
+        });
         context.RegisterSourceOutput(files.Combine(global), (spc, pair) => spc.AddSource("Probe.Seen.g.cs", SourceText.From(
             $$"""
             namespace Probe
