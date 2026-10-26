@@ -15,7 +15,7 @@ namespace MeshWeaver.Layout.Client;
 /// <para>Together they let a plugin ship Blazor views: its <c>ConfigureHub</c> calls
 /// <see cref="PortalConfigurationExtensions.WithPortalConfiguration"/>, the delegate lands here, and
 /// the next portal hub applies it — the same seam
-/// <c>layout.WithView&lt;ChartControl, RadzenChartView&gt;()</c> uses.</para>
+/// <c>layout.WithView&lt;ChartControl, TChartView&gt;()</c> uses.</para>
 ///
 /// <para>Mesh-scoped singleton: registered in the mesh's container so its lifetime IS the mesh's and
 /// it dies at teardown. Never static — a process-wide registry would leak view registrations (and

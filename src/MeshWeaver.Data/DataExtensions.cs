@@ -1850,7 +1850,7 @@ public static class DataExtensions
                     // which on expiry NACKed `Unknown` + "TimeoutException" — read by the writer as
                     // "the write did NOT apply and is not auto-retryable" (LATE_NACK_TERMINAL) and
                     // by its caller as a failed write. Measured on the node-repo gate (Manufacturing
-                    // run 33623113056): the bake seed's adoption stamp for Radzen/Gallery committed at
+                    // run 33623113056): the bake seed's adoption stamp for one package's Gallery node committed at
                     // the owner (echo at +ε), the storage flush sat behind the mass install's queue
                     // past 10 s, the owner answered NACK, the seed concluded "not adopted", the sweep
                     // compiled the type OVER the adoption that had landed, and the gate DECLINED a

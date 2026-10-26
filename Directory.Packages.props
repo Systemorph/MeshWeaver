@@ -66,19 +66,8 @@
     <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.84.2" />
     <PackageVersion Include="System.ClientModel" Version="1.15.0" />
     <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.62.0" />
-    <!-- 🚨 The ONE GUI package still pinned here, and not because the platform uses it: the
-         module-library shelf (tools/MeshWeaver.ModuleLibraries) stages it for the Plugins module
-         MeshWeaver.Blazor.Radzen. It leaves with the shelf list — see
-         Doc/Architecture/CoreCarriesNoGuiTechnology, "Build tooling that still names a GUI". -->
-    <PackageVersion Include="Radzen.Blazor" Version="10.3.2" />
     <PackageVersion Include="DocSharp.Markdown" Version="0.21.0" />
-    <PackageVersion Include="ClosedXML" Version="0.105.1" />
-    <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="DocumentFormat.OpenXml" Version="3.5.1" />
-    <!-- ExcelDataReader (MIT, no dependencies on net8.0+) reads .xls (BIFF2-8), .xlsx and .xlsm row by
-         row for the content-indexing text extractor (MeshWeaver.Plugins#3826). Pinned here because a
-         satellite declares no PackageVersion of its own. -->
-    <PackageVersion Include="ExcelDataReader" Version="3.9.0" />
     <PackageVersion Include="Grpc.AspNetCore" Version="2.80.0" />
     <PackageVersion Include="Grpc.AspNetCore.Web" Version="2.80.0" />
     <PackageVersion Include="Grpc.Net.Client" Version="2.80.0" />
@@ -91,12 +80,6 @@
          it is used. -->
     <PackageVersion Include="Humanizer.Core" Version="3.0.10" />
     <PackageVersion Include="Markdig" Version="1.5.0" />
-    <!-- MailKit: the typed IMAP/SMTP client behind the "Other email" connection (Plugins'
-         Mail module, MeshWeaver.Plugins AI/GettingStartedAndConnections). The verify probe connects,
-         authenticates and disconnects through MailKit's ImapClient/SmtpClient only — no hand-rolled
-         protocol. Consumed by MeshWeaver.Plugins through $(MeshWeaverRoot); see that repo's AGENTS.md
-         "Package versions live in ONE file". -->
-    <PackageVersion Include="MailKit" Version="4.18.0" />
     <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.3" />
     <!-- 🚨 Microsoft.AspNetCore.DataProtection pinned to override transitive 10.0.0
          (CVE-2026-40372 / GHSA-9mv3-2cwr-p262) — but NOTHING references it directly and
@@ -144,10 +127,7 @@
          was withdrawn for exactly this. Doc/Architecture/PlatformImageClosure has the
          measurements. -->
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
-    <PackageVersion Include="ModelContextProtocol" Version="2.3.0" />
-    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.3.0" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="2.3.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.11.0" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.14.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.14" />
@@ -187,10 +167,6 @@
     <PackageVersion Include="Net.Codecrete.QrCodeGenerator" Version="3.2.1" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.4.0" />
-    <!-- 1.17.0 is where the agent-store abstractions MeshWeaver.AI.Stores implements over mesh
-         nodes (AgentFileStore, AgentSkillsSource) reached their current shape. Kept in lockstep —
-         these three ship together and mixing versions breaks their shared abstractions. -->
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.17.0" />
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageVersion Include="Serilog.Settings.Configuration" Version="10.0.1" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
@@ -321,16 +297,6 @@
     <PackageVersion Include="Roslynator.CodeAnalysis.Analyzers" Version="4.15.0" />
     <PackageVersion Include="Roslynator.Refactorings" Version="4.15.0" />
     <PackageVersion Include="Namotion.Reflection" Version="3.5.1" />
-    <!-- 🚨 ONE Orleans family, one version. These four are referenced only by MeshWeaver.Plugins'
-         hosts (this file is its version source), so no core project shows them to Dependabot and a
-         grouped Orleans bump leaves them behind. A split family ships Microsoft.Orleans.Reminders at
-         the OLD version in the portal image; the image-derived central list then pins it there, and
-         every Plugins test project on Microsoft.Orleans.TestingHost fails restore with NU1109
-         (TestingHost needs Reminders at the family version). Move them with the rest of the family. -->
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.4.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.6" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
@@ -349,27 +315,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 🚨 PINS THE SATELLITE REPOS CONSUME. This file is the ONE source of package versions for
-         the plugin repos too — MeshWeaver.Plugins et al. declare NO PackageVersion of their own and
-         resolve every version from here through $(MeshWeaverRoot). So "no project in THIS repo
-         references it" does not mean a pin is dead: these fourteen belong to modules that LEFT the
-         platform (the AI providers, Mail/Graph, the agent SDKs) and are referenced from the plugin
-         repos alone. Pruning them as orphans (2026-08-21) turned nine module-bundle jobs red on the
-         plugins trunk with a build failure that named only the package. Audit across the satellites
-         before removing anything here. -->
-    <PackageVersion Include="Azure.AI.Agents.Persistent" Version="1.2.0-beta.10" />
-    <PackageVersion Include="Azure.AI.Inference" Version="1.0.0-beta.5" />
-    <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
-    <PackageVersion Include="ClaudeAgentSdk" Version="0.2.1" />
-    <PackageVersion Include="GitHub.Copilot.SDK" Version="1.0.8" />
-    <PackageVersion Include="Microsoft.Agents.AI.AzureAI" Version="1.0.0-rc5" />
-    <PackageVersion Include="Microsoft.Agents.AI.AzureAI.Persistent" Version="1.4.0-preview.260505.1" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.17.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.AzureAIInference" Version="10.0.0-preview.1.25559.3" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.Graph" Version="6.2.0" />
-    <PackageVersion Include="OpenAI" Version="2.14.0" />
   </ItemGroup>
 </Project>
