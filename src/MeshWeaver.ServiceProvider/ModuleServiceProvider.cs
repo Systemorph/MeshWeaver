@@ -328,6 +328,14 @@ public static class ModuleServiceProvider
         return scope.ResolveRegistration(RegistrationAt(scope, serviceType, position), serviceType);
     }
 
+    // 🚨 The module container's OWN registrations only — never what its ModuleFallbackSource adds. A root
+    // stand-in that resolves position i of a type the module does NOT register (a cached stand-in for a
+    // module-declared type after its module swapped to a new generation, whose container holds the new
+    // generation's type) would otherwise land on the module's own fallback stand-in for the ROOT's
+    // registration — which is that same root stand-in. Each hop is a fresh resolve, so no cycle check sees
+    // it: on the Autofac container this counted positions over every registration a lookup reached, and a
+    // portal process died of a StackOverflowException in exactly that cycle (MeshWeaver#5388). Counted over
+    // the module's own, such a position is refused by name. Pinned by AStaleRootStandInIsRefusedNotRecursedTest.
     private static ServiceRegistration RegistrationAt(MeshServiceProvider scope, Type serviceType, int position) =>
         scope.ContainerRoot.OwnRegistrationsOf(serviceType).ElementAtOrDefault(position)
         ?? throw new InvalidOperationException(
