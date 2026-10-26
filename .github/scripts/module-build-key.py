@@ -265,7 +265,7 @@ def requires_of(index: dict) -> list[str]:
 
 def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, platform_ref: str,
             recipe: str = RECIPE_VERSION, shelf_project: str = "",
-            extensions_project: str = "") -> dict:
+            extensions_project: str = "", extensions_sdk: str = "") -> dict:
     """{key, inputs} for one matrix entry. Raises KeyError-shaped ValueError on an unkeyable entry."""
     package = entry.get("package") or ""
     module = entry.get("module") or ""
@@ -331,6 +331,15 @@ def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, p
     # so an edit to it is a new build. Absent ⇒ the key is byte-identical to one computed before.
     if extensions_project:
         inputs["buildExtension"] = shelf_inputs(root, extensions_project, "build-extensions-project")
+        # 🚨 The extension's publish takes compiler bytes from OUTSIDE the repository too: the Razor
+        # extension stages its source generator from the installed .NET SDK. So the SDK the lane
+        # publishes it with is a key input — a new SDK is a new compiler, and a ledger keyed on the
+        # repository alone would reuse bundles (and recorded failures) built by the old one.
+        if not extensions_sdk:
+            raise ValueError("build-extensions-project is set but no --build-extensions-sdk was given — "
+                             "the SDK the extension is published with decides its generator bytes, so an "
+                             "unkeyed SDK lets the ledger reuse a bundle built by a different compiler")
+        inputs["buildExtension"]["sdk"] = extensions_sdk
     canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return {"key": sha256_bytes(canonical.encode("utf-8")), "inputs": inputs}
 
@@ -527,10 +536,12 @@ def self_test() -> int:
             check("a named shelf that does not exist is refused", "does not exist" in str(exc))
 
         print("the caller's build extension:")
+        sdk = "10.0.200"
 
         def with_ext(shelf_too: bool = False) -> dict:
             return compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123",
-                           shelf_project=shelf if shelf_too else "", extensions_project=shelf)
+                           shelf_project=shelf if shelf_too else "", extensions_project=shelf,
+                           extensions_sdk=sdk)
 
         e0 = with_ext()
         check("no extension named: the inputs carry no buildExtension (keys recorded before stay valid)",
@@ -550,8 +561,19 @@ def self_test() -> int:
         check("a project the extension reaches changes the extension key", k != e0["key"])
         check("…while the key WITHOUT an extension ignores it (negative control)", k_plain == k0)
         check("…and restoring it restores the extension key", with_ext()["key"] == e0["key"])
+        check("the publishing SDK is keyed with the extension", e0["inputs"]["buildExtension"].get("sdk") == sdk)
+        sdk = "10.0.201"
+        check("a different publishing SDK changes the extension key", with_ext()["key"] != e0["key"])
+        sdk = "10.0.200"
+        check("…and the same SDK restores it (negative control)", with_ext()["key"] == e0["key"])
         try:
-            compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", extensions_project="tools/Nope/Nope.csproj")
+            compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", extensions_project=shelf)
+            check("an extension without its publishing SDK is refused", False, "no error raised")
+        except ValueError as exc:
+            check("an extension without its publishing SDK is refused, by name", "--build-extensions-sdk" in str(exc))
+        try:
+            compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", extensions_project="tools/Nope/Nope.csproj",
+                    extensions_sdk=sdk)
             check("a named extension that does not exist is refused", False, "no error raised")
         except ValueError as exc:
             check("a named extension that does not exist is refused, by its own input name",
@@ -594,6 +616,8 @@ def main() -> int:
                    help="the caller's module-libraries shelf csproj (relative to --root); keyed when set")
     p.add_argument("--build-extensions-project", default="",
                    help="the caller's build-extension csproj (relative to --root); keyed when set")
+    p.add_argument("--build-extensions-sdk", default="",
+                   help="the exact .NET SDK version the extension is published with; required with it")
     p.add_argument("--json", action="store_true", help="with --entry: print {key, inputs}")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     a = p.parse_args()
@@ -606,7 +630,8 @@ def main() -> int:
     try:
         if a.entry:
             got = compute(root, json.loads(a.entry), a.tester_digest, a.platform_digest, a.platform_ref,
-                          a.recipe_version, a.module_libraries_project, a.build_extensions_project)
+                          a.recipe_version, a.module_libraries_project, a.build_extensions_project,
+                          a.build_extensions_sdk)
             print(json.dumps(got, indent=2) if a.json else got["key"])
             return 0
         if a.modules:
@@ -617,7 +642,8 @@ def main() -> int:
             out = []
             for e in entries:
                 got = compute(root, e, a.tester_digest, a.platform_digest, a.platform_ref, a.recipe_version,
-                              a.module_libraries_project, a.build_extensions_project)
+                              a.module_libraries_project, a.build_extensions_project,
+                              a.build_extensions_sdk)
                 out.append({"package": e.get("package"), "module": e.get("module"),
                             "key": got["key"], "inputs": got["inputs"]})
                 print(f"  {e.get('module')}: {got['key']} (moduleVersion {got['inputs']['moduleVersion']}, "

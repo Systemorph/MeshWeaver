@@ -964,6 +964,9 @@ jobs:
       ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       EXECUTING_WORKFLOW: ${{ github.workspace }}/lane-definition/.github/workflows/node-repo-module-pack.yml
     outputs:
+      # The exact SDK the caller's build extension is published with — a ledger key input (empty
+      # when the caller names no extension).
+      build-extensions-sdk: ${{ steps.ext-sdk.outputs.version }}
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
       # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
       modules: ${{ steps.reuse.outputs.modules }}
@@ -1298,6 +1301,22 @@ jobs:
       # UNAVAILABLE degrades to "build everything, uncoordinated", in yellow — the ledger is a
       # coordination layer over a build that is correct without it, and its outage may cost a
       # duplicate build, never a green (core #3119).
+      # 🚨 The build extension's publish takes its generator from the installed .NET SDK, so the SDK
+      # is a KEY input. Resolve the exact version ONCE, here: the ledger keys it, and the
+      # build-workspace job installs exactly that version to publish with.
+      - uses: actions/setup-dotnet@v6
+        if: inputs.build-extensions-project != ''
+        with:
+          dotnet-version: "10.0.x"
+      - name: Resolve the SDK the build extension is published with
+        id: ext-sdk
+        if: inputs.build-extensions-project != ''
+        run: |
+          set -euo pipefail
+          v="$(dotnet --version)"
+          [[ "$v" =~ ^10\.0\.[0-9]+$ ]] || { echo "::error::dotnet --version answered '$v', not an exact 10.0 SDK version — the extension's generator bytes come from this SDK, so it must be named exactly."; exit 1; }
+          echo "build extension SDK: $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Consult the module build ledger
         id: ledger
         env:
@@ -1321,6 +1340,7 @@ jobs:
           # The caller's own shelf is a compiler input, so it is part of every key when named.
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          EXTENSIONS_SDK: ${{ steps.ext-sdk.outputs.version }}
         run: |
           set -euo pipefail
           printf '%s' "${SCOPE_MODULES:-[]}" > "$RUNNER_TEMP/selection.json"
@@ -1345,7 +1365,7 @@ jobs:
               # exactly as before and keeps its recorded builds.
               shelf_arg=()
               [ -z "${SHELF_PROJECT:-}" ] || shelf_arg=(--module-libraries-project "$SHELF_PROJECT")
-              [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_arg+=(--build-extensions-project "$EXTENSIONS_PROJECT")
+              [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_arg+=(--build-extensions-project "$EXTENSIONS_PROJECT" --build-extensions-sdk "${EXTENSIONS_SDK:-}")
               python3 build-logic/.github/scripts/module-build-key.py --root repo \
                 --modules "@$RUNNER_TEMP/selection.json" \
                 --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
@@ -1936,7 +1956,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         if: inputs.module-libraries-project != '' || inputs.build-extensions-project != ''
         with:
-          dotnet-version: "10.0.x"
+          # EXACTLY the SDK select keyed the extension with; floating only when no extension is named.
+          dotnet-version: ${{ needs.select.outputs.build-extensions-sdk || '10.0.x' }}
       - name: Publish the caller's module-libraries shelf
         id: shelf
         if: inputs.module-libraries-project != ''
@@ -1966,9 +1987,14 @@ jobs:
         if: inputs.build-extensions-project != ''
         env:
           PROJECT: ${{ inputs.build-extensions-project }}
+          KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
         run: |
           set -euo pipefail
           [ -f "$PROJECT" ] || { echo "::error::build-extensions-project '$PROJECT' does not exist in this checkout — the caller named an extension this repository does not have."; exit 1; }
+          # The ledger keyed the SDK select resolved; publishing with any other one would put a
+          # compiler the key never saw behind a reused-or-recorded verdict.
+          sdk="$(dotnet --version)"
+          [ -n "$KEYED_SDK" ] && [ "$sdk" = "$KEYED_SDK" ] || { echo "::error::the extension would be published with SDK '$sdk', but select keyed '${KEYED_SDK:-<none>}' — refusing to build with a generator the ledger key does not name."; exit 1; }
           root="$RUNNER_TEMP/build-extension"
           rm -rf "$root"
           dotnet publish "$PROJECT" -c Release -o "$root" \
