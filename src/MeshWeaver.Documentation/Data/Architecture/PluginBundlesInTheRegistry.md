@@ -382,6 +382,38 @@ NodeType coverage (`BundleReader.IsModuleNotServedMiss`), so it can neither warn
 nor fail a require-prebuilt adoption of types that did arrive. It clears when the module for that
 version is published.
 
+### The index advertises a version that can carry its module (MeshWeaver#7181)
+
+The record running ahead is the ordinary state whenever the package repository's publish lane is
+red: content reaches the registry through GitSync, which never waits for a green build, and the
+module bytes reach the shelf only through that lane. On 2026-10-25, MeshWeaver.Plugins `main` was
+red or cancelled for about twenty hours, and every consumer's `/health` `bundle_adoption` listed
+`module '<name>': not served — … no retained generation at version …` for the modules merged in
+that time.
+
+Those misses did not mean the modules were missing. The index listed the plugin twice: the
+record's version first, with no module section, then the shelved generation, with one. A consumer
+reads the two halves of an install from different entries. The NodeType adoption
+(`PluginBundleClient.Adopt`, `FetchShippedBuilds`, the held-type retry) takes the plugin's first
+entry, and the module adoption takes its first entry that carries a module. So the module landed
+at the shelved generation, while the NodeType half fetched the record's bundle, found no module in
+it and recorded a miss.
+
+The registry now withholds, from the index only, a version whose declared module it cannot serve
+at that version, whenever the same plugin has a version whose module it can serve
+(`PluginBundleEndpoints.CoherentlyAdvertised` in MeshWeaver.Plugins). Nothing is lost: a bundle
+carries the plugin's current NodeType builds whichever version is asked for, so every consumer
+path now reads one entry, whose bundle states the version of the module bytes it carries
+(MeshWeaver#6067). The registry logs the lag, naming both versions. Two things are unchanged. A
+plugin with no servable module version at all keeps its entries, because there is nothing to fall
+back to and the `not served` miss is then the true answer. And the download route asked for the
+record's version directly still serves it with no module section and the stated miss.
+
+What this does not change: while the lane is red, a consumer runs the record's newer content on
+the shelved module generation. Content does not wait for the module, and nothing checks that the
+newer content works with the older module. It converges when the lane publishes the module and the
+consumer's update pass lands it.
+
 ## What stays on the HTTP surface
 
 * **`GET /api/plugins`** and **`POST /api/plugins/files`** — the catalog index and package files.
