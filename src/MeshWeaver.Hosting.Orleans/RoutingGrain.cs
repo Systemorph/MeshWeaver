@@ -619,6 +619,54 @@ internal class RoutingGrain(
     }
 
     /// <summary>
+    /// What a refused NACK means when its sender is a POD-PROCESS hub — issue #7001.
+    ///
+    /// <para><b>A <see cref="PodHubNotHereException.Released"/> refusal means the sender is gone, so
+    /// the NACK is dropped and recorded once at Debug.</b> The release tombstone is stamped only when
+    /// the registration that claimed the address was disposed with no live route left on the owning
+    /// silo (#5136): a closed Blazor circuit, a torn-down hosted hub. A closed circuit id is never
+    /// reused, and a hub that comes back claims afresh through <c>Attach</c>, which supersedes the
+    /// tombstone. So nobody is left to tell, nobody is waiting out a request budget, and an Error line
+    /// ("the sender will wait out its own request budget") would be false. Every closed tab with a
+    /// read in flight produced one.</para>
+    ///
+    /// <para><b>Every other refusal stays LOUD.</b> An UNRELEASED refusal is the stranded-claim shape
+    /// (#2938): a sender that may well be alive, whose claim lost its directory entry, and which then
+    /// really does burn its budget. That one, and every non-pod-hub fault, still goes to
+    /// <paramref name="logUndeliverable"/>, the windowed Error line. Nothing is retried on either
+    /// branch: a NACK has no NACK of its own, and <see cref="DeliverToGrainObservable"/> never
+    /// retries a <see cref="PodHubNotHereException"/>, so a dead sender costs one directed call and
+    /// one Debug line per NACK, and no loop.</para>
+    /// </summary>
+    /// <param name="ex">What the directed pod-hub call failed with.</param>
+    /// <param name="delivery">The original delivery whose failure was being reported.</param>
+    /// <param name="errorType">The verdict the NACK carried.</param>
+    /// <param name="failureMessage">The original failure, which nobody will now hear about.</param>
+    /// <param name="logUndeliverable">The loud, windowed report, for every refusal that is not a release.</param>
+    /// <param name="logger">Logger for the Debug record of a dropped NACK.</param>
+    /// <returns>One <see cref="Unit"/>, then completion, on both branches.</returns>
+    internal static IObservable<Unit> AnswerNackToPodHubSenderRefused(
+        Exception ex,
+        IMessageDelivery delivery,
+        ErrorType errorType,
+        string failureMessage,
+        Func<Exception, IObservable<Unit>> logUndeliverable,
+        ILogger logger)
+    {
+        if (!IsPodHubNotHere(ex) || !WasReleased(ex))
+            return logUndeliverable(ex);
+
+        RoutingGrainTrace.Write(
+            $"RoutingGrain.RouteMessage FAILURE_SENDER_RELEASED_DROPPED id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
+        logger.LogDebug(
+            "[ROUTE] Dropped the {ErrorType} DeliveryFailure for {DeliveryId}: its sender {Sender} was RELEASED "
+            + "by its owner (the registration that claimed it was disposed; the tombstone on silo {Silo} "
+            + "answered), so there is nobody left to tell. Original failure: {FailureMessage}",
+            errorType, delivery.Id, delivery.Sender, RespondingSilo(ex) ?? "(not reported)", failureMessage);
+        return Observable.Return(Unit.Default);
+    }
+
+    /// <summary>
     /// Is this the grain saying "not through this transport, not here"? Orleans wraps a thrown grain
     /// exception on its way back to the caller, so the test walks the inner chain — matching by type
     /// only, never by message text.
@@ -1155,7 +1203,8 @@ internal class RoutingGrain(
                                 new AggregateException(
                                     "Neither the directed pod-hub call nor the client-hosted stream publish could carry the NACK.",
                                     ex, streamEx)));
-                    return LogUndeliverableNack(ex);
+                    return AnswerNackToPodHubSenderRefused(
+                        ex, delivery, errorType, failureMessage, LogUndeliverableNack, logger);
                 }));
 
         // The NACK leg for a GRAIN-hosted sender (a per-node hub): resolve the sender's host path the

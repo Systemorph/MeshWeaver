@@ -244,7 +244,10 @@ jobs:
   # newest `pull_request` run of this workflow for the head — the one the rollup reads (#4649); never
   # only its failed jobs, which GitHub refuses for a run cancelled before any job started (#6315) —
   # so a reply that answers the last thread unblocks the pull request without anyone re-running it
-  # by hand. `actions: write` below is for that job alone (a called job can hold only what its caller
+  # by hand. After a GREEN verdict on ANY event it also re-runs every OLDER red run of this check on
+  # the head, whatever its event (MeshWeaver.Plugins#4276: three older review/comment reds blocked the
+  # merge while the newest check-run read success; core #7204 carries 8 such reds beside 4 greens).
+  # `actions: write` below is for that job alone (a called job can hold only what its caller
   # grants); the gate job above stays read-only.
   lane:
     uses: ./.github/workflows/node-repo-review-answered.yml
