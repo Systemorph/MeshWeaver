@@ -348,24 +348,37 @@ def _executor(with_: dict) -> str:
     return _norm_condition(raw) if "${{" in str(raw) else str(raw)
 
 
-def _executor_needs_problem(wf_name: str, jid: str, job: dict) -> str | None:
-    """An `executor` expression may read only jobs in the call's OWN `needs:`.
+def _needs_problems(wf_name: str, jid: str, job: dict, fields: tuple[str, ...]) -> list[str]:
+    """Each named expression may read only jobs in the call's OWN `needs:`.
 
-    `needs.<job>` resolves only for a direct need; any other reference evaluates EMPTY, so an
-    `|| 'actions'` fallback silently answers `actions`. Two calls spelling the same expression would
-    then disagree at run time — the pack call on `host`, its host-publication call on `actions`,
-    fetching nothing — and the static spelling check above could not see it."""
-    raw = str((job.get("with") or {}).get("executor") or "")
-    refs = set(re.findall(r"\bneeds\.([A-Za-z0-9_-]+)\.", raw))
+    `needs.<job>` resolves only for a direct need; any other reference evaluates EMPTY. Two calls
+    spelling the same expression would then disagree at run time while the static spelling checks
+    pass: an `executor` falls back to `actions` (the host-publication call fetches nothing while
+    its pack call ran on `host`), and a condition reads false (the host-publication call and its
+    publisher are SKIPPED while the pack call staged). `fields` names `executor`/`publish` (in
+    `with:`) or `if` (the job's own)."""
     need = job.get("needs") or []
     need = {need} if isinstance(need, str) else set(need)
-    missing = sorted(refs - need)
-    if not missing:
-        return None
-    return (f"{wf_name}: `{jid}`'s `executor` reads needs.{', needs.'.join(missing)} but its own `needs:` "
-            f"does not name {', '.join(f'`{m}`' for m in missing)} — that context is EMPTY for a job it is "
-            "not a direct need of, so the expression falls back (to `actions`) while a sibling call "
-            "spelling the same expression resolves `host`.")
+    problems = []
+    for field in fields:
+        raw = str(job.get("if") or "") if field == "if" else str((job.get("with") or {}).get(field) or "")
+        missing = sorted(set(re.findall(r"\bneeds\.([A-Za-z0-9_-]+)\.", raw)) - need)
+        if missing:
+            problems.append(
+                f"{wf_name}: `{jid}`'s `{field}` reads needs.{', needs.'.join(missing)} but its own "
+                f"`needs:` does not name {', '.join(f'`{m}`' for m in missing)} — that context is EMPTY "
+                "for a job it is not a direct need of, so the expression resolves differently here than "
+                "in a sibling call that spells it identically.")
+    return problems
+
+
+def _inert(text) -> str:
+    """Record- or host-derived text, printed: one line, workflow-command data escaped.
+
+    The same rule as build-artifacts-fetch.py: a module name or reason carrying `\\n::add-mask::…`
+    or a legacy `##[…]` must never become a runner command in this job's log."""
+    return (str(text).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            .replace("##[", "##​[").replace("::", ":​:"))
 
 
 def _may_run_on_host(executor: str) -> bool:
@@ -478,9 +491,7 @@ def check_callers(root: Path) -> int:
                 if _needs_output(hw.get(key), output) != pack_id:
                     problems.append(f"{wf.name}: `{hid}` must pass `{key}` as needs.{pack_id}.outputs."
                                     f"{output} — the SAME call whose lane it stages — got {hw.get(key)!r}.")
-            missing = _executor_needs_problem(wf.name, hid, hj)
-            if missing:
-                problems.append(missing)
+            problems.extend(_needs_problems(wf.name, hid, hj, ("executor", "if")))
             if _executor(hw) != _executor(pw):
                 problems.append(
                     f"{wf.name}: `{hid}` passes `executor: {_executor(hw)}` but `{pack_id}` runs with "
@@ -538,6 +549,7 @@ def check_callers(root: Path) -> int:
             # H7: the publisher may read its lane THROUGH the pack call's build-host-publication call
             # — the host graph. Anything else is refused, exactly as before.
             if src in hosts:
+                problems.extend(_needs_problems(wf.name, pid, pj, ("if",)))
                 pack_id = _needs_output((hosts[src].get("with") or {}).get("lane"), "lane")
                 if pack_id not in packs:
                     # The host call's own wiring is refused (by name) in the host loop below.
@@ -590,9 +602,8 @@ def check_callers(root: Path) -> int:
                 continue
             wired = sorted(pid for pid, pj in pubs.items() if publisher_pack(pj) == kid)
             executor = _executor(kw)
-            missing = _executor_needs_problem(wf.name, kid, kj)
-            if missing:
-                problems.append(missing)
+            if _may_run_on_host(executor):
+                problems.extend(_needs_problems(wf.name, kid, kj, ("executor", "publish")))
             if mode == "direct" and executor == "host" and _norm_condition(kw.get("publish", False)) != "false":
                 problems.append(
                     f"{wf.name}: `{kid}` runs on a build host (`executor: host`) and publishes IN-LEG "
@@ -729,8 +740,8 @@ def publish(a: argparse.Namespace) -> int:
                             "does not name it — the two disagree about what this run validated.")
             continue
         if not rec.get("owed"):
-            print(f"  -- {m}@{rec['version']}: no hand-over owed — "
-                  f"{rec.get('reason') or 'no reason recorded'}")
+            print(_inert(f"  -- {m}@{rec['version']}: no hand-over owed — "
+                         f"{rec.get('reason') or 'no reason recorded'}"))
             continue
         bundle_meta = rec.get("bundle") or {}
         name, want = bundle_meta.get("name"), bundle_meta.get("sha256")
@@ -777,7 +788,7 @@ def publish(a: argparse.Namespace) -> int:
 
     if problems:
         for p in problems:
-            print(f"::error title=Publication refused::{p}", file=sys.stderr)
+            print(f"::error title=Publication refused::{_inert(p)}", file=sys.stderr)
         summarise(["### Module publication REFUSED", "",
                    "The registry was left untouched — not one byte was handed over.", ""]
                   + [f"- {p}" for p in problems])
@@ -812,8 +823,8 @@ def publish(a: argparse.Namespace) -> int:
     for item in plan:
         url = (f"{a.registry.rstrip('/')}/api/plugins/bundles/{item['package']}"
                f"?version={item['version']}&packagePath={a.source}/{item['package']}")
-        print(f"  -> {item['module']}@{item['version']} ({item['sha256'][:12]}…, built against "
-              f"{item['identity']}) to {url}")
+        print(_inert(f"  -> {item['module']}@{item['version']} ({item['sha256'][:12]}…, built against "
+                     f"{item['identity']}) to {url}"))
         if a.dry_run:
             published.append(item)
             continue
@@ -852,7 +863,7 @@ def publish(a: argparse.Namespace) -> int:
         lines += ["", "**Refused by the registry:**", ""] + [f"- {f}" for f in failed]
     summarise(lines)
     for f in failed:
-        print(f"::error title=Publication failed::{f}", file=sys.stderr)
+        print(f"::error title=Publication failed::{_inert(f)}", file=sys.stderr)
     print(f"published {len(published)} of {len(plan)} module bundle(s)")
     return 1 if failed else 0
 
@@ -897,8 +908,8 @@ def partition(staged: Path, lane: str, aside: Path) -> int:
         bundle = path.parent / name
         if name and bundle.is_file() and bundle.resolve() not in kept_bundles:
             bundle.rename(dest.parent / name)
-        print(f"  set aside: `{rec.get('module') or rel}` is stamped lane `{rec.get('lane')}` — another "
-              f"pack call's record, never published by lane `{lane}`")
+        print(_inert(f"  set aside: `{rec.get('module') or rel}` is stamped lane `{rec.get('lane')}` — "
+                     f"another pack call's record, never published by lane `{lane}`"))
     print(f"partition: {len(foreign)} record(s) of another lane set aside; the rest is lane `{lane}`'s to check.")
     return 0
 
@@ -1236,6 +1247,34 @@ jobs:
         rc, out = callers(hosted.replace("needs.validate.outputs.executor", "needs.admission.outputs.executor"))
         check("MUTATION H7: a pack call whose executor reads a job it does not directly need is caught",
               rc == 1 and "`modules`'s `executor` reads needs.admission" in out, out)
+        # Review of #7271 (2nd round): the CONDITION too — an identical `publish:`/`if:` spelling reads
+        # false in a call that does not directly need the job it reads, skipping host-publication and
+        # its publisher while the pack call staged.
+        cond = "${{ needs.validate.outputs.publish == 'true' }}"
+        on_cond = (literal_host
+                   .replace("      publish: >-\n        ${{ github.event_name == 'push'\n"
+                            "        || github.event_name == 'schedule' }}\n", f"      publish: {cond}\n", 1)
+                   .replace("    if: >\n      github.event_name == 'push' ||\n      github.event_name == 'schedule'\n",
+                            f"    if: {cond}\n"))
+        check("the condition fixture really carries a needs-reading condition on all three calls",
+              on_cond.count(cond) == 3, on_cond)
+        rc, out = callers(on_cond)
+        check("H7: a needs-reading condition every call directly needs passes", rc == 0, out)
+        rc, out = callers(on_cond.replace("    needs: [modules, validate]\n", "    needs: [modules]\n", 1))
+        check("MUTATION H7: a build-host-publication whose `if:` reads a job it does not directly need is caught",
+              rc == 1 and "`host-publication`'s `if` reads needs.validate" in out, out)
+        rc, out = callers(on_cond.replace("    needs: [validate, modules, gate, host-publication]\n",
+                                          "    needs: [modules, gate, host-publication]\n", 1))
+        check("MUTATION H7: a publisher whose `if:` reads a job it does not directly need is caught",
+              rc == 1 and "`publish-modules`'s `if` reads needs.validate" in out, out)
+        rc, out = callers(on_cond.replace("  modules:\n    needs: [validate]\n", "  modules:\n    needs: [gate0]\n", 1)
+                          .replace("  gate:\n", "  gate0:\n    runs-on: ubuntu-latest\n    steps: [{ run: echo }]\n  gate:\n", 1)
+                          .replace("required-jobs: validate modules gate host-publication",
+                                   "required-jobs: validate modules gate host-publication gate0", 1)
+                          .replace("    needs: [validate, modules, gate, host-publication]\n",
+                                   "    needs: [validate, modules, gate, host-publication, gate0]\n", 1))
+        check("MUTATION H7: a host-capable pack call whose `publish:` reads a job it does not directly need is caught",
+              rc == 1 and "`modules`'s `publish` reads needs.validate" in out, out)
         rc, out = callers(hosted.replace("      modules: ${{ needs.host-publication.outputs.declared }}",
                                          "      modules: ${{ needs.modules.outputs.declared }}", 1))
         check("MUTATION H7: a publisher mixing the host call's lane with the pack call's catalog is caught",
@@ -1400,6 +1439,33 @@ jobs:
         rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(root / "wronglane"), lane="L9"))
         check("H7 partition NEGATIVE CONTROL: partitioning under the WRONG lane leaves the selection unanswered — RED",
               rc == 1 and "MeshWeaver.AI" in out, out)
+        # Review of #7271 (2nd round): host-produced record text must never print as a runner command.
+        evil = "MeshWeaver.Evil\n::add-mask::secret\n  ##[group]x"
+
+        def commands_in(text: str) -> list[str]:
+            return [l for l in text.splitlines() if l.lstrip().startswith("::add-mask") or "##[" in l]
+
+        d = stage("evil", "MeshWeaver.AI", lane="L1")
+        rec = {"lane": "L2\n::stop-commands::tok", "module": evil, "bundle": {"name": "x.nupkg"}}
+        (d / "evil.publication.json").write_text(json.dumps(rec), encoding="utf-8")
+        rc, out = run(partition, d, "L1", root / "evil-aside")
+        check("H7 partition: a foreign record's module/lane text prints as DATA, never a runner command",
+              rc == 0 and "set aside" in out and not commands_in(out)
+              and "::stop-commands" not in out, out)
+        d = stage("evil2", "MeshWeaver.AI", lane="L1")
+        rec = json.loads((d / "MeshWeaver.AI.publication.json").read_text())
+        rec["reason"], rec["owed"] = evil, False
+        (d / "MeshWeaver.AI.publication.json").write_text(json.dumps(rec), encoding="utf-8")
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(d)))
+        check("H7 check-only: a record's reason prints as DATA", rc == 0 and not commands_in(out), out)
+        d = stage("evil3", "MeshWeaver.AI", lane="L1")
+        (d / "z.publication.json").write_text(json.dumps({"lane": "L1", "module": evil}), encoding="utf-8")
+        rc, out = run(publish, args(check_only=True, dry_run=False, staged=str(d)))
+        check("H7 check-only: a REFUSAL naming a hostile module prints as one escaped ::error line",
+              rc == 1 and not commands_in(out) and "%0A" in out, out)
+        check("NEGATIVE CONTROL: the hostile text WOULD be a command if printed raw",
+              bool(commands_in(evil)))
+
         rc, out = run(partition, root / "never-fetched", "L1", root / "x-aside")
         check("H7 partition: a directory that was never fetched is nothing to set aside", rc == 0, out)
         rc, out = run(partition, mixed, "", root / "x-aside")
