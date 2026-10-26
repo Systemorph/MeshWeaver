@@ -4471,7 +4471,10 @@ jobs:
   # (build-host-stable.yml's daily roll).
   build-host-report:
     name: "Build host: report the build-latest lane (its own alert)"
-    needs: [preflight, build-host-image, build-host-latest]
+    # `build-host-image-arch` is named DIRECTLY: a failed architecture leg SKIPS `build-host-image`
+    # (implicit success()), and a skipped join reads as neither failure nor cancelled — so without the
+    # leg's own result a hand-over of a PREVIOUSLY armed set would close the alert over a failed build.
+    needs: [preflight, build-host-image-arch, build-host-image, build-host-latest]
     if: always() && needs.preflight.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -4482,6 +4485,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARCH: ${{ needs.build-host-image-arch.result }}
           IMAGE: ${{ needs.build-host-image.result }}
           HANDOVER: ${{ needs.build-host-latest.result }}
           HANDED: ${{ needs.build-host-latest.outputs.handed }}
@@ -4489,8 +4493,10 @@ jobs:
           set -euo pipefail
           open=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=build-host-latest&state=open&per_page=10" --jq '.[].number')
           # failed OR cancelled (a timeout, a cancelled run) is a lane that did not hand over
-          if [ "$IMAGE" = failure ] || [ "$HANDOVER" = failure ] || [ "$IMAGE" = cancelled ] || [ "$HANDOVER" = cancelled ]; then
-            body="The build-latest lane failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — build-host-image: \`${IMAGE}\`, build-host-latest: \`${HANDOVER}\`. Every image of the platform set IS published and the fleet's delivery is unaffected; build-latest keeps its previous set until a run hands it over. Read the failed job's ::error:: line (Doc/Architecture/BuildHosts)."
+          # A failed or cancelled architecture leg counts too: it leaves the join SKIPPED, not failed.
+          if [ "$ARCH" = failure ] || [ "$IMAGE" = failure ] || [ "$HANDOVER" = failure ] \
+            || [ "$ARCH" = cancelled ] || [ "$IMAGE" = cancelled ] || [ "$HANDOVER" = cancelled ]; then
+            body="The build-latest lane failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — build-host-image-arch: \`${ARCH}\`, build-host-image: \`${IMAGE}\`, build-host-latest: \`${HANDOVER}\`. Every image of the platform set IS published and the fleet's delivery is unaffected; build-latest keeps its previous set until a run hands it over. Read the failed job's ::error:: line (Doc/Architecture/BuildHosts)."
             first=$(printf '%s\n' "$open" | head -n 1)
             if [ -n "$first" ]; then
               gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$first/comments" -f body="$body" >/dev/null
