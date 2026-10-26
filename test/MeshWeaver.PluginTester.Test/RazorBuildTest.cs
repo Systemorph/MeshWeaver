@@ -1,6 +1,9 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reflection;
 using MeshWeaver.Data;
+using MeshWeaver.PluginTester.Extensibility;
+using MeshWeaver.PluginTester.Razor;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -98,6 +101,15 @@ public class RazorBuildTest : IDisposable
     private static Task<ProjectBuild.Report> Build(ProjectBuild.Options options) =>
         ProjectBuild.Run(options).Await(TestContext.Current.CancellationToken);
 
+    /// <summary>The Razor extension, as the builder would have loaded it, for evaluation-only tests.</summary>
+    private static readonly IBuildExtension[] Razor = [new RazorBuildExtension()];
+
+    private static ProjectFile.Model Load(string project, IReadOnlyCollection<string>? accepted = null) =>
+        ProjectFile.Load(project, accepted, null, Razor);
+
+    private static ImmutableArray<RazorItem> RazorItems(ProjectFile.Model model) =>
+        RazorBuildExtension.ItemsOf(model.Extensions.GetValueOrDefault(RazorBuildExtension.ExtensionName));
+
     // ── what the image ships ───────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -180,7 +192,7 @@ public class RazorBuildTest : IDisposable
         report.ExitCode.Should().Be(0);
         var result = report.Projects.Single().Result!;
         result.Failure.Should().BeNull();
-        result.RazorCount.Should().BeGreaterThan(0, "the .razor file must have produced a document");
+        result.ExtensionGeneratedSources.Should().BeGreaterThan(0, "the .razor file must have produced a document");
         result.AssemblyPath.Should().NotBeNull();
 
         // 🚨 LOAD it. "the compiler returned" is not evidence that a component exists — the whole
@@ -242,7 +254,10 @@ public class RazorBuildTest : IDisposable
         var empty = Path.Combine(_root, "no-generators");
         Directory.CreateDirectory(empty);
 
-        var options = OptionsFor(project) with { RazorGeneratorDirectory = empty };
+        var options = OptionsFor(project) with
+        {
+            ExtensionOptions = new Dictionary<string, string> { [RazorBuildExtension.GeneratorsOption] = empty },
+        };
         var report = await Build(options);
 
         report.ExitCode.Should().Be(1);
@@ -271,13 +286,13 @@ public class RazorBuildTest : IDisposable
         Write("Plain/Stray.razor", "<p>stray</p>\n");
 
         var refusal = Assert.Throws<ProjectFile.UnsupportedConstructException>(
-            () => ProjectFile.Load(project));
+            () => Load(project));
         refusal.Message.Should().Contain("Stray.razor");
-        refusal.Message.Should().Contain(ProjectFile.Accept.RazorNotCompiled);
+        refusal.Message.Should().Contain(RazorBuildExtension.Accept.RazorNotCompiled);
 
         // Acknowledged, the project loads and carries NO Razor items — the SDK ignores them too.
-        var model = ProjectFile.Load(project, [ProjectFile.Accept.RazorNotCompiled]);
-        model.RazorItems.Should().BeEmpty();
+        var model = Load(project, [RazorBuildExtension.Accept.RazorNotCompiled]);
+        RazorItems(model).Should().BeEmpty();
     }
 
     [Fact]
@@ -291,20 +306,20 @@ public class RazorBuildTest : IDisposable
         Write("Widgets/Spacer.razor.css", ".spacer { height: 8px; }\n");
         Write("Widgets/Bare.razor", "<div>no stylesheet</div>\n");
 
-        var model = ProjectFile.Load(project);
-        var spacer = model.RazorItems.Single(i => i.Path.EndsWith("Spacer.razor"));
+        var model = Load(project);
+        var spacer = RazorItems(model).Single(i => i.Path.EndsWith("Spacer.razor"));
         spacer.CssScope.Should().Be(
             ScopedCss.GenerateScope("Spacer.razor.css", "Widgets.Scoped"),
             "the generator's markup attribute and the bundler's selector suffix are this one value");
-        model.RazorItems.Single(i => i.Path.EndsWith("Bare.razor")).CssScope.Should().BeNull(
+        RazorItems(model).Single(i => i.Path.EndsWith("Bare.razor")).CssScope.Should().BeNull(
             "a component without a stylesheet sibling gets no scope, exactly like ApplyCssScopes");
         // The .razor.css itself is never a Razor input — it is a stylesheet, and the default
         // *.razor glob must not pick it up.
-        model.RazorItems.Should().HaveCount(2);
+        RazorItems(model).Should().HaveCount(2);
 
         // A caller still passing the historical accept keeps building identically.
-        ProjectFile.Load(project, [ProjectFile.Accept.RazorCssScope])
-            .RazorItems.Single(i => i.Path.EndsWith("Spacer.razor"))
+        RazorItems(Load(project, [RazorBuildExtension.Accept.RazorCssScope]))
+            .Single(i => i.Path.EndsWith("Spacer.razor"))
             .CssScope.Should().Be(spacer.CssScope);
     }
 
@@ -324,9 +339,9 @@ public class RazorBuildTest : IDisposable
         Write("Widgets/Keep.razor", "<p>keep</p>\n");
         Write("Widgets/Legacy.razor", "<p>legacy</p>\n");
 
-        var model = ProjectFile.Load(project);
+        var model = Load(project);
 
-        model.RazorItems.Select(i => i.TargetPath).Should().Equal("Keep.razor");
+        RazorItems(model).Select(i => i.TargetPath).Should().Equal("Keep.razor");
     }
 
     [Fact]
@@ -336,13 +351,13 @@ public class RazorBuildTest : IDisposable
         Write("Widgets/Panels/Card.razor", "<article>card</article>\n");
         Write("Widgets/Views/Index.cshtml", "@{ }\n<p>index</p>\n");
 
-        var model = ProjectFile.Load(project);
+        var model = Load(project);
 
-        model.RazorItems.Select(i => i.TargetPath).Order(StringComparer.Ordinal)
+        RazorItems(model).Select(i => i.TargetPath).Order(StringComparer.Ordinal)
             .Should().Equal(Path.Combine("Panels", "Card.razor"), Path.Combine("Views", "Index.cshtml"));
-        model.RazorItems.Single(i => i.TargetPath.EndsWith(".razor", StringComparison.Ordinal))
+        RazorItems(model).Single(i => i.TargetPath.EndsWith(".razor", StringComparison.Ordinal))
             .IsComponent.Should().BeTrue();
-        model.RazorItems.Single(i => i.TargetPath.EndsWith(".cshtml", StringComparison.Ordinal))
+        RazorItems(model).Single(i => i.TargetPath.EndsWith(".cshtml", StringComparison.Ordinal))
             .IsComponent.Should().BeFalse();
     }
 
