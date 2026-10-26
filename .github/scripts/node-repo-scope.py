@@ -80,6 +80,7 @@ OUTPUT — JSON on stdout, the human report on stderr, plus $GITHUB_OUTPUT / $GI
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -358,6 +359,8 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 # ── the caller's module-libraries shelf ──────────────────────────────────────────────────────
 
 _SHELF_INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+_SHELF_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+_PROJECT_DIR_PROPS = ("$(MSBuildThisFileDirectory)", "$(MSBuildProjectDirectory)")
 
 
 def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
@@ -391,7 +394,28 @@ def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
                 continue
             if target.is_file():
                 queue.append(target)
-    return frozenset(p.parent.relative_to(root).as_posix() for p in seen)
+    # Plus every `<Compile Include>` a project links from outside its folder (`../Shared/X.cs`), as a
+    # repository-relative path or glob: it is compiled with the project, so a diff touching ONLY it
+    # changes the shelf / extension as much as one inside its directory does (module-build-key.py
+    # keys the same files, and a key nobody computes because nothing was selected is no key).
+    linked: set[str] = set()
+    for csproj in seen:
+        text = csproj.read_text(encoding="utf-8", errors="replace")
+        rel_dir = csproj.parent.relative_to(root).as_posix()
+        for a, b in re.findall(_SHELF_COMPILE, text):
+            for include in (a or b).split(";"):
+                include = include.strip().replace("\\", "/")
+                for prop in _PROJECT_DIR_PROPS:
+                    if include.startswith(prop):
+                        include = include[len(prop):].lstrip("/")
+                        break
+                if not include or "$(" in include or "@(" in include or "%(" in include:
+                    continue
+                norm = os.path.normpath(f"{rel_dir}/{include}").replace("\\", "/")
+                if norm.startswith("../") or norm == ".." or os.path.isabs(norm):
+                    continue  # outside this checkout — not this repository's
+                linked.add(norm)
+    return frozenset({p.parent.relative_to(root).as_posix() for p in seen} | linked)
 
 
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
@@ -494,7 +518,8 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         if dirs_ is None:
             return full(f"{input_name} {project} is not in this checkout, so whether this diff "
                         f"changes the {label} cannot be decided — running the full set.")
-        touched = [f for f in files if any(f.startswith(d + "/") for d in dirs_)]
+        touched = [f for f in files
+                   if any(f.startswith(d + "/") or fnmatch.fnmatchcase(f, d) for d in dirs_)]
         if touched:
             return full(f"{len(touched)} changed file(s) are in the caller's {label} "
                         f"({project} and the projects it reaches) — first: {touched[0]}. "
@@ -1122,6 +1147,22 @@ def self_test() -> int:
         check("[modules] a named extension missing from the checkout ⇒ ALL (cannot decide), named by its input",
               got["scope"] == "full" and got["count"] == 2 and "build-extensions-project" in got["reason"],
               f"scope={got['scope']} — {got['reason'][:80]}")
+        # A linked source outside the extension's folder: `<Compile Include="../Shared/Emitter.cs" />`.
+        (shelf_dir / "Acme.ModuleLibraries.csproj").write_text(
+            # No ProjectReference this time: Acme.Other is a project the graph knows and NOTHING
+            # reaches, so only the Compile links below can make an edit there select anything.
+            '<Project><ItemGroup><Compile Include="../Acme.Other/Emitter.cs" />'
+            '<Compile Include="$(MSBuildThisFileDirectory)../Acme.Other/Gen/**/*.cs" /></ItemGroup></Project>\n',
+            encoding="utf-8")
+        for label, path in (("a linked <Compile Include> source", "src/Acme.Other/Emitter.cs"),
+                            ("a file a linked wildcard matches", "src/Acme.Other/Gen/Deep/G.cs")):
+            got = _run(root, "modules", "pull_request", [path], extra=ext_arg)
+            check(f"[modules] {label} changed, extension named ⇒ ALL",
+                  got["scope"] == "full" and got["count"] == 2 and "build extension" in got["reason"],
+                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=ext_arg)
+        check("[modules] negative control — a file beside the linked one that no Compile item names narrows",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
         (shelf_dir / "Acme.ModuleLibraries.csproj").unlink()
         shelf_dir.rmdir()
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "plugin-gate.allow"])
