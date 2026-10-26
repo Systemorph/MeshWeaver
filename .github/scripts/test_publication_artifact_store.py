@@ -174,14 +174,66 @@ class PublicationArtifactStoreTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, stdout=json.dumps(self.run))
             return real_run(command, **kwargs)
 
+        repo = self.checkout({"Floor": []})
         output = io.StringIO()
-        args = ["reuse", "--matrix", '[{"module":"Floor","test":false}]', "--run", "10",
-                "--sha", "a" * 40, "--repo", self.repo, "--artifact-store", self.store]
+        args = ["reuse", "--matrix", '[{"module":"Floor","project":"src/Floor/Floor.csproj","test":false}]',
+                "--run", "10", "--sha", "a" * 40, "--repo", self.repo, "--artifact-store", self.store,
+                "--root", str(repo)]
         with patch.object(sys, "argv", args), patch.object(REUSE.subprocess, "run", side_effect=call), \
                 contextlib.redirect_stdout(output):
             self.assertEqual(0, REUSE.main())
         self.assertEqual(1, len(github_paths))
         self.assertIn("reuse", json.loads(output.getvalue())[0])
+
+    def checkout(self, projects):
+        repo = self.root / "repo"
+        for name, refs in projects.items():
+            (repo / "src" / name).mkdir(parents=True)
+            items = "".join(f'<ProjectReference Include="../{r}/{r}.csproj" />' for r in refs)
+            (repo / "src" / name / f"{name}.csproj").write_text(f"<Project><ItemGroup>{items}</ItemGroup></Project>")
+        return repo
+
+    def reuse_cli(self, matrix, root):
+        """Run the CLI over a real store holding every matrix entry's bundle from run 10."""
+        for entry in matrix:
+            self.publish(name=f"module-bundle-{entry['module']}", attempt=3)
+
+        real_run = subprocess.run
+
+        def call(command, **kwargs):
+            if command[:2] == ["gh", "api"]:
+                return subprocess.CompletedProcess(command, 0, stdout=json.dumps(self.run))
+            return real_run(command, **kwargs)
+
+        args = ["reuse", "--matrix", json.dumps(matrix), "--run", "10", "--sha", "a" * 40,
+                "--repo", self.repo, "--artifact-store", self.store]
+        if root is not None:
+            args += ["--root", str(root)]
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(sys, "argv", args), patch.object(REUSE.subprocess, "run", side_effect=call), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            self.assertEqual(0, REUSE.main())
+        return {e["module"]: e for e in json.loads(output.getvalue())}, errors.getvalue()
+
+    def test_a_sibling_riding_a_built_bundle_is_built_with_it_not_reused(self):
+        # MeshWeaver.Plugins#4253: AI's sources changed and AI references Collaboration, whose
+        # sources did not. Reusing Essentials' Collaboration bundle beside a freshly built AI bundle
+        # (which carries its own Collaboration) put one assembly name into the gate's set at two
+        # builds. Maps shares no project with AI and stays reused.
+        repo = self.checkout({"Collab": [], "AI": ["Collab"], "Maps": []})
+        matrix = [{"module": m, "project": f"src/{m}/{m}.csproj", "test": t}
+                  for m, t in (("Collab", False), ("AI", True), ("Maps", False))]
+        got, log = self.reuse_cli(matrix, repo)
+        self.assertNotIn("reuse", got["Collab"])
+        self.assertIn("reuse", got["Maps"])
+        self.assertNotIn("reuse", got["AI"])
+        self.assertIn("BUILD Collab, not reused: it shares src/Collab/Collab.csproj with AI", log)
+
+    def test_without_a_root_nothing_is_reused(self):
+        matrix = [{"module": "Maps", "project": "src/Maps/Maps.csproj", "test": False}]
+        got, log = self.reuse_cli(matrix, None)
+        self.assertNotIn("reuse", got["Maps"])
+        self.assertIn("no --root", log)
 
     def test_nested_adapter_does_not_leak_github_outputs(self):
         self.publish()
