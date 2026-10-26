@@ -193,6 +193,11 @@ what it left (#7187: an `in_progress` run may already have published its red). T
 it applies the whole predicate to live state, so a thread that is really unanswered is red there
 too. No loop: a re-run of a `pull_request` run is a `pull_request` event, which never refreshes, and
 a GITHUB_TOKEN re-run raises no new workflow event.
+And after a GREEN verdict on ANY event (`pull_request` included, never `merge_group`) it re-runs
+EVERY other run of this workflow on the head whose review check-run is red and started before the
+verdict — `duplicate_red_action` (pure, self-tested): each run publishes its own duplicate of the
+required context, and MeshWeaver.Plugins#4276 stayed blocked on three older review/comment reds
+while the newest check-run read success.
 
 `--as-of` evaluates the pull request as it stood at that instant (reviews, comments and waiver
 events created later are ignored) — the controls in Doc/Architecture/ReviewFindingsAnswered use it
@@ -1428,7 +1433,9 @@ def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dic
     the pull request has no `pull_request` verdict on this head at all until it runs."""
     head = str((pr.get("head") or {}).get("sha") or "")
     if event == PROTECTION_READ_EVENT:
-        return "none", f"this run IS a `{PROTECTION_READ_EVENT}` run — its own verdict is the one branch protection reads"
+        # Its own verdict is a `pull_request` one; the older reds of OTHER events on the head are the
+        # duplicate sweep's (duplicate_red_action — #4276 was exactly this run going green by hand).
+        return "none", f"this run IS a `{PROTECTION_READ_EVENT}` run — its own verdict is a `{PROTECTION_READ_EVENT}` one"
     if event == "merge_group":
         return "none", "a merge-queue entry is its own commit with its own check-run — nothing on the pull request head to refresh"
     if pr.get("state") not in (None, "open"):
@@ -1472,6 +1479,100 @@ def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dic
                         "than this one, so it is not re-run")
     return "rerun", (f"this `{event}` verdict is GREEN but branch protection reads `{PROTECTION_READ_EVENT}` run "
                      f"{candidate.get('id')}, which concluded {candidate.get('conclusion')} before it — re-running the whole run")
+
+
+# ─────────────────────────── EVERY OLDER RED ON THE HEAD (the duplicate sweep) ───────────────────────────
+#
+# 🚨 `refresh_action` alone does NOT converge (MeshWeaver.Plugins#4276, head 264517aeaf). Every run of
+# this workflow publishes its OWN check-run named `… Automatic review answered` on the head, one per
+# event (`pull_request`, `pull_request_review`, `pull_request_review_comment`), and the merge refused
+# with 405 "Required status check … is failing" while the NEWEST such check-run read success: three
+# older runs (40342994248, 40343008573, 40343010678 — a review and two comment events) still carried
+# the red each took truthfully at 14:48Z ("head owes its own Copilot review"). Copilot's review landed
+# at 18:28Z and started no run; the `pull_request` run was re-run by hand at 18:36Z and went GREEN —
+# and its refresh did nothing, because a `pull_request` verdict never refreshed, and no refresh ever
+# looked at a run of any other event. So which of the duplicates branch protection reads is not
+# assumed here at all (#4649 measured one selection, #4276 another): after a GREEN verdict, EVERY
+# completed run on the head whose review check-run is red and that started before the verdict is
+# re-run, whatever its event. A re-run applies the whole predicate to live state, so a thread that is
+# really unanswered is red there too — the sweep softens nothing.
+
+#: The job (= check-run) name of this check. A reusable call prefixes it with the caller's job id
+#: (`review-answered / Automatic review answered` in a satellite, `lane / …` beside core's own job).
+REVIEW_CHECK_NAME = "Automatic review answered"
+
+#: Conclusions branch protection accepts for a required context. Everything else — failure,
+#: cancelled, timed_out, action_required, startup_failure, stale — is a red that blocks.
+PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
+
+
+def is_review_check_job(name) -> bool:
+    """True for the job that publishes this check's required context, under any caller prefix. Pure."""
+    name = str(name or "")
+    return name == REVIEW_CHECK_NAME or name.endswith(f" / {REVIEW_CHECK_NAME}")
+
+
+def sweep_precondition(event: str, repo: str, pr: dict) -> str | None:
+    """Why the duplicate sweep must NOT run for this verdict (None = it runs). Pure. A merge-queue entry
+    is its own commit; a closed pull request needs nothing; a fork's token cannot re-run anything
+    (`refresh_action` already says `manual` for it, naming the remedy)."""
+    if event == "merge_group":
+        return "a merge-queue entry is its own commit — nothing on the pull request head to sweep"
+    if pr.get("state") not in (None, "open"):
+        return f"#{pr.get('number')} is {pr.get('state')}"
+    head_repo = str(((pr.get("head") or {}).get("repo") or {}).get("full_name") or "")
+    if head_repo and head_repo != repo:
+        return f"#{pr.get('number')} comes from the fork {head_repo} — its token cannot re-run a workflow"
+    return None
+
+
+def duplicate_red_action(run: dict, jobs: list | None, own_run_id, own_created_at: str, evaluated_at: str,
+                         head: str) -> tuple[str, str]:
+    """For ONE other run of this workflow on the head, after a GREEN verdict: ('rerun' | 'wait' | 'none' |
+    'fail', why). Pure. `jobs` is that run's (latest attempt's) job listing — read only when the run can
+    carry a red at all; `own_created_at` is when THIS run was created.
+
+    Re-run iff its review check-run is RED, the run is completed (GitHub refuses to re-run one in
+    flight) and it STARTED before this verdict (it judged an older state). Wait for a review job still
+    in flight — it may yet publish a red read before this verdict (#7187), and a review job never waits
+    on a refresh, so that wait cannot cycle. A red inside a run that is still finishing (its own refresh
+    is running) is waited for only when that run is OLDER than this one: waiting only on older runs is
+    what keeps two refreshes from waiting on each other."""
+    rid = run.get("id")
+    if str(rid) == str(own_run_id):
+        return "none", f"run {rid} is this run"
+    if run.get("head_sha") != head:
+        return "none", f"run {rid} is for {str(run.get('head_sha'))[:10]}, not the current head {head[:10]}"
+    if run.get("status") in NOT_STARTED_RUN_STATUSES:
+        return "none", f"run {rid} ({run.get('event')}) is {run.get('status')} — it has not started, so it reads live state after this verdict"
+    if run.get("status") == "completed" and run.get("conclusion") == "success":
+        return "none", f"run {rid} ({run.get('event')}) already reads success"
+    review = [j for j in (jobs or []) if is_review_check_job(j.get("name"))]
+    if not review:
+        if run.get("status") == "completed":
+            return "none", (f"run {rid} ({run.get('event')}, {run.get('conclusion')}) published no `{REVIEW_CHECK_NAME}` "
+                            "check-run (replaced while pending — zero jobs), so it holds no red")
+        return "wait", f"run {rid} ({run.get('event')}) is {run.get('status')} and has not created its review job yet"
+    flying = [j for j in review if j.get("status") != "completed"]
+    if flying:
+        return "wait", f"run {rid} ({run.get('event')}): `{flying[0].get('name')}` is still {flying[0].get('status')} — letting it finish"
+    reds = [j for j in review if j.get("conclusion") not in PASSING_CONCLUSIONS]
+    if not reds:
+        return "none", f"run {rid} ({run.get('event')}): its review check-run already reads success"
+    red = f"`{reds[0].get('name')}` concluded {reds[0].get('conclusion')}"
+    if run.get("status") != "completed":
+        if str(run.get("created_at") or "") < str(own_created_at or ""):
+            return "wait", f"run {rid} ({run.get('event')}): {red}, but the run is still {run.get('status')} — a re-run needs it completed"
+        return "none", (f"run {rid} ({run.get('event')}): {red} while the run is still {run.get('status')}; it is NEWER than this "
+                        "run, so it is not waited for (only older runs are — no two refreshes wait on each other)")
+    started, judged = parse_stamp(run.get("run_started_at")), parse_stamp(evaluated_at)
+    if judged is None:
+        return "fail", f"the verdict's own time {evaluated_at!r} is unreadable, so staleness cannot be judged"
+    if started is not None and started >= judged:
+        return "none", (f"run {rid} ({run.get('event')}): {red}, but it started at {run.get('run_started_at')}, not before "
+                        f"this verdict ({evaluated_at}) — it judged a state no older than this one")
+    return "rerun", (f"run {rid} ({run.get('event')}): {red} before this GREEN verdict — branch protection may read "
+                     "any duplicate of this check on the head, so re-running the whole run")
 
 
 # ─────────────────────────────── REVIEW ON REAL CHANGE (pure) ───────────────────────────────
@@ -2182,11 +2283,18 @@ REFRESH_POLL_SECONDS = 30
 
 def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: str, gh=None,
                 wait_s: float = REFRESH_WAIT_SECONDS) -> int:
-    """The self-refresh job: exit 0 when it re-ran the read run or had nothing to do (both printed),
-    1 (RED, named) when it could not read or could not re-run. It never changes a verdict itself.
-    `gh` is the REST adapter (`Gh(repo)` when omitted); the self-test injects a stub so the POST this
-    caller actually issues — the whole-run `rerun`, never `rerun-failed-jobs` — is asserted end to end.
-    A read run still in flight is waited for (up to `wait_s`), then judged — never skipped (#7187)."""
+    """The self-refresh job: exit 0 when it re-ran what carried a stale red or had nothing to do (every
+    decision printed), 1 (RED, named) when it could not read, could not re-run, or could not judge.
+    It never changes a verdict itself. Two halves, decided off ONE listing of this workflow's runs on
+    the head per poll:
+      * `refresh_action` — the newest `pull_request` run (#4649; a zero-job one too, #6315);
+      * `duplicate_red_action` — EVERY other run of this workflow on the head, whatever its event, whose
+        review check-run is red and older than this verdict (MeshWeaver.Plugins#4276).
+    `gh` is the REST adapter (`Gh(repo)` when omitted); the self-test injects a stub so the POSTs this
+    caller actually issues — the whole-run `rerun`, never `rerun-failed-jobs` — are asserted end to end.
+    Anything still in flight is waited for (up to `wait_s`), then judged — never skipped (#7187)."""
+    sweep: list = []
+    candidate = None
     try:
         gh = gh if gh is not None else Gh(repo)
         sleep, clock = getattr(gh, "sleep", time.sleep), getattr(gh, "now", time.monotonic)
@@ -2194,53 +2302,119 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
         workflow_id = own.get("workflow_id") if isinstance(own, dict) else None
         if not workflow_id:
             raise ReadError(f"actions/runs/{run_id} named no workflow_id")
+        own_created = str(own.get("created_at") or "")
         pr = gh.api(f"pulls/{number}")
         if not isinstance(pr, dict) or pr.get("number") != number:
             raise ReadError(f"pulls/{number} did not return pull request #{number}")
         head = str((pr.get("head") or {}).get("sha") or "")
         if not re.fullmatch(r"[0-9a-f]{40}", head):
             raise ReadError(f"pulls/{number} reported no head sha")
+        # A completed attempt's jobs never change, so they are read once per (run, attempt).
+        jobs_cache: dict = {}
+
+        def review_jobs(run: dict):
+            if run.get("status") in NOT_STARTED_RUN_STATUSES or (
+                    run.get("status") == "completed" and run.get("conclusion") == "success"):
+                return []
+            key = (run.get("id"), run.get("run_attempt"))
+            if key in jobs_cache:
+                return jobs_cache[key]
+            listing = gh.api(f"actions/runs/{run.get('id')}/jobs?per_page=100")
+            jobs = listing.get("jobs") if isinstance(listing, dict) else None
+            if not isinstance(jobs, list):
+                raise ReadError(f"actions/runs/{run.get('id')}/jobs did not return a job listing")
+            if run.get("status") == "completed":
+                jobs_cache[key] = jobs
+            return jobs
+
+        def judge(pr_now: dict, runs: list) -> tuple:
+            pr_runs = [r for r in runs if r.get("event") == PROTECTION_READ_EVENT]
+            cand = max(pr_runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if pr_runs else None
+            act, reason = refresh_action(event, run_id, evaluated_at, repo, pr_now, cand)
+            head_now = str((pr_now.get("head") or {}).get("sha") or "")
+            decisions = []
+            if sweep_precondition(event, repo, pr_now) is None:
+                # The newest `pull_request` run is refresh_action's — unless this run IS a
+                # `pull_request` one, when refresh_action stands aside and the sweep covers it too.
+                skip = {str(run_id)}
+                if cand is not None and event != PROTECTION_READ_EVENT:
+                    skip.add(str(cand.get("id")))
+                for r in runs:
+                    if str(r.get("id")) in skip:
+                        continue
+                    decisions.append((r,) + duplicate_red_action(r, review_jobs(r), run_id, own_created,
+                                                                 evaluated_at, head_now))
+            return cand, act, reason, decisions
+
         deadline = clock() + wait_s
         while True:
-            listing = gh.api(f"actions/workflows/{workflow_id}/runs?head_sha={head}&event={PROTECTION_READ_EVENT}&per_page=50")
+            listing = gh.api(f"actions/workflows/{workflow_id}/runs?head_sha={head}&per_page=100")
             runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
             if not isinstance(runs, list):
                 raise ReadError(f"actions/workflows/{workflow_id}/runs?head_sha={head[:10]} did not return a run listing")
-            candidate = max(runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if runs else None
-            action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
-            if action != "wait":
+            total = listing.get("total_count")
+            if isinstance(total, int) and total > len(runs):
+                # Never judge a partial listing: an unread page could hold the red that blocks.
+                raise ReadError(f"the run listing for head {head[:10]} is truncated ({len(runs)} of {total})")
+            candidate, action, why, sweep = judge(pr, runs)
+            waits = ([why] if action == "wait" else []) + [w for _, a, w in sweep if a == "wait"]
+            if not waits:
                 break
             if clock() + REFRESH_POLL_SECONDS > deadline:
-                action, why = "fail", (f"{why} — and it did not finish within {int(wait_s)}s, so whether it carries a red "
-                                       "older than this verdict could not be judged; re-run this run once it has finished")
+                late = (f" — and it did not finish within {int(wait_s)}s, so whether it carries a red older than "
+                        "this verdict could not be judged; re-run this run once it has finished")
+                if action == "wait":
+                    action, why = "fail", why + late
+                sweep = [(r, "fail", w + late) if a == "wait" else (r, a, w) for r, a, w in sweep]
                 break
-            print(f"  #{number}: {why}", flush=True)
+            for w in waits:
+                print(f"  #{number}: {w}", flush=True)
             sleep(REFRESH_POLL_SECONDS)
-        if action == "rerun":
+        if action == "rerun" or any(a == "rerun" for _, a, _ in sweep):
             # 🚨 Re-read the pull request and judge again immediately before the POST (MeshWeaver#7203
             # review): the snapshot above can be 30 minutes old, and a push or a closure since then
-            # makes the candidate an OBSOLETE evaluation — re-running it would queue it in the
-            # pull request's `…-gate` group, where it can displace the current head's pending run.
+            # makes a red run an OBSOLETE evaluation — re-running it would queue it in the pull
+            # request's group, where it can displace the current head's pending run.
             pr = gh.api(f"pulls/{number}")
             if not isinstance(pr, dict) or pr.get("number") != number:
                 raise ReadError(f"pulls/{number} did not return pull request #{number}")
-            action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
+            if action == "rerun":
+                action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
+            head_now = str((pr.get("head") or {}).get("sha") or "")
+            gone = sweep_precondition(event, repo, pr)
+            rejudged = []
+            for r, a, w in sweep:
+                if a == "rerun" and gone:
+                    rejudged.append((r, "none", gone))
+                elif a == "rerun":
+                    rejudged.append((r,) + duplicate_red_action(r, jobs_cache.get((r.get("id"), r.get("run_attempt"))),
+                                                                run_id, own_created, evaluated_at, head_now))
+                else:
+                    rejudged.append((r, a, w))
+            sweep = rejudged
         if action == "rerun" and not post_rerun(gh, candidate["id"], RERUN_WHOLE_RUN):
             action, why = "none", f"run {candidate['id']} was already re-run by another invocation"
+        for i, (r, a, w) in enumerate(sweep):
+            if a == "rerun" and not post_rerun(gh, r["id"], RERUN_WHOLE_RUN):
+                sweep[i] = (r, "none", f"run {r['id']} was already re-run by another invocation")
     except (ReadError, KeyError, TypeError) as e:
         print(f"::error::the protection-read run of #{number} was NOT refreshed: {e}")
         return 1
-    if action == "rerun":
-        print(f"::notice::#{number}: {why} — {candidate.get('html_url')}")
-    elif action == "manual":
-        print(f"::warning::#{number}: {why}")
-    elif action == "fail":
-        print(f"::error::#{number}: {why}")
-        return 1
-    else:
-        print(f"  #{number}: {why}")
-    _append("GITHUB_STEP_SUMMARY", f"Refresh of the protection-read verdict for #{number}: {action} — {why}\n")
-    return 0
+    rc = 0
+    rows = [("the newest pull_request run", action, why, (candidate or {}).get("html_url"))]
+    rows += [(f"run {r.get('id')}", a, w, r.get("html_url")) for r, a, w in sweep]
+    for label, a, w, url in rows:
+        if a == "rerun":
+            print(f"::notice::#{number}: {w} — {url}")
+        elif a == "manual":
+            print(f"::warning::#{number}: {w}")
+        elif a == "fail":
+            print(f"::error::#{number}: {w}")
+            rc = 1
+        else:
+            print(f"  #{number}: {w}")
+        _append("GITHUB_STEP_SUMMARY", f"Refresh for #{number} ({label}): {a} — {w}\n")
+    return rc
 
 
 # ─────────────────────────────── THE OUTAGE RETRY (MeshWeaver#7187) ───────────────────────────────
@@ -3839,7 +4013,7 @@ def self_test() -> int:
 
     # ── the SELF-REFRESH: a green verdict branch protection does not read re-runs the one it does.
     ref_pr = {"number": 4649, "state": "open", "head": {"sha": HEAD, "repo": {"full_name": "Systemorph/MeshWeaver"}}}
-    red_read = {"id": 7, "head_sha": HEAD, "status": "completed", "conclusion": "failure",
+    red_read = {"id": 7, "event": "pull_request", "head_sha": HEAD, "status": "completed", "conclusion": "failure",
                 "run_started_at": "2026-10-07T09:40:00Z", "html_url": "u"}
     def ref_case(name, expect, event, candidate, pr=None, evaluated_at="2026-10-07T10:00:00Z", own=99, says=""):
         nonlocal failures
@@ -3913,6 +4087,7 @@ def self_test() -> int:
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} posted={stub.posted}")
 
+    failures += duplicate_sweep_self_test(HEAD, ref_pr, red_read)
     failures += outage_self_test(HEAD, ref_pr, red_read)
 
     # the merge-queue ref → pull request number
@@ -3938,6 +4113,122 @@ def self_test() -> int:
         return 1
     print("self-test: every red case went red for exactly its own reason, and every green case went green")
     return 0
+
+
+def duplicate_sweep_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
+    """MeshWeaver.Plugins#4276 — an OLDER failed duplicate of this check on the same head is re-run after
+    a GREEN verdict, whatever event produced either; the negative controls prove the sweep can say no."""
+    failures = 0
+
+    def check(name, ok, detail=""):
+        nonlocal failures
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} sweep: {name:70} {detail}")
+
+    verdict_at = "2026-10-26T18:37:30Z"
+    own_created = "2026-10-26T14:47:41Z"
+    red_job = {"name": "review-answered / Automatic review answered", "status": "completed", "conclusion": "failure"}
+    green_job = dict(red_job, conclusion="success")
+    refresh_job = {"name": "review-answered / Refresh the verdict branch protection reads", "status": "completed",
+                   "conclusion": "skipped"}
+    dup = {"id": 40343008573, "event": "pull_request_review", "head_sha": HEAD, "status": "completed",
+           "conclusion": "failure", "run_attempt": 1, "created_at": "2026-10-26T14:47:52Z",
+           "run_started_at": "2026-10-26T14:47:52Z", "html_url": "u"}
+    for name, run, jobs, expect, says in [
+        ("#4276: older review-event red, verdict GREEN later -> rerun", dup, [red_job, refresh_job], "rerun", "re-running"),
+        ("older comment-event red -> rerun", dict(dup, event="pull_request_review_comment"), [red_job], "rerun", "re-running"),
+        ("core's lane-prefixed and bare job names both count", dup,
+         [dict(red_job, name="Automatic review answered"), dict(green_job, name="lane / Automatic review answered")],
+         "rerun", "re-running"),
+        ("a timed-out review job is a red too", dup, [dict(red_job, conclusion="timed_out")], "rerun", "timed_out"),
+        ("NEG: duplicate already green -> none", dict(dup, conclusion="success"), [green_job], "none", "already reads success"),
+        ("NEG: run red only in its REFRESH job (review check green) -> none", dup,
+         [green_job, dict(refresh_job, conclusion="failure")], "none", "already reads success"),
+        ("NEG: red but started AFTER the verdict -> none", dict(dup, run_started_at="2026-10-26T18:40:00Z"), [red_job],
+         "none", "not before this verdict"),
+        ("NEG: red on an OLDER head -> none", dict(dup, head_sha="b" * 40), [red_job], "none", "not the current head"),
+        ("NEG: zero-job cancelled run (replaced while pending) -> none", dict(dup, conclusion="cancelled"), [],
+         "none", "zero jobs"),
+        ("NEG: this very run -> none", dict(dup, id=99), [red_job], "none", "is this run"),
+        ("review job still in flight -> wait", dict(dup, status="in_progress", conclusion=None),
+         [dict(red_job, status="in_progress", conclusion=None)], "wait", "letting it finish"),
+        ("red in an OLDER run still finishing -> wait (acyclic)", dict(dup, status="in_progress", conclusion=None,
+                                                                   created_at="2026-10-26T14:40:00Z"), [red_job],
+         "wait", "needs it completed"),
+        ("red in a NEWER run still finishing -> none, never a mutual wait", dict(dup, status="in_progress", conclusion=None),
+         [red_job], "none", "not waited for"),
+        ("not started -> none", dict(dup, status="pending", conclusion=None), [], "none", "has not started"),
+    ]:
+        action, why = duplicate_red_action(run, jobs, 99, own_created, verdict_at, HEAD)
+        check(name, action == expect and says in why, f"expected={expect} got={action} ({why[:50]})")
+
+    # end to end: the #4276 head replayed through run_refresh — a GREEN `pull_request` verdict (the run a
+    # person re-ran by hand at 18:36Z) re-runs the three older reds of the other events, and only those.
+    own = {"id": 99, "workflow_id": 5, "created_at": own_created}
+    zero = dict(dup, id=40343005656, event="pull_request_review_comment", conclusion="cancelled")
+    reds = [dict(dup, id=40342994248, event="pull_request_review_comment"), dup,
+            dict(dup, id=40343010678, event="pull_request_review_comment")]
+    green_pr = dict(red_read, id=99, conclusion="success", created_at=own_created)
+
+    class _SweepGh:
+        def __init__(self, runs, jobs_by_id, pr=None):
+            self.runs, self.jobs_by_id, self.pr, self.posted, self.reads = runs, jobs_by_id, pr or ref_pr, [], []
+        def api(self, path):
+            self.reads.append(path)
+            if path == "actions/runs/99":
+                return own
+            if path == "pulls/4649":
+                return self.pr
+            if path.startswith("actions/workflows/5/runs?"):
+                return {"total_count": len(self.runs), "workflow_runs": self.runs}
+            for rid, jobs in self.jobs_by_id.items():
+                if path.startswith(f"actions/runs/{rid}/jobs"):
+                    return {"jobs": jobs}
+            raise ReadError(f"unexpected GET {path}")
+        def post(self, path):
+            self.posted.append(path)
+    all_red = {r["id"]: [red_job, refresh_job] for r in reds}
+    all_red[zero["id"]] = []
+    for name, event, runs, jobs, pr, expect_rc, expect_posted in [
+        ("#4276: pull_request verdict GREEN -> the 3 older reds of other events re-run",
+         "pull_request", [green_pr, zero] + reds, all_red, None, 0,
+         sorted(f"actions/runs/{r['id']}/rerun" for r in reds)),
+        ("comment verdict GREEN -> the older pull_request red AND the older review red re-run",
+         "pull_request_review_comment", [red_read, dup, dict(dup, id=99, event="pull_request_review_comment")],
+         {dup["id"]: [red_job]}, None, 0, ["actions/runs/40343008573/rerun", "actions/runs/7/rerun"]),
+        ("NEG: every duplicate already green -> posts nothing", "pull_request",
+         [green_pr] + [dict(r, conclusion="success") for r in reds], {}, None, 0, []),
+        ("NEG: a fork pull request -> no sweep, posts nothing", "pull_request", [green_pr] + reds, all_red,
+         dict(ref_pr, head={"sha": HEAD, "repo": {"full_name": "someone/MeshWeaver"}}), 0, []),
+        ("NEG: closed pull request -> posts nothing", "pull_request", [green_pr] + reds, all_red,
+         dict(ref_pr, state="closed"), 0, []),
+    ]:
+        stub = _SweepGh(runs, jobs, pr)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = run_refresh("Systemorph/MeshWeaver", 4649, event, "99", verdict_at, gh=stub, wait_s=0)
+        check(name, rc == expect_rc and sorted(stub.posted) == sorted(expect_posted), f"rc={rc} posted={stub.posted}")
+    stub = _SweepGh([green_pr] + reds, all_red)
+    with contextlib.redirect_stdout(io.StringIO()):
+        run_refresh("Systemorph/MeshWeaver", 4649, "pull_request", "99", verdict_at, gh=stub, wait_s=0)
+    check("no job listing is read for a run that is already green",
+          not any(p.startswith("actions/runs/99/jobs") for p in stub.reads), f"reads={len(stub.reads)}")
+    # A truncated run listing is never judged — an unread page could hold the blocking red.
+    stub = _SweepGh([green_pr] + reds, all_red)
+    stub.api_orig = stub.api
+    stub.api = lambda path: ({"total_count": 101, "workflow_runs": stub.runs}
+                             if path.startswith("actions/workflows/5/runs?") else stub.api_orig(path))
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request", "99", verdict_at, gh=stub, wait_s=0)
+    check("NEG: truncated run listing -> RED, nothing posted", rc == 1 and stub.posted == [], f"rc={rc} posted={stub.posted}")
+    # A duplicate still in flight past the wait -> RED, named; the decided reds are still re-run.
+    flying = dict(dup, id=40342994248, status="in_progress", conclusion=None)
+    stub = _SweepGh([green_pr, flying, reds[2]], {flying["id"]: [dict(red_job, status="in_progress", conclusion=None)],
+                                                   reds[2]["id"]: [red_job]})
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request", "99", verdict_at, gh=stub, wait_s=0)
+    check("in flight past the wait -> RED, the decided red still re-run",
+          rc == 1 and stub.posted == [f"actions/runs/{reds[2]['id']}/rerun"], f"rc={rc} posted={stub.posted}")
+    return failures
 
 
 def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
