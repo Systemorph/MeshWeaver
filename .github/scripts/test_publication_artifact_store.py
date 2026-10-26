@@ -50,20 +50,28 @@ class PublicationArtifactStoreTests(unittest.TestCase):
         self.addCleanup(env.stop)
         os.environ.pop("GITHUB_OUTPUT", None)
 
-    def publish(self, name="publication-inputs", run="10", attempt=1, value=None):
+    def publish(self, name="publication-inputs", run="10", attempt=1, value=None, filename=None):
         artifact = ARTIFACTS.Artifacts(self.store, self.repo, run, attempt)
         source = self.root / f"source-{run}-{attempt}-{name}"
         source.write_text(json.dumps(self.inputs if value is None else value))
-        filename = "publication-inputs.json" if name == "publication-inputs" else "bundle.module.nupkg"
+        filename = filename or ("publication-inputs.json" if name == "publication-inputs" else "bundle.module.nupkg")
         with contextlib.redirect_stdout(io.StringIO()):
             doc = artifact.upload(name, {filename: source})
         return artifact, doc
 
-    def invoke_base(self, runs):
+    def invoke_base(self, runs, extra=(), jobs=None, current=None):
+        """`jobs`: {run id → job count} answered by the jobs endpoint (absent ⇒ the endpoint gives
+        no count, i.e. the run is treated as started)."""
         inputs = self.root / "inputs.json"
-        inputs.write_text(json.dumps(self.inputs))
+        inputs.write_text(json.dumps(self.inputs if current is None else current))
         args = ["publication-base", "--workflow", "ci.yml", "--inputs", str(inputs),
-                "--repo", self.repo, "--artifact-store", self.store]
+                "--repo", self.repo, "--artifact-store", self.store, *extra]
+
+        def gh(endpoint):
+            if "/jobs" in endpoint:
+                run_id = int(endpoint.split("/runs/")[1].split("/")[0])
+                return {} if jobs is None or run_id not in jobs else {"total_count": jobs[run_id], "jobs": []}
+            return {"workflow_runs": runs}
         real_run = subprocess.run
 
         def call(command, **kwargs):
@@ -72,7 +80,7 @@ class PublicationArtifactStoreTests(unittest.TestCase):
             return real_run(command, **kwargs)
 
         output = io.StringIO()
-        with patch.object(sys, "argv", args), patch.object(BASE, "gh_json", return_value={"workflow_runs": runs}), \
+        with patch.object(sys, "argv", args), patch.object(BASE, "gh_json", side_effect=gh), \
                 patch.object(BASE.subprocess, "run", side_effect=call), contextlib.redirect_stdout(output):
             result = BASE.main()
         return result, json.loads(output.getvalue()) if output.getvalue() else None
@@ -123,6 +131,88 @@ class PublicationArtifactStoreTests(unittest.TestCase):
         code, result = self.invoke_base([later, self.run])
         self.assertEqual(0, code)
         self.assertEqual("", result["sha"])
+
+    # ── runs that NEVER STARTED (2026-10-26: five green Plugins main runs, baseline none each time) ──
+    def test_a_zero_job_cancelled_run_is_ignored_and_the_baseline_narrows(self):
+        self.publish()
+        never = {**self.run, "id": 11, "head_sha": "b" * 40, "conclusion": "cancelled"}
+        code, result = self.invoke_base([never, self.run], jobs={11: 0})
+        self.assertEqual(0, code)
+        self.assertEqual(("a" * 40, []), (result["sha"], result["between"]))
+
+    def test_negative_control_a_cancelled_run_that_ran_jobs_still_forces_full(self):
+        self.publish()
+        ran = {**self.run, "id": 11, "head_sha": "b" * 40, "conclusion": "cancelled"}
+        code, result = self.invoke_base([ran, self.run], jobs={11: 4})
+        self.assertEqual(0, code)
+        self.assertEqual("", result["sha"])
+
+    def test_an_in_flight_run_is_never_asked_and_still_forces_full_without_attestation(self):
+        self.publish()
+        flight = {**self.run, "id": 11, "head_sha": "b" * 40, "status": "in_progress", "conclusion": None}
+        code, result = self.invoke_base([flight, self.run], jobs={11: 0})
+        self.assertEqual(0, code)
+        self.assertEqual("", result["sha"])
+
+    # ── a PARTIAL publication is a baseline that CARRIES what it withheld ──
+    def mark(self, value, run="10"):
+        self.publish(name="publication-withheld", run=run, value=value, filename="publication-withheld.json")
+
+    def test_partial_withheld_run_is_a_baseline_carrying_its_withheld_packages(self):
+        self.publish()
+        self.mark({"sha": "a" * 40, "withheld": ["Mail", "Hosting"]})
+        out = self.root / "github-output"
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(out)):
+            code, result = self.invoke_base(
+                [self.run], extra=["--withheld-marker", "publication-withheld", "--carry-withheld"])
+        self.assertEqual(0, code)
+        self.assertEqual(("a" * 40, ["Hosting", "Mail"]), (result["sha"], result["carry"]))
+        self.assertIn("publication-carry=Hosting Mail\n", out.read_text())
+
+    def test_negative_control_without_carry_withheld_a_marked_run_is_walked_past(self):
+        self.publish()
+        self.mark({"sha": "a" * 40, "withheld": ["Mail"]})
+        code, result = self.invoke_base([self.run], extra=["--withheld-marker", "publication-withheld"])
+        self.assertEqual(0, code)
+        self.assertEqual(("", []), (result["sha"], result["carry"]))
+
+    def test_a_marker_naming_no_packages_is_walked_past_never_read_as_complete(self):
+        for n, value in enumerate(({"sha": "a" * 40}, {"withheld": []}, {"withheld": [""]}, ["Mail"])):
+            with self.subTest(value=value):
+                run = {**self.run, "id": 30 + n}
+                self.publish(run=str(run["id"]))
+                self.mark(value, run=str(run["id"]))
+                code, result = self.invoke_base(
+                    [run], extra=["--withheld-marker", "publication-withheld", "--carry-withheld"])
+                self.assertEqual(0, code)
+                self.assertEqual("", result["sha"])
+
+    def test_an_unmarked_run_is_a_complete_baseline_with_no_carry(self):
+        self.publish()
+        code, result = self.invoke_base(
+            [self.run], extra=["--withheld-marker", "publication-withheld", "--carry-withheld"])
+        self.assertEqual(0, code)
+        self.assertEqual(("a" * 40, []), (result["sha"], result["carry"]))
+
+    # ── the toolchain is the resolved SET plus the lane's recipe, not core main's HEAD ──
+    def test_a_moved_build_logic_ref_narrows_when_both_attest_the_recipe(self):
+        self.inputs = {"platform": "p1", "set": "3.1.9898", "logic": "l1", "recipe": "4"}
+        self.publish()
+        code, result = self.invoke_base([self.run], current={**self.inputs, "logic": "l2"})
+        self.assertEqual(0, code)
+        self.assertEqual("a" * 40, result["sha"])
+
+    def test_negative_controls_recipe_set_or_a_missing_recipe_still_force_full(self):
+        self.inputs = {"platform": "p1", "set": "3.1.9898", "logic": "l1", "recipe": "4"}
+        self.publish()
+        for label, current in (("recipe moved", {**self.inputs, "logic": "l2", "recipe": "5"}),
+                               ("set moved", {**self.inputs, "logic": "l2", "set": "3.1.9901"}),
+                               ("no recipe on the current side",
+                                {k: v for k, v in {**self.inputs, "logic": "l2"}.items() if k != "recipe"})):
+            with self.subTest(label):
+                code, result = self.invoke_base([self.run], current=current)
+                self.assertEqual(0, code)
+                self.assertEqual("", result["sha"])
 
     def test_expired_is_not_absent_and_cannot_be_reused(self):
         artifact, doc = self.publish()
