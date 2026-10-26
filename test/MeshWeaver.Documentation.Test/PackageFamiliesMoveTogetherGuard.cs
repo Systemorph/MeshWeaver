@@ -85,16 +85,12 @@ public class PackageFamiliesMoveTogetherGuard
             + "only in the projects that reference the testing package. A split therefore restores "
             + "cleanly and silently runs the TEST SUITE on a different Rx major from the one src/ "
             + "compiles and the portals ship"),
-        ("ModelContextProtocol",
-            ["ModelContextProtocol", "ModelContextProtocol.AspNetCore", "ModelContextProtocol.Core"],
-            "the MCP SDK: ModelContextProtocol pins .Core EXACTLY and .AspNetCore pins "
-            + "ModelContextProtocol EXACTLY — a split is NU1107 in every project that references "
-            + "the SDK beside core's MeshWeaver.Hosting (#7206 moved .Core alone)"),
-        ("Microsoft.Extensions.AI",
-            ["Microsoft.Extensions.AI", "Microsoft.Extensions.AI.Abstractions", "Microsoft.Extensions.AI.OpenAI"],
-            "Microsoft.Extensions.AI: every member requires .Abstractions at its OWN version, so a "
-            + "member ahead of .Abstractions is NU1605 in every project that references both. "
-            + "(.AzureAIInference is deliberately not listed: it ships preview-only on its own line)"),
+        // 🚨 ModelContextProtocol and Microsoft.Extensions.AI are no longer listed: core restores
+        // one member of each (.Core, .Abstractions) and pins only that. Their other members live in
+        // MeshWeaver.Plugins' src/Directory.Packages.Plugins.props, which takes each one's VERSION
+        // from the sibling core pins (an item transform over the PackageVersion list), so the family
+        // cannot split by construction. A family of one would make TheScannerSeesEveryFamilyItPolices
+        // fail, which is the point of that test.
     ];
 
     private static string PropsPath() =>
