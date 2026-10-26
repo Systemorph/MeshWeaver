@@ -81,6 +81,47 @@ PY_REQUIRES
 # in_words <word> <space-separated list>
 in_words() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# await_reach — called from stage(), reads its $repo, $url, $dest and ${auth[@]}. Waits until the
+# stage credential can READ the stage repository, and only then lets the first fetch run.
+#
+# 🚨 WHY. The lane mints the installation token (actions/create-github-app-token, scoped to the
+# stage repo) and fetches with it well under a second later. Measured 2026-10-26 on the satellites'
+# publish bakes, same lane commit, same secret, same sealed commit: Reinsurance staged
+# MeshWeaver.Plugins@ed336b36dc at 17:56:37Z while Manufacturing's fetch of that very commit, in the
+# same second, answered `remote: Repository not found.` — and Crm, Reinsurance and Manufacturing
+# each went green and red on alternate attempts (8 of 12 stage steps red from 16:37Z on, 0 of 18
+# before). The token step had succeeded every time, which GitHub refuses for an installation
+# that cannot reach the named repository. So the 404 is a token whose repository grant had not
+# yet reached the git endpoint that served the fetch.
+#
+# The condition is waited on, never assumed: an `ls-remote` with the same credential, repeated
+# while (and ONLY while) the answer is exactly "Repository not found", up to a bounded deadline.
+# Every other failure is RED at once, and a grant that never arrives is RED at the deadline,
+# naming the App provisioning to check. When the wait was needed, a ::notice:: says how many
+# probes and how many seconds it took, so the lag is measured in every run.
+await_reach() {
+  local deadline="${STAGE_REACH_SECONDS:-90}" interval="${STAGE_REACH_INTERVAL_SECONDS:-3}"
+  local start now probes=0 err="$dest.reach-err"
+  start=$(date +%s)
+  while :; do
+    probes=$((probes + 1))
+    if git "${auth[@]}" ls-remote --exit-code "$url" HEAD > /dev/null 2> "$err"; then
+      now=$(date +%s)
+      rm -f "$err"
+      if [ "$probes" -gt 1 ]; then
+        echo "::notice::the stage credential reached $repo on probe $probes, $((now - start)) s after the first answered 'Repository not found' — a freshly minted token's repository grant had not yet propagated."
+      fi
+      return 0
+    fi
+    grep -q 'Repository not found' "$err" \
+      || die "could not read $repo with the stage credential: $(tr '\n' ' ' < "$err")"
+    now=$(date +%s)
+    [ $((now - start)) -lt "$deadline" ] \
+      || die "$repo still answers 'Repository not found' to the stage credential after $probes probe(s) over $((now - start)) s. This is no propagation delay: the App behind stage-repo-app-id is not installed on $repo, or cannot read its contents. Check that App's installation on the repository's owner and its Contents: Read permission."
+    sleep "$interval"
+  done
+}
+
 stage() {
   local repo="" source="" modules="" prov="" dest="" caller="" resolved_out="" provided_out=""
   while [ $# -gt 0 ]; do
@@ -124,6 +165,8 @@ stage() {
   fi
   local url="$repo"
   case "$repo" in */*) [ -d "$repo" ] || url="https://github.com/$repo" ;; esac
+  await_reach
+
 
   # Round 1 stages what the caller named; every later round stages the dependencies the previous
   # round's packages declare that are neither staged nor carried by the caller. A fixpoint, so a
@@ -375,6 +418,54 @@ self_test() {
     "$([ $rc = 0 ] && [ "$(resolved "$t/c13")" = "Alpha Beta Gamma" ] && [ "$(tr '\n' ' ' < "$t/c13/provided" | sed 's/ $//')" = "Local Local2" ] \
        && [ ! -d "$t/c13/out/Local" ]; echo $?)" \
     "rc=$rc; resolved='$(cat "$t/c13/resolved" 2>/dev/null)'; provided='$(cat "$t/c13/provided" 2>/dev/null)'; $(cat "$t/c13/log")"
+
+  # ── the credential reach wait ──
+  # A fake `git` ahead of the real one answers the first $FAKE_FAILS ls-remote probes with
+  # $FAKE_ERR and passes everything else through, counting probes in $FAKE_COUNT.
+  local fake="$t/fakegit" real_git
+  real_git=$(command -v git)
+  mkdir -p "$fake"
+  cat > "$fake/git" <<FAKE_GIT
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = ls-remote ]; then
+    n=\$(( \$(cat "\$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "\$FAKE_COUNT"
+    if [ "\$n" -le "\$FAKE_FAILS" ]; then printf '%b\n' "\$FAKE_ERR" >&2; exit 128; fi
+    break
+  fi
+done
+exec "$real_git" "\$@"
+FAKE_GIT
+  chmod +x "$fake/git"
+  local nf=$'remote: Repository not found.\nfatal: repository \'https://github.com/x/y/\' not found'
+  # runf <dir> <fails> <err> <deadline> — stage Store through the fake git
+  runf() {
+    prov "$1" "$A" absent
+    ( set -euo pipefail; export PATH="$fake:$PATH" FAKE_COUNT="$1/count" FAKE_FAILS="$2" FAKE_ERR="$3" \
+        STAGE_REACH_SECONDS="$4" STAGE_REACH_INTERVAL_SECONDS=0
+      stage --repo "$up" --source plugins --modules Store --provenance "$1" --dest "$1/out" ) > "$1/log" 2>&1
+  }
+  # 14. Not found twice, then reachable: staged, and the lag is reported.
+  runf "$t/c14" 2 "$nf" 30; rc=$?
+  check "a credential that answers 'not found' and then reads is waited for, and the wait is reported" \
+    "$([ $rc = 0 ] && [ "$(cat "$t/c14/count")" = 3 ] && [ "$(cat "$t/c14/out/Store/floor")" = old ] \
+       && grep -q '::notice::the stage credential reached .* on probe 3' "$t/c14/log"; echo $?)" \
+    "rc=$rc; count=$(cat "$t/c14/count" 2>/dev/null); $(cat "$t/c14/log")"
+  # 15. Reachable at once: one probe, no notice.
+  runf "$t/c15" 0 "$nf" 30; rc=$?
+  check "a credential that reads at once is probed once and reports nothing" \
+    "$([ $rc = 0 ] && [ "$(cat "$t/c15/count")" = 1 ] && ! grep -q 'stage credential reached' "$t/c15/log"; echo $?)" \
+    "rc=$rc; $(cat "$t/c15/log")"
+  # 16. Never reachable: RED at the deadline, naming the App provisioning, nothing staged.
+  runf "$t/c16" 1000 "$nf" 0; rc=$?
+  check "a credential that never reads is RED at the deadline, naming the App provisioning" \
+    "$([ $rc != 0 ] && grep -q "still answers 'Repository not found'" "$t/c16/log" && grep -q 'Contents: Read' "$t/c16/log" \
+       && [ ! -d "$t/c16/out/Store" ]; echo $?)" "rc=$rc; $(cat "$t/c16/log")"
+  # 17. Any other failure is RED at once — the wait is for the propagation answer only.
+  runf "$t/c17" 1000 "fatal: Authentication failed for 'https://github.com/x/y/'" 30; rc=$?
+  check "a failure other than 'Repository not found' is RED on the first probe" \
+    "$([ $rc != 0 ] && [ "$(cat "$t/c17/count")" = 1 ] && grep -q 'could not read .* with the stage credential: fatal: Authentication failed' "$t/c17/log"; echo $?)" \
+    "rc=$rc; count=$(cat "$t/c17/count" 2>/dev/null); $(cat "$t/c17/log")"
 
   [ "$fails" = 0 ] || { echo "stage-sealed-upstream.sh --self-test: $fails failure(s)"; return 1; }
   echo "stage-sealed-upstream.sh --self-test: all cases passed"

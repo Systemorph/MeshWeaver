@@ -454,6 +454,8 @@ therefore:
   commit can be newer than one package's bytes), at the publication commit for a bundle-less
   package or a publication that predates listings, and RED for an unreadable listing or a listed
   package with no commit;
+- waits, before the first fetch, until the freshly minted stage token can read the stage repository
+  (see "A fresh stage token can answer Repository not found" below);
 - re-reads the publication after composing module bytes and goes RED if it moved, since the module
   composition is a separate read and a republish in between would pair one publication's
   definitions with another's bytes;
@@ -495,6 +497,30 @@ The reason this is resolved and not listed: Plugins' `AI` gained `requires: Trai
 SocialMedia's publish bake still staged `AI Store`. Its main went red with
 `Install of 'AI' failed: NodeType(s) not registered: Training/Tour` (MeshWeaver.SocialMedia#246).
 The gate lanes stayed green because they seed the whole sealed upstream, not a list.
+
+#### A fresh stage token can answer "Repository not found"
+
+The lane mints an installation token scoped to the stage repository and fetches with it less than a
+second later. On 2026-10-26 the satellites' publish bakes went red at random on
+`remote: Repository not found.` for `Systemorph/MeshWeaver.Plugins`. The lane commit, the secret
+and the sealed commit were the same in green and red runs. Reinsurance staged `ed336b36dc` in the
+same second that Manufacturing's fetch of that commit was refused, and 8 of 12 stage steps from
+16:37Z on were red, against 0 of 18 earlier that day. Every time, the token step had succeeded, and
+GitHub refuses that step for an installation that cannot reach the named repository. So the refusal
+came from a token whose repository grant had not yet reached the git endpoint that served the fetch.
+
+`stage-sealed-upstream.sh` therefore probes the stage repository with `git ls-remote` using the
+same credential before it fetches anything. It repeats the probe only while the answer is exactly
+`Repository not found`, and stops at a deadline (`STAGE_REACH_SECONDS`, 90 s by default):
+
+- any other failure is RED on the first probe;
+- a grant that never arrives is RED at the deadline, naming the App installation and its
+  Contents: Read permission as the thing to check;
+- when the wait was needed, a `::notice::` gives the number of probes and seconds, so every run
+  measures the lag.
+
+The self-test covers all four outcomes with a fake `git`: reachable at once, reachable after two
+refusals, never reachable, and a different error.
 
 ### What closing it looks like
 
