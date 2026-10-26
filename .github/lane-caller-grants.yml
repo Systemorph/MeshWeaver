@@ -142,6 +142,13 @@ repos:
         job: gate-follow
         lane: build-follow.yml
         grants: {contents: read, id-token: write}
+      # ── The module-pack lane on the build host (H7) — ARRIVING. The follow job whose result the
+      # `modules-floor` call takes as `host-verdict` (node-repo-module-pack.yml `executor`/`host-verdict`).
+      - workflow: ci.yml
+        job: modules-follow
+        lane: build-follow.yml
+        grants: {contents: read, id-token: write}
+        pending: lands with this repository's module-pack host adoption (draft), after core's node-repo-module-pack.yml executor/host-verdict inputs are on main
 
   # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
   # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core

@@ -30,7 +30,7 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 | piece | file | what it does |
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
-| the publish-side fetch (H9) | `.github/workflows/build-host-publication.yml` + `.github/scripts/build-artifacts-fetch.py` | a host-executed run's modules, fetched by receipt and verified, staged for the unchanged module publish lane |
+| the publish-side fetch (H9) | `.github/workflows/build-host-publication.yml` + `.github/scripts/build-artifacts-fetch.py` | a host-executed run's modules, fetched by receipt and verified, checked with the publisher's own check, staged for the unchanged module publish lane; the publisher's lane and selection source on a host run (§5) |
 | the host runner | `.github/scripts/build-run.py`, shipped in the `mw-build-host` image (`deploy/build-host/Dockerfile`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
 | the chart | `deploy/helm/templates/build-host/` (`buildHosts.*`, gate `memex.buildHosts`) | per channel a Deployment + KEDA `ScaledObject`; one ServiceAccount, one NetworkPolicy |
 | the CD hand-over | `main-cd.yml` jobs `build-host-image`, `build-host-latest`; `.github/workflows/build-host-stable.yml`; `.github/scripts/build-host-announcement.py`, declared by `.github/build-hosts.json` | the runner image per set; in the run that arms a set, a signed event that moves `build-latest` to it; daily, `build-stable` to the main-passed ceiling |
@@ -494,10 +494,78 @@ publication and the green ledger would vanish on the very path where nothing run
 |---|---|---|
 | `node-repo-compile-check.yml` | `executor`, `host-verdict` | every heavy step is skipped; the job (the required `… / Compile every NodeType (vs core)`) is green only for `host-verdict == success` |
 | `node-repo-gate.yml` | `executor`, `host-verdict` | `plan` and the shards do not run; `verify` (the required `… / Compile + render node repos (MeshWeaver from ACR)`) is green only for `host-verdict == success`, and refuses a plan or shard that ran anyway; output `executed-on: host`, no gate log — a caller's ratchet over that log takes the followed verdict (the host's gate stage runs the ratchet itself) |
+| `node-repo-module-pack.yml` | `executor`, `host-verdict` | `select` still runs (it is the independent selection a host run is checked against), the build ledger is not consulted; `prepare` (*Warm the shared build environment (once)*), `build-workspace`, the `pack` legs and the `tests` legs do not run; `verify` (the required `… / All selected bundles built`) is green only for `host-verdict == success`, and refuses a select that failed or a heavy job that ran anyway; outputs `executed-on: host` and `bundles-built: false` (nothing composable was uploaded into the run). A PUBLISHING host run must be `publish-mode: staged` — `select` refuses `direct`, because a host holds no publication credential |
 
 A follow job that did not run, was cancelled or failed is RED in the lane — a skipped need is never
 a pass. Any `executor` other than `actions` / `host` is RED. With the defaults (`actions`, no
 verdict) every lane behaves exactly as before, so a caller that passes nothing is unchanged.
+
+### The host publication graph (module-pack on a host)
+
+A module repository's bundles reach the registry from a host run through three calls, and
+`module-publication.py check-callers` (run by `node-repo-validate.yml` on every satellite pull
+request) refuses any other shape:
+
+```yaml
+modules:                 # the pack call: its `select` runs here, its legs on the host
+  uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-pack.yml@main
+  with:
+    executor: ${{ needs.admission.outputs.executor || 'actions' }}
+    host-verdict: ${{ needs.modules-follow.result }}
+    publish-mode: staged
+    publish: <the publishing condition>
+host-publication:        # the host graph's source for the publisher
+  needs: [modules]
+  if: <the pack call's `publish:` condition, verbatim>
+  uses: Systemorph/MeshWeaver/.github/workflows/build-host-publication.yml@main
+  permissions: { contents: read, id-token: write }
+  with:
+    executor: ${{ needs.admission.outputs.executor || 'actions' }}   # the pack call's, verbatim
+    stage: modules
+    lane: ${{ needs.modules.outputs.lane }}
+    selected: ${{ needs.modules.outputs.selected }}
+    declared: ${{ needs.modules.outputs.declared }}
+    api-url: …
+    artifact-store: …
+    artifact-store-id: …
+publish:                 # unchanged lane, reading THROUGH the host-publication call
+  needs: [host-publication, …]
+  uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main
+  with:
+    lane: ${{ needs.host-publication.outputs.lane }}
+    selected: ${{ needs.host-publication.outputs.selected }}
+    modules: ${{ needs.host-publication.outputs.declared }}
+```
+
+- **`build-host-publication.yml` emits exactly the outputs the publisher reads from a pack call**
+  (`lane`, `selected`, `declared`). With `executor: host` it fetches the receipts, runs the
+  publisher's OWN check over the records (`module-publication.py publish --check-only`: one record per
+  selected module, stamped with the lane, naming its bytes by sha256 and the framework identity read
+  back off them), stages them as `module-publication-<lane>-host`, and only then emits its outputs.
+  With `executor: actions` it is a no-op success that hands the pack call's outputs through — never a
+  skip, because a skipped ancestor skips the publisher. A zero selection is the one "nothing owed".
+- **The selection is the pack call's `select`, never the host's records.** A selection read off what
+  the host staged would accept whatever the host staged.
+- **`check-callers` refuses**: a host-capable staged pack call with no (or two) host-publication
+  calls; a publisher reading such a call's lane directly; a host-publication call whose lane,
+  selection or catalog does not come from one pack call, whose `executor` differs from that call's,
+  whose `if:` differs from the pack call's `publish:` or carries a status function, or that does not
+  need the pack call; a host-publication call for a pack call that always runs on Actions or is not
+  `staged`; and a literal `executor: host` that publishes in-leg. An `executor` expression counts as
+  "may run on a host".
+- **The host's modules stage owes the lane's format** (§2, step 7): a bundle and a
+  `<module>.publication.json` per selected module, stamped with the pack call's lane key —
+  `module-publication.py lane-key --lane-id <lane-id> --modules <the call's modules input, verbatim>`,
+  the same key the lane's `This call's lane key` step derives (`test-module-pack-host.py` runs that
+  step's bash against it).
+
+**Adopting it, in order:** (1) core carries the lanes and the validator (H7 core half); (2) the
+repository declares a `modules` stage in `.github/build-stages.json` whose command produces the
+artifacts above, and adds `modules-follow` (`build-follow.yml`, stage `modules`) beside its other
+follow jobs, with its `pending:` row in `.github/lane-caller-grants.yml` landed first; (3) the pack
+call passes `executor` and `host-verdict`; (4) a repository that publishes from that call moves to
+`publish-mode: staged` with the two calls above. Nothing changes until the admission answers `host`
+for the repository (a `ciEquivalent` declaration and the instance's switch).
 
 **Before a repository claims equivalence** (review of MeshWeaver.Plugins#4180), its stages must cover
 what the Actions legs they replace check — each item is a reason a host green would otherwise mean less:
@@ -589,10 +657,12 @@ whole workflow (the admission queues a new attempt).
   protected the way other pinned digests are (`lock-pinned-digests.py`,
   [Pinned Image Retention](../PinnedImageRetention)) — not wired for `mw-build-host` or the
   build-host record's digests yet.
-- **A host-only publication graph.** `module-publication.py check-callers` (run by
-  `node-repo-validate.yml`) requires the publisher's lane and selection outputs to come from
-  `node-repo-module-pack.yml`, so an adopter keeps that lane's `select` beside
-  `build-host-publication.yml`. Replacing the pack job outright needs the host-publication output
-  contract and the caller validator extended together — owed with H7.
+- **The host's `modules` stage** — the command that packs a repository's modules on the host and
+  leaves the bundles and lane-stamped `<module>.publication.json` records of *The host publication
+  graph* (§5). The lanes and the validator are in core; no repository declares the stage yet, so no
+  run's module bundles are built on a host. Its selection must be the one the pack call's `select`
+  makes (`node-repo-scope.py` over the same merged tree): the publisher refuses a record the
+  selection does not name. The publication-wide assembly census (`module-set-census.py`) that
+  `verify` takes on an Actions run is skipped on a host run and is owed by that stage.
 - **Keying compile outputs** by (source hash, reference-set hash) is the stages' work: the runner
   promotes what a trunk stage writes under `$MW_BUILD_OUTPUTS/<key>/`, and reads nothing itself.
