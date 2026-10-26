@@ -568,6 +568,36 @@ been read is guessing, and the promotion condition is therefore explicit:
 `test-module-set-census.py` pins both halves, the denominator's zero-shapes, and the report posture
 in both directions, so the promotion cannot happen by halves. `MeshWeaver#3732`.
 
+### Publication reuse must not split one compilation in two
+
+The divergence predicted above for a `reuse` leg was measured on MeshWeaver.Plugins#4253. The pull
+request changed `MeshWeaver.AI` and left `MeshWeaver.Markdown.Collaboration` untouched. The source
+selector therefore marked `Essentials` (which declares `MeshWeaver.Markdown.Collaboration`)
+unaffected, and `node-repo-publication-reuse.py` reused its bundle from the last successful main
+publication, run `40272452328`. `AI` was rebuilt in the pull request's own workspace build and carried
+that build's copy of `MeshWeaver.Markdown.Collaboration`. The gate's composed set refused it:
+
+```
+module set: 5 MeshWeaver.* assembly file(s) across 4 bundle(s), 4 distinct name(s), 1 carried by more than one bundle, 1 carried at more than one BUILD
+          sealed 0a54b5391a502a2b as a sibling riding MeshWeaver.Plugin.AI.1.39.2.module.nupkg
+          sealed 3884878de5cfae41 as the declared module of MeshWeaver.Plugin.Essentials.1.15.17.module.nupkg
+```
+
+The same pair passed hours earlier (#4227, run `40264034823`) only because no successful main run
+existed yet for that base, so nothing was reused. The trigger is any pull request or main push that
+rebuilds a module while an unaffected module it shares a riding project with is reusable.
+
+"Unaffected" was the wrong test for reuse. The right test is: **an entry may be reused only if its
+in-repo `ProjectReference` closure shares no RIDING project with an entry this run builds.**
+`cohere` in `node-repo-publication-reuse.py` applies that test, repeating until nothing changes,
+because an entry it withdraws is then built and can pull in the next one. The select job passes
+`--root repo` so the closures are read from the tree under test. A project the platform ships rides no
+bundle, so sharing it is harmless. Which projects those are comes from `module-owned-platform.sh`,
+the same witness the pack uses. The select job has no platform image, so here it reads the declared
+`src/platform-shipped.txt`. A stale line that wrongly names a project as shipped could still hide a
+shared ride. The gate refusal above still catches that case by name. Without `--root`, nothing is
+reused. Ledger reuse (`ledger: required`) keeps its own decision and is not covered by this check.
+
 See also: [The Dependency Record Floor](../DependencyRecordFloor) ·
 [Module Closure Accounting](../ModuleClosureAccounting) ·
 [Module Build Architecture](../ModuleBuildArchitecture) ·
