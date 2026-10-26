@@ -97,6 +97,10 @@ to white.
 
 ## The node-icon catalogue
 
+> The catalogue's new glyphs are Microsoft **Fluent UI System Icons** (MIT). Their notice ships with them in
+> `src/MeshWeaver.Graph/ThirdPartyNotices/fluentui-system-icons.txt`, embedded in the assembly, and lists each file it
+> covers.
+
 A node's `Icon` may be a Fluent icon name such as `"DocumentText"`, but not every surface can draw
 every Fluent name. The Blazor navigation renders any name through FluentUI; a link preview, an
 HTML card or a browser tab can only draw a name whose glyph the platform ships

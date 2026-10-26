@@ -158,4 +158,24 @@ public class NodeIconCatalogTest
 
         return null;
     }
+
+    /// <summary>The vendored Fluent glyphs carry their upstream MIT notice in the shipped assembly, and every file
+    /// the notice names is a glyph that ships (the notice cannot silently drift from the files it covers).</summary>
+    [Fact]
+    public void TheFluentNotice_ShipsWithTheGlyphs()
+    {
+        var assembly = typeof(NodeIconCatalog).Assembly;
+        using var stream = assembly.GetManifestResourceStream("MeshWeaver.Graph.ThirdPartyNotices.fluentui-system-icons.txt");
+        Assert.NotNull(stream);
+        using var reader = new System.IO.StreamReader(stream!);
+        var text = reader.ReadToEnd();
+
+        Assert.Contains("MIT License", text);
+        Assert.Contains("Copyright (c) 2020 Microsoft Corporation", text);
+        Assert.Contains("Permission is hereby granted", text);
+        var files = text.Split('\n').Select(l => l.Trim()).Where(l => l.EndsWith(".svg", StringComparison.Ordinal)).ToList();
+        Assert.True(files.Count >= 100, $"expected the vendored glyphs to be listed, found {files.Count}");
+        foreach (var file in files)
+            Assert.NotNull(assembly.GetManifestResourceStream(IconResourcePrefix + file));
+    }
 }
