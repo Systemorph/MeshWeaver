@@ -785,6 +785,44 @@ control: an N+1 that changes the forwarded shape is refused with N serving; a cl
 the module implements is a blocker the guard names. `ModuleLiveUpdateGuardTest` (+1): a declared
 non-boot-time category fails.
 
+### A stale root stand-in is refused, never recursed (MeshWeaver#5388)
+
+A portal process died of a `StackOverflowException` (image 3.1.11464, still on Autofac). Its dump shows
+one thread in about 395 repeats of the same cycle: `ModuleServiceProvider.ResolveAt` → the module
+container's `ModuleFallbackSource` stand-in for a ROOT registration → that root registration, a stand-in
+that calls `ResolveAt` on the same module container → and round again.
+
+**The shape.** The root holds a stand-in that resolves position `i` of type `T` in a module container,
+which is what `ModuleOwnedRootSource` hands the root for a module-declared type. The module container does
+NOT register `T` itself. After a live swap, for example, the new generation's container holds the new
+generation's `T` and never the old one. Neither `isModuleType` nor `registrationsElsewhere` claims the
+old `T`, and the root reports `T` as a service because the stand-in IS a root registration. So the
+module's fallback answers `T` with a stand-in back to the root. `ResolveAt` then counted positions over
+EVERY registration a lookup reached, sources included, so position `i` was that fallback stand-in, and
+the cycle closed. Each hop started a fresh resolve operation, so no per-operation cycle detection saw it.
+Autofac also cached a source's answers in the root, which kept the stale stand-in, and `IsService(T)`,
+alive after the swap.
+
+**Closed by construction.** `ModuleServiceProvider.RegistrationAt` counts positions among the module
+container's OWN registrations only (`OwnRegistrationsOf`), never what its fallback adds. That has been
+true since the Autofac replacement, MeshServiceProvider (#7145). A position the module does not register
+is refused by name: *"T has no registration at position i in this module container."* The root also
+caches nothing a source answers, so after a swap `ModuleOwnedRootSource` finds no owner for the old `T`
+and the root reports it as not registered.
+
+**Tests:** `AStaleRootStandInIsRefusedNotRecursedTest` (3) drives the exact shape: a root source standing
+in for position 0 of a module container that does not register the type. It is refused by name, with and
+without a caller. The control checks that the precondition is armed: the module can reach exactly one
+registration of the type, its fallback's stand-in for the root's. The negative control is the same road
+into a module that registers the type, which answers the module's instance. Mutating `RegistrationAt` back
+to `RegistrationsOf` kills the test host with `Stack overflow.` (exit 134), and the frames repeat the
+dump's cycle.
+
+**Not covered by this:** a cycle made ONLY of transient factory registrations (every stand-in is one)
+is still not refused by the container. `ResolveContext` restarts inside a factory, and only a shared
+instance's slot (`InstanceSlot.BuildingThread`) catches re-entry. The mutated run above recursed through
+1,804 transient builds with no refusal.
+
 ## What is shipped (slice 5 — the builder hook, decomposed; the mesh hub's type registry re-applied)
 
 **The builder hook** (`BuilderConfigurations` — MeshWeaver.AI, Graph.Views, Observability, Publish,
