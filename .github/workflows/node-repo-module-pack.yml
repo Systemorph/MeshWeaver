@@ -575,6 +575,24 @@ on:
         type: string
         required: false
         default: ''
+      module-libraries-project:
+        description: >
+          A csproj in the caller's repository (path relative to its root) whose PUBLISH is the
+          module-libraries shelf for this run: the additional libraries a container-built module
+          may bind beyond what the platform image supplies (provider SDKs, import/export helpers,
+          GUI component packages). The build-workspace job publishes it against the platform
+          checkout at `platform-ref` and hands it to `build-project` as `--module-libs`, which
+          REPLACES the shelf the tester image ships.
+
+
+          The repository that owns the modules owns their library list, so the platform carries
+          none of it (core Doc/Architecture/CoreCarriesNoGuiTechnology, "The module-library
+          shelf"). The publish fails closed: no single deps.json beside the assemblies, or no
+          assemblies at all, is RED — the deps.json is the record every ride's closure is derived
+          from. Omitted, the tester image's own shelf is used and the lane behaves exactly as before.
+        type: string
+        required: false
+        default: ''
       platform-image:
         description: >
           The PORTAL image the modules will load into (e.g. meshweaver.azurecr.io/memex-portal-ai).
@@ -1868,6 +1886,46 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends zstd || { echo "::error::apt-get could not install zstd on $RUNNER_NAME. Bake it into the runner image: Systemorph/Memex deployments/aks/ci-runners/runner-image/Dockerfile."; exit 1; }
           fi
           zstd --version
+      # ───────── THE CALLER'S OWN MODULE-LIBRARIES SHELF (module-libraries-project) ─────────
+      # Published here, not in `prepare`: this is the job whose compiler reads it, and the shelf is
+      # small. The platform checkout it restores against lands in a hidden directory and is
+      # REMOVED before the build below mounts this workspace at /repo — anything left beside the
+      # content tree would become compiler input. The publish output goes to RUNNER_TEMP for the
+      # same reason.
+      - name: Check out the platform for the shelf publish
+        if: inputs.module-libraries-project != ''
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: .module-libs-platform
+      - uses: actions/setup-dotnet@v6
+        if: inputs.module-libraries-project != ''
+        with:
+          dotnet-version: "10.0.x"
+      - name: Publish the caller's module-libraries shelf
+        id: shelf
+        if: inputs.module-libraries-project != ''
+        env:
+          PROJECT: ${{ inputs.module-libraries-project }}
+        run: |
+          set -euo pipefail
+          [ -f "$PROJECT" ] || { echo "::error::module-libraries-project '$PROJECT' does not exist in this checkout — the caller named a shelf this repository does not have."; exit 1; }
+          root="$RUNNER_TEMP/module-libs"
+          rm -rf "$root"
+          dotnet publish "$PROJECT" -c Release -o "$root" \
+            -p:MeshWeaverRoot="$GITHUB_WORKSPACE/.module-libs-platform"
+          # 🚨 Fail closed, exactly as main-cd does for the image's shelf: the deps.json IS the record
+          # every ride's closure is derived from, and a shelf without one resolves nothing truthfully.
+          deps=$(find "$root" -maxdepth 1 -name '*.deps.json' | wc -l | tr -d ' ')
+          [ "$deps" = "1" ] || { echo "::error::the shelf publish of $PROJECT produced $deps deps.json file(s) — exactly one is the closure record build-project reads."; exit 1; }
+          count=$(find "$root" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
+          [ "$count" -gt 0 ] || { echo "::error::the shelf publish of $PROJECT staged no assemblies — not a shelf."; exit 1; }
+          # Nothing of the publish may stay in the mounted source tree.
+          projdir="$(dirname "$PROJECT")"
+          rm -rf "${GITHUB_WORKSPACE:?}/.module-libs-platform" "${projdir:?}/obj" "${projdir:?}/bin"
+          echo "shelf: $count assemblies from $PROJECT"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -1879,6 +1937,7 @@ jobs:
           TESTER_IMAGE: ${{ inputs.tester-image }}
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
           SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
+          SHELF: ${{ steps.shelf.outputs.root }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           ACR_LOGIN: ${{ inputs.acr-login }}
@@ -1983,6 +2042,17 @@ jobs:
             echo "::error::the pinned tester (tester-image-digest $TESTER_DIGEST) has no 'build-project --bind-to-image' (its usage is above), so it cannot stamp modules with the image's own AssemblyVersion — every module would fail the binding-identity check, or bind to a literal that is wrong for this platform. Move tester-image-digest and platform-image-digest TOGETHER to a set built from MeshWeaver main after the flag landed."
             exit 1
           fi
+          # The caller's own shelf, when it named one. Empty ⇒ no flag, no mount ⇒ byte-identical
+          # invocation to before module-libraries-project existed.
+          shelf_mount=(); shelf_flag=()
+          if [ -n "${SHELF:-}" ]; then
+            if ! printf '%s\n' "$usage" | grep -q -- '--module-libs'; then
+              echo "::error::module-libraries-project is set but the pinned tester (tester-image-digest $TESTER_DIGEST) has no 'build-project --module-libs', so it would build against the image's own shelf instead of the one this repository published. Move tester-image-digest and platform-image-digest TOGETHER to a set built from MeshWeaver main after the flag landed."
+              exit 1
+            fi
+            shelf_mount=(-v "$SHELF:/module-libs:ro"); shelf_flag=(--module-libs /module-libs)
+            echo "module-libraries shelf: the caller's own publish ($SHELF), replacing the tester image's"
+          fi
           echo "global build: ${#projects[@]} container entr(y|ies) in ONE workspace — ${projects[*]}"
           # AS THE RUNNER'S UID (a root-owned /out is unwritable to later steps); HOME=/tmp keeps
           # runtime probes off read-only image paths. No --extra-refs, ever, on this lane.
@@ -1994,8 +2064,9 @@ jobs:
             -v "$GITHUB_WORKSPACE:/repo:ro" \
             -v "$tester_app:/tester:ro" \
             -v "$out:/out" \
+            ${shelf_mount[@]+"${shelf_mount[@]}"} \
             --entrypoint dotnet "$img" \
-            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out --bind-to-image ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} 2>&1 | tee "$out/workspace-build.log"
+            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out --bind-to-image ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} ${shelf_flag[@]+"${shelf_flag[@]}"} 2>&1 | tee "$out/workspace-build.log"
           echo "built=true" >> "$GITHUB_OUTPUT"
       # 🚨 THE TOOLING CHECKOUT LANDS **AFTER** THE BUILD, ON PURPOSE. This job mounts
       # `$GITHUB_WORKSPACE` at `/repo:ro` for the container build, so anything checked out beside

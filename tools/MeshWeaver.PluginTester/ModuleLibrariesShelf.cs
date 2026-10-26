@@ -64,9 +64,28 @@ public sealed class ModuleLibrariesShelf
     /// Locates the shelf: <c>module-libs/</c> beside the builder first (the in-image layout), then
     /// under the reference container's directory. Null when no shelf ships — a dev build without
     /// the staging; a shelf-needing module then fails by name exactly as before.
+    ///
+    /// <para>🚨 <c>--module-libs</c> REPLACES that search rather than heading it, exactly as
+    /// <c>--razor-generators</c> does: the module repository that names its own shelf has made a
+    /// choice, and quietly falling back to the image's copy would resolve its packages from a list
+    /// it did not declare. A named directory that is missing or holds no single <c>deps.json</c> is
+    /// therefore a failure, never a null.</para>
     /// </summary>
-    public static ModuleLibrariesShelf? Locate(string appDirectory)
+    /// <param name="explicitDirectory">The <c>--module-libs</c> value, when given.</param>
+    /// <param name="appDirectory">The container's assembly directory.</param>
+    /// <returns>The shelf, or null when no explicit directory was named and none ships.</returns>
+    /// <exception cref="InvalidOperationException">The named directory is not a readable shelf.</exception>
+    public static ModuleLibrariesShelf? Locate(string? explicitDirectory, string appDirectory)
     {
+        if (explicitDirectory is { Length: > 0 })
+        {
+            var named = Path.GetFullPath(explicitDirectory);
+            if (!System.IO.Directory.Exists(named))
+                throw new InvalidOperationException(
+                    $"--module-libs '{named}' does not exist. A shelf that is not there resolves no "
+                    + "package, and every module needing one would fail as if the package were unknown.");
+            return Read(named);
+        }
         foreach (var candidate in new[]
                  {
                      Path.Combine(AppContext.BaseDirectory, DirectoryName),
