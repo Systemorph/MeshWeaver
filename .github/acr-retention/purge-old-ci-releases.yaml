@@ -5,7 +5,10 @@ version: v1.1.0
 # and the public brand site then served 503 for ~11 hours.
 # The test for adding any repository here: if this tag were deleted tonight, would anything
 # recreate it? The repositories below are continuously republished. A pinned tag is not.
+# SUPERSEDED and DISABLED (tasks.json). Its tag filters are held to the same per-build identity
+# allowlist as purge-old-images.yaml (MeshWeaver#3438) — the record is what `apply` pushes, so a
+# disabled task reaching a release channel is one command away from deleting it.
 steps: 
-  - cmd: acr purge --filter 'memex-migration:.*' --filter 'memex-bake:.*' --filter 'memex-portal-next:.*' --filter 'memex-portal:.*' --filter 'memex-portal-ai:.*' --ago 30d --untagged
+  - cmd: acr purge --filter 'memex-migration:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --filter 'memex-bake:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --filter 'memex-portal-next:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --filter 'memex-portal:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --filter 'memex-portal-ai:^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$' --ago 30d --untagged
     disableWorkingDirectoryOverride: true
     timeout: 3600
