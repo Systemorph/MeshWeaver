@@ -143,8 +143,11 @@ modules: the shelf becomes a declaration the module lane receives, not a hard-co
    publishes it against the platform checkout at `platform-ref`, fails closed on a publish with
    no single `deps.json` or no assemblies, removes the checkout and the project's `obj`/`bin` before
    the source mount, and passes the result as `--module-libs`. It refuses a pinned tester that does
-   not advertise the flag, naming the pin to move. Omitted, the tester image's shelf is used, and
-   nothing changes for a caller that sets nothing.
+   not advertise the flag, naming the pin to move. The named shelf is also part of every module's
+   build-ledger key (`module-build-key.py --module-libraries-project`): its project, every in-repo
+   project it reaches and the `Directory.*.props|targets` it inherits, so a shelf edit is a new
+   build and never a reused bundle. Omitted, the tester image's shelf is used, the key is
+   byte-identical to before, and nothing changes for a caller that sets nothing.
 2. **Plugins** — adds its own shelf csproj under `src/` (only `src/` imports its package versions)
    carrying every entry only Plugins modules use, pins those packages in
    `src/Directory.Packages.Plugins.props`, and passes `module-libraries-project:` on every

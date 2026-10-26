@@ -1292,6 +1292,8 @@ jobs:
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
           PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
           PLATFORM_REF: ${{ inputs.platform-ref }}
+          # The caller's own shelf is a compiler input, so it is part of every key when named.
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
         run: |
           set -euo pipefail
           printf '%s' "${SCOPE_MODULES:-[]}" > "$RUNNER_TEMP/selection.json"
@@ -1312,10 +1314,14 @@ jobs:
                 exit 0
               fi
               echo "module build ledger: REQUIRED — keying $COUNT selected module(s) against $MW_LEDGER_URL"
+              # The shelf enters the key only when the caller names one, so a caller without it keys
+              # exactly as before and keeps its recorded builds.
+              shelf_arg=()
+              [ -z "${SHELF_PROJECT:-}" ] || shelf_arg=(--module-libraries-project "$SHELF_PROJECT")
               python3 build-logic/.github/scripts/module-build-key.py --root repo \
                 --modules "@$RUNNER_TEMP/selection.json" \
                 --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
-                > "$RUNNER_TEMP/keys.json"
+                "${shelf_arg[@]}" > "$RUNNER_TEMP/keys.json"
               # Waits at most 40 of this job's 45 minutes on a live holder; a holder still busy then is
               # built anyway (a duplicate build, flagged), never a red. Exit 1 ONLY for a key the same
               # inputs already compiled RED elsewhere — that is a verdict, not the ledger's outage.
