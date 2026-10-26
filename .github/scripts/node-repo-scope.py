@@ -399,7 +399,8 @@ def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
            override: list[str] | None, say, publishing: bool = False,
            always: frozenset[str] = frozenset(), publication_base: str = "",
-           publication_reach: bool = False, shelf_project: str = "") -> dict:
+           publication_reach: bool = False, shelf_project: str = "",
+           extensions_project: str = "") -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -480,16 +481,24 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
 
     # 🚨 The caller's own module-libraries shelf decides what EVERY container-built module binds,
     # but no module references it, so the project closure below would rule a shelf edit inert.
-    if shelf_project:
-        shelf = shelf_dirs(root, shelf_project)
-        if shelf is None:
-            return full(f"module-libraries-project {shelf_project} is not in this checkout, so "
-                        "whether this diff changes the shelf cannot be decided — running the full set.")
-        touched = [f for f in files if any(f.startswith(d + "/") for d in shelf)]
+    # A build extension (`build-extensions-project`, e.g. the Razor one) is the same shape: it decides
+    # what the compiler GENERATES for every module, and no module references it.
+    for input_name, label, project, consequence in (
+            ("module-libraries-project", "module-libraries shelf", shelf_project,
+             "the shelf is what every module binds"),
+            ("build-extensions-project", "build extension", extensions_project,
+             "the extension decides what every module's compile generates")):
+        if not project:
+            continue
+        dirs_ = shelf_dirs(root, project)
+        if dirs_ is None:
+            return full(f"{input_name} {project} is not in this checkout, so whether this diff "
+                        f"changes the {label} cannot be decided — running the full set.")
+        touched = [f for f in files if any(f.startswith(d + "/") for d in dirs_)]
         if touched:
-            return full(f"{len(touched)} changed file(s) are in the caller's module-libraries shelf "
-                        f"({shelf_project} and the projects it reaches) — first: {touched[0]}. The "
-                        "shelf is what every module binds, so every module is rebuilt and tested.")
+            return full(f"{len(touched)} changed file(s) are in the caller's {label} "
+                        f"({project} and the projects it reaches) — first: {touched[0]}. "
+                        f"{consequence[0].upper() + consequence[1:]}, so every module is rebuilt and tested.")
 
     packages = node_packages(root)
     node_files: list[str] = []
@@ -1096,6 +1105,23 @@ def self_test() -> int:
                    extra=["--module-libraries-project", "src/Nope/Nope.csproj"])
         check("[modules] a named shelf missing from the checkout ⇒ ALL (cannot decide)",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        print("the caller's build extension:")
+        ext_arg = ["--build-extensions-project", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"]
+        for label, path in (("the extension csproj", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"),
+                            ("a project the extension reaches", "src/Acme.Other/K.cs")):
+            got = _run(root, "modules", "pull_request", [path], extra=ext_arg)
+            check(f"[modules] {label} changed, extension named ⇒ ALL, every one tested, and SAYS it is the extension",
+                  got["scope"] == "full" and got["count"] == 2 and len(got["tested"]) == 2
+                  and "build extension" in got["reason"],
+                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], extra=ext_arg)
+        check("[modules] an extension named but untouched still narrows",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
+                   extra=["--build-extensions-project", "src/Nope/Nope.csproj"])
+        check("[modules] a named extension missing from the checkout ⇒ ALL (cannot decide), named by its input",
+              got["scope"] == "full" and got["count"] == 2 and "build-extensions-project" in got["reason"],
+              f"scope={got['scope']} — {got['reason'][:80]}")
         (shelf_dir / "Acme.ModuleLibraries.csproj").unlink()
         shelf_dir.rmdir()
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "plugin-gate.allow"])
@@ -1225,6 +1251,9 @@ def main() -> int:
     p.add_argument("--module-libraries-project", default="", dest="shelf_project",
                    help="the caller's module-libraries shelf csproj (relative to --root): a diff "
                         "that touches it or a project it reaches runs the full set")
+    p.add_argument("--build-extensions-project", default="", dest="extensions_project",
+                   help="the caller's build-extension csproj (relative to --root): a diff that "
+                        "touches it or a project it reaches runs the full set")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -1252,7 +1281,8 @@ def main() -> int:
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
                     publishing=args.publishing, always=always, publication_base=args.publication_base,
-                    publication_reach=args.publication_reach, shelf_project=args.shelf_project)
+                    publication_reach=args.publication_reach, shelf_project=args.shelf_project,
+                    extensions_project=args.extensions_project)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"

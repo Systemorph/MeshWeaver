@@ -183,12 +183,15 @@ def closure_dirs(root: Path, entry_project: str) -> list[str]:
 SHELF_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
 
 
-def shelf_inputs(root: Path, project: str) -> dict:
-    """The caller's module-libraries shelf as key inputs: its reference closure and its imports."""
+def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project") -> dict:
+    """A caller-supplied compiler-input project as key inputs: its reference closure and its imports.
+
+    Used for the module-libraries shelf and for a build extension (`build-extensions-project`):
+    both are published per run and change what every module compiles against."""
     root = root.resolve()
     csproj = (root / project).resolve()
     if not csproj.is_file():
-        raise ValueError(f"module-libraries-project {project} does not exist under {root} — a shelf "
+        raise ValueError(f"{kind} {project} does not exist under {root} — a compiler input "
                          "that cannot be keyed must not be silently keyed on nothing")
     seen: set[Path] = set()
     queue = [csproj]
@@ -261,7 +264,8 @@ def requires_of(index: dict) -> list[str]:
 
 
 def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, platform_ref: str,
-            recipe: str = RECIPE_VERSION, shelf_project: str = "") -> dict:
+            recipe: str = RECIPE_VERSION, shelf_project: str = "",
+            extensions_project: str = "") -> dict:
     """{key, inputs} for one matrix entry. Raises KeyError-shaped ValueError on an unkeyable entry."""
     package = entry.get("package") or ""
     module = entry.get("module") or ""
@@ -323,6 +327,10 @@ def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, p
     # is thrown away by this input's arrival.
     if shelf_project:
         inputs["shelf"] = shelf_inputs(root, shelf_project)
+    # The same for a build extension (e.g. the Razor one): it decides what the compiler GENERATES,
+    # so an edit to it is a new build. Absent ⇒ the key is byte-identical to one computed before.
+    if extensions_project:
+        inputs["buildExtension"] = shelf_inputs(root, extensions_project, "build-extensions-project")
     canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return {"key": sha256_bytes(canonical.encode("utf-8")), "inputs": inputs}
 
@@ -518,6 +526,37 @@ def self_test() -> int:
         except ValueError as exc:
             check("a named shelf that does not exist is refused", "does not exist" in str(exc))
 
+        print("the caller's build extension:")
+
+        def with_ext(shelf_too: bool = False) -> dict:
+            return compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123",
+                           shelf_project=shelf if shelf_too else "", extensions_project=shelf)
+
+        e0 = with_ext()
+        check("no extension named: the inputs carry no buildExtension (keys recorded before stay valid)",
+              "buildExtension" not in base["inputs"] and "buildExtension" not in s0["inputs"])
+        check("a named extension changes the key", e0["key"] != k0)
+        check("the extension is keyed under its own name, never as the shelf",
+              "shelf" not in e0["inputs"] and e0["key"] != s0["key"])
+        check("shelf AND extension together key differently from either alone",
+              with_ext(shelf_too=True)["key"] not in (e0["key"], s0["key"]))
+        mutate, restore = edit("tools/Acme.ShelfKit/Code.cs", "// extension changed\n")
+        mutate()
+        try:
+            k = with_ext()["key"]
+            k_plain = compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"]
+        finally:
+            restore()
+        check("a project the extension reaches changes the extension key", k != e0["key"])
+        check("…while the key WITHOUT an extension ignores it (negative control)", k_plain == k0)
+        check("…and restoring it restores the extension key", with_ext()["key"] == e0["key"])
+        try:
+            compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", extensions_project="tools/Nope/Nope.csproj")
+            check("a named extension that does not exist is refused", False, "no error raised")
+        except ValueError as exc:
+            check("a named extension that does not exist is refused, by its own input name",
+                  "build-extensions-project" in str(exc) and "does not exist" in str(exc))
+
         print("refusals:")
         (root / "Alpha" / "manifest.lock").unlink()
         try:
@@ -553,6 +592,8 @@ def main() -> int:
     p.add_argument("--recipe-version", default=RECIPE_VERSION, help=argparse.SUPPRESS)
     p.add_argument("--module-libraries-project", default="",
                    help="the caller's module-libraries shelf csproj (relative to --root); keyed when set")
+    p.add_argument("--build-extensions-project", default="",
+                   help="the caller's build-extension csproj (relative to --root); keyed when set")
     p.add_argument("--json", action="store_true", help="with --entry: print {key, inputs}")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     a = p.parse_args()
@@ -565,7 +606,7 @@ def main() -> int:
     try:
         if a.entry:
             got = compute(root, json.loads(a.entry), a.tester_digest, a.platform_digest, a.platform_ref,
-                          a.recipe_version, a.module_libraries_project)
+                          a.recipe_version, a.module_libraries_project, a.build_extensions_project)
             print(json.dumps(got, indent=2) if a.json else got["key"])
             return 0
         if a.modules:
@@ -576,7 +617,7 @@ def main() -> int:
             out = []
             for e in entries:
                 got = compute(root, e, a.tester_digest, a.platform_digest, a.platform_ref, a.recipe_version,
-                              a.module_libraries_project)
+                              a.module_libraries_project, a.build_extensions_project)
                 out.append({"package": e.get("package"), "module": e.get("module"),
                             "key": got["key"], "inputs": got["inputs"]})
                 print(f"  {e.get('module')}: {got['key']} (moduleVersion {got['inputs']['moduleVersion']}, "

@@ -181,10 +181,19 @@ Razor one.
    loads every staged Roslyn source generator through the same load context, with the same
    per-RID, PE-machine and provenance checks `stage-razor-generators.py` performs today. The Razor
    generator keeps being staged by default, so the image does not change.
-2. **Plugins** — a small `tester-gui` image (`FROM` the platform tester at the pinned digest) adds
-   the Razor generator layer, plus `RazorBuildTest` and the static-asset assertions
-   (`check-bundle-static-assets.py`, `test-module-asset-landing.py`) as Plugins-side gates, and the
-   module lane runs Razor modules on it.
+2. **Plugins** — takes the Razor extension project, `RazorBuildTest` and the static-asset
+   assertions (`check-bundle-static-assets.py`, `test-module-asset-landing.py`) as Plugins-side
+   gates, and passes the extension to the module lane. **No separate tester image is needed:** the
+   shared `node-repo-module-pack.yml` lane takes `build-extensions-project:`, a csproj in the
+   caller's repository whose publish is one extension directory (it carries
+   `build-extension.json`). The workspace-build job publishes it against the platform checkout at
+   `platform-ref`, fails closed on a publish without the manifest or without assemblies, removes
+   the checkout and the project's `obj`/`bin` before the source mount, and passes it to
+   `build-project` as `--extensions`, which replaces the extensions the tester image ships. A
+   pinned tester without the flag is refused by name. Like the module-libraries shelf, the
+   extension is a compiler input of every module: it is keyed into the build ledger
+   (`module-build-key.py --build-extensions-project`) and an edit to it selects every module
+   (`node-repo-scope.py --build-extensions-project`). Omitted, nothing changes.
 3. **Core (deletion, last)** — stops staging the Razor generator, deletes
    `stage-razor-generators.py`, `RazorBuildTest` and the static-asset scripts, and removes the
    Razor-specific branches from `ProjectFile` (the `.razor`/`.cshtml` item resolution and CSS-scope
