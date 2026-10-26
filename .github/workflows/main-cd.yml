@@ -1986,20 +1986,30 @@ jobs:
   # git, bubblewrap, the .NET SDK and THIS commit's build-run.py + compose-gate-host.sh
   # (deploy/build-host/Dockerfile). Tagged with the run's VERSION, the tag every image of the set
   # carries, so `build-host-latest` (and the stable roll) resolve the runner by the set's version
-  # exactly as they resolve its tester and portal — and hand it to the hosts BY DIGEST. linux/amd64:
-  # the build pool's nodes. Outside the promotion: the platform set is complete without it, and a
-  # red here is paged (alert-on-failure) without holding the fleet's delivery.
-  build-host-image:
-    name: "Build + push mw-build-host (the build-host runner)"
+  # exactly as they resolve its tester and portal — and hand it to the hosts BY DIGEST. One INDEX of
+  # linux/amd64 (the build pool's nodes) and linux/arm64 (a leased-back Mac's Colima VM —
+  # Plugins Hosting/BackLease.md phase 2b): the set's tester and portal already carry both, and a
+  # runner tag is written once per version, so an amd64-only runner leaves that version unusable on
+  # an arm64 host for good. Each leg builds natively, by digest; `build-host-image` joins them.
+  # Outside the promotion: the platform set is complete without it, and a red here is paged
+  # (alert-on-failure) without holding the fleet's delivery.
+  build-host-image-arch:
+    name: "Build + push mw-build-host for linux/${{ matrix.arch }} (by digest)"
     needs: [gate, migration-image]
     if: needs.gate.outputs.publish == 'true' && needs.migration-image.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       id-token: write
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2020,23 +2030,85 @@ jobs:
           dotnet-version: 10.0.x
       # core's `meshweaver-plugin-build` (module-fetch) rides in the image: the host stages the
       # plugins layer from the registry's bundle index with it (H8). Framework-dependent — the
-      # image's SDK carries the runtime.
+      # image's SDK carries the runtime, so the same publish serves both architectures.
       - name: Publish meshweaver-plugin-build into the image context
         run: dotnet publish src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o artifacts/plugin-build -nologo
       - uses: docker/setup-buildx-action@v4
-      - name: "Build + push mw-build-host:<version> (linux/amd64), and read its digest"
+      # No QEMU: this runner IS the platform, so the image's RUN steps execute natively.
+      - name: "Build + push mw-build-host for linux/${{ matrix.arch }} (by digest, ACR)"
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker buildx build --platform "linux/$ARCH" -f deploy/build-host/Dockerfile \
+            --output "type=image,name=${{ env.ACR }}/mw-build-host,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file "$RUNNER_TEMP/build-host-$ARCH.json" .
+          digest=$(jq -r '."containerimage.digest" // empty' "$RUNNER_TEMP/build-host-$ARCH.json")
+          case "$digest" in sha256:*) ;; *) echo "::error::mw-build-host linux/$ARCH was pushed but reported no digest ('$digest')"; exit 1 ;; esac
+          mkdir -p "$RUNNER_TEMP/build-host-digest"
+          echo "$digest" > "$RUNNER_TEMP/build-host-digest/$ARCH"
+          echo "- mw-build-host linux/$ARCH = \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-host-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/build-host-digest/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # The two platform images joined into `mw-build-host:<version>` — the digest the set names. Each
+  # architecture must be present: an index missing one is a runner its hosts on that architecture
+  # cannot run.
+  build-host-image:
+    name: "Build + push mw-build-host (the build-host runner)"
+    needs: [gate, migration-image, build-host-image-arch]
+    if: needs.gate.outputs.publish == 'true' && needs.migration-image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: build-host-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/build-host-digest
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - uses: docker/setup-buildx-action@v4
+      - name: "Join mw-build-host:<version> (linux/amd64 + linux/arm64), and read its digest"
         id: push
         env:
           VERSION: ${{ needs.migration-image.outputs.version }}
         run: |
           set -euo pipefail
           [ -n "${VERSION:-}" ] || { echo "::error::migration-image produced no version — refusing to tag mw-build-host with nothing"; exit 1; }
-          docker buildx build --platform linux/amd64 -f deploy/build-host/Dockerfile \
-            --tag "${{ env.ACR }}/mw-build-host:$VERSION" --push .
+          sources=()
+          for arch in amd64 arm64; do
+            f="$RUNNER_TEMP/build-host-digest/$arch"
+            [ -s "$f" ] || { echo "::error::no linux/$arch digest was handed over ($f is missing or empty) — refusing to publish an index without it"; exit 1; }
+            d=$(<"$f")
+            case "$d" in sha256:*) ;; *) echo "::error::no linux/$arch digest was handed over ('$d') — refusing to publish an index without it"; exit 1 ;; esac
+            sources+=("${{ env.ACR }}/mw-build-host@$d")
+          done
+          docker buildx imagetools create --tag "${{ env.ACR }}/mw-build-host:$VERSION" "${sources[@]}"
           digest=$(docker buildx imagetools inspect "${{ env.ACR }}/mw-build-host:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
           case "$digest" in sha256:*) ;; *) echo "::error::mw-build-host:$VERSION was pushed but resolves to no digest ('$digest')"; exit 1 ;; esac
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "- mw-build-host \`$VERSION\` = \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- mw-build-host \`$VERSION\` = \`$digest\` (linux/amd64 + linux/arm64)" >> "$GITHUB_STEP_SUMMARY"
       # The same manifest to the fleet registry, digest verified — the registry contract every image of
       # the set keeps, so a build-host record whose runnerRepository names the fleet registry can pull
       # the digest it is handed. Still outside the fleet's delivery.

@@ -371,10 +371,14 @@ hand. The design is Deploy, Test the Deploy, Switch Latest (the design page in c
 
 ## 4. Core's CD deploys the host
 
-**The runner image.** `main-cd.yml` job `build-host-image` builds `deploy/build-host/Dockerfile`
+**The runner image.** `main-cd.yml` builds `deploy/build-host/Dockerfile`
 (the .NET 10 SDK, bash, python3, git, bubblewrap, and THIS commit's `build-run.py` +
-`compose-gate-host.sh`, whose self-test runs in the build) for linux/amd64 and pushes
-`mw-build-host:<version>` — the version every image of the set carries — for every published
+`compose-gate-host.sh`, whose self-test runs in the build) natively for linux/amd64 and
+linux/arm64 (job `build-host-image-arch`, one runner per architecture, pushed by digest), and job
+`build-host-image` joins the two into one index under `mw-build-host:<version>`. Both
+architectures are required: the tag is written once per version, so an amd64-only runner would
+leave that version unusable on an arm64 host (a leased-back Mac, Plugins `Hosting/BackLease.md`)
+for good. It pushes `mw-build-host:<version>` — the version every image of the set carries — for every published
 platform build. It is outside the promotion (the set is complete without it) and under
 `alert-on-failure`. Nothing names it by a moving tag: the hosts get it BY DIGEST with the rest of the
 set.
