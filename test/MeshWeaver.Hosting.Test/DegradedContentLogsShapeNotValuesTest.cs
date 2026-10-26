@@ -187,6 +187,28 @@ public class DegradedContentLogsShapeNotValuesTest
     }
 
     /// <summary>
+    /// A JsonElement keeps duplicate names: thousands of repeated <c>$type</c> properties must not
+    /// each be formatted. The last one wins, as it does for a reader.
+    /// </summary>
+    [Fact]
+    public void RepeatedDiscriminators_AreFormattedOnce()
+    {
+        string Build(string last) =>
+            "{" + string.Concat(Enumerable.Repeat("\"$type\":\"" + new string('d', 60) + "\",", 20_000))
+            + "\"$type\":\"" + last + "\"}";
+        _ = ContentShapes.Describe(JsonSerializer.Deserialize<JsonElement>(Build("Warm")));
+        var element = JsonSerializer.Deserialize<JsonElement>(Build("Last"));
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var shape = ContentShapes.Describe(element);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.StartsWith("$type=\"Last\"", shape);
+        // 20,000 formatted discriminators would be several MB; the budget covers 32 displayed names.
+        Assert.True(allocated < 64_000, $"Describing 20,001 $type properties allocated {allocated:N0} bytes.");
+    }
+
+    /// <summary>
     /// A FRESH parsed tree (its containers still lazy) with a large numeric array: sizing must not
     /// materialise the array or format each number on the heap. The size is then a lower bound.
     /// </summary>

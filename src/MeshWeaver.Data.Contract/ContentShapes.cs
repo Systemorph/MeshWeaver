@@ -82,15 +82,18 @@ public static class ContentShapes
 
         var names = ImmutableList.CreateBuilder<string>();
         var total = 0;
-        var type = "no $type";
+        // The LAST $type wins (as for a reader), and it is formatted once, after the walk: a
+        // JsonElement keeps duplicate names, so formatting each occurrence would allocate per duplicate.
+        JsonElement? discriminator = null;
         foreach (var property in element.EnumerateObject())
         {
             total++;
             if (names.Count < MaxKeys)
                 names.Add(DisplayEscaped(JsonMarshal.GetRawUtf8PropertyName(property)));
             if (property.NameEquals(TypeDiscriminator))
-                type = TypeOf(property.Value);
+                discriminator = property.Value;
         }
+        var type = discriminator is { } found ? TypeOf(found) : "no $type";
         return Compose(nameof(JsonValueKind.Object), type, names.ToImmutable(), total, bytes);
     }
 
