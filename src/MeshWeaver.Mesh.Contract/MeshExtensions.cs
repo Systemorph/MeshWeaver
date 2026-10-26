@@ -437,7 +437,9 @@ public static class MeshExtensions
     /// ROUTING SERVICE so replies land on it cross-silo.</para>
     ///
     /// <para>Returns <c>null</c> only when the hub cannot be materialised (the mesh is already
-    /// tearing down); callers then fall back to their own hub.</para>
+    /// tearing down). <see cref="ReadIssuingHub"/> then falls back to the caller's own hub — which,
+    /// for a router caller, puts the router on an end of the read (#7136); a caller that can settle
+    /// the read without posting uses <see cref="TryReadIssuingHub"/> instead.</para>
     /// </summary>
     /// <param name="hub">Any hub in the mesh; the read hub is resolved from its mesh root.</param>
     /// <returns>The shared read-issuing hub, or <c>null</c> while the mesh is disposing.</returns>
@@ -500,8 +502,29 @@ public static class MeshExtensions
     /// <param name="hub">The hub the caller holds — returned unchanged unless it is the root mesh hub.</param>
     /// <returns>The off-router read-issuing hub.</returns>
     public static IMessageHub ReadIssuingHub(this IMessageHub hub) =>
+        hub.TryReadIssuingHub() ?? hub;
+
+    /// <summary>
+    /// <see cref="ReadIssuingHub"/> without its last-resort fallback: the caller's own hub when it
+    /// is not the router, the shared read hub (<see cref="MeshReadHub"/>) when it is — and
+    /// <c>null</c> when the caller IS the router and that hub cannot be had (the mesh is past
+    /// <see cref="MessageHubRunLevel.DisposeHostedHubs"/>, or its construction faulted).
+    ///
+    /// <para>🚨 <b>Why the null matters.</b> <see cref="ReadIssuingHub"/> answers that case with the
+    /// router itself, so a read issued through it in the teardown window LEAVES THE ROUTER — exactly
+    /// the <c>ROUTER_TRAFFIC ORIGIN</c> line of
+    /// <see href="https://github.com/Systemorph/MeshWeaver/issues/7136">#7136</see>
+    /// (<c>GetDataRequest was POSTED with the mesh hub as sender</c>). A caller that can settle the
+    /// read without posting — <c>GetMeshNodeOutcome</c> answers it
+    /// <see cref="NodeReadStatus.Unavailable"/> — takes this overload and never puts the router on
+    /// an end of the delivery.</para>
+    /// </summary>
+    /// <param name="hub">The hub the caller holds — returned unchanged unless it is the root mesh hub.</param>
+    /// <returns>The off-router read-issuing hub, or <c>null</c> when the caller is the router and
+    /// no off-router hub can be materialised.</returns>
+    public static IMessageHub? TryReadIssuingHub(this IMessageHub hub) =>
         string.Equals(hub.Address.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
-            ? hub.MeshReadHub() ?? hub
+            ? hub.MeshReadHub()
             : hub;
 
     /// <summary>
