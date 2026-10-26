@@ -1076,11 +1076,20 @@ jobs:
           EXECUTOR: ${{ inputs.executor }}
           MODE: ${{ inputs.publish-mode }}
           PUBLISH: ${{ inputs.publish }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
         run: |
           set -euo pipefail
           case "$EXECUTOR" in
             actions) echo "executor: actions — every job of this lane runs here." ;;
             host)
+              # 🚨 The build extension is published and handed to `build-project --extensions` by
+              # THIS lane's build-workspace job, which a host run skips; the build host neither
+              # receives the input nor publishes it. A host run would compile with the tester image's
+              # own extensions and publish a different bundle under a green verdict, so refuse it.
+              if [ -n "${EXTENSIONS_PROJECT:-}" ]; then
+                echo "::error title=Build executor::executor is 'host' and build-extensions-project is '$EXTENSIONS_PROJECT'. The build host does not publish or load a caller's build extension, so it would compile WITHOUT it and publish a wrong bundle. Run this call with executor: actions until the build host carries build-extensions-project (Doc/Architecture/BuildHosts)."
+                exit 1
+              fi
               if [ "$PUBLISH" = "true" ] && [ "$MODE" != "staged" ]; then
                 echo "::error title=Build executor::executor is 'host' and this run publishes with publish-mode '$MODE'. A build host holds no publication credential and no pack leg runs here, so an in-leg (direct) publication would hand the registry NOTHING. Publish a host run with publish-mode: staged through build-host-publication.yml and node-repo-module-publish.yml (Doc/Architecture/BuildHosts §5)."
                 exit 1
