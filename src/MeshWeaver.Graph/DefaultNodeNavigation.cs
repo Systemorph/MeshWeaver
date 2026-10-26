@@ -148,7 +148,10 @@ public static class DefaultNodeNavigation
         var labels = new IndexLabels(
             LocalizationCatalog.Get("common.loadMore", locale),
             LocalizationCatalog.Get("common.showAll", locale),
-            mode => LocalizationCatalog.Get(SortLabelKey(mode), locale));
+            mode => LocalizationCatalog.Get(SortLabelKey(mode), locale))
+        {
+            Section = nodeType => IndexSections.Label(nodeType, locale),
+        };
         return Guard(
             Observable.Defer(() => levels
                 .CombineLatest()
@@ -335,7 +338,8 @@ public static class DefaultNodeNavigation
     /// The lines of ONE folder of the index, opened on demand (<see cref="SuppliedNavigationRail.FolderArea"/>):
     /// its first <see cref="LevelCap"/> children in the default order, each probed for children of
     /// its own, then "Show all" when it holds more. Emits an empty list at once, and a fault reads
-    /// as an empty folder after <paramref name="logger"/> has seen it.
+    /// as an empty folder after <paramref name="logger"/> has seen it. A folder that mixes kinds of
+    /// node reads as sections headed in <paramref name="viewer"/>'s locale (<see cref="IndexSections"/>).
     /// </summary>
     /// <param name="meshService">The unified mesh service.</param>
     /// <param name="folder">The folder whose children are listed.</param>
@@ -346,6 +350,23 @@ public static class DefaultNodeNavigation
     public static IObservable<IReadOnlyList<NodeNavigationEntry>> ObserveFolder(
         IMeshService meshService, string folder, string currentPath, string showAllLabel,
         AccessContext? viewer, ILogger? logger = null)
+        => ObserveFolder(meshService, folder, currentPath, showAllLabel,
+            nodeType => IndexSections.Label(nodeType, viewer?.Locale), viewer, logger);
+
+    /// <summary>
+    /// <see cref="ObserveFolder(IMeshService, string, string, string, AccessContext?, ILogger?)"/>
+    /// with the viewer's section headings (<see cref="IndexSections"/>).
+    /// </summary>
+    /// <param name="meshService">The unified mesh service.</param>
+    /// <param name="folder">The folder whose children are listed.</param>
+    /// <param name="currentPath">The page being read — marks the current line.</param>
+    /// <param name="showAllLabel">The viewer's label for the show-all line.</param>
+    /// <param name="sectionLabel">The viewer's heading for a node type's section.</param>
+    /// <param name="viewer">The reader every read is stamped with (<c>LayoutAreaHost.ViewerContext</c>).</param>
+    /// <param name="logger">Sees a fault before it is swallowed.</param>
+    public static IObservable<IReadOnlyList<NodeNavigationEntry>> ObserveFolder(
+        IMeshService meshService, string folder, string currentPath, string showAllLabel,
+        Func<string?, string> sectionLabel, AccessContext? viewer, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(meshService);
         return ReadLevel(meshService, folder, IndexSort.Order, LevelCap, viewer)
@@ -353,7 +374,7 @@ public static class DefaultNodeNavigation
             .Publish(level => level.CombineLatest(
                 FolderProbes(meshService, level.Select(v => v.Take(LevelCap).Select(n => n.Path)
                     .ToImmutableSortedSet(StringComparer.Ordinal)), viewer, logger),
-                (visible, withChildren) => FolderEntries(folder, visible, currentPath, withChildren, showAllLabel)))
+                (visible, withChildren) => FolderEntries(folder, visible, currentPath, withChildren, showAllLabel, sectionLabel)))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "The index folder query for {Folder} faulted — the folder renders empty", folder);
@@ -375,17 +396,33 @@ public static class DefaultNodeNavigation
     public static IReadOnlyList<NodeNavigationEntry> FolderEntries(
         string folder, IReadOnlyList<MeshNode> visible, string currentPath,
         IReadOnlySet<string> withChildren, string showAllLabel)
+        => FolderEntries(folder, visible, currentPath, withChildren, showAllLabel,
+            nodeType => IndexSections.Label(nodeType, null));
+
+    /// <summary>
+    /// <see cref="FolderEntries(string, IReadOnlyList{MeshNode}, string, IReadOnlySet{string}, string)"/>
+    /// with the viewer's section headings: a folder that mixes kinds of node reads as sections,
+    /// exactly as a loaded level does (<see cref="IndexSections"/>). Pure.
+    /// </summary>
+    /// <param name="folder">The folder.</param>
+    /// <param name="visible">Its visible children, in rail order.</param>
+    /// <param name="currentPath">The page being read.</param>
+    /// <param name="withChildren">The children known to have children of their own.</param>
+    /// <param name="showAllLabel">The viewer's label for the show-all line.</param>
+    /// <param name="sectionLabel">The viewer's heading for a node type's section.</param>
+    public static IReadOnlyList<NodeNavigationEntry> FolderEntries(
+        string folder, IReadOnlyList<MeshNode> visible, string currentPath,
+        IReadOnlySet<string> withChildren, string showAllLabel, Func<string?, string> sectionLabel)
     {
-        var entries = visible.Take(LevelCap)
-            .Select(n => new NodeNavigationEntry(
+        var entries = IndexSections.Group(folder, [.. visible.Take(LevelCap)
+            .Select(n => (n.NodeType, new NodeNavigationEntry(
                 n.Name ?? n.Id,
                 n.Path,
                 string.Equals(n.Path, currentPath, StringComparison.Ordinal),
                 MeshNodeImageHelper.ResolveNodeIcon(n))
             {
                 HasUnloadedChildren = withChildren.Contains(n.Path),
-            })
-            .ToImmutableList();
+            }))], sectionLabel);
         if (visible.Count > LevelCap)
         {
             var all = ShowAllHref(folder, IndexSort.Order);
@@ -806,9 +843,9 @@ public static class DefaultNodeNavigation
         IReadOnlyDictionary<string, IndexLevel> levels, IndexLabels labels, IReadOnlySet<string> withChildren)
     {
         var level = levels.TryGetValue(parent, out var named) ? named : null;
-        var children = VisibleInOrder(
+        var rows = VisibleInOrder(
                 subtree.Where(n => IsChildOf(n.Path, parent)), level?.Sort ?? IndexSort.Order, level?.ViewedRank)
-            .Select(n => new NodeNavigationEntry(
+            .Select(n => (n.NodeType, Entry: new NodeNavigationEntry(
                 n.Name ?? n.Id,
                 n.Path,
                 string.Equals(n.Path, currentPath, StringComparison.Ordinal),
@@ -821,8 +858,11 @@ public static class DefaultNodeNavigation
                 // The dropdown sorts the entry's children, so it is offered only where they are
                 // loaded — a folder off the reader's path opens in the default order.
                 SortOptions = levels.TryGetValue(n.Path, out var own) ? own.SortOptions : [],
-            })
+            }))
             .ToImmutableList();
+        // A level that mixes kinds of node reads as sections — "Opportunities", "Mails" — and one
+        // kind stays flat (IndexSections).
+        var children = IndexSections.Group(parent, rows, labels.Section);
         if (children.Count == 0 || level is null)
             return children;
         // A level that holds more than it shows ends with the entries that load the next batch
@@ -893,4 +933,11 @@ public sealed record IndexLevel
 /// <param name="LoadMore">The load-more entry.</param>
 /// <param name="ShowAll">The show-all entry.</param>
 /// <param name="SortLabel">Each sort mode's name in the dropdown.</param>
-public sealed record IndexLabels(string LoadMore, string ShowAll, Func<string, string> SortLabel);
+public sealed record IndexLabels(string LoadMore, string ShowAll, Func<string, string> SortLabel)
+{
+    /// <summary>
+    /// Each node type's section heading (null for an untyped node) — the viewer's labels when set,
+    /// else the English ones (<see cref="IndexSections.Label"/>).
+    /// </summary>
+    public Func<string?, string> Section { get; init; } = nodeType => IndexSections.Label(nodeType, null);
+}
