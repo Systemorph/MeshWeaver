@@ -371,10 +371,14 @@ hand. The design is Deploy, Test the Deploy, Switch Latest (the design page in c
 
 ## 4. Core's CD deploys the host
 
-**The runner image.** `main-cd.yml` job `build-host-image` builds `deploy/build-host/Dockerfile`
+**The runner image.** `main-cd.yml` builds `deploy/build-host/Dockerfile`
 (the .NET 10 SDK, bash, python3, git, bubblewrap, and THIS commit's `build-run.py` +
-`compose-gate-host.sh`, whose self-test runs in the build) for linux/amd64 and pushes
-`mw-build-host:<version>` — the version every image of the set carries — for every published
+`compose-gate-host.sh`, whose self-test runs in the build) natively for linux/amd64 and
+linux/arm64 (job `build-host-image-arch`, one runner per architecture, pushed by digest), and job
+`build-host-image` joins the two into one index under `mw-build-host:<version>`. Both
+architectures are required: the tag is written once per version, so an amd64-only runner would
+leave that version unusable on an arm64 host (a leased-back Mac, Plugins `Hosting/BackLease.md`)
+for good. It pushes `mw-build-host:<version>` — the version every image of the set carries — for every published
 platform build. It is outside the promotion (the set is complete without it) and under
 `alert-on-failure`. Nothing names it by a moving tag: the hosts get it BY DIGEST with the rest of the
 set.
@@ -445,8 +449,10 @@ running builds on it: the operations instance's build queue has its own switch
 `build-host-image` and `build-host-latest` are outside `delivery-verdict` (the fleet's delivery does
 not depend on a build host) and outside `alert-on-failure` (whose `ci-failure` issue recovers on
 platform delivery, not on a build host): job `build-host-report` files or comments on the ONE open
-`build-host-latest` issue when either fails or is cancelled, and closes it only after a run that actually HANDED
-build-latest a set. `build-host-stable.yml` reports on its own `build-host` issue, the same way.
+`build-host-latest` issue when either fails or is cancelled — or when an architecture leg
+(`build-host-image-arch`) does, since a failed leg leaves the join SKIPPED rather than failed and a
+hand-over of an earlier armed set would otherwise close the alert over it — and closes it only after a
+run that actually HANDED build-latest a set. `build-host-stable.yml` reports on its own `build-host` issue, the same way.
 
 ## 5. Every repository on the hosts (H7) — dormant until the instance says so
 
