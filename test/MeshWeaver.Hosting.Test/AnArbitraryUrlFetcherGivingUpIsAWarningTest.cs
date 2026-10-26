@@ -80,6 +80,31 @@ public class AnArbitraryUrlFetcherGivingUpIsAWarningTest
         Assert.False(Defaults.FetchesArbitraryUrls(null, provider));
     }
 
+    /// <summary>
+    /// A declaration from a module that has been withdrawn or uninstalled is still registered as a root
+    /// forwarder, and calling it throws. The check runs for every client's Error event, so it must skip
+    /// that declaration rather than throw (review of #7256). Negative control: reading
+    /// <c>ClientName</c> through the forwarder throws.
+    /// </summary>
+    [Fact]
+    public void AWithdrawnModulesDeclaration_IsAbsent_NeverAThrow()
+    {
+        using var modules = new ModuleContexts();
+        var withdrawn = (IArbitraryUrlFetcher)ModuleServiceProxy.Create(
+            typeof(IArbitraryUrlFetcher), modules, "Withdrawn.Module", 0);
+        Assert.Throws<InvalidOperationException>(() => withdrawn.ClientName);
+
+        using var provider = new ServiceCollection()
+            .AddSingleton(withdrawn)
+            .DeclareArbitraryUrlFetcher(Fetcher)
+            .BuildServiceProvider();
+        using var declared = Stamped(Fetcher);
+        using var other = Stamped(Platform);
+
+        Assert.True(Defaults.FetchesArbitraryUrls(declared, provider));
+        Assert.False(Defaults.FetchesArbitraryUrls(other, provider));
+    }
+
     private static HttpRequestMessage Stamped(string name)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, "http://example.invalid/");

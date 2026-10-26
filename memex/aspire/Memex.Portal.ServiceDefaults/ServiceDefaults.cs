@@ -267,7 +267,13 @@ public static class ServiceDefaults
 
     /// <summary>Whether <paramref name="request"/> was sent by a client declared an
     /// <see cref="IArbitraryUrlFetcher"/>. A request with no stamped client name — the default,
-    /// unnamed client — never qualifies: nothing declared it.</summary>
+    /// unnamed client — never qualifies: nothing declared it.
+    ///
+    /// <para>🚨 Each declaration is read under a lease (<see cref="ModuleServiceProxy.TryLease{T}"/>),
+    /// never through the forwarder: a module that is withdrawn or uninstalled leaves its root forwarder
+    /// registered, and calling it throws <c>Module … holds no service scope</c>. This runs inside Polly's
+    /// telemetry for EVERY client's Error event, so a throw here would hit unrelated platform clients.
+    /// A declaration whose module is not held is absent.</para></summary>
     /// <param name="request">The request the event is about, if the pipeline carried one.</param>
     /// <param name="provider">The container the declarations are registered in.</param>
     internal static bool FetchesArbitraryUrls(HttpRequestMessage? request, IServiceProvider provider)
@@ -275,8 +281,15 @@ public static class ServiceDefaults
         if (request is null)
             return false;
         var name = ClientNameOf(request);
-        return name != UnnamedClient
-               && provider.GetServices<IArbitraryUrlFetcher>().Any(f => string.Equals(f.ClientName, name, StringComparison.Ordinal));
+        if (name == UnnamedClient)
+            return false;
+        foreach (var declaration in provider.GetServices<IArbitraryUrlFetcher>())
+        {
+            using var lease = ModuleServiceProxy.TryLease(declaration);
+            if (lease is not null && string.Equals(lease.Service.ClientName, name, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>The request option the outermost handler writes the sending client's name into.</summary>
