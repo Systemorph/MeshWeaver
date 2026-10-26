@@ -20,6 +20,9 @@
          directly: a predicate that can only be exercised through a real socket is a predicate
          nobody checks. -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <!-- AnArbitraryUrlFetcherGivingUpIsAWarningTest (#7085) pins the severity predicate and the
+         client-name stamp it reads, next to the core change. -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
   </ItemGroup>
 
   <ItemGroup>
