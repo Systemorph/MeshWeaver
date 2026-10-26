@@ -26,14 +26,9 @@
     <ProjectGuid>{93595120-3ccf-45c6-8783-4829a1120166}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>
-    <!-- 🚨 NO CORE CODE USES YamlDotNet any more: every YAML read and write in core goes through
-         MeshWeaver.Yaml (Doc/Architecture/TolerantYaml). This reference stays ONLY so the platform
-         image keeps CARRYING the assembly: MeshWeaver.Plugins' AI and Publish modules still
-         reference YamlDotNet versionless, take its VERSION from the platform (the image's
-         .deps.json on the container build path, which would fail NU1015 without it) and load
-         next to the platform's copy at run time. It is the DELETING half of a paired change and
-         leaves only after the Plugins port has merged. -->
-    <PackageReference Include="YamlDotNet" />
+    <!-- YAML is read and written with the platform's own MeshWeaver.Yaml
+         (Doc/Architecture/TolerantYaml), referenced below. The platform carries no third-party YAML
+         library: the last users, MeshWeaver.Plugins' AI and Publish modules, moved to MeshWeaver.Yaml. -->
     <PackageReference Include="Markdig" />
     <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
