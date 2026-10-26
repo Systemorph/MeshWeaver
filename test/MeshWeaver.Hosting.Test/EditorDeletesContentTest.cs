@@ -39,6 +39,9 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>A node the Editor is DENIED at its own scope (both roles), created by an Admin.</summary>
     private const string DeniedSource = "denied-source";
 
+    /// <summary>A child the Editor is denied — its name must never appear in an answer to the Editor.</summary>
+    private const string PrivateChild = "private-child-7f3a";
+
     private static readonly AccessContext EditorContext = new() { ObjectId = EditorId, Name = "Editor C" };
     private static readonly AccessContext SpaceAdminContext = new() { ObjectId = SpaceAdminId, Name = "Space Admin" };
 
@@ -240,6 +243,58 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
             "an Editor could not MOVE this node into another partition with its authorship, so a copy may not "
             + "preserve it either — that would be the impersonation the gate exists to stop");
         response.Message.RejectionReason.Should().Be(NodeCopyRejectionReason.Unauthorized);
+    }
+
+    /// <summary>
+    /// The preserving copy's entitlement pre-flight covers what the copy CARRIES, nothing more: a grant
+    /// under the source (an <c>_Access</c> satellite) that a copy without <c>IncludeSatellites</c> leaves
+    /// behind does not refuse an Editor's same-partition preserving copy.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task APreservingCopy_IgnoresSatellitesItDoesNotCarry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var source = await SeedAsAdmin(TestPartition, "with-grant", ct);
+        await NodeFactory.CreateNode(AssignmentNodeFactory.UserRole("someone-else", "Viewer", source))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var before = await ReadExisting(source, ct);
+        var target = NewPath(TestPartition, "with-grant-copy");
+
+        Access.SetCircuitContext(EditorContext);
+        var response = await ObserveNodeOperation(new CopyNodeRequest(source, target) { PreserveAuthorship = true })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        response.Message.Success.Should().BeTrue(response.Message.Error
+            ?? "the grant is a satellite this copy does not carry, so it needs no entitlement");
+        (await ReadExisting(target, ct)).CreatedBy.Should().Be(before.CreatedBy, "within the partition the stamps travel");
+    }
+
+    /// <summary>
+    /// 🚨 The pre-flight reads the stored inventory before row-level security filters it, so its refusal
+    /// must never name a node the caller cannot read. An Editor denied a private child copies the
+    /// parent into another partition with its authorship — refused, and the answer names only the
+    /// requested source.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task APreservingCopyRefusal_NeverNamesAnUnreadableDescendant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var source = await SeedAsAdmin(TestPartition, "with-private", ct);
+        Access.SetCircuitContext(TestUsers.Admin);
+        await NodeFactory.CreateNode(MeshNode.FromPath($"{source}/{PrivateChild}") with { Name = "private", NodeType = "Markdown", State = MeshNodeState.Active })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await NodeFactory.CreateNode(AssignmentNodeFactory.UserRole(EditorId, "Editor", $"{source}/{PrivateChild}", denied: true))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        Access.SetCircuitContext(EditorContext);
+        var response = await ObserveNodeOperation(
+                new CopyNodeRequest(source, NewPath(Other, "with-private-copy")) { PreserveAuthorship = true })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        Output.WriteLine($"copy: success={response.Message.Success} error={response.Message.Error}");
+        response.Message.Success.Should().BeFalse("an Editor may not carry the authorship into another partition");
+        (response.Message.Error ?? string.Empty).Should().NotContain(PrivateChild,
+            "the refusal names the requested source, never a descendant the caller may not read");
     }
 
     private static string NewPath(string partition, string prefix) =>
