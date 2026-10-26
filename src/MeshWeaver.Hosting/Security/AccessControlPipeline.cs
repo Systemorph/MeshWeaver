@@ -142,7 +142,14 @@ public static class AccessControlPipeline
         if (!string.Equals(check.Path, hubPath, StringComparison.OrdinalIgnoreCase))
             return Observable.Return(PermissionCheckOutcome.Denied);
 
-        var operation = NodeTypeAccessRuleGate.SubjectOperationFor(check.Permission);
+        // 🚨 A delete-shaped message is re-decided as a DELETE, whatever permission its standard check
+        // demanded: ordinary content is deleted with Update (DeletePermission.RequiredFor), and mapping
+        // that back to NodeOperation.Update would ask the type's rule the wrong question — a rule that
+        // lets a commenter delete their own comment says nothing about updating it, and a rule that
+        // lets someone post into a thread says nothing about deleting it.
+        var operation = CascadeRootOf(delivery.Message) is not null
+            ? NodeOperation.Delete
+            : NodeTypeAccessRuleGate.SubjectOperationFor(check.Permission);
         // A non-CRUD permission (Comment, Thread, Execute, …) about THIS hub's own node is decided by
         // the node type's INodeTypePermissionRule when it declares one. Create still maps to nothing
         // on either branch — its subject is a node that does not exist yet.

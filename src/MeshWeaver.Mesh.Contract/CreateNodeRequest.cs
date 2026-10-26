@@ -1188,9 +1188,11 @@ public class DeleteNodePermissionAttribute() : RequiresPermissionAttribute(Permi
 
 /// <summary>
 /// Custom permission attribute for MoveNodeRequest. A move IS a delete at the source plus a create
-/// at the target, so it demands exactly those two: the delete demand
+/// at the target, so it demands those two: the delete demand
 /// (<see cref="DeletePermission.RequiredFor"/>) on the source namespace and Create on the target
-/// namespace — nothing special to a move.
+/// namespace. Into ANOTHER partition the source demand is Delete itself: a move carries the node's
+/// authorship verbatim, and only an administrator of the source may carry it out of the governance
+/// that covered it.
 /// </summary>
 public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Update)
 {
@@ -1200,7 +1202,11 @@ public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permiss
     {
         if (delivery.Message is MoveNodeRequest move)
         {
-            yield return (GetNamespace(move.SourcePath), DeletePermission.RequiredFor(move.SourcePath));
+            // Within a partition: the delete demand. Into another partition: Delete itself, because
+            // the node's authorship travels with it (MeshExtensions.MoveEntitlement).
+            yield return (GetNamespace(move.SourcePath), DeletePermission.SamePartition(move.SourcePath, move.TargetPath)
+                ? DeletePermission.RequiredFor(move.SourcePath)
+                : Permission.Delete);
             yield return (GetNamespace(move.TargetPath), Permission.Create);
         }
         else

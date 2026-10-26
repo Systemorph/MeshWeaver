@@ -36,6 +36,9 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>A Space whose root an Admin stores at run time; the Editor holds Editor on it.</summary>
     private const string StoredRoot = "StoredRoot";
 
+    /// <summary>A node the Editor is DENIED at its own scope (both roles), created by an Admin.</summary>
+    private const string DeniedSource = "denied-source";
+
     private static readonly AccessContext EditorContext = new() { ObjectId = EditorId, Name = "Editor C" };
     private static readonly AccessContext SpaceAdminContext = new() { ObjectId = SpaceAdminId, Name = "Space Admin" };
 
@@ -50,6 +53,7 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
                 AssignmentNodeFactory.UserRole(EditorId, "Editor", TestPartition),
                 AssignmentNodeFactory.UserRole(EditorId, "Editor", Other),
                 AssignmentNodeFactory.UserRole(EditorId, "Editor", StoredRoot),
+                AssignmentNodeFactory.UserRole(EditorId, "Editor", $"{TestPartition}/{DeniedSource}", denied: true),
                 AssignmentNodeFactory.UserRole(SpaceAdminId, "Admin", TestPartition),
                 AssignmentNodeFactory.UserRole(SpaceAdminId, "Editor", Other));
 
@@ -148,24 +152,58 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
         after.CreatedDate.Should().Be(before.CreatedDate, "a relocation, not a creation");
     }
 
+    /// <summary>
+    /// A move never re-authors a node — its resumability and relocation provenance rest on the stamps
+    /// travelling verbatim — so a move that may NOT carry them is refused, before anything is written.
+    /// Into another partition only an administrator of the source may carry them.
+    /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task AnEditor_MovesIntoAnotherPartition_AndTheAuthorshipIsReStamped()
+    public async Task AnEditor_IsRefusedAMoveIntoAnotherPartition()
     {
         var ct = TestContext.Current.CancellationToken;
         var source = await SeedAsAdmin(TestPartition, "across", ct);
-        var before = await ReadExisting(source, ct);
-        before.CreatedBy.Should().NotBe(EditorId, "precondition: somebody else authored it");
         var target = NewPath(Other, "across-moved");
 
         Access.SetCircuitContext(EditorContext);
         var moved = await Move(source, target, ct);
 
-        moved.Success.Should().BeTrue(moved.Error ?? "an Editor may delete the source and create at the target");
-        (await StoredAt(source, ct)).Should().BeNull("the source is gone");
-        var after = await ReadExisting(target, ct);
-        after.CreatedBy.Should().Be(EditorId,
-            "carrying another author into a partition the source's governance does not cover would let owner-scoped "
-            + "work there run AS that author — so the node arrives as the mover's");
+        moved.Success.Should().BeFalse(
+            "carrying an administrator's authorship into a partition their governance does not cover would let "
+            + "owner-scoped work there run AS them — and a move does not re-author");
+        (await StoredAt(source, ct)).Should().NotBeNull("the refused move leaves the source in place");
+        (await StoredAt(target, ct)).Should().BeNull("and writes nothing at the target");
+    }
+
+    /// <summary>
+    /// 🚨 The adversarial case for <c>CreateNodeRequest.AuthorshipFrom</c>, which is caller-settable and
+    /// reads the stamps straight from storage: an Editor DENIED on the source node names it as the
+    /// authorship source of content of their own. The entitlement is checked on the source NODE, so
+    /// the node-level deny holds and the create is stamped for the Editor.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnEditorDeniedTheSource_CannotBorrowItsAuthorship()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var source = $"{TestPartition}/{DeniedSource}";
+        Access.SetCircuitContext(TestUsers.Admin);
+        await NodeFactory.CreateNode(MeshNode.FromPath(source) with { Name = "denied", NodeType = "Markdown", State = MeshNodeState.Active })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var target = NewPath(TestPartition, "forged");
+
+        Access.SetCircuitContext(EditorContext);
+        var created = await ObserveNodeOperation(new CreateNodeRequest(MeshNode.FromPath(target) with
+                {
+                    Name = "forged",
+                    NodeType = "Markdown",
+                    State = MeshNodeState.Active,
+                })
+                { CreatedBy = EditorId, AuthorshipFrom = source })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        Output.WriteLine($"create: success={created.Message.Success} error={created.Message.Error}");
+        if (created.Message.Success)
+            (await ReadExisting(target, ct)).CreatedBy.Should().Be(EditorId,
+                "an Editor denied the source may not take its authorship — the create records the requester");
     }
 
     [Fact(Timeout = 60000)]

@@ -58,6 +58,10 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
 
     private const string EditorUser = "satellite-editor";
 
+    /// <summary>A commenter — Comment on the partition, no Update — and the comment they wrote.</summary>
+    private const string CommenterUser = "satellite-commenter";
+    private const string OwnCommentPath = MainNodePath + "/_Comment/c1";
+
     /// <summary>The Editor's own grant — governance, not content.</summary>
     private const string GrantPath = Partition + "/_Access/" + EditorUser + "_Access";
     private const string ViewerUser = "satellite-viewer";
@@ -92,7 +96,16 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
                 // then be refused when erasing it".
                 AssignmentNodeFactory.UserRole(EditorUser, "Editor", Partition),
                 // Read only — neither Delete on the satellite nor Update on its MainNode.
-                AssignmentNodeFactory.UserRole(ViewerUser, "Viewer", Partition));
+                AssignmentNodeFactory.UserRole(ViewerUser, "Viewer", Partition),
+                AssignmentNodeFactory.UserRole(CommenterUser, "Commenter", Partition),
+                new MeshNode("c1", MainNodePath + "/_Comment")
+                {
+                    Name = "Own comment",
+                    NodeType = "Comment",
+                    MainNode = MainNodePath,
+                    // Identity(...) names the caller by its id, and the rule matches the author by name.
+                    Content = new Comment { Author = CommenterUser, PrimaryNodePath = MainNodePath },
+                });
 
     private static AccessContext Identity(string userId) => new()
     {
@@ -185,5 +198,22 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
             + "Editor (Update, no Delete) stays refused");
         failure!.ErrorType.Should().Be(ErrorType.Unauthorized,
             "the standard fold reached a verdict: " + failure.Message);
+    }
+
+    /// <summary>
+    /// 🚨 A delete is re-decided through the type's rule AS A DELETE. Deleting ordinary content
+    /// demands Update, which a Commenter lacks, so the standard check denies — and the gate must then
+    /// ask the Comment rule about a DELETE (its author may always delete their own comment), not about
+    /// an UPDATE, which the rule would refuse.
+    /// </summary>
+    [Fact]
+    public async Task ACommentersOwnCommentPreflight_IsNotRefusedByTheGate()
+    {
+        var failure = await PreflightRefusal(OwnCommentPath, CommenterUser).Should().Within(Budget).Emit();
+
+        failure.Should().BeNull(
+            "SatelliteAccessRule lets a comment's author delete it; the gate must re-decide the denied "
+            + "standard check as a Delete, not as the Update the standard demand names: "
+            + (failure?.Message ?? string.Empty));
     }
 }

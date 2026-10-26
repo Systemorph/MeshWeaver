@@ -408,20 +408,29 @@ grants, its caps, its sync wiring, its purchases — is an administrator's call.
 path applies the same function: the `DeleteNodeRequest` / `ValidateDeleteRequest` delivery gates, the
 delete handler's per-node pre-flight (`CheckDeletePermissionByPath`), `RlsNodeValidator`, the
 `SatelliteAccessRule` fallback, `MoveNodePermissionAttribute` (the delete demand on the source
-namespace + `Create` on the target namespace) and the Delete / Move menu entries. A node type's own
+namespace + `Create` on the target namespace; `Delete` for a move into another partition — see below)
+and the Delete / Move menu entries. A node type's own
 rule still decides for its own type. `Role.Editor` and the permission numbers are unchanged — the
 `Delete` bit still distinguishes an Admin, so `HasFlag(Permission.All)` (and `IsGlobalAdmin`) keep
 meaning what they meant, and nothing in the PostgreSQL permission projection changes.
 
-**Authorship travels only where the mover may carry it** (`MoveEntitlement` in `MeshExtensions`, the
+**A move carries its authorship, or it does not happen** (`MoveEntitlement` in `MeshExtensions`, the
 ONE function behind the move, `CopyNodeRequest.PreserveAuthorship` and `CreateNodeRequest.AuthorshipFrom`).
 `AccessContextScope` impersonates a node's `CreatedBy`, so carrying someone else's authorship into a
-place their governance does not cover would let owner-scoped work there run as them. A relocation
-keeps the stamps when the caller may delete the source AND either the target is in the SAME partition
-(the node stays under the governance that already covered it) or the caller holds `Delete` on the
-source's namespace (an administrator). Otherwise the move still succeeds and the node arrives stamped
-for the mover; a copy asking to preserve authorship is refused. Pinned by `EditorDeletesContentTest`
-(`test/MeshWeaver.Hosting.Test`).
+place their governance does not cover would let owner-scoped work there run as them. The stamps may
+travel when the caller may delete the SOURCE NODE (checked on the node itself, so a node-level deny
+holds) AND either the target is in the SAME partition — the node stays under the governance that
+already covered it, and a caller who may edit it in place gains nothing — or the caller holds
+`Delete` on the source (an administrator). A move that may not carry them is REFUSED before it writes
+anything, never turned into a re-authoring copy: a half-landed move resumes by recognising its own
+stamps at the target, and relocated legacy content keeps its provenance. So `MoveNodePermissionAttribute`
+demands `Delete` on the source namespace for a move into another partition, a preserving copy is
+refused on the same terms, and `AuthorshipFrom` on a create records the requester when they are not
+entitled. The `DeleteNodeRequest` / `ValidateDeleteRequest` delivery gate re-decides a denied check
+through the node type's rule AS A DELETE (a comment's author may delete it although the standard
+demand, Update, is not held), and the delete seal's early abort is authorised by the same demand.
+Pinned by `EditorDeletesContentTest` (`test/MeshWeaver.Hosting.Test`) and
+`SatelliteDeliveryGateTest` (`test/MeshWeaver.Graph.Test`).
 
 ## Permission flags
 
