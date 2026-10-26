@@ -223,8 +223,10 @@ public static class SuppliedNavigationRail
         var menu = Controls.NavMenu
             // The search box searches the space the index covers: the tree is for where you are,
             // the box is for everything under it.
+            // The heading link is the menu's title: a renderer with a header row shows it there,
+            // beside the collapse control and above the search box.
             .WithSkin(s => s.WithWidth(width).WithCollapsible(collapsible).WithSearchNamespace(searchNamespace)
-                .WithSortOptions(rail.SortOptions))
+                .WithSortOptions(rail.SortOptions).WithFirstEntryIsTitle())
             .WithNavLink(RenderLink(rail.Home));
 
         // ONE walk, in plan order. WithNavLink and WithNavGroup both append to the container's
