@@ -722,24 +722,11 @@ public static class BuildNodeType
             + "over the live holder, evicting it from the only witness every cluster's arbiter "
             + "reads and starting a second bake on a build already running. The arbiter is "
             + "level-triggered, so the next trigger re-decides — against a row this pass did not "
-            + "overwrite. Raw: {RawJson}",
+            + "overwrite. Shape: {ContentShape}",
             claimPath,
             held.Content?.GetType().FullName ?? "<null>",
-            ContentExcerpt(held.Content));
+            ContentShapes.Describe(held.Content));
         return null;
-    }
-
-    /// <summary>
-    /// A bounded, printable excerpt of a node's content for a diagnostic. Used only on the refusal
-    /// paths, where the whole point is that the value could NOT be read — so the raw bytes are the
-    /// only thing that identifies the offending row.
-    /// </summary>
-    private const int ContentExcerptLimit = 400;
-
-    private static string ContentExcerpt(object? content)
-    {
-        var text = content?.ToString() ?? "<null>";
-        return text.Length <= ContentExcerptLimit ? text : text[..ContentExcerptLimit] + "…";
     }
 
     /// <summary>

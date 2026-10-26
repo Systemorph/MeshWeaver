@@ -1282,12 +1282,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private static MeshNodeError BuildDeserializationError(
         MeshNode node, JsonElement je, System.Exception ex)
     {
-        // Truncate the raw JSON snippet to keep diagnostics readable while
-        // still preserving the discriminator + first few fields — usually
-        // enough to identify which TypeRegistry entry is missing.
-        const int maxJsonChars = 400;
-        var raw = je.GetRawText();
-        var snippet = raw.Length <= maxJsonChars ? raw : raw[..maxJsonChars] + "…";
+        // 🚨 The diagnostic is the content's SHAPE ($type, keys, kind, length), never a snippet of
+        // it: MeshNodeError travels on the wire, the synthesized MeshNodeStreamException is logged
+        // by whoever observes the fault, and a record's ToString prints Diagnostic — so a value put
+        // here reaches Warning+ logs outside row-level security. The discriminator and the keys are
+        // what identify the missing TypeRegistry entry or the missing required property.
+        var snippet = ContentShapes.Describe(je);
         var discriminator = je.ValueKind == JsonValueKind.Object && je.TryGetProperty("$type", out var t)
             ? t.GetString() ?? "<null>"
             : "<no $type>";
@@ -1422,24 +1422,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 ? $"untyped JSON ({content.GetType().Name})"
                 : $"a {content.GetType().FullName} ({content.GetType().Assembly.GetName().Name})";
 
-    private const int TypedWriteExcerptLimit = 400;
-
-    private static string? ContentExcerpt(object? content)
-    {
-        if (content is null)
-            return null;
-        var raw = content switch
-        {
-            JsonElement je => je.GetRawText(),
-            System.Text.Json.Nodes.JsonNode jn => jn.ToJsonString(),
-            _ => null,
-        };
-        return raw is null
-            ? null
-            : raw.Length <= TypedWriteExcerptLimit
-                ? raw
-                : raw[..TypedWriteExcerptLimit] + "…";
-    }
+    /// <summary>
+    /// The refused write's diagnostic: the content's SHAPE, never its values — see
+    /// <see cref="ContentShapes"/> and <c>BuildDeserializationError</c> for why. <c>null</c> when
+    /// there is no content, as before.
+    /// </summary>
+    internal static string? ContentExcerpt(object? content)
+        => content is null ? null : ContentShapes.Describe(content);
 
     /// <summary>
     /// Applies <paramref name="update"/> to the targeted MeshNode and returns an
