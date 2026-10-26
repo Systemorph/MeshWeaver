@@ -3145,6 +3145,13 @@ jobs:
     - name: "The module-pack lane's host arm carries only a followed success"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-pack-host.py
+    # `select` keys a build extension's publishing SDK; `build-workspace` publishes with exactly it.
+    # They check the caller out at different places, so the key must come from the caller's
+    # `repo/global.json`, not the workspace root. The resolve step's bash is RUN from the declared
+    # working directory, with a negative control from the root.
+    - name: "The module-pack lane keys the extension SDK the caller's checkout resolves"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-module-pack-extension-sdk.py
 
     # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module

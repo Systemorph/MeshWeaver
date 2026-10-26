@@ -686,7 +686,49 @@ def self_test() -> int:
                 check(f"node-repo-scope selects on {f} — the file this key hashes (no drift)",
                       any(f.startswith(d + "/") or _SCOPE.msbuild_glob_matches(f, d) for d in scope_dirs),
                       str(sorted(scope_dirs)))
+            # Compile items INHERITED through imports. `tools/Directory.Build.props` (implicit, an
+            # ancestor) links with $(MSBuildThisFileDirectory), its OWN directory. An explicit
+            # <Import> of `../build/inner/Ext.props` links `Gen.cs` beside that file and `../Shared/Plain.cs`
+            # with a plain relative path, which is the PROJECT's directory, wherever it is written.
+            ext_proj.write_text('<Project><Import Project="../build/inner/Ext.props" /><ItemGroup>'
+                                '<ProjectReference Include="../Acme.ShelfKit/Acme.ShelfKit.csproj" /></ItemGroup></Project>\n',
+                                encoding="utf-8")
+            (root / "tools" / "build" / "inner").mkdir(parents=True)
+            (root / "tools" / "build" / "inner" / "Ext.props").write_text(
+                '<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)Gen.cs" />'
+                '<Compile Include="../Shared/Emitter.cs" /></ItemGroup></Project>\n', encoding="utf-8")
+            (root / "tools" / "build" / "inner" / "Gen.cs").write_text("// gen v1\n", encoding="utf-8")
+            (root / "tools" / "build" / "NotImported.props").write_text(
+                '<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)Stray.cs" /></ItemGroup></Project>\n',
+                encoding="utf-8")
+            (root / "tools" / "build" / "Stray.cs").write_text("// stray v1\n", encoding="utf-8")
+            (root / "tools" / "Directory.Build.props").write_text(
+                '<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)Shared/Deep/Nested.cs" /></ItemGroup></Project>\n',
+                encoding="utf-8")
+            i0 = with_ext()
+            got = sorted(i0["inputs"]["buildExtension"].get("linked", {}))
+            check("Compile items inherited through Directory.Build.props and an explicit <Import> are keyed, "
+                  "each $(MSBuildThisFileDirectory) against its DEFINING file",
+                  got == ["tools/Shared/Deep/Nested.cs", "tools/Shared/Emitter.cs", "tools/build/inner/Gen.cs"], str(got))
+            for rel, text in (("tools/build/inner/Gen.cs", "// gen v2\n"), ("tools/Shared/Deep/Nested.cs", "// nested v9\n")):
+                old_text = (root / rel).read_text(encoding="utf-8")
+                (root / rel).write_text(text, encoding="utf-8")
+                check(f"editing {rel}, linked only through an import, changes the key", with_ext()["key"] != i0["key"])
+                (root / rel).write_text(old_text, encoding="utf-8")
+            (root / "tools" / "build" / "Stray.cs").write_text("// stray v2\n", encoding="utf-8")
+            check("a source linked only by a props file NOTHING imports leaves the key unchanged (negative control)",
+                  with_ext()["key"] == i0["key"])
+            scope_dirs = _SCOPE.shelf_dirs(root, "tools/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj")
+            check("node-repo-scope selects on the import-linked tools/build/inner/Gen.cs too (no drift)",
+                  any("tools/build/inner/Gen.cs".startswith(d + "/") or _SCOPE.msbuild_glob_matches("tools/build/inner/Gen.cs", d)
+                      for d in scope_dirs), str(sorted(scope_dirs)))
         finally:
+            for extra in (root / "tools" / "Directory.Build.props",):
+                if extra.exists():
+                    extra.unlink()
+            if (root / "tools" / "build").exists():
+                import shutil
+                shutil.rmtree(root / "tools" / "build")
             ext_proj.write_text(ext_old, encoding="utf-8")
             import shutil
             shutil.rmtree(shared)

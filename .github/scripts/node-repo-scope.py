@@ -361,7 +361,6 @@ _SHELF_INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
 _SHELF_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
 # The project-relative MSBuild properties a linked item may start with; any other $(…) names a
 # location outside this repository (the platform's), whose bytes the platform digest already keys.
-_PROJECT_DIR_PROPS = ("$(MSBuildThisFileDirectory)", "$(MSBuildProjectDirectory)")
 
 
 # 🚨 The ONE reading of a project's linked `<Compile Include>` items and the ONE matcher for them.
@@ -372,28 +371,80 @@ _PROJECT_DIR_PROPS = ("$(MSBuildThisFileDirectory)", "$(MSBuildProjectDirectory)
 # `Shared/Emitter.cs` and an edit to it selected no module. This file stays importable on its own
 # (node-repo-validate fetches it as a single file), which is why the matcher lives HERE.
 
-def linked_compile_patterns(root: Path, csproj: Path) -> list[str]:
-    """Repository-relative paths / MSBuild globs of the project's explicit `<Compile Include>` items.
+_IMPORT = r"<Import\s[^>]*Project=(?:\"([^\"]+)\"|'([^']+)')"
+_IMPLICIT_IMPORTS = ("Directory.Build.props", "Directory.Build.targets")
 
-    Platform-relative (`$(…)` other than the project's own directory) and out-of-checkout entries
-    are dropped: their bytes are the platform's, keyed by its digest."""
+
+def msbuild_files(root: Path, csproj: Path) -> list[Path]:
+    """The project file and every in-repo MSBuild file it evaluates: each `Directory.Build.props` /
+    `Directory.Build.targets` from its directory up to the root, and every `<Import>` those reach,
+    transitively.
+
+    MSBuild imports only the NEAREST implicit file, so taking every ancestor over-reads and never
+    under-reads; that also covers the usual `$([MSBuild]::GetPathOfFileAbove(...))` chain upward.
+    An `<Import>` path resolves against the IMPORTING file's directory, with or without a leading
+    `$(MSBuildThisFileDirectory)`. Any other `$(…)` names a location outside this repository (the
+    platform's), as it does for a ProjectReference, and the platform digest keys those bytes."""
     root = root.resolve()
-    text = csproj.read_text(encoding="utf-8", errors="replace")
-    rel_dir = csproj.resolve().parent.relative_to(root).as_posix()
-    found: set[str] = set()
-    for a, b in re.findall(_SHELF_COMPILE, text):
-        for include in (a or b).split(";"):
-            include = include.strip().replace("\\", "/")
-            for prop in _PROJECT_DIR_PROPS:
-                if include.startswith(prop):
-                    include = include[len(prop):].lstrip("/")
-                    break
-            if not include or "$(" in include or "@(" in include or "%(" in include:
+    csproj = csproj.resolve()
+    queue = [csproj]
+    d = csproj.parent
+    while True:
+        queue += [d / n for n in _IMPLICIT_IMPORTS if (d / n).is_file()]
+        if d == root or root not in d.parents:
+            break
+        d = d.parent
+    seen: list[Path] = []
+    while queue:
+        f = queue.pop(0)
+        if f in seen:
+            continue
+        seen.append(f)
+        for a, b in re.findall(_IMPORT, f.read_text(encoding="utf-8", errors="replace")):
+            proj = (a or b).strip().replace("\\", "/")
+            if proj.startswith("$(MSBuildThisFileDirectory)"):
+                proj = proj[len("$(MSBuildThisFileDirectory)"):].lstrip("/")
+            if not proj or "$(" in proj or "@(" in proj or "%(" in proj or is_msbuild_glob(proj):
                 continue
-            norm = os.path.normpath(f"{rel_dir}/{include}").replace("\\", "/")
-            if norm.startswith("../") or norm == ".." or os.path.isabs(norm):
+            target = (f.parent / proj).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError:
                 continue  # outside this checkout — not this repository's
-            found.add(norm)
+            if target.is_file():
+                queue.append(target)
+    return seen
+
+
+def linked_compile_patterns(root: Path, csproj: Path) -> list[str]:
+    """Repository-relative paths / MSBuild globs of the `<Compile Include>` items the project
+    evaluates: its own, plus those inherited through `msbuild_files()` (Directory.Build.* and
+    explicit imports).
+
+    `$(MSBuildThisFileDirectory)` is the DEFINING file's directory. A plain relative include, or
+    one starting with `$(MSBuildProjectDirectory)`, is the PROJECT's, wherever it is written.
+    Platform-relative (`$(…)` otherwise) and out-of-checkout entries are dropped: their bytes are
+    the platform's, keyed by its digest."""
+    root = root.resolve()
+    csproj = csproj.resolve()
+    project_dir = csproj.parent.relative_to(root).as_posix()
+    found: set[str] = set()
+    for f in msbuild_files(root, csproj):
+        this_dir = f.parent.relative_to(root).as_posix()
+        for a, b in re.findall(_SHELF_COMPILE, f.read_text(encoding="utf-8", errors="replace")):
+            for include in (a or b).split(";"):
+                include = include.strip().replace("\\", "/")
+                base = project_dir
+                if include.startswith("$(MSBuildThisFileDirectory)"):
+                    include, base = include[len("$(MSBuildThisFileDirectory)"):].lstrip("/"), this_dir
+                elif include.startswith("$(MSBuildProjectDirectory)"):
+                    include = include[len("$(MSBuildProjectDirectory)"):].lstrip("/")
+                if not include or "$(" in include or "@(" in include or "%(" in include:
+                    continue
+                norm = os.path.normpath(f"{base}/{include}").replace("\\", "/")
+                if norm.startswith("../") or norm == ".." or os.path.isabs(norm):
+                    continue  # outside this checkout — not this repository's
+                found.add(norm)
     return sorted(found)
 
 
@@ -1212,6 +1263,23 @@ def self_test() -> int:
               got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
         got = _run(root, "modules", "pull_request", ["src/Acme.Other/Gen/notes.txt"], extra=ext_arg)
         check("[modules] negative control — a non-.cs file under the linked `**/` narrows",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        # Compile items INHERITED from an import: the extension's own Directory.Build.props links a
+        # file with $(MSBuildThisFileDirectory), which is the DEFINING file's directory.
+        dbp = shelf_dir / "Directory.Build.props"
+        dbp.write_text('<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)../Acme.Other/FromProps.cs" />'
+                       '</ItemGroup></Project>\n', encoding="utf-8")
+        try:
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/FromProps.cs"], extra=ext_arg)
+            check("[modules] a source linked through the extension's Directory.Build.props changed ⇒ ALL",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=ext_arg)
+            check("[modules] negative control — with the props link in place, an unlinked file there still narrows",
+                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        finally:
+            dbp.unlink()
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/FromProps.cs"], extra=ext_arg)
+        check("[modules] …and with the props file gone, that file no longer selects (the link was the cause)",
               got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
         print("the MSBuild glob matcher (shared with module-build-key.py):")
         for path, pattern, want in (
