@@ -10,6 +10,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -96,6 +97,40 @@ public class CaseOnlyRenameNeverDeletesAtAFailedSecondLegsTargetTest(ITestOutput
         siblings.Where(p => p.Contains(id, StringComparison.Ordinal)
                 || p.StartsWith($"{TestPartition}/{StagingMarker}", StringComparison.Ordinal))
             .Should().Equal([source], "no staging sibling and no second casing is left behind");
+    }
+
+    /// <summary>
+    /// 🚨 A FAILED rename still retires the hub it removed (#7171). Executed on the SOURCE node's own
+    /// hub (the target <c>MeshOperations.Move</c> uses), the first leg removes the source and the
+    /// second leg fails with nothing moved back, so the source address names no node. The failure
+    /// verdict must still reach the caller, and the hub that executed the move must not be left
+    /// serving that address. Fails on code that retires the executing hub only on success.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task AFailedRenameExecutedOnTheSourceHub_StillAnswers_AndRetiresThatHub()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, target) = await CreateTree(ct);
+        refusing.Refuse($"{target}/birgit");
+
+        (await ReadNode(source).Timeout(ReadNodeTimeout).FirstAsync().Await(ct)).Should().NotBeNull();
+        var sourceHub = Mesh.GetHostedHub(new Address(source), HostedHubCreation.Never);
+        sourceHub.Should().NotBeNull("PRECONDITION: a read activates the source hub");
+
+        var moved = await ObserveNodeOperation(new MoveNodeRequest(source, target),
+                o => o.WithTarget(new Address(source)))
+            .Select(d => d.Message)
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "the failure verdict must reach the caller although the hub that executed the move is retired",
+                cancellationToken: ct);
+        moved.Success.Should().BeFalse("the second leg's descendant create was refused");
+        moved.RejectionReason.Should().Be(NodeMoveRejectionReason.Unknown, "nothing was moved back");
+
+        await sourceHub!.DisposalCompleted.FirstOrDefaultAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "the move removed the path this hub is hosted at; a failed verdict does not bring the node "
+                + "back, so the hub must be retired exactly as on success",
+                cancellationToken: ct);
     }
 
     private async Task<(string Source, string Target)> CreateTree(CancellationToken ct)
