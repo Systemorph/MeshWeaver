@@ -278,8 +278,8 @@ def realistic_natives() -> dict[str, bytes]:
 def realistic_assets(module: str) -> dict[str, bytes]:
     """The two shapes a standalone RCL publish emits, plus what makes them awkward.
 
-    * the pack's OWN assets at the wwwroot root — including the collocated `.razor.js` whose 404
-      is #3514's actual symptom, and the scoped-CSS aggregate the host links;
+    * the pack's OWN assets at the wwwroot root — including a view's JS module, whose 404 is
+      #3514's actual symptom, and the stylesheet aggregate the host links;
     * its DEPENDENCIES' assets already namespaced under `wwwroot/_content/<Dep>/`;
     * precompressed `.br`/`.gz` siblings, which the host negotiates and which must ride along;
     * a nested directory, so a flat copy cannot pass.

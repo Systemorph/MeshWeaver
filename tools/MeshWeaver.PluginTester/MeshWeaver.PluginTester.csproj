@@ -24,46 +24,20 @@
   </ItemGroup>
 
 
-  <!-- ═════════ BUILD EXTENSIONS RIDE ALONG — as ASSETS, never as a reference ═════════
-       A source kind the builder does not know itself (Razor is the first) is compiled by a BUILD
-       EXTENSION it loads at run time from build-extensions/<name>/ beside itself
-       (Doc/Architecture/CoreCarriesNoGuiTechnology, "The Razor source generator in the tester image").
-       The contract (MeshWeaver.PluginTester.Extensibility) is an ordinary reference — it is the
-       builder's own half of the seam — while the Razor extension is BUILT but not referenced, and its
-       whole output (the extension, its manifest, and the per-RID Razor generator it stages) is laid
-       under build-extensions/razor/. So the image behaves as before, and the extension can be
-       shipped from elsewhere without touching the builder.
+  <!-- ═════════ BUILD EXTENSIONS: loaded at run time, never referenced ═════════
+       A source kind the builder does not know itself is compiled by a BUILD EXTENSION it loads at
+       run time from build-extensions/<name>/ beside itself, or from a directory named by
+       extensions (Doc/Architecture/CoreCarriesNoGuiTechnology). The platform ships NONE: the
+       repository that owns a source kind supplies its extension, and the module-pack lane publishes
+       it per run (build-extensions-project). The contract (MeshWeaver.PluginTester.Extensibility)
+       is an ordinary reference — it is the builder's own half of the seam.
 
        🚨 The framework identity is unaffected: FrameworkBuildIdentityTest excludes every
        MeshWeaver.PluginTester* assembly from the closure — the contract is tester host, not content
-       surface — and a ReferenceOutputAssembly="false" reference contributes nothing to it. -->
+       surface. -->
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.PluginTester.Extensibility\MeshWeaver.PluginTester.Extensibility.csproj" />
-    <ProjectReference Include="..\MeshWeaver.PluginTester.Razor\MeshWeaver.PluginTester.Razor.csproj"
-                      ReferenceOutputAssembly="false"
-                      Private="false"
-                      OutputItemType="_MeshWeaverRazorExtensionAssembly" />
   </ItemGroup>
-
-  <Target Name="StageBuildExtensions" BeforeTargets="AssignTargetPaths" DependsOnTargets="ResolveProjectReferences">
-    <PropertyGroup>
-      <_MeshWeaverRazorExtensionDir>@(_MeshWeaverRazorExtensionAssembly->'%(RootDir)%(Directory)')</_MeshWeaverRazorExtensionDir>
-    </PropertyGroup>
-    <!-- 🚨 An image without the extension cannot compile a single Blazor project — and would say so,
-         by name, for every one of them. Fail the image build instead. -->
-    <Error Condition="'$(_MeshWeaverRazorExtensionDir)' == '' Or !Exists('$(_MeshWeaverRazorExtensionDir)build-extension.json')"
-           Text="The Razor build extension was not built (no build-extension.json beside '@(_MeshWeaverRazorExtensionAssembly)'), so build-extensions/razor/ would ship empty and no Blazor project could be compiled." />
-    <ItemGroup>
-      <_MeshWeaverRazorExtensionFile Include="$(_MeshWeaverRazorExtensionDir)**/*"
-                                     Exclude="$(_MeshWeaverRazorExtensionDir)**/*.pdb" />
-      <Content Include="@(_MeshWeaverRazorExtensionFile)"
-               Link="build-extensions/razor/%(RecursiveDir)%(Filename)%(Extension)"
-               CopyToOutputDirectory="PreserveNewest"
-               CopyToPublishDirectory="PreserveNewest"
-               Pack="false"
-               Visible="false" />
-    </ItemGroup>
-  </Target>
 
   <!-- ═══ The SDK's BUILT-IN source generators (GeneratedRegex, JsonSerializable, LibraryImport…) ═══
        A MeshWeaver image ships the RUNTIME; these generators live in the SDK's targeting pack
@@ -71,9 +45,9 @@
        [GeneratedRegex] compiles on the SDK path and dies as CS8795 under build-project unless the
        image carries the generator (measured on MeshWeaver.Markdown.Collaboration, 2026-08-31:
        7 errors → 0 with exactly this DLL supplied by hand via the generators flag). Staging them beside the
-       builder lets build-project pick them up with NO flag, the same way razor-generators/ works.
+       builder lets build-project pick them up with NO flag.
 
-       Staged FLAT — no per-RID split. Unlike the Razor compiler these are plain AnyCPU IL
+       Staged FLAT — no per-RID split. These are plain AnyCPU IL
        (PE machine 0x014C, measured on ref pack 10.0.11), so one copy loads on every RID the image
        publishes. Satellite-resource subfolders are left behind on purpose: diagnostics in English.
 
@@ -123,8 +97,8 @@
 
   <!-- ═══ The MODULE-LIBRARIES shelf (tools/MeshWeaver.ModuleLibraries) ═══
        CD publishes the shelf project and hands its output root over here, and it ships as
-       module-libs/ beside the builder — the same handover pattern as the Razor generators, minus
-       the per-RID split (the shelf is AnyCPU IL). A build WITHOUT the property simply ships no
+       module-libs/ beside the builder — the same handover pattern as the SDK generators (the shelf
+       is AnyCPU IL). A build WITHOUT the property simply ships no
        shelf: a dev build then resolves no additional libraries, and a shelf-needing module fails
        BY NAME exactly as before — absence is visible, never wrong. The deps.json ships with it:
        it IS the record every shelf ride's closure is derived from (ModuleLibrariesShelf). -->

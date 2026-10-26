@@ -2687,31 +2687,6 @@ jobs:
       # csproj (project-local — a global -p:RuntimeIdentifiers breaks referenced libs, see above).
       # `latest` (the tag the plugins repo pins as MW_TEST_IMAGE) and the GHCR mirror both moved
       # to `promote`: they are consumer-visible, so they must not appear until every leg is green.
-      # 🚨 THE RAZOR COMPILER, STAGED FOR BOTH IMAGE ARCHITECTURES.
-      # `mw-plugin-test build-project` compiles .razor/.cshtml, and Razor compilation in the .NET
-      # SDK is a Roslyn SOURCE GENERATOR. This image ships the runtime and no SDK, so the generator
-      # has to travel with the builder — and it CANNOT be copied once: the SDK crossgens it for the
-      # SDK's own RID, so the same 10.0.400 file carries PE machine 0xFD1D on linux-x64 and 0xD11D
-      # on linux-arm64, and the wrong one throws BadImageFormatException at run time and nowhere
-      # else. This image publishes BOTH architectures from ONE x64 host, so both copies are staged
-      # and the builder picks the one for the RID it is running on.
-      #
-      # The arm64 copy comes from the SDK FEED — the linux-arm64 tarball of the EXACT SAME SDK
-      # VERSION, checked against the SHA-512 the release metadata publishes, generator directory
-      # only, nothing executed. NOT from mcr.microsoft.com/dotnet/sdk:<version>: setup-dotnet's
-      # `10.0.x` takes a new SDK the moment the metadata names it, MCR tags its image hours later,
-      # and in between this leg failed `manifest unknown` and withheld the whole set from the seal
-      # (10.0.402 release day: runs 38469625713, 38476972766, 38477708481). The feed is published
-      # with the metadata setup-dotnet resolved from, so it cannot lag the host SDK. Every RID is
-      # then checked for the compiler built FOR it (PE machine), not merely present. Self-tested
-      # in dotnet-test.yml; the script's header carries the measurement.
-      - name: Stage the Razor source generator for linux-x64 and linux-arm64
-        id: razor
-        run: |
-          set -euo pipefail
-          ROOT="$RUNNER_TEMP/razor-generators"
-          python3 .github/scripts/stage-razor-generators.py "$ROOT"
-          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
       # The module-libraries SHELF: the curated additional libraries a container-built module may
       # bind (tools/MeshWeaver.ModuleLibraries). One publish — the assemblies are AnyCPU IL, so
       # both image architectures stage the same copy — and its deps.json travels with it: it IS
@@ -2738,7 +2713,6 @@ jobs:
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
           -p:Version=${{ steps.vars.outputs.version }}
-          -p:MeshWeaverRazorGeneratorRoot=${{ steps.razor.outputs.root }}
           -p:MeshWeaverModuleLibrariesRoot=${{ steps.shelf.outputs.root }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=mw-plugin-test
@@ -2765,10 +2739,8 @@ jobs:
   # `promote`, asserted by check-image-set.sh. Linux amd64 + arm64 like every image of the set.
   # 🚨 ONE BUILD PER ARCHITECTURE, ON A RUNNER OF THAT ARCHITECTURE. The bins are NOT only portable
   # IL: each carries the native `mw-plugin-test` apphost of the machine that built it
-  # (StartupFailureProcessTest executes it) and the Razor generator ReadyToRun-compiled for the
-  # build SDK's own RID (RazorBuildTest loads it, and the other architecture's copy throws
-  # BadImageFormatException). An x64 tree copied into the arm64 image ships an x64 apphost and no
-  # arm64 generator, so each leg builds natively, packs its own tree and pushes its platform image
+  # (StartupFailureProcessTest executes it). An x64 tree copied into the arm64 image ships an x64
+  # apphost, so each leg builds natively, packs its own tree and pushes its platform image
   # BY DIGEST; `core-tests-image` joins the two into the set's index.
   core-tests-image-arch:
     name: "Build + push mw-core-tests for linux/${{ matrix.arch }} (by digest)"
