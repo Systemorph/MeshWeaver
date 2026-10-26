@@ -21,6 +21,8 @@ using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
+using Polly;
+using Polly.Telemetry;
 
 namespace Memex.Portal.ServiceDefaults;
 
@@ -147,6 +149,21 @@ public static class ServiceDefaults
             .SelectPipelineBy(static _ => ClientNameOf);
         });
 
+        // 🚨 A REMOTE SITE GIVING UP IS NOT A PLATFORM INCIDENT (#7085, policy
+        // arbitrary-url-fetch-failure-is-warning). When the pipeline gives up on a request — the
+        // final exhausted retry, the breaker opening — Polly reports the event at Error, and the
+        // fleet's log watcher folds every Error line into a LogIncident. For a client that fetches
+        // arbitrary user-supplied URLs (an agent's web fetch) that turned every remote site's TLS
+        // reset, refused connect or EAGAIN into a ticket: one log site fanned out into 46 fingerprints.
+        // Such a client DECLARES itself (DeclareArbitraryUrlFetcher); its give-up lines drop to
+        // Warning. Every other client keeps Error — a platform or service client giving up IS an
+        // incident. Global, so it also reaches a client that re-registered its own pipeline.
+        services.AddOptions<TelemetryOptions>().Configure<IServiceProvider>((options, provider) =>
+        {
+            var previous = options.SeverityProvider;
+            options.SeverityProvider = args => SeverityOf(args, previous, provider);
+        });
+
         // Attributable resilience for the plugin-registry client (#1133/#1137). Every other client
         // rides the defaults pipeline above (Source: '-standard/{client}/…' since #4528; before it,
         // '-standard//…' with an empty instance, which is why the boot-time registry timeouts
@@ -222,6 +239,57 @@ public static class ServiceDefaults
 #pragma warning restore EXTEXP0001
 
         return services;
+    }
+
+    /// <summary>
+    /// The severity a resilience event is logged at: what Polly (or an earlier provider) decided,
+    /// except that an <see cref="ResilienceEventSeverity.Error"/> for a request sent by a client
+    /// declared an <see cref="IArbitraryUrlFetcher"/> is lowered to
+    /// <see cref="ResilienceEventSeverity.Warning"/> (#7085). Only Error is lowered: Critical,
+    /// and every severity of every undeclared client, pass unchanged.
+    ///
+    /// <para>The declarations are read when the event fires, never captured: a module that is
+    /// swapped live contributes its declaration through a forwarder, and an Error event is rare
+    /// enough that the lookup costs nothing.</para>
+    /// </summary>
+    /// <param name="args">The event.</param>
+    /// <param name="previous">A provider configured before this one, if any.</param>
+    /// <param name="provider">The container the declarations are registered in.</param>
+    /// <returns>The severity to log the event at.</returns>
+    internal static ResilienceEventSeverity SeverityOf(
+        SeverityProviderArguments args, Func<SeverityProviderArguments, ResilienceEventSeverity>? previous, IServiceProvider provider)
+    {
+        var severity = previous?.Invoke(args) ?? args.Event.Severity;
+        return severity == ResilienceEventSeverity.Error && FetchesArbitraryUrls(args.Context.GetRequestMessage(), provider)
+            ? ResilienceEventSeverity.Warning
+            : severity;
+    }
+
+    /// <summary>Whether <paramref name="request"/> was sent by a client declared an
+    /// <see cref="IArbitraryUrlFetcher"/>. A request with no stamped client name — the default,
+    /// unnamed client — never qualifies: nothing declared it.
+    ///
+    /// <para>🚨 Each declaration is read under a lease (<see cref="ModuleServiceProxy.TryLease{T}"/>),
+    /// never through the forwarder: a module that is withdrawn or uninstalled leaves its root forwarder
+    /// registered, and calling it throws <c>Module … holds no service scope</c>. This runs inside Polly's
+    /// telemetry for EVERY client's Error event, so a throw here would hit unrelated platform clients.
+    /// A declaration whose module is not held is absent.</para></summary>
+    /// <param name="request">The request the event is about, if the pipeline carried one.</param>
+    /// <param name="provider">The container the declarations are registered in.</param>
+    internal static bool FetchesArbitraryUrls(HttpRequestMessage? request, IServiceProvider provider)
+    {
+        if (request is null)
+            return false;
+        var name = ClientNameOf(request);
+        if (name == UnnamedClient)
+            return false;
+        foreach (var declaration in provider.GetServices<IArbitraryUrlFetcher>())
+        {
+            using var lease = ModuleServiceProxy.TryLease(declaration);
+            if (lease is not null && string.Equals(lease.Service.ClientName, name, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>The request option the outermost handler writes the sending client's name into.</summary>
