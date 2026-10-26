@@ -132,18 +132,36 @@ transitively) and `dependencies:<path>` (everything `<path>` depends on). Each a
 - No materialized view: the closure table already answers "all dependents of X" as one indexed
   lookup, and nothing measured asks for a second structure.
 
-### In memory (core, `QueryEvaluator`)
+### In memory (core, `DependencyClosure`)
 
-The same `(node, depth, path)` answer computed by a breadth-first walk over the forward edge sets,
-reversed for `dependents:`, held in a mesh-scoped instance cache (never static), invalidated when an
-edge set changes.
+`MeshWeaver.Mesh.DependencyClosure` (`Mesh.Contract/Query`) answers the same `(node, depth, path)`
+rows from a set of forward edges: breadth-first distances, and the same next-hop rule (shortest
+chain, then the smallest next hop under ordinal comparison), with every path rebuilt by following
+the ancestor's next hops, as `dependency_path` does. It is pure and immutable, so an instance built
+from one edge set is held by a mesh-scoped service (never a static) and replaced when an edge set
+changes.
 
 ### Parity
 
-One fixture both providers pass (Query Provider Parity): a cycle `A → B → C → A` plus a leaf `D`,
-asserting membership, depth AND path; and, on Postgres, incremental maintenance equals
-`rebuild_dependency_closure()` after a chain inserted edge by edge, after a cycle is created and then
-broken, and after one compile's edges arrive in one statement versus one at a time.
+One corpus both providers are held to: `test/MeshWeaver.Fixture/DependencyClosureCorpus`. It holds
+the cycle `a → b → c → a` plus the leaf `d → a`, and a diamond with two equally short chains, and
+asserts membership, depth AND path. Core's `DependencyClosureParityTest` runs every case in memory.
+Plugins' `DependencyClosureTests` reads the same answers from `public.dependents` /
+`public.dependencies`, and on Postgres also asserts that incremental maintenance equals
+`rebuild_dependency_closure()`:
+
+- after a chain is inserted edge by edge;
+- after a cycle is created and then broken;
+- when one compile's edges arrive in one statement versus one at a time;
+- after every 10th step of 120 random inserts and deletes.
+
+### What is not wired yet: the query terms
+
+`dependents:<path>` / `dependencies:<path>` are not parsed yet. A query answers `MeshNode`s, and a
+`MeshNode` has no slot for a row's `depth` and `path`. So the term needs a decision first: it either
+returns the dependent nodes ordered by depth, with the chain only through a separate read, or it
+returns closure rows as their own content type. Whichever it is, the Postgres side filters each row
+by the reader's access to the node: the closure table spans every partition, the edge sets do not.
 
 ## Open questions
 
