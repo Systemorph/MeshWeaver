@@ -348,6 +348,16 @@ def _executor(with_: dict) -> str:
     return _norm_condition(raw) if "${{" in str(raw) else str(raw)
 
 
+#: Every way an expression names a job of the `needs` context: `needs.x`, `needs['x']`, `needs["x"]`
+#: (review of #7271 — bracket access read as "references nothing" and slipped the dependency check).
+NEEDS_REF = re.compile(r"""\bneeds\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_-]*)|\[\s*(['"])([A-Za-z_][A-Za-z0-9_-]*)\2\s*\])""")
+
+
+def _needs_refs(raw: str) -> set[str]:
+    """The jobs an expression reads from the `needs` context, in either access syntax."""
+    return {m.group(1) or m.group(3) for m in NEEDS_REF.finditer(raw or "")}
+
+
 def _needs_problems(wf_name: str, jid: str, job: dict, fields: tuple[str, ...]) -> list[str]:
     """Each named expression may read only jobs in the call's OWN `needs:`.
 
@@ -362,7 +372,7 @@ def _needs_problems(wf_name: str, jid: str, job: dict, fields: tuple[str, ...]) 
     problems = []
     for field in fields:
         raw = str(job.get("if") or "") if field == "if" else str((job.get("with") or {}).get(field) or "")
-        missing = sorted(set(re.findall(r"\bneeds\.([A-Za-z0-9_-]+)\.", raw)) - need)
+        missing = sorted(_needs_refs(raw) - need)
         if missing:
             problems.append(
                 f"{wf_name}: `{jid}`'s `{field}` reads needs.{', needs.'.join(missing)} but its own "
@@ -1275,6 +1285,42 @@ jobs:
                                    "    needs: [validate, modules, gate, host-publication, gate0]\n", 1))
         check("MUTATION H7: a host-capable pack call whose `publish:` reads a job it does not directly need is caught",
               rc == 1 and "`modules`'s `publish` reads needs.validate" in out, out)
+
+        # Review of #7271 (3rd round): BRACKET access names a job too — `needs['x']` / `needs["x"]`.
+        for expr, want in (("needs.a.outputs.x", {"a"}), ("needs['a'].outputs.x", {"a"}),
+                           ('needs["a-b"].result', {"a-b"}), ("needs[ 'a' ].outputs.x || needs.b.result", {"a", "b"}),
+                           ("toJSON(needs)", set()), ("inputs.needs", set())):
+            check(f"needs references of {expr!r} == {sorted(want)}", _needs_refs(expr) == want, str(_needs_refs(expr)))
+        for quote in ("'", '"'):
+            bracket = f"needs[{quote}validate{quote}].outputs.executor"
+            br = hosted.replace("needs.validate.outputs.executor", bracket)
+            check(f"the bracket fixture ({quote}) really carries the bracket form on both calls",
+                  br.count(bracket) == 2, br)
+            rc, out = callers(br)
+            check(f"H7: a bracket ({quote}) executor every call directly needs passes", rc == 0, out)
+            rc, out = callers(br.replace("    needs: [modules, validate]\n", "    needs: [modules]\n", 1))
+            check(f"MUTATION H7: a bracket ({quote}) executor on build-host-publication reading a job it does not "
+                  "directly need is caught", rc == 1 and "`host-publication`'s `executor` reads needs.validate" in out, out)
+            rc, out = callers(br.replace("  modules:\n    needs: [validate]\n", "  modules:\n    needs: [gate0]\n", 1)
+                              .replace("  gate:\n", "  gate0:\n    runs-on: ubuntu-latest\n    steps: [{ run: echo }]\n  gate:\n", 1)
+                              .replace("required-jobs: validate modules gate host-publication",
+                                       "required-jobs: validate modules gate host-publication gate0", 1)
+                              .replace("    needs: [validate, modules, gate, host-publication]\n",
+                                       "    needs: [validate, modules, gate, host-publication, gate0]\n", 1))
+            check(f"MUTATION H7: a bracket ({quote}) executor on the pack call reading a job it does not directly "
+                  "need is caught", rc == 1 and "`modules`'s `executor` reads needs.validate" in out, out)
+            bcond = f"${{{{ needs[{quote}validate{quote}].outputs.publish == 'true' }}}}"
+            on_bcond = on_cond.replace(cond, bcond)
+            check(f"the bracket ({quote}) condition fixture carries it on all three calls", on_bcond.count(bcond) == 3, on_bcond)
+            rc, out = callers(on_bcond)
+            check(f"H7: a bracket ({quote}) condition every call directly needs passes", rc == 0, out)
+            rc, out = callers(on_bcond.replace("    needs: [modules, validate]\n", "    needs: [modules]\n", 1))
+            check(f"MUTATION H7: a bracket ({quote}) `if:` on build-host-publication reading a job it does not "
+                  "directly need is caught", rc == 1 and "`host-publication`'s `if` reads needs.validate" in out, out)
+            rc, out = callers(on_bcond.replace("    needs: [validate, modules, gate, host-publication]\n",
+                                               "    needs: [modules, gate, host-publication]\n", 1))
+            check(f"MUTATION H7: a bracket ({quote}) `if:` on the publisher reading a job it does not directly need "
+                  "is caught", rc == 1 and "`publish-modules`'s `if` reads needs.validate" in out, out)
         rc, out = callers(hosted.replace("      modules: ${{ needs.host-publication.outputs.declared }}",
                                          "      modules: ${{ needs.modules.outputs.declared }}", 1))
         check("MUTATION H7: a publisher mixing the host call's lane with the pack call's catalog is caught",
