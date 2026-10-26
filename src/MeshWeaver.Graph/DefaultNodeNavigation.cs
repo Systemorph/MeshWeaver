@@ -859,7 +859,7 @@ public static class DefaultNodeNavigation
                 // loaded — a folder off the reader's path opens in the default order.
                 SortOptions = levels.TryGetValue(n.Path, out var own) ? own.SortOptions : [],
             }))
-            .ToList();
+            .ToImmutableList();
         // A level that mixes kinds of node reads as sections — "Opportunities", "Mails" — and one
         // kind stays flat (IndexSections).
         var children = IndexSections.Group(parent, rows, labels.Section);
