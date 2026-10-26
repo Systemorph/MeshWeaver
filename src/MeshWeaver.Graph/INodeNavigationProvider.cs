@@ -109,4 +109,13 @@ public record NodeNavigationEntry(string Label, string Path, bool IsCurrent = fa
     /// page sorted that way. Rendered on the entry's group heading; empty offers no choice.
     /// </summary>
     public IReadOnlyList<MeshWeaver.Layout.NavSortOption> SortOptions { get; init; } = [];
+
+    /// <summary>
+    /// The entry is a SECTION HEADING, not a node: a titled, open group over its
+    /// <see cref="Children"/> ("Opportunities", "Mails", "Documents") with no link of its own,
+    /// because there is no page behind it. <see cref="NodeNavigationEntry.Path"/> only identifies it.
+    /// Core's default index groups a level into sections when it holds more than one kind of node
+    /// (<see cref="IndexSections"/>).
+    /// </summary>
+    public bool IsSection { get; init; }
 }

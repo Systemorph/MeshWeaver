@@ -193,6 +193,21 @@ enough for a course (module → lesson pages) and not for a document tree of any
 on the reader's path are open, at every level. `RailGroup.Links` remains as a filter — the group's
 direct links — never the render order.
 
+### 6 · A level that mixes kinds reads as sections
+
+Core's default index groups any level that holds more than one kind of node into one
+**section per node type** — a CRM client's root reads *Opportunities · Contacts · Documents*, and
+a deal one level down reads *Emails · Documents* — while a level of one kind (a docs tree) stays
+flat (policy [`index-sections-by-kind`](/Doc/Architecture/PolicyNotProse)). A section is a
+`NodeNavigationEntry` with `IsSection`: the rail draws it as a group that is always open and has
+**no link of its own**, since there is no page behind the heading. It takes the place of its first
+member in the level's sort, so the sort dropdown re-orders sections and members alike.
+
+The heading is the catalog's `nav.section.{nodeType}` when there is one (`Markdown` →
+*Documents*), else the type's last segment in words and in the plural (`Crm/Opportunity` →
+*Opportunities*, `Edu/CourseInvite` → *Course Invites*), so a module's types are named without core
+knowing them. A folder opened on demand is sectioned the same way. Pinned by `IndexSectionsTest`.
+
 ## The rail's chrome — header, resize and collapse
 
 The rail is one pane of a horizontal `SplitterControl` beside the content, so the divider is a real
