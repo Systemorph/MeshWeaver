@@ -151,6 +151,14 @@ public static class ProjectBuild
         /// </summary>
         public ImmutableArray<LoadedBuildExtension> LoadedExtensions { get; init; } = [];
 
+        /// <summary>
+        /// The module-libraries shelf to resolve additional packages from. Null means the standard
+        /// search (<c>module-libs/</c> beside this builder, then under <see cref="AppDirectory"/>),
+        /// which is the shelf the image ships. A module repository that publishes its own shelf
+        /// names it here, and it REPLACES the search (<see cref="ModuleLibrariesShelf.Locate"/>).
+        /// </summary>
+        public string? ModuleLibrariesDirectory { get; init; }
+
         /// <summary>Concurrency cap across independent projects.</summary>
         public int MaxParallel { get; init; } = Math.Max(1, Environment.ProcessorCount);
 
@@ -478,7 +486,15 @@ public static class ProjectBuild
 
         var extraReferences = ResolveExtraReferences(options, sink);
         var generators = ResolveGenerators(options, sink);
-        var shelf = ModuleLibrariesShelf.Locate(container.AppDirectory);
+        ModuleLibrariesShelf? shelf;
+        try
+        {
+            shelf = ModuleLibrariesShelf.Locate(options.ModuleLibrariesDirectory, container.AppDirectory);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Observable.Return(Fatal(options, sink, wall, container.PlatformAssemblyVersion, ex.Message));
+        }
         if (shelf is not null)
             sink.Info($"module-libraries shelf: {shelf.PackageCount} package(s) from {shelf.Directory} "
                 + "(an additional library resolves here and RIDES the bundle with its deps.json-derived closure)");

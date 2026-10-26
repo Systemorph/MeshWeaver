@@ -211,6 +211,161 @@ public class BuildExtensionSeamTest : IDisposable
 
         report.FatalError.Should().Contain("--extensions").And.Contain("does not exist");
     }
+
+    [Fact]
+    public void ARazorFileIncludedFromOutsideTheProject_withNoExtension_isRefusedByName()
+    {
+        // The default glob sees only files under the project; an explicit include from a sibling
+        // directory is the shape it cannot see, and the one a claimed-items-only log loses when no
+        // extension is loaded.
+        Write("Shared/Card.razor", "<p>card</p>\n");
+        var project = Write("Outside/Outside.csproj", Project(
+            "Seam.Outside", """<Content Include="../Shared/Card.razor" />"""));
+        Write("Outside/Anchor.cs", "namespace Seam; public static class Anchor { }");
+
+        var refusal = Assert.Throws<ProjectFile.UnsupportedConstructException>(() => ProjectFile.Load(project));
+        refusal.Message.Should().Contain("Card.razor");
+        refusal.Message.Should().Contain(ProjectFile.Accept.UnclaimedSources);
+
+        // Negative control: the same project WITHOUT the explicit include has no Razor input at all,
+        // so it loads — the refusal is caused by the include, not by the sibling file existing.
+        var plain = Write("Outside2/Outside2.csproj", Project("Seam.Outside2"));
+        Write("Outside2/Anchor.cs", "namespace Seam; public static class Anchor { }");
+        ProjectFile.Load(plain).CompileItems.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ARazorFileTheProjectRemovesFromContent_isNotAnUnclaimedInput()
+    {
+        var project = Write("Removed/Removed.csproj", Project(
+            "Seam.Removed", """<Content Remove="Gone.razor" />"""));
+        Write("Removed/Anchor.cs", "namespace Seam; public static class Anchor { }");
+        Write("Removed/Gone.razor", "<p>gone</p>\n");
+
+        ProjectFile.Load(project).CompileItems.Should().ContainSingle(
+            "a .razor file the project removes from Content is not handed to any generator");
+
+        // Negative control: a Remove on a DIFFERENT item type leaves the Content item in place.
+        var kept = Write("Kept/Kept.csproj", Project("Seam.Kept", """<None Remove="Gone.razor" />"""));
+        Write("Kept/Anchor.cs", "namespace Seam; public static class Anchor { }");
+        Write("Kept/Gone.razor", "<p>kept</p>\n");
+        Assert.Throws<ProjectFile.UnsupportedConstructException>(() => ProjectFile.Load(kept))
+            .Message.Should().Contain("Gone.razor");
+    }
+
+    /// <summary>
+    /// Compiles a REAL extension assembly into <paramref name="directory"/> — an assembly this
+    /// process has never seen, so the only way it can be found is the loader reading the directory.
+    /// </summary>
+    private static string CompileExtension(string directory, string assemblyName)
+    {
+        Directory.CreateDirectory(directory);
+        var source = """
+            using System;
+            using System.Collections.Generic;
+            using System.Collections.Immutable;
+            using MeshWeaver.PluginTester.Extensibility;
+            using Microsoft.CodeAnalysis;
+
+            namespace CompiledProbe;
+
+            public sealed class CompiledExtension : IBuildExtension
+            {
+                public string Name => "compiled-probe";
+                public ImmutableArray<string> ClaimedItemTypes => ImmutableArray<string>.Empty;
+                public ImmutableArray<string> ClaimedSourceSuffixes => ImmutableArray<string>.Empty;
+                public ImmutableArray<string> AcceptTokens => ImmutableArray<string>.Empty;
+                public ImmutableArray<string> OptionNames => ImmutableArray.Create("compiled-option");
+                public IProjectContribution? Evaluate(IProjectEvaluation project) => null;
+                public string? DiagnoseErrors(string projectName, IProjectContribution? contribution, IReadOnlyList<Diagnostic> errors) => null;
+                public IDeclaredTypeScan BeginDeclaredTypeScan(string sourceRoot) => throw new NotSupportedException();
+            }
+            """;
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+            assemblyName,
+            [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(source,
+                new Microsoft.CodeAnalysis.CSharp.CSharpParseOptions(Microsoft.CodeAnalysis.CSharp.LanguageVersion.Latest))],
+            references,
+            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+        var dll = Path.Combine(directory, assemblyName + ".dll");
+        var emitted = compilation.Emit(dll);
+        emitted.Success.Should().BeTrue(string.Join(Environment.NewLine, emitted.Diagnostics));
+        File.WriteAllText(
+            Path.Combine(directory, BuildExtensions.ManifestName),
+            $$"""{ "assembly": "{{assemblyName}}" }""");
+        return dll;
+    }
+
+    [Fact]
+    public void AnExtensionDllIsLoadedFromTheNamedDirectory_andItsAbsenceIsAFailureByName()
+    {
+        var assemblyName = $"Mw.CompiledProbe.{Guid.NewGuid():N}";
+        AppDomain.CurrentDomain.GetAssemblies().Should().NotContain(
+            a => a.GetName().Name == assemblyName, "the probe must be unknown to this process before the load");
+        var directory = Path.Combine(_root, "_compiled", "probe");
+        var dll = CompileExtension(directory, assemblyName);
+
+        var loaded = BuildExtensions.Load([directory], appDirectory: string.Empty);
+
+        var extension = loaded.Should().ContainSingle().Subject;
+        extension.Extension.Name.Should().Be("compiled-probe");
+        extension.Directory.Should().Be(Path.GetFullPath(directory));
+        var type = extension.Extension.GetType();
+        Path.GetFullPath(type.Assembly.Location).Should().Be(Path.GetFullPath(dll),
+            "the extension's assembly came from the named directory, not from the host");
+        System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(type.Assembly).Should().NotBeSameAs(
+            System.Runtime.Loader.AssemblyLoadContext.Default,
+            "an extension loads in its own context, never into the host's default one");
+        extension.Extension.Should().BeAssignableTo<IBuildExtension>(
+            "the extension bound the HOST's copy of the contract, or the cast would have failed");
+
+        // Negative control: the same directory with the DLL removed is a failure that names the
+        // assembly — never an empty extension set that quietly compiles nothing.
+        var removedDirectory = Path.Combine(_root, "_compiled", "removed");
+        Directory.CreateDirectory(removedDirectory);
+        File.Copy(Path.Combine(directory, BuildExtensions.ManifestName),
+            Path.Combine(removedDirectory, BuildExtensions.ManifestName));
+        var failure = Assert.Throws<InvalidOperationException>(
+            () => BuildExtensions.Load([removedDirectory], appDirectory: string.Empty));
+        failure.Message.Should().Contain(assemblyName).And.Contain("could not be loaded");
+    }
+
+    [Fact]
+    public void TheCommandLine_passesAnExtensionOption_throughToTheBuild()
+    {
+        // The PARSE, not the build: an option the parser refuses never reaches ProjectBuild, so a
+        // test that builds ProjectBuild.Options directly cannot see this.
+        var stderr = new StringWriter();
+        var parsed = BuildProjectCommandLine.Parse(
+            ["Some.csproj", "--razor-generators", "/opt/rg", "--extensions", "/opt/ext", "--module-libs", "/opt/libs"],
+            TextWriter.Null, stderr);
+
+        stderr.ToString().Should().BeEmpty();
+        parsed.ExitCode.Should().Be(0);
+        parsed.Options.Should().NotBeNull();
+        parsed.Options!.ExtensionOptions.Keys.Should().Equal("razor-generators");
+        parsed.Options.ExtensionOptions["razor-generators"].Should().Be("/opt/rg");
+        parsed.Options.ExtensionDirectories.Should().Equal("/opt/ext");
+        parsed.Options.ModuleLibrariesDirectory.Should().Be("/opt/libs");
+        parsed.Options.EntryProjects.Should().Equal("Some.csproj");
+    }
+
+    [Fact]
+    public void TheCommandLine_refusesAnUnknownFlagWithNoValue()
+    {
+        // Negative control for the extension-option case: a bare `--flag` with nothing after it is
+        // not an extension option, and stays a refusal by name.
+        var stderr = new StringWriter();
+        var parsed = BuildProjectCommandLine.Parse(["Some.csproj", "--no-such-flag"], TextWriter.Null, stderr);
+
+        parsed.Options.Should().BeNull();
+        parsed.ExitCode.Should().Be(2);
+        stderr.ToString().Should().Contain("unknown option --no-such-flag");
+    }
 }
 
 /// <summary>A build extension that compiles <c>*.probe</c> files — the seam, without Razor.</summary>

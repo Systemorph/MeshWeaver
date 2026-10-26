@@ -450,6 +450,11 @@ public static class ProjectFile
         // extension's input rules (the Razor SDK's Content Include/Remove of a component) change
         // WHAT COMPILES, so they are handed over verbatim rather than flattened.
         private readonly List<ItemOperation> _claimedItemOperations = [];
+        // Include/Remove naming a GENERATOR-COMPILED source kind (.razor/.cshtml) on ANY item type,
+        // recorded whether or not an extension claims it: with no extension loaded the claimed log
+        // above is empty, and an explicit `<Content Include="../Shared/Card.razor" />` lies outside
+        // the default glob — so without this the unclaimed-sources refusal could not see it.
+        private readonly List<ItemOperation> _generatorSourceOperations = [];
         // EmbeddedResource is order-sensitive in a way Compile is not: an Update that arrives before
         // its Include attaches nothing, and a Remove only removes what is already there. So the
         // declarations are kept as an ORDERED LOG and replayed in ToModel, rather than being
@@ -666,6 +671,10 @@ public static class ProjectFile
             var claimed = IsClaimedByExtension(type);
             if (claimed && (include.Length > 0 || remove.Length > 0))
                 _claimedItemOperations.Add(new ItemOperation(type, [.. Split(include)], [.. Split(remove)], file));
+            var generatorIncludes = Split(include).Where(IsGeneratorCompiledPattern).ToImmutableArray();
+            var generatorRemoves = Split(remove).Where(IsGeneratorCompiledPattern).ToImmutableArray();
+            if (!generatorIncludes.IsEmpty || !generatorRemoves.IsEmpty)
+                _generatorSourceOperations.Add(new ItemOperation(type, generatorIncludes, generatorRemoves, file));
 
             switch (type)
             {
@@ -1283,6 +1292,9 @@ public static class ProjectFile
         /// </summary>
         private static readonly ImmutableArray<string> GeneratorCompiledSuffixes = [".razor", ".cshtml"];
 
+        private static bool IsGeneratorCompiledPattern(string pattern) =>
+            GeneratorCompiledSuffixes.Any(suffix => pattern.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+
         private void RefuseUnclaimedSources()
         {
             if (IsAccepted(Accept.UnclaimedSources))
@@ -1291,7 +1303,7 @@ public static class ProjectFile
             {
                 if (extensions.Any(e => e.ClaimedSourceSuffixes.Contains(suffix, StringComparer.OrdinalIgnoreCase)))
                     continue;
-                var files = DefaultGlob("*" + suffix).ToImmutableArray();
+                var files = UnclaimedInputs(suffix);
                 if (files.IsEmpty)
                     continue;
                 throw new UnsupportedConstructException(
@@ -1302,6 +1314,38 @@ public static class ProjectFile
                     + "build-extensions/<name>/ or name it with --extensions <dir>; re-run with "
                     + $"--accept {Accept.UnclaimedSources} only if they are deliberately not compiled.");
             }
+        }
+
+        /// <summary>
+        /// The files of one generator-compiled kind this project would hand a generator: those under
+        /// the project directory (the SDK's default <c>Content</c> glob) plus every one it lists
+        /// EXPLICITLY on any item type — an include from outside the directory included — less what
+        /// it removes from <c>Content</c>, the item type the Razor SDK derives its inputs from. An
+        /// explicit include no glob here can expand (a wildcard reaching above the project) counts as
+        /// itself: refusing on a pattern is the safe side, silently compiling without it is not.
+        /// </summary>
+        private ImmutableArray<string> UnclaimedInputs(string suffix)
+        {
+            var files = new List<string>(DefaultGlob("*" + suffix));
+            var removed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var operation in _generatorSourceOperations)
+            {
+                foreach (var include in operation.Include.Where(i => i.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var matches = ExpandGlob(include).ToImmutableArray();
+                    files.AddRange(matches.IsEmpty
+                        ? [Path.GetFullPath(Path.Combine(ProjectDirectory, include.Replace('\\', Path.DirectorySeparatorChar)))]
+                        : matches);
+                }
+                if (operation.ItemType == "Content")
+                    foreach (var remove in operation.Remove.Where(r => r.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)))
+                        foreach (var match in ExpandGlob(remove))
+                            removed.Add(match);
+            }
+            return [.. files
+                .Where(f => !removed.Contains(f))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.Ordinal)];
         }
 
         private bool IsClaimedByExtension(string itemType) =>

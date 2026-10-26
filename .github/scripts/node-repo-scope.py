@@ -355,12 +355,51 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
     return [p for p in proc.stdout.split("\0") if p]
 
 
+# ── the caller's module-libraries shelf ──────────────────────────────────────────────────────
+
+_SHELF_INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+
+
+def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
+    """The directories of the caller's shelf project and every in-repo project it reaches.
+
+    None when the project is not in this checkout — the caller of this function reads that as
+    "cannot decide", which is a full run. The shelf is a compiler input of EVERY container-built
+    module, yet it is in no module's ProjectReference closure, so without this a shelf-only edit
+    reaches no entry and narrows to nothing.
+    """
+    root = root.resolve()
+    start = (root / project).resolve()
+    if not start.is_file():
+        return None
+    seen: set[Path] = set()
+    queue = [start]
+    while queue:
+        csproj = queue.pop()
+        if csproj in seen:
+            continue
+        seen.add(csproj)
+        text = csproj.read_text(encoding="utf-8", errors="replace")
+        for a, b in re.findall(_SHELF_INCLUDE, text):
+            include = (a or b).strip()
+            if "$(" in include:
+                continue  # the platform's, not this repository's
+            target = (csproj.parent / include.replace("\\", "/")).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError:
+                continue
+            if target.is_file():
+                queue.append(target)
+    return frozenset(p.parent.relative_to(root).as_posix() for p in seen)
+
+
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
 
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
            override: list[str] | None, say, publishing: bool = False,
            always: frozenset[str] = frozenset(), publication_base: str = "",
-           publication_reach: bool = False) -> dict:
+           publication_reach: bool = False, shelf_project: str = "") -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -438,6 +477,19 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         return full(f"the diff for '{diff_range or '--changed'}' came back EMPTY — a CI diff is "
                     "never empty, so this is a broken range (is the base ref fetched?), not "
                     "'nothing to do'. Running the full set.")
+
+    # 🚨 The caller's own module-libraries shelf decides what EVERY container-built module binds,
+    # but no module references it, so the project closure below would rule a shelf edit inert.
+    if shelf_project:
+        shelf = shelf_dirs(root, shelf_project)
+        if shelf is None:
+            return full(f"module-libraries-project {shelf_project} is not in this checkout, so "
+                        "whether this diff changes the shelf cannot be decided — running the full set.")
+        touched = [f for f in files if any(f.startswith(d + "/") for d in shelf)]
+        if touched:
+            return full(f"{len(touched)} changed file(s) are in the caller's module-libraries shelf "
+                        f"({shelf_project} and the projects it reaches) — first: {touched[0]}. The "
+                        "shelf is what every module binds, so every module is rebuilt and tested.")
 
     packages = node_packages(root)
     node_files: list[str] = []
@@ -1018,6 +1070,34 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "src/Acme.Beta/T.cs"])
         check("[modules] a root no-op file riding along never widens a real selection",
               got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+
+        print("the caller's module-libraries shelf:")
+        # Acme.Other is a project the graph KNOWS and no entry reaches, exactly what a shelf is to
+        # the real project-closure.py — so an edit there narrows to nothing unless the shelf is named.
+        shelf_dir = root / "src" / "Acme.ModuleLibraries"
+        shelf_dir.mkdir(parents=True, exist_ok=True)
+        (shelf_dir / "Acme.ModuleLibraries.csproj").write_text(
+            _csproj(["../Acme.Other/Acme.Other.csproj"]), encoding="utf-8")
+        shelf_arg = ["--module-libraries-project", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"]
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"])
+        check("[modules] negative control — WITHOUT the shelf named, an edit to a project it reaches selects nothing",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        for label, path in (("the shelf csproj", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"),
+                            ("a project the shelf reaches", "src/Acme.Other/K.cs")):
+            got = _run(root, "modules", "pull_request", [path], extra=shelf_arg)
+            check(f"[modules] {label} changed, shelf named ⇒ ALL, every one tested, and SAYS it is the shelf",
+                  got["scope"] == "full" and got["count"] == 2 and len(got["tested"]) == 2
+                  and "module-libraries shelf" in got["reason"],
+                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], extra=shelf_arg)
+        check("[modules] a shelf named but untouched still narrows",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
+                   extra=["--module-libraries-project", "src/Nope/Nope.csproj"])
+        check("[modules] a named shelf missing from the checkout ⇒ ALL (cannot decide)",
+              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        (shelf_dir / "Acme.ModuleLibraries.csproj").unlink()
+        shelf_dir.rmdir()
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "plugin-gate.allow"])
         check("[modules] one UNNAMED root file among no-op ones still runs the full set",
               got["scope"] == "full" and "plugin-gate.allow" in got["reason"],
@@ -1142,6 +1222,9 @@ def main() -> int:
     p.add_argument("--always", default="",
                    help="comma-separated module names the caller's gates compose on EVERY run — "
                         "a floor the narrowing always keeps (--for modules)")
+    p.add_argument("--module-libraries-project", default="", dest="shelf_project",
+                   help="the caller's module-libraries shelf csproj (relative to --root): a diff "
+                        "that touches it or a project it reaches runs the full set")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -1169,7 +1252,7 @@ def main() -> int:
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
                     publishing=args.publishing, always=always, publication_base=args.publication_base,
-                    publication_reach=args.publication_reach)
+                    publication_reach=args.publication_reach, shelf_project=args.shelf_project)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"

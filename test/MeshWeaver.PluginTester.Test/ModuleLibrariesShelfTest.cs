@@ -87,4 +87,31 @@ public class ModuleLibrariesShelfTest : IDisposable
         act.Should().Throw<InvalidOperationException>().WithMessage("*deps.json*",
             "a shelf that silently resolves nothing turns every consumer's failure into a lie");
     }
+
+    [Fact]
+    public void ANamedShelfReplacesTheSearch()
+    {
+        // The app directory is empty: only the named directory can have supplied this shelf.
+        var emptyApp = Path.Combine(_root, "empty-app");
+        var named = Shelf();
+        Directory.CreateDirectory(emptyApp);
+
+        var shelf = ModuleLibrariesShelf.Locate(named, emptyApp);
+
+        shelf.Should().NotBeNull();
+        shelf!.Directory.Should().Be(Path.GetFullPath(named),
+            "a module repository that publishes its own shelf resolves from that publish");
+        shelf.Resolve("Provider.Sdk", _ => false).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void ANamedShelfThatIsMissingIsARefusal_neverAFallbackToTheImagesShelf()
+    {
+        var missing = Path.Combine(_root, "not-published");
+
+        Action act = () => ModuleLibrariesShelf.Locate(missing, _root);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*--module-libs*does not exist*",
+            "the caller named a shelf; resolving from another one would build against a list it did not declare");
+    }
 }
