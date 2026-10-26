@@ -34,8 +34,9 @@ namespace MeshWeaver.Graph.Test;
 ///     the rule grants what the raw path check denies;</description></item>
 ///   <item><description>a Viewer's is still refused — the rule DENIES (no Update on the MainNode),
 ///     and a rule that refuses leaves the delivery refused;</description></item>
-///   <item><description>the same Editor at a PLAIN child, whose node type has no rule, is still
-///     refused — nothing widened outside the types that declare a rule.</description></item>
+///   <item><description>the same Editor at a GRANT (<c>_Access</c>) is still refused — deleting
+///     ordinary content is an edit (Update), but what governs a partition keeps demanding Delete, so
+///     nothing widened beyond content. The plain child is now admitted for that reason.</description></item>
 /// </list></para>
 /// </summary>
 public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -56,6 +57,13 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
     private const string PlainChildPath = MainNodePath + "/Plain";
 
     private const string EditorUser = "satellite-editor";
+
+    /// <summary>A commenter — Comment on the partition, no Update — and the comment they wrote.</summary>
+    private const string CommenterUser = "satellite-commenter";
+    private const string OwnCommentPath = MainNodePath + "/_Comment/c1";
+
+    /// <summary>The Editor's own grant — governance, not content.</summary>
+    private const string GrantPath = Partition + "/_Access/" + EditorUser + "_Access";
     private const string ViewerUser = "satellite-viewer";
 
     /// <summary>
@@ -88,7 +96,16 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
                 // then be refused when erasing it".
                 AssignmentNodeFactory.UserRole(EditorUser, "Editor", Partition),
                 // Read only — neither Delete on the satellite nor Update on its MainNode.
-                AssignmentNodeFactory.UserRole(ViewerUser, "Viewer", Partition));
+                AssignmentNodeFactory.UserRole(ViewerUser, "Viewer", Partition),
+                AssignmentNodeFactory.UserRole(CommenterUser, "Commenter", Partition),
+                new MeshNode("c1", MainNodePath + "/_Comment")
+                {
+                    Name = "Own comment",
+                    NodeType = "Comment",
+                    MainNode = MainNodePath,
+                    // Identity(...) names the caller by its id, and the rule matches the author by name.
+                    Content = new Comment { Author = CommenterUser, PrimaryNodePath = MainNodePath },
+                });
 
     private static AccessContext Identity(string userId) => new()
     {
@@ -150,21 +167,53 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// The scope boundary: a node type with NO registered rule is unchanged.
-    /// <c>NodeTypeAccessRuleSet.Find</c> returning null means "no rule has an opinion", and the
-    /// standard closed-by-default check stands — the same Editor, one level away from the
-    /// satellite, is still refused.
+    /// The plain child — a node type with NO registered rule — is decided by the standard demand,
+    /// <see cref="MeshWeaver.Mesh.Security.DeletePermission.RequiredFor"/>: deleting ordinary content
+    /// demands Update, which the Editor holds. (Before deleting content became an edit this case was
+    /// the refusal that proved nothing widened outside rule-governed types; the boundary that now
+    /// proves it is the GRANT below.)
     /// </summary>
     [Fact]
-    public async Task AnEditorsPlainChildPreflight_IsStillRefused()
+    public async Task AnEditorsPlainChildPreflight_IsAdmitted_BecauseDeletingContentIsAnEdit()
     {
         var failure = await PreflightRefusal(PlainChildPath, EditorUser).Should().Within(Budget).Emit();
 
+        failure.Should().BeNull(
+            "Markdown registers no INodeTypeAccessRule, so the standard demand applies — and deleting "
+            + "ordinary content demands Update, which this Editor holds: " + (failure?.Message ?? string.Empty));
+    }
+
+    /// <summary>
+    /// 🚨 The scope boundary: what GOVERNS a partition is not content. The same Editor's pre-flight at a
+    /// grant — <c>_Access</c>, rule-less, under the same partition — is refused, because deleting a
+    /// grant still demands Delete, which only an Admin holds. Nothing widened beyond content.
+    /// </summary>
+    [Fact]
+    public async Task AnEditorsGrantPreflight_IsStillRefused()
+    {
+        var failure = await PreflightRefusal(GrantPath, EditorUser).Should().Within(Budget).Emit();
+
         failure.Should().NotBeNull(
-            "Markdown registers no INodeTypeAccessRule, so nothing overrides the standard "
-            + "Permission.Delete check and an Editor (Update, no Delete) stays refused — the fix "
-            + "may only reach node types that declare a rule");
+            "deleting a grant changes who may do what, so it keeps demanding Permission.Delete — and an "
+            + "Editor (Update, no Delete) stays refused");
         failure!.ErrorType.Should().Be(ErrorType.Unauthorized,
             "the standard fold reached a verdict: " + failure.Message);
+    }
+
+    /// <summary>
+    /// 🚨 A delete is re-decided through the type's rule AS A DELETE. Deleting ordinary content
+    /// demands Update, which a Commenter lacks, so the standard check denies — and the gate must then
+    /// ask the Comment rule about a DELETE (its author may always delete their own comment), not about
+    /// an UPDATE, which the rule would refuse.
+    /// </summary>
+    [Fact]
+    public async Task ACommentersOwnCommentPreflight_IsNotRefusedByTheGate()
+    {
+        var failure = await PreflightRefusal(OwnCommentPath, CommenterUser).Should().Within(Budget).Emit();
+
+        failure.Should().BeNull(
+            "SatelliteAccessRule lets a comment's author delete it; the gate must re-decide the denied "
+            + "standard check as a Delete, not as the Update the standard demand names: "
+            + (failure?.Message ?? string.Empty));
     }
 }

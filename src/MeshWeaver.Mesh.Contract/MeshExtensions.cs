@@ -950,6 +950,18 @@ public static class MeshExtensions
     private const string MoveCaseRenameRestoredKey = "activity.node.move.caseRenameRestored";
 
     /// <inheritdoc cref="CopyStalledKey"/>
+    private const string MoveAcrossPartitionsKey = "activity.node.move.acrossPartitionsRequiresDelete";
+
+    /// <inheritdoc cref="CopyStalledKey"/>
+    private const string MoveEntitlementUndeterminedKey = "activity.node.move.entitlementUndetermined";
+
+    /// <inheritdoc cref="CopyStalledKey"/>
+    private const string CopyAuthorshipRefusedKey = "activity.node.copy.preserveAuthorshipRefused";
+
+    /// <inheritdoc cref="CopyStalledKey"/>
+    private const string CopyAuthorshipUndeterminedKey = "activity.node.copy.preserveAuthorshipUndetermined";
+
+    /// <inheritdoc cref="CopyStalledKey"/>
     private const string MoveCaseRenameUnresolvedKey = "activity.node.move.caseRenameUnresolved";
 
     /// <inheritdoc cref="CopyStalledKey"/>
@@ -6930,7 +6942,7 @@ public static class MeshExtensions
             .TakeDecisionOutsideGate()
             .Select(perms =>
             {
-                var denied = !perms.HasFlag(Permission.Delete);
+                var denied = !perms.HasFlag(DeletePermission.RequiredFor(node.Path));
                 if (denied)
                     logger.LogDebug(
                         "[DeleteNode] permission-denied for {User} on {Path} (effective={Perms})",
@@ -7028,7 +7040,9 @@ public static class MeshExtensions
             return request.Processed();
         }
         var bind = (Func<IDisposable, IDisposable>)hub.RegisterForDisposalDetachable;
-        hub.CheckPermissionOutcome(release.Path, userId, Permission.Delete)
+        // The same demand the delete itself makes (DeletePermission.RequiredFor), so a deleter the
+        // delete admits can always leave its early-abort mark.
+        hub.CheckPermissionOutcome(release.Path, userId, DeletePermission.RequiredFor(release.Path))
             .Take(1)
             .Subscribe(
                 outcome => Answer(outcome.IsGranted
@@ -7453,13 +7467,42 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// 🚨 THE entitlement to relocate <paramref name="sourcePath"/> with its authorship: Delete on
-    /// its namespace, which is what <see cref="MoveNodePermissionAttribute"/> requires of a mover.
-    /// ONE function, so the copy handler's <c>PreserveAuthorship</c> gate and the create handler's
-    /// <c>AuthorshipFrom</c> gate cannot drift apart. Cold.
+    /// 🚨 THE entitlement to relocate <paramref name="sourcePath"/> to <paramref name="targetPath"/>
+    /// WITH ITS AUTHORSHIP. ONE function, so the move, the copy handler's <c>PreserveAuthorship</c>
+    /// gate and the create handler's <c>AuthorshipFrom</c> gate cannot drift apart. Cold; emits once.
+    ///
+    /// <para>Two conditions, both checked on the source NODE (so a node-level deny holds). First, the
+    /// caller may DELETE the source — the demand <see cref="DeletePermission.RequiredFor"/> sets: Update
+    /// for ordinary content. A caller who holds that on the node could edit it in place, so carrying its
+    /// authorship within the partition grants nothing they do not already have. Second, the relocation must not
+    /// hand the caller a node authored by someone else in a place the source's governance does not
+    /// cover: <see cref="AccessContextScope"/> impersonates <see cref="MeshNode.CreatedBy"/>, so an
+    /// Editor (who deletes content with Update) who could carry an administrator's authorship into a
+    /// partition of their own would have owner-scoped work run AS that administrator. So the target
+    /// must be in the SAME partition as the source — the node stays under the governance that
+    /// already covered it, and the caller gains nothing they could not do by editing it in place — or
+    /// the caller must hold <see cref="Permission.Delete"/> itself (an administrator) on the source.
+    /// Anything else is refused — and so is the move: a move never re-authors a node, because its
+    /// resumability and its relocation provenance both rest on the stamps travelling verbatim.</para>
     /// </summary>
-    private static IObservable<PermissionCheckOutcome> MoveEntitlement(IMessageHub hub, string sourcePath) =>
-        hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete);
+    private static IObservable<PermissionCheckOutcome> MoveEntitlement(
+        IMessageHub hub, string sourcePath, string targetPath, string? userId = null)
+    {
+        // 🚨 Checked on the SOURCE NODE itself, never only its namespace: a node-level deny must hold.
+        // CreateNodeRequest.AuthorshipFrom is caller-settable and reads the stamps straight from
+        // storage, so a namespace-only check would let a caller denied the source borrow its author.
+        IObservable<PermissionCheckOutcome> Check(Permission permission) =>
+            (userId is null
+                ? hub.CheckPermissionOutcome(sourcePath, permission)
+                : hub.CheckPermissionOutcome(sourcePath, userId, permission)).Take(1);
+        var mayDelete = Check(DeletePermission.RequiredFor(sourcePath));
+        if (DeletePermission.SamePartition(sourcePath, targetPath))
+            return mayDelete;
+        // Both checks are subscribed in the same turn (Zip subscribes its sources on Subscribe), so
+        // an ambient caller is resolved once for both.
+        return mayDelete.Zip(Check(Permission.Delete),
+            (delete, administer) => delete.IsGranted ? administer : delete);
+    }
 
     /// <summary>
     /// The stored node whose authorship a create may carry over (<see cref="CreateNodeRequest.AuthorshipFrom"/>),
@@ -7476,7 +7519,7 @@ public static class MeshExtensions
         var from = request.AuthorshipFrom?.Trim();
         if (string.IsNullOrEmpty(from) || persistence is null || RequestIdentity.IsPlatform(request.CreatedBy))
             return Observable.Return<MeshNode?>(null);
-        return MoveEntitlement(hub, from)
+        return MoveEntitlement(hub, from, request.Node.Path)
             .Take(1)
             .SelectMany(outcome =>
             {
@@ -10173,6 +10216,32 @@ public static class MeshExtensions
                     EnterMoveStage(MoveStagePreflight);
                     return SourceMayBeDeleted(from);
                 })
+                // 🚨 A MOVE CARRIES ITS AUTHORSHIP OR DOES NOT HAPPEN (MoveEntitlement). Within the
+                // source's partition the delete demand is enough; into another partition the mover must
+                // hold Delete on the source — otherwise an Editor could carry an administrator's
+                // authorship somewhere that administrator's governance does not reach, and owner-scoped
+                // work there would run AS them. Refused before the copy writes anything, never turned
+                // into a re-authoring copy: the stamps are what make a half-landed move resumable.
+                .SelectMany(_ => MoveEntitlement(hub, from, to, callerContext?.ObjectId))
+                .SelectMany(entitlement => entitlement.IsGranted
+                    ? Observable.Return(System.Reactive.Unit.Default)
+                    : Observable.Throw<System.Reactive.Unit>(entitlement.IsUndetermined
+                        ? new MoveFailedException(
+                            LocalizableText.Keyed(
+                                $"Cannot move '{from}' now: whether it may be relocated with its authorship could not "
+                                + $"be established ({entitlement.UndeterminedReason}). Nothing was moved; the move may "
+                                + "be retried.",
+                                MoveEntitlementUndeterminedKey,
+                                ("source", from), ("reason", entitlement.UndeterminedReason ?? string.Empty)),
+                            NodeMoveRejectionReason.Unavailable, null)
+                        : new MoveFailedException(
+                            LocalizableText.Keyed(
+                                $"Cannot move '{from}' to '{to}': moving it into another partition requires the right to "
+                                + "delete it there as an administrator (Delete on its namespace). Nothing was moved; an "
+                                + "Editor can move it within its own partition, or copy it.",
+                                MoveAcrossPartitionsKey,
+                                ("source", from), ("target", to)),
+                            NodeMoveRejectionReason.ValidationFailed, null)))
                 .Do(_ => EnterMoveStage(MoveStageCopy))
                 .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(CopyRequestFor(from, to), o =>
                 {
@@ -10568,22 +10637,29 @@ public static class MeshExtensions
         // caller who does not is refused. UNDETERMINED is a refusal too, reported as unavailability
         // rather than as a denial (#974/#2742) — a fold that reached no answer must never read as
         // one, in either direction.
-        IObservable<(string Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
+        IObservable<(LocalizableText Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
             !copyRequest.PreserveAuthorship
-                ? Observable.Return<(string, bool)?>(null)
+                ? Observable.Return<(LocalizableText, bool)?>(null)
                 // 🚨 Take(1): the permission fold is LONG-LIVED — it re-emits on every
                 // AccessAssignment change and never completes. Without the Take, every re-emission
                 // re-ran the whole copy below (a second create pass answering "already exists" over
                 // the first one's success), and the copy chain itself never completed.
-                : MoveEntitlement(hub, sourcePath)
+                : MoveEntitlement(hub, sourcePath, targetPath)
                     .Take(1)
                     .Select(outcome => outcome.IsGranted
-                        ? ((string, bool)?)null
+                        ? ((LocalizableText, bool)?)null
                         : outcome.IsUndetermined
-                            ? ($"Cannot determine whether '{sourcePath}' may be relocated with its authorship: "
-                                + $"{outcome.UndeterminedReason}", true)
-                            : ($"Preserving authorship on a copy of '{sourcePath}' requires Delete on its "
-                                + "namespace — the same entitlement a move of it requires.", false));
+                            ? (LocalizableText.Keyed(
+                                $"Cannot determine whether '{sourcePath}' may be relocated with its authorship: "
+                                + $"{outcome.UndeterminedReason}",
+                                CopyAuthorshipUndeterminedKey,
+                                ("source", sourcePath), ("reason", outcome.UndeterminedReason ?? string.Empty)), true)
+                            : (LocalizableText.Keyed(
+                                $"Preserving authorship on a copy of '{sourcePath}' requires the right to delete it "
+                                + "and, outside its own partition, Delete on it — the same entitlement a move of it "
+                                + "with its authorship requires.",
+                                CopyAuthorshipRefusedKey,
+                                ("source", sourcePath)), false));
 
         // 🚨 EVERY path storage holds under the source — the AUTHORITATIVE inventory, and the SAME
         // enumeration the move's delete leg is planned from (IStorageAdapter.ListDescendantPaths,
@@ -10739,11 +10815,12 @@ public static class MeshExtensions
                 if (refusal is { } denied)
                 {
                     logger.LogWarning("[CopyNode] REFUSED preserveAuthorship {Source} -> {Target}: {Reason}",
-                        sourcePath, targetPath, denied.Message);
-                    hub.Post(CopyNodeResponse.Fail(denied.Message,
+                        sourcePath, targetPath, denied.Message.English);
+                    hub.Post(CopyNodeResponse.Fail(denied.Message.English,
                             denied.Undetermined
                                 ? NodeCopyRejectionReason.Unknown
-                                : NodeCopyRejectionReason.Unauthorized),
+                                : NodeCopyRejectionReason.Unauthorized)
+                            with { Log = NodeCreationFailure.Transcript("NodeCopy", denied.Message, sourcePath) },
                         o => o.ResponseFor(request));
                     return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
                 }
