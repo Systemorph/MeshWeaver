@@ -657,7 +657,11 @@ itself again"*, and every pod logged registration #36 as not constructible. The 
 provider under its forwarder's label and reads the provider's real name from the instance each
 subscription leases (`QueryMembers`), which also de-duplicates by that name. A duplicate registration is
 leased once, by the first subscription, to learn its name; later subscriptions leave it out without
-constructing it.
+constructing it. A learned name is trusted only while the generation that answered it is current
+(`ModuleServiceProxy.CurrentGeneration`): a same-shape swap may reorder a module's providers, and a
+position must never be skipped under the name its neighbour now answers by.
+`AModuleProviderReorderedByASwapTest` swaps `[A, B]` for `[B, A]` and both still answer; with the name
+trusted across generations, A is absent after the swap.
 `AModuleProviderNeedingTheMeshServiceTest` pins it with a module provider built over a root singleton that
 takes `IMeshService`. Once the provider is built, no fault is reported against its registration, and the
 `IMeshService` built during its construction serves it. On the base, the circular dependency was reported.

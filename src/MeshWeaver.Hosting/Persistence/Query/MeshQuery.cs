@@ -107,14 +107,31 @@ public partial class MeshQuery : IMeshQueryCore
     {
         public IMeshQueryProvider Forwarder => forwarder;
 
-        // The provider's own name, learned from the first instance a subscription leased (QueryMembers) —
-        // null until then. It lets a later subscription leave out a duplicate registration of a provider
-        // another member already answers for WITHOUT constructing it.
-        private string? learnedName;
+        // The provider's own name, learned from an instance a subscription leased (QueryMembers), with the
+        // module generation that was current when it was learned. It lets a later subscription leave out a
+        // duplicate registration of a provider another member already answers for WITHOUT constructing it.
+        // 🚨 Trusted only while THAT generation is current: a live swap may put a different provider at
+        // this registration position (review of #7231 — a reorder made a slot skip itself for good under
+        // the name its neighbour now answers by). Read before the lease, so a swap racing the lease only
+        // makes the name look stale, never makes a stale name look current.
+        private sealed record Learned(ModuleGeneration? Generation, string Name);
 
-        public string? LearnedName => Volatile.Read(ref learnedName);
+        private Learned? learned;
 
-        public void Learn(string name) => Volatile.Write(ref learnedName, name);
+        public string? LearnedName
+        {
+            get
+            {
+                var known = Volatile.Read(ref learned);
+                return known is not null && ReferenceEquals(known.Generation, ModuleServiceProxy.CurrentGeneration(forwarder))
+                    ? known.Name
+                    : null;
+            }
+        }
+
+        public ModuleGeneration? CurrentGeneration => ModuleServiceProxy.CurrentGeneration(forwarder);
+
+        public void Learn(ModuleGeneration? generation, string name) => Volatile.Write(ref learned, new Learned(generation, name));
 
         // What the fan-out dedupes by when it is built: the forwarder's label (module and registration).
         // The provider's own name is read from the instance a subscription leases (QueryMembers).
@@ -253,6 +270,7 @@ public partial class MeshQuery : IMeshQueryCore
                     // A registration that cannot be leased NOW keeps its learned name: the first registration
                     // of a provider wins, so a duplicate does not stand in for it (as when the names were
                     // read at build time and the duplicate was never a member).
+                    var generation = module.CurrentGeneration;
                     if (module.LearnedName is { } known && names.Contains(known))
                         continue;
                     if (module.TryLease() is not { } lease)
@@ -267,7 +285,7 @@ public partial class MeshQuery : IMeshQueryCore
                         // Module code: a lease no member owns yet must not leak (and keep its generation
                         // from ever quiescing) when it throws.
                         name = lease.Service.Name;
-                        module.Learn(name);
+                        module.Learn(generation, name);
                     }
                     catch
                     {

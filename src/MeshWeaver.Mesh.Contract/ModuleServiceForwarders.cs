@@ -98,6 +98,21 @@ public class ModuleServiceProxy : DispatchProxy
     }
 
     /// <summary>
+    /// The generation of the module behind <paramref name="service"/> that is current NOW — or null for an
+    /// ordinary instance, or for a proxy whose module is not held. Reads the registry only; never resolves
+    /// the instance. A consumer that remembers something it learned from a leased instance (the query
+    /// fan-out remembers a provider's name) keys it to the generation current when it learned it, and
+    /// trusts it only while that same generation is current: a live swap may change what a registration
+    /// position holds (MeshWeaver#7218).
+    /// </summary>
+    /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
+    public static ModuleGeneration? CurrentGeneration(object service)
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        return service is ModuleServiceProxy proxy ? proxy.contexts?.Current(proxy.module) : null;
+    }
+
+    /// <summary>
     /// Whether <paramref name="service"/> is a member a SET of platform services should hold now: true for
     /// an ordinary instance, and for a forwarding proxy whose module the registry still holds; false for a
     /// proxy left behind by a module that was withdrawn at boot or retired.
