@@ -504,6 +504,24 @@ read, and on the node-CRUD execution hub its reply waited behind the bulk import
 What remains uncovered is a plain `AddSingleton` service handed the root hub. For that case the
 runtime ORIGIN line is still the instrument.
 
+### A seam's own FALLBACK was the router (#7136)
+
+`GetMeshNodeOutcome` already issued on `ReadIssuingHub()`, and production still logged
+`GetDataRequest was POSTED with the mesh hub as sender` from its `Issue()`. The seam was
+`MeshReadHub() ?? hub`, and `MeshReadHub()` returns `null` once the mesh is past
+`DisposeHostedHubs`: it refuses to materialise a hub during disposal. In that window the fallback
+handed the router back, so any mesh-singleton that read a node through the root hub while hosted
+hubs were going down posted from `mesh/{id}`. No `src/` ratchet sees this either: the call site is
+correct, and only a run level makes it wrong.
+
+There is no off-router hub left to hop onto in that window, so moving the post cannot fix it. The
+read is not issued at all. `MeshExtensions.TryReadIssuingHub()` is the seam without the fallback and
+answers `null` there. `GetMeshNodeOutcome` (and so `GetMeshNode`) settles the read
+`Unavailable`, carrying an `ObjectDisposedException` that names the mesh's run level.
+`Unavailable` means "could not be read" and says nothing about whether the node exists, which is
+the truth. `ReadIssuingHub()` keeps its fallback for its other callers. A caller that can settle
+without posting should take `TryReadIssuingHub()`.
+
 ## Reading a report
 
 `ROUTER_TRAFFIC ORIGIN:` prints up to twelve frames, with `MessageHub`'s own plumbing dropped off the
@@ -576,6 +594,11 @@ another process.
   (`DataExtensions.cs:3446` on the answering half). Its companion
   `ANodeAddressedUnifiedPathReadFromTheRootMeshHub_IsAnsweredOffTheRouter` keeps the addressed read
   working and off the router.
+- `NodeReadDuringMeshTeardownLeavesTheRouterOffTest` — #7136. A hosted hub's disposal action
+  issues `GetMeshNodeOutcome` on the root hub while the mesh disposes its hosted hubs. The test
+  asserts that the read ran inside that window, that no `GetDataRequest` origin line names the
+  router as sender, and that the read settled `Unavailable`. Against the pre-fix seam it reports
+  the production line from `GetMeshNodeOutcome`'s `Issue()`.
 - `EverySeam_IsTheIdentityFunction_ForAHubThatIsNotTheRouter` — the premise all three seams rest on,
   plus the half that matters for the third: `StreamSubscribingHub()` must not resolve to
   `ReadIssuingHub()`'s hub, because that one registers no handlers and could never deliver a
