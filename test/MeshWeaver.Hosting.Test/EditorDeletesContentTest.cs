@@ -374,7 +374,7 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
         var grant = AssignmentNodeFactory.UserRole(EditorId, "Viewer", notes);
         grant = grant with
         {
-            Content = ((AccessAssignment)grant.Content!) with
+            Content = grant.ContentAs<AccessAssignment>(Mesh.JsonSerializerOptions)! with
             {
                 Roles = [new RoleAssignment { Role = "Viewer" }, new RoleAssignment { Role = "Editor", Denied = true }],
             },
