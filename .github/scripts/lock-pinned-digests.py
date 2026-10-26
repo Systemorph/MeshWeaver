@@ -3256,7 +3256,47 @@ def check_one_invocation(where: str, step: str, tokens: list[str]) -> list[str]:
 # day it is declared. An identity tag of a shape the allowlist does not know is RETAINED, which
 # costs storage and is visible in the dry-run log; a name-protected tag the purge reaches costs a
 # fresh install its seed. The direction is chosen.
+# 🚨 THE ALLOWLIST IS THE PROOF; THE SAMPLES ONLY CHECK THE ALLOWLIST. A finite sample set cannot
+# prove that an arbitrary regex reaches no protected name — `^3[.]0[.][0-9]+$` misses every sample
+# below and still reaches every clean 3.0 release (review of #7238). So every recorded filter's TAG
+# half must be EXACTLY this reviewed expression, and the samples are held against THIS expression
+# once. Widening what the purge reaches is then a diff to this constant, reviewed as such.
+IDENTITY_TAG_REGEX = (r"^(staging-[0-9a-f]{7,40}-[0-9]+(-[a-z0-9]+)*|[0-9a-f]{7,40}(-p[0-9a-f]{7,40})?"
+                      r"|[0-9]+[.][0-9]+[.][0-9]+-(ci|rc|next)[.0-9a-z]*)$")
 OFFICIAL_RELEASE_SAMPLES = ("3.1.0", "v3.1.0", "3.1.9984", "10.0.0")
+
+
+def filter_values(tokens: list[str]) -> tuple[list[str], str]:
+    """Every `--filter` value of ONE `acr purge` invocation, in every spelling acr-cli (cobra)
+    accepts — `--filter V`, `--filter=V`, `-f V`, `-f=V`, `-fV` — plus why they could not be read.
+
+    🚨 ONE READER FOR EVERY CONSUMER: the record check, the purge model and `--describe-purge-file`.
+    Each used to scan for the literal token `--filter` alone, so a `-f 'repo:.*'` or
+    `--filter='repo:.*'` step reached every tag while every check read it as filtering nothing
+    (review of #7238). A flag with no value, or a value not shaped `repository:regex`, is an
+    ERROR — never a filter that is silently skipped."""
+    values: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        value: str | None = None
+        if token in ("--filter", "-f"):
+            if index + 1 >= len(tokens):
+                return values, f"`{token}` carries no value"
+            value = tokens[index + 1]
+            index += 1
+        elif token.startswith("--filter="):
+            value = token[len("--filter="):]
+        elif token.startswith("-f") and not token.startswith("--"):
+            value = token[3:] if token.startswith("-f=") else token[2:]
+        index += 1
+        if value is None:
+            continue
+        repo_part, colon, tag_part = value.partition(":")
+        if not colon or not repo_part or not tag_part:
+            return values, f"`{value}` is not a `repository:regex` filter"
+        values.append(value)
+    return values, ""
 CHANNEL_SAMPLE_LINES = ((3, 0, 0), (3, 1, 9984), (4, 12, 7), (10, 0, 123))
 ARM_COMPLETE_PREFIX_RE = re.compile(r'^ARM_COMPLETE_PREFIX\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 
@@ -3307,27 +3347,41 @@ def name_protected_samples(scripts_dir: Path | None = None) -> tuple[list[tuple[
 
 def check_name_protected_reach(where: str, tokens: list[str],
                                samples: list[tuple[str, str]]) -> list[str]:
-    """Does ONE `acr purge` invocation's TAG half reach a tag protected by name? acr-cli SEARCHES
-    the tag half (see `purge_selection`), so a sample is reached when the regex finds it anywhere."""
+    """Can ONE `acr purge` invocation reach a tag protected by name?
+
+    🚨 STRUCTURAL, NOT SAMPLED. Every filter's TAG half must be exactly `IDENTITY_TAG_REGEX`; the
+    samples are then held against that one reviewed expression (acr-cli SEARCHES the tag half, see
+    `purge_selection`). Sampling an arbitrary regex proves nothing about the names the samples do
+    not spell. Every filter spelling is read (`filter_values`), and an invocation whose filters
+    cannot be read, or that has none, is a problem — never a step that reaches nothing."""
     problems: list[str] = []
-    filters = [tokens[i + 1] for i in range(len(tokens) - 1) if tokens[i] == "--filter"]
+    filters, error = filter_values(tokens)
+    if error:
+        return [f"{where}: a purge filter could not be read ({error}), so what the step reaches "
+                f"was NOT checked:\n      {' '.join(tokens)[:160]}"]
+    if not filters:
+        return [f"{where}: a purge step carries no filter, so what it reaches was NOT checked"]
     for value in filters:
         repo_part, _, tag_part = value.partition(":")
-        try:
-            regex = re.compile(tag_part)
-        except re.error as exc:
-            problems.append(f"{where}: `--filter {value}` does not compile ({exc}), so what it "
-                            "reaches was NOT checked")
-            continue
-        reached = [(tag, why) for tag, why in samples if regex.search(tag)]
-        if reached:
-            shown = "; ".join(f"`{tag}` — {why}" for tag, why in reached[:6])
+        if tag_part != IDENTITY_TAG_REGEX:
             problems.append(
-                f"{where}: `--filter {value}` reaches {len(reached)} tag(s) protected by NAME "
-                f"in `{repo_part}`: {shown}{' …' if len(reached) > 6 else ''}\n"
-                "    A moving label is never locked (it would pin bytes it has left), so the purge "
-                "filter is the ONLY thing between it and `--ago`. Anchor the tag half (`^…$`) to "
-                "the per-build identity shapes — acr-cli SEARCHES it, it does not full-match it.")
+                f"{where}: the filter `{value}` does not use the reviewed identity allowlist as its "
+                f"tag half (`IDENTITY_TAG_REGEX`).\n"
+                "    A sampled check cannot prove an arbitrary regex reaches no protected name "
+                "(`^3[.]0[.][0-9]+$` misses every sample and reaches every clean 3.0 release). "
+                "Use the allowlist verbatim; widening it is a reviewed change to that constant.")
+    try:
+        regex = re.compile(IDENTITY_TAG_REGEX)
+    except re.error as exc:
+        return problems + [f"IDENTITY_TAG_REGEX does not compile ({exc})"]
+    reached = [(tag, why) for tag, why in samples if regex.search(tag)]
+    if reached:
+        shown = "; ".join(f"`{tag}` — {why}" for tag, why in reached[:6])
+        problems.append(
+            f"{where}: the identity allowlist itself reaches {len(reached)} tag(s) protected by "
+            f"NAME: {shown}{' …' if len(reached) > 6 else ''}\n"
+            "    A moving label is never locked (it would pin bytes it has left), so the purge "
+            "filter is the ONLY thing between it and `--ago`.")
     return problems
 
 
@@ -3433,7 +3487,8 @@ def retention_windows(root: str) -> tuple[list[str], str]:
             continue
         for step in re.findall(r"^\s*-\s+cmd:\s*(.+)$", yaml_path.read_text(encoding="utf-8"),
                                re.MULTILINE):
-            filters = " ".join(re.findall(r"--filter '([^']+)'", step)) or "?"
+            filters = " ".join(f for tokens in purge_invocations(step)[0]
+                               for f in filter_values(tokens)[0]) or "?"
             ago = (re.search(r"--ago (\S+)", step) or [None, "?"])[1]
             keep = (re.search(r"--keep (\S+)", step) or [None, "none"])[1]
             invocations, _ = purge_invocations(step)
@@ -3698,7 +3753,10 @@ def purge_selection(tokens: list[str], subjects: list[PurgeSubject],
     if dry_error:
         selection.problem = dry_error
         return selection
-    filters = [tokens[i + 1] for i in range(len(tokens) - 1) if tokens[i] == "--filter"]
+    filters, filter_error = filter_values(tokens)
+    if filter_error:
+        selection.problem = f"a filter is unreadable ({filter_error}), so nothing was selected"
+        return selection
     has_ago, ago_value = option_value(tokens, "--ago")
     ago_days = parse_ago_days(ago_value or "") if has_ago else 0.0
     if ago_days is None:
@@ -5023,10 +5081,11 @@ def purge_file_description(path: str) -> dict:
     for step in steps:
         invocations, parse_error = purge_invocations(step)
         for tokens in invocations:
+            filters, filter_error = filter_values(tokens)
             described.append({
-                "filters": sorted(value for name, value in (
-                    (tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1))
-                    if name == "--filter"),
+                # Every spelling (`--filter V`, `--filter=V`, `-f V`, `-fV`) — one reader.
+                "filters": sorted(filters),
+                "filterError": filter_error or None,
                 # Fail-closed: an unreadable `--include-locked` is reported as ON.
                 "includeLocked": include_locked_value(tokens)[0],
                 "untagged": bool_flag_value(tokens, "--untagged")[0],
@@ -5068,11 +5127,16 @@ def declared_drift_problems(live: dict, recorded: dict, task: str) -> tuple[list
                             f"acr purge: {purge['notAPurge']}")
         if purge.get("parseError"):
             problems.append(f"a LIVE step of {task!r} could not be tokenized: {purge['parseError']}")
+        if purge.get("filterError"):
+            problems.append(f"a LIVE filter of {task!r} could not be read: {purge['filterError']}")
         if purge.get("includeLocked"):
             problems.append(
                 f"the LIVE definition of {task!r} passes --include-locked. That flag DELETES LOCKED "
                 "MANIFESTS — the entire protection the lock job provides. A recordAheadOfRegistry "
                 "declaration is about the retention WINDOW and does not excuse it.")
+    for purge in recorded.get("purges", []):
+        if purge.get("filterError"):
+            problems.append(f"a RECORDED filter of {task!r} could not be read: {purge['filterError']}")
 
     def filters(description: dict) -> list[str]:
         return sorted(f for p in description.get("purges", []) for f in p.get("filters", []))
@@ -8232,8 +8296,7 @@ env:
         # Every referenced TAG the record's filters REACH is past the window, so with no lock written
         # every one is selected — nothing referenced is spared by its age alone. (A repository no
         # filter names, e.g. the whisper image, is spared by the filter; that is not this question.)
-        _reached = {r for tokens in _recorded for i, tok in enumerate(tokens[:-1]) if tok == "--filter"
-                    for r in [tokens[i + 1].partition(":")[0]]}
+        _reached = {f.partition(":")[0] for tokens in _recorded for f in filter_values(tokens)[0]}
         _reachable_refs = {t for t in referenced_tags if t[0] in _reached}
         check(_reachable_refs and _reachable_refs <= unprotected.tags,
               f"ARM 40c: with NO lock written, referenced tag(s) "
@@ -8369,8 +8432,8 @@ env:
         check(not _err and _inv, f"ARM 41: {_file} could not be read ({_err}), so what it reaches "
                                  "was NOT checked")
         _recorded_all.extend(_inv)
-    _reached_repos = sorted({tokens[i + 1].partition(":")[0] for tokens in _recorded_all
-                             for i in range(len(tokens) - 1) if tokens[i] == "--filter"})
+    _reached_repos = sorted({f.partition(":")[0] for tokens in _recorded_all
+                             for f in filter_values(tokens)[0]})
     check(len(_reached_repos) >= 6,
           f"ARM 41: the record reaches only {_reached_repos} — fewer repositories than it names")
 
@@ -8438,6 +8501,58 @@ env:
         check(any("ARM_COMPLETE_PREFIX" in p for p in name_protected_samples(Path(_empty))[1]),
               "ARM 41: a missing arming-marker declaration produced no problem — the marker would "
               "silently stop being checked")
+
+    # ── ARM 41c: the proof is the ALLOWLIST, not the samples (review of #7238) ──────────────────
+    # `^3[.]0[.][0-9]+$` reaches no sample and every clean 3.0 release. The check must refuse it
+    # because it is not the reviewed allowlist — while the model shows it really reaches `3.0.7`.
+    _narrow_but_wrong = ["acr", "purge", "--filter", "memex-portal-ai:^3[.]0[.][0-9]+$",
+                         "--ago", "30d", "--untagged"]
+    check(not any(_named_tag == "3.0.7" for _named_tag, _ in _named)
+          and purge_selection(_narrow_but_wrong,
+                              [PurgeSubject("memex-portal-ai", "sha256:" + "cd" * 32, "3.0.7", 400.0,
+                                            False)], {}, {}).tags == {("memex-portal-ai", "3.0.7")},
+          "ARM 41c: the control is not a control — `3.0.7` is a sample, or the model does not "
+          "reach it")
+    check(check_name_protected_reach("n", _narrow_but_wrong, _named),
+          "ARM 41c: a filter that reaches every clean 3.0 release passed because no SAMPLE matched it")
+    check(not check_name_protected_reach(
+              "ok", ["acr", "purge", "--filter", "memex-portal-ai:" + IDENTITY_TAG_REGEX, "--ago", "30d"],
+              _named),
+          "ARM 41c: the reviewed allowlist itself was refused")
+
+    # ── ARM 41d: every filter SPELLING is read, by every consumer (review of #7238) ─────────────
+    _wide_value = "memex-portal-ai:.*"
+    _spellings = {"--filter V": ["--filter", _wide_value], "--filter=V": ["--filter=" + _wide_value],
+                  "-f V": ["-f", _wide_value], "-f=V": ["-f=" + _wide_value], "-fV": ["-f" + _wide_value]}
+    _latest = [PurgeSubject("memex-portal-ai", "sha256:" + "ef" * 32, "latest", 400.0, False)]
+    for _label, _flag in _spellings.items():
+        _tokens = ["acr", "purge", *_flag, "--ago", "30d"]
+        check(filter_values(_tokens) == ([_wide_value], ""),
+              f"ARM 41d: `{_label}` was not read as a filter: {filter_values(_tokens)}")
+        check(check_name_protected_reach("s", _tokens, _named),
+              f"ARM 41d: a `.*` filter spelled `{_label}` passed the name check")
+        check(purge_selection(_tokens, _latest, {}, {}).tags == {("memex-portal-ai", "latest")},
+              f"ARM 41d: the model did not apply a filter spelled `{_label}`")
+    # …and the description `verify` compares reads them too.
+    with tempfile.TemporaryDirectory() as _spell_dir:
+        _spell_file = Path(_spell_dir) / "t.yaml"
+        _spell_file.write_text(f"steps:\n  - cmd: acr purge -f '{_wide_value}' --ago 30d\n",
+                               encoding="utf-8")
+        check(purge_file_description(str(_spell_file))["purges"][0]["filters"] == [_wide_value],
+              "ARM 41d: `--describe-purge-file` dropped a `-f` filter, so `verify` would compare "
+              "a repository set that is missing it")
+    # A flag with no value, or a value that is not `repository:regex`, is an ERROR, never skipped.
+    for _bad in (["acr", "purge", "--ago", "30d", "--filter"], ["acr", "purge", "-f", "nocolon"],
+                 ["acr", "purge", "--filter=:.*"]):
+        check(bool(filter_values(_bad)[1]) and check_name_protected_reach("b", _bad, _named),
+              f"ARM 41d: an unreadable filter {_bad[2:]} was skipped instead of RED")
+        check(bool(purge_selection(_bad, _latest, {}, {}).problem),
+              f"ARM 41d: the model selected over an unreadable filter {_bad[2:]}")
+    check(check_name_protected_reach("none", ["acr", "purge", "--ago", "30d"], _named),
+          "ARM 41d: a purge step with NO filter passed the name check as reaching nothing")
+    # Control: the other options are not mistaken for filters.
+    check(filter_values(["acr", "purge", "--filter-timeout-seconds", "60", "--ago", "30d"]) == ([], ""),
+          "ARM 41d: `--filter-timeout-seconds` was read as a filter")
 
     # ── ARM 41b: a DECLARED drift may narrow the TAG half, never move the REPOSITORY half ───────
     def _desc(*filters: str, include_locked: bool = False) -> dict:

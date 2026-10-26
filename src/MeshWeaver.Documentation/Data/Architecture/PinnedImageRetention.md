@@ -461,8 +461,16 @@ contains seven hex characters. The purge model in `lock-pinned-digests.py` (`pur
 `fullmatch` for both halves, which under-selects what the tool deletes. It now searches the tag
 half too.
 
-**Held on every pull request.** `--check-retention-record` derives every name-protected tag from its
-reader: each declared channel rendered over several version lines, the floating words,
+**The allowlist is the proof, not the samples.** A finite sample set cannot prove that an arbitrary
+regex reaches no protected name: `^3[.]0[.][0-9]+$` misses every sample and still reaches every
+clean 3.0 release. So every recorded filter's tag half must be **exactly** `IDENTITY_TAG_REGEX` in
+`lock-pinned-digests.py`. Reaching more is a reviewed change to that constant. Every filter spelling
+acr-cli accepts (`--filter V`, `--filter=V`, `-f V`, `-f=V`, `-fV`) is read by one parser,
+`filter_values`, shared by the record check, the purge model and `--describe-purge-file`. A filter
+with no value, or one not shaped `repository:regex`, is a red.
+
+**Held on every pull request.** `--check-retention-record` holds the allowlist itself against every
+name-protected tag, derived from its reader: each declared channel rendered over several version lines, the floating words,
 `ARM_COMPLETE_PREFIX` read from `arm-promoted-set.py`, and official version shapes. It reds on any
 recorded filter that reaches one. A missing channel declaration or marker prefix, or zero samples,
 is a red, not a smaller check. Self-test **ARM 41** drives both committed records over an
