@@ -32,6 +32,10 @@ THE KEY
           globals:         {path → sha256 | null}  for the repo-level build inputs that change what
                            EVERY project compiles (src/Directory.Build.props, platform-shipped.txt, …);
                            null records ABSENCE, which is an input too
+          imports:         {path → sha256 | null}  for every Directory.*.props|targets each closure
+                           project inherits, from its own directory up to the root (implicit names
+                           recorded as null when absent): a package-version pin or a platform-ref
+                           target edit is a compiler input, nested or not
           testerDigest, platformDigest, platformRef:  the compiler, the reference set, and the
                            platform source the tests build core from
           shelf:           ONLY when the caller supplies its own module-libraries shelf
@@ -98,6 +102,10 @@ RECIPE_VERSION = "4"
 GLOBAL_INPUTS = (
     "src/Directory.Build.props",
     "src/Directory.Build.targets",
+    "src/Directory.Packages.props",
+    "src/Directory.Packages.Plugins.props",
+    "src/Directory.PlatformRefs.targets",
+    "src/Directory.PlatformRefs.Graph.targets",
     "src/platform-shipped.txt",
     "Directory.Build.props",
     "Directory.Build.targets",
@@ -183,6 +191,29 @@ def closure_dirs(root: Path, entry_project: str) -> list[str]:
 SHELF_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
 
 
+def directory_imports(root: Path, dirs: list[str]) -> dict[str, str | None]:
+    """{path → sha256 | null} of every MSBuild file the projects in `dirs` inherit: from each project
+    directory up to the repository root, the implicit names (absence recorded as null) and every other
+    `Directory.*.props|targets` present there (split pin files such as `Directory.Packages.Plugins.props`
+    and `Directory.PlatformRefs*.targets`, which the implicit ones import). ONE walk for the module
+    closure and the shelf — a package pin or a platform-ref edit is a compiler input either way."""
+    root = root.resolve()
+    imports: dict[str, str | None] = {}
+    for d in dirs:
+        here = root / d
+        while True:
+            names = set(SHELF_IMPORTS) | {f.name for pattern in ("Directory.*.props", "Directory.*.targets")
+                                          for f in here.glob(pattern) if f.is_file()}
+            for name in sorted(names):
+                rel = (here / name).relative_to(root).as_posix()
+                if rel not in imports:
+                    imports[rel] = file_hash(here / name) if (here / name).is_file() else None
+            if here == root:
+                break
+            here = here.parent
+    return dict(sorted(imports.items()))
+
+
 def shelf_inputs(root: Path, project: str) -> dict:
     """The caller's module-libraries shelf as key inputs: its reference closure and its imports."""
     root = root.resolve()
@@ -199,22 +230,9 @@ def shelf_inputs(root: Path, project: str) -> dict:
         seen.add(p)
         queue.extend(project_references(root, p))
     dirs = sorted({p.parent.relative_to(root).as_posix() for p in seen})
-    imports: dict[str, str | None] = {}
-    for d in dirs:
-        here = root / d
-        while True:
-            names = set(SHELF_IMPORTS) | {f.name for pattern in ("Directory.*.props", "Directory.*.targets")
-                                          for f in here.glob(pattern) if f.is_file()}
-            for name in sorted(names):
-                rel = (here / name).relative_to(root).as_posix()
-                if rel not in imports:
-                    imports[rel] = file_hash(here / name) if (here / name).is_file() else None
-            if here == root:
-                break
-            here = here.parent
     return {"project": Path(project).as_posix(),
             "closure": {d: tree_hash(root, d) for d in dirs},
-            "imports": dict(sorted(imports.items()))}
+            "imports": directory_imports(root, dirs)}
 
 
 def read_json(path: Path) -> dict | None:
@@ -315,6 +333,9 @@ def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, p
         "closure": closure,
         "packages": dict(sorted(reached.items())),
         "globals": globals_,
+        # Every Directory.* file above each closure project — the pins and platform-ref targets a
+        # project inherits from its own directory up (a nested one included), not only src/'s.
+        "imports": directory_imports(root, dirs),
         "testerDigest": tester_digest or "",
         "platformDigest": platform_digest or "",
         "platformRef": platform_ref or "",
@@ -451,6 +472,55 @@ def self_test() -> int:
         check("accept token ORDER does not change the key (it is a set)",
               compute(root, {**_ENTRY, "accept": "b a"}, "sha256:t", "sha256:p", "abc123")["key"]
               == compute(root, {**_ENTRY, "accept": "a b"}, "sha256:t", "sha256:p", "abc123")["key"])
+
+        print("package pins and platform-ref targets flip the key (no shelf named):")
+        pin_v1 = '<Project><ItemGroup><PackageVersion Include="Radzen.Blazor" Version="9.0.0" /></ItemGroup></Project>\n'
+        pin_v2 = pin_v1.replace("9.0.0", "9.1.0")
+        for rel in ("src/Directory.Packages.props", "src/Directory.Packages.Plugins.props",
+                    "src/Directory.PlatformRefs.targets", "src/Directory.PlatformRefs.Graph.targets",
+                    "src/Acme.Alpha/Directory.Build.props", "src/Acme.Kit/Directory.Packages.props"):
+            f = root / rel
+            f.write_text(pin_v1, encoding="utf-8")
+            try:
+                k1 = compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"]
+                f.write_text(pin_v2, encoding="utf-8")
+                k2 = compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"]
+            finally:
+                f.unlink()
+            check(f"{rel} appearing changes the key", k1 != k0)
+            check(f"a version pin change in {rel} changes the key", k2 != k1)
+        check("…and removing them all restores the key",
+              compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"] == k0)
+        # A project NESTED below src/: the Directory.* file in the directory BETWEEN it and src/ is
+        # neither in its closure tree hash nor a repo-level global — only the ancestor walk sees it.
+        deep_dir = root / "src" / "Group" / "Acme.Deep"
+        deep_dir.mkdir(parents=True)
+        (deep_dir / "Acme.Deep.csproj").write_text(_csproj([]), encoding="utf-8")
+        deep = {"package": "Beta", "module": "Acme.Deep", "project": "src/Group/Acme.Deep/Acme.Deep.csproj"}
+        d0 = compute(root, deep, "sha256:t", "sha256:p", "abc123")["key"]
+        between = root / "src" / "Group" / "Directory.Packages.props"
+        between.write_text(pin_v1, encoding="utf-8")
+        d1 = compute(root, deep, "sha256:t", "sha256:p", "abc123")["key"]
+        between.write_text(pin_v2, encoding="utf-8")
+        d2 = compute(root, deep, "sha256:t", "sha256:p", "abc123")["key"]
+        between.unlink()
+        check("a pin file in a directory BETWEEN a nested project and src/ changes its key", d1 != d0)
+        check("…and a version change in it changes the key again", d2 != d1)
+        check("NEGATIVE CONTROL: that nested pin file leaves the sibling module's key unchanged",
+              compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"] == k0)
+        import shutil
+        shutil.rmtree(root / "src" / "Group")
+        # NEGATIVE CONTROLS: a Directory.* file no closure project inherits, and a non-Directory file
+        # beside the pins, are not inputs of this module.
+        for rel in ("src/Acme.Other/Directory.Packages.props", "tools/Directory.Packages.props",
+                    "src/Packages.notes.txt"):
+            f = root / rel
+            f.write_text(pin_v1, encoding="utf-8")
+            try:
+                k = compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"]
+            finally:
+                f.unlink()
+            check(f"NEGATIVE CONTROL: {rel} (not inherited by the closure) leaves the key unchanged", k == k0)
 
         print("noise does NOT flip the key:")
         for label, rel in (("an unrelated project", "src/Acme.Other/Code.cs"),
