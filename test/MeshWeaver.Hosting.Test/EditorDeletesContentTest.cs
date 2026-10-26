@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,6 +33,8 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
     private const string Other = "OtherData";
     private const string EditorId = "editor-content";
     private const string SpaceAdminId = "space-admin";
+    private const string CommenterId = "commenter-c";
+    private static readonly AccessContext CommenterContext = new() { ObjectId = CommenterId, Name = "Commenter C" };
 
     /// <summary>A Space whose root an Admin stores at run time; the Editor holds Editor on it.</summary>
     private const string StoredRoot = "StoredRoot";
@@ -386,6 +389,45 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
         Output.WriteLine($"copy: success={response.Message.Success} error={response.Message.Error}");
         response.Message.Success.Should().BeFalse("the copy would carry a child the Editor may read but not delete");
         (await StoredAt(target, ct)).Should().BeNull("refused before anything was written");
+    }
+
+    /// <summary>
+    /// 🚨 A DELETE-ONLY rule grant lends no authorship. A comment's author may delete it with only
+    /// Comment permission — but carrying a node's stamps is an authority over its content, so the
+    /// entitlement also demands Update on the source. A Commenter whose name is the comment's Author,
+    /// although someone else's id is its CreatedBy, cannot lend that CreatedBy to a comment of their own.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ACommenterWhoMayDeleteAComment_CannotBorrowItsAuthorship()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var doc = await SeedAsAdmin(TestPartition, "commented", ct);
+        var source = $"{doc}/_Comment/imported";
+        Access.SetCircuitContext(TestUsers.Admin);
+        await NodeFactory.CreateNode(new MeshNode("imported", $"{doc}/_Comment")
+            {
+                Name = "imported", NodeType = "Comment", MainNode = doc, State = MeshNodeState.Active,
+                Content = new Comment { Author = CommenterContext.Name, PrimaryNodePath = doc },
+            })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await NodeFactory.CreateNode(AssignmentNodeFactory.UserRole(CommenterId, "Commenter", doc))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var before = await ReadExisting(source, ct);
+        before.CreatedBy.Should().NotBe(CommenterId, "precondition: someone else's id is the comment's CreatedBy");
+        var target = $"{doc}/_Comment/mine-{Guid.NewGuid().ToString("N")[..8]}";
+
+        Access.SetCircuitContext(CommenterContext);
+        var created = await ObserveNodeOperation(new CreateNodeRequest(new MeshNode(target.Split('/').Last(), $"{doc}/_Comment")
+                {
+                    Name = "mine", NodeType = "Comment", MainNode = doc, State = MeshNodeState.Active,
+                    Content = new Comment { Author = CommenterContext.Name, PrimaryNodePath = doc },
+                })
+                { CreatedBy = CommenterId, AuthorshipFrom = source })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        created.Message.Success.Should().BeTrue(created.Message.Error ?? "a Commenter may write a comment");
+        (await ReadExisting(target, ct)).CreatedBy.Should().Be(CommenterId,
+            "deleting a comment does not make its author's CreatedBy the commenter's to lend");
     }
 
     private static string NewPath(string partition, string prefix) =>

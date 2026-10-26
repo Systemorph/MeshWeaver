@@ -62,6 +62,10 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
     private const string CommenterUser = "satellite-commenter";
     private const string OwnCommentPath = MainNodePath + "/_Comment/c1";
 
+    /// <summary>A Partition record below the partition root — rule-governed (PartitionAccessRule demands
+    /// Delete) although the rule-less demand for its path would be Update.</summary>
+    private const string PartitionRecordPath = Partition + "/Parts/PartX";
+
     /// <summary>The Editor's own grant — governance, not content.</summary>
     private const string GrantPath = Partition + "/_Access/" + EditorUser + "_Access";
     private const string ViewerUser = "satellite-viewer";
@@ -98,6 +102,8 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
                 // Read only — neither Delete on the satellite nor Update on its MainNode.
                 AssignmentNodeFactory.UserRole(ViewerUser, "Viewer", Partition),
                 AssignmentNodeFactory.UserRole(CommenterUser, "Commenter", Partition),
+                new MeshNode("Parts", Partition) { Name = "Parts", NodeType = "Markdown" },
+                new MeshNode("PartX", Partition + "/Parts") { Name = "Part X", NodeType = "Partition" },
                 new MeshNode("c1", MainNodePath + "/_Comment")
                 {
                     Name = "Own comment",
@@ -215,5 +221,28 @@ public class SatelliteDeliveryGateTest(ITestOutputHelper output) : MonolithMeshT
             "SatelliteAccessRule lets a comment's author delete it; the gate must re-decide the denied "
             + "standard check as a Delete, not as the Update the standard demand names: "
             + (failure?.Message ?? string.Empty));
+    }
+
+    /// <summary>
+    /// 🚨 For a delete-shaped message a GRANT is re-decided too when the node's type declares a Delete
+    /// rule. The Editor holds Update, which is the rule-less demand for this path — but the Partition
+    /// type's own rule demands Delete, so the version-guarded pre-flight (the branch that would take the
+    /// owner's seal) is refused at the gate.
+    /// </summary>
+    [Fact]
+    public async Task AnEditorsVersionGuardedPreflightOnAPartitionRecord_IsRefused()
+    {
+        var failure = await RequestHub
+            .Observe(new ValidateDeleteRequest(PartitionRecordPath) { ExpectedVersion = 1 },
+                o => o.WithTarget(new Address(PartitionRecordPath)).WithAccessContext(Identity(EditorUser)))
+            .Take(1)
+            .Select(_ => (DeliveryFailure?)null)
+            .Catch((DeliveryFailureException ex) => Observable.Return<DeliveryFailure?>(ex.Failure))
+            .Should().Within(Budget).Emit();
+
+        failure.Should().NotBeNull(
+            "the Partition type's rule demands Delete, which an Editor lacks — a grant of the rule-less "
+            + "Update demand must not let the pre-flight take the owner's seal");
+        failure!.ErrorType.Should().Be(ErrorType.Unauthorized, failure.Message ?? "a denial");
     }
 }

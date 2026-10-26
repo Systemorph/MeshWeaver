@@ -137,10 +137,14 @@ public static class AccessControlPipeline
         (string Path, Permission Permission) check,
         string userId,
         AccessContext? trustedCaller,
-        ILogger? logger)
+        ILogger? logger,
+        PermissionCheckOutcome? whenNoRule = null)
     {
+        // What the standard check said, returned unchanged wherever no rule speaks: a denial on the
+        // reconsideration path, a grant on the declared-delete-rule path below.
+        var unchanged = whenNoRule ?? PermissionCheckOutcome.Denied;
         if (!string.Equals(check.Path, hubPath, StringComparison.OrdinalIgnoreCase))
-            return Observable.Return(PermissionCheckOutcome.Denied);
+            return Observable.Return(unchanged);
 
         // 🚨 A delete-shaped message is re-decided as a DELETE, whatever permission its standard check
         // demanded: ordinary content is deleted with Update (DeletePermission.RequiredFor), and mapping
@@ -154,19 +158,19 @@ public static class AccessControlPipeline
         // the node type's INodeTypePermissionRule when it declares one. Create still maps to nothing
         // on either branch — its subject is a node that does not exist yet.
         if (operation is null && !NodeTypeAccessRuleSet.IsRuleDecidablePermission(check.Permission))
-            return Observable.Return(PermissionCheckOutcome.Denied);
+            return Observable.Return(unchanged);
 
         return NodeTypeAccessRuleGate.ReadSubjectNode(hub, hubPath)
             .SelectMany(node =>
             {
                 if (node is null)
-                    return Observable.Return(PermissionCheckOutcome.Denied);
+                    return Observable.Return(unchanged);
 
                 var accessService = hub.ServiceProvider.GetService<AccessService>();
                 if (operation is null)
                 {
                     if (NodeTypeAccessRuleGate.FindPermissionRule(hub, node.NodeType, check.Permission) is not { } permissionRule)
-                        return Observable.Return(PermissionCheckOutcome.Denied);
+                        return Observable.Return(unchanged);
                     logger?.LogDebug(
                         "AccessControlPipeline: {Permission} on {Path} was denied by the standard check — "
                         + "re-deciding through the {NodeType} permission rule, which governs this node type",
@@ -191,7 +195,7 @@ public static class AccessControlPipeline
                 if (NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation.Value) is not { } rule)
                     return operation == NodeOperation.Read
                         ? NodeTypeAccessRuleGate.ReconsiderPointRead(hub, hubPath, callerContext, PermissionCheckOutcome.Denied, pointRead)
-                        : Observable.Return(PermissionCheckOutcome.Denied);
+                        : Observable.Return(unchanged);
 
                 var context = new NodeValidationContext
                 {
@@ -593,10 +597,24 @@ public static class AccessControlPipeline
                         // two directions. It costs nothing on the hot path (a granted SubscribeRequest
                         // never reads a node), and it never turns an UNDETERMINED fold into a rule
                         // question — "we could not check" must stay "we could not check".
-                        .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
+                        //
+                        // 🚨 …and for a DELETE-shaped message a GRANT is re-decided too, when the node's
+                        // type declares a Delete rule. Deleting ordinary content demands Update
+                        // (DeletePermission.RequiredFor), so a scoped Editor passes the standard check on
+                        // a node whose own rule demands Delete (a Partition record, a Space) — and a
+                        // version-guarded ValidateDeleteRequest would then take the owner's seal without
+                        // the rule ever being asked. The rule IS the decision, in both directions; a node
+                        // type without one keeps the standard grant unchanged.
+                        .SelectMany(outcome => outcome.IsUndetermined
                             ? Observable.Return(outcome)
-                            : ReconsiderThroughNodeTypeRule(
-                                hub, delivery, hubPath, check, effectiveUserId, trustedCaller, logger))
+                            : outcome.IsGranted
+                                ? CascadeRootOf(delivery.Message) is not null
+                                    ? ReconsiderThroughNodeTypeRule(
+                                        hub, delivery, hubPath, check, effectiveUserId, trustedCaller, logger,
+                                        whenNoRule: outcome)
+                                    : Observable.Return(outcome)
+                                : ReconsiderThroughNodeTypeRule(
+                                    hub, delivery, hubPath, check, effectiveUserId, trustedCaller, logger))
                         .Select(outcome => new EvaluatedCheck(check.Path, check.Permission, outcome)))
                     // Concat, not Merge: the checks run ONE AT A TIME, in order — which is what
                     // makes the termination below actually save the remaining evaluations, and

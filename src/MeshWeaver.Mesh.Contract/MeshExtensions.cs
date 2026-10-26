@@ -7512,7 +7512,7 @@ public static class MeshExtensions
                 // checked on ITS OWN path — never its MainNode, which the rule-less delete fallback
                 // consults, so a deny on a sibling such as 'Acme/Doc/_Meta' holds here.
                 .SelectMany(node => node is null || NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Delete) is null
-                    ? hub.CheckPermissionOutcome(sourcePath, userId, DeletePermission.RequiredFor(sourcePath)).Take(1)
+                    ? hub.CheckPermissionOutcome(sourcePath, userId, DeletePermission.RequiredFor(sourcePath)).TakeDecisionOutsideGate()
                     : CheckDeletePermissionForNode(hub, userId, node, new DeleteNodeRequest(sourcePath), context, logger)
                         .Select(verdict => verdict.Verdict switch
                         {
@@ -7524,11 +7524,19 @@ public static class MeshExtensions
                 .Take(1)
                 .DefaultIfEmpty(PermissionCheckOutcome.Undetermined(
                     $"whether '{sourcePath}' may be deleted produced no answer"));
-            if (DeletePermission.SamePartition(sourcePath, targetPath))
-                return mayDelete;
-            return mayDelete.SelectMany(delete => delete.IsGranted
-                ? hub.CheckPermissionOutcome(sourcePath, userId, Permission.Delete).Take(1)
-                : Observable.Return(delete));
+            // 🚨 …AND the right to UPDATE the source. A type's Delete rule can grant deletion to someone
+            // who may not edit the node (a comment's author deletes their own comment with only Comment
+            // permission), and carrying a node's stamps is an authority over its content: without this,
+            // such a caller could lend the node's CreatedBy to content of their own through a free-form
+            // AuthorshipFrom create. For ordinary content the delete demand already IS Update.
+            IObservable<PermissionCheckOutcome> And(IObservable<PermissionCheckOutcome> first, Permission next) =>
+                first.SelectMany(o => o.IsGranted
+                    ? hub.CheckPermissionOutcome(sourcePath, userId, next).TakeDecisionOutsideGate()
+                    : Observable.Return(o));
+            var mayCarry = And(mayDelete, Permission.Update);
+            return DeletePermission.SamePartition(sourcePath, targetPath)
+                ? mayCarry
+                : And(mayCarry, Permission.Delete);
         });
 
     /// <summary>
