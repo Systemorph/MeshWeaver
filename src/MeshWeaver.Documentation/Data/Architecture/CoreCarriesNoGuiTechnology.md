@@ -134,16 +134,26 @@ the tester image as `module-libs/`; its `deps.json` is the closure, core's centr
 **Proposal.** Keep the *mechanism* in core and move the *list* to the repository that owns the
 modules: the shelf becomes a declaration the module lane receives, not a hard-coded project.
 
-1. **Core (addition)** — `mw-plugin-test build-project` accepts `--module-libs <dir>` in addition
-   to the staged `module-libs/`, and the shared `node-repo-module-pack.yml` lane gains an optional
-   `module-libraries-project:` input: when set, the lane publishes THAT csproj (against the platform's
-   pins plus the caller's own pin file) and hands its output to `build-project`. The tester-image
-   shelf stays as the default, so nothing changes for a caller that sets nothing.
-2. **Plugins** — adds its own `tools/ModuleLibraries` csproj carrying the entries only Plugins
-   modules use (`Radzen.Blazor`, and over time the provider SDKs), pins `Radzen.Blazor` in
-   `src/Directory.Packages.Plugins.props`, and passes `module-libraries-project:`.
-3. **Core (deletion, last)** — drops `Radzen.Blazor` from its shelf and from `Directory.Packages.props`,
-   declared under `Satellite-pins: Radzen.Blazor`.
+1. **Core (addition) — in place.** `mw-plugin-test build-project --module-libs <dir>` reads that
+   directory as the shelf, and it REPLACES the search for the image's `module-libs/` the way
+   `--razor-generators` replaces the Razor search. A named directory that is missing or holds no
+   single `deps.json` fails the build by name; it never falls back to the image's shelf
+   (`ModuleLibrariesShelfTest`). The shared `node-repo-module-pack.yml` lane takes
+   `module-libraries-project:`, a csproj in the caller's repository. The workspace-build job
+   publishes it against the platform checkout at `platform-ref`, fails closed on a publish with
+   no single `deps.json` or no assemblies, removes the checkout and the project's `obj`/`bin` before
+   the source mount, and passes the result as `--module-libs`. It refuses a pinned tester that does
+   not advertise the flag, naming the pin to move. Omitted, the tester image's shelf is used, and
+   nothing changes for a caller that sets nothing.
+2. **Plugins** — adds its own shelf csproj under `src/` (only `src/` imports its package versions)
+   carrying every entry only Plugins modules use, pins those packages in
+   `src/Directory.Packages.Plugins.props`, and passes `module-libraries-project:` on every
+   module-pack call, once its tester pin includes the flag.
+3. **Core (deletion, last)** — deletes `tools/MeshWeaver.ModuleLibraries`, the main-cd step that
+   stages it into the tester image, and the pins only it used (`Radzen.Blazor`, the AI provider
+   SDKs and their `Microsoft.Agents.AI` / `Microsoft.Extensions.AI` families, ClosedXML, CsvHelper,
+   MailKit, Microsoft.Graph, ExcelDataReader), declared under `Satellite-pins:`. The tester keeps
+   reading `module-libs/` when one is staged, so the mechanism outlives the list.
 
 **Risk.** The closure stops being one shared, image-baked fact and becomes per-run: a lane that
 publishes the shelf itself must derive the closure from that publish's `deps.json` exactly as the
