@@ -109,6 +109,27 @@ The ledger's sentence keeps the denominator visible — `… no misses (13 carri
 adopt)` — because *"25 attempts, 25 adopted, no misses"* would invite the reader to conclude 25
 packages were served.
 
+### Content-only packages declare it (#7181)
+
+A **content-only** package — an `index.json` plus harness, plan or documentation files, no NodeType
+source and no runtime module — declared neither of the two things above. A registry bundle
+deliberately carries no node content (the installer already wrote it), so its manifest had no
+`content` list, no `module` section and no `misses`: exactly the empty archive of a producer defect.
+Measured 2026-10-26 on `/health` of two portals: `Antigravity`, `Cursor`, `Grok`, `OpenCode` and
+`LearningRoadmap` each read `NoAssemblies (the bundle carried no assemblies)`.
+
+The registry now **states** it: `contentOnly: true` in the bundle manifest
+(`BundleReader.Manifest.ContentOnly`), written only when it read the package's tree, found its root
+and no NodeType in it, and the package declares no module. `BundleReader.DeclaresNothingToAdopt`
+accepts that statement as a third positive declaration. It never outranks a producer miss or a
+declared assembly that did not arrive, and a consumer never infers it from an empty archive.
+
+The other half of the same finding: a package that **has** NodeTypes but whose registry could serve
+none of them (a NodeType never compiled there, bytes the store no longer holds) also arrived empty
+and unexplained. The registry now records each such type as a miss, and the consumer's
+`NoAssemblies` outcome carries the reasons the producer stated (`BundleOffering.StatedReasons`). Before
+this change it carried only the module misses.
+
 ## Stage ④ is the one that costs CI today
 
 **Measured 2026-09-11T08:20Z → 2026-09-12T07:51Z on `Systemorph/MeshWeaver.Reinsurance`, counted by

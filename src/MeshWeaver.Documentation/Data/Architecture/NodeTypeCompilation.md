@@ -942,6 +942,34 @@ LIVE inputs differ from that stamp:
 | The stamp is `null` (a failure from before this field, or an `Error` baked into a node file) | one fresh attempt — the migration |
 | The source set has not been established yet (`CurrentSourceVersions` unwritten) | **no attempt — it WAITS**: "not known yet" is not "no sources", and a compile driven from a set nobody established forms a verdict from evidence the mesh does not have |
 
+#### A type authored definition-first, sources second (#7226)
+
+A NodeType created before its `Source/*` nodes compiles once, at once: the first-build kickoff
+fires on the first activation, the default source queries answer — established, and **empty** —
+and a configuration that names a type from those sources (`WithContentType<CoreInfo>()`) settles
+at `Error` with `CS0246`, the empty fold (`src=0`) and the MISSING SOURCES lead. That verdict is
+correct for the evidence it had, and it is **provisional, not final**. The moment a declared source
+lands, TWO independent paths re-drive it, with no Compile button and no recycle:
+
+1. **In the process that parked it** — the sources watcher's parked auto-retry
+   (`NodeTypeCompileParkRegistry.ShouldRetryForSourceChange`): the snapshot moved since the park,
+   so it un-parks and flips `Pending` with the new snapshot.
+2. **In any other process, or after a restart** (the in-memory park is gone) — the failed-verdict
+   re-drive above: the type has never built (`LastCompileSucceededAt` unset), so
+   `IsUnconvergableSourceFailure` does not hold; the new `CurrentSourceVersions` no longer matches
+   `FailedBuildInputs`, and the *added source* row takes one attempt.
+
+A source written while that first compile is still running is caught at the terminal stamp instead
+(#4280, `SourcesMovedSince`). So the first compile never has to *wait* for sources that may never
+come; it converges reactively when they do. A type that stays red with its sources present is a
+declaration defect (wrong query, a missing `shared=@…` entry), not this.
+
+Pinned end to end on the real mesh by `ANodeTypeAuthoredBeforeItsSourcesConvergesTest`
+(MeshWeaver.Graph.Test): definition first then source ⇒ `Error` then `Ok`; both written together ⇒
+`Ok`; and the control, no source ever written ⇒ `Error` naming the unmatched `Source` query.
+Measured by mutation while it was written: the first case still passes with either path disabled
+alone, and times out with both disabled, so it is not satisfied by anything else.
+
 ### A failure formed on an older platform BUILD
 
 The `fw=` half of that token is the platform **compatibility key** (`c003e001`), which is stable
