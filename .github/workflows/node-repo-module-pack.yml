@@ -1332,8 +1332,13 @@ jobs:
             echo "build=$BUILD" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # `--root repo`: an unaffected entry is reused only when its in-repo project closure shares
+          # nothing with an entry this run BUILDS. A built bundle carries its own copy of every
+          # module-owned sibling, so a reused one beside it would put the sibling into the composed
+          # set at two builds (MeshWeaver#3732; MeshWeaver.Plugins#4253: AI rebuilt, Essentials
+          # reused, MeshWeaver.Markdown.Collaboration refused at the gate).
           python3 build-logic/.github/scripts/node-repo-publication-reuse.py \
-            --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE" \
+            --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE" --root repo \
             --artifact-store "$ARTIFACT_STORE" --expect-store-id "$ARTIFACT_STORE_ID"
 
       # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
