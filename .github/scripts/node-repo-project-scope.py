@@ -115,6 +115,12 @@ def select(root, policy, files):
         shipped = set(shipped_of(root)) if callable(shipped_of) else set()
     except (OSError, ValueError):
         shipped = set()
+    # OPTIONAL, like `platform_shipped`: a caller whose project-closure.py can say which projects'
+    # MSBuild import chain contains a changed `.props`/`.targets` (MeshWeaver.Plugins#4314, for a
+    # nested `src/<cluster>/` layout) bills that file to them; without the hook, or when it cannot
+    # say, the file stays unclassified — full validation, the safe answer.
+    msbuild_of = getattr(projects, "msbuild_scope", None)
+    msbuild_owner = {}
     packages = scope.node_packages(root)
     noop_dirs, _ = scope.resolve_noop_dirs(root)
     if noop_dirs is None:
@@ -135,7 +141,18 @@ def select(root, policy, files):
             continue
         if path.startswith("src/"):
             if not any(under(path, project) for project in graph):
-                return answer(policy, f"unclassified compiled input {path} — full validation")
+                # 🚨 A TOP-LEVEL src/ file (src/Directory.Build.props, src/Directory.Packages.props,
+                # platform-shipped.txt) can change what EVERY project builds: always full, whatever
+                # a hook would answer.
+                billed = None
+                if callable(msbuild_of) and path.count("/") > 1:
+                    try:
+                        billed = msbuild_of(root, path)
+                    except (OSError, ValueError):
+                        billed = None
+                if not billed:
+                    return answer(policy, f"unclassified compiled input {path} — full validation")
+                msbuild_owner[path] = set(billed)
         elif path.split("/", 1)[0] not in packages:
             return answer(policy, f"shared or unknown input {path} — full validation")
         relevant.append(path)
@@ -162,6 +179,11 @@ def select(root, policy, files):
                             reads.append(pattern)
 
         def reaches(path):
+            importers = msbuild_owner.get(path)
+            if importers is not None:
+                if importers & set(closure):
+                    return True
+                return any(input_covers(path, r) for r in reads)
             owner = asset_owner.get(path)
             if owner is not None:
                 if entry_dir in (owner, owner + ".Test"):
@@ -230,6 +252,30 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
         project = root / a["project"]
         project.write_text('<Project><Content Include="../../Alpha/**" /></Project>')
         assert select(root, policy, ["Alpha/Lesson.md"])["build"] == [a["project"]]
+        project.write_text(_ENTRY_SOURCE)
+        # A NESTED MSBuild file no project owns (MeshWeaver.Plugins#4314's `src/<cluster>/` layout).
+        cluster = "src/cluster/Directory.Packages.props"
+        top = "src/Directory.Packages.props"
+        # NEGATIVE CONTROL: no `msbuild_scope` hook ⇒ unclassified ⇒ full, as before.
+        assert select(root, policy, [cluster])["count"] == 2
+        graph_src = (root / scope.PROJECTS).read_text()
+        (root / scope.PROJECTS).write_text(
+            graph_src + "def msbuild_scope(root, path):\n"
+            "    return {'src/Acme.Shared'} if path == 'src/cluster/Directory.Packages.props' else None\n")
+        got = select(root, policy, [cluster])
+        assert got["build"] == [a["project"]] and got["test"] == [], got  # billed to Shared ⇒ Alpha only
+        assert select(root, [a, {**b, "inputs": ["src/cluster/"]}], [cluster])["count"] == 2  # a declared read still counts
+        assert select(root, policy, ["src/cluster/Other.props"])["count"] == 2  # the hook cannot say ⇒ full
+        assert select(root, policy, [top])["count"] == 2  # top-level src/ file: full, never asked
+        (root / scope.PROJECTS).write_text(graph_src + "def msbuild_scope(root, path):\n    return {'src/Acme.Shared'}\n")
+        assert select(root, policy, [top])["count"] == 2  # …even when the hook would narrow it
+        assert select(root, policy, ["src/cluster/X.props"])["build"] == [a["project"]]
+        (root / scope.PROJECTS).write_text(graph_src + "def msbuild_scope(root, path):\n    raise ValueError('x')\n")
+        assert select(root, policy, [cluster])["count"] == 2  # a failing hook ⇒ full
+        (root / scope.PROJECTS).write_text(graph_src + "def msbuild_scope(root, path):\n    return set()\n")
+        assert select(root, policy, [cluster])["count"] == 2  # an EMPTY answer is not a narrowing
+        (root / scope.PROJECTS).write_text(graph_src)
+        project.write_text('<Project><Content Include="../../Alpha/**" /></Project>')
         for bad in [[], [a, a], [{**a, "project": "src/Missing/Missing.csproj"}]]:
             try:
                 select(root, bad, ["Alpha/Lesson.md"])
@@ -247,7 +293,7 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
         assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
         (isolated / "node-repo-scope.py").write_text("this is invalid Python !")
         assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
-    print("compiled project scope: 29 assertions passed")
+    print("compiled project scope: 38 assertions passed")
 
 
 def main():
