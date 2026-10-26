@@ -144,11 +144,12 @@ public class ABareWithViewLosesProvenanceTest(ITestOutputHelper output)
 }
 
 /// <summary>
-/// THE FIX, on the identical page. <c>WithNodePage</c> with no stated opinion composes the
-/// provenance line above the page — so a landing page written by somebody who never thought about
-/// provenance ships with it, instead of silently without.
+/// The default, on the identical page. <c>WithNodePage</c> with no stated opinion used to compose the
+/// provenance line above the page; since 2026-10-26 the portal shell carries it as the breadcrumb's
+/// current-crumb tooltip on every page, so the framework composes NOTHING and the page renders as
+/// it is. The verdict is still recorded, so "nobody decided" stays unrepresentable.
 /// </summary>
-public class WithNodePageSuppliesProvenanceTest(ITestOutputHelper output)
+public class WithNodePageLeavesProvenanceToTheShellTest(ITestOutputHelper output)
     : NodePageProvenanceExperimentBase(output)
 {
     /// <inheritdoc />
@@ -159,17 +160,13 @@ public class WithNodePageSuppliesProvenanceTest(ITestOutputHelper output)
             .AddMeshNodes(new MeshNode(Node) { Name = "Probe" });
 
     [HubFact]
-    public async Task ThePageRenders_BelowAProvenanceStrip()
+    public async Task ThePageRenders_WithNoStripAboveIt()
     {
         var root = await LandingPageRoot();
 
-        Assert.Contains(root.Areas, IsProvenanceStrip);
-
-        // The page is intact BELOW the strip — the framework composed, it did not replace. Found
-        // by taking the non-strip sibling's own rendered key rather than a positional guess.
-        var pageArea = Assert.Single(root.Areas.Where(a => !IsProvenanceStrip(a)));
-        var page = await Child(pageArea);
-        Assert.Contains(page.Areas, IsPageBody);
+        // The page's own body is a direct child of the landing area's root — nothing wrapped it.
+        Assert.Contains(root.Areas, IsPageBody);
+        Assert.DoesNotContain(root.Areas, IsProvenanceStrip);
     }
 }
 
