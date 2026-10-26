@@ -3599,8 +3599,9 @@ public static class MeshNodeStreamExtensions
             // handlers, so its block only ever dispatches replies to reads issued on it.
             //
             // 🚨 TryReadIssuingHub, never ReadIssuingHub: the latter falls back to the ROUTER when
-            // the read hub cannot be had — the mesh is past DisposeHostedHubs (or the read hub's
-            // construction faulted) — and a mesh-singleton reacting to the hosted-hub teardown then
+            // the read hub cannot be had — the mesh is disposing (Dispose() closes hosted-hub
+            // creation at its first instant, and MeshReadHub refuses outright past
+            // DisposeHostedHubs) or the read hub's construction faulted — and a mesh-singleton reacting to the hosted-hub teardown then
             // posted this GetDataRequest with Sender = mesh/{id}, the very ROUTER_TRAFFIC ORIGIN
             // line of #7136. There is no off-router hub left to issue on, so the read is not
             // issued at all: it settles Unavailable, the status that means "could not be read",
@@ -3609,10 +3610,15 @@ public static class MeshNodeStreamExtensions
             if (issuingHub is null)
             {
                 var mesh = hub.GetMeshHub();
-                var unissued = mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
+                // IsDisposing, not a run level: Dispose() sets it and closes hosted-hub CREATION
+                // (HostedHubsCollection.CloseCreation) while the run level still reads Started, so a
+                // read hub not yet created is refused from that first instant — well before
+                // DisposeHostedHubs. That window is teardown too and must be named as such.
+                var unissued = mesh.IsDisposing || mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
                     ? (Exception)new ObjectDisposedException(mesh.Address.ToString(),
                         $"GetMeshNode('{path}') was not issued: the caller holds the root mesh hub "
-                        + $"(the router), the mesh is tearing down (RunLevel={mesh.RunLevel}), so the "
+                        + $"(the router), the mesh is tearing down (IsDisposing={mesh.IsDisposing}, "
+                        + $"RunLevel={mesh.RunLevel}), so the "
                         + "off-router read hub cannot be materialised — and the router must never be "
                         + "an end of a delivery (#7136).")
                     : new InvalidOperationException(

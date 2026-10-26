@@ -105,6 +105,66 @@ public class NodeReadDuringMeshTeardownLeavesTheRouterOffTest(ITestOutputHelper 
             "the failure must name the teardown that made the read unissuable");
     }
 
+    /// <summary>
+    /// The EARLIER half of the same teardown: <c>MessageHub.Dispose()</c> sets <c>IsDisposing</c> and
+    /// closes hosted-hub creation (<c>HostedHubsCollection.CloseCreation</c>) before it enters
+    /// Quiescing, so the run level still reads <see cref="MessageHubRunLevel.Started"/> while a read
+    /// hub that does not exist yet can no longer be created. The mesh's own
+    /// <see cref="IMessageHub.ShuttingDown"/> fires synchronously in exactly that window, which makes
+    /// it the deterministic trigger. A read there must neither leave the router nor be misreported as
+    /// a construction fault: it is teardown, and must say so.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ANodeReadIssuedFromTheRouterAfterCreationCloses_IsNamedAsTeardown()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = $"{TestPartition}/teardown-read-target";
+        var mesh = Mesh;
+
+        // PRECONDITION: the shared read hub must not exist yet. An existing one is still handed out
+        // during the drain, and the read would then be issued from it, measuring nothing here.
+        mesh.GetHostedHub(AddressExtensions.CreatePortalAddress($"reads-{mesh.Address.Id}"),
+                HostedHubCreation.Never)
+            .Should().BeNull("this case is about a read hub that teardown no longer lets be created");
+
+        var issued = new AsyncSubject<(bool IsDisposing, MessageHubRunLevel RunLevel)>();
+        var outcome = new AsyncSubject<NodeReadOutcome>();
+        using var shuttingDown = mesh.ShuttingDown.Subscribe(_ =>
+        {
+            issued.OnNext((mesh.IsDisposing, mesh.RunLevel));
+            issued.OnCompleted();
+            mesh.GetMeshNodeOutcome(path, TimeSpan.FromSeconds(5), ReadTimeoutBehavior.EmitNull)
+                .Subscribe(
+                    o => { outcome.OnNext(o); outcome.OnCompleted(); },
+                    ex => outcome.OnError(ex));
+        });
+
+        mesh.Dispose();
+
+        var atIssue = await issued.Should().Within(30.Seconds()).Emit(
+            "the mesh signals ShuttingDown synchronously at the start of its teardown", ct);
+        atIssue.IsDisposing.Should().BeTrue("the read must be issued after Dispose() began");
+        (atIssue.RunLevel < MessageHubRunLevel.DisposeHostedHubs).Should().BeTrue(
+            $"the mesh was at {atIssue.RunLevel}; this case is the window BEFORE DisposeHostedHubs, "
+            + "where only the creation freeze refuses the read hub");
+
+        var read = await outcome.Should().Within(30.Seconds()).Emit(
+            "the read must settle either way", ct);
+        Output.WriteLine($"[read] status={read.Status} failure={read.Failure?.GetType().Name}: {read.Failure?.Message}");
+
+        foreach (var record in origins.Records)
+            Output.WriteLine($"[origin] {record}");
+        origins.Records
+            .Where(r => r.MessageType.Contains(nameof(GetDataRequest), StringComparison.Ordinal)
+                        && r.Role.Contains("sender", StringComparison.Ordinal))
+            .Should().BeEmpty("#7136: the read must never be POSTED from the router");
+
+        read.Status.Should().Be(NodeReadStatus.Unavailable);
+        read.Failure.Should().BeOfType<ObjectDisposedException>(
+            "the read hub was refused by the teardown's creation freeze, not by a construction fault; "
+            + "an InvalidOperationException here sends the reader looking for an error that never happened");
+    }
+
     private sealed record OriginRecord(string MessageType, string Role, string Sender, string Target, string CallSite);
 
     /// <summary>Reads the detector's own <c>ROUTER_TRAFFIC ORIGIN</c> ERROR out of the logging
