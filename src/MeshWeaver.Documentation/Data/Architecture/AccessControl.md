@@ -389,6 +389,40 @@ Defined as static properties on `Role` (`src/MeshWeaver.Mesh.Contract/Security/R
 | `Commenter` | Read, Comment, Api |
 | `PlatformAdmin` | `All \| Compile` |
 
+## Deleting and moving — what each demands
+
+**A move is a create at the target plus a delete at the source, and it demands exactly what those two
+demand — nothing special to a move.** So the question "who may move this?" is answered by "who may
+delete it?", and that has ONE answer, `DeletePermission.RequiredFor(path)`
+(`src/MeshWeaver.Mesh.Contract/Security/DeletePermission.cs`):
+
+| Deleting… | Demands | Who holds it |
+|---|---|---|
+| ordinary content — any node below a partition root | `Update` | Editor and Admin |
+| a partition root (a Space, a Partition, a user home) | `Delete` | Admin |
+| anything under `_Access`, `_Policy`, `_GitSync`, `_Entitlements` | `Delete` | Admin |
+| a node whose type's access rule decides Delete (Space, Partition, the sync config, …) | what the rule says | — |
+
+Deleting content is an edit of the space it lives in; deleting what GOVERNS a space — its root, its
+grants, its caps, its sync wiring, its purchases — is an administrator's call. Every rule-less delete
+path applies the same function: the `DeleteNodeRequest` / `ValidateDeleteRequest` delivery gates, the
+delete handler's per-node pre-flight (`CheckDeletePermissionByPath`), `RlsNodeValidator`, the
+`SatelliteAccessRule` fallback, `MoveNodePermissionAttribute` (the delete demand on the source
+namespace + `Create` on the target namespace) and the Delete / Move menu entries. A node type's own
+rule still decides for its own type. `Role.Editor` and the permission numbers are unchanged — the
+`Delete` bit still distinguishes an Admin, so `HasFlag(Permission.All)` (and `IsGlobalAdmin`) keep
+meaning what they meant, and nothing in the PostgreSQL permission projection changes.
+
+**Authorship travels only where the mover may carry it** (`MoveEntitlement` in `MeshExtensions`, the
+ONE function behind the move, `CopyNodeRequest.PreserveAuthorship` and `CreateNodeRequest.AuthorshipFrom`).
+`AccessContextScope` impersonates a node's `CreatedBy`, so carrying someone else's authorship into a
+place their governance does not cover would let owner-scoped work there run as them. A relocation
+keeps the stamps when the caller may delete the source AND either the target is in the SAME partition
+(the node stays under the governance that already covered it) or the caller holds `Delete` on the
+source's namespace (an administrator). Otherwise the move still succeeds and the node arrives stamped
+for the mover; a copy asking to preserve authorship is refused. Pinned by `EditorDeletesContentTest`
+(`test/MeshWeaver.Hosting.Test`).
+
 ## Permission flags
 
 ```csharp
@@ -1932,8 +1966,9 @@ Both are correct in isolation and both are on the same request. The effective po
 **conjunction**, so wherever a rule was *more permissive* than `Permission.Delete` the rule silently
 did not apply. `SatelliteAccessRule` maps a satellite's Delete to `Permission.Update` on its
 `MainNode` — creating a satellite is a modification of its main node, and so is removing it — and
-`Role.Editor` holds Update and **not** Delete. So an Editor could **publish a satellite onto a node
-and then be refused when erasing it**: "I can turn it on but not off", the exact state a
+`Role.Editor` held Update and **not** Delete, and at the time every delete demanded Delete (deleting
+ordinary content now demands Update — see "Deleting and moving" above). So an Editor could **publish a
+satellite onto a node and then be refused when erasing it**: "I can turn it on but not off", the exact state a
 revocable-consent feature exists to prevent, reachable by an ordinary Editor. It surfaced only when
 someone *ran* the writer (session presence, MeshWeaver.Plugins#1031), never by reading either file.
 
@@ -2033,14 +2068,16 @@ input deciding whether the gate ran, the shape AGENTS.md bans and `MissingEvalua
 pins one level up. `Undetermined` is still fail-closed; it just stops claiming a verdict nobody
 reached.
 
-Pinned by `SatelliteDeliveryGateTest` (`test/MeshWeaver.Graph.Test`), whose three cases are the three
-verdicts on one mesh: an Editor's satellite pre-flight is served, a Viewer's is refused
-`Unauthorized` (the rule DENIES — consulting a rule never means granting), and the same Editor at a
-plain `Markdown` child of the same node is still refused (no rule, nothing widened).
+Pinned by `SatelliteDeliveryGateTest` (`test/MeshWeaver.Graph.Test`), whose cases are the verdicts
+on one mesh: an Editor's satellite pre-flight is served, a Viewer's is refused `Unauthorized` (the
+rule DENIES — consulting a rule never means granting), the same Editor at a plain `Markdown` child is
+served (no rule, and deleting ordinary content demands Update), and the same Editor at a grant under
+`_Access` is refused (what governs a partition keeps demanding Delete — nothing widened beyond
+content).
 
 Pinned by `DeleteHonoursNodeTypeAccessRuleTest` (`MeshWeaver.Plugins`, `src/MeshWeaver.Security.Test`), whose four cases
-are the four rows of the table above — including the one that matters most, that an Editor still
-cannot delete a node whose type has no rule.
+are the four rows of the table above — including the one that matters most, that a rule-less node
+is decided by the standard demand (`DeletePermission.RequiredFor`).
 
 ## End-to-end: portal hub creating a VUser
 
