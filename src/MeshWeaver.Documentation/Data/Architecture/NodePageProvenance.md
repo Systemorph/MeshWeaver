@@ -18,7 +18,7 @@ The line is platform controls, never markup: a wrapping horizontal `Stack` of th
 each a `Label` and its value — the node type as a `Link` to its Configuration area, the creation
 stamp and the last change as `Label`s. The segments are projected once (`MetaLine.Of`, pure, the
 viewer's language passed in) and then either fed into `/data` and bound by pointer (the standard
-header and the composed strip) or passed as literals (`BuildMetaRow`); both go through the same
+header) or passed as literals (`BuildMetaRow`); both go through the same
 `MeshNodeLayoutAreas.MetaRow`, so the two shapes cannot drift. A segment the node has no value for
 is hidden through its bound style rather than removed, so the bound row keeps one shape.
 
@@ -61,18 +61,26 @@ The reported floor was "at least three". The real ratio is **87% of pages that o
 framework renderer**, and most of them in a repository no core reviewer reads. That number is what
 decided the shape of the fix: at 87%, patching call sites leaves the next page to be forgotten.
 
-## The shape: the default carries it
+## The shape: the default carries it — in the breadcrumb
 
 `MeshNodeLayoutAreas.WithNodePage` replaces the bare `WithView` for a landing area, and its
-NO-ARGUMENT form composes the provenance line above the page:
+NO-ARGUMENT form leaves the provenance line to the portal shell, which shows it as the
+**tooltip of the breadcrumb's current crumb** — on every page, landing or not, one hover away.
+
+> **Changed 2026-10-26 (maintainer):** the default used to compose a `Type · Created · Updated`
+> strip ABOVE the page. A technical strip over a designed page — a Store cover above all — looked
+> bad, so the line moved into the breadcrumb tooltip (`BreadcrumbProvenance` in the Blazor portal,
+> MeshWeaver.Plugins), built from the same `BuildMetaEntries` segments, localized and in the
+> viewer's zone. The framework composes nothing into the page any more; the verdict is still
+> recorded. The standard header's own provenance row (`BuildHeader`) and `BuildMetaRow` are
+> unchanged.
 
 ```csharp
-// The framework composes the line above your page. This is what you write when you have no
-// opinion about provenance — and it produces a correct page.
+// The page renders as it is; the shell's breadcrumb tooltip carries the line. This is what you
+// write when you have no opinion about provenance — and it produces a correct page.
 layout.WithNodePage(MeshNodeLayoutAreas.OverviewArea, MyPage)
 
-// The page already draws the standard header (it calls BuildHeader). The framework adds nothing;
-// two provenance lines on one page is a worse page than one.
+// The page already draws the standard header (it calls BuildHeader), provenance row included.
 layout.WithNodePage(OverviewArea, MyPage, NodePageProvenance.RenderedByThePage)
 
 // The page carries none, deliberately. The reason is MANDATORY — Declined("") throws.
@@ -82,8 +90,8 @@ layout.WithNodePage(OverviewArea, MyPage, NodePageProvenance.Declined(
 
 Three properties make this more than a rename of "opt-in" to "opt-out":
 
-1. **Forgetting produces a correct page.** The failure mode changes from "the line silently
-   disappears" to "the line silently appears", and the second is visible.
+1. **Forgetting produces a correct page.** The line is in the breadcrumb tooltip whatever the page
+   draws.
 2. **A decline is a sentence.** `NodePageProvenance.Declined` refuses a blank reason, so the record
    cannot say "somebody decided" without saying what.
 3. **The verdict cannot go stale.** It lives on the `LayoutDefinition` beside the renderer it
@@ -94,10 +102,6 @@ Three properties make this more than a rename of "opt-in" to "opt-out":
 
 `LayoutDefinition.GetNodePageProvenance(area)` reads it back, and `null` — "nobody decided" — stays
 distinguishable from `Declined` — "decided no".
-
-The composed strip honours the same per-node opt-out the standard header does,
-`ExcludeFromContext: [header]`, so a chrome-less marketing cover does not grow a metadata strip it
-was explicitly built without.
 
 ## What core decided for its own four
 
@@ -114,10 +118,10 @@ describe the INSTANCE while the broken thing is its TYPE.
 
 ## Measuring it on a rendered page
 
-The strip renders into an area with a stable id, `MeshNodeLayoutAreas.NodeMetaArea` (`NodeMeta`).
-Nested containers render into `{parentArea}/{childId}`, so its depth varies by page but its store
-key always ends in `/NodeMeta`; on a page the framework composed it for, the key is exactly
-`{area}/NodeMeta`.
+The standard header's provenance row renders into an area with a stable id,
+`MeshNodeLayoutAreas.NodeMetaArea` (`NodeMeta`). Nested containers render into
+`{parentArea}/{childId}`, so its depth varies by page but its store key always ends in `/NodeMeta`.
+A default `WithNodePage` landing page carries no `NodeMeta` area: its line is in the breadcrumb.
 
 That id exists because the previous way to answer "does this page carry provenance?" was to read
 the rendered HTML for the English word `Created:` — an assertion that a German reader sees an

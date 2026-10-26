@@ -99,5 +99,7 @@
     <Project Path="tools/MeshWeaver.ComboAssembler/MeshWeaver.ComboAssembler.csproj" />
     <Project Path="tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj" />
     <Project Path="tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj" />
+    <Project Path="tools/MeshWeaver.PluginTester.Extensibility/MeshWeaver.PluginTester.Extensibility.csproj" />
+    <Project Path="tools/MeshWeaver.PluginTester.Razor/MeshWeaver.PluginTester.Razor.csproj" />
   </Folder>
 </Solution>

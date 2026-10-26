@@ -233,6 +233,12 @@ repos:
         job: gate-follow
         lane: build-follow.yml
         grants: {contents: read, id-token: write}
+      # ── Retry known transients (MeshWeaver.Manufacturing#84) — ARRIVING. The thin caller, as in MeshWeaver.Crm.
+      - workflow: retry-known-transients.yml
+        job: retry
+        lane: node-repo-retry-transients.yml
+        grants: {actions: write, checks: read, contents: read}
+        pending: the thin retry-known-transients.yml caller lands in Systemorph/MeshWeaver.Education#413
 
   # ── MeshWeaver.Reinsurance ────────────────────────────────────────────────────────────────────
   Systemorph/MeshWeaver.Reinsurance:
@@ -624,6 +630,13 @@ repos:
         lane: node-repo-request-review.yml
         grants: {contents: read, pull-requests: write}
         pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
+      # ── Automatic review answered (MeshWeaver#4776) — ARRIVING. The thin review-answered.yml caller, identical to
+      # MeshWeaver.Crm's; the context joins protection only after it has run green on main.
+      - workflow: review-answered.yml
+        job: review-answered
+        lane: node-repo-review-answered.yml
+        grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+        pending: the thin review-answered.yml caller lands in Systemorph/MeshWeaver.FundReporting#17
 
   # ── Systemorph/Memex (the private deployment-config repository) ───────────────────────────────
   # 🚨 THE ONE ROW NOTHING RE-MEASURES, AND IT SAYS SO. Memex calls exactly one platform lane —
@@ -648,6 +661,19 @@ repos:
         lane: node-repo-request-review.yml
         grants: {contents: read, pull-requests: write}
         pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
+      # ── The review gate and the transient retry — ARRIVING with Systemorph/Memex#844. Both lanes work through the
+      # API only, so they fit this deployment repository as-is; the review context becomes required only once it
+      # has run green on main.
+      - workflow: review-answered.yml
+        job: review-answered
+        lane: node-repo-review-answered.yml
+        grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+        pending: the thin review-answered.yml caller lands in Systemorph/Memex#844
+      - workflow: retry-known-transients.yml
+        job: retry
+        lane: node-repo-retry-transients.yml
+        grants: {actions: write, checks: read, contents: read}
+        pending: the thin retry-known-transients.yml caller lands in Systemorph/Memex#844
 
   # ── Systemorph/MeshWeaver.Deploy (the public Helm chart repository) ─────────────────────────────
   # Its first platform-lane caller arrives with the review-on-change lane. Like Memex it does NOT call
