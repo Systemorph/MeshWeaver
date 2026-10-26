@@ -59,7 +59,14 @@ public static class DependencyEdgeExtraction
         ArgumentException.ThrowIfNullOrEmpty(selfPath);
 
         var owners = DeclaredTypeOwners(selfPath, roots, includes, ct);
-        var foreignOwners = owners.Values.Where(o => !IsSelf(o, selfPath))
+        // The foreign owners whose code this compile CONSUMED — read off the files (roots and
+        // includes), not off the declared types, so a foreign file that declares no type (only
+        // directives or assembly attributes) is still counted as an inclusion.
+        var foreignOwners = roots.Select(u => u.Path)
+            .Concat(includes?.Keys ?? [])
+            .Select(CodeConventions.OwnerOfCodePath)
+            .OfType<string>()
+            .Where(o => !IsSelf(o, selfPath))
             .ToImmutableSortedSet(StringComparer.OrdinalIgnoreCase);
 
         var nodeTypeEvidence = foreignOwners.IsEmpty
@@ -121,8 +128,34 @@ public static class DependencyEdgeExtraction
         foreach (var unit in roots)
             Attribute(unit.Path, unit.Code, overrideExisting: false);
         if (includes is not null)
+        {
             foreach (var (path, code) in includes.OrderBy(kv => kv.Key, StringComparer.Ordinal))
                 Attribute(path, code, overrideExisting: true);
+
+            // An include spliced INSIDE a namespace of the including file declares its types under
+            // that namespace, which a separate parse of the include cannot know. Find each include's
+            // text in the root it was spliced into and attribute the declarations within that span,
+            // under the names they carry IN THE ROOT, to the included node's owner.
+            foreach (var unit in roots)
+            {
+                var spans = includes
+                    .Select(kv => (Owner: CodeConventions.OwnerOfCodePath(kv.Key), Start: unit.Code.IndexOf(kv.Value, StringComparison.Ordinal), kv.Value.Length))
+                    .Where(x => x.Owner is not null && x.Start >= 0 && x.Length > 0)
+                    .ToArray();
+                if (spans.Length == 0)
+                    continue;
+                var root = CSharpSyntaxTree.ParseText(unit.Code, parseOptions, cancellationToken: ct).GetRoot(ct);
+                foreach (var declaration in root.DescendantNodes().OfType<MemberDeclarationSyntax>())
+                {
+                    if (TypeDeclarationName(declaration) is not { } name)
+                        continue;
+                    var at = declaration.SpanStart;
+                    foreach (var span in spans)
+                        if (at >= span.Start && at < span.Start + span.Length)
+                            byName[name] = span.Owner!;
+                }
+            }
+        }
         return byName.ToImmutableDictionary(StringComparer.Ordinal);
     }
 
@@ -188,24 +221,93 @@ public static class DependencyEdgeExtraction
         foreach (var tree in authoredTrees)
         {
             var model = compilation.GetSemanticModel(tree, ignoreAccessibility: true);
-            foreach (var name in tree.GetRoot(ct).DescendantNodes().OfType<SimpleNameSyntax>())
+            foreach (var node in tree.GetRoot(ct).DescendantNodes(
+                         descendIntoChildren: n => n is not UsingDirectiveSyntax))
             {
                 ct.ThrowIfCancellationRequested();
-                if (!IsSelf(OwnerOfLocation(name, owners) ?? selfPath, selfPath))
+                // A using directive is an IMPORT, not a use — and a hoisted one sits in the skeleton,
+                // outside every attributed type, where it would read as the compiling type's own.
+                if (node is UsingDirectiveSyntax)
                     continue;
-                var info = model.GetSymbolInfo(name, ct);
-                var symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
-                if (OutermostSourceType(symbol, compilation) is not { } type)
+                var bound = BoundSymbols(node, model, ct).ToArray();
+                if (bound.Length == 0 || !IsSelf(OwnerOfLocation(node, owners) ?? selfPath, selfPath))
                     continue;
-                var typeName = MetadataNameOf(type);
-                if (!owners.TryGetValue(typeName, out var owner) || IsSelf(owner, selfPath))
-                    continue;
-                if (!found.TryGetValue(owner, out var set))
-                    found[owner] = set = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
-                set.Add(typeName);
+                foreach (var symbol in bound)
+                {
+                    if (OutermostSourceType(symbol, compilation) is not { } type)
+                        continue;
+                    var typeName = MetadataNameOf(type);
+                    if (!owners.TryGetValue(typeName, out var owner) || IsSelf(owner, selfPath))
+                        continue;
+                    if (!found.TryGetValue(owner, out var set))
+                        found[owner] = set = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
+                    set.Add(typeName);
+                }
             }
         }
         return found.ToImmutableDictionary(kv => kv.Key, kv => kv.Value.ToImmutable(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Every symbol a syntax node BINDS — named (a simple name) or implicit: the enumerator pattern
+    /// of a <c>foreach</c> (an extension <c>GetEnumerator</c> nobody names), the awaiter pattern of an
+    /// <c>await</c>, a deconstruction's <c>Deconstruct</c>, a query clause's operator methods, a
+    /// collection initializer's <c>Add</c>, a target-typed <c>new()</c>'s constructor, and a
+    /// user-defined implicit conversion.
+    /// </summary>
+    private static IEnumerable<ISymbol?> BoundSymbols(SyntaxNode node, SemanticModel model, CancellationToken ct)
+    {
+        switch (node)
+        {
+            case SimpleNameSyntax name:
+                var info = model.GetSymbolInfo(name, ct);
+                yield return info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
+                break;
+            case CommonForEachStatementSyntax forEach:
+                var each = model.GetForEachStatementInfo(forEach);
+                yield return each.GetEnumeratorMethod;
+                yield return each.MoveNextMethod;
+                yield return each.CurrentProperty;
+                if (forEach is ForEachVariableStatementSyntax deconstructed)
+                    foreach (var method in DeconstructMethods(model.GetDeconstructionInfo(deconstructed)))
+                        yield return method;
+                break;
+            case AwaitExpressionSyntax awaited:
+                var awaitInfo = model.GetAwaitExpressionInfo(awaited);
+                yield return awaitInfo.GetAwaiterMethod;
+                yield return awaitInfo.GetResultMethod;
+                break;
+            case AssignmentExpressionSyntax { Left: TupleExpressionSyntax or DeclarationExpressionSyntax } assignment:
+                foreach (var method in DeconstructMethods(model.GetDeconstructionInfo(assignment)))
+                    yield return method;
+                break;
+            case QueryClauseSyntax clause:
+                var clauseInfo = model.GetQueryClauseInfo(clause, ct);
+                yield return clauseInfo.CastInfo.Symbol;
+                yield return clauseInfo.OperationInfo.Symbol;
+                break;
+            case SelectOrGroupClauseSyntax or OrderingSyntax:
+                yield return model.GetSymbolInfo(node, ct).Symbol;
+                break;
+            case ImplicitObjectCreationExpressionSyntax created:
+                yield return model.GetSymbolInfo(created, ct).Symbol;
+                break;
+            case InitializerExpressionSyntax { RawKind: (int)SyntaxKind.CollectionInitializerExpression } initializer:
+                foreach (var element in initializer.Expressions)
+                    yield return model.GetCollectionInitializerSymbolInfo(element, ct).Symbol;
+                break;
+        }
+
+        if (node is ExpressionSyntax expression && model.GetConversion(expression, ct) is { IsUserDefined: true } conversion)
+            yield return conversion.MethodSymbol;
+    }
+
+    private static IEnumerable<ISymbol?> DeconstructMethods(DeconstructionInfo info)
+    {
+        yield return info.Method;
+        foreach (var nested in info.Nested)
+            foreach (var method in DeconstructMethods(nested))
+                yield return method;
     }
 
     /// <summary>The owner of the code a reference sits in: the owner of its OUTERMOST enclosing type

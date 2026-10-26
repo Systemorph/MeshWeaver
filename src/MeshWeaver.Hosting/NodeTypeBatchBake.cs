@@ -1477,9 +1477,17 @@ internal static class NodeTypeBatchBake
         string? unreleasedBuildFailureClass = null)
     {
         var gate = mesh.ServiceProvider.GetService<MeshPublicationGate>();
+        // The forward dependency edges this compile read (Doc/Architecture/DependencyGraph) ride
+        // the SAME gated publication as the stamp, as on the activation path: a cold-start batch
+        // compile is still a compile that ran Roslyn here, and its edges must not be the only ones
+        // missing. A held stamp holds them too; a discarded one writes neither.
+        var dependencyEdges = ok ? result?.DependencyEdges : null;
         IObservable<Unit> Stamp() =>
             BuildStamp(mesh, typeNode, ok, result, error, releasePath, startedAt, logger,
-                unreleasedBuildPath, unreleasedBuildReason, unreleasedBuildFailureClass);
+                    unreleasedBuildPath, unreleasedBuildReason, unreleasedBuildFailureClass)
+                .Concat(Observable.Defer(() => dependencyEdges is null
+                    ? Observable.Empty<Unit>()
+                    : MeshWeaver.Graph.Configuration.DependencyEdgeSetWriter.Write(mesh, dependencyEdges, logger)));
         return gate is null
             ? Observable.Defer(Stamp)
             : gate.Publish($"NodeType compile stamp for {typeNode.Path}", Stamp);

@@ -41,6 +41,10 @@ One node per compiled source, holding that source's whole forward edge set:
   `InputDigest` the generated-input digest of that compile. A consumer that finds a set whose
   `BuildMvid` is not the type's current build knows the edges are stale — the check step (4)
   needs.
+- **In-memory compiles** (disk cache off) record the loaded image's MVID as `BuildMvid`, while the
+  NodeType record leaves `LatestAssemblyMvid` unstamped there (it names a STORED build, and an
+  in-memory build has none). A reader comparing the two on such a mesh sees "not current". That is
+  loud, not silent. Whether in-memory builds should stamp an identity is a separate decision.
 - **Only a compile that ran Roslyn writes one.** A cache hit, an adopted prebuilt or the hydration
   shortcut has no compilation to read, so it writes nothing and the existing set (with its own
   `BuildMvid`) stays as it is. "Extracted, and there are no edges" is an EMPTY set; "never
@@ -73,7 +77,24 @@ used — after the source generators, before the emitted bytes are loaded — an
    as `TargetBuildMvid`. Platform (TPA) assemblies and NuGet packages are not edges.
 4. **Included but unused.** A foreign owner whose code was compiled in but never referenced from
    the compiling type's own code is listed in `IncludedWithoutUse`, not as an edge — the inclusion
-   is a declared source query, the edge is what Roslyn bound.
+   is a declared source query, the edge is what Roslyn bound. The candidates are read off the
+   consumed FILES (roots and includes), so a foreign file that declares no type still counts.
+
+What "binds" covers: every simple name, plus the bindings no name spells — a `foreach` enumerator
+pattern (an extension `GetEnumerator`), an `await` awaiter, a deconstruction's `Deconstruct`, query
+clause operators, a collection initializer's `Add`, a target-typed `new()`, and a user-defined
+implicit conversion. A `using` directive is an import, not a use, and is skipped (hoisted directives
+sit in the skeleton, outside every attributed type). An `@@` include spliced inside a namespace of
+the including file is attributed under the name it carries there, by its span in that file.
+
+Known limits, each failing towards an extra edge rather than a missing one:
+- **A partial type whose parts two owners declare.** Its declaration is attributed to the compiling
+  type. A reference inside the foreign part then reads as the compiling type's own.
+- **Code outside any `Source/` or `Test/` segment** has no owner. A reference in it reads as the
+  compiling type's own.
+
+Telling these apart exactly needs each reference's file origin carried through source shaping. That
+is a change to the emitted input, and it moves every content key.
 
 The walk is skipped entirely when the compile consumed no foreign-owned code, so a self-contained
 type pays one `GetUsedAssemblyReferences` call and nothing else.
@@ -91,7 +112,8 @@ which is what step 1 does.
 | compile | extraction | written by |
 |---|---|---|
 | runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane | the compile settle, beside the terminal stamp, as the edge-set node |
-| build-process bake (`NodeSetCompiler.Compile`) | after the emit | carried on `CompiledNode.DependencyEdges` for the bundle — writing it into a mesh at adoption is a follow-up |
+| cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate |
+| build-process bake (`NodeSetCompiler.Compile`) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges` for the bundle — writing it into a mesh at adoption is a follow-up |
 | module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | not yet | follow-up: it runs in CI with no mesh, so its edges need a transport (the bundle, then the registry) that belongs with step (4); and its one-body-pass discipline means `GetUsedAssemblyReferences`' extra binding cost is measured there before it is added |
 
 ## The reverse closure (step 3)

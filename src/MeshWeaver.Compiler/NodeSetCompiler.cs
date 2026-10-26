@@ -257,6 +257,8 @@ public static class NodeSetCompiler
     /// would emit an assembly missing the very types the directive exists to supply.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <param name="ct">Cancellation.</param>
+    /// <param name="moduleAssemblyPaths">The installed module assemblies' files, for the
+    /// <c>Module</c> dependency edges; null or empty records none.</param>
     public static CompiledNode Compile(
         NodeSet nodes,
         MeshNode typeNode,
@@ -270,7 +272,8 @@ public static class NodeSetCompiler
         string outputDirectory,
         Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>? resolveNuGet = null,
         ILogger? logger = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyCollection<string>? moduleAssemblyPaths = null)
     {
         ArgumentNullException.ThrowIfNull(references);
         ArgumentNullException.ThrowIfNull(dependencyIdOf);
@@ -322,13 +325,13 @@ public static class NodeSetCompiler
                 ReferencedAssemblyNames(artifact.DllPath), dependencyIdOf, toolchainId, digest))
         {
             Warnings = [.. artifact.Warnings],
-            // The modules are the references the caller composed ON TOP of the platform baseline
-            // (CompileReferences.ComposeWithModules) — told apart by file, never by name.
+            // The modules are the files the CALLER names (moduleAssemblyPaths) — told apart by file,
+            // never by name and never by subtracting a baseline: a directory host's platform
+            // references are fresh instances, and an image-bound module may sit in the baseline.
+            // None named ⇒ no module edges, never a guess.
             DependencyEdges = DependencyEdgeExtraction.Extract(
                     compilation, authored.SyntaxTrees, inputs.NodePath, inputs.SourceUnits, inputs.ResolvedIncludes,
-                    DependencyEdgeExtraction.ModuleReferences(references,
-                        references.Except(CompileReferences.Default)
-                            .OfType<PortableExecutableReference>().Select(r => r.FilePath)),
+                    DependencyEdgeExtraction.ModuleReferences(references, moduleAssemblyPaths ?? []),
                     ct)
                 with { BuildMvid = MvidOfFile(artifact.DllPath), InputDigest = digest },
         };

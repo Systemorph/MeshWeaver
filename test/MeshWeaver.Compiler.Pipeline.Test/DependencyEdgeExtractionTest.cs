@@ -61,7 +61,7 @@ public class DependencyEdgeExtractionTest
     /// <paramref name="sources"/> and returns what the bake recorded.</summary>
     private static NodeSetCompiler.CompiledNode CompileB(
         IReadOnlyList<MeshNode> nodes, IReadOnlyList<string>? sources, System.Threading.CancellationToken ct,
-        IReadOnlyList<MetadataReference>? references = null)
+        IReadOnlyList<MetadataReference>? references = null, IReadOnlyCollection<string>? moduleAssemblyPaths = null)
     {
         var output = Path.Combine(Path.GetTempPath(), "mw-depedges-" + Guid.NewGuid().ToString("N"));
         try
@@ -73,7 +73,8 @@ public class DependencyEdgeExtractionTest
                 dependencyIdOf: _ => null,
                 toolchainId: NodeTypeCompilationHelpers.ProcessToolchainId,
                 outputDirectory: output,
-                ct: ct);
+                ct: ct,
+                moduleAssemblyPaths: moduleAssemblyPaths);
         }
         finally
         {
@@ -240,7 +241,8 @@ public class DependencyEdgeExtractionTest
                     """)],
                 sources: null, TestContext.Current.CancellationToken,
                 references: [.. CompileReferences.Default,
-                    MetadataReference.CreateFromFile(used), MetadataReference.CreateFromFile(unused)]).DependencyEdges!;
+                    MetadataReference.CreateFromFile(used), MetadataReference.CreateFromFile(unused)],
+                moduleAssemblyPaths: [used, unused]).DependencyEdges!;
 
             var module = edges.Edges.Should().ContainSingle(
                 "the unused module is referenced but never bound — GetUsedAssemblyReferences prunes it").Which;
@@ -255,6 +257,135 @@ public class DependencyEdgeExtractionTest
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
         }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void NegativeControl_AReferenceTheCallerDoesNotNameAsAModule_IsNoModuleEdge()
+    {
+        var used = EmitModule("DepGraphProbeNotNamed", """
+            namespace DepGraphProbe.NotNamed;
+            /// <summary>A type a NodeType binds.</summary>
+            public sealed class Widget { /// <summary>Its name.</summary>
+            public string Name => "w"; }
+            """);
+        try
+        {
+            var edges = CompileB(
+                [Code(B, "UsesIt", """
+                    /// <summary>Binds a referenced assembly the caller did not name as a module.</summary>
+                    public static class UsesIt
+                    {
+                        /// <summary>The widget's name.</summary>
+                        public static string Name() => new DepGraphProbe.NotNamed.Widget().Name;
+                    }
+                    """)],
+                sources: null, TestContext.Current.CancellationToken,
+                references: [.. CompileReferences.Default, MetadataReference.CreateFromFile(used)],
+                moduleAssemblyPaths: null).DependencyEdges!;
+            edges.Edges.Should().BeEmpty("what is a module is NAMED by the caller, never guessed by subtracting a baseline");
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(used)!, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AForeignFileThatDeclaresNoType_IsStillAnInclusion()
+    {
+        var edges = CompileB(
+            [Code(A, "Notes", "// Lib/A's shared notes: declares nothing."), Code(B, "Own", """
+                /// <summary>B's own code.</summary>
+                public record Own(int Value);
+                """)],
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().BeEmpty();
+        edges.IncludedWithoutUse.Should().Equal([A], "the file was consumed although it declares no type");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AnIncludeSplicedIntoANamespace_IsAttributedUnderItsNamespacedName()
+    {
+        var edges = CompileB(
+            [AThing(), Code(B, "UsesA", """
+                namespace Wrapped
+                {
+                    @@Lib/A/Source/AThing
+                }
+
+                /// <summary>B's own code, binding the included type under its namespaced name.</summary>
+                public static class UsesWrapped
+                {
+                    /// <summary>One.</summary>
+                    public static Wrapped.AThing One() => new(1);
+                }
+                """)],
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A);
+        edges.Edges[0].Evidence.Should().Equal(["Wrapped.AThing"]);
+        edges.IncludedWithoutUse.Should().BeEmpty();
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AnImplicitBinding_AForeachOverAForeignExtensionEnumerator_IsAnEdge()
+    {
+        var edges = CompileB(
+            [Code(A, "Ranges", """
+                using System.Collections.Generic;
+                /// <summary>Lib/A's extension enumerator over an int.</summary>
+                public static class IntRanges
+                {
+                    /// <summary>0 .. n-1.</summary>
+                    public static IEnumerator<int> GetEnumerator(this int n)
+                    {
+                        for (var i = 0; i < n; i++)
+                            yield return i;
+                    }
+                }
+                """), Code(B, "Sums", """
+                /// <summary>B's own code: no name of A's appears, the binding is the foreach pattern.</summary>
+                public static class Sums
+                {
+                    /// <summary>0 + 1 + 2.</summary>
+                    public static int UpToThree()
+                    {
+                        var sum = 0;
+                        foreach (var i in 3)
+                            sum += i;
+                        return sum;
+                    }
+                }
+                """)],
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A);
+        edges.Edges[0].Evidence.Should().Equal(["IntRanges"]);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void NegativeControl_AHoistedUsingStaticOfForeignCode_IsNotAUse()
+    {
+        var edges = CompileB(
+            [Code(A, "Helpers", """
+                using static AHelpers;
+                /// <summary>Lib/A's helpers, imported by its own file.</summary>
+                public static class AHelpers
+                {
+                    /// <summary>One.</summary>
+                    public static int One() => 1;
+                }
+                """), Code(B, "Own", """
+                /// <summary>B's own code, binding nothing of A's.</summary>
+                public record Own(int Value);
+                """)],
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().BeEmpty("A's own using directive is hoisted into the skeleton, but an import is not a use");
+        edges.IncludedWithoutUse.Should().Equal([A]);
     }
 
     [Fact]
