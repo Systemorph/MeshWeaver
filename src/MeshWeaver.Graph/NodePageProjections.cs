@@ -43,11 +43,6 @@ internal static class NodePageProjections
     internal sealed record HeaderView(
         string Style, string Title, string Icon, string IconSize, string IconFit, string TileStyle, MetaLine Meta);
 
-    /// <summary>The provenance strip a framework-composed landing page carries.</summary>
-    /// <param name="Style">The strip's style — hidden for a node excluded from the header context.</param>
-    /// <param name="Meta">The provenance line.</param>
-    internal sealed record MetaView(string Style, MetaLine Meta);
-
     /// <summary>The node's markdown body.</summary>
     /// <param name="Markdown">The raw markdown (empty when the node carries none).</param>
     /// <param name="Html">The pre-rendered HTML, or null.</param>
@@ -95,14 +90,6 @@ internal static class NodePageProjections
                 (node, partitionRoot) => ProjectHeader(node, partitionRoot, hubPath, visibleStyle, viewer))
             .DistinctUntilChanged();
     }
-
-    /// <summary>The provenance strip of the hub's own node.</summary>
-    internal static IObservable<MetaView> Meta(LayoutAreaHost host, string visibleStyle, Viewer viewer)
-        => host.Workspace.GetMeshNodeStream()
-            .Select(node => new MetaView(
-                IsHeaderless(node) ? Hidden : visibleStyle,
-                MetaLine.Of(MeshNodeLayoutAreas.BuildMetaEntries(node, viewer.ZoneId), viewer.Locale)))
-            .DistinctUntilChanged();
 
     /// <summary>The markdown body of the hub's own node.</summary>
     internal static IObservable<BodyView> Body(LayoutAreaHost host, string visibleStyle)
