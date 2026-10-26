@@ -32,14 +32,8 @@ public class CreateDeadlineReleasesHubTest(ITestOutputHelper output) : MonolithM
     {
         var weak = await CreateThenDisposeMesh();
 
-        for (var i = 0; i < 3 && weak.IsAlive; i++)
-        {
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
-        }
-
-        weak.IsAlive.Should().BeFalse(
+        // Awaited, never one immediate collection — see CopyMoveDeadlineReleasesHubTest.
+        await Collected.Of(weak).Should().Within(TestTimeouts.Convergence).Emit(
             "the completed create's cancelled Rx deadline is still queued, but it must not retain "
             + "the handler's disposed mesh hub for the rest of the operation budget");
     }

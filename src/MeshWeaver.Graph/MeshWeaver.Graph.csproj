@@ -62,6 +62,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Icons\**\*.*" />
+    <!-- The upstream licences of vendored glyphs (MIT requires the notice to travel with the copies). -->
+    <EmbeddedResource Include="ThirdPartyNotices\**\*.*" />
     <!-- Built-in import script templates seeded as Code MeshNodes via
          GraphImportTemplates. Embed as resources so the .csx text travels
          inside the assembly with no file-system lookup at runtime. -->
