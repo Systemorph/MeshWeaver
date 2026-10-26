@@ -57,11 +57,13 @@ public partial class MeshQuery : IMeshQueryCore
     /// <see cref="IMeshQueryProvider.Name"/> here threw <c>Module … holds no service scope in this
     /// mesh</c>; <c>IMeshService</c> builds this fan-out, a hosted service takes <c>IMeshService</c>, so
     /// the host never started and the pod crash-looped while the module was merely reported as
-    /// contributing nothing. A module's provider is now bound under ONE lease
-    /// (<see cref="ModuleServiceProxy.TryLease{T}"/>): its name is read from the generation's own instance,
-    /// a proxy that cannot be leased is left out, and the fan-out skips a provider whose module is retired
-    /// later — the feature is absent and the withdrawal is reported, exactly as for the security rules
-    /// (<see cref="NodeTypeAccessRuleSet"/>).</para>
+    /// contributing nothing. Building the fan-out therefore never asks a module for its provider: each
+    /// SUBSCRIPTION leases it once (<see cref="ModuleServiceProxy.TryLease{T}"/>), reads its name from the
+    /// generation's own instance, and leaves out a provider that cannot be leased — the feature is absent
+    /// and the withdrawal is reported, exactly as for the security rules (<see cref="NodeTypeAccessRuleSet"/>).
+    /// Leasing at build time also closed a cycle: a module provider whose own construction builds an
+    /// <c>IMeshService</c> was leased again, on the same thread, by the fan-out that service built
+    /// (MeshWeaver#7218).</para>
     /// </summary>
     /// <param name="providers">The registered per-adapter query providers to aggregate.</param>
     /// <param name="hub">The message hub supplying JSON serializer options and identity context.</param>
@@ -81,38 +83,42 @@ public partial class MeshQuery : IMeshQueryCore
         this.hub = hub;
     }
 
-    // An ordinary provider as it is; a module's forwarding proxy bound to its name, read under one lease.
-    // 🚨 A proxy whose lease cannot be taken NOW is RETAINED, its name read when a later subscription
-    // leases it (review of #6854): this set is built once and cached for the mesh's life, so dropping it
-    // here dropped the module's provider for good — past a construction fault that has since cleared,
-    // and past every later generation of the module. Each subscription decides membership afresh
-    // (QueryMembers).
-    private static IMeshQueryProvider Bind(IMeshQueryProvider provider)
-    {
-        if (provider is not ModuleServiceProxy)
-            return provider;
-        using var lease = ModuleServiceProxy.TryLease(provider);
-        return new ModuleQueryProvider(provider, lease?.Service.Name);
-    }
+    // An ordinary provider as it is; a module's forwarding proxy wrapped UNBOUND — its name is read from
+    // the instance the first subscription leases (QueryMembers), never here.
+    // 🚨 Building the fan-out constructs NO module provider (MeshWeaver#7218). It is built inside every
+    // IMeshService, and a module provider's own construction may build an IMeshService: the mail module's
+    // Teams chats provider reaches the portal's user directory, a root singleton over IMeshService. A
+    // lease taken here re-entered the provider's singleton slot on the thread already building it, the
+    // container refused that as a circular dependency on IMeshQueryProvider, and every pod reported the
+    // registration as not constructible. Each subscription decides membership afresh (QueryMembers), so
+    // a proxy is also never dropped for a fault at build time (review of #6854).
+    private static IMeshQueryProvider Bind(IMeshQueryProvider provider) =>
+        provider is ModuleServiceProxy ? new ModuleQueryProvider(provider) : provider;
 
     /// <summary>
-    /// A module's query provider as the fan-out holds it: the name read once when the fan-out was built,
+    /// A module's query provider as the fan-out holds it: never constructed when the fan-out is built,
     /// and every use made on the module's CURRENT generation under a lease (<see cref="ModuleServiceProxy.TryLease{T}"/>)
     /// — for <see cref="Matches"/> the call, for every observable member the whole SUBSCRIPTION
     /// (<see cref="ModuleServiceProxy.Leased{T, TResult}"/>) — never a check followed by a call through the proxy,
     /// which a retirement in between turned into <c>Module … holds no service scope</c>. A module retired
     /// before the call is a named <see cref="ModuleRetiredException"/>.
     /// </summary>
-    private sealed class ModuleQueryProvider(IMeshQueryProvider forwarder, string? boundName) : IMeshQueryProvider
+    private sealed class ModuleQueryProvider(IMeshQueryProvider forwarder) : IMeshQueryProvider
     {
         public IMeshQueryProvider Forwarder => forwarder;
 
-        // The provider's own name, read when the fan-out was built — or, when it could not be leased
-        // then, null: its name is read from the instance a subscription leases (QueryMembers).
-        public string? BoundName => boundName;
+        // The provider's own name, learned from the first instance a subscription leased (QueryMembers) —
+        // null until then. It lets a later subscription leave out a duplicate registration of a provider
+        // another member already answers for WITHOUT constructing it.
+        private string? learnedName;
 
-        // What the fan-out dedupes by: the bound name, or the forwarder's label until one is read.
-        public string Name => boundName ?? ModuleServiceProxy.Label(forwarder);
+        public string? LearnedName => Volatile.Read(ref learnedName);
+
+        public void Learn(string name) => Volatile.Write(ref learnedName, name);
+
+        // What the fan-out dedupes by when it is built: the forwarder's label (module and registration).
+        // The provider's own name is read from the instance a subscription leases (QueryMembers).
+        public string Name => ModuleServiceProxy.Label(forwarder);
 
         public bool Matches(IReadOnlyList<string> queryNamespaces) => Call(p => p.Matches(queryNamespaces));
 
@@ -220,11 +226,12 @@ public partial class MeshQuery : IMeshQueryCore
         private readonly System.Reactive.Disposables.CompositeDisposable pinned = new();
 
         // 🚨 Members are distinct by RESOLVED name, first registration wins (review of #6854). The fan-out
-        // dedupes by name when it is built, but a module provider whose lease failed then is held under its
-        // forwarder's label until a subscription reads its real name — so a duplicate registration of the
+        // dedupes by name when it is built, but a module provider is held there under its forwarder's
+        // label until a subscription reads its real name (MeshWeaver#7218) — so a duplicate registration of the
         // same logical provider can surface here under the name another member already has. Running both
         // would execute the provider twice and open two change feeds for one query (the exactly-once
-        // contract of IMeshQueryProvider). A later duplicate is dropped and its lease released at once.
+        // contract of IMeshQueryProvider). A later duplicate is dropped and its lease released at once — and
+        // once its name is learned, later subscriptions leave it out without leasing it.
         public QueryMembers(IReadOnlyList<IMeshQueryProvider> registered)
         {
             var members = System.Collections.Immutable.ImmutableList.CreateBuilder<IMeshQueryProvider>();
@@ -241,14 +248,26 @@ public partial class MeshQuery : IMeshQueryCore
                         members.Add(provider);
                         continue;
                     }
-                    if (module.TryLease() is not { } lease)
+                    // A registration already known to answer under a member's name is a duplicate: left
+                    // out before it is leased, so a transient one is not constructed only to be dropped.
+                    // A registration that cannot be leased NOW keeps its learned name: the first registration
+                    // of a provider wins, so a duplicate does not stand in for it (as when the names were
+                    // read at build time and the duplicate was never a member).
+                    if (module.LearnedName is { } known && names.Contains(known))
                         continue;
+                    if (module.TryLease() is not { } lease)
+                    {
+                        if (module.LearnedName is { } unserved)
+                            names = names.Add(unserved);
+                        continue;
+                    }
                     string name;
                     try
                     {
-                        // Module code when the name was not read at build time: a lease no member owns yet
-                        // must not leak (and keep its generation from ever quiescing) when it throws.
-                        name = module.BoundName ?? lease.Service.Name;
+                        // Module code: a lease no member owns yet must not leak (and keep its generation
+                        // from ever quiescing) when it throws.
+                        name = lease.Service.Name;
+                        module.Learn(name);
                     }
                     catch
                     {
