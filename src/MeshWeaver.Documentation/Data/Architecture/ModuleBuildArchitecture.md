@@ -662,13 +662,6 @@ keeps the supersede model in the next section.
   it FAILED, or withheld its publication, it is walked past and its changes stay in the waiting
   run's union. A run that overlaps in time (a re-run, or the release lane) can still rebuild a
   network that another run is building; rule 4 makes that harmless.
-* **The Tests-area gate narrows a push the same way** (`node-repo-gate.yml` `push-base`). A caller
-  that knows the newest green main run its push descends from (MeshWeaver.Plugins: the change set's
-  `push-base`) passes it, and the gate runs the caller's `affected-modules.py` closure of
-  `<push-base>..HEAD`. A base that is not a full sha, is missing from the checkout, is off HEAD's
-  line or equals HEAD, and a range that touches `.github/` or `scripts/`, all run the full set and
-  print why. Without the input, a push gates everything, as before. A run that overlaps in time (a re-run, or the release lane) can still rebuild a
-  network that another run is building; rule 4 makes that harmless.
 * **A red newest leg.** When the newest run's leg for a module fails, rule 4 has already stood the
   older leg down, so the module stays at its previously published version until the fix lands. The
   red is on the trunk and names the module.
@@ -690,6 +683,12 @@ keeps the supersede model in the next section.
   unit actually changed. (Raised by the DeepSign session, 2026-09-11.)
 * **An in-flight platform run is not cancelled** by a newer one (rule 6 replaces only a queued one):
   cancelling it mid-seal is the torn publication of Plugins#826.
+* **The Tests-area gate narrows a push the same way** (`node-repo-gate.yml` `push-base`). A caller
+  that knows the newest green main run its push descends from (MeshWeaver.Plugins: the change set's
+  `push-base`) passes it, and the gate runs the caller's `affected-modules.py` closure of
+  `<push-base>..HEAD`. A base that is not a full sha, is missing from the checkout, is off HEAD's
+  line or equals HEAD, and a range that touches `.github/` or `scripts/`, all run the full set and
+  print why. Without the input, a push gates everything, as before.
 
 ## 🚨 Superseded runs on `main` — cancelled by construction, selected by the compile tree
 
