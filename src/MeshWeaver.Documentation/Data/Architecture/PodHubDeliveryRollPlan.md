@@ -155,6 +155,28 @@ That last row is the one that matters most and the one a producer-side check can
 *reply* cannot be delivered, the party that needs to know is the original requester — and it is
 precisely the party that is unreachable. Making the reply land is the only answer.
 
+### When the NACK's own sender cannot be reached
+
+A NACK that cannot be carried has two causes that look alike in the log and need opposite
+answers. Telling them apart is what keeps the undeliverable-NACK line honest:
+
+| the sender | what the router sees | what it does |
+|---|---|---|
+| a pod-process hub whose owner RELEASED it (a closed circuit) | `PodHubNotHereException { Released = true }` | **drops the NACK, one Debug line.** The tombstone is stamped only when the owner disposed its registration with no live route left (#5136), a closed circuit id is never reused, and a hub that comes back claims afresh. Nobody is waiting, so nothing is reported as a failure (#7001). |
+| a pod-process hub whose claim is NOT held, not released | `PodHubNotHereException { Released = false }` | **Error, windowed.** This is the stranded-claim shape (#2938): the sender may be alive and is burning its budget. |
+| a per-node hub whose address names no node | the sender resolves to "neither a pod-process hub nor a node" | **Error, windowed.** The sender is ALIVE (it is the one sending), so dropping its NACK would hide a fan-out to a corpse. |
+
+The last row was the visible end of a lifecycle defect, not a routing one (#7171): a **move**
+removed the source rows but, unlike a delete, neither invalidated the node-stream cache nor
+disposed the per-node hub activated under the source address. That activation went on serving
+under an address the router resolves to nothing, so neither forward traffic nor the terminal NACK
+that makes an owner evict a closed circuit could reach it. On memex, after a node was moved, the
+router logged hundreds of undeliverable NACKs a minute to its old address. The move's delete leg
+now retires every removed source path the way the delete commit does
+(`MeshExtensions.RetireRemovedPath`). That disposal is local to the process that runs the move,
+the same reach the delete commit has. An activation of the source on another silo is not reached
+by it, and that residual is still logged at Error, because its sender is alive.
+
 ## 🚨 What the swap traded — read this before calling #1742 closed
 
 The table above is about the *stream's* residuals, and it is accurate. It is also only half the
