@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
-using System.Text.RegularExpressions;
+using MeshWeaver.PluginTester.Extensibility;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
@@ -42,43 +42,40 @@ namespace MeshWeaver.PluginTester;
 /// missed staleness costs what the status quo already costs. So the image side counts type
 /// FORWARDERS as definitions (a forwarded type is just as visible to the compiler), the source side
 /// counts every <c>.cs</c> under the root — in-mesh <c>Source/*.cs</c> nodes included, they are this
-/// repository's source too — and a <c>.razor</c>/<c>.cshtml</c> component contributes BOTH the
-/// namespace it declares (an <c>@namespace</c> directive, or the nearest <c>_Imports.razor</c> plus
-/// the folder path below it — which is how a moved view keeps the old namespace <c>CS0436</c>
-/// requires) AND, as a fallback, its simple name with its directory suffix, since the
-/// <c>RootNamespace</c> prefix is the Razor SDK's to compute and a re-derivation that got it wrong
-/// would produce precisely the false red this check must never produce. Razor is not a corner case
-/// here: the move that motivated the whole option (MeshWeaver.Plugins#1268) was three <c>.razor</c>
-/// views.</para>
+/// repository's source too — and every file a loaded BUILD EXTENSION claims contributes whatever the
+/// extension reads off it (the Razor extension: a component's declared namespace, and as a fallback
+/// its simple name with its directory suffix, since the <c>RootNamespace</c> prefix is the SDK's to
+/// compute and a re-derivation that got it wrong would produce precisely the false red this check
+/// must never produce).</para>
 ///
 /// <para>An assembly whose metadata cannot be READ is a refusal of its own, never a staleness
 /// verdict — naming the wrong entry to delete is worse than saying nothing.</para>
 /// </summary>
-internal sealed partial class SupersededEntryStaleness
+internal sealed class SupersededEntryStaleness
 {
     /// <summary>Build output and tool caches under the source root declare nothing a human wrote.</summary>
     private static readonly ImmutableHashSet<string> SkippedDirectories = ImmutableHashSet.Create(
         StringComparer.OrdinalIgnoreCase, "bin", "obj", ".git", ".vs", ".idea", "node_modules", "packages");
 
     private readonly ImmutableHashSet<string> declaredTypes;
-    private readonly ImmutableDictionary<string, ImmutableHashSet<string>> razorComponentDirectories;
+    private readonly ImmutableDictionary<string, ImmutableHashSet<string>> suffixDeclared;
 
     private SupersededEntryStaleness(
         string sourceRoot,
         int filesScanned,
         ImmutableHashSet<string> declaredTypes,
-        ImmutableDictionary<string, ImmutableHashSet<string>> razorComponentDirectories)
+        ImmutableDictionary<string, ImmutableHashSet<string>> suffixDeclared)
     {
         SourceRoot = sourceRoot;
         FilesScanned = filesScanned;
         this.declaredTypes = declaredTypes;
-        this.razorComponentDirectories = razorComponentDirectories;
+        this.suffixDeclared = suffixDeclared;
     }
 
     /// <summary>The tree the source side was read from.</summary>
     public string SourceRoot { get; }
 
-    /// <summary>How many <c>.cs</c> / <c>.razor</c> / <c>.cshtml</c> files contributed.</summary>
+    /// <summary>How many <c>.cs</c> files and extension-claimed files contributed.</summary>
     public int FilesScanned { get; }
 
     /// <summary>Top-level type names the tree declares in C# source.</summary>
@@ -90,7 +87,10 @@ internal sealed partial class SupersededEntryStaleness
     /// exist, and a parse answers it for a repository in a couple of seconds. Paid only on the runs
     /// that actually pass <c>--superseded-image-assembly</c>, which is the rare wave after a move.
     /// </summary>
-    public static SupersededEntryStaleness ForSourceRoot(string sourceRoot)
+    /// <param name="sourceRoot">The repository's source root.</param>
+    /// <param name="extensions">The loaded build extensions; each indexes the files it claims.</param>
+    public static SupersededEntryStaleness ForSourceRoot(
+        string sourceRoot, IReadOnlyList<IBuildExtension>? extensions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceRoot);
         var root = Path.GetFullPath(sourceRoot);
@@ -99,39 +99,55 @@ internal sealed partial class SupersededEntryStaleness
                 $"the source root '{root}' does not exist, so whether a --superseded-image-assembly "
                 + "entry is still needed cannot be answered. Refusing rather than guessing.");
 
-        var declared = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
-        var razor = new Dictionary<string, ImmutableHashSet<string>.Builder>(StringComparer.Ordinal);
-        var projectDirectoryOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var importsNamespaceOf = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        var files = 0;
-
-        foreach (var path in SourceFiles(root))
+        var scans = new Dictionary<string, IDeclaredTypeScan>(StringComparer.OrdinalIgnoreCase);
+        foreach (var extension in extensions ?? [])
         {
+            var scan = extension.BeginDeclaredTypeScan(root);
+            foreach (var suffix in extension.ClaimedSourceSuffixes)
+                scans.TryAdd(suffix, scan);
+        }
+
+        var sink = new Sink();
+        var files = 0;
+        foreach (var path in SourceFiles(root, scans.Keys))
+        {
+            files++;
             var extension = Path.GetExtension(path);
             if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase))
-            {
-                files++;
-                CollectCSharpTypes(path, declared);
-            }
-            else
-            {
-                files++;
-                CollectRazorComponent(root, path, projectDirectoryOf, importsNamespaceOf, declared, razor);
-            }
+                CollectCSharpTypes(path, sink.Exact);
+            else if (scans.TryGetValue(extension, out var scan))
+                scan.Collect(path, sink);
         }
 
         return new SupersededEntryStaleness(
             root,
             files,
-            declared.ToImmutable(),
-            razor.ToImmutableDictionary(e => e.Key, e => e.Value.ToImmutable(), StringComparer.Ordinal));
+            sink.Exact.ToImmutable(),
+            sink.BySuffix.ToImmutableDictionary(e => e.Key, e => e.Value.ToImmutable(), StringComparer.Ordinal));
+    }
+
+    /// <summary>Collects what the C# parse and the extensions declare.</summary>
+    private sealed class Sink : IDeclaredTypeSink
+    {
+        internal ImmutableHashSet<string>.Builder Exact { get; } = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+
+        internal Dictionary<string, ImmutableHashSet<string>.Builder> BySuffix { get; } = new(StringComparer.Ordinal);
+
+        public void Declare(string qualifiedName) => Exact.Add(qualifiedName);
+
+        public void DeclareBySuffix(string simpleName, string dottedDirectory)
+        {
+            if (!BySuffix.TryGetValue(simpleName, out var directories))
+                BySuffix[simpleName] = directories = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+            directories.Add(dottedDirectory);
+        }
     }
 
     /// <summary>
     /// Does this repository's source declare a top-level type of this exact name? The C# side is an
-    /// exact namespace-qualified match; the Razor side matches the component's simple name and
-    /// requires the namespace to END with the component's directory path (a component at the project
-    /// root matches any namespace — the root namespace is the SDK's to compute, not this index's).
+    /// exact namespace-qualified match; a name an extension declared by suffix matches its simple name
+    /// and requires the namespace to END with the recorded directory path (an empty path matches any
+    /// namespace — the root namespace is the SDK's to compute, not this index's).
     /// </summary>
     public bool Declares(string @namespace, string name)
     {
@@ -140,7 +156,7 @@ internal sealed partial class SupersededEntryStaleness
         var qualified = @namespace.Length == 0 ? name : @namespace + "." + name;
         if (declaredTypes.Contains(qualified))
             return true;
-        if (!razorComponentDirectories.TryGetValue(name, out var directories))
+        if (!suffixDeclared.TryGetValue(name, out var directories))
             return false;
         foreach (var directory in directories)
             if (directory.Length == 0
@@ -246,8 +262,9 @@ internal sealed partial class SupersededEntryStaleness
     /// symlinked directory is not followed: a link out of the tree is not this repository's source,
     /// and a link back into it is a cycle.
     /// </summary>
-    private static IEnumerable<string> SourceFiles(string root)
+    private static IEnumerable<string> SourceFiles(string root, IEnumerable<string> claimedSuffixes)
     {
+        var suffixes = claimedSuffixes.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
         var pending = new Stack<string>();
         pending.Push(root);
         while (pending.Count > 0)
@@ -260,8 +277,7 @@ internal sealed partial class SupersededEntryStaleness
                 {
                     var extension = Path.GetExtension(file);
                     if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
-                        || extension.Equals(".razor", StringComparison.OrdinalIgnoreCase)
-                        || extension.Equals(".cshtml", StringComparison.OrdinalIgnoreCase))
+                        || suffixes.Contains(extension))
                         files.Add(file);
                 }
                 foreach (var child in Directory.EnumerateDirectories(directory))
@@ -328,120 +344,4 @@ internal sealed partial class SupersededEntryStaleness
 
     private static string Qualify(string @namespace, string name) =>
         @namespace.Length == 0 ? name : @namespace + "." + name;
-
-    /// <summary>
-    /// A Razor component contributes its FILE NAME plus the dotted directory path from its project,
-    /// which is the suffix its generated namespace always ends with when the namespace is derived —
-    /// the <c>RootNamespace</c> prefix is the SDK's to compute, and guessing it wrong would drop a
-    /// real match, which is a false "stale" on an entry still holding a collision apart.
-    ///
-    /// <para>🚨 <b>When the namespace is DECLARED rather than derived, the suffix rule is not
-    /// enough</b> — and declaring it is exactly what a moved component does. <c>CS0436</c> needs the
-    /// same fully-qualified name on both sides, so a view that leaves <c>MeshWeaver.Blazor.Views</c>
-    /// for another project keeps its old namespace with an <c>@namespace</c> directive (or an
-    /// <c>_Imports.razor</c> covering its folder); its new folder path then has nothing to do with
-    /// its namespace. Both are read here and recorded EXACTLY, in addition to the suffix rule —
-    /// never instead of it, because every extra name can only make the check quieter.</para>
-    /// </summary>
-    private static void CollectRazorComponent(
-        string root,
-        string path,
-        Dictionary<string, string> projectDirectoryOf,
-        Dictionary<string, string?> importsNamespaceOf,
-        ImmutableHashSet<string>.Builder declared,
-        Dictionary<string, ImmutableHashSet<string>.Builder> razor)
-    {
-        var name = Path.GetFileNameWithoutExtension(path);
-        if (name.Length == 0 || name.Equals("_Imports", StringComparison.OrdinalIgnoreCase))
-            return;
-        var directory = Path.GetDirectoryName(path)!;
-        var projectDirectory = ProjectDirectoryOf(root, directory, projectDirectoryOf);
-
-        if (DirectiveNamespace(path) is { } own)
-            declared.Add(Qualify(own, name));
-        else if (ImportsNamespace(directory, projectDirectory, importsNamespaceOf) is { } inherited)
-            declared.Add(Qualify(inherited, name));
-
-        var relative = Path.GetRelativePath(projectDirectory, directory);
-        var dotted = relative is "." or ""
-            ? string.Empty
-            : relative.Replace(Path.DirectorySeparatorChar, '.').Replace(Path.AltDirectorySeparatorChar, '.');
-        if (!razor.TryGetValue(name, out var directories))
-            razor[name] = directories = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
-        directories.Add(dotted);
-    }
-
-    /// <summary>The namespace the nearest <c>_Imports.razor</c> at or above <paramref name="directory"/>
-    /// puts this folder in — the base it declares, plus the folder path from there down, which is how
-    /// the Razor SDK applies it. Null when no <c>_Imports.razor</c> up to the project declares one.</summary>
-    private static string? ImportsNamespace(
-        string directory, string projectDirectory, Dictionary<string, string?> memo)
-    {
-        if (memo.TryGetValue(directory, out var cached))
-            return cached;
-        string? resolved = null;
-        var suffix = string.Empty;
-        for (var current = directory; current is not null; current = Path.GetDirectoryName(current))
-        {
-            var imports = Path.Combine(current, "_Imports.razor");
-            if (File.Exists(imports) && DirectiveNamespace(imports) is { } declaredNamespace)
-            {
-                resolved = suffix.Length == 0 ? declaredNamespace : declaredNamespace + "." + suffix;
-                break;
-            }
-            if (current.Equals(projectDirectory, StringComparison.OrdinalIgnoreCase))
-                break;
-            var segment = Path.GetFileName(current);
-            if (segment.Length == 0)
-                break;
-            suffix = suffix.Length == 0 ? segment : segment + "." + suffix;
-        }
-        memo[directory] = resolved;
-        return resolved;
-    }
-
-    /// <summary>The <c>@namespace</c> a Razor file declares, if it declares one.</summary>
-    private static string? DirectiveNamespace(string path)
-    {
-        try
-        {
-            // Razor files are small; the directive is a whole line, so the whole text is the
-            // cheapest correct thing to match against.
-            var match = NamespaceDirective().Match(File.ReadAllText(path));
-            return match.Success ? match.Groups["ns"].Value : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-
-    [GeneratedRegex(
-        // [ \t\r]*$ — a CRLF file leaves the \r before the line end, and a directive that stops
-        // matching on a Windows checkout is a false "stale" nobody would attribute to line endings.
-        @"^[ \t]*@namespace[ \t]+(?<ns>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)[ \t\r]*$",
-        RegexOptions.Multiline)]
-    private static partial Regex NamespaceDirective();
-
-    /// <summary>The nearest ancestor holding a <c>.csproj</c>, memoized per directory — the walk is
-    /// otherwise repeated once per component in the same folder.</summary>
-    private static string ProjectDirectoryOf(string root, string directory, Dictionary<string, string> memo)
-    {
-        if (memo.TryGetValue(directory, out var known))
-            return known;
-        // No project above it ⇒ the file's own directory, which yields an EMPTY relative path and
-        // therefore matches any namespace. Quiet, which is the safe direction.
-        var result = directory;
-        for (var current = directory;
-             current is not null && current.Length >= root.Length;
-             current = current.Equals(root, StringComparison.OrdinalIgnoreCase) ? null : Path.GetDirectoryName(current))
-        {
-            if (!Directory.EnumerateFiles(current, "*.csproj").Any())
-                continue;
-            result = current;
-            break;
-        }
-        memo[directory] = result;
-        return result;
-    }
 }

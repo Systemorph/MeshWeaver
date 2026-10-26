@@ -3,7 +3,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace MeshWeaver.PluginTester;
+namespace MeshWeaver.PluginTester.Razor;
 
 /// <summary>
 /// Reproduces the SDK's CSS-isolation pipeline for <c>build-project</c>: the <c>b-…</c> scope
