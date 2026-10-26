@@ -190,7 +190,14 @@ public class SuppliedNavigationRailTest
         menu.Skin.Collapsible.Should().Be(true);
         // home link + the childless entry + one area per group
         menu.Areas.Should().HaveCount(4);
+        menu.Skin.FirstEntryIsTitle.Should().BeTrue(
+            "the heading link is the menu's title — a renderer shows it in the header row, beside the collapse control");
     }
+
+    [Fact]
+    public void APlainNavMenuKeepsItsFirstEntryInTheList()
+        => Controls.NavMenu.WithNavLink("Home", "/").Skin.FirstEntryIsTitle.Should().BeFalse(
+            "only a menu that declares its title gets one — a hand-built menu's first line stays a line");
 
     // ── #3406: the supplier's order is the rail's order ───────────────────────────────────────────
 
