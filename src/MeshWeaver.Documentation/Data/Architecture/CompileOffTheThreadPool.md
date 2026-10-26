@@ -75,6 +75,19 @@ the same queue and the same cap, only the drain loops run on their own threads. 
 distinct-type compiles now QUEUES behind the cap instead of becoming hundreds of threads, and the OS
 time-slices the lane's threads fairly against the ThreadPool the grain turns run on.
 
+🚨 **The compile's time bound does not count the queue.** `CompilationCacheOptions.RoslynCompileTimeout`
+bounds the `roslyn-compile` leg so that a hung leaf cannot park a NodeType at `Compiling` for ever. Its
+clock used to start when the leg was subscribed, so a compile still WAITING for a lane slot when the
+bound elapsed failed terminally as "hung" although it had not started. Measured in the combo
+verification lane (#4413) on a CI runner: one package dispatched 47 types at once, the lane
+drained them over five minutes, and the ten still queued at the bound were parked at
+`CompilationStatus=Error`, which read as a red package. Now (`BoundLegExcludingLaneWait`) the IO
+prefix is bounded until the emit is QUEUED, the emit is bounded afresh from the moment the lane ADMITS
+it, and the queue in between carries no clock. The queue still drains: every admitted emit is bounded
+and cancelled when its bound fires. A caller that joins a compile already in flight times against the
+leader's queue and admission. `CompileBoundExcludesCpuLaneQueueTest` holds a one-slot lane for three
+bounds and requires the queued compile to succeed once admitted.
+
 Its leaves:
 
 - a NodeType's `EmitCompiled` (generators, bind, emit, artifact write) and the failure-path
