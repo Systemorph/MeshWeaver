@@ -526,7 +526,7 @@ public sealed class ModuleServices : IDisposable
     /// <para>NOT built: a SCOPED registration, and a singleton whose constructor graph reaches one
     /// (<c>ModuleServiceProvider.BuildRootReachableSingletons</c>) — their instances belong to a
     /// circuit or a request, and the one a boot would build runs against scoped state nobody initialised
-    /// (Radzen's <c>DialogService</c> and its <c>NavigationManager</c>, MeshWeaver#6556); a module's
+    /// (a component library's <c>DialogService</c> and its <c>NavigationManager</c>, MeshWeaver#6556); a module's
     /// PRIVATE registration unless a built one takes it; and a module's HOSTED services, which are left
     /// to their own host — the root never reaches them, and a hosted service that cannot be built costs
     /// its feature, never the module (#2449). Throws what a constructor throws.</para>
