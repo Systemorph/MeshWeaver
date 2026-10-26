@@ -128,7 +128,9 @@ public class ModuleSuiteLaneGuard
         Assert.Contains("    name: All selected bundles built\n", text, StringComparison.Ordinal);
 
         var verify = JobBody("verify");
-        Assert.Contains("needs: [select, pack, tests]", verify, StringComparison.Ordinal);
+        // `prepare` and `build-workspace` are needed by the host arm (H7, Doc/Architecture/BuildHosts
+        // §5), which must SEE that they skipped; `pack` and `tests` stay, for the reason above.
+        Assert.Contains("needs: [select, prepare, build-workspace, pack, tests]", verify, StringComparison.Ordinal);
         Assert.Contains("if: always()", verify, StringComparison.Ordinal);
         Assert.Contains("TESTS_RESULT: ${{ needs.tests.result }}", verify, StringComparison.Ordinal);
         Assert.Contains("--tests-result \"$TESTS_RESULT\"", verify, StringComparison.Ordinal);
