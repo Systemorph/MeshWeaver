@@ -3138,6 +3138,13 @@ jobs:
     - name: "Execute the module publication lane against a stub registry"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-publication.py
+    # The module-pack lane's HOST arm (H7, Doc/Architecture/BuildHosts §5) and the host graph's
+    # source, build-host-publication.yml: both are `workflow_call` lanes no core run executes, and the
+    # build hosts do not run stages yet — so their new steps' bash is EXTRACTED and RUN here, every
+    # structural rule against a mutated copy too.
+    - name: "The module-pack lane's host arm carries only a followed success"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-module-pack-host.py
 
     # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
