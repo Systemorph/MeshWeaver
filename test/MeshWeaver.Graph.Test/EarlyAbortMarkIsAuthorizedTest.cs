@@ -28,6 +28,10 @@ public class EarlyAbortMarkIsAuthorizedTest(ITestOutputHelper output) : Monolith
     private const string Deleter = "seal-marks-deleter";
     private const string Intruder = "seal-marks-intruder";
 
+    /// <summary>An Editor: deleting ordinary content demands Update (DeletePermission.RequiredFor), so an
+    /// Editor is a deleter the delete admits — and must be able to leave its early-abort mark.</summary>
+    private const string EditorDeleter = "seal-marks-editor";
+
     private CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // ConfigureMeshBase: the default test configuration grants Public Admin, which would let the intruder delete.
@@ -36,6 +40,7 @@ public class EarlyAbortMarkIsAuthorizedTest(ITestOutputHelper output) : Monolith
         => ConfigureMeshBase(builder).AddMeshNodes(
             new MeshNode(Partition) { NodeType = "Markdown" },
             AssignmentNodeFactory.UserRole(Deleter, "Admin", Partition),
+            AssignmentNodeFactory.UserRole(EditorDeleter, "Editor", Partition),
             new MeshNode("Doc", Partition) { NodeType = "Markdown" });
 
     private async Task<bool> EarlyAbortFrom(string user, string sealId)
@@ -68,6 +73,23 @@ public class EarlyAbortMarkIsAuthorizedTest(ITestOutputHelper output) : Monolith
         (await EarlyAbortFrom(Deleter, "deleter-seal")).Should().BeFalse("there was no seal to release");
         registry.TakeOwnerDeleteSeal("deleter-seal", Path, NoLifetime)
             .Should().BeFalse("control: the authorized abort overtook the check, which now refuses the seal");
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The early abort is authorised by the SAME demand as the delete it belongs to. An Editor may delete
+    /// ordinary content, so its abort that overtakes the owner's check must leave the mark — otherwise
+    /// the delayed check could take a seal after the Editor's only release, and the owner would defer
+    /// writes until its activation is torn down.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AnEarlyAbortFromAnEditor_LeavesTheMark_BecauseTheEditorMayDeleteContent()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        (await EarlyAbortFrom(EditorDeleter, "editor-seal")).Should().BeFalse("there was no seal to release");
+        registry.TakeOwnerDeleteSeal("editor-seal", Path, NoLifetime)
+            .Should().BeFalse("the Editor's abort overtook the check, which now refuses the seal");
         registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse();
     }
 }

@@ -7486,23 +7486,47 @@ public static class MeshExtensions
     /// resumability and its relocation provenance both rest on the stamps travelling verbatim.</para>
     /// </summary>
     private static IObservable<PermissionCheckOutcome> MoveEntitlement(
-        IMessageHub hub, string sourcePath, string targetPath, string? userId = null)
-    {
-        // 🚨 Checked on the SOURCE NODE itself, never only its namespace: a node-level deny must hold.
-        // CreateNodeRequest.AuthorshipFrom is caller-settable and reads the stamps straight from
-        // storage, so a namespace-only check would let a caller denied the source borrow its author.
-        IObservable<PermissionCheckOutcome> Check(Permission permission) =>
-            (userId is null
-                ? hub.CheckPermissionOutcome(sourcePath, permission)
-                : hub.CheckPermissionOutcome(sourcePath, userId, permission)).Take(1);
-        var mayDelete = Check(DeletePermission.RequiredFor(sourcePath));
-        if (DeletePermission.SamePartition(sourcePath, targetPath))
-            return mayDelete;
-        // Both checks are subscribed in the same turn (Zip subscribes its sources on Subscribe), so
-        // an ambient caller is resolved once for both.
-        return mayDelete.Zip(Check(Permission.Delete),
-            (delete, administer) => delete.IsGranted ? administer : delete);
-    }
+        IMessageHub hub, string sourcePath, string targetPath, AccessContext? caller = null)
+        => Observable.Defer(() =>
+        {
+            // The caller is resolved ONCE, here, while the subscribing turn still holds it — every
+            // check below is explicit about whom it asks about.
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            var context = caller ?? accessService?.Context ?? accessService?.CircuitContext;
+            var userId = context?.ObjectId;
+            if (string.IsNullOrEmpty(userId))
+                return Observable.Return(PermissionCheckOutcome.Denied);
+            var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Mesh.Services.IMeshCatalog");
+            var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+
+            // 🚨 Checked on the SOURCE NODE itself, never only its namespace, and through the SAME
+            // rule-aware verdict the delete pre-flight takes (CheckDeletePermissionForNode): a
+            // node-level deny holds, and a node type whose own rule decides Delete (a satellite, a
+            // comment) is asked that rule rather than the rule-less default. CreateNodeRequest.
+            // AuthorshipFrom is caller-settable and reads the stamps straight from storage, so a
+            // namespace-only check would let a caller denied the source borrow its author.
+            var mayDelete = (persistence is null
+                    ? Observable.Return<MeshNode?>(null)
+                    : ReadNodeAuthoritative(hub, persistence, sourcePath))
+                .SelectMany(node => node is null
+                    ? hub.CheckPermissionOutcome(sourcePath, userId, DeletePermission.RequiredFor(sourcePath)).Take(1)
+                    : CheckDeletePermissionForNode(hub, userId, node, new DeleteNodeRequest(sourcePath), context, logger)
+                        .Select(verdict => verdict.Verdict switch
+                        {
+                            DeletePreflight.Allowed => PermissionCheckOutcome.Granted,
+                            DeletePreflight.Denied => PermissionCheckOutcome.Denied,
+                            _ => PermissionCheckOutcome.Undetermined(
+                                verdict.Detail ?? $"whether '{sourcePath}' may be deleted could not be established"),
+                        }))
+                .Take(1)
+                .DefaultIfEmpty(PermissionCheckOutcome.Undetermined(
+                    $"whether '{sourcePath}' may be deleted produced no answer"));
+            if (DeletePermission.SamePartition(sourcePath, targetPath))
+                return mayDelete;
+            return mayDelete.SelectMany(delete => delete.IsGranted
+                ? hub.CheckPermissionOutcome(sourcePath, userId, Permission.Delete).Take(1)
+                : Observable.Return(delete));
+        });
 
     /// <summary>
     /// The stored node whose authorship a create may carry over (<see cref="CreateNodeRequest.AuthorshipFrom"/>),
@@ -10222,7 +10246,7 @@ public static class MeshExtensions
                 // authorship somewhere that administrator's governance does not reach, and owner-scoped
                 // work there would run AS them. Refused before the copy writes anything, never turned
                 // into a re-authoring copy: the stamps are what make a half-landed move resumable.
-                .SelectMany(_ => MoveEntitlement(hub, from, to, callerContext?.ObjectId))
+                .SelectMany(_ => MoveEntitlement(hub, from, to, callerContext))
                 .SelectMany(entitlement => entitlement.IsGranted
                     ? Observable.Return(System.Reactive.Unit.Default)
                     : Observable.Throw<System.Reactive.Unit>(entitlement.IsUndetermined
@@ -10644,22 +10668,44 @@ public static class MeshExtensions
                 // AccessAssignment change and never completes. Without the Take, every re-emission
                 // re-ran the whole copy below (a second create pass answering "already exists" over
                 // the first one's success), and the copy chain itself never completed.
-                : MoveEntitlement(hub, sourcePath, targetPath)
-                    .Take(1)
-                    .Select(outcome => outcome.IsGranted
+                : CarriedAuthorshipEntitlement()
+                    .Select(denied => denied is null
                         ? ((LocalizableText, bool)?)null
-                        : outcome.IsUndetermined
+                        : denied.Value.Outcome.IsUndetermined
                             ? (LocalizableText.Keyed(
-                                $"Cannot determine whether '{sourcePath}' may be relocated with its authorship: "
-                                + $"{outcome.UndeterminedReason}",
+                                $"Cannot determine whether '{denied.Value.Path}' may be relocated with its authorship: "
+                                + $"{denied.Value.Outcome.UndeterminedReason}",
                                 CopyAuthorshipUndeterminedKey,
-                                ("source", sourcePath), ("reason", outcome.UndeterminedReason ?? string.Empty)), true)
+                                ("source", denied.Value.Path),
+                                ("reason", denied.Value.Outcome.UndeterminedReason ?? string.Empty)), true)
                             : (LocalizableText.Keyed(
-                                $"Preserving authorship on a copy of '{sourcePath}' requires the right to delete it "
+                                $"Preserving authorship on a copy of '{denied.Value.Path}' requires the right to delete it "
                                 + "and, outside its own partition, Delete on it — the same entitlement a move of it "
                                 + "with its authorship requires.",
                                 CopyAuthorshipRefusedKey,
-                                ("source", sourcePath)), false));
+                                ("source", denied.Value.Path)), false));
+
+        // 🚨 EVERY CARRIED NODE, BEFORE ANYTHING IS WRITTEN. A preserving copy creates each node with
+        // AuthorshipFrom, whose create-side check re-stamps a node it may not carry — so a subtree with
+        // ONE such descendant would land half re-authored, and a move would then delete the originals
+        // and could no longer recognise its own half-landed copy on a retry. So the copy asks the
+        // entitlement for the root and every stored path under it first, and refuses the whole copy
+        // on the first node that may not carry its stamps. Emits the first refusal, or null.
+        IObservable<(string Path, PermissionCheckOutcome Outcome)?> CarriedAuthorshipEntitlement() =>
+            (persistence is null
+                ? Observable.Return<IReadOnlyCollection<string>>(Array.Empty<string>())
+                : persistence.ListDescendantPaths(sourcePath).Take(1).DefaultIfEmpty(Array.Empty<string>()))
+            .SelectMany(descendants => descendants
+                .Where(p => !string.IsNullOrEmpty(p)
+                    && !string.Equals(p, sourcePath, StringComparison.OrdinalIgnoreCase))
+                .Prepend(sourcePath)
+                .Select(p => MoveEntitlement(hub, p, targetPath + p[sourcePath.Length..], callerAccessContext)
+                    .Select(outcome => (Path: p, Outcome: outcome)))
+                .Merge(8)
+                .Where(r => !r.Outcome.IsGranted)
+                .Select(r => ((string Path, PermissionCheckOutcome Outcome)?)r)
+                .Take(1)
+                .DefaultIfEmpty(null));
 
         // 🚨 EVERY path storage holds under the source — the AUTHORITATIVE inventory, and the SAME
         // enumeration the move's delete leg is planned from (IStorageAdapter.ListDescendantPaths,

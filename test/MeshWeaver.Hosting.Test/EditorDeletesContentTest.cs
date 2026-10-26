@@ -201,9 +201,10 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
 
         Output.WriteLine($"create: success={created.Message.Success} error={created.Message.Error}");
-        if (created.Message.Success)
-            (await ReadExisting(target, ct)).CreatedBy.Should().Be(EditorId,
-                "an Editor denied the source may not take its authorship — the create records the requester");
+        created.Message.Success.Should().BeTrue(created.Message.Error
+            ?? "an independent create naming a source it may not carry still lands — stamped for the requester");
+        (await ReadExisting(target, ct)).CreatedBy.Should().Be(EditorId,
+            "an Editor denied the source may not take its authorship — the create records the requester");
     }
 
     [Fact(Timeout = 60000)]
