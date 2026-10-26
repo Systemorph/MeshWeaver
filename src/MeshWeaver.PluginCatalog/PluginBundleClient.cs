@@ -1294,7 +1294,6 @@ public sealed class PluginBundleClient
                 // A DECLARED-BUT-NOT-SERVED module (`module '<name>': not served — …`) names no NodeType: it
                 // explains an empty bundle (below) but is not NodeType coverage, so it must
                 // neither warn as one nor fail a require-prebuilt adoption of types that DID arrive.
-                var moduleMisses = (manifest?.Misses ?? []).Where(BundleReader.IsModuleNotServedMiss).ToArray();
                 if (manifest?.Misses?.Where(m => !BundleReader.IsModuleNotServedMiss(m)).ToArray()
                     is { Length: > 0 } misses)
                 {
@@ -1347,9 +1346,8 @@ public sealed class PluginBundleClient
                         return Nothing(pluginId, $"the package ships {offering}, no NodeTypes");
                     }
 
-                    var why = moduleMisses.Length == 0
-                        ? string.Empty
-                        : " — the registry says: " + string.Join(" | ", moduleMisses);
+                    // 🚨 #7181 — EVERY reason the producer stated, NodeType misses included.
+                    var why = BundleOffering.StatedReasons(manifest);
                     _logger?.LogInformation(
                         "Bundle for {Plugin} carried no assemblies{Why} — {Consequence}", pluginId,
                         why, MissConsequence("compiling instead"));
