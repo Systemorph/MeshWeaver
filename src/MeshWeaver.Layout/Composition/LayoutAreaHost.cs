@@ -1044,10 +1044,10 @@ public record LayoutAreaHost : IDisposable
             // the WORDING - "Rendering failed for area Catalog" sent every reader hunting for a bug
             // in the Catalog view - and, below, what the viewer is shown.
             logger.LogError(ex,
-                "Area {Area} could not render: the data store was unreachable and the query "
-                + "fan-in's bounded transient-connect retry did not recover it", area);
+                "Area {Area} on {Hub} could not render: the data store was unreachable and the query "
+                + "fan-in's bounded transient-connect retry did not recover it", area, Hub.Address);
         else
-            logger.LogError(ex, "Rendering failed for area {Area}", area);
+            logger.LogError(ex, "Rendering failed for area {Area} on {Hub}", area, Hub.Address);
 
         // 🚨 No placeholder on a dead scope (#2679). CreateRenderErrorControl localises its copy
         // through this host's scope (LayoutAreaLocalizationExtensions.Localize → AccessService), so

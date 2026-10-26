@@ -117,6 +117,34 @@ public static class BundleOffering
             ? BundleAdoptionKind.NothingToAdopt
             : BundleAdoptionKind.NoAssemblies;
 
+    /// <summary>How many of the producer's stated miss reasons <see cref="StatedReasons"/> names
+    /// before it truncates — enough to name the cause on <c>/health</c> without a package with many
+    /// NodeTypes drowning every other line.</summary>
+    public const int StatedReasonsShown = 3;
+
+    /// <summary>
+    /// The suffix an empty bundle's <see cref="BundleAdoptionKind.NoAssemblies"/> outcome carries:
+    /// every reason the producer STATED in <c>Misses</c> — the NodeType misses as well as the
+    /// module ones — or the empty string when it stated none.
+    ///
+    /// <para>🚨 MeshWeaver#7181: only the module misses used to be named, so a package whose
+    /// NodeTypes the registry could not serve (never compiled there, bytes evicted, no artifact
+    /// for the lane) rendered on <c>/health</c> as a bare "the bundle carried no assemblies" —
+    /// word for word what a producer that shipped an empty archive renders. The reason the
+    /// producer gave travels to the one surface the delivery lane is triaged from.</para>
+    /// </summary>
+    /// <param name="manifest">The bundle's manifest, or null from an unreadable bundle.</param>
+    public static string StatedReasons(BundleReader.Manifest? manifest)
+    {
+        var stated = manifest?.Misses ?? [];
+        if (stated.Count == 0)
+            return string.Empty;
+        return " — the registry says: " + string.Join(" | ", stated.Take(StatedReasonsShown))
+               + (stated.Count > StatedReasonsShown
+                   ? $" …(+{stated.Count - StatedReasonsShown})"
+                   : string.Empty);
+    }
+
     /// <summary>What an empty-but-complete bundle offered instead of NodeTypes, for the log.</summary>
     public static string OfferingOf(BundleReader.Manifest? manifest) =>
         manifest?.Module?.AssemblyName is { Length: > 0 } name
