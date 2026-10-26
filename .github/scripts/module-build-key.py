@@ -180,10 +180,10 @@ def compile_includes(root: Path, csproj: Path) -> list[Path]:
 
     A project compiles more than its own directory: `<Compile Include="../Shared/Emitter.cs" />`
     links a file from elsewhere, and a directory tree hash never sees it. The patterns and the
-    matcher are node-repo-scope.py's (`linked_compile_patterns`, `msbuild_glob_matches`)."""
+    matcher are node-repo-scope.py's (`linked_item_patterns`, `msbuild_glob_matches`)."""
     root = root.resolve()
     found: set[Path] = set()
-    for pattern in _SCOPE.linked_compile_patterns(root, csproj):
+    for pattern in _SCOPE.linked_item_patterns(root, csproj):
         if not _SCOPE.is_msbuild_glob(pattern):
             f = root / pattern
             if f.is_file() and not any(part in SKIP_DIRS for part in Path(pattern).parts):
@@ -250,29 +250,39 @@ def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project
         if p in seen:
             continue
         seen.add(p)
-        queue.extend(project_references(root, p))
+        # ProjectReferences declared in the project OR anything it imports (node-repo-scope.py).
+        queue.extend(_SCOPE.project_reference_targets(root, p))
     dirs = sorted({p.parent.relative_to(root).as_posix() for p in seen})
+
+    def inside_closure(rel: str) -> bool:
+        return any(rel.startswith(d + "/") for d in dirs if d != ".")
+
+    # Every MSBuild file the closure evaluates, from node-repo-scope.py's ONE reading: each implicit
+    # import candidate (present, or recorded as absent so a NEW one is a new key) and every explicit
+    # <Import> outside the hashed directories — a DefineConstants there is a different compile.
     imports: dict[str, str | None] = {}
-    for d in dirs:
-        here = root / d
-        while True:
-            names = set(SHELF_IMPORTS) | {f.name for pattern in ("Directory.*.props", "Directory.*.targets")
-                                          for f in here.glob(pattern) if f.is_file()}
-            for name in sorted(names):
-                rel = (here / name).relative_to(root).as_posix()
-                if rel not in imports:
-                    imports[rel] = file_hash(here / name) if (here / name).is_file() else None
-            if here == root:
-                break
-            here = here.parent
-    # Linked sources: a `<Compile Include>` naming a file outside every closure directory is
-    # compiled (and published) with the project, so its bytes are an input too. Recorded only when
+    for p in sorted(seen):
+        for cand in _SCOPE.implicit_import_candidates(root, p):
+            if _SCOPE.is_msbuild_glob(cand):
+                parent = root / cand.rsplit("/", 1)[0] if "/" in cand else root
+                for f in sorted(parent.glob(cand.rsplit("/", 1)[-1])):
+                    if f.is_file():
+                        imports.setdefault(f.relative_to(root).as_posix(), file_hash(f))
+            else:
+                imports.setdefault(cand, file_hash(root / cand) if (root / cand).is_file() else None)
+        for f in _SCOPE.msbuild_files(root, p):
+            rel = f.relative_to(root).as_posix()
+            if rel not in imports and not inside_closure(rel):
+                imports[rel] = file_hash(f)
+    # Linked sources: a path item (`<Compile>`, `<EmbeddedResource>`, `<AdditionalFiles>`, …) naming
+    # a file outside every closure directory is compiled or published with the project, so its bytes
+    # are an input too. Recorded only when
     # present, so a project that links nothing keys exactly as it did before this input existed.
     linked: dict[str, str] = {}
     for p in sorted(seen):
         for f in compile_includes(root, p):
             rel = f.relative_to(root).as_posix()
-            if any(rel.startswith(d + "/") for d in dirs if d != "."):
+            if inside_closure(rel):
                 continue  # already inside a hashed closure directory
             linked[rel] = file_hash(f)
     result = {"project": Path(project).as_posix(),
@@ -722,7 +732,60 @@ def self_test() -> int:
             check("node-repo-scope selects on the import-linked tools/build/inner/Gen.cs too (no drift)",
                   any("tools/build/inner/Gen.cs".startswith(d + "/") or _SCOPE.msbuild_glob_matches("tools/build/inner/Gen.cs", d)
                       for d in scope_dirs), str(sorted(scope_dirs)))
+            # The imported FILE's own bytes are an input: a property there is a different compile.
+            ext_props = root / "tools" / "build" / "inner" / "Ext.props"
+            props_old = ext_props.read_text(encoding="utf-8")
+            ext_props.write_text(props_old.replace("<Project>", "<Project><PropertyGroup><DefineConstants>RAZOR2"
+                                                   "</DefineConstants></PropertyGroup>", 1), encoding="utf-8")
+            check("a property changed ONLY in an imported file (DefineConstants) changes the key",
+                  with_ext()["key"] != i0["key"])
+            ext_props.write_text(props_old, encoding="utf-8")
+            check("…and restoring it restores the key", with_ext()["key"] == i0["key"])
+            (root / "tools" / "build" / "NotImported.props").write_text(
+                "<Project><PropertyGroup><DefineConstants>X</DefineConstants></PropertyGroup></Project>\n",
+                encoding="utf-8")
+            check("a property changed in a props file NOTHING imports leaves the key unchanged (negative control)",
+                  with_ext()["key"] == i0["key"])
+            # A ProjectReference and a non-Compile path item declared IN THE IMPORT, not the csproj.
+            extra = root / "tools" / "Acme.Extra"
+            extra.mkdir()
+            (extra / "Acme.Extra.csproj").write_text(_csproj([]), encoding="utf-8")
+            (extra / "Code.cs").write_text("// extra v1\n", encoding="utf-8")
+            (shared / "res.txt").write_text("resource v1\n", encoding="utf-8")
+            ext_props.write_text(props_old.replace(
+                "</ItemGroup>", '<ProjectReference Include="../Acme.Extra/Acme.Extra.csproj" />'
+                                '<EmbeddedResource Include="../Shared/res.txt" /></ItemGroup>', 1), encoding="utf-8")
+            r0 = with_ext()
+            check("a ProjectReference declared in an imported file joins the closure",
+                  "tools/Acme.Extra" in r0["inputs"]["buildExtension"]["closure"],
+                  str(sorted(r0["inputs"]["buildExtension"]["closure"])))
+            (extra / "Code.cs").write_text("// extra v2\n", encoding="utf-8")
+            check("editing a project reached only through an imported ProjectReference changes the key",
+                  with_ext()["key"] != r0["key"])
+            (extra / "Code.cs").write_text("// extra v1\n", encoding="utf-8")
+            (shared / "res.txt").write_text("resource v2\n", encoding="utf-8")
+            check("editing an <EmbeddedResource> linked from an import changes the key", with_ext()["key"] != r0["key"])
+            (shared / "res.txt").write_text("resource v1\n", encoding="utf-8")
+            (shared / "notes.txt").write_text("unlinked, edited again\n", encoding="utf-8")
+            check("an unlinked file beside the resource leaves the key unchanged (negative control)",
+                  with_ext()["key"] == r0["key"])
+            # The single-source property itself: EVERY file this key hashes outside the extension's
+            # own folder is one a diff to which node-repo-scope selects on.
+            scope_dirs = _SCOPE.shelf_dirs(root, "tools/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj")
+            keyed = (set(r0["inputs"]["buildExtension"].get("linked", {}))
+                     | set(r0["inputs"]["buildExtension"]["imports"])
+                     | {d + "/Code.cs" for d in r0["inputs"]["buildExtension"]["closure"]})
+            missed = sorted(f for f in keyed
+                            if not any(f.startswith(d + "/") or _SCOPE.msbuild_glob_matches(f, d) for d in scope_dirs))
+            check(f"every one of the {len(keyed)} paths the key hashes is in the scope's reach (no drift)",
+                  not missed, str(missed))
+            check("…the reach covers imports and closure alike (the check is not vacuous)",
+                  {"tools/build/inner/Ext.props", "tools/Acme.Extra/Code.cs", "tools/Shared/res.txt"} <= keyed,
+                  str(sorted(keyed)))
         finally:
+            if (root / "tools" / "Acme.Extra").exists():
+                import shutil
+                shutil.rmtree(root / "tools" / "Acme.Extra")
             for extra in (root / "tools" / "Directory.Build.props",):
                 if extra.exists():
                     extra.unlink()

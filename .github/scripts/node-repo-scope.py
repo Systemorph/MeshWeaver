@@ -363,89 +363,134 @@ _SHELF_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
 # location outside this repository (the platform's), whose bytes the platform digest already keys.
 
 
-# 🚨 The ONE reading of a project's linked `<Compile Include>` items and the ONE matcher for them.
-# module-build-key.py LOADS both from this file (it never re-implements them), so the scope that
-# decides WHETHER a module is rebuilt and the key that decides WHICH build it is cannot disagree on
-# what a pattern names. They did once: scope used fnmatch, whose `**/` cannot match zero
-# directories, while the key's pathlib glob could — so `../Shared/**/*.cs` keyed
-# `Shared/Emitter.cs` and an edit to it selected no module. This file stays importable on its own
-# (node-repo-validate fetches it as a single file), which is why the matcher lives HERE.
-
 _IMPORT = r"<Import\s[^>]*Project=(?:\"([^\"]+)\"|'([^']+)')"
-_IMPLICIT_IMPORTS = ("Directory.Build.props", "Directory.Build.targets")
+# Any item element with an Include. The tag says which kind; ProjectReference is followed as an edge.
+_ITEM = r"<([A-Za-z_][\w.-]*)\s[^>]*?\bInclude=(?:\"([^\"]+)\"|'([^']+)')"
+# Item types whose Include is a NAME, not a path (a package, a namespace, an assembly name).
+_NAME_ITEMS = frozenset({"PackageReference", "PackageVersion", "GlobalPackageReference", "PackageDownload",
+                         "FrameworkReference", "Using", "InternalsVisibleTo", "ProjectCapability",
+                         "SupportedPlatform", "TrimmerRootAssembly", "AssemblyAttribute",
+                         "ProjectReference", "Import"})
+# The MSBuild files a project inherits IMPLICITLY from its own directory and every ancestor up to
+# the repository root. MSBuild takes only the nearest Directory.Build.*; taking every ancestor
+# over-reads and never under-reads, and covers the usual GetPathOfFileAbove chain upward. The
+# `Directory.*` globs catch split pin files such as Directory.Packages.Plugins.props.
+_IMPLICIT_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
+_IMPLICIT_GLOBS = ("Directory.*.props", "Directory.*.targets")
 
 
-def msbuild_files(root: Path, csproj: Path) -> list[Path]:
-    """The project file and every in-repo MSBuild file it evaluates: each `Directory.Build.props` /
-    `Directory.Build.targets` from its directory up to the root, and every `<Import>` those reach,
-    transitively.
+# 🚨 THE ONE READING of what a caller-supplied project (a build extension, a module-libraries
+# shelf) evaluates. module-build-key.py LOADS these functions and never re-implements them, so
+# whatever reaches the build reaches the key AND the reach set together:
+#   implicit_import_candidates  where an implicit import is or COULD appear (a new one is an input)
+#   msbuild_files               the project plus every in-repo MSBuild file it evaluates
+#   project_reference_targets   the in-repo ProjectReferences declared anywhere in those files
+#   linked_item_patterns        every path-valued item (Compile, EmbeddedResource, AdditionalFiles,
+#                               Content, …) declared anywhere in those files
+#   msbuild_glob_matches        the ONE matcher (MSBuild semantics) for those patterns
+# They disagreed twice: fnmatch's `**/` could not match zero directories, and imported Compile
+# items were invisible to both. This file stays importable on its own (node-repo-validate fetches
+# it as a single file), which is why the reading lives HERE.
 
-    MSBuild imports only the NEAREST implicit file, so taking every ancestor over-reads and never
-    under-reads; that also covers the usual `$([MSBuild]::GetPathOfFileAbove(...))` chain upward.
-    An `<Import>` path resolves against the IMPORTING file's directory, with or without a leading
-    `$(MSBuildThisFileDirectory)`. Any other `$(…)` names a location outside this repository (the
-    platform's), as it does for a ProjectReference, and the platform digest keys those bytes."""
+def implicit_import_candidates(root: Path, csproj: Path) -> list[str]:
+    """Repository-relative implicit-import paths (literal, present or not) and per-directory globs."""
     root = root.resolve()
-    csproj = csproj.resolve()
-    queue = [csproj]
-    d = csproj.parent
+    out: list[str] = []
+    d = csproj.resolve().parent
     while True:
-        queue += [d / n for n in _IMPLICIT_IMPORTS if (d / n).is_file()]
+        rel = d.relative_to(root).as_posix()
+        prefix = "" if rel == "." else rel + "/"
+        out += [prefix + n for n in _IMPLICIT_IMPORTS] + [prefix + g for g in _IMPLICIT_GLOBS]
         if d == root or root not in d.parents:
             break
         d = d.parent
+    return out
+
+
+def _resolve_item(include: str, project_dir: str, this_dir: str) -> str | None:
+    """A repository-relative path/glob for one Include entry, or None when it is not this repo's.
+
+    `$(MSBuildThisFileDirectory)` is the DEFINING file's directory; a plain relative entry, or one
+    starting with `$(MSBuildProjectDirectory)`, is the PROJECT's, wherever it is written. Any other
+    `$(…)` names the platform's files, which the platform digest keys."""
+    include = include.strip().replace("\\", "/")
+    base = project_dir
+    if include.startswith("$(MSBuildThisFileDirectory)"):
+        include, base = include[len("$(MSBuildThisFileDirectory)"):].lstrip("/"), this_dir
+    elif include.startswith("$(MSBuildProjectDirectory)"):
+        include = include[len("$(MSBuildProjectDirectory)"):].lstrip("/")
+    if not include or "$(" in include or "@(" in include or "%(" in include:
+        return None
+    norm = os.path.normpath(f"{base}/{include}").replace("\\", "/")
+    if norm.startswith("../") or norm == ".." or os.path.isabs(norm):
+        return None  # outside this checkout — not this repository's
+    return norm
+
+
+def msbuild_files(root: Path, csproj: Path) -> list[Path]:
+    """The project file and every in-repo MSBuild file it evaluates: the implicit imports present
+    in its directory and every ancestor, and every `<Import>` those reach, transitively. An Import
+    path resolves against the IMPORTING file's directory; any other `$(…)` is the platform's."""
+    root = root.resolve()
+    csproj = csproj.resolve()
+    queue = [csproj]
+    for cand in implicit_import_candidates(root, csproj):
+        if is_msbuild_glob(cand):
+            parent = root / cand.rsplit("/", 1)[0] if "/" in cand else root
+            queue += sorted(f for f in parent.glob(cand.rsplit("/", 1)[-1]) if f.is_file())
+        elif (root / cand).is_file():
+            queue.append(root / cand)
     seen: list[Path] = []
     while queue:
-        f = queue.pop(0)
+        f = queue.pop(0).resolve()
         if f in seen:
             continue
         seen.append(f)
+        this_dir = f.parent.relative_to(root).as_posix()
         for a, b in re.findall(_IMPORT, f.read_text(encoding="utf-8", errors="replace")):
-            proj = (a or b).strip().replace("\\", "/")
-            if proj.startswith("$(MSBuildThisFileDirectory)"):
-                proj = proj[len("$(MSBuildThisFileDirectory)"):].lstrip("/")
-            if not proj or "$(" in proj or "@(" in proj or "%(" in proj or is_msbuild_glob(proj):
+            # An Import's relative path is the importing file's, never the project's.
+            rel = _resolve_item(a or b, this_dir, this_dir)
+            if rel is None or is_msbuild_glob(rel):
                 continue
-            target = (f.parent / proj).resolve()
-            try:
-                target.relative_to(root)
-            except ValueError:
-                continue  # outside this checkout — not this repository's
-            if target.is_file():
-                queue.append(target)
+            if (root / rel).is_file():
+                queue.append(root / rel)
     return seen
 
 
-def linked_compile_patterns(root: Path, csproj: Path) -> list[str]:
-    """Repository-relative paths / MSBuild globs of the `<Compile Include>` items the project
-    evaluates: its own, plus those inherited through `msbuild_files()` (Directory.Build.* and
-    explicit imports).
-
-    `$(MSBuildThisFileDirectory)` is the DEFINING file's directory. A plain relative include, or
-    one starting with `$(MSBuildProjectDirectory)`, is the PROJECT's, wherever it is written.
-    Platform-relative (`$(…)` otherwise) and out-of-checkout entries are dropped: their bytes are
-    the platform's, keyed by its digest."""
+def _items(root: Path, csproj: Path):
+    """(tag, repository-relative path/glob) for every item declared in any file msbuild_files reads."""
     root = root.resolve()
     csproj = csproj.resolve()
     project_dir = csproj.parent.relative_to(root).as_posix()
-    found: set[str] = set()
     for f in msbuild_files(root, csproj):
         this_dir = f.parent.relative_to(root).as_posix()
-        for a, b in re.findall(_SHELF_COMPILE, f.read_text(encoding="utf-8", errors="replace")):
+        for tag, a, b in re.findall(_ITEM, f.read_text(encoding="utf-8", errors="replace")):
             for include in (a or b).split(";"):
-                include = include.strip().replace("\\", "/")
-                base = project_dir
-                if include.startswith("$(MSBuildThisFileDirectory)"):
-                    include, base = include[len("$(MSBuildThisFileDirectory)"):].lstrip("/"), this_dir
-                elif include.startswith("$(MSBuildProjectDirectory)"):
-                    include = include[len("$(MSBuildProjectDirectory)"):].lstrip("/")
-                if not include or "$(" in include or "@(" in include or "%(" in include:
-                    continue
-                norm = os.path.normpath(f"{base}/{include}").replace("\\", "/")
-                if norm.startswith("../") or norm == ".." or os.path.isabs(norm):
-                    continue  # outside this checkout — not this repository's
-                found.add(norm)
-    return sorted(found)
+                rel = _resolve_item(include, project_dir, this_dir)
+                if rel is not None:
+                    yield tag, rel
+
+
+def project_reference_targets(root: Path, csproj: Path) -> list[Path]:
+    """In-repo projects referenced from the project OR any file it imports."""
+    root = root.resolve()
+    return sorted({(root / rel).resolve() for tag, rel in _items(root, csproj)
+                   if tag == "ProjectReference" and not is_msbuild_glob(rel) and (root / rel).is_file()})
+
+
+def linked_item_patterns(root: Path, csproj: Path) -> list[str]:
+    """Repository-relative paths / MSBuild globs of every path-valued item the project evaluates."""
+    return sorted({rel for tag, rel in _items(root, csproj) if tag not in _NAME_ITEMS})
+
+
+def msbuild_reach(root: Path, csproj: Path) -> set[str]:
+    """Everything a diff can touch to change what this ONE project evaluates, beyond its own
+    directory: implicit-import candidates (present or not), every MSBuild file read, every linked
+    item. The scope's reach and the key's inputs are both built from these functions."""
+    root = root.resolve()
+    return (set(implicit_import_candidates(root, csproj))
+            | {f.relative_to(root).as_posix() for f in msbuild_files(root, csproj)}
+            | set(linked_item_patterns(root, csproj)))
 
 
 def is_msbuild_glob(pattern: str) -> bool:
@@ -490,26 +535,14 @@ def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
         if csproj in seen:
             continue
         seen.add(csproj)
-        text = csproj.read_text(encoding="utf-8", errors="replace")
-        for a, b in re.findall(_SHELF_INCLUDE, text):
-            include = (a or b).strip()
-            if "$(" in include:
-                continue  # the platform's, not this repository's
-            target = (csproj.parent / include.replace("\\", "/")).resolve()
-            try:
-                target.relative_to(root)
-            except ValueError:
-                continue
-            if target.is_file():
-                queue.append(target)
-    # Plus every `<Compile Include>` a project links from outside its folder (`../Shared/X.cs`), as a
-    # repository-relative path or glob: it is compiled with the project, so a diff touching ONLY it
-    # changes the shelf / extension as much as one inside its directory does (module-build-key.py
-    # keys the same files, and a key nobody computes because nothing was selected is no key).
-    linked: set[str] = set()
+        queue.extend(project_reference_targets(root, csproj))
+    # Plus everything outside those directories that changes what they evaluate: implicit imports
+    # (present or a new one), explicit imports, and every linked path item (`../Shared/X.cs`) —
+    # the SAME functions module-build-key.py keys, so a diff that changes the key selects too.
+    reach: set[str] = set()
     for csproj in seen:
-        linked.update(linked_compile_patterns(root, csproj))
-    return frozenset({p.parent.relative_to(root).as_posix() for p in seen} | linked)
+        reach |= msbuild_reach(root, csproj)
+    return frozenset({p.parent.relative_to(root).as_posix() for p in seen} | reach)
 
 
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
@@ -1280,6 +1313,29 @@ def self_test() -> int:
             dbp.unlink()
         got = _run(root, "modules", "pull_request", ["src/Acme.Other/FromProps.cs"], extra=ext_arg)
         check("[modules] …and with the props file gone, that file no longer selects (the link was the cause)",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        # The imported FILE itself is in reach: an edit to `../Acme.Other/Extension.props` alone (a
+        # DefineConstants, say) changes what the extension compiles, and the key keys its bytes.
+        ext_csproj = shelf_dir / "Acme.ModuleLibraries.csproj"
+        csproj_old = ext_csproj.read_text(encoding="utf-8")
+        ext_csproj.write_text('<Project><Import Project="../Acme.Other/Extension.props" /></Project>\n', encoding="utf-8")
+        (root / "src" / "Acme.Other" / "Extension.props").write_text("<Project />\n", encoding="utf-8")
+        try:
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Extension.props"], extra=ext_arg)
+            check("[modules] an edit ONLY to a file the extension imports ⇒ ALL",
+                  got["scope"] == "full" and got["count"] == 2 and "build extension" in got["reason"],
+                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Other.props"], extra=ext_arg)
+            check("[modules] negative control — a props file beside it that nothing imports narrows",
+                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+            got = _run(root, "modules", "pull_request", ["src/Directory.Build.targets"], extra=ext_arg)
+            check("[modules] a NEW implicit import in an ancestor (src/Directory.Build.targets) ⇒ ALL",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+        finally:
+            ext_csproj.write_text(csproj_old, encoding="utf-8")
+            (root / "src" / "Acme.Other" / "Extension.props").unlink()
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/Extension.props"], extra=ext_arg)
+        check("[modules] …and once nothing imports it, the same edit narrows (the import was the cause)",
               got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
         print("the MSBuild glob matcher (shared with module-build-key.py):")
         for path, pattern, want in (
