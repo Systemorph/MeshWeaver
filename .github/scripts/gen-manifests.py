@@ -1051,12 +1051,18 @@ def floor_only_change(root: Path, base: str, path: str) -> bool:
     an unreadable one, or any other change is not a stamp."""
     before = _sans_floor(git(root, ["show", f"{base}:{path}"], preserve_output=True))
     after = _sans_floor(git(root, ["show", f"HEAD:{path}"], preserve_output=True))
-    return before is not None and after is not None and before == after
+    # TYPE-PRESERVING comparison: Python's `==` says `False == 0` and `1 == 1.0`, inside nested
+    # dicts and lists too, so a stamp beside a `false`→`0` edit would read as floor-only. Canonical
+    # JSON text keeps every type distinct.
+    return (before is not None and after is not None
+            and json.dumps(before, sort_keys=True) == json.dumps(after, sort_keys=True))
 
 
 def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
     """Verify the CI-owned lock PR is only the exact settlement the current main tree requires."""
-    changed = git(root, ["diff", "-z", "--name-only", base, "HEAD"])
+    # `--no-renames`: with rename detection a move (`Mod/README.md` → `Mod/mesh-floor.lock`) lists
+    # only its allowed DESTINATION and hides the deleted source; both ends must be checked.
+    changed = git(root, ["diff", "-z", "--no-renames", "--name-only", base, "HEAD"])
     if changed is None:
         return [f"cannot read the settlement PR diff against {base[:12]} — refusing to accept it"]
     paths = sorted(p for p in changed.split("\0") if p)
@@ -2541,6 +2547,7 @@ def _self_test_main_owned(repo: Path) -> list[str]:
     quiet(settle, settlement_repo, False)
     sg("add", "-A")
     sg("commit", "-qm", "settle: main-owned locks")
+    settled_good = sg("rev-parse", "HEAD").stdout.strip()   # the exact, uncorrupted settlement
     settlement_event_path = settlement_repo.parent / "event.json"
     settlement_event = {
         "repository": {"full_name": "Systemorph/MeshWeaver.Plugins"},
@@ -2616,9 +2623,38 @@ def _self_test_main_owned(repo: Path) -> list[str]:
         if not any("must change only existing package manifest.lock" in error
                    for error in check_untouched(settlement_repo, settlement_base)):
             failures.append("main-owned: the settlement PR must refuse an index.json change beyond the floor")
+        # …a `false`→`0` edit beside the floor is refused (Python's `False == 0` must not decide it)…
+        sg("checkout", "-qb", "settlement-floor-and-bool-to-number", settlement_base)
+        (settlement_repo / "Mod" / "index.json").write_text(
+            '{"content": {"flag": false, "version": "1.2"}}\n')
+        sg("commit", "-qam", "main-side: a boolean field")
+        bool_base = sg("rev-parse", "HEAD").stdout.strip()
+        (settlement_repo / "Mod" / "index.json").write_text(
+            '{"content": {"flag": 0, "minMeshVersion": "3.0.0-ci.42", "version": "1.2"}}\n')
+        sg("commit", "-qam", "settle: floor plus false→0")
+        if floor_only_change(settlement_repo, bool_base, "Mod/index.json"):
+            failures.append("main-owned: a false→0 edit beside the floor must not read as floor-only")
+        # …a rename of another file ONTO an allowed path is refused at its deleted source…
+        sg("checkout", "-qb", "settlement-rename-onto-witness", settled_good)
+        (settlement_repo / "Mod" / "README.md").write_text("a page that must not vanish\n" * 20)
+        sg("add", "-A")
+        sg("commit", "-qm", "main-side: a page")
+        rename_base = sg("rev-parse", "HEAD").stdout.strip()
+        sg("mv", "Mod/README.md", f"Mod/{FLOOR_WITNESS}")
+        sg("commit", "-qm", "settle: the page renamed onto the witness")
+        renamed = check_generated_lock_settlement(settlement_repo, rename_base)
+        if not any("Mod/README.md" in error for error in renamed):
+            failures.append(f"main-owned: a rename onto an allowed path must be refused at its source, got {renamed}")
         # …and a stamp WITHOUT the settled locks it implies is refused by the generated comparison.
+        # The lock copied is the EXACT settlement of the unstamped tree (`settled_good`, never the
+        # branch tip the earlier case corrupted), so this fails only because the floor moved it.
+        sg("checkout", "-qb", "settlement-good-lock-control", settlement_base)
+        sg("checkout", "-q", settled_good, "--", "Mod/manifest.lock")
+        sg("commit", "-qam", "settle: the exact lock, no floor")
+        if check_untouched(settlement_repo, settlement_base):
+            failures.append("main-owned: CONTROL — the exact settlement lock without a stamp must pass")
         sg("checkout", "-qb", "settlement-floor-without-locks", settlement_base)
-        sg("checkout", "-q", SETTLEMENT_PR_BRANCH, "--", "Mod/manifest.lock")
+        sg("checkout", "-q", settled_good, "--", "Mod/manifest.lock")
         (settlement_repo / "Mod" / "index.json").write_text(
             '{"content": {"minMeshVersion": "3.0.0-ci.42", "version": "1.2"}}\n')
         sg("add", "-A")
