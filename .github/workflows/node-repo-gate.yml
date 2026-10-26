@@ -404,11 +404,23 @@ on:
         description: >-
           On pull_request diffs, gate only the affected module closure computed by the caller's
           scripts/affected-modules.py (mirrors the runtime's edge semantics; full-run fallbacks
-          are built into the script's classification). Main pushes / dispatches never narrow.
+          are built into the script's classification). Dispatches never narrow; a main push narrows only when the caller hands `push-base`.
           Set false for a repo without that script — every event then gates the full set.
         required: false
         type: boolean
         default: true
+      push-base:
+        description: >-
+          Optional, `push` events only (with affected-narrowing): a 40-hex commit — the newest
+          GREEN main push run of the caller's workflow that is an ancestor of HEAD (MeshWeaver.Plugins
+          passes its change-set job's `push-base`). The gate then mirrors the pull-request path for
+          `<push-base>..HEAD`: the caller's scripts/affected-modules.py closure. Empty (the
+          default), not a full sha, not in the checkout, not an ancestor of HEAD, equal to HEAD, or
+          a range that touches `.github/` or `scripts/` ⇒ the FULL set, with the reason printed.
+          Ignored on every other event. Absent, every caller behaves exactly as before.
+        required: false
+        type: string
+        default: ''
       adopted-verdict:
         description: >-
           `auto` (the default): the lane decides whether this head may ADOPT an earlier head's green
@@ -775,39 +787,76 @@ jobs:
           CALLER_WORKFLOW: ${{ github.workflow }}
           GH_TOKEN: ${{ github.token }}
           FRESH_MAIN: ${{ steps.fresh.outputs.main-sha }}
-        # 🎯 PRs gate only the AFFECTED dependency closure — changed modules, plus every
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
+          PUSH_BASE: ${{ inputs.push-base }}
+        # 🎯 PRs (and a main push given `push-base`) gate only the AFFECTED dependency closure — changed modules, plus every
         # transitive DEPENDENT, plus the affected set's own dependencies (the fresh gate mesh
         # needs them present to install and to resolve `shared=@…`).
         # 🚨 FAIL LOUD: `set -euo pipefail` — an errored computation fails the job; the script
         # itself refuses an empty diff, so a wrong empty set can never pass as "nothing to test".
         run: |
           set -euo pipefail
-          if [ "$ADOPTED_VERDICT" = "auto" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "$ADOPTED_VERDICT" = "auto" ] && [ "$EVENT" = "pull_request" ]; then
             # The lane decides: fetch the platform's adopt-verdict.py at the lane's scripts ref and ask it.
             SCRIPT="${RUNNER_TEMP:-/tmp}/adopt-verdict.py"
             "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/adopt-verdict.py" > "$SCRIPT" \
               || { echo "::warning::could not fetch .github/scripts/adopt-verdict.py at ${SCRIPTS_REF} — gating as usual"; ADOPTED_VERDICT=''; }
             if [ -n "$ADOPTED_VERDICT" ]; then
-              python3 "$SCRIPT" --base "origin/${{ github.base_ref }}" --workflow "$CALLER_WORKFLOW" --repo "$GITHUB_REPOSITORY" --github-output "$RUNNER_TEMP/adopt.txt" | tail -3
+              python3 "$SCRIPT" --base "origin/$BASE_REF" --workflow "$CALLER_WORKFLOW" --repo "$GITHUB_REPOSITORY" --github-output "$RUNNER_TEMP/adopt.txt" | tail -3
               ADOPTED_VERDICT=$(grep '^adopted=' "$RUNNER_TEMP/adopt.txt" | cut -d= -f2-)
             fi
           fi
           if [ "$ADOPTED_VERDICT" = "off" ]; then ADOPTED_VERDICT=''; fi
-          if [ -n "$ADOPTED_VERDICT" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ -n "$ADOPTED_VERDICT" ] && [ "$EVENT" = "pull_request" ]; then
             # The caller adopted a green run's verdict: this head is that run's content plus main's
             # merge and regenerated locks. Nothing to gate — said so, with the run, in the proof.
             echo "::notice title=verdict adopted::this head differs from an already-green head only by main's merge and regenerated locks — the gate adopts $ADOPTED_VERDICT and runs no shard"
             echo "adopted verdict: $ADOPTED_VERDICT" >> "$GITHUB_STEP_SUMMARY"
             echo '{"mount": [], "runAll": false, "adopted": "'"$ADOPTED_VERDICT"'"}' > affected.json
-          elif [ "$NARROWING" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+          elif [ "$NARROWING" = "true" ] && [ "$EVENT" = "pull_request" ]; then
             # The range's base is the tip the fresh merge was built on: HEAD's first parent IS that
             # tip, so this diff is exactly the pull request's effect on the CURRENT main, and the
             # dependency edges are read from the merged tree the shards test.
             [ -n "$FRESH_MAIN" ] || { echo "::error::a narrowed pull_request run has no fresh-merge base tip — refusing to select against a base nobody named"; exit 1; }
             python3 scripts/affected-modules.py \
               --range "$FRESH_MAIN...HEAD" --json > affected.json
+          elif [ "$NARROWING" = "true" ] && [ "$EVENT" = "push" ] && [ -n "$PUSH_BASE" ]; then
+            # 🎯 A MAIN PUSH the caller narrowed (`push-base`: the newest GREEN main run's commit,
+            # an ancestor of HEAD). The tree at that commit passed every gate it owed, so the
+            # closure of `<push-base>..HEAD` is what this push still owes — the same answer, from
+            # the same script, as the pull-request path above. Every doubt about the base is a FULL
+            # run that says why; a CI path in the range is FULL too (policy
+            # ci-paths-owe-no-module-leg: a pull request skips module legs for it BECAUSE the push
+            # run covers them, so the push run cannot take that shortcut itself).
+            why=''
+            if ! [[ "$PUSH_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+              why="push-base '$PUSH_BASE' is not a full commit sha"
+            elif ! git cat-file -e "$PUSH_BASE^{commit}" 2>/dev/null; then
+              why="push-base $PUSH_BASE is not in this checkout"
+            elif ! git merge-base --is-ancestor "$PUSH_BASE" HEAD; then
+              why="push-base $PUSH_BASE is not an ancestor of HEAD"
+            elif [ "$PUSH_BASE" = "$(git rev-parse HEAD)" ]; then
+              why="push-base $PUSH_BASE IS HEAD — an empty range is a broken input, never 'nothing to gate'"
+            else
+              ci_path="$(git diff --name-only "$PUSH_BASE" HEAD -- .github scripts | head -n1)"
+              [ -z "$ci_path" ] || why="the range touches the CI path $ci_path — a main push covers module legs for CI paths, so it runs them all"
+            fi
+            if [ -n "$why" ]; then
+              echo "push on $REF_NAME — full run: $why"
+              echo '{"mount": [], "runAll": true}' > affected.json
+            else
+              echo "push on $REF_NAME — narrowed to the closure of $PUSH_BASE..HEAD (the caller's push-base)"
+              python3 scripts/affected-modules.py \
+                --range "$PUSH_BASE..HEAD" --json > affected.json
+            fi
           else
-            echo "${{ github.event_name }} on ${{ github.ref_name }} — full run (narrowing applies only to PR diffs)"
+            if [ "$EVENT" = "push" ] && [ "$NARROWING" = "true" ]; then
+              echo "push on $REF_NAME — full run: no push-base was given (the caller found no green main run to diff from, or does not narrow pushes)"
+            else
+              echo "$EVENT on $REF_NAME — full run (narrowing applies to PR diffs, and to a push the caller hands a push-base)"
+            fi
             echo '{"mount": [], "runAll": true}' > affected.json
           fi
           {
