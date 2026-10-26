@@ -117,7 +117,7 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
             ? Permission.Comment
             : Permission.Create,
         NodeOperation.Update => Permission.Update,
-        NodeOperation.Delete => Permission.Delete,
+        NodeOperation.Delete => DeletePermission.RequiredFor(context.Node.Path),
         _ => Permission.None
     };
 }
