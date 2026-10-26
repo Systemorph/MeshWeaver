@@ -92,6 +92,7 @@ which is what step 1 does.
 |---|---|---|
 | runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane | the compile settle, beside the terminal stamp, as the edge-set node |
 | build-process bake (`NodeSetCompiler.Compile`) | after the emit | carried on `CompiledNode.DependencyEdges` for the bundle — writing it into a mesh at adoption is a follow-up |
+| module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | not yet | follow-up: it runs in CI with no mesh, so its edges need a transport (the bundle, then the registry) that belongs with step (4); and its one-body-pass discipline means `GetUsedAssemblyReferences`' extra binding cost is measured there before it is added |
 
 ## The reverse closure (step 3)
 
@@ -106,14 +107,21 @@ transitively) and `dependencies:<path>` (everything `<path>` depends on). Each a
   the source's rows and insert the new set in the same statement, so one compile is one
   transaction.
 - **`public.dependency_closure(ancestor, descendant, depth, next_hop, build_identity)`**, PK
-  `(ancestor, descendant)`, indexes on `(descendant)` and `(ancestor, depth)`. `ancestor` depends on
-  `descendant` (`ancestor → … → descendant`); `next_hop` is the first step from `ancestor` towards
-  `descendant`, so a chain is rebuilt by following `next_hop` from the start.
-- **AFTER INSERT** on `dependency_edge` (statement level, transition table): for every new edge
-  `s → t`, insert `{ancestors of s, s} × {t, descendants of t}` with `depth = d1 + 1 + d2`, keeping
-  the minimum depth and its `next_hop` (`ON CONFLICT … DO UPDATE … WHERE excluded.depth < depth`).
-  A self-pair from a cycle is not stored: a node is never its own dependent, and the cycle stays
-  visible as the pair of rows `(a, b)` and `(b, a)`.
+  `(ancestor, descendant)`, indexes on `(descendant)` and `(ancestor, depth)`. The ANCESTOR is the
+  dependency (the parent), the DESCENDANT depends on it (the child), so "all children of X" — every
+  dependent — is the one indexed lookup `WHERE ancestor = X ORDER BY depth`, and "what X depends on"
+  is `WHERE descendant = X`. An edge `s → t` (s depends on t) is the row `(t, s, 1, t)`. `next_hop`
+  is the first step from the DESCENDANT towards the ancestor (the node it directly depends on along
+  the chosen shortest chain), so `dependency_path(a, d)` walks `d → next_hop(a, d) → … → a`. Among
+  chains of equal length the smallest `next_hop` (ordinal) is chosen, so the incremental and the
+  full computation agree row for row.
+- **AFTER INSERT** on `dependency_edge` (statement level, transition table, processed one edge at a
+  time so each sees the ones before it): for a new edge `s → t`, every `A ∈ {t} ∪ (what t depends
+  on)` and every `D ∈ {s} ∪ (what depends on s)` gets the row `(A, D)` with
+  `depth = depth(A, t) + 1 + depth(s, D)` and `next_hop = t` when `D = s`, else `next_hop(s, D)`;
+  `ON CONFLICT (ancestor, descendant) DO UPDATE` keeps the smaller `(depth, next_hop)`. A self-pair
+  from a cycle (`A = D`) is not stored: a node is never its own dependent, and the cycle stays
+  visible as the rows `(a, b)` and `(b, a)`.
 - **AFTER DELETE / UPDATE**: insert-only maintenance cannot shrink a closure, so the affected rows
   are rebuilt — `rebuild_dependency_closure()` over the whole table, which at this size (hundreds of
   packages, about a thousand NodeTypes, at most ~10⁵ closure rows) is measured before anything
