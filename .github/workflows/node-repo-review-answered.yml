@@ -97,7 +97,11 @@ name: Node repo review answered (reusable)
 # until a person re-ran it by hand. Now, after a GREEN verdict on any event but `pull_request` /
 # `merge_group`, the `refresh` job re-runs the WHOLE newest `pull_request` run of the
 # CALLER's workflow for the current head — once per (head, answered state); the decision is
-# `refresh_action` in the predicate, self-tested. It is the ONLY job here that writes, and the ONLY
+# `refresh_action` in the predicate, self-tested. 🚨 And after a GREEN verdict on ANY event (a
+# `pull_request` one included) it re-runs EVERY other run of this check on the head whose review
+# check-run is red and started before the verdict (`duplicate_red_action`): each run publishes its own
+# duplicate of the required context, and branch protection blocked MeshWeaver.Plugins#4276 on three
+# older review/comment-event reds while the newest check-run read success. It is the ONLY job here that writes, and the ONLY
 # reason a caller grants `actions: write`: a called workflow's job permissions are a HARD requirement
 # on every caller (startup_failure, zero jobs, otherwise — .github/lane-caller-grants.yml), so an
 # adopting caller grants it in the same change and records it in its roster row.
@@ -235,7 +239,8 @@ jobs:
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
   # ♻️ THE SELF-REFRESH — see the header. Runs only after a GREEN verdict (`needs` success); on a
-  # RED one there is nothing to refresh, and a later reply's own GREEN run refreshes then. The script
+  # RED one there is nothing to refresh, and a later reply's own GREEN run refreshes then. It covers
+# the newest `pull_request` run AND every older red duplicate of any event (#4276). The script
   # decides and PRINTS every no-op (this run is the `pull_request` one; the read run is already
   # green, or newer than this verdict; a fork) and WAITS for a read run still in flight (#7187 — it
   # may already have published its red) — so the job never skips silently on an event
@@ -272,7 +277,7 @@ jobs:
             || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
           python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
 
-      - name: Re-run the newest pull_request run iff it still carries an older red
+      - name: Re-run every run of this check on the head that still carries an older red
         id: judge
         env:
           GH_TOKEN: ${{ github.token }}

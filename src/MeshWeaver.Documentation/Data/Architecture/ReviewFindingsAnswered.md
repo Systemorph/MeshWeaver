@@ -1287,6 +1287,89 @@ reply's run is GREEN, because that run refreshes too. `refresh` is the only job 
 writes, and it holds `actions: write` alone. A caller adopting the lane grants it on its `uses:`
 job and records the grant in `.github/lane-caller-grants.yml` in the same change.
 
+#### 🚨 Every older red on the head, not only the `pull_request` one (the duplicate sweep)
+
+**What the paragraph above did not cover.** Every run of this workflow publishes its OWN check-run
+named `… Automatic review answered` on the head, one per event, and GitHub cannot be told to merge
+them. The refresh above looked at ONE of them, and only after a GREEN verdict taken on a
+review or comment event. Measured on MeshWeaver.Plugins#4276 (head `264517aeaf`):
+
+- At 14:48Z three runs, 40342994248 (`pull_request_review_comment`), 40343008573
+  (`pull_request_review`) and 40343010678 (`pull_request_review_comment`), each went red. Each red
+  was true when it was taken: the head owed its own Copilot review, which had been refused for quota.
+- Copilot's review landed at 18:28Z, and its event started no run.
+- At 18:36Z a person re-ran the `pull_request` run 40342980035, and it went GREEN. Its refresh did
+  nothing, because a `pull_request` verdict never refreshed, and no refresh had ever looked at a run
+  of another event.
+- A REST merge then answered `405 Required status check "review-answered / Automatic review
+  answered" is failing`, although the newest check-run of that name read success. The pull request
+  stayed blocked until the three older runs were re-run by hand. Core #7250 and #7252 merged the same
+  way, and core #7204 carries 12 check-runs of the two names on one head: 8 failures and 4 successes.
+
+So which duplicate branch protection reads is **not assumed any more**. #4649 measured one selection
+and #4276 another. After every GREEN verdict, from any event (`pull_request` included, never
+`merge_group`), the `refresh` job also lists EVERY run of this workflow on the head in one call. It
+reads each run's jobs only when the run could hold a red: completed runs are read once per attempt,
+and a run that is green or has not started is never read. It then re-runs the WHOLE run when all of
+these hold:
+
+- its review check-run (a job named `Automatic review answered`, or any `<caller job> / Automatic
+  review answered`) is red;
+- the run is completed;
+- the run STARTED before this verdict.
+
+The decision is the pure function `duplicate_red_action`, and `run_refresh` calls it beside
+`refresh_action` off the same listing. Its self-test replays the #4276 head end to end, with
+negative controls: a duplicate already green, a run red only in its `refresh` job, a red started
+after the verdict, a red on an older head, a zero-job cancelled run, a fork, a closed pull request,
+and a truncated listing, which is RED and never judged. A review job still in flight is waited for.
+A review job never waits on a refresh, so that wait cannot cycle. A red inside a run that is still
+finishing, because its own refresh is running, is waited for only when that run is OLDER than this
+one. Waiting only on older runs is what keeps two refreshes from waiting on each other. 🚨 This is
+ONE policy, `in_flight_policy`, and BOTH decision paths use it: the newest `pull_request` run as well
+as the sweep. With two separate policies, an older comment run waited on a newer `pull_request` run
+whose refresh was waiting on it, and both ran into the 30-minute limit (#7257 review).
+
+🚨 **One re-run per concurrency group per refresh, and never into an occupied slot**
+(`plan_reruns`). The caller's group (`…-gate`, or `…-feedback` for review-comment runs) keeps ONE
+pending run, and a re-run enters it like a new run. A second re-run POSTed into the same group would
+replace the first before it evaluates anything. The replaced attempt is cancelled with zero jobs, its
+red stands, and the refresh would still report success.
+
+So the reds are re-run as a CHAIN. The chosen re-run judges live state, and when it is GREEN its own
+refresh re-runs the next red, which also started before that verdict. A group that already holds a
+pending run gets no re-run: that run is the next link. A re-run that stays red stops the chain there,
+and that red is true. The self-test replays such a chain to convergence.
+
+A re-run
+softens nothing: it applies the whole predicate to live state, so a thread that is really unanswered
+is red there too.
+
+**Why not ONE stable check-run per head, updated by every event.** That would also clear the red
+history on the pull request page, which a re-run does not do: each re-run replaces its run's
+check-run, so the page ends green, but the older attempts stay in the run history. It is not the fix
+in this change, for four reasons:
+
+1. **A workflow job ALWAYS publishes a check-run under its own name**, one per run, and nothing in a
+   workflow suppresses it. So a single verdict needs the job RENAMED, so that its check-runs stop
+   carrying the required name, and the verdict written through the API under that name.
+2. **That moves the producer of a required context in every repository.** Core's ruleset requires
+   the bare `Automatic review answered`. MeshWeaver.Plugins' classic protection requires
+   `review-answered / Automatic review answered` pinned to `app_id 15368` (both measured
+   2026-10-26). Under that pin a commit STATUS can never satisfy the context, and a check-run
+   counts only if the GitHub Actions app wrote it. Changing a required context is a protection edit,
+   which is the maintainer's call, and it needs the rename procedure in
+   [Renaming a Required Check](../RenamingARequiredCheck).
+3. **A fork pull request's token is read-only**, so it could write no verdict at all. Under classic
+   protection the context would then block forever. Today the gate judges forks in full.
+4. **Not established:** whether the workflow token may `PATCH` a check-run that another run's job
+   created, and whether a check-run created through the API from a `pull_request_review_comment` run
+   lands in a check suite the rollup reads. #4649 showed that the comment runs' own check-runs were
+   absent from the rollup, and nobody has measured why.
+
+The re-run sweep needs no protection edit, and every caller gets it when its pin moves. The stable
+verdict stays recorded here as the shape to measure next.
+
 The staged pipeline's hold is re-evaluated on the same reply events by the existing listener,
 `stage-advance.yml` → `node-repo-stage-advance.yml`. Its `on-answer` job fires on
 `pull_request_review_comment: created` and `pull_request_review: submitted` and re-runs the failed
@@ -1294,13 +1377,14 @@ jobs of the head's held `dotnet-test.yml` run once stage 1 is green.
 
 **Manual fallback.** The self-refresh cannot help in two cases. A **fork** pull request's token
 cannot re-run a workflow, so the job warns and names this remedy. And if the `refresh` job itself
-is **red**, it names what it could not read. In both cases, re-run the check's `pull_request` run:
+is **red**, it names what it could not read. In both cases, re-run EVERY run of the check on the
+head that is not `success`, whatever its event (the duplicate sweep above says why):
 
 ```bash
-# the run whose verdict branch protection actually reads
-gh api "repos/Systemorph/MeshWeaver/actions/workflows/review-answered.yml/runs?head_sha=<HEAD SHA>" \
-  --jq '.workflow_runs[] | select(.event=="pull_request") | .id'
-gh api -X POST "repos/Systemorph/MeshWeaver/actions/runs/<ID>/rerun"
+# every run of this check on the head that still carries a red (any event)
+gh api "repos/Systemorph/MeshWeaver/actions/workflows/review-answered.yml/runs?head_sha=<HEAD SHA>&per_page=100" \
+  --jq '.workflow_runs[] | select(.status=="completed" and .conclusion!="success") | "\(.id) \(.event) \(.conclusion)"'
+gh api -X POST "repos/Systemorph/MeshWeaver/actions/runs/<ID>/rerun"   # once per id listed
 ```
 
 An empty commit does the same thing by a longer road — it gives the check a head sha it has never
