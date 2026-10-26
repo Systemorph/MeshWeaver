@@ -215,9 +215,11 @@ reader of the logs. The warnings now carry the content's **shape** — the `$typ
 the JSON kind, the top-level property names (at most 32, each cut and JSON-escaped) and the byte
 length — and no value. `ContentShapes.Describe` (`MeshWeaver.Data.Contract`) is the one
 implementation every site uses, and it keeps the allocation property above: a `JsonElement` is
-measured from its raw UTF-8 span, and a `JsonNode` is sized by walking the tree (reported with a
-`~`, since string escaping is not counted) rather than serialized, so no converter runs and no
-payload is materialised. The marker's `MeshNodeContentDegradedException.Shape` carries the same
+measured from its raw UTF-8 span; a `JsonNode` is sized over its top level only, never serialized
+and never descended into (descending would materialise a parsed tree's lazy containers), so no
+converter runs and no payload is materialised — the size is printed `~` when complete and `≥` when
+a nested container or the entry budget left it a lower bound. Only the displayed names are decoded,
+each cut before decoding; the discriminator is matched on raw bytes. The marker's `MeshNodeContentDegradedException.Shape` carries the same
 text; its old `RawJson` property survives only as an `[Obsolete]` forwarder that the platform's
 own sites leave `null`. `DegradedContentLogsShapeNotValuesTest` drives the production seams with a
 value-bearing payload and asserts the value is absent from the formatted line, the marker's

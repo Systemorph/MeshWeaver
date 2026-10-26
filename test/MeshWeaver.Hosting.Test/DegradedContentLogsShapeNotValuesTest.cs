@@ -127,19 +127,106 @@ public class DegradedContentLogsShapeNotValuesTest
         Assert.Contains("~", fromNode); // a walked size, said to be approximate
     }
 
-    [Fact]
-    public void KeysAreBoundedAndEscaped()
+    /// <summary>
+    /// The adversarial key is FIRST, so it is inside the displayed prefix: removing the escaping
+    /// would put a raw line break in the line, and removing the cut would print all 200 'x'.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ADisplayedKeyIsEscapedAndCut(bool asJsonNode)
     {
-        var obj = new JsonObject();
+        var adversarial = "line\nbreak" + new string('x', 200);
+        var obj = new JsonObject { [adversarial] = "v" };
         for (var i = 0; i < ContentShapes.MaxKeys + 5; i++)
             obj[$"k{i}"] = i;
-        obj["line\nbreak" + new string('x', 200)] = "v";
 
-        var shape = ContentShapes.Describe(JsonSerializer.SerializeToElement(obj));
+        var shape = asJsonNode
+            ? ContentShapes.Describe(obj)
+            : ContentShapes.Describe(JsonSerializer.SerializeToElement(obj));
 
+        // escaped (\n as two characters) and cut to MaxNameChars characters of the escaped form
+        var expected = "\"line\\nbreak" + new string('x', ContentShapes.MaxNameChars - "line\\nbreak".Length) + "…\"";
+        if (asJsonNode) // cut BEFORE escaping, so one more 'x' fits
+            expected = "\"line\\nbreak" + new string('x', ContentShapes.MaxNameChars - "line\nbreak".Length) + "…\"";
+        Assert.Contains("[" + expected + ", ", shape);
+        Assert.DoesNotContain("\n", shape);
+        Assert.DoesNotContain(new string('x', ContentShapes.MaxNameChars), shape);
         Assert.Contains($"{ContentShapes.MaxKeys + 6} top-level keys", shape);
         Assert.Contains("… 6 more", shape);
-        Assert.DoesNotContain("\n", shape);
+
+        // Negative control: the key really carries a line break and more than the cut.
+        Assert.Contains("\n", adversarial);
+        Assert.True(adversarial.Length > ContentShapes.MaxNameChars);
+    }
+
+    /// <summary>
+    /// An oversized KEY or <c>$type</c> must not be decoded whole just to print 64 characters of it.
+    /// </summary>
+    [Theory]
+    [InlineData("key")]
+    [InlineData("type")]
+    public void AnOversizedKeyOrType_IsNotDecodedWhole(string where)
+    {
+        string Build(char c)
+        {
+            var big = new string(c, 512_000);
+            return where == "key"
+                ? JsonSerializer.Serialize(new Dictionary<string, int> { [big] = 1 })
+                : JsonSerializer.Serialize(new Dictionary<string, string> { ["$type"] = big });
+        }
+        _ = ContentShapes.Describe(JsonSerializer.Deserialize<JsonElement>(Build('w'))); // warm-up
+        var element = JsonSerializer.Deserialize<JsonElement>(Build('z'));
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var shape = ContentShapes.Describe(element);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Contains(new string('z', ContentShapes.MaxNameChars) + "…", shape);
+        Assert.True(allocated < 64_000, $"Describing an oversized {where} allocated {allocated:N0} bytes.");
+    }
+
+    /// <summary>
+    /// A FRESH parsed tree (its containers still lazy) with a large numeric array: sizing must not
+    /// materialise the array or format each number on the heap. The size is then a lower bound.
+    /// </summary>
+    [Fact]
+    public void AFreshParsedTreeWithALargeNumericArray_IsNotMaterialised()
+    {
+        var json = "{\"$type\":\"X\",\"values\":[" + string.Join(",", Enumerable.Range(0, 100_000)) + "]}";
+        _ = ContentShapes.Describe(JsonNode.Parse(json)!); // warm-up on ANOTHER tree
+        var fresh = JsonNode.Parse(json)!;
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var shape = ContentShapes.Describe(fresh);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Contains("[\"$type\", \"values\"]", shape);
+        Assert.Contains("≥", shape);
+        Assert.True(allocated < 64_000, $"Describing a fresh 100k-number tree allocated {allocated:N0} bytes.");
+    }
+
+    /// <summary>
+    /// Constructed numeric leaves are sized without a heap string each, and past the entry budget
+    /// the size is reported as a lower bound.
+    /// </summary>
+    [Fact]
+    public void ALargeConstructedNumericArray_IsBudgeted()
+    {
+        var array = new JsonArray();
+        for (var i = 0; i < 100_000; i++)
+            array.Add(i * 1.5);
+        _ = ContentShapes.Describe(array);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var shape = ContentShapes.Describe(array);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.StartsWith("no $type, JSON Array, ≥", shape);
+        Assert.True(allocated < 64_000, $"Describing a 100k-number array allocated {allocated:N0} bytes.");
+
+        // Negative control: a small array is sized completely, so '≥' above is the budget's doing.
+        Assert.StartsWith("no $type, JSON Array, ~", ContentShapes.Describe(new JsonArray(1, 2, 3)));
     }
 
     [Fact]

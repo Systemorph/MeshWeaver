@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -17,10 +18,21 @@ namespace MeshWeaver.Mesh;
 /// none), which top-level properties it carries (a missing required one is the usual cause), what
 /// kind of JSON value it is and how big — and none of that needs a value.</para>
 ///
-/// <para>Bounded by construction: at most <see cref="MaxKeys"/> property names are listed, each
-/// cut to <see cref="MaxNameChars"/> characters and JSON-escaped (a name cannot inject a line
-/// break into the log), and measuring a <see cref="JsonElement"/> reads its length without
-/// materialising the payload.</para>
+/// <para><b>Bounded by construction</b>, in output AND in allocation, because a degradation is
+/// exactly when the payload is unusual:</para>
+/// <list type="bullet">
+/// <item>at most <see cref="MaxKeys"/> property names are listed (the total is always given), and
+/// only those are decoded — the discriminator is matched on raw bytes
+/// (<see cref="JsonProperty.NameEquals(string)"/>), so a huge object costs no per-key string;</item>
+/// <item>a displayed name or <c>$type</c> is cut to <see cref="MaxNameChars"/> BEFORE it is
+/// decoded, and printed JSON-escaped (a name cannot inject a line break into the log);</item>
+/// <item>a <see cref="JsonElement"/>'s length is read from its raw UTF-8 span;</item>
+/// <item>a <see cref="JsonNode"/> is sized over its top level only (at most
+/// <see cref="MaxSizedEntries"/> entries, numbers formatted into a stack buffer) and nested
+/// containers are never descended into — descending would materialise a parsed tree's lazy
+/// containers, an allocation that grows with the payload. Such a size is printed as a lower
+/// bound (<c>≥</c>); a fully sized flat node as approximate (<c>~</c>, escaping not counted).</item>
+/// </list>
 /// </summary>
 public static class ContentShapes
 {
@@ -29,6 +41,9 @@ public static class ContentShapes
 
     /// <summary>The longest property name (or <c>$type</c> value) a description prints before cutting it.</summary>
     public const int MaxNameChars = 64;
+
+    /// <summary>The most top-level entries a <see cref="JsonNode"/> size is summed over; beyond it the size is a lower bound.</summary>
+    public const int MaxSizedEntries = 1024;
 
     private const string TypeDiscriminator = "$type";
 
@@ -61,9 +76,9 @@ public static class ContentShapes
 
     private static string Element(JsonElement element)
     {
-        var bytes = JsonMarshal.GetRawUtf8Value(element).Length;
+        var bytes = JsonMarshal.GetRawUtf8Value(element).Length.ToString(CultureInfo.InvariantCulture);
         if (element.ValueKind != JsonValueKind.Object)
-            return Compose(element.ValueKind, "no $type", null, 0, bytes.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return Compose(element.ValueKind.ToString(), "no $type", null, 0, bytes);
 
         var names = ImmutableList.CreateBuilder<string>();
         var total = 0;
@@ -72,14 +87,20 @@ public static class ContentShapes
         {
             total++;
             if (names.Count < MaxKeys)
-                names.Add(property.Name);
-            if (property.Name == TypeDiscriminator)
-                type = property.Value.ValueKind == JsonValueKind.String
-                    ? $"$type={Quote(property.Value.GetString() ?? string.Empty)}"
-                    : $"$type is a JSON {property.Value.ValueKind}";
+                names.Add(DisplayEscaped(JsonMarshal.GetRawUtf8PropertyName(property)));
+            if (property.NameEquals(TypeDiscriminator))
+                type = TypeOf(property.Value);
         }
-        return Compose(JsonValueKind.Object, type, names.ToImmutable(), total,
-            bytes.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return Compose(nameof(JsonValueKind.Object), type, names.ToImmutable(), total, bytes);
+    }
+
+    /// <summary>The <c>$type</c> clause for a discriminator held as a <see cref="JsonElement"/>, decoded only up to the cut.</summary>
+    private static string TypeOf(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+            return $"$type is a JSON {value.ValueKind}";
+        var raw = JsonMarshal.GetRawUtf8Value(value); // includes the surrounding quotes
+        return "$type=" + DisplayEscaped(raw[1..^1]);
     }
 
     private static string Node(JsonNode node)
@@ -93,11 +114,15 @@ public static class ContentShapes
         foreach (var property in obj)
         {
             if (names.Count < MaxKeys)
-                names.Add(property.Key);
+                names.Add(DisplayUnescaped(property.Key));
             if (property.Key == TypeDiscriminator)
-                type = property.Value is JsonValue value && value.TryGetValue<string>(out var discriminator)
-                    ? $"$type={Quote(discriminator)}"
-                    : $"$type is a JSON {Kind(property.Value)}";
+                type = property.Value switch
+                {
+                    JsonValue value when value.TryGetValue<JsonElement>(out var element) => TypeOf(element),
+                    // A constructed string value: the string already exists, nothing is decoded.
+                    JsonValue value when value.TryGetValue<string>(out var text) => "$type=" + DisplayUnescaped(text),
+                    var other => $"$type is a JSON {Kind(other)}",
+                };
         }
         return Compose(nameof(JsonValueKind.Object), type, names.ToImmutable(), obj.Count, bytes);
     }
@@ -120,68 +145,114 @@ public static class ContentShapes
         _ => "value of an unrecognised CLR type",
     };
 
-    private static string Compose(JsonValueKind kind, string type, ImmutableList<string>? names, int total, string bytes)
-        => Compose(kind.ToString(), type, names, total, bytes);
-
     private static string Compose(
         string kind, string type, ImmutableList<string>? names, int total, string bytes)
     {
         var keys = names is null
             ? string.Empty
             : $", {total} top-level key{(total == 1 ? "" : "s")} ["
-              + string.Join(", ", names.Select(Quote))
+              + string.Join(", ", names)
               + (total > names.Count ? $", … {total - names.Count} more" : string.Empty)
               + "]";
         return $"{type}, JSON {kind}{keys}, {bytes} bytes (values not logged)";
     }
 
-    private static string Quote(string name)
-        => JsonSerializer.Serialize(name.Length <= MaxNameChars ? name : name[..MaxNameChars] + "…");
+    /// <summary>
+    /// Displays a name that is ALREADY JSON-escaped (raw bytes from the document): cut to
+    /// <see cref="MaxNameChars"/> bytes, never splitting a UTF-8 character, then decoded — only the
+    /// cut prefix is ever turned into a string. Escaped JSON contains no raw control character, so
+    /// the result cannot break the log line.
+    /// </summary>
+    private static string DisplayEscaped(ReadOnlySpan<byte> escaped)
+    {
+        var count = Math.Min(escaped.Length, MaxNameChars);
+        while (count > 0 && count < escaped.Length && (escaped[count] & 0xc0) == 0x80)
+            count--;
+        return "\"" + Encoding.UTF8.GetString(escaped[..count]) + (count < escaped.Length ? "…" : "") + "\"";
+    }
+
+    /// <summary>Displays an unescaped name that already exists as a string: cut first, then JSON-escaped.</summary>
+    private static string DisplayUnescaped(string name)
+    {
+        var cut = name.Length > MaxNameChars;
+        var escaped = JsonSerializer.Serialize(cut ? name[..MaxNameChars] : name);
+        return "\"" + escaped[1..^1] + (cut ? "…" : "") + "\"";
+    }
 
     /// <summary>
-    /// The approximate UTF-8 length a <see cref="JsonNode"/> serializes to, summed by walking the
-    /// tree — never by serializing it: that would allocate the whole payload for a diagnostic, and
-    /// a customised <see cref="JsonValue"/> would run an arbitrary converter. String escaping is not
-    /// counted and a value of an unrecognised CLR type counts as zero, hence the <c>~</c>.
+    /// The approximate UTF-8 length of a <see cref="JsonNode"/>, summed over its TOP LEVEL — never
+    /// by serializing it (that allocates the whole payload and runs a customised value's converter)
+    /// and never by descending into a nested container (that materialises a parsed tree's lazy
+    /// containers). A nested container, an unrecognised value, or more than
+    /// <see cref="MaxSizedEntries"/> entries makes it a lower bound (<c>≥</c>); otherwise it is
+    /// approximate (<c>~</c>), since string escaping is not counted.
     /// </summary>
     private static string Measure(JsonNode node)
-        => "~" + Size(node).ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-    private static long Size(JsonNode? node)
     {
+        var partial = false;
+        long total;
+        switch (node)
+        {
+            case JsonObject obj:
+            {
+                total = 2 + Math.Max(0, obj.Count - 1);
+                var seen = 0;
+                foreach (var property in obj)
+                {
+                    if (++seen > MaxSizedEntries) { partial = true; break; }
+                    total += Encoding.UTF8.GetByteCount(property.Key) + 3 + LeafSize(property.Value, ref partial);
+                }
+                break;
+            }
+            case JsonArray array:
+            {
+                total = 2 + Math.Max(0, array.Count - 1);
+                var seen = 0;
+                foreach (var item in array)
+                {
+                    if (++seen > MaxSizedEntries) { partial = true; break; }
+                    total += LeafSize(item, ref partial);
+                }
+                break;
+            }
+            default:
+                total = LeafSize(node, ref partial);
+                break;
+        }
+        return (partial ? "≥" : "~") + total.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>The size of a value without descending into it or allocating for it.</summary>
+    private static long LeafSize(JsonNode? node, ref bool partial)
+    {
+        Span<char> digits = stackalloc char[64];
         switch (node)
         {
             case null:
                 return 4; // null
-            case JsonObject obj:
-            {
-                long total = 2 + Math.Max(0, obj.Count - 1);
-                foreach (var property in obj)
-                    total += Encoding.UTF8.GetByteCount(property.Key) + 3 + Size(property.Value);
-                return total;
-            }
-            case JsonArray array:
-            {
-                long total = 2 + Math.Max(0, array.Count - 1);
-                foreach (var item in array)
-                    total += Size(item);
-                return total;
-            }
+            case JsonObject or JsonArray:
+                partial = true;
+                return 2; // "{}" / "[]" at least
             case JsonValue value when value.TryGetValue<JsonElement>(out var element):
                 return JsonMarshal.GetRawUtf8Value(element).Length;
             case JsonValue value when value.TryGetValue<string>(out var text):
                 return Encoding.UTF8.GetByteCount(text) + 2;
             case JsonValue value when value.TryGetValue<bool>(out var flag):
                 return flag ? 4 : 5;
-            case JsonValue value when value.TryGetValue<int>(out var small):
-                return small.ToString(System.Globalization.CultureInfo.InvariantCulture).Length;
-            case JsonValue value when value.TryGetValue<long>(out var integer):
-                return integer.ToString(System.Globalization.CultureInfo.InvariantCulture).Length;
-            case JsonValue value when value.TryGetValue<decimal>(out var number):
-                return number.ToString(System.Globalization.CultureInfo.InvariantCulture).Length;
-            case JsonValue value when value.TryGetValue<double>(out var real):
-                return real.ToString("R", System.Globalization.CultureInfo.InvariantCulture).Length;
+            case JsonValue value when value.TryGetValue<int>(out var small)
+                                      && small.TryFormat(digits, out var written, default, CultureInfo.InvariantCulture):
+                return written;
+            case JsonValue value when value.TryGetValue<long>(out var integer)
+                                      && integer.TryFormat(digits, out var written, default, CultureInfo.InvariantCulture):
+                return written;
+            case JsonValue value when value.TryGetValue<decimal>(out var number)
+                                      && number.TryFormat(digits, out var written, default, CultureInfo.InvariantCulture):
+                return written;
+            case JsonValue value when value.TryGetValue<double>(out var real)
+                                      && real.TryFormat(digits, out var written, "R", CultureInfo.InvariantCulture):
+                return written;
             default:
+                partial = true;
                 return 0;
         }
     }
