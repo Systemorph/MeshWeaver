@@ -202,8 +202,8 @@ across pages and reloads. A shell that does not know the class leaves the splitt
 chevron in charge. (The Blazor portal's half lives in MeshWeaver.Plugins: `NavRailStateService`,
 `NavRailPanePresentation`, `SidePaneHeader`, and the toggle in `PortalLayoutBase`.)
 
-**Every left sidebar reads top-down the same way** (2026-10-26, the maintainer: *"consistently bring
-title and collapse, then search / order then index"*, after the file pane of a code host):
+**Every left sidebar reads top-down the same way** (policy
+[`sidebar-reads-header-search-index`](/Doc/Architecture/PolicyNotProse)), as a code host's file pane does:
 
 1. **The header row** — the collapse button, then the title. For the index rail the title is the
    heading link: `Render` sets `NavMenuSkin.FirstEntryIsTitle`, and a renderer with a header row shows
@@ -220,10 +220,9 @@ and follow the same rule, and they share ONE state with the index rail. The coll
   already is. The top bar shows no sidebar button while a sidebar is open: one control per state.
 - **Collapsed takes zero width, and the top bar holds the way back.** Nothing stays behind on the left
   edge — no strip, no reveal button, no splitter bar; the expand button sits at the left end of the
-  top bar, beside the logo, where a browser keeps its sidebar button. This revises the 2026-09-16 rule
-  (*"integrate the open button … in the top menu bar, similar to how safari is doing it"*), which kept
-  ONE button in the top bar in both states: the open half moved into the header on 2026-10-26; the
-  collapsed half is unchanged.
+  top bar, beside the logo, where a browser keeps its sidebar button. An earlier rule kept ONE button
+  in the top bar in both states; the open half has moved into the header, the collapsed half is
+  unchanged.
 - **The state is the reader's, not the page's.** Hiding the thread list also hides a document's index;
   the choice follows the reader across pages and reloads.
 - **A sidebar reports its presence** (`NavRailStateService.Attach`/`Detach`, reconciled after every
