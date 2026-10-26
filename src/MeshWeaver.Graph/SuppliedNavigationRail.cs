@@ -80,7 +80,8 @@ public static class SuppliedNavigationRail
     /// <summary>A collapsible group of the rail — one supplied entry that has children.</summary>
     /// <param name="Label">The group heading (never a link — it toggles).</param>
     /// <param name="Path">The node the group stands for.</param>
-    /// <param name="Expanded">Open only when the reader is at or below <paramref name="Path"/>.</param>
+    /// <param name="Expanded">Open only when the reader is at or below <paramref name="Path"/> — a
+    /// section heading (<see cref="NodeNavigationEntry.IsSection"/>) is always open.</param>
     /// <param name="Items">The entry's own link first, then its children IN THE SUPPLIED ORDER —
     /// a childless child as a <see cref="RailLink"/>, one with children as a nested
     /// <see cref="RailGroup"/> (defect 5 in the class remarks).</param>
@@ -178,7 +179,12 @@ public static class SuppliedNavigationRail
     /// child with children becomes a group inside the group, however deep the tree goes (defect 5).
     /// </summary>
     private static RailItem Project(NodeNavigationEntry entry, string currentPath)
-        => entry.Children.Count == 0
+        => entry.IsSection
+            // A section heading has no page behind it: a group that is always open, holding only
+            // its children — no own link, since there is nothing to link to.
+            ? new RailGroup(entry.Label, entry.Path, true,
+                [.. entry.Children.Select(child => Project(child, currentPath))], entry.Icon)
+            : entry.Children.Count == 0
             ? entry.HasUnloadedChildren
                 // A folder whose children are not loaded is STILL a group: it shows its chevron,
                 // and its children load from the page's own hub when the reader opens it.
