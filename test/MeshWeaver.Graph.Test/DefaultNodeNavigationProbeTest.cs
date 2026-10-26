@@ -17,7 +17,7 @@ using MeshWeaver.Fixture;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The children probes of the default index (<see cref="DefaultNodeNavigation.ObserveFolder"/>)
+/// The children probes of the default index (<c>DefaultNodeNavigation.ObserveFolder</c>)
 /// against a REAL mesh — never a mocked <see cref="IMeshService"/>; the wrapper below only forwards
 /// and records what was asked, as whom.
 ///

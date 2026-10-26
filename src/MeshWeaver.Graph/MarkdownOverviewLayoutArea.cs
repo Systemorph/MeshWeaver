@@ -153,7 +153,7 @@ public static class MarkdownOverviewLayoutArea
     /// One folder of the left-hand index, opened on demand (<see cref="SuppliedNavigationRail.FolderArea"/>):
     /// the children of the folder named by the <see cref="SuppliedNavigationRail.FolderParameter"/>
     /// parameter, read with the same bounded level read as the index
-    /// (<see cref="DefaultNodeNavigation.ObserveFolder"/>) and drawn with the same rail lines — a
+    /// (<c>DefaultNodeNavigation.ObserveFolder</c>) and drawn with the same rail lines — a
     /// child that has children of its own is again a group that loads when opened. Renders nothing
     /// without a folder, or before the first rows arrive.
     /// </summary>
@@ -167,8 +167,10 @@ public static class MarkdownOverviewLayoutArea
         var currentPath = host.Hub.Address.ToString();
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DefaultNodeNavigation");
+        var locale = host.ViewerLocale();
         return DefaultNodeNavigation.ObserveFolder(meshService, folder, currentPath,
-                MeshWeaver.Messaging.LocalizationCatalog.Get("common.showAll", host.ViewerLocale()),
+                MeshWeaver.Messaging.LocalizationCatalog.Get("common.showAll", locale),
+                nodeType => IndexSections.Label(nodeType, locale),
                 host.ViewerContext, logger)
             .Select(entries => entries.Count == 0
                 ? null
