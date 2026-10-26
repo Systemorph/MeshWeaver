@@ -419,7 +419,8 @@ public class XUnitFileLogger : ILogger
     /// </summary>
     /// <param name="logLevel">The level to test.</param>
     /// <returns><c>true</c> if logging is enabled for <paramref name="logLevel"/>; otherwise <c>false</c>.</returns>
-    public bool IsEnabled(LogLevel logLevel) => logLevel >= _minLogLevel.Value;
+    public bool IsEnabled(LogLevel logLevel)
+        => logLevel != LogLevel.None && logLevel >= TestLogLevel.Floor(_minLogLevel.Value);
 
     private LogLevel GetMinLogLevel()
     {

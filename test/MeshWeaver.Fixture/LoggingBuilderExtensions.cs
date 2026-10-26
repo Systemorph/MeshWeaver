@@ -110,8 +110,8 @@ public class XUnitLogger(
             return false;
 
         var options = filterOptions.CurrentValue;
-        var effectiveLogLevel = GetEffectiveLogLevel(categoryName, options);
-        
+        var effectiveLogLevel = TestLogLevel.Floor(GetEffectiveLogLevel(categoryName, options));
+
         return logLevel >= effectiveLogLevel;
     }
 
