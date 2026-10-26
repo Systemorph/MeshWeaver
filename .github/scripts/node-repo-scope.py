@@ -358,6 +358,162 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 # ── the caller's module-libraries shelf ──────────────────────────────────────────────────────
 
 _SHELF_INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+_SHELF_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+# The project-relative MSBuild properties a linked item may start with; any other $(…) names a
+# location outside this repository (the platform's), whose bytes the platform digest already keys.
+
+
+_IMPORT = r"<Import\s[^>]*Project=(?:\"([^\"]+)\"|'([^']+)')"
+# Any item element with an Include. The tag says which kind; ProjectReference is followed as an edge.
+_ITEM = r"<([A-Za-z_][\w.-]*)\s[^>]*?\bInclude=(?:\"([^\"]+)\"|'([^']+)')"
+# Item types whose Include is a NAME, not a path (a package, a namespace, an assembly name).
+_NAME_ITEMS = frozenset({"PackageReference", "PackageVersion", "GlobalPackageReference", "PackageDownload",
+                         "FrameworkReference", "Using", "InternalsVisibleTo", "ProjectCapability",
+                         "SupportedPlatform", "TrimmerRootAssembly", "AssemblyAttribute",
+                         "ProjectReference", "Import"})
+# The MSBuild files a project inherits IMPLICITLY from its own directory and every ancestor up to
+# the repository root. MSBuild takes only the nearest Directory.Build.*; taking every ancestor
+# over-reads and never under-reads, and covers the usual GetPathOfFileAbove chain upward. The
+# `Directory.*` globs catch split pin files such as Directory.Packages.Plugins.props.
+_IMPLICIT_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
+_IMPLICIT_GLOBS = ("Directory.*.props", "Directory.*.targets")
+
+
+# 🚨 THE ONE READING of what a caller-supplied project (a build extension, a module-libraries
+# shelf) evaluates. module-build-key.py LOADS these functions and never re-implements them, so
+# whatever reaches the build reaches the key AND the reach set together:
+#   implicit_import_candidates  where an implicit import is or COULD appear (a new one is an input)
+#   msbuild_files               the project plus every in-repo MSBuild file it evaluates
+#   project_reference_targets   the in-repo ProjectReferences declared anywhere in those files
+#   linked_item_patterns        every path-valued item (Compile, EmbeddedResource, AdditionalFiles,
+#                               Content, …) declared anywhere in those files
+#   msbuild_glob_matches        the ONE matcher (MSBuild semantics) for those patterns
+# They disagreed twice: fnmatch's `**/` could not match zero directories, and imported Compile
+# items were invisible to both. This file stays importable on its own (node-repo-validate fetches
+# it as a single file), which is why the reading lives HERE.
+
+def implicit_import_candidates(root: Path, csproj: Path) -> list[str]:
+    """Repository-relative implicit-import paths (literal, present or not) and per-directory globs."""
+    root = root.resolve()
+    out: list[str] = []
+    d = csproj.resolve().parent
+    while True:
+        rel = d.relative_to(root).as_posix()
+        prefix = "" if rel == "." else rel + "/"
+        out += [prefix + n for n in _IMPLICIT_IMPORTS] + [prefix + g for g in _IMPLICIT_GLOBS]
+        if d == root or root not in d.parents:
+            break
+        d = d.parent
+    return out
+
+
+def _resolve_item(include: str, project_dir: str, this_dir: str) -> str | None:
+    """A repository-relative path/glob for one Include entry, or None when it is not this repo's.
+
+    `$(MSBuildThisFileDirectory)` is the DEFINING file's directory; a plain relative entry, or one
+    starting with `$(MSBuildProjectDirectory)`, is the PROJECT's, wherever it is written. Any other
+    `$(…)` names the platform's files, which the platform digest keys."""
+    include = include.strip().replace("\\", "/")
+    base = project_dir
+    if include.startswith("$(MSBuildThisFileDirectory)"):
+        include, base = include[len("$(MSBuildThisFileDirectory)"):].lstrip("/"), this_dir
+    elif include.startswith("$(MSBuildProjectDirectory)"):
+        include = include[len("$(MSBuildProjectDirectory)"):].lstrip("/")
+    if not include or "$(" in include or "@(" in include or "%(" in include:
+        return None
+    norm = os.path.normpath(f"{base}/{include}").replace("\\", "/")
+    if norm.startswith("../") or norm == ".." or os.path.isabs(norm):
+        return None  # outside this checkout — not this repository's
+    return norm
+
+
+def msbuild_files(root: Path, csproj: Path) -> list[Path]:
+    """The project file and every in-repo MSBuild file it evaluates: the implicit imports present
+    in its directory and every ancestor, and every `<Import>` those reach, transitively. An Import
+    path resolves against the IMPORTING file's directory; any other `$(…)` is the platform's."""
+    root = root.resolve()
+    csproj = csproj.resolve()
+    queue = [csproj]
+    for cand in implicit_import_candidates(root, csproj):
+        if is_msbuild_glob(cand):
+            parent = root / cand.rsplit("/", 1)[0] if "/" in cand else root
+            queue += sorted(f for f in parent.glob(cand.rsplit("/", 1)[-1]) if f.is_file())
+        elif (root / cand).is_file():
+            queue.append(root / cand)
+    seen: list[Path] = []
+    while queue:
+        f = queue.pop(0).resolve()
+        if f in seen:
+            continue
+        seen.append(f)
+        this_dir = f.parent.relative_to(root).as_posix()
+        for a, b in re.findall(_IMPORT, f.read_text(encoding="utf-8", errors="replace")):
+            # An Import's relative path is the importing file's, never the project's.
+            rel = _resolve_item(a or b, this_dir, this_dir)
+            if rel is None or is_msbuild_glob(rel):
+                continue
+            if (root / rel).is_file():
+                queue.append(root / rel)
+    return seen
+
+
+def _items(root: Path, csproj: Path):
+    """(tag, repository-relative path/glob) for every item declared in any file msbuild_files reads."""
+    root = root.resolve()
+    csproj = csproj.resolve()
+    project_dir = csproj.parent.relative_to(root).as_posix()
+    for f in msbuild_files(root, csproj):
+        this_dir = f.parent.relative_to(root).as_posix()
+        for tag, a, b in re.findall(_ITEM, f.read_text(encoding="utf-8", errors="replace")):
+            for include in (a or b).split(";"):
+                rel = _resolve_item(include, project_dir, this_dir)
+                if rel is not None:
+                    yield tag, rel
+
+
+def project_reference_targets(root: Path, csproj: Path) -> list[Path]:
+    """In-repo projects referenced from the project OR any file it imports."""
+    root = root.resolve()
+    return sorted({(root / rel).resolve() for tag, rel in _items(root, csproj)
+                   if tag == "ProjectReference" and not is_msbuild_glob(rel) and (root / rel).is_file()})
+
+
+def linked_item_patterns(root: Path, csproj: Path) -> list[str]:
+    """Repository-relative paths / MSBuild globs of every path-valued item the project evaluates."""
+    return sorted({rel for tag, rel in _items(root, csproj) if tag not in _NAME_ITEMS})
+
+
+def msbuild_reach(root: Path, csproj: Path) -> set[str]:
+    """Everything a diff can touch to change what this ONE project evaluates, beyond its own
+    directory: implicit-import candidates (present or not), every MSBuild file read, every linked
+    item. The scope's reach and the key's inputs are both built from these functions."""
+    root = root.resolve()
+    return (set(implicit_import_candidates(root, csproj))
+            | {f.relative_to(root).as_posix() for f in msbuild_files(root, csproj)}
+            | set(linked_item_patterns(root, csproj)))
+
+
+def is_msbuild_glob(pattern: str) -> bool:
+    return "*" in pattern or "?" in pattern
+
+
+def msbuild_glob_matches(path: str, pattern: str) -> bool:
+    """MSBuild item-glob semantics over '/'-separated relative paths.
+
+    `**` as a whole segment matches ZERO or more directories (`a/**/*.cs` matches `a/x.cs`);
+    `*` and `?` never cross a '/'. A pattern without wildcards matches only itself."""
+    if not is_msbuild_glob(pattern):
+        return path == pattern
+    segs = pattern.split("/")
+    rx = ""
+    for i, seg in enumerate(segs):
+        last = i == len(segs) - 1
+        if seg == "**":
+            rx += ".*" if last else "(?:[^/]+/)*"
+            continue
+        rx += "".join("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c) for c in seg)
+        rx += "" if last else "/"
+    return re.fullmatch(rx, path) is not None
 
 
 def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
@@ -379,19 +535,14 @@ def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
         if csproj in seen:
             continue
         seen.add(csproj)
-        text = csproj.read_text(encoding="utf-8", errors="replace")
-        for a, b in re.findall(_SHELF_INCLUDE, text):
-            include = (a or b).strip()
-            if "$(" in include:
-                continue  # the platform's, not this repository's
-            target = (csproj.parent / include.replace("\\", "/")).resolve()
-            try:
-                target.relative_to(root)
-            except ValueError:
-                continue
-            if target.is_file():
-                queue.append(target)
-    return frozenset(p.parent.relative_to(root).as_posix() for p in seen)
+        queue.extend(project_reference_targets(root, csproj))
+    # Plus everything outside those directories that changes what they evaluate: implicit imports
+    # (present or a new one), explicit imports, and every linked path item (`../Shared/X.cs`) —
+    # the SAME functions module-build-key.py keys, so a diff that changes the key selects too.
+    reach: set[str] = set()
+    for csproj in seen:
+        reach |= msbuild_reach(root, csproj)
+    return frozenset({p.parent.relative_to(root).as_posix() for p in seen} | reach)
 
 
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
@@ -399,7 +550,8 @@ def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
            override: list[str] | None, say, publishing: bool = False,
            always: frozenset[str] = frozenset(), publication_base: str = "",
-           publication_reach: bool = False, shelf_project: str = "") -> dict:
+           publication_reach: bool = False, shelf_project: str = "",
+           extensions_project: str = "") -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -480,16 +632,25 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
 
     # 🚨 The caller's own module-libraries shelf decides what EVERY container-built module binds,
     # but no module references it, so the project closure below would rule a shelf edit inert.
-    if shelf_project:
-        shelf = shelf_dirs(root, shelf_project)
-        if shelf is None:
-            return full(f"module-libraries-project {shelf_project} is not in this checkout, so "
-                        "whether this diff changes the shelf cannot be decided — running the full set.")
-        touched = [f for f in files if any(f.startswith(d + "/") for d in shelf)]
+    # A build extension (`build-extensions-project`, e.g. the Razor one) is the same shape: it decides
+    # what the compiler GENERATES for every module, and no module references it.
+    for input_name, label, project, consequence in (
+            ("module-libraries-project", "module-libraries shelf", shelf_project,
+             "the shelf is what every module binds"),
+            ("build-extensions-project", "build extension", extensions_project,
+             "the extension decides what every module's compile generates")):
+        if not project:
+            continue
+        dirs_ = shelf_dirs(root, project)
+        if dirs_ is None:
+            return full(f"{input_name} {project} is not in this checkout, so whether this diff "
+                        f"changes the {label} cannot be decided — running the full set.")
+        touched = [f for f in files
+                   if any(f.startswith(d + "/") or msbuild_glob_matches(f, d) for d in dirs_)]
         if touched:
-            return full(f"{len(touched)} changed file(s) are in the caller's module-libraries shelf "
-                        f"({shelf_project} and the projects it reaches) — first: {touched[0]}. The "
-                        "shelf is what every module binds, so every module is rebuilt and tested.")
+            return full(f"{len(touched)} changed file(s) are in the caller's {label} "
+                        f"({project} and the projects it reaches) — first: {touched[0]}. "
+                        f"{consequence[0].upper() + consequence[1:]}, so every module is rebuilt and tested.")
 
     packages = node_packages(root)
     node_files: list[str] = []
@@ -1096,6 +1257,98 @@ def self_test() -> int:
                    extra=["--module-libraries-project", "src/Nope/Nope.csproj"])
         check("[modules] a named shelf missing from the checkout ⇒ ALL (cannot decide)",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
+        print("the caller's build extension:")
+        ext_arg = ["--build-extensions-project", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"]
+        for label, path in (("the extension csproj", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"),
+                            ("a project the extension reaches", "src/Acme.Other/K.cs")):
+            got = _run(root, "modules", "pull_request", [path], extra=ext_arg)
+            check(f"[modules] {label} changed, extension named ⇒ ALL, every one tested, and SAYS it is the extension",
+                  got["scope"] == "full" and got["count"] == 2 and len(got["tested"]) == 2
+                  and "build extension" in got["reason"],
+                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], extra=ext_arg)
+        check("[modules] an extension named but untouched still narrows",
+              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
+                   extra=["--build-extensions-project", "src/Nope/Nope.csproj"])
+        check("[modules] a named extension missing from the checkout ⇒ ALL (cannot decide), named by its input",
+              got["scope"] == "full" and got["count"] == 2 and "build-extensions-project" in got["reason"],
+              f"scope={got['scope']} — {got['reason'][:80]}")
+        # A linked source outside the extension's folder: `<Compile Include="../Shared/Emitter.cs" />`.
+        (shelf_dir / "Acme.ModuleLibraries.csproj").write_text(
+            # No ProjectReference this time: Acme.Other is a project the graph knows and NOTHING
+            # reaches, so only the Compile links below can make an edit there select anything.
+            '<Project><ItemGroup><Compile Include="../Acme.Other/Emitter.cs" />'
+            '<Compile Include="$(MSBuildThisFileDirectory)../Acme.Other/Gen/**/*.cs" /></ItemGroup></Project>\n',
+            encoding="utf-8")
+        for label, path in (("a linked <Compile Include> source", "src/Acme.Other/Emitter.cs"),
+                            ("a file a linked `**/` matches one level down", "src/Acme.Other/Gen/Deep/G.cs"),
+                            # `**/` matches ZERO directories — the case fnmatch missed
+                            ("a DIRECT child a linked `**/` matches", "src/Acme.Other/Gen/G.cs"),
+                            # a diff can name a file that no longer exists: matching is on the path
+                            ("a DELETED path a linked `**/` matches", "src/Acme.Other/Gen/Gone/Removed.cs")):
+            got = _run(root, "modules", "pull_request", [path], extra=ext_arg)
+            check(f"[modules] {label} changed, extension named ⇒ ALL",
+                  got["scope"] == "full" and got["count"] == 2 and "build extension" in got["reason"],
+                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=ext_arg)
+        check("[modules] negative control — a file beside the linked one that no Compile item names narrows",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/Gen/notes.txt"], extra=ext_arg)
+        check("[modules] negative control — a non-.cs file under the linked `**/` narrows",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        # Compile items INHERITED from an import: the extension's own Directory.Build.props links a
+        # file with $(MSBuildThisFileDirectory), which is the DEFINING file's directory.
+        dbp = shelf_dir / "Directory.Build.props"
+        dbp.write_text('<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)../Acme.Other/FromProps.cs" />'
+                       '</ItemGroup></Project>\n', encoding="utf-8")
+        try:
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/FromProps.cs"], extra=ext_arg)
+            check("[modules] a source linked through the extension's Directory.Build.props changed ⇒ ALL",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=ext_arg)
+            check("[modules] negative control — with the props link in place, an unlinked file there still narrows",
+                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        finally:
+            dbp.unlink()
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/FromProps.cs"], extra=ext_arg)
+        check("[modules] …and with the props file gone, that file no longer selects (the link was the cause)",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        # The imported FILE itself is in reach: an edit to `../Acme.Other/Extension.props` alone (a
+        # DefineConstants, say) changes what the extension compiles, and the key keys its bytes.
+        ext_csproj = shelf_dir / "Acme.ModuleLibraries.csproj"
+        csproj_old = ext_csproj.read_text(encoding="utf-8")
+        ext_csproj.write_text('<Project><Import Project="../Acme.Other/Extension.props" /></Project>\n', encoding="utf-8")
+        (root / "src" / "Acme.Other" / "Extension.props").write_text("<Project />\n", encoding="utf-8")
+        try:
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Extension.props"], extra=ext_arg)
+            check("[modules] an edit ONLY to a file the extension imports ⇒ ALL",
+                  got["scope"] == "full" and got["count"] == 2 and "build extension" in got["reason"],
+                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Other.props"], extra=ext_arg)
+            check("[modules] negative control — a props file beside it that nothing imports narrows",
+                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+            got = _run(root, "modules", "pull_request", ["src/Directory.Build.targets"], extra=ext_arg)
+            check("[modules] a NEW implicit import in an ancestor (src/Directory.Build.targets) ⇒ ALL",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+        finally:
+            ext_csproj.write_text(csproj_old, encoding="utf-8")
+            (root / "src" / "Acme.Other" / "Extension.props").unlink()
+        got = _run(root, "modules", "pull_request", ["src/Acme.Other/Extension.props"], extra=ext_arg)
+        check("[modules] …and once nothing imports it, the same edit narrows (the import was the cause)",
+              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        print("the MSBuild glob matcher (shared with module-build-key.py):")
+        for path, pattern, want in (
+                ("src/Shared/Emitter.cs", "src/Shared/**/*.cs", True),
+                ("src/Shared/a/b/Emitter.cs", "src/Shared/**/*.cs", True),
+                ("src/Shared/Emitter.cs", "src/Shared/*.cs", True),
+                ("src/Shared/a/Emitter.cs", "src/Shared/*.cs", False),
+                ("src/Shared/x/notes.txt", "src/Shared/**", True),
+                ("src/SharedX/Emitter.cs", "src/Shared/**/*.cs", False),
+                ("src/Shared/Emitter.cs", "src/Shared/Emitter.cs", True),
+                ("src/Shared/Emitter.csx", "src/Shared/Emitter.cs", False)):
+            check(f"msbuild_glob_matches({path!r}, {pattern!r}) is {want}",
+                  msbuild_glob_matches(path, pattern) is want)
         (shelf_dir / "Acme.ModuleLibraries.csproj").unlink()
         shelf_dir.rmdir()
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "plugin-gate.allow"])
@@ -1225,6 +1478,9 @@ def main() -> int:
     p.add_argument("--module-libraries-project", default="", dest="shelf_project",
                    help="the caller's module-libraries shelf csproj (relative to --root): a diff "
                         "that touches it or a project it reaches runs the full set")
+    p.add_argument("--build-extensions-project", default="", dest="extensions_project",
+                   help="the caller's build-extension csproj (relative to --root): a diff that "
+                        "touches it or a project it reaches runs the full set")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -1252,7 +1508,8 @@ def main() -> int:
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
                     publishing=args.publishing, always=always, publication_base=args.publication_base,
-                    publication_reach=args.publication_reach, shelf_project=args.shelf_project)
+                    publication_reach=args.publication_reach, shelf_project=args.shelf_project,
+                    extensions_project=args.extensions_project)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"

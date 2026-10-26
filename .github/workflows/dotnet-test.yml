@@ -2575,6 +2575,16 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 🚨 A packaged script finds its siblings in the repository, where every test runs, and NOT in the
+    # image, where it is used: the build-host image copies a flat script list, so a sibling a copied
+    # script loads (module-build-key.py → node-repo-scope.py) must be COPYed and allow-listed in the
+    # image's .dockerignore too, transitively. Self-test first; it also checks the real image.
+    - name: "Every sibling a packaged script loads is in the image — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-image-script-siblings.py --self-test
+    - name: "Every sibling a packaged script loads is in the image"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-image-script-siblings.py --root .
     # 🔐 No doc, runbook, skill or script tells a human to set or read a Key Vault secret by hand
     # (policy `secrets-write-only-entry`, Doc/Architecture/SecretsWriteOnlyEntry): secrets are
     # entered through the write-only GUI of the app that owns them and written by the governed
@@ -3135,6 +3145,13 @@ jobs:
     - name: "The module-pack lane's host arm carries only a followed success"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-pack-host.py
+    # `select` keys a build extension's publishing SDK; `build-workspace` publishes with exactly it.
+    # They check the caller out at different places, so the key must come from the caller's
+    # `repo/global.json`, not the workspace root. The resolve step's bash is RUN from the declared
+    # working directory, with a negative control from the root.
+    - name: "The module-pack lane keys the extension SDK the caller's checkout resolves"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-module-pack-extension-sdk.py
 
     # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
