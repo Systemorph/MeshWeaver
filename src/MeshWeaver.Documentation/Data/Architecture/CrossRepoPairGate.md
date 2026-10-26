@@ -445,8 +445,9 @@ against the new list was main-cd's control image (run 40300348495). It failed th
 every later main run that built the control image, so no `memex-control` version was promoted until
 the four pins moved. The publish loop also misread the failure: it recognised compiler and MSBuild
 errors as deterministic, but not a NuGet restore error, so it retried NU1605 twice behind a registry
-re-login. It now fails at once on any `error NU….` except NU1301, the one code that means the feed
-could not be reached.
+re-login. It now fails at once on any `error NU….` except the two network codes: NU1301 (the feed
+could not be reached) and NU1900 (the vulnerability-audit data could not be fetched), which keep the
+bounded retry.
 
 **The gate:** `scripts/check-package-train-lockstep.py` runs in the
 `Satellite package pins (removal declared)` job on every pull request. It requires every stable

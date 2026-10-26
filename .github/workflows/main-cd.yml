@@ -1613,9 +1613,10 @@ jobs:
             # there is two builds of one project racing (concurrent per-RID inner publishes).
             # A NuGet RESTORE error is the dependency graph, not the transport — NU1605 (a central pin
             # lagging a sibling's floor) failed the control leg three times running on #7227, each
-            # retry re-authenticating to a registry that had nothing to do with it. Only NU1301 (the
-            # feed could not be reached) is the network, so it alone stays retryable.
-            nu=$(grep -oE 'error NU[0-9]{4}' "$LOG" | sed 's/^error //' | grep -v '^NU1301$' | sort -u | paste -sd, - || true)
+            # retry re-authenticating to a registry that had nothing to do with it. Only the network
+            # codes stay retryable: NU1301 (the feed could not be reached) and NU1900 (the
+            # vulnerability-audit feed could not be read, an error under Directory.Build.props).
+            nu=$(grep -oE 'error NU[0-9]{4}' "$LOG" | sed 's/^error //' | grep -vE '^NU(1301|1900)$' | sort -u | paste -sd, - || true)
             if [ -n "$nu" ]; then
               echo "::error::portal-ai publish failed with NuGet restore error(s) $nu (see attempt $attempt above) — the package graph, not the registry transport, so not retried. NU1605 = a central pin lower than a sibling package's floor."
               exit 1
@@ -2167,7 +2168,7 @@ jobs:
               exit 1
             fi
             # A NuGet restore error is the package graph — see the portal-ai leg's note (#7227).
-            nu=$(grep -oE 'error NU[0-9]{4}' "$LOG" | sed 's/^error //' | grep -v '^NU1301$' | sort -u | paste -sd, - || true)
+            nu=$(grep -oE 'error NU[0-9]{4}' "$LOG" | sed 's/^error //' | grep -vE '^NU(1301|1900)$' | sort -u | paste -sd, - || true)
             if [ -n "$nu" ]; then
               echo "::error::control publish failed with NuGet restore error(s) $nu (attempt $attempt) — the package graph, not the registry transport, so not retried. NU1605 = a central pin lower than a sibling package's floor."
               exit 1
