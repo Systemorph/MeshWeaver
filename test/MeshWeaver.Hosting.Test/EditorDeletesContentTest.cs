@@ -297,6 +297,97 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
             "the refusal names the requested source, never a descendant the caller may not read");
     }
 
+    /// <summary>
+    /// A rule-less SIBLING whose MainNode differs from its path (<c>doc/_Meta</c>, MainNode <c>doc</c>):
+    /// the entitlement is checked on the source's own path, never its MainNode, so a deny on the sibling
+    /// holds and <c>AuthorshipFrom</c> cannot borrow its author.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnEditorDeniedASibling_CannotBorrowItsAuthorship()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var doc = await SeedAsAdmin(TestPartition, "with-meta", ct);
+        var meta = $"{doc}/_Meta";
+        Access.SetCircuitContext(TestUsers.Admin);
+        await NodeFactory.CreateNode(new MeshNode("_Meta", doc) { Name = "meta", NodeType = "Markdown", MainNode = doc, State = MeshNodeState.Active })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await NodeFactory.CreateNode(AssignmentNodeFactory.UserRole(EditorId, "Editor", meta, denied: true))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var target = NewPath(TestPartition, "borrowed");
+
+        Access.SetCircuitContext(EditorContext);
+        var created = await ObserveNodeOperation(new CreateNodeRequest(MeshNode.FromPath(target) with
+                { Name = "borrowed", NodeType = "Markdown", State = MeshNodeState.Active })
+                { CreatedBy = EditorId, AuthorshipFrom = meta })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        created.Message.Success.Should().BeTrue(created.Message.Error ?? "the independent create lands");
+        (await ReadExisting(target, ct)).CreatedBy.Should().Be(EditorId,
+            "the deny on the sibling holds although its MainNode is a node the Editor may edit");
+    }
+
+    /// <summary>
+    /// The carried-node check runs over the EXACT selection the copy writes: a root-only copy that
+    /// carries satellites is asked about those satellites — here a grant, which demands Delete — and is
+    /// refused before anything is written.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARootOnlyPreservingCopyWithSatellites_IsAskedAboutThem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var source = await SeedAsAdmin(TestPartition, "root-sat", ct);
+        await NodeFactory.CreateNode(AssignmentNodeFactory.UserRole("someone-else", "Viewer", source))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var target = NewPath(TestPartition, "root-sat-copy");
+
+        Access.SetCircuitContext(EditorContext);
+        var response = await ObserveNodeOperation(new CopyNodeRequest(source, target)
+            {
+                PreserveAuthorship = true,
+                IncludeDescendants = false,
+                IncludeSatellites = true,
+            })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        Output.WriteLine($"copy: success={response.Message.Success} error={response.Message.Error}");
+        response.Message.Success.Should().BeFalse("the copy would carry a grant the Editor may not delete");
+        (await StoredAt(target, ct)).Should().BeNull("refused before anything was written");
+    }
+
+    /// <summary>
+    /// An ordinary underscore-prefixed CHILD (<c>_notes</c>, its own main node) that the Editor may READ
+    /// but not delete is carried by a preserving copy — so the copy is refused before anything is written.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task APreservingCopy_IsAskedAboutAReadableButUndeletableChild()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var source = await SeedAsAdmin(TestPartition, "with-notes", ct);
+        var notes = $"{source}/_notes";
+        Access.SetCircuitContext(TestUsers.Admin);
+        await NodeFactory.CreateNode(new MeshNode("_notes", source) { Name = "notes", NodeType = "Markdown", State = MeshNodeState.Active })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        // ONE assignment per subject and scope: Editor denied, Viewer granted — readable, not deletable.
+        var grant = AssignmentNodeFactory.UserRole(EditorId, "Viewer", notes);
+        grant = grant with
+        {
+            Content = ((AccessAssignment)grant.Content!) with
+            {
+                Roles = [new RoleAssignment { Role = "Viewer" }, new RoleAssignment { Role = "Editor", Denied = true }],
+            },
+        };
+        await NodeFactory.CreateNode(grant).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var target = NewPath(TestPartition, "with-notes-copy");
+
+        Access.SetCircuitContext(EditorContext);
+        var response = await ObserveNodeOperation(new CopyNodeRequest(source, target) { PreserveAuthorship = true })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        Output.WriteLine($"copy: success={response.Message.Success} error={response.Message.Error}");
+        response.Message.Success.Should().BeFalse("the copy would carry a child the Editor may read but not delete");
+        (await StoredAt(target, ct)).Should().BeNull("refused before anything was written");
+    }
+
     private static string NewPath(string partition, string prefix) =>
         $"{partition}/{prefix}-{Guid.NewGuid().ToString("N")[..8]}";
 

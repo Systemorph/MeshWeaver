@@ -7508,7 +7508,10 @@ public static class MeshExtensions
             var mayDelete = (persistence is null
                     ? Observable.Return<MeshNode?>(null)
                     : ReadNodeAuthoritative(hub, persistence, sourcePath))
-                .SelectMany(node => node is null
+                // A node type that declares a Delete rule is asked that rule; every other source is
+                // checked on ITS OWN path — never its MainNode, which the rule-less delete fallback
+                // consults, so a deny on a sibling such as 'Acme/Doc/_Meta' holds here.
+                .SelectMany(node => node is null || NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Delete) is null
                     ? hub.CheckPermissionOutcome(sourcePath, userId, DeletePermission.RequiredFor(sourcePath)).Take(1)
                     : CheckDeletePermissionForNode(hub, userId, node, new DeleteNodeRequest(sourcePath), context, logger)
                         .Select(verdict => verdict.Verdict switch
@@ -10661,95 +10664,48 @@ public static class MeshExtensions
         // caller who does not is refused. UNDETERMINED is a refusal too, reported as unavailability
         // rather than as a denial (#974/#2742) — a fold that reached no answer must never read as
         // one, in either direction.
+        // 🚨 A refusal names the REQUESTED SOURCE only, never the carried node that failed and never
+        // that node's undetermined reason, so it cannot disclose anything about a node beyond the one
+        // the caller named. The operator's log carries the detail.
+        (LocalizableText Message, bool Undetermined) AuthorshipRefusalFor(string failedPath, PermissionCheckOutcome outcome)
+        {
+            logger.LogWarning(
+                "[CopyNode] preserveAuthorship {Source} -> {Target}: '{Carried}' may not carry its authorship ({Outcome})",
+                sourcePath, targetPath, failedPath, outcome.UndeterminedReason ?? "denied");
+            return outcome.IsUndetermined
+                ? (LocalizableText.Keyed(
+                    $"Cannot determine now whether '{sourcePath}' may be relocated with its authorship. "
+                    + "Nothing was copied; the copy may be retried.",
+                    CopyAuthorshipUndeterminedKey,
+                    ("source", sourcePath)), true)
+                : (LocalizableText.Keyed(
+                    $"Preserving authorship on a copy of '{sourcePath}' requires the right to delete "
+                    + "everything it carries and, outside its own partition, Delete on it — the same "
+                    + "entitlement a move of it with its authorship requires.",
+                    CopyAuthorshipRefusedKey,
+                    ("source", sourcePath)), false);
+        }
+
+        // The ROOT, up front — before the inventory is even read.
         IObservable<(LocalizableText Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
             !copyRequest.PreserveAuthorship
                 ? Observable.Return<(LocalizableText, bool)?>(null)
-                // 🚨 Take(1) inside: the permission fold is LONG-LIVED — it re-emits on every
-                // AccessAssignment change and never completes. Without it, every re-emission re-ran the
-                // whole copy below (a second create pass answering "already exists" over the first
-                // one's success), and the copy chain itself never completed.
-                //
-                // 🚨 The refusal names the REQUESTED SOURCE only, never the carried node that failed and
-                // never that node's undetermined reason: the inventory is read from storage, before the
-                // caller's row-level security has filtered it, so a descendant's path or detail could
-                // disclose a node the caller may not read. The operator's log carries the detail.
-                : CarriedAuthorshipEntitlement()
-                    .Select(denied =>
-                    {
-                        if (denied is null)
-                            return ((LocalizableText, bool)?)null;
-                        logger.LogWarning(
-                            "[CopyNode] preserveAuthorship {Source} -> {Target}: '{Carried}' may not carry its "
-                            + "authorship ({Outcome})", sourcePath, targetPath, denied.Value.Path,
-                            denied.Value.Outcome.UndeterminedReason ?? "denied");
-                        return denied.Value.Outcome.IsUndetermined
-                            ? (LocalizableText.Keyed(
-                                $"Cannot determine now whether '{sourcePath}' may be relocated with its authorship. "
-                                + "Nothing was copied; the copy may be retried.",
-                                CopyAuthorshipUndeterminedKey,
-                                ("source", sourcePath)), true)
-                            : (LocalizableText.Keyed(
-                                $"Preserving authorship on a copy of '{sourcePath}' requires the right to delete "
-                                + "everything it carries and, outside its own partition, Delete on it — the same "
-                                + "entitlement a move of it with its authorship requires.",
-                                CopyAuthorshipRefusedKey,
-                                ("source", sourcePath)), false);
-                    });
+                : MoveEntitlement(hub, sourcePath, targetPath, callerAccessContext)
+                    .Select(outcome => outcome.IsGranted
+                        ? ((LocalizableText, bool)?)null
+                        : AuthorshipRefusalFor(sourcePath, outcome));
 
-        // 🚨 EVERY CARRIED NODE, BEFORE ANYTHING IS WRITTEN. A preserving copy creates each node with
-        // AuthorshipFrom, whose create-side check re-stamps a node it may not carry — so a subtree with
-        // ONE such descendant would land half re-authored, and a move would then delete the originals
-        // and could no longer recognise its own half-landed copy on a retry. So the copy asks the
-        // entitlement for every node it is going to CARRY first, and refuses the whole copy on the first
-        // that may not carry its stamps. Emits the first refusal, or null.
-        //
-        // "Carried" is the selected inventory: the root, its descendants only with IncludeDescendants,
-        // and satellites (any '_' segment below the source) only with IncludeSatellites — a node the
-        // copy leaves behind needs no entitlement. A stored node the CALLER cannot read is not carried
-        // either (the subtree query filters it out); RequireComplete refuses such a copy on its own
-        // terms, later, without naming it.
-        IObservable<(string Path, PermissionCheckOutcome Outcome)?> CarriedAuthorshipEntitlement()
-        {
-            bool Carried(string p)
-            {
-                if (string.Equals(p, sourcePath, StringComparison.OrdinalIgnoreCase))
-                    return false; // the root is checked on its own, first
-                if (!copyRequest.IncludeDescendants)
-                    return false;
-                var below = p.Length > sourcePath.Length ? p[(sourcePath.Length + 1)..] : string.Empty;
-                return copyRequest.IncludeSatellites
-                    || !below.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(seg => seg.StartsWith('_'));
-            }
-
-            var callerId = callerAccessContext?.ObjectId;
-            IObservable<bool> Readable(string p) =>
-                (string.IsNullOrEmpty(callerId)
-                    ? hub.CheckPermissionOutcome(p, Permission.Read)
-                    : hub.CheckPermissionOutcome(p, callerId, Permission.Read))
+        // Every other carried node — asked over the exact selection the copy is about to write (see the
+        // create stage). Emits the first refusal, or null. An undetermined answer is a refusal too.
+        IObservable<(LocalizableText Message, bool Undetermined)?> CarriedAuthorshipRefusal(IEnumerable<string> carried) =>
+            carried
+                .Select(p => MoveEntitlement(hub, p, targetPath + p[sourcePath.Length..], callerAccessContext)
+                    .Select(outcome => (Path: p, Outcome: outcome)))
+                .Merge(8)
+                .Where(r => !r.Outcome.IsGranted)
+                .Select(r => ((LocalizableText, bool)?)AuthorshipRefusalFor(r.Path, r.Outcome))
                 .Take(1)
-                .Select(o => o.IsGranted)
-                .DefaultIfEmpty(false);
-
-            IObservable<(string Path, PermissionCheckOutcome Outcome)> EntitlementOf(string p, bool isRoot) =>
-                MoveEntitlement(hub, p, targetPath + p[sourcePath.Length..], callerAccessContext)
-                    .SelectMany(outcome => outcome.IsGranted || isRoot
-                        ? Observable.Return((p, outcome))
-                        // A descendant the caller cannot read is not carried — not a refusal.
-                        : Readable(p).Select(readable => readable ? (p, outcome) : (p, PermissionCheckOutcome.Granted)));
-
-            return (persistence is null || !copyRequest.IncludeDescendants
-                    ? Observable.Return<IReadOnlyCollection<string>>(Array.Empty<string>())
-                    : persistence.ListDescendantPaths(sourcePath).Take(1).DefaultIfEmpty(Array.Empty<string>()))
-                .SelectMany(descendants => descendants
-                    .Where(p => !string.IsNullOrEmpty(p) && Carried(p))
-                    .Select(p => EntitlementOf(p, isRoot: false))
-                    .Prepend(EntitlementOf(sourcePath, isRoot: true))
-                    .Merge(8)
-                    .Where(r => !r.Outcome.IsGranted)
-                    .Select(r => ((string Path, PermissionCheckOutcome Outcome)?)r)
-                    .Take(1)
-                    .DefaultIfEmpty(null));
-        }
+                .DefaultIfEmpty(null);
 
         // 🚨 EVERY path storage holds under the source — the AUTHORITATIVE inventory, and the SAME
         // enumeration the move's delete leg is planned from (IStorageAdapter.ListDescendantPaths,
@@ -11002,6 +10958,30 @@ public static class MeshExtensions
                             }
                         }
 
+                        // 🚨 EVERY CARRIED NODE MAY CARRY ITS AUTHORSHIP — asked of the EXACT selection the
+                        // creates below write (toCopy: the secured subtree query's rows plus the satellite
+                        // sweep), before the first of them. A preserving create the entitlement does not
+                        // cover is re-stamped for the requester, so one such node would leave the copy half
+                        // re-authored, and a move would then delete the originals and could no longer
+                        // recognise its own half-landed copy on a retry. The root was asked up front.
+                        if (copyRequest.PreserveAuthorship && toCopy.Count > 0)
+                            return CarriedAuthorshipRefusal(toCopy.Select(n => n.Path))
+                                .SelectMany(refusal =>
+                                {
+                                    if (refusal is not { } denied)
+                                        return CreateAll();
+                                    logger.LogWarning("[CopyNode] REFUSED preserveAuthorship {Source} -> {Target}: {Reason}",
+                                        sourcePath, targetPath, denied.Message.English);
+                                    hub.Post(CopyNodeResponse.Fail(denied.Message.English,
+                                                denied.Undetermined
+                                                    ? NodeCopyRejectionReason.Unknown
+                                                    : NodeCopyRejectionReason.Unauthorized)
+                                            with { Log = NodeCreationFailure.Transcript("NodeCopy", denied.Message, sourcePath) },
+                                        o => o.ResponseFor(request));
+                                    return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
+                                });
+                        return CreateAll();
+
                         // Create root, then create all children in parallel via Merge — Move
                         // semantics require all inserts to complete before the source is deleted.
                         // Every create runs under the caller's identity (CreateUnderCaller) so the
@@ -11014,7 +10994,7 @@ public static class MeshExtensions
                         // would rewrite the authorship it exists to keep. The satellites the sweep
                         // found arrived through the same query surface, so they go through the same
                         // storage read.
-                        return Authoritative(sourceNode)
+                        IObservable<(MeshNode Root, int Desc, int Sat)> CreateAll() => Authoritative(sourceNode)
                             .SelectMany(CreateRetargeted)
                             .SelectMany(rootCreated =>
                             {
