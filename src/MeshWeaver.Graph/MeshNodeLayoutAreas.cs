@@ -1075,8 +1075,8 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// The provenance line's slots as the controls receive them: each a literal value
     /// (<see cref="MetaSlots.Of"/>) or a <see cref="JsonPointerReference"/> into a bound
-    /// <see cref="MetaLine"/> — the template header and the composed strip build it from the
-    /// projection's pointers inside their <c>Bind</c> expression.
+    /// <see cref="MetaLine"/> — the template header builds it from the
+    /// projection's pointers inside its <c>Bind</c> expression.
     /// </summary>
     internal sealed record MetaSlots(
         object TypeStyle, object TypeLabel, object TypeText, object TypeHref,
@@ -1126,26 +1126,21 @@ public static class MeshNodeLayoutAreas
     /// the bare <c>WithView(area, …)</c> — for any area a node type names with
     /// <c>WithDefaultArea</c>.
     ///
-    /// <para><b>The default carries the line.</b> Called without a verdict, this composes
-    /// <see cref="BuildMetaRow"/> above <paramref name="page"/>'s own content, so a landing page
-    /// written without an opinion about provenance SHIPS WITH IT. That inversion is the fix for
-    /// Systemorph/MeshWeaver#4500: the line used to ride on one renderer, so replacing that
-    /// renderer dropped it, and nothing recorded the loss. Measured 2026-09-16, 86 of the 99
-    /// landing pages that replace the framework renderer had dropped it — 4 in core, 82 in
-    /// MeshWeaver.Plugins.</para>
+    /// <para><b>The default carries the line — in the shell, not on the page.</b> Called without a
+    /// verdict, the page is registered as it is and the portal shell shows the node's provenance as
+    /// the tooltip of the breadcrumb's current crumb, on every page, so a landing page written
+    /// without an opinion about provenance still SHIPS WITH IT (Systemorph/MeshWeaver#4500: the line
+    /// used to ride on one renderer, so replacing that renderer dropped it). Until 2026-10-26 the
+    /// framework composed a <c>Type · Created · Updated</c> strip above the page here; the maintainer
+    /// moved it into the breadcrumb tooltip because a technical strip above a designed page (a
+    /// marketing cover above all) looked bad.</para>
     ///
     /// <para><b>The two other answers are declared, never inferred.</b> A page that draws its own
-    /// header passes <see cref="NodePageProvenance.RenderedByThePage"/> (the framework then adds
-    /// nothing — two provenance lines is a worse page than one); a page that wants none passes
-    /// <see cref="NodePageProvenance.Declined"/> WITH A REASON. Both are recorded on the
+    /// header passes <see cref="NodePageProvenance.RenderedByThePage"/>; a page that wants none passes
+    /// <see cref="NodePageProvenance.Declined"/> WITH A REASON. All three are recorded on the
     /// <see cref="LayoutDefinition"/> and readable back through
     /// <see cref="LayoutDefinition.GetNodePageProvenance"/>, so "someone weighed this" and "nobody
     /// thought about it" stop looking identical from outside.</para>
-    ///
-    /// <para>🚨 The composed strip honours the SAME per-node opt-out the standard header does —
-    /// <c>ExcludeFromContext: [header]</c>, <see cref="MeshNodeVisibility.HeaderContext"/> — so a
-    /// chrome-less marketing cover does not grow a metadata strip it was explicitly built without.
-    /// One mechanism, no parallel flag.</para>
     /// </summary>
     /// <param name="layout">The layout definition to register on.</param>
     /// <param name="area">The landing area — the one this hub's <c>WithDefaultArea</c> names.</param>
@@ -1162,14 +1157,7 @@ public static class MeshNodeLayoutAreas
         // 🚨 Order is load-bearing: every WithView overload funnels through WithNamedRenderer,
         // which REMOVES the area's verdict (LayoutDefinition.NodePages) so a verdict can never
         // outlive the renderer it describes. Record it AFTER registering, never before.
-        //
-        // WithDecoratedView, not WithView, on the composing path: the area's catalog metadata
-        // ([Browsable(false)], the XML summary) is read off the generator's METHOD, and a lambda
-        // has neither — see LayoutDefinitionExtensions.WithDecoratedView.
-        var registered = verdict.Kind == NodePageProvenanceKind.FrameworkSupplied
-            ? layout.WithDecoratedView<UiControl>(
-                area, (host, ctx) => ComposeProvenance(host, page.Invoke(host, ctx)), page)
-            : layout.WithView(area, page);
+        var registered = layout.WithView(area, page);
 
         return registered.WithNodePageProvenance(area, verdict);
     }
@@ -1177,7 +1165,7 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// <see cref="WithNodePage(LayoutDefinition, string, Func{LayoutAreaHost, RenderingContext, IObservable{UiControl}}, NodePageProvenance)"/>
     /// for a landing page whose content is produced SYNCHRONOUSLY. Same contract, same default:
-    /// no verdict means the framework composes the provenance line above the page.
+    /// no verdict means the shell's breadcrumb carries the provenance line.
     /// </summary>
     /// <typeparam name="T">The UiControl subtype the page factory returns.</typeparam>
     /// <param name="layout">The layout definition to register on.</param>
@@ -1191,56 +1179,10 @@ public static class MeshNodeLayoutAreas
         NodePageProvenance? provenance = null) where T : UiControl?
     {
         var verdict = provenance ?? NodePageProvenance.FrameworkSupplied;
-        var registered = verdict.Kind == NodePageProvenanceKind.FrameworkSupplied
-            ? layout.WithDecoratedView(
-                area,
-                (host, ctx) => ComposeProvenance(host, Observable.Return<UiControl?>(page.Invoke(host, ctx))),
-                page)
-            : layout.WithView(area, page);
+        var registered = layout.WithView(area, page);
 
         return registered.WithNodePageProvenance(area, verdict);
     }
-
-    /// <summary>
-    /// The provenance strip above a page that does not draw one itself, composed from framework
-    /// controls only (a <c>Stack</c> carrying <see cref="BuildMetaRow"/>) and aligned to the same
-    /// page geometry as the standard header via <see cref="GetContainerStyle"/>.
-    ///
-    /// <para>🚨 <c>CombineLatest</c>, never <c>.Take(1)</c> on either leg: both the node and the
-    /// page are live, data-bound streams, and latching either one freezes the binding. A null page
-    /// emission passes through UNCHANGED — several renderers emit null as a deliberate
-    /// pass-through frame (the compile-in-progress catch-all's <c>StartWith(null)</c>), and
-    /// wrapping that in a stack would turn a pass-through into a rendered empty page.</para>
-    /// </summary>
-    private static IObservable<UiControl?> ComposeProvenance(
-        LayoutAreaHost host, IObservable<UiControl?> page)
-    {
-        // A TEMPLATE strip: emitted with the page, its line bound to a projection of the node
-        // (NodePageProjections.Meta). The viewer — zone and language — is captured HERE, on the
-        // render turn; the projection runs later, off it.
-        var stripStyle = GetContainerStyle(host) + " margin-top: 16px; margin-bottom: 8px;";
-        var viewer = NodePageProjections.Viewer.Of(host);
-        return page.Select(view => view is null
-            ? null
-            : (UiControl?)Controls.Stack
-                .WithWidth("100%")
-                .WithView(
-                    NodePageProjections.Meta(host, stripStyle, viewer)
-                        .Bind(p => ProvenanceStrip(p.Style, new MetaSlots(
-                            p.Meta.TypeStyle, p.Meta.TypeLabel, p.Meta.TypeText, p.Meta.TypeHref,
-                            p.Meta.CreatedStyle, p.Meta.CreatedLabel, p.Meta.CreatedText,
-                            p.Meta.ChangedStyle, p.Meta.ChangedLabel, p.Meta.ChangedText)), ProvenanceDataId),
-                    NodeMetaArea)
-                .WithView(view));
-    }
-
-    /// <summary>The <c>/data</c> id the composed provenance strip's projection is published under.</summary>
-    internal const string ProvenanceDataId = "nodeProvenance";
-
-    /// <summary>The composed provenance strip with its bound values as POINTERS.</summary>
-    internal static StackControl ProvenanceStrip(object style, MetaSlots meta)
-        => (Controls.Stack.WithWidth("100%") with { Style = style })
-            .WithView(MetaRow(meta));
 
     /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.

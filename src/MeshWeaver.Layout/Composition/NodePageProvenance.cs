@@ -45,9 +45,10 @@ public sealed record NodePageProvenance
     public string? Reason { get; }
 
     /// <summary>
-    /// The framework composes the provenance line above the page's own content. This is the
-    /// DEFAULT: a landing page registered without an opinion gets the line, so forgetting produces
-    /// a correct page rather than a silently incomplete one.
+    /// The page draws nothing; the portal shell carries the provenance line as the tooltip of the
+    /// breadcrumb's current crumb (until 2026-10-26 the framework composed a strip above the page).
+    /// This is the DEFAULT: a landing page registered without an opinion still gets the line, so
+    /// forgetting produces a correct page rather than a silently incomplete one.
     /// </summary>
     public static readonly NodePageProvenance FrameworkSupplied =
         new(NodePageProvenanceKind.FrameworkSupplied, null);
@@ -90,7 +91,7 @@ public sealed record NodePageProvenance
 /// <summary>The three answers a node landing page can give about provenance.</summary>
 public enum NodePageProvenanceKind
 {
-    /// <summary>The framework composes the provenance line above the page — the default.</summary>
+    /// <summary>The shell carries the provenance line (the breadcrumb tooltip) — the default.</summary>
     FrameworkSupplied,
 
     /// <summary>The page renders the line itself (it calls <c>BuildHeader</c> / <c>BuildMetaRow</c>).</summary>
