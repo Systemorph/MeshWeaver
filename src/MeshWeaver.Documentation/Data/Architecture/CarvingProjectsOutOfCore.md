@@ -441,6 +441,47 @@ and the `.gitignore` re-include for `bin/`. Their release-channel writer is now 
 repositories (`"repo"` on a binding in `.github/release-channels.json`), which keeps
 `hosting-operator:main` protected. MeshWeaver.Plugins `Hosting/HostingOperator` is the manual.
 
+## Package versions follow the projects: core pins only what core restores
+
+Moving a project out of core leaves its package pins behind in `Directory.Packages.props`, because
+MeshWeaver.Plugins imports that list as its version source. Left alone, core's list keeps growing
+with packages nothing in core restores. Such a pin is not harmless: Dependabot and every security
+review read it as a core dependency, and a version decision about a Plugins host gets made in the
+wrong repository.
+
+**The rule.** A `PackageVersion` lives in core only when some core project restores the package, at
+any depth. Anything else lives in MeshWeaver.Plugins' `src/Directory.Packages.Plugins.props` as a
+FILL-IN entry, which applies only when no other list declares the id. So the Plugins half can land
+first with no duplicate-pin error, and core's delete lands second.
+
+**How to measure it.** A text search for `PackageReference` is not enough, because a pin can be
+needed only transitively. Restore the whole solution and read every `obj/project.assets.json`:
+
+- a pin with no `PackageReference` that still appears among the restored libraries is a transitive
+  pin, such as `Azure.Core`, `System.ClientModel` or `OpenTelemetry.Api`, and it stays;
+- a pin that appears in no core project's graph belongs to whichever repository restores it.
+
+The first pass found 67 pins with no direct core reference. 12 were transitive and stayed. 48 moved
+to Plugins at the versions core carried, with their comments, including security overrides such as
+`MessagePack` and `SQLitePCLRaw.lib.e_sqlite3`.
+
+**Families stay whole.** A package whose family core still partly pins stays in core with the rest:
+the four Orleans clustering and persistence packages, `ModelContextProtocol` and
+`ModelContextProtocol.AspNetCore` (core restores `ModelContextProtocol.Core`), `Microsoft.Agents.AI`
+and `Microsoft.Extensions.AI`. A family split across two files drifts on the first grouped version
+bump, and Orleans has already shipped mismatched versions once that way.
+
+**Still pinned for Plugins, and why.** The module-library shelf (`tools/MeshWeaver.ModuleLibraries`)
+is a core csproj listing libraries that only Plugins modules bind: ClosedXML, CsvHelper, the AI
+provider SDKs, MailKit, Microsoft.Graph, `Radzen.Blazor`, ExcelDataReader. Its pins leave together
+with the shelf list; see [Core Carries No GUI Technology](../CoreCarriesNoGuiTechnology) under
+"Build tooling that still names a GUI". `Octokit` leaves under its own two conditions in
+[GitHub Sync](../GitHubSync), "Removing the transitional Octokit reference".
+
+**Before deleting a pin, check every satellite.** A satellite may consume a pin versionless. For
+the 48, the only versionless consumers outside Plugins were two Reinsurance `legacy/` projects.
+That repository's CI skips them, and they import no central list.
+
 ## Related
 
 - [Module Build Architecture](../ModuleBuildArchitecture) — the unified build every repo follows
