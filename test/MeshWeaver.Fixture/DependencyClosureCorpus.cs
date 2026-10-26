@@ -37,6 +37,12 @@ public static class DependencyClosureCorpus
     public static readonly ImmutableArray<(string Source, string Target)> Diamond =
         [("x", "y"), ("x", "z"), ("y", "w"), ("z", "w"), ("w", "v"), ("u", "x")];
 
+    /// <summary>Two crossing shortest chains s → a → z → t and s → b → y → t: the next hop is chosen
+    /// on the DEPENDENT side (s steps to a, the smaller of a and b), so the path to t runs through z
+    /// although y sorts before z — the case that tells this rule from a sorted reverse traversal.</summary>
+    public static readonly ImmutableArray<(string Source, string Target)> Crossing =
+        [("s", "a"), ("a", "z"), ("z", "t"), ("s", "b"), ("b", "y"), ("y", "t")];
+
     /// <summary>Every case.</summary>
     public static readonly ImmutableArray<DependencyClosureCase> Cases =
     [
@@ -54,5 +60,9 @@ public static class DependencyClosureCorpus
             "two equally short chains: the smaller next hop (y) is the path"),
         new(Diamond, "dependencies", "u", null, ["x|1|u>x", "y|2|u>x>y", "z|2|u>x>z", "w|3|u>x>y>w", "v|4|u>x>y>w>v"],
             "the same tie read forward"),
+        new(Crossing, "dependents", "t", null, ["y|1|t>y", "z|1|t>z", "a|2|t>z>a", "b|2|t>y>b", "s|3|t>z>a>s"],
+            "the next hop is the dependent's: s → a (a < b), so s's chain runs through z although y < z"),
+        new(Crossing, "dependencies", "s", null, ["a|1|s>a", "b|1|s>b", "y|2|s>b>y", "z|2|s>a>z", "t|3|s>a>z>t"],
+            "the same crossing read forward"),
     ];
 }

@@ -90,9 +90,10 @@ public sealed class DependencyClosure
         return depth
             .Where(kv => maxDepth is null || kv.Value <= maxDepth)
             .OrderBy(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal)
+            // The chain follows the ANCESTOR's next hops — the same rows the closure table holds —
+            // computed only along the one walk from source, from that ancestor's reverse distances.
             .Select(kv => new DependencyClosureRow(kv.Key, kv.Value,
-                // The chain follows the ANCESTOR's next hops — the same rows the closure table holds.
-                [.. Walk(source, kv.Key, TowardsAncestor(kv.Key).NextHop)]))
+                [.. WalkTowards(source, kv.Key, Distances(kv.Key, reverse))]))
             .ToImmutableList();
     }
 
@@ -104,8 +105,25 @@ public sealed class DependencyClosure
     {
         if (string.Equals(dependent, dependency, StringComparison.Ordinal))
             return [dependent];
-        var (depth, nextHop) = TowardsAncestor(dependency);
-        return depth.ContainsKey(dependent) ? [.. Walk(dependent, dependency, nextHop)] : null;
+        var towards = Distances(dependency, reverse);
+        return towards.ContainsKey(dependent) ? [.. WalkTowards(dependent, dependency, towards)] : null;
+    }
+
+    /// <summary>The chain from <paramref name="from"/> to <paramref name="ancestor"/>: at each step the
+    /// smallest direct dependency one step closer, by <paramref name="towards"/> (the reverse distances
+    /// to the ancestor) — the next-hop rule, evaluated only on the nodes of this one chain.</summary>
+    private IEnumerable<string> WalkTowards(string from, string ancestor, ImmutableDictionary<string, int> towards)
+    {
+        var current = from;
+        yield return current;
+        while (!string.Equals(current, ancestor, StringComparison.Ordinal))
+        {
+            var d = towards[current];
+            current = forward[current].First(n =>
+                d == 1 ? string.Equals(n, ancestor, StringComparison.Ordinal)
+                       : towards.TryGetValue(n, out var dn) && dn == d - 1);
+            yield return current;
+        }
     }
 
     /// <summary>Shortest distance from every dependent of <paramref name="ancestor"/> to it, and each
