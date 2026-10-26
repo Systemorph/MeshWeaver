@@ -99,27 +99,67 @@ in_words() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # Every other failure is RED at once, and a grant that never arrives is RED at the deadline,
 # naming the App provisioning to check. When the wait was needed, a ::notice:: says how many
 # probes and how many seconds it took, so the lag is measured in every run.
+#
+# The whole wait is bounded: each probe gets only the budget left and is killed when it outlives
+# it, the pause between probes never exceeds what is left, and a probe that does not answer in
+# time is RED (a stalled connection is not the propagation answer).
 await_reach() {
   local deadline="${STAGE_REACH_SECONDS:-90}" interval="${STAGE_REACH_INTERVAL_SECONDS:-3}"
-  local start now probes=0 err="$dest.reach-err"
+  local start now left probes=0 rc err="$dest.reach-err" probe_dir="$dest.reach-probe"
+  [ "$deadline" -ge 1 ] || deadline=1
+  rm -rf "$probe_dir"
+  git init -q "$probe_dir"
   start=$(date +%s)
   while :; do
+    now=$(date +%s)
+    left=$((deadline - (now - start)))
+    if [ "$left" -le 0 ]; then
+      rm -rf "$probe_dir"
+      die "$repo still answers 'Repository not found' to the stage credential after $probes probe(s) over $((now - start)) s. This is no propagation delay: the App behind stage-repo-app-id is not installed on $repo, or cannot read its contents. Check that App's installation on the repository's owner and its Contents: Read permission."
+    fi
     probes=$((probes + 1))
-    if git "${auth[@]}" ls-remote --exit-code "$url" HEAD > /dev/null 2> "$err"; then
-      now=$(date +%s)
-      rm -f "$err"
+    rc=0
+    probe_once "$left" || rc=$?
+    now=$(date +%s)
+    if [ "$rc" = 0 ]; then
+      rm -rf "$err" "$probe_dir"
       if [ "$probes" -gt 1 ]; then
         echo "::notice::the stage credential reached $repo on probe $probes, $((now - start)) s after the first answered 'Repository not found' — a freshly minted token's repository grant had not yet propagated."
       fi
       return 0
     fi
-    grep -q 'Repository not found' "$err" \
-      || die "could not read $repo with the stage credential: $(tr '\n' ' ' < "$err")"
-    now=$(date +%s)
-    [ $((now - start)) -lt "$deadline" ] \
-      || die "$repo still answers 'Repository not found' to the stage credential after $probes probe(s) over $((now - start)) s. This is no propagation delay: the App behind stage-repo-app-id is not installed on $repo, or cannot read its contents. Check that App's installation on the repository's owner and its Contents: Read permission."
-    sleep "$interval"
+    if [ "$rc" = 124 ]; then
+      rm -rf "$probe_dir"
+      die "probe $probes of $repo with the stage credential did not answer within the ${deadline} s budget ($((now - start)) s elapsed) — a stalled connection, not a propagation answer."
+    fi
+    if ! grep -q 'Repository not found' "$err"; then
+      rm -rf "$probe_dir"
+      die "could not read $repo with the stage credential: $(tr '\n' ' ' < "$err")"
+    fi
+    left=$((deadline - (now - start)))
+    [ "$left" -gt 0 ] || continue
+    if [ "$interval" -lt "$left" ]; then sleep "$interval"; else sleep "$left"; fi
   done
+}
+
+# probe_once <budget-seconds> — one ls-remote with the stage credential, killed (exit 124) when it
+# outlives the budget. It runs in $probe_dir, a repository of its own, exactly like the fetch: the
+# step's working directory is the CALLER's checkout, whose persisted URL-scoped extraheader (the
+# caller's own token) would otherwise ride along beside ours and answer "Repository not found" for
+# a valid stage token.
+probe_once() {
+  ( cd "$probe_dir" && exec git "${auth[@]}" ls-remote --exit-code "$url" HEAD ) > /dev/null 2> "$err" &
+  local pid=$! ticks=0  # ticks of 0.2 s
+  while kill -0 "$pid" 2> /dev/null; do
+    if [ "$ticks" -ge $(($1 * 5)) ]; then
+      kill "$pid" 2> /dev/null || true
+      wait "$pid" 2> /dev/null || true
+      return 124
+    fi
+    sleep 0.2
+    ticks=$((ticks + 1))
+  done
+  wait "$pid"
 }
 
 stage() {
@@ -431,6 +471,12 @@ for a in "\$@"; do
   if [ "\$a" = ls-remote ]; then
     n=\$(( \$(cat "\$FAKE_COUNT" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "\$FAKE_COUNT"
     if [ "\$n" -le "\$FAKE_FAILS" ]; then printf '%b\n' "\$FAKE_ERR" >&2; exit 128; fi
+    # A persisted checkout credential in the repository the probe runs in rides along beside the
+    # stage token — GitHub then answers as if the stage token could not read the repo.
+    if "$real_git" config --get-regexp 'extraheader' 2>/dev/null | grep -q CALLER-CHECKOUT-TOKEN; then
+      echo 'remote: Repository not found.' >&2; exit 128
+    fi
+    if [ -n "\${FAKE_SLEEP:-}" ]; then exec sleep "\$FAKE_SLEEP"; fi
     break
   fi
 done
@@ -438,11 +484,13 @@ exec "$real_git" "\$@"
 FAKE_GIT
   chmod +x "$fake/git"
   local nf=$'remote: Repository not found.\nfatal: repository \'https://github.com/x/y/\' not found'
-  # runf <dir> <fails> <err> <deadline> — stage Store through the fake git
+  # runf <dir> <fails> <err> <deadline> [cwd] [probe-sleep] — stage Store through the fake git,
+  # from <cwd> (default: here), each probe that passes the fake stalling <probe-sleep> seconds
   runf() {
     prov "$1" "$A" absent
     ( set -euo pipefail; export PATH="$fake:$PATH" FAKE_COUNT="$1/count" FAKE_FAILS="$2" FAKE_ERR="$3" \
-        STAGE_REACH_SECONDS="$4" STAGE_REACH_INTERVAL_SECONDS=0
+        STAGE_REACH_SECONDS="$4" STAGE_REACH_INTERVAL_SECONDS=0 FAKE_SLEEP="${6:-}"
+      cd "${5:-.}"
       stage --repo "$up" --source plugins --modules Store --provenance "$1" --dest "$1/out" ) > "$1/log" 2>&1
   }
   # 14. Not found twice, then reachable: staged, and the lag is reported.
@@ -466,6 +514,23 @@ FAKE_GIT
   check "a failure other than 'Repository not found' is RED on the first probe" \
     "$([ $rc != 0 ] && [ "$(cat "$t/c17/count")" = 1 ] && grep -q 'could not read .* with the stage credential: fatal: Authentication failed' "$t/c17/log"; echo $?)" \
     "rc=$rc; count=$(cat "$t/c17/count" 2>/dev/null); $(cat "$t/c17/log")"
+  # 18. Run from inside the CALLER's checkout, whose persisted URL-scoped credential (the caller's
+  #     own token) would ride along: the probe runs in a repository of its own, so it reads.
+  local co="$t/c18-checkout"
+  git init -q "$co"
+  git -C "$co" config http.https://github.com/.extraheader "AUTHORIZATION: basic CALLER-CHECKOUT-TOKEN"
+  runf "$t/c18" 0 "$nf" 3 "$co"; rc=$?
+  check "the probe ignores the caller checkout's persisted credential" \
+    "$([ $rc = 0 ] && [ "$(cat "$t/c18/count")" = 1 ] && [ "$(cat "$t/c18/out/Store/floor")" = old ]; echo $?)" \
+    "rc=$rc; count=$(cat "$t/c18/count" 2>/dev/null); $(cat "$t/c18/log")"
+  # 19. A probe that stalls is killed at the budget and is RED — never held to the job timeout.
+  local s0 s1
+  s0=$(date +%s)
+  runf "$t/c19" 0 "$nf" 2 . 30; rc=$?
+  s1=$(date +%s)
+  check "a stalled probe is killed at the budget and is RED" \
+    "$([ $rc != 0 ] && [ $((s1 - s0)) -le 6 ] && grep -q 'did not answer within the 2 s budget' "$t/c19/log" && [ ! -d "$t/c19/out/Store" ]; echo $?)" \
+    "rc=$rc; took $((s1 - s0)) s; $(cat "$t/c19/log")"
 
   [ "$fails" = 0 ] || { echo "stage-sealed-upstream.sh --self-test: $fails failure(s)"; return 1; }
   echo "stage-sealed-upstream.sh --self-test: all cases passed"

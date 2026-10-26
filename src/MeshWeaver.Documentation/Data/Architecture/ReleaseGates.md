@@ -513,14 +513,20 @@ came from a token whose repository grant had not yet reached the git endpoint th
 same credential before it fetches anything. It repeats the probe only while the answer is exactly
 `Repository not found`, and stops at a deadline (`STAGE_REACH_SECONDS`, 90 s by default):
 
+- the probe runs in a repository of its own, like the fetch, never in the caller's checkout: that
+  checkout persists a URL-scoped credential (the caller's own token), which would be sent beside
+  the stage token and make GitHub answer `Repository not found` for a valid one;
+- the wait is bounded: each probe gets only the budget left and is killed when it outlives it, and
+  a probe that stalls is RED;
 - any other failure is RED on the first probe;
 - a grant that never arrives is RED at the deadline, naming the App installation and its
   Contents: Read permission as the thing to check;
 - when the wait was needed, a `::notice::` gives the number of probes and seconds, so every run
   measures the lag.
 
-The self-test covers all four outcomes with a fake `git`: reachable at once, reachable after two
-refusals, never reachable, and a different error.
+The self-test covers these outcomes with a fake `git`: reachable at once, reachable after two
+refusals, never reachable, a different error, a run from inside a checkout that carries a persisted
+credential, and a probe that stalls.
 
 ### What closing it looks like
 
