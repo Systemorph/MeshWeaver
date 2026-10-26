@@ -23,6 +23,12 @@ namespace MeshWeaver.Hosting.Test;
 /// <c>WorkItem → Timeout.Absolute → Defer → handler closure → hub</c> chain #6308 cut for create.
 /// The long budget keeps the cancelled deadline queued while this test collects; it does not make
 /// the operation or the assertion wait longer.
+///
+/// <para>The release is awaited (<see cref="Collected.Of"/>), never read from one immediate
+/// collection: <c>DisposalCompleted</c> fires while the hub's own ShutDown turn is still on its
+/// thread's stack, so on a loaded run an immediate collection found the hub alive for a reason that
+/// is not the deadline (<see cref="TheDisposalSignalFiresBeforeTheDisposingTurnLetsGoTest"/>). The
+/// bound is seconds; the retention this pins lasts the ten-minute operation budget.</para>
 /// </summary>
 public class CopyMoveDeadlineReleasesHubTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -37,8 +43,7 @@ public class CopyMoveDeadlineReleasesHubTest(ITestOutputHelper output) : Monolit
     public async Task CompletedCopy_DoesNotPinDisposedMeshUntilItsDeadline()
     {
         var weak = await OperateThenDisposeMesh(move: false);
-        Collect(weak);
-        weak.IsAlive.Should().BeFalse(
+        await Collected.Of(weak).Should().Within(TestTimeouts.Convergence).Emit(
             "the completed copy's cancelled Rx deadline is still queued, but it must not retain "
             + "the handler's disposed mesh hub for the rest of the operation budget");
     }
@@ -47,20 +52,9 @@ public class CopyMoveDeadlineReleasesHubTest(ITestOutputHelper output) : Monolit
     public async Task CompletedMove_DoesNotPinDisposedMeshUntilItsDeadline()
     {
         var weak = await OperateThenDisposeMesh(move: true);
-        Collect(weak);
-        weak.IsAlive.Should().BeFalse(
+        await Collected.Of(weak).Should().Within(TestTimeouts.Convergence).Emit(
             "the completed move's cancelled Rx deadline is still queued, but it must not retain "
             + "the handler's disposed mesh hub for the rest of the operation budget");
-    }
-
-    private static void Collect(WeakReference weak)
-    {
-        for (var i = 0; i < 3 && weak.IsAlive; i++)
-        {
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
-        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
