@@ -1526,6 +1526,79 @@ def sweep_precondition(event: str, repo: str, pr: dict) -> str | None:
     return None
 
 
+def in_flight_policy(run: dict, jobs: list | None, own_created_at: str) -> tuple[str, str] | None:
+    """THE ONE wait policy for a run that has started and not completed, shared by BOTH decision paths
+    (`refresh_action`'s newest `pull_request` run and `duplicate_red_action`'s sweep). None when the run
+    is completed (nothing to wait for). Pure.
+
+    A refresh may wait on a REVIEW job still in flight: a review job never waits on a refresh, so that
+    wait cannot cycle. Once a run's review jobs are done, what keeps it `in_progress` is its own refresh
+    — and waiting on THAT is waited for only when the run is OLDER than this one. Two refreshes then
+    never wait on each other, whichever path each is deciding on (#7257 review: an older comment run
+    waiting on a newer `pull_request` run, which waited on the older run's refresh, until both hit the
+    30-minute wait). A run whose review check-runs are already green is not waited for at all."""
+    if run.get("status") == "completed":
+        return None
+    rid, ev = run.get("id"), run.get("event")
+    review = [j for j in (jobs or []) if is_review_check_job(j.get("name"))]
+    if not review:
+        return "wait", f"run {rid} ({ev}) is {run.get('status')} and has not created its review job yet"
+    flying = [j for j in review if j.get("status") != "completed"]
+    if flying:
+        return "wait", f"run {rid} ({ev}): `{flying[0].get('name')}` is still {flying[0].get('status')} — letting it finish"
+    reds = [j for j in review if j.get("conclusion") not in PASSING_CONCLUSIONS]
+    if not reds:
+        return "none", f"run {rid} ({ev}): its review check-run already reads success; only its other jobs are still running"
+    red = f"`{reds[0].get('name')}` concluded {reds[0].get('conclusion')}"
+    if str(run.get("created_at") or "") < str(own_created_at or ""):
+        return "wait", f"run {rid} ({ev}): {red}, but the run is still {run.get('status')} — a re-run needs it completed"
+    return "none", (f"run {rid} ({ev}): {red} while the run is still {run.get('status')}; it is NEWER than this "
+                    "run, so it is not waited for (only older runs are — no two refreshes wait on each other)")
+
+
+#: The caller's concurrency group is split by event class (review-answered.yml, and the lane header's
+#: caller contract): `…-feedback` for review-comment runs, `…-gate` for every other event. Each group
+#: keeps ONE pending run, and a re-run enters the group like a new run.
+FEEDBACK_LANE_EVENT = "pull_request_review_comment"
+
+
+def concurrency_lane(event) -> str:
+    """The caller's concurrency-group suffix for a run of this event. Pure."""
+    return "feedback" if event == FEEDBACK_LANE_EVENT else "gate"
+
+
+def plan_reruns(selected: list, runs: list, own_run_id) -> list:
+    """Of the runs the two decision paths chose to re-run (`selected`, in priority order: the newest
+    `pull_request` run first, then the oldest red), POST at most ONE per concurrency group, and none into
+    a group that already holds a pending run. Returns [(run, 'rerun' | 'none', why)] in input order. Pure.
+
+    🚨 Each group keeps ONE pending run (#7257 review), so a second re-run POSTed into it REPLACES the
+    first before it evaluates anything: the replaced attempt is cancelled with zero jobs and its red
+    stands, while the refresh reports success. So the reds are re-run as a CHAIN: the chosen re-run
+    evaluates live state, and on GREEN its own refresh re-runs the next red, which started before that
+    verdict too. A red that is still red after its re-run stops the chain, and that red is true. A
+    pending run already in the group is the same chain's link: it evaluates after this verdict and its
+    GREEN refresh carries on, while a re-run now would replace it."""
+    planned, chosen = [], {}
+    pending = {}
+    for r in runs:
+        if str(r.get("id")) != str(own_run_id) and r.get("status") in NOT_STARTED_RUN_STATUSES:
+            pending.setdefault(concurrency_lane(r.get("event")), r)
+    for r, why in selected:
+        lane = concurrency_lane(r.get("event"))
+        if lane in pending:
+            planned.append((r, "none", (f"deferred: run {pending[lane].get('id')} is already pending in the `…-{lane}` group — it "
+                                        "evaluates live state after this verdict and its GREEN refresh re-runs this red; "
+                                        "a re-run now would replace it")))
+        elif lane in chosen:
+            planned.append((r, "none", (f"deferred: one re-run per `…-{lane}` group (it keeps ONE pending run, so a second "
+                                        f"would replace the first) — run {chosen[lane].get('id')}'s GREEN refresh re-runs this one next")))
+        else:
+            chosen[lane] = r
+            planned.append((r, "rerun", why))
+    return planned
+
+
 def duplicate_red_action(run: dict, jobs: list | None, own_run_id, own_created_at: str, evaluated_at: str,
                          head: str) -> tuple[str, str]:
     """For ONE other run of this workflow on the head, after a GREEN verdict: ('rerun' | 'wait' | 'none' |
@@ -1553,18 +1626,13 @@ def duplicate_red_action(run: dict, jobs: list | None, own_run_id, own_created_a
             return "none", (f"run {rid} ({run.get('event')}, {run.get('conclusion')}) published no `{REVIEW_CHECK_NAME}` "
                             "check-run (replaced while pending — zero jobs), so it holds no red")
         return "wait", f"run {rid} ({run.get('event')}) is {run.get('status')} and has not created its review job yet"
-    flying = [j for j in review if j.get("status") != "completed"]
-    if flying:
-        return "wait", f"run {rid} ({run.get('event')}): `{flying[0].get('name')}` is still {flying[0].get('status')} — letting it finish"
+    in_flight = in_flight_policy(run, jobs, own_created_at)
+    if in_flight is not None:
+        return in_flight
     reds = [j for j in review if j.get("conclusion") not in PASSING_CONCLUSIONS]
     if not reds:
         return "none", f"run {rid} ({run.get('event')}): its review check-run already reads success"
     red = f"`{reds[0].get('name')}` concluded {reds[0].get('conclusion')}"
-    if run.get("status") != "completed":
-        if str(run.get("created_at") or "") < str(own_created_at or ""):
-            return "wait", f"run {rid} ({run.get('event')}): {red}, but the run is still {run.get('status')} — a re-run needs it completed"
-        return "none", (f"run {rid} ({run.get('event')}): {red} while the run is still {run.get('status')}; it is NEWER than this "
-                        "run, so it is not waited for (only older runs are — no two refreshes wait on each other)")
     started, judged = parse_stamp(run.get("run_started_at")), parse_stamp(evaluated_at)
     if judged is None:
         return "fail", f"the verdict's own time {evaluated_at!r} is unreadable, so staleness cannot be judged"
@@ -2331,6 +2399,9 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
             pr_runs = [r for r in runs if r.get("event") == PROTECTION_READ_EVENT]
             cand = max(pr_runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if pr_runs else None
             act, reason = refresh_action(event, run_id, evaluated_at, repo, pr_now, cand)
+            if act == "wait" and cand is not None:
+                # The SAME acyclic wait policy as the sweep's — never a wait on a newer run's refresh.
+                act, reason = in_flight_policy(cand, review_jobs(cand), own_created) or (act, reason)
             head_now = str((pr_now.get("head") or {}).get("sha") or "")
             decisions = []
             if sweep_precondition(event, repo, pr_now) is None:
@@ -2392,6 +2463,16 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
                 else:
                     rejudged.append((r, a, w))
             sweep = rejudged
+        # At most ONE re-run per concurrency group (plan_reruns): the rest chain through its GREEN refresh.
+        selected = [(candidate, why)] if action == "rerun" else []
+        reds = sorted((i for i, (_, a, _) in enumerate(sweep) if a == "rerun"),
+                      key=lambda i: (sweep[i][0].get("run_started_at") or "", sweep[i][0].get("id") or 0))
+        selected += [(sweep[i][0], sweep[i][2]) for i in reds]
+        plan = plan_reruns(selected, runs, run_id)
+        if action == "rerun":
+            _, action, why = plan.pop(0)
+        for i, planned in zip(reds, plan):
+            sweep[i] = planned
         if action == "rerun" and not post_rerun(gh, candidate["id"], RERUN_WHOLE_RUN):
             action, why = "none", f"run {candidate['id']} was already re-run by another invocation"
         for i, (r, a, w) in enumerate(sweep):
@@ -4190,12 +4271,15 @@ def duplicate_sweep_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
     all_red = {r["id"]: [red_job, refresh_job] for r in reds}
     all_red[zero["id"]] = []
     for name, event, runs, jobs, pr, expect_rc, expect_posted in [
-        ("#4276: pull_request verdict GREEN -> the 3 older reds of other events re-run",
+        ("#4276: pull_request verdict GREEN -> ONE re-run per group (oldest comment red + the review red)",
          "pull_request", [green_pr, zero] + reds, all_red, None, 0,
-         sorted(f"actions/runs/{r['id']}/rerun" for r in reds)),
-        ("comment verdict GREEN -> the older pull_request red AND the older review red re-run",
+         ["actions/runs/40342994248/rerun", "actions/runs/40343008573/rerun"]),
+        ("comment verdict GREEN -> the pull_request red first; the review red (same group) deferred",
          "pull_request_review_comment", [red_read, dup, dict(dup, id=99, event="pull_request_review_comment")],
-         {dup["id"]: [red_job]}, None, 0, ["actions/runs/40343008573/rerun", "actions/runs/7/rerun"]),
+         {dup["id"]: [red_job]}, None, 0, ["actions/runs/7/rerun"]),
+        ("#7257: a run already PENDING in the gate group -> no re-run into it (it would be replaced)",
+         "pull_request", [green_pr, dup, dict(dup, id=555, status="pending", conclusion=None, run_started_at=None)],
+         {dup["id"]: [red_job]}, None, 0, []),
         ("NEG: every duplicate already green -> posts nothing", "pull_request",
          [green_pr] + [dict(r, conclusion="success") for r in reds], {}, None, 0, []),
         ("NEG: a fork pull request -> no sweep, posts nothing", "pull_request", [green_pr] + reds, all_red,
@@ -4228,6 +4312,88 @@ def duplicate_sweep_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
         rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request", "99", verdict_at, gh=stub, wait_s=0)
     check("in flight past the wait -> RED, the decided red still re-run",
           rc == 1 and stub.posted == [f"actions/runs/{reds[2]['id']}/rerun"], f"rc={rc} posted={stub.posted}")
+
+    # ── #7257 review, thread 1: BOTH refreshes active — no cycle between the two decision paths.
+    # X = an OLDER comment run (core shape): its bare review job RED, its lane review job GREEN, its lane
+    # refresh running. P = a NEWER `pull_request` run: review jobs GREEN, refresh running. P may wait on X
+    # (older, red, still finishing); X must NOT wait on P, whose review check-runs are done.
+    x = dict(dup, id=601, event="pull_request_review_comment", status="in_progress", conclusion=None,
+             created_at="2026-10-26T14:40:00Z")
+    p_run = dict(red_read, id=602, status="in_progress", conclusion=None, created_at="2026-10-26T14:50:00Z",
+                 run_started_at="2026-10-26T14:50:00Z")
+    lane_refresh = {"name": "lane / Refresh the verdict branch protection reads", "status": "in_progress", "conclusion": None}
+    x_jobs = [dict(red_job, name="Automatic review answered"), dict(green_job, name="lane / Automatic review answered"),
+              lane_refresh]
+    p_jobs = [dict(green_job, name="Automatic review answered"), dict(green_job, name="lane / Automatic review answered"),
+              lane_refresh]
+    x_side = in_flight_policy(p_run, p_jobs, x["created_at"])
+    p_side = in_flight_policy(x, x_jobs, p_run["created_at"])
+    check("cycle: X (older) does NOT wait on P's refresh", x_side is not None and x_side[0] == "none", f"{x_side}")
+    check("cycle: P (newer) may wait on X (older, red, finishing)", p_side is not None and p_side[0] == "wait", f"{p_side}")
+    check("NEG cycle: a review job still in flight IS waited for", (in_flight_policy(
+        p_run, [dict(green_job, status="in_progress", conclusion=None)], x["created_at"]) or ("",))[0] == "wait")
+    check("NEG cycle: a NEWER run with a finished RED review job is NOT waited for", (in_flight_policy(
+        p_run, [red_job], x["created_at"]) or ("",))[0] == "none")
+
+    class _TwoGh(_SweepGh):
+        def __init__(self, own_run, runs, jobs_by_id):
+            super().__init__(runs, jobs_by_id)
+            self.own_run = own_run
+        def api(self, path):
+            if path == f"actions/runs/{self.own_run['id']}":
+                return dict(self.own_run, workflow_id=5)
+            return super().api(path)
+    # X's refresh, end to end with NO wait budget: before the fix it waited on P and went RED at the deadline.
+    stub = _TwoGh(x, [x, p_run], {602: p_jobs, 601: x_jobs})
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request_review_comment", "601", verdict_at, gh=stub, wait_s=0)
+    check("cycle end to end: X's refresh decides at once, never waits on P", rc == 0 and stub.posted == [],
+          f"rc={rc} posted={stub.posted}")
+
+    # ── #7257 review, thread 2: ONE re-run per concurrency group, never into an occupied pending slot.
+    g1, g2 = dict(dup, id=701), dict(dup, id=702, event="pull_request")
+    f1, f2 = dict(dup, id=703, event="pull_request_review_comment"), dict(dup, id=704, event="pull_request_review_comment")
+    plan = plan_reruns([(g1, "a"), (g2, "b"), (f1, "c"), (f2, "d")], [], 99)
+    check("plan: one re-run per group (gate + feedback), the rest deferred",
+          [a for _, a, _ in plan] == ["rerun", "none", "rerun", "none"], f"{[a for _, a, _ in plan]}")
+    plan = plan_reruns([(g1, "a"), (f1, "c")], [dict(dup, id=705, status="queued", conclusion=None)], 99)
+    check("plan: a pending gate run occupies the slot -> no gate re-run; feedback still re-run",
+          [a for _, a, _ in plan] == ["none", "rerun"], f"{[a for _, a, _ in plan]}")
+    plan = plan_reruns([(g1, "a")], [dict(dup, id=99, status="pending", conclusion=None)], 99)
+    check("NEG plan: this run itself is not a pending occupant", [a for _, a, _ in plan] == ["rerun"])
+
+    # The CHAIN converges: every red eventually gets a fresh evaluation, one re-run per group per refresh.
+    def chain(red_ids, stays_red=()):
+        world = {r: dict(dup, id=r, event=("pull_request_review_comment" if r % 2 else "pull_request_review"))
+                 for r in red_ids}
+        world[900] = dict(green_pr, id=900, created_at="2026-10-26T18:36:00Z", run_started_at="2026-10-26T18:36:00Z")
+        jobs = {r: [red_job] for r in red_ids}
+        refreshers, posted_all, worst, step = [900], [], 0, 0
+        while refreshers and step < 20:
+            own_id = refreshers.pop(0)
+            step += 1
+            stub = _TwoGh(world[own_id], list(world.values()), jobs)
+            with contextlib.redirect_stdout(io.StringIO()):
+                run_refresh("Systemorph/MeshWeaver", 4649, world[own_id]["event"], str(own_id),
+                            f"2026-10-26T19:{step:02d}:30Z", gh=stub, wait_s=0)
+            ids = [int(path.split("/")[2]) for path in stub.posted]
+            lanes = [concurrency_lane(world[i]["event"]) for i in ids]
+            worst = max([worst] + [lanes.count(lane) for lane in set(lanes)])
+            for i in ids:
+                posted_all.append(i)
+                world[i] = dict(world[i], run_attempt=2, run_started_at=f"2026-10-26T19:{step:02d}:40Z",
+                                conclusion="failure" if i in stays_red else "success")
+                if i not in stays_red:
+                    jobs.pop(i, None)
+                    refreshers.append(i)
+        return posted_all, worst
+    red_ids = [801, 802, 803, 804, 805]
+    posted_all, worst = chain(red_ids)
+    check("chain: every red is re-run exactly once, at most one per group per refresh",
+          sorted(posted_all) == red_ids and worst <= 1, f"posted={posted_all} worst={worst}")
+    posted_all, worst = chain([802, 804, 806], stays_red={802})
+    check("NEG chain: a re-run that stays RED (truly unanswered) refreshes nothing — the chain stops there",
+          posted_all == [802], f"posted={posted_all}")
     return failures
 
 
@@ -4436,7 +4602,13 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
                 return self.pr
             if path.startswith("actions/workflows/5/runs?"):
                 state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
+                self.last = state
                 return {"workflow_runs": [state]}
+            if path.startswith("actions/runs/7/jobs"):
+                # The run is in flight because its REVIEW job is (a review job never waits on a refresh).
+                done = self.last.get("status") == "completed"
+                return {"jobs": [{"name": "Automatic review answered", "status": "completed" if done else "in_progress",
+                                  "conclusion": self.last.get("conclusion") if done else None}]}
             raise ReadError(f"unexpected GET {path}")
         def post(self, path):
             self.posted.append(path)

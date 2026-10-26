@@ -1325,7 +1325,23 @@ after the verdict, a red on an older head, a zero-job cancelled run, a fork, a c
 and a truncated listing, which is RED and never judged. A review job still in flight is waited for.
 A review job never waits on a refresh, so that wait cannot cycle. A red inside a run that is still
 finishing, because its own refresh is running, is waited for only when that run is OLDER than this
-one. Waiting only on older runs is what keeps two refreshes from waiting on each other. A re-run
+one. Waiting only on older runs is what keeps two refreshes from waiting on each other. 🚨 This is
+ONE policy, `in_flight_policy`, and BOTH decision paths use it: the newest `pull_request` run as well
+as the sweep. With two separate policies, an older comment run waited on a newer `pull_request` run
+whose refresh was waiting on it, and both ran into the 30-minute limit (#7257 review).
+
+🚨 **One re-run per concurrency group per refresh, and never into an occupied slot**
+(`plan_reruns`). The caller's group (`…-gate`, or `…-feedback` for review-comment runs) keeps ONE
+pending run, and a re-run enters it like a new run. A second re-run POSTed into the same group would
+replace the first before it evaluates anything. The replaced attempt is cancelled with zero jobs, its
+red stands, and the refresh would still report success.
+
+So the reds are re-run as a CHAIN. The chosen re-run judges live state, and when it is GREEN its own
+refresh re-runs the next red, which also started before that verdict. A group that already holds a
+pending run gets no re-run: that run is the next link. A re-run that stays red stops the chain there,
+and that red is true. The self-test replays such a chain to convergence.
+
+A re-run
 softens nothing: it applies the whole predicate to live state, so a thread that is really unanswered
 is red there too.
 
