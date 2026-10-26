@@ -1,0 +1,315 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.IO;
+using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using MeshWeaver.Compiler;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Xunit;
+
+namespace MeshWeaver.Compiler.Pipeline.Test;
+
+/// <summary>
+/// The forward dependency edges Roslyn reads at the end of a NodeType compile
+/// (<c>Doc/Architecture/DependencyGraph</c>), measured on REAL emits through the build-process bake
+/// (<see cref="NodeSetCompiler.Compile"/>) — the same extraction the runtime compile runs.
+///
+/// <para>Every positive case has a negative control beside it that differs in exactly the one
+/// thing the edge is supposed to follow: binding versus merely including, owning code versus
+/// foreign code, a used module versus a referenced-but-unused one.</para>
+/// </summary>
+public class DependencyEdgeExtractionTest
+{
+    private const string A = "Lib/A";
+    private const string B = "App/B";
+    private const string C = "Lib/C";
+
+    private static MeshNode TypeNode(string path) => MeshNode.FromPath(path) with
+    {
+        Name = path[(path.LastIndexOf('/') + 1)..],
+        NodeType = MeshNode.NodeTypePath,
+        State = MeshNodeState.Active,
+        LastModified = DateTimeOffset.UtcNow,
+        Content = new NodeTypeDefinition(),
+    };
+
+    private static MeshNode Code(string ownerPath, string id, string code) => new(id, $"{ownerPath}/Source")
+    {
+        NodeType = "Code",
+        Name = id,
+        State = MeshNodeState.Active,
+        LastModified = DateTimeOffset.UtcNow,
+        Content = new CodeConfiguration { Language = "csharp", Code = code },
+    };
+
+    private static MeshNode AThing() => Code(A, "AThing", """
+        /// <summary>A type owned by Lib/A.</summary>
+        public record AThing(int Value);
+        """);
+
+    private static MeshNode CThing() => Code(C, "CThing", """
+        /// <summary>A type owned by Lib/C.</summary>
+        public record CThing(string Name);
+        """);
+
+    /// <summary>Compiles <see cref="B"/> out of <paramref name="nodes"/> with
+    /// <paramref name="sources"/> and returns what the bake recorded.</summary>
+    private static NodeSetCompiler.CompiledNode CompileB(
+        IReadOnlyList<MeshNode> nodes, IReadOnlyList<string>? sources, System.Threading.CancellationToken ct,
+        IReadOnlyList<MetadataReference>? references = null)
+    {
+        var output = Path.Combine(Path.GetTempPath(), "mw-depedges-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            return NodeSetCompiler.Compile(
+                NodeSet.Create([TypeNode(B), .. nodes]), TypeNode(B),
+                sources, tests: null, configuration: null, contentCollections: null,
+                references: references ?? CompileReferences.Default,
+                dependencyIdOf: _ => null,
+                toolchainId: NodeTypeCompilationHelpers.ProcessToolchainId,
+                outputDirectory: output,
+                ct: ct);
+        }
+        finally
+        {
+            // The record is read off the compile, never off the files — the directory can go.
+            try { Directory.Delete(output, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static readonly string[] OwnAndShared = ["namespace:Source scope:subtree", $"shared=@{A}/Source"];
+
+    [Fact(Timeout = 120_000)]
+    public void BBindsATypeOfA_RecordsExactlyTheEdgeBToA_StampedWithTheEmittedMvid()
+    {
+        var output = Path.Combine(Path.GetTempPath(), "mw-depedges-mvid-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var compiled = NodeSetCompiler.Compile(
+                NodeSet.Create([TypeNode(B), AThing(), Code(B, "UsesA", """
+                    /// <summary>B's own code, binding A's type.</summary>
+                    public static class UsesA
+                    {
+                        /// <summary>Doubles an AThing.</summary>
+                        public static AThing Twice(AThing a) => new(a.Value * 2);
+                    }
+                    """)]),
+                TypeNode(B), OwnAndShared, tests: null, configuration: null, contentCollections: null,
+                references: CompileReferences.Default, dependencyIdOf: _ => null,
+                toolchainId: NodeTypeCompilationHelpers.ProcessToolchainId, outputDirectory: output,
+                ct: TestContext.Current.CancellationToken);
+
+            var edges = compiled.DependencyEdges;
+            edges.Should().NotBeNull("the bake always extracts — null would read as 'never extracted'");
+            edges!.Source.Should().Be(B);
+            edges.Edges.Should().ContainSingle("B binds exactly one foreign owner's code");
+            var edge = edges.Edges[0];
+            edge.Target.Should().Be(A);
+            edge.Kind.Should().Be(DependencyEdgeKinds.NodeType);
+            edge.Evidence.Should().Equal(["AThing"], "the evidence names WHY B depends on A");
+            edge.TargetBuildMvid.Should().BeNull("A's code is compiled INTO B — there is no separate A build");
+            edges.IncludedWithoutUse.Should().BeEmpty("A is bound, so it is an edge, not a bare inclusion");
+
+            // The build identity is the emitted assembly's own MVID, read independently here.
+            edges.BuildMvid.Should().Be(MvidOf(compiled.DllPath),
+                "the edge set names the bytes it was read from, so a stale set can be told from a current one");
+            edges.InputDigest.Should().NotBeNullOrEmpty();
+        }
+        finally
+        {
+            try { Directory.Delete(output, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void NegativeControl_BIncludesAButNeverBindsIt_HasNoEdge_AndNamesTheInclusion()
+    {
+        var edges = CompileB(
+            [AThing(), Code(B, "Standalone", """
+                /// <summary>B's own code, binding nothing of A's.</summary>
+                public static class Standalone
+                {
+                    /// <summary>Forty-two.</summary>
+                    public static int Answer() => 42;
+                }
+                """)],
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().BeEmpty(
+            "A's code was compiled in, but nothing B owns binds it — an inclusion is a declared source "
+            + "query, an edge is what Roslyn bound");
+        edges.IncludedWithoutUse.Should().Equal([A]);
+        edges.BuildMvid.Should().NotBeNullOrEmpty("an EMPTY set is still an extracted set for a named build");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void NegativeControl_BWithoutAnyForeignCode_HasNoEdgeAndNoInclusion()
+    {
+        var edges = CompileB(
+            [AThing(), Code(B, "Standalone", """
+                /// <summary>B's own code.</summary>
+                public record Standalone(int Value);
+                """)],
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().BeEmpty();
+        edges.IncludedWithoutUse.Should().BeEmpty("B's default source query never reaches A");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AForeignOwnersOwnReference_IsThatOwnersEdge_NotTheCompilingTypes()
+    {
+        // B compiles A's and C's code in; A's code binds C's type, B's own code binds only A's.
+        var edges = CompileB(
+            [
+                CThing(),
+                Code(A, "AThing", """
+                    /// <summary>A type owned by Lib/A that binds Lib/C.</summary>
+                    public record AThing(CThing Inner, int Count);
+                    """),
+                Code(B, "UsesA", """
+                    /// <summary>B's own code, binding only A's type.</summary>
+                    public static class UsesA
+                    {
+                        /// <summary>The count.</summary>
+                        public static int Count(AThing a) => a.Count;
+                    }
+                    """),
+            ],
+            ["namespace:Source scope:subtree", $"shared=@{A}/Source", $"shared=@{C}/Source"],
+            TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Select(e => e.Target).Should().Equal([A],
+            "A → C is A's edge, recorded by A's own compile; the closure joins B → A → C. B's own "
+            + "code binds only A's members, so C is compiled in but never bound by B");
+        edges.IncludedWithoutUse.Should().Equal([C]);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AnIncludedSnippet_IsAttributedToTheIncludedNodesOwner()
+    {
+        var edges = CompileB(
+            [AThing(), Code(B, "UsesA", """
+                @@Lib/A/Source/AThing
+                /// <summary>B's own code, binding the included type.</summary>
+                public static class UsesA
+                {
+                    /// <summary>One.</summary>
+                    public static AThing One() => new(1);
+                }
+                """)],
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A,
+            "the snippet's text was spliced into B's file, but the INCLUDED node is A's");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AUsedModule_IsAModuleEdgeWithItsMvid_AndAnUnusedOneIsNot()
+    {
+        var used = EmitModule("DepGraphProbeModuleUsed", """
+            namespace DepGraphProbe.Used;
+            /// <summary>A type a NodeType binds.</summary>
+            public sealed class Widget { /// <summary>Its name.</summary>
+            public string Name => "w"; }
+            """);
+        var unused = EmitModule("DepGraphProbeModuleUnused", """
+            namespace DepGraphProbe.Unused;
+            /// <summary>A type no NodeType binds.</summary>
+            public sealed class Gadget { }
+            """);
+        try
+        {
+            var edges = CompileB(
+                [Code(B, "UsesModule", """
+                    /// <summary>B's own code, binding a module type.</summary>
+                    public static class UsesModule
+                    {
+                        /// <summary>The widget's name.</summary>
+                        public static string Name() => new DepGraphProbe.Used.Widget().Name;
+                    }
+                    """)],
+                sources: null, TestContext.Current.CancellationToken,
+                references: [.. CompileReferences.Default,
+                    MetadataReference.CreateFromFile(used), MetadataReference.CreateFromFile(unused)]).DependencyEdges!;
+
+            var module = edges.Edges.Should().ContainSingle(
+                "the unused module is referenced but never bound — GetUsedAssemblyReferences prunes it").Which;
+            module.Kind.Should().Be(DependencyEdgeKinds.Module);
+            module.Target.Should().Be("DepGraphProbeModuleUsed");
+            module.TargetBuildMvid.Should().Be(MvidOf(used), "a module edge names the module build it compiled against");
+        }
+        finally
+        {
+            foreach (var file in new[] { used, unused })
+                try { Directory.Delete(Path.GetDirectoryName(file)!, recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    [Fact]
+    public void DeclaredTypeNames_SpellNestedGenericAndNamespacedTypesAsTheBoundSymbolDoes()
+    {
+        const string code = """
+            namespace Outer.Inner
+            {
+                public class Box<T> { public class Lid { } }
+                public delegate void Handler<T1, T2>(T1 a, T2 b);
+                public enum Colour { Red }
+            }
+            public record Top;
+            """;
+        var tree = CSharpSyntaxTree.ParseText(code);
+        var declared = DependencyEdgeExtraction.DeclaredTypeNames(tree.GetRoot()).ToImmutableSortedSet(StringComparer.Ordinal);
+
+        var compilation = CSharpCompilation.Create("probe", [tree], CompileReferences.Default);
+        var bound = compilation.SyntaxTrees.SelectMany(t => t.GetRoot().DescendantNodes())
+            .Select(n => compilation.GetSemanticModel(n.SyntaxTree).GetDeclaredSymbol(n))
+            .OfType<INamedTypeSymbol>()
+            .Select(DependencyEdgeExtraction.MetadataNameOf)
+            .ToImmutableSortedSet(StringComparer.Ordinal);
+
+        declared.Should().Equal(bound, "attribution matches a parse-time name to a bind-time name — they must be spelled alike");
+        declared.Should().Contain(["Outer.Inner.Box`1", "Outer.Inner.Box`1+Lid", "Outer.Inner.Handler`2", "Outer.Inner.Colour", "Top"]);
+    }
+
+    [Theory]
+    [InlineData("Lib/A/Source/AThing", "Lib/A")]
+    [InlineData("Lib/A/Test/AThingTest", "Lib/A")]
+    [InlineData("Lib/A/Source/Deep/Nested", "Lib/A")]
+    [InlineData("Lib/Common/Helpers", null)]
+    [InlineData("Source/Top", null)]
+    public void OwnerOfCodePath_IsEverythingBeforeTheFirstSourceOrTestSegment(string path, string? owner) =>
+        CodeConventions.OwnerOfCodePath(path).Should().Be(owner);
+
+    private static string MvidOf(string dllPath)
+    {
+        using var stream = File.OpenRead(dllPath);
+        using var pe = new PEReader(stream);
+        var reader = pe.GetMetadataReader();
+        return reader.GetGuid(reader.GetModuleDefinition().Mvid).ToString("N");
+    }
+
+    /// <summary>Emits a small module assembly to its own temp directory and returns its path.</summary>
+    private static string EmitModule(string name, string code)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "mw-depedges-module-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, name + ".dll");
+        var result = CSharpCompilation.Create(name, [CSharpSyntaxTree.ParseText(code)], CompileReferences.Default,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
+            .Emit(path, cancellationToken: TestContext.Current.CancellationToken);
+        result.Success.Should().BeTrue(string.Join("\n", result.Diagnostics));
+        return path;
+    }
+}

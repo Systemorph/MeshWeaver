@@ -81,6 +81,9 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Security.User), nameof(MeshWeaver.Mesh.Security.User));
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), typeof(MeshWeaver.Mesh.Activity.UserActivityRecord).FullName!);
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Activity.UserActivityRecord), nameof(MeshWeaver.Mesh.Activity.UserActivityRecord));
+        // The forward dependency edge set a NodeType compile writes (Doc/Architecture/DependencyGraph)
+        // — registered in the core registry so the write's $type resolves on every hub that reads it.
+        config.TypeRegistry.WithType(typeof(DependencyEdgeSet), nameof(DependencyEdgeSet));
         config.TypeRegistry.WithType(typeof(CreateNodeRequest), nameof(CreateNodeRequest));
         config.TypeRegistry.WithType(typeof(CreateNodeResponse), nameof(CreateNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeCreationRejectionReason), nameof(NodeCreationRejectionReason));

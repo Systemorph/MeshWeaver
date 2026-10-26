@@ -5758,9 +5758,20 @@ internal static class NodeTypeCompilationHelpers
                     })
                     .Select(_ => Unit.Default);
 
+                    // The forward dependency edges this compile read (Doc/Architecture/DependencyGraph)
+                    // are written AFTER the stamp lands, from the settle hub — only for a build that
+                    // succeeded and actually ran Roslyn here (a cache hit carries none and leaves the
+                    // stored set, which names its own build, untouched).
+                    // Inside the same publication gate as the stamp: a process whose validation is
+                    // still forming, or failed, writes neither.
+                    var dependencyEdges = ok ? outcome.Result?.DependencyEdges : null;
+                    IObservable<Unit> StampThenEdges() =>
+                        StampCompileState().Concat(Observable.Defer(() => dependencyEdges is null
+                            ? Observable.Empty<Unit>()
+                            : DependencyEdgeSetWriter.Write(SettleHub(), dependencyEdges, logger)));
                     (admission is null
-                            ? Observable.Defer(StampCompileState)
-                            : admission.Publish($"NodeType compile stamp for {hubPath}", StampCompileState))
+                            ? Observable.Defer(StampThenEdges)
+                            : admission.Publish($"NodeType compile stamp for {hubPath}", StampThenEdges))
                         .Subscribe(
                             _ => { },
                             ex => logger?.LogWarning(ex,
