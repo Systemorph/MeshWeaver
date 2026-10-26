@@ -1,5 +1,5 @@
 {
-  "$comment": "Whether the platform's estate runs STANDING BUILD HOSTS (Doc/Architecture/BuildHosts; MeshWeaver.Plugins Hosting/StandingBuildHosts), and which channels core's CD rolls onto the set it arms (`main-cd.yml` job `build-host-latest`, `build-host-announcement.py`). The hosts live on the operations record `.github/control-instance.json` names. While `enabled` is false the CD job sends NOTHING; the receiver guards the same fact again (it changes a record only when that record's `buildHosts.enabled` is true). Turning it on is two acts in this order: the record's `buildHosts` block (through its approval path), then `enabled: true` here.",
-  "enabled": false,
+  "$comment": "Whether the platform's estate runs STANDING BUILD HOSTS (Doc/Architecture/BuildHosts; MeshWeaver.Plugins Hosting/StandingBuildHosts), and which channels core's CD rolls onto the set it arms (`main-cd.yml` job `build-host-latest`, `build-host-announcement.py`). The hosts live on the operations record `.github/control-instance.json` names. While `enabled` is false the CD job sends NOTHING; the receiver guards the same fact again (it changes a record only when that record's `buildHosts.enabled` is true). Turning it on is two acts in this order: the record's `buildHosts` block (through its approval path), then `enabled: true` here. Turned on 2026-10-26: the operations record (Systemorph/Memex mesh/Deployments/control.json) declares buildHosts.enabled with the `latest` channel, so the first act is done.",
+  "enabled": true,
   "channels": ["latest"]
 }
