@@ -3,13 +3,14 @@
 
     check-bundle-static-assets.py --module MeshWeaver.Blazor.OpenStreetMap \\
         --project src/MeshWeaver.Blazor.OpenStreetMap/MeshWeaver.Blazor.OpenStreetMap.csproj \\
-        --manifest $RUNNER_TEMP/inspect-<Module>/meshweaver/manifest.json
+        --manifest $RUNNER_TEMP/inspect-<Module>/meshweaver/manifest.json \\
+        --build-output <the directory the module was built/published into>
     exit 0 = every implied asset is declared (the denominator is printed either way)
     exit 1 = at least one is missing, named, with what implies it
 
 🚨 WHY THIS EXISTS (Systemorph/MeshWeaver#2384). The lane's previous assertion was
 
-    jq -e '(.module.staticAssets // []) | length > 0'   # …and only if the project has wwwroot/ or *.razor.css
+    jq -e '(.module.staticAssets // []) | length > 0'   # …and only if the project had wwwroot/ or scoped CSS
 
 and it is two different kinds of blind at once:
 
@@ -23,23 +24,24 @@ and it is two different kinds of blind at once:
   surface is one collocated `.razor.js`, and it 404'd unexamined. A gate that asks about a
   different input than the one that breaks is not a weak gate; it is an absent one.
 
-🚨 WHAT IT COMPARES. The bundle's declared `module.staticAssets` against the asset set the PROJECT
-SOURCE TREE implies — the three kinds the Razor SDK produces, each at the path `dotnet publish`
-lays it at (measured against SDK 10.0.400, 2026-09-15):
+🚨 WHAT IT COMPARES. The bundle's declared `module.staticAssets` against the asset set the module
+OWES, from two sources, each at the path `dotnet publish` lays it at:
 
-1. `wwwroot/**`, verbatim                          → `wwwroot/<relative>`
-2. a collocated `Foo.razor.js` beside `Foo.razor`  → `wwwroot/<path relative to the project>`
-3. the CSS-isolation aggregate, when the project has any `*.razor.css`
-                                                   → `wwwroot/<Module>.styles.css`
+1. `wwwroot/**` of the PROJECT source tree, verbatim   → `wwwroot/<relative>`
+2. every file the BUILD emitted under its output's `wwwroot/` (`--build-output`): the assets a
+   build extension's inputs imply — e.g. a GUI extension's collocated JS modules or CSS-isolation
+   aggregate — which exist in no source tree at the path they are served from.
+                                                       → `wwwroot/<relative>`
+
+The platform encodes NO source kind's conventions here. Which assets an extension-compiled source
+file implies is the EXTENSION's knowledge: it emits them, it refuses at
+BUILD time an input whose asset cannot be produced, and its own repository tests that. What this
+gate owns is the step after: the bundle must declare every asset the tree holds and the build
+emitted, because a pack that drops one ships a 404 with every other gate green.
 
 CONTAINMENT, never equality: an SDK-lane publish also materialises the module's DEPENDENCIES'
-assets under `wwwroot/_content/<Dep>/…` and precompressed `.br`/`.gz` siblings, and a bundle
-declaring more than its own tree implies is correct.
-
-🚨 AN UNPAIRED `*.razor.js` IS NOT EXPECTED — and that is not a loophole. The SDK refuses it
-(`BLAZOR106`, an error, measured to fire for a file under `wwwroot/` as well), and so does
-`ProjectBuild.EmitJsModules`; demanding a file no producer will ever emit would make this gate red
-on a project whose real defect is a rename. The build is where that case fails, by name.
+assets under `wwwroot/_content/<Dep>/…` and precompressed `.br`/`.gz` siblings; those are neither
+demanded from the build output nor refused when declared.
 
 🚨 IT RUNS FOR BOTH LANES AND HAS NO PRECONDITION. The property is about the BUNDLE, not about
 which compiler produced it. A project that implies nothing prints `0 expected` and passes — that
@@ -72,19 +74,13 @@ def _property_is_false(text: str, name: str) -> bool:
     return re.search(rf"<{name}\s*>\s*false\s*</{name}\s*>", text, re.IGNORECASE) is not None
 
 
-def expected_assets(project: Path, module: str) -> dict[str, str]:
-    """The asset set the project tree implies, as {bundle path: why it is implied}.
+def expected_assets(project: Path, module: str, build_output: Path | None = None) -> dict[str, str]:
+    """The asset set the module owes, as {bundle path: why it is owed}.
 
-    🚨 Two MSBuild properties would make this walk WRONG rather than merely coarse, so each is
-    read and handled exactly:
-
-    * ``EnableDefaultItems`` / ``EnableDefaultContentItems`` = false means the project lists its
-      own items, and a file on disk no longer implies an asset. This script is not an MSBuild
-      evaluator, so it REFUSES rather than over- or under-stating the set — fail closed. (Measured
-      2026-09-15: no project in MeshWeaver or MeshWeaver.Plugins sets either, so this costs the
-      fleet nothing today and cannot silently start guessing tomorrow.)
-    * ``ScopedCssEnabled`` = false means the SDK emits no ``.styles.css`` aggregate, so neither
-      does this gate expect one.
+    🚨 ``EnableDefaultItems`` / ``EnableDefaultContentItems`` = false means the project lists its
+    own items, and a file on disk no longer implies an asset. This script is not an MSBuild
+    evaluator, so it REFUSES rather than over- or under-stating the set — fail closed. (Measured
+    2026-09-15: no project in MeshWeaver or MeshWeaver.Plugins sets either.)
     """
     directory = project.parent
     project_text = project.read_text(encoding="utf-8", errors="replace")
@@ -95,7 +91,6 @@ def expected_assets(project: Path, module: str) -> dict[str, str]:
                 "implies a project item and this gate cannot state what the bundle owes. It "
                 "refuses rather than guessing in either direction — teach it the project's own "
                 "item declarations, or do not disable the glob.")
-    scoped_css_enabled = not _property_is_false(project_text, "ScopedCssEnabled")
     implied: dict[str, str] = {}
 
     wwwroot = directory / "wwwroot"
@@ -108,28 +103,24 @@ def expected_assets(project: Path, module: str) -> dict[str, str]:
                 continue
             implied[f"wwwroot/{relative.as_posix()}"] = f"wwwroot/{relative.as_posix()} in the source tree"
 
-    # Kind 2 — collocated JS modules, PAIRED. A file already under wwwroot/ was counted above.
-    for suffix in (".razor.js", ".cshtml.js"):
-        for file in sorted(directory.rglob(f"*{suffix}")):
-            if not file.is_file():
-                continue
-            relative = file.relative_to(directory)
-            if _skip(relative) or relative.parts[0] == "wwwroot":
-                continue
-            component = file.with_name(file.name[: -len(".js")])
-            if not component.is_file():
-                # BLAZOR106 territory — the build refuses it; this gate must not demand it.
-                continue
-            implied[f"wwwroot/{relative.as_posix()}"] = (
-                f"{relative.as_posix()} is collocated with {component.name}")
-
-    # Kind 3 — the CSS-isolation aggregate, if and only if the project has scoped CSS.
-    for file in directory.rglob("*.razor.css") if scoped_css_enabled else []:
-        if file.is_file() and not _skip(file.relative_to(directory)):
-            implied[f"wwwroot/{module}.styles.css"] = (
-                f"the project has scoped CSS ({file.relative_to(directory).as_posix()}), so the SDK "
-                "emits a .styles.css aggregate")
-            break
+    # Kind 2 — what the BUILD emitted (a build extension's assets). Its dependencies' _content and
+    # the precompressed siblings an SDK publish adds are not the module's own assets.
+    if build_output is not None:
+        if not build_output.is_dir():
+            raise CannotCompute(
+                f"the build output {build_output} does not exist, so the assets the build emitted "
+                "cannot be compared with the bundle — refusing rather than reading 'no build "
+                "output' as 'nothing emitted'.")
+        built = build_output / "wwwroot"
+        if built.is_dir():
+            for file in sorted(built.rglob("*")):
+                if not file.is_file():
+                    continue
+                relative = file.relative_to(built)
+                if relative.parts[0] == "_content" or file.suffix in (".br", ".gz"):
+                    continue
+                key = f"wwwroot/{relative.as_posix()}"
+                implied.setdefault(key, f"{key} was emitted by the build ({built})")
 
     return implied
 
@@ -173,9 +164,10 @@ def declared_assets(manifest: Path) -> list[str]:
     return list(assets)
 
 
-def check(module: str, project: Path, manifest: Path, *, out=sys.stdout) -> int:
+def check(module: str, project: Path, manifest: Path, *, build_output: Path | None = None,
+          out=sys.stdout) -> int:
     try:
-        implied = expected_assets(project, module)
+        implied = expected_assets(project, module, build_output)
     except CannotCompute as refusal:
         print(f"::error::{module}: {refusal}", file=out)
         return 1
@@ -193,12 +185,10 @@ def check(module: str, project: Path, manifest: Path, *, out=sys.stdout) -> int:
     have = set(declared)
     missing = {path: why for path, why in sorted(implied.items()) if path not in have}
 
-    js_modules = sum(1 for p in implied if p.endswith((".razor.js", ".cshtml.js")))
-    aggregate = 1 if f"wwwroot/{module}.styles.css" in implied else 0
+    built = sum(1 for why in implied.values() if "emitted by the build" in why)
     print(
-        f"{module}: {len(implied)} asset(s) implied by the source tree "
-        f"({len(implied) - js_modules - aggregate} wwwroot file(s), {js_modules} collocated JS "
-        f"module(s), {aggregate} scoped-CSS aggregate), {len(declared)} declared by the bundle, "
+        f"{module}: {len(implied)} asset(s) owed ({len(implied) - built} wwwroot file(s) in the "
+        f"source tree, {built} emitted by the build), {len(declared)} declared by the bundle, "
         f"{len(missing)} missing",
         file=out)
 
@@ -211,18 +201,9 @@ def check(module: str, project: Path, manifest: Path, *, out=sys.stdout) -> int:
               "asking for it gets a 404 and the view that imports it renders nothing, with the "
               "publish, the landing and the module load all green (Systemorph/MeshWeaver#2384).",
               file=out)
-    print(f"::error::{module}: {len(missing)} of {len(implied)} implied static asset(s) are absent "
+    print(f"::error::{module}: {len(missing)} of {len(implied)} owed static asset(s) are absent "
           "from the bundle. A COUNT cannot see this — the other assets are present, which is "
           "exactly how it shipped.", file=out)
-    if any(path.endswith((".razor.js", ".cshtml.js")) for path in missing):
-        # 🚨 The one red whose cause is NOT in the diff in front of you. This is a TRUE failure —
-        # the bundle really would 404 — and it clears itself, so it is named rather than softened.
-        print(f"::error::{module}: the missing asset(s) are collocated JS modules. On the "
-              "`container` lane the emitter is `mw-plugin-test` INSIDE THE PINNED PLATFORM IMAGE, "
-              "not a script this lane fetches — so a lane still pinned to an image built before "
-              "MeshWeaver#2384 reds here with nothing wrong in its own diff. The fix is to move "
-              "this lane's platform set to one carrying that builder; the bundle it is producing "
-              "right now genuinely 404s the file, so this must not be waved through.", file=out)
     return 1
 
 
@@ -244,69 +225,51 @@ def _manifest(root: Path, module: str, assets: list[str] | None) -> Path:
     return path
 
 
-#: The real packs, at the shapes that produced #2384. OSM is why a COUNT passed; AppleMaps is why
-#: the PRECONDITION skipped; GoogleMaps has a .razor.css and no wwwroot, so it satisfied the
-#: precondition with the aggregate alone while its map JS was missing.
-_OSM = {
-    "Osm.csproj": "<Project/>",
-    "wwwroot/leaflet/leaflet.css": ".l{}",
-    "wwwroot/leaflet/leaflet-src.esm.js": "//l",
-    "OpenStreetMapView.razor": "<div/>",
-    "OpenStreetMapView.razor.js": "export function i(){}",
-}
-_APPLE = {
-    "Apple.csproj": "<Project/>",
-    "AppleMapView.razor": "<div/>",
-    "AppleMapView.razor.js": "export function i(){}",
-}
-_GOOGLE = {
-    "Google.csproj": "<Project/>",
-    "GoogleMapView.razor": "<div/>",
-    "GoogleMapView.razor.css": ".g{}",
-    "GoogleMapView.razor.js": "export function i(){}",
-}
+#: The real packs, at the shapes that produced #2384, as source tree + what the build emitted.
+#: OSM is why a COUNT passed (vendored wwwroot files present, the view's own module absent);
+#: AppleMaps is why the PRECONDITION skipped (no wwwroot at all — its one asset exists only in the
+#: build output).
+_OSM_TREE = {"Osm.csproj": "<Project/>", "wwwroot/leaflet/leaflet.css": ".l{}",
+             "wwwroot/leaflet/leaflet-src.esm.js": "//l"}
+_OSM_BUILT = {"wwwroot/leaflet/leaflet.css": ".l{}", "wwwroot/leaflet/leaflet-src.esm.js": "//l",
+              "wwwroot/OpenStreetMapView.module.js": "export function i(){}"}
+_APPLE_TREE = {"Apple.csproj": "<Project/>", "AppleMapView.cs": "class A{}"}
+_APPLE_BUILT = {"wwwroot/AppleMapView.module.js": "export function i(){}",
+                "wwwroot/Apple.styles.css": ".a{}"}
 
-_CASES: list[tuple[str, dict[str, str], list[str] | None, int, str]] = [
-    # (name, source tree, declared staticAssets, expected exit, a string the output must contain)
-    ("OSM pre-fix — 7 wwwroot files present, the view's own JS absent",
-     _OSM, ["wwwroot/leaflet/leaflet.css", "wwwroot/leaflet/leaflet-src.esm.js"], 1,
-     "OpenStreetMapView.razor.js"),
-    ("OSM fixed — the collocated JS is declared",
-     _OSM, ["wwwroot/leaflet/leaflet.css", "wwwroot/leaflet/leaflet-src.esm.js",
-            "wwwroot/OpenStreetMapView.razor.js"], 0, "0 missing"),
-    ("AppleMaps pre-fix — no wwwroot, no scoped CSS, staticAssets null (the SKIPPED case)",
-     _APPLE, None, 1, "AppleMapView.razor.js"),
+_CASES: list[tuple[str, dict[str, str], dict[str, str] | None, list[str] | None, int, str]] = [
+    # (name, source tree, build output (None = not given), declared staticAssets, exit, needle)
+    ("OSM pre-fix — the tree's files present, the build-emitted module absent",
+     _OSM_TREE, _OSM_BUILT, ["wwwroot/leaflet/leaflet.css", "wwwroot/leaflet/leaflet-src.esm.js"], 1,
+     "OpenStreetMapView.module.js"),
+    ("OSM fixed — the build-emitted module is declared",
+     _OSM_TREE, _OSM_BUILT, ["wwwroot/leaflet/leaflet.css", "wwwroot/leaflet/leaflet-src.esm.js",
+                             "wwwroot/OpenStreetMapView.module.js"], 0, "0 missing"),
+    ("AppleMaps pre-fix — no wwwroot in the tree, staticAssets null (the SKIPPED case)",
+     _APPLE_TREE, _APPLE_BUILT, None, 1, "AppleMapView.module.js"),
     ("AppleMaps fixed",
-     _APPLE, ["wwwroot/AppleMapView.razor.js"], 0, "1 collocated JS module(s)"),
-    ("GoogleMaps pre-fix — the aggregate satisfied the old count, the JS was still absent",
-     _GOOGLE, ["wwwroot/Google.styles.css"], 1, "GoogleMapView.razor.js"),
-    ("GoogleMaps fixed",
-     _GOOGLE, ["wwwroot/Google.styles.css", "wwwroot/GoogleMapView.razor.js"], 0, "0 missing"),
-    ("#2221's half — scoped CSS present, the aggregate not declared",
-     _GOOGLE, ["wwwroot/GoogleMapView.razor.js"], 1, "Google.styles.css"),
-    ("a wwwroot file dropped from the bundle",
-     _OSM, ["wwwroot/leaflet/leaflet.css", "wwwroot/OpenStreetMapView.razor.js"], 1,
+     _APPLE_TREE, _APPLE_BUILT, ["wwwroot/AppleMapView.module.js", "wwwroot/Apple.styles.css"], 0,
+     "2 emitted by the build"),
+    ("#2221's half — the build emitted a stylesheet aggregate the bundle does not declare",
+     _APPLE_TREE, _APPLE_BUILT, ["wwwroot/AppleMapView.module.js"], 1, "Apple.styles.css"),
+    ("a source-tree wwwroot file dropped from the bundle",
+     _OSM_TREE, _OSM_BUILT, ["wwwroot/leaflet/leaflet.css", "wwwroot/OpenStreetMapView.module.js"], 1,
      "leaflet-src.esm.js"),
     ("a module with no assets at all — a STATED zero, not a skip",
-     {"Plain.csproj": "<Project/>", "Thing.cs": "class T{}"}, None, 0, "0 asset(s) implied"),
-    ("an UNPAIRED *.razor.js is not demanded — the build refuses it by name instead",
-     {"Orphan.csproj": "<Project/>", "Stranded.razor.js": "export function s(){}"}, None, 0,
-     "0 asset(s) implied"),
-    ("an SDK-lane bundle declaring MORE than the tree implies (deps' _content, .br/.gz) passes",
-     _APPLE, ["wwwroot/AppleMapView.razor.js", "wwwroot/AppleMapView.razor.js.br",
-              "wwwroot/_content/MeshWeaver.Blazor/x.css"], 0, "0 missing"),
-    ("ScopedCssEnabled=false — the SDK emits no aggregate, so neither is one demanded",
-     {"NoCss.csproj": "<Project><PropertyGroup><ScopedCssEnabled>false</ScopedCssEnabled></PropertyGroup></Project>",
-      "V.razor": "<div/>", "V.razor.css": ".v{}", "V.razor.js": "export function v(){}"},
-     ["wwwroot/V.razor.js"], 0, "0 scoped-CSS aggregate"),
+     {"Plain.csproj": "<Project/>", "Thing.cs": "class T{}"}, {}, None, 0, "0 asset(s) owed"),
+    ("no build output given — only the source tree is owed (negative control of the build kind)",
+     _APPLE_TREE, None, None, 0, "0 emitted by the build"),
+    ("an SDK-lane bundle declaring MORE than owed (deps' _content, .br/.gz) passes, and those are not demanded",
+     _APPLE_TREE, {**_APPLE_BUILT, "wwwroot/_content/MeshWeaver.Dep/x.css": "//",
+                   "wwwroot/Apple.styles.css.br": "//"},
+     ["wwwroot/AppleMapView.module.js", "wwwroot/Apple.styles.css", "wwwroot/AppleMapView.module.js.br",
+      "wwwroot/_content/MeshWeaver.Dep/x.css"], 0, "0 missing"),
     ("EnableDefaultItems=false — the walk would be a guess, so the gate REFUSES",
      {"NoGlob.csproj": "<Project><PropertyGroup><EnableDefaultItems>false</EnableDefaultItems></PropertyGroup></Project>",
-      "V.razor": "<div/>", "V.razor.js": "export function v(){}"},
-     ["wwwroot/V.razor.js"], 1, "cannot state what the bundle owes"),
-    ("build residue is never an asset",
-     {"Res.csproj": "<Project/>", "V.razor": "<div/>", "V.razor.js": "export function v(){}",
-      "obj/Release/Ghost.razor.js": "//", "bin/Release/wwwroot/Ghost.css": "//"},
-     ["wwwroot/V.razor.js"], 0, "1 asset(s) implied"),
+      "wwwroot/x.js": "//"}, {}, ["wwwroot/x.js"], 1, "cannot state what the bundle owes"),
+    ("build residue in the source tree is never an asset",
+     {"Res.csproj": "<Project/>", "wwwroot/site.css": ".s{}", "obj/Release/Ghost.js": "//",
+      "bin/Release/wwwroot/Ghost.css": "//"}, {}, ["wwwroot/site.css"], 0, "1 asset(s) owed"),
 ]
 
 
@@ -314,15 +277,17 @@ def self_test() -> int:
     import io
 
     failures = 0
-    for index, (title, files, declared, want_exit, needle) in enumerate(_CASES):
+    for index, (title, files, built, declared, want_exit, needle) in enumerate(_CASES):
         with tempfile.TemporaryDirectory() as raw:
             root = _tree(Path(raw) / "proj", files)
             project = next(root.glob("*.csproj"))
-            module = {"Osm": "OpenStreetMap", "Apple": "Apple", "Google": "Google",
-                      "Plain": "Plain", "Orphan": "Orphan", "Res": "Res",
-                      "NoCss": "NoCss", "NoGlob": "NoGlob"}[project.stem]
+            module = project.stem
+            build_output = _tree(Path(raw) / "out", built) if built is not None else None
+            if build_output is not None:
+                build_output.mkdir(parents=True, exist_ok=True)
             buffer = io.StringIO()
-            got = check(module, project, _manifest(Path(raw), module, declared), out=buffer)
+            got = check(module, project, _manifest(Path(raw), module, declared),
+                        build_output=build_output, out=buffer)
             output = buffer.getvalue()
             problems = []
             if got != want_exit:
@@ -335,6 +300,18 @@ def self_test() -> int:
             else:
                 print(f"  ok    [{index}] {title}")
 
+    # A named build output that does not exist is a refusal, never "nothing emitted".
+    with tempfile.TemporaryDirectory() as raw:
+        root = _tree(Path(raw) / "proj", {"Gone.csproj": "<Project/>"})
+        buffer = io.StringIO()
+        got = check("Gone", next(root.glob("*.csproj")), _manifest(Path(raw), "Gone", None),
+                    build_output=Path(raw) / "no-such-output", out=buffer)
+        if got != 1 or "does not exist" not in buffer.getvalue():
+            failures += 1
+            print(f"  FAIL  [out] a missing build output must refuse: exit {got}, {buffer.getvalue()!r}")
+        else:
+            print("  ok    [out] a missing build output REFUSES instead of reading as 'nothing emitted'")
+
     # ── the manifest READER, which the table above cannot reach ────────────────────────────
     # Every case above writes its manifest with this file's own helper, so none of them can
     # see how a manifest written by SOMEONE ELSE decodes. These two do.
@@ -345,7 +322,7 @@ def self_test() -> int:
                  "plugin": "P", "version": "1.0.0",
                  "module": {"assemblyName": "Plain", "staticAssets": []},
              }).encode("utf-8")),
-         0, "0 asset(s) implied"),
+         0, "0 asset(s) owed"),
         ("a manifest that is not JSON REFUSES by name instead of raising",
          lambda path: path.write_text("{ not json", encoding="utf-8"),
          1, "the bundle manifest could not be read"),
@@ -376,9 +353,9 @@ def self_test() -> int:
             else:
                 print(f"  ok    [bom] {title}")
 
-    total = len(_CASES) + len(reader_cases)
-    fires = sum(1 for case in _CASES if case[3] == 1) + sum(1 for case in reader_cases if case[2] == 1)
-    print(f"\n{total} case(s) — {len(_CASES)} asset-shape + {len(reader_cases)} manifest-reader: "
+    total = len(_CASES) + len(reader_cases) + 1
+    fires = sum(1 for case in _CASES if case[4] == 1) + sum(1 for case in reader_cases if case[2] == 1) + 1
+    print(f"\n{total} case(s) — {len(_CASES)} asset-shape + {len(reader_cases)} manifest-reader + 1 build-output: "
           f"{fires} must FAIL the gate, {total - fires} must PASS it.")
     if failures:
         print(f"FAILED — {failures} case(s) did not behave as stated")
@@ -393,6 +370,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--module", help="the module's assembly name")
     ap.add_argument("--project", help="path to the module project's .csproj")
     ap.add_argument("--manifest", help="path to the packed bundle's meshweaver/manifest.json")
+    ap.add_argument("--build-output",
+                    help="the directory the module was built or published into; every file under "
+                         "its wwwroot/ is owed by the bundle")
     ap.add_argument("--self-test", action="store_true",
                     help="prove the gate fires and stays silent on the right inputs")
     args = ap.parse_args(argv)
@@ -413,7 +393,8 @@ def main(argv: list[str]) -> int:
     if not manifest.is_file():
         print(f"::error::{args.module}: no bundle manifest at {manifest}.", file=sys.stderr)
         return 1
-    return check(args.module, project, manifest)
+    return check(args.module, project, manifest,
+                 build_output=Path(args.build_output) if args.build_output else None)
 
 
 if __name__ == "__main__":

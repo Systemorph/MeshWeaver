@@ -658,6 +658,13 @@ column — it redistributes it.
 
 ## The container compiles Razor (2026-08-31)
 
+> **Since moved.** Everything below describes how the platform's tester compiled Razor when it
+> carried that support itself. Razor is now a build extension MeshWeaver.Plugins supplies
+> (`src/MeshWeaver.PluginTester.Razor`, passed to the module lane as `build-extensions-project`);
+> the platform ships no Razor generator and no `stage-razor-generators.py`. See
+> [Core Carries No GUI Technology](../CoreCarriesNoGuiTechnology). The measurements stay as the
+> record of why the extension is built the way it is.
+
 Razor was the biggest single category above, and it was one missing file rather than a missing
 feature: **Razor compilation in the .NET SDK is a Roslyn source generator**
 (`Microsoft.CodeAnalysis.Razor.Compiler`) that turns each `.razor` into the partial class carrying

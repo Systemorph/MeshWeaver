@@ -16,7 +16,7 @@
        the SDK path smuggled it inside per-bundle closures.
 
        Staged into the tester image as module-libs/ beside the builder by the plugin-test-image
-       CD job (the same handover pattern as razor-generators/ and sdk-generators/); a dev build
+       CD job (the same handover pattern as sdk-generators/); a dev build
        without the staging simply has no shelf, and a shelf-needing module then fails BY NAME
        exactly as before. -->
   <PropertyGroup>

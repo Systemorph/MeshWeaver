@@ -12,8 +12,8 @@ public sealed record LoadedBuildExtension(IBuildExtension Extension, string Dire
 
 /// <summary>
 /// Finds and loads the BUILD EXTENSIONS <c>build-project</c> compiles with — the components that know
-/// a source kind the builder itself does not (Razor is the first;
-/// <see href="/Doc/Architecture/CoreCarriesNoGuiTechnology">Core Carries No GUI Technology</see>).
+/// a source kind the builder itself does not, supplied by the repository that owns that kind
+/// (<see href="/Doc/Architecture/CoreCarriesNoGuiTechnology">Core Carries No GUI Technology</see>).
 ///
 /// <para>An extension is a directory holding <see cref="ManifestName"/> (which names its assembly)
 /// beside that assembly and whatever it ships. The standard search is <c>build-extensions/*/</c>
@@ -21,7 +21,7 @@ public sealed record LoadedBuildExtension(IBuildExtension Extension, string Dire
 /// taken from the first.</para>
 ///
 /// <para>🚨 <c>--extensions &lt;dir&gt;</c> REPLACES that search rather than heading it, exactly as
-/// <c>--module-libs</c> and <c>--razor-generators</c> do: an operator who names extensions has made
+/// <c>--module-libs</c> does: an operator who names extensions has made
 /// a choice, and quietly adding the image's own would build with a set nobody asked for. A named
 /// directory that does not exist, or holds no extension, is a failure by name.</para>
 ///
