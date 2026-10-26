@@ -107,6 +107,28 @@ public static class BundleReader
         /// </summary>
         public bool? ModuleVersionPerAssembly { get; init; }
 
+        /// <summary>
+        /// 🚨 MeshWeaver#7181 — <c>true</c> when the PRODUCER states that the package is
+        /// CONTENT-ONLY: its tree holds no NodeType and it declares no runtime module, so a bundle
+        /// with no assemblies is complete as delivered. Content-only packages (harness definitions,
+        /// plans, documentation) are installed through the registry's content path, and a registry
+        /// bundle deliberately carries no node content (<see cref="Content"/> stays null), so
+        /// without this statement their bundle was byte-for-byte the empty archive of a producer
+        /// defect, and every consumer recorded a <c>NoAssemblies</c> miss for it on
+        /// <c>/health</c> → <c>bundle_adoption</c>.
+        ///
+        /// <para>A DECLARATION, never an inference: only the producer, which read the package
+        /// tree, can say there was nothing to compile. A consumer never concludes it from an
+        /// empty archive, and <see cref="DeclaresNothingToAdopt"/> still lets producer
+        /// <see cref="Misses"/> or declared <see cref="Assemblies"/> dominate it. Null/false (an
+        /// older producer, or a package that has NodeTypes) means no such statement was
+        /// made.</para>
+        ///
+        /// <para>An INIT property for the binary-break reason
+        /// <see cref="AssemblyRef.SourceFingerprint"/> states.</para>
+        /// </summary>
+        public bool? ContentOnly { get; init; }
+
         /// <summary>The module version the bytes of <paramref name="reference"/> were built at, as
         /// this manifest states it — per assembly under <see cref="ModuleVersionPerAssembly"/>,
         /// otherwise the bundle's <see cref="Version"/> (MeshWeaver#6831).</summary>
@@ -402,7 +424,8 @@ public static class BundleReader
     /// <summary>
     /// 🚨 THE one rule for a bundle with no NodeType assemblies (#3768, #7015 review): it is a
     /// COMPLETE delivery that names no NodeType only when its manifest lists no assemblies, records
-    /// no producer <see cref="Manifest.Misses"/>, and positively DECLARES a module or content. Every
+    /// no producer <see cref="Manifest.Misses"/>, and positively DECLARES a module, content files,
+    /// or that the package is content-only (<see cref="Manifest.ContentOnly"/>, #7181). Every
     /// other empty bundle — an empty archive, one with misses, or one that declared assemblies none
     /// of which arrived — is a miss. The registry lane (<c>BundleOffering.ClassifyEmpty</c>) and
     /// the shipped-bundle discovery both read this, so the two can never disagree. Pure.
@@ -412,7 +435,9 @@ public static class BundleReader
     {
         if (manifest?.Misses is { Count: > 0 } || manifest?.Assemblies is { Count: > 0 })
             return false;
-        return manifest?.Module?.AssemblyName is { Length: > 0 } || manifest?.Content is { Count: > 0 };
+        return manifest?.Module?.AssemblyName is { Length: > 0 }
+               || manifest?.Content is { Count: > 0 }
+               || manifest?.ContentOnly == true;
     }
 
     /// <summary>
