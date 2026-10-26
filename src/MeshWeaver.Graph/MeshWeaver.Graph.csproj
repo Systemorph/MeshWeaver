@@ -70,12 +70,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Nothing in THIS project calls Humanizer any more. The reference stays because a
-         dependent compiles against it TRANSITIVELY through this project: MeshWeaver.Plugins'
-         MeshWeaver.Graph.Views (CodeViews.cs calls DateTime.Humanize) declares no Humanizer.Core
-         of its own and references only this project. Drop it here only after that dependent
-         declares the package itself. -->
-    <PackageReference Include="Humanizer.Core" />
     <!-- IHostedService consumers (AccessGrantNotifier, EventSubscriptionRunner,
          StartupErrorNotifier) reached this via a TRANSITIVE ref that left with the Azure
          shed — declared explicitly, as a direct use always should be. -->
