@@ -34,6 +34,13 @@ THE KEY
                            null records ABSENCE, which is an input too
           testerDigest, platformDigest, platformRef:  the compiler, the reference set, and the
                            platform source the tests build core from
+          shelf:           ONLY when the caller supplies its own module-libraries shelf
+                           (`--module-libraries-project`): {project, closure: {dir → tree hash} of
+                           the shelf project and every in-repo project it reaches, imports:
+                           {path → sha256 | null} of the MSBuild files it inherits from its own
+                           directory up to the root}. The shelf is a compiler input — its deps.json
+                           decides what a module binds — so a shelf edit must be a new build. Omitted,
+                           the key is byte-identical to a key computed before the shelf existed.
         } )
 
 A `$(MeshWeaverRoot)`-relative ProjectReference is the PLATFORM's and is never an edge here: the
@@ -49,6 +56,7 @@ USAGE
 -----
   module-build-key.py --root REPO --entry '<matrix entry JSON>' --tester-digest T --platform-digest D --platform-ref R
   module-build-key.py --root REPO --modules @matrix.json …      # every entry → JSON list on stdout
+  … --module-libraries-project tools/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj   # + the shelf
   module-build-key.py --self-test
 
 Output: `--entry` prints the key alone (or `--json` for {key, inputs}); `--modules` prints a JSON
@@ -167,6 +175,48 @@ def closure_dirs(root: Path, entry_project: str) -> list[str]:
     return sorted({p.parent.relative_to(root).as_posix() for p in seen})
 
 
+# The MSBuild files a project inherits implicitly from its own directory and every ancestor up to
+# the repository root (the first one found wins in MSBuild; hashing all of them over-keys, never
+# under-keys). Absence of these names is recorded too. Every other `Directory.*.props|targets`
+# beside them is hashed when present, because the implicit ones import split pin files such as
+# `Directory.Packages.Plugins.props`, and a pin there is a shelf input as much as one inline.
+SHELF_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
+
+
+def shelf_inputs(root: Path, project: str) -> dict:
+    """The caller's module-libraries shelf as key inputs: its reference closure and its imports."""
+    root = root.resolve()
+    csproj = (root / project).resolve()
+    if not csproj.is_file():
+        raise ValueError(f"module-libraries-project {project} does not exist under {root} — a shelf "
+                         "that cannot be keyed must not be silently keyed on nothing")
+    seen: set[Path] = set()
+    queue = [csproj]
+    while queue:
+        p = queue.pop()
+        if p in seen:
+            continue
+        seen.add(p)
+        queue.extend(project_references(root, p))
+    dirs = sorted({p.parent.relative_to(root).as_posix() for p in seen})
+    imports: dict[str, str | None] = {}
+    for d in dirs:
+        here = root / d
+        while True:
+            names = set(SHELF_IMPORTS) | {f.name for pattern in ("Directory.*.props", "Directory.*.targets")
+                                          for f in here.glob(pattern) if f.is_file()}
+            for name in sorted(names):
+                rel = (here / name).relative_to(root).as_posix()
+                if rel not in imports:
+                    imports[rel] = file_hash(here / name) if (here / name).is_file() else None
+            if here == root:
+                break
+            here = here.parent
+    return {"project": Path(project).as_posix(),
+            "closure": {d: tree_hash(root, d) for d in dirs},
+            "imports": dict(sorted(imports.items()))}
+
+
 def read_json(path: Path) -> dict | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -211,7 +261,7 @@ def requires_of(index: dict) -> list[str]:
 
 
 def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, platform_ref: str,
-            recipe: str = RECIPE_VERSION) -> dict:
+            recipe: str = RECIPE_VERSION, shelf_project: str = "") -> dict:
     """{key, inputs} for one matrix entry. Raises KeyError-shaped ValueError on an unkeyable entry."""
     package = entry.get("package") or ""
     module = entry.get("module") or ""
@@ -269,6 +319,10 @@ def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, p
         "platformDigest": platform_digest or "",
         "platformRef": platform_ref or "",
     }
+    # Only when set: a caller without its own shelf keys exactly as before, so no recorded build
+    # is thrown away by this input's arrival.
+    if shelf_project:
+        inputs["shelf"] = shelf_inputs(root, shelf_project)
     canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return {"key": sha256_bytes(canonical.encode("utf-8")), "inputs": inputs}
 
@@ -303,6 +357,12 @@ def _fixture(root: Path) -> None:
         (d / "bin").mkdir(exist_ok=True)
         (d / "bin" / "out.dll").write_bytes(b"\x00")
     (root / "src" / "Directory.Build.props").write_text("<Project />\n", encoding="utf-8")
+    for name, refs in (("Acme.ModuleLibraries", ["../Acme.ShelfKit/Acme.ShelfKit.csproj"]),
+                       ("Acme.ShelfKit", [])):
+        d = root / "tools" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{name}.csproj").write_text(_csproj(refs), encoding="utf-8")
+        (d / "Code.cs").write_text(f"// {name}\n", encoding="utf-8")
     (root / "docs").mkdir(exist_ok=True)
     (root / "docs" / "guide.md").write_text("x\n", encoding="utf-8")
 
@@ -407,6 +467,57 @@ def self_test() -> int:
         check("build output (bin/) leaves the key unchanged",
               compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"] == k0)
 
+        print("the caller's module-libraries shelf:")
+        shelf = "tools/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"
+
+        def with_shelf() -> dict:
+            return compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project=shelf)
+
+        s0 = with_shelf()
+        check("no shelf named: the inputs carry no shelf (keys recorded before it stay valid)",
+              "shelf" not in base["inputs"])
+        check("a named shelf changes the key", s0["key"] != k0)
+        check("the shelf closure is the shelf project and what it reaches",
+              sorted(s0["inputs"]["shelf"]["closure"]) == ["tools/Acme.ModuleLibraries", "tools/Acme.ShelfKit"],
+              str(sorted(s0["inputs"]["shelf"]["closure"])))
+        for label, rel, text in (
+                ("the shelf project (a PackageReference added)",
+                 "tools/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj",
+                 '<Project><ItemGroup><PackageReference Include="Radzen.Blazor" /></ItemGroup></Project>\n'),
+                ("a project the shelf reaches", "tools/Acme.ShelfKit/Code.cs", "// changed\n")):
+            mutate, restore = edit(rel, text)
+            mutate()
+            try:
+                k = with_shelf()["key"]
+            finally:
+                restore()
+            check(f"{label} changes the shelf key", k != s0["key"])
+            check(f"{label}: the build key WITHOUT a shelf ignores it",
+                  compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"] == k0)
+        pins = root / "tools" / "Directory.Packages.props"
+        pins.write_text("<Project><ItemGroup><PackageVersion Include=\"Radzen.Blazor\" Version=\"9.0.0\" /></ItemGroup></Project>\n",
+                        encoding="utf-8")
+        try:
+            k = with_shelf()["key"]
+        finally:
+            pins.unlink()
+        check("a package pin the shelf inherits (tools/Directory.Packages.props) changes the shelf key",
+              k != s0["key"])
+        check("…and removing it restores the shelf key", with_shelf()["key"] == s0["key"])
+        split = root / "tools" / "Directory.Packages.Plugins.props"
+        split.write_text("<Project />\n", encoding="utf-8")
+        try:
+            k = with_shelf()["key"]
+        finally:
+            split.unlink()
+        check("a split pin file the shelf's imports pull in (Directory.Packages.Plugins.props) changes the shelf key",
+              k != s0["key"])
+        try:
+            compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project="tools/Nope/Nope.csproj")
+            check("a named shelf that does not exist is refused", False, "no error raised")
+        except ValueError as exc:
+            check("a named shelf that does not exist is refused", "does not exist" in str(exc))
+
         print("refusals:")
         (root / "Alpha" / "manifest.lock").unlink()
         try:
@@ -440,6 +551,8 @@ def main() -> int:
     p.add_argument("--platform-digest", default="")
     p.add_argument("--platform-ref", default="")
     p.add_argument("--recipe-version", default=RECIPE_VERSION, help=argparse.SUPPRESS)
+    p.add_argument("--module-libraries-project", default="",
+                   help="the caller's module-libraries shelf csproj (relative to --root); keyed when set")
     p.add_argument("--json", action="store_true", help="with --entry: print {key, inputs}")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     a = p.parse_args()
@@ -452,7 +565,7 @@ def main() -> int:
     try:
         if a.entry:
             got = compute(root, json.loads(a.entry), a.tester_digest, a.platform_digest, a.platform_ref,
-                          a.recipe_version)
+                          a.recipe_version, a.module_libraries_project)
             print(json.dumps(got, indent=2) if a.json else got["key"])
             return 0
         if a.modules:
@@ -462,7 +575,8 @@ def main() -> int:
             entries = json.loads(raw)
             out = []
             for e in entries:
-                got = compute(root, e, a.tester_digest, a.platform_digest, a.platform_ref, a.recipe_version)
+                got = compute(root, e, a.tester_digest, a.platform_digest, a.platform_ref, a.recipe_version,
+                              a.module_libraries_project)
                 out.append({"package": e.get("package"), "module": e.get("module"),
                             "key": got["key"], "inputs": got["inputs"]})
                 print(f"  {e.get('module')}: {got['key']} (moduleVersion {got['inputs']['moduleVersion']}, "
