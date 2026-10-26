@@ -425,6 +425,44 @@ An **undecidable** read — a shallow fetch missing the merge base, a moved prop
 stopped matching — exits RED naming why, never "nothing was removed": *couldn't tell* and *clean*
 must never be one colour, which is the failure that let #3344 through with every check green.
 
+### The servicing train: a pin nobody here references is a pin nothing here MOVES (#7227)
+
+The eighth shape has a second form that removes nothing. Dependabot updates only the dependencies it
+**discovers in a project file**, so a pin that only the satellites consume is invisible to it. The
+weekly `nuget-minor-patch` sweep #7219 moved eighteen `Microsoft.Extensions.*` pins from 10.0.13 to
+10.0.14 and left four behind: `Options`, `Options.ConfigurationExtensions`,
+`Configuration.EnvironmentVariables` and `FileSystemGlobbing`. No core project references any of
+them. dotnet/runtime ships that family as one servicing train, and every package of patch `n`
+depends on its siblings at `>= n`. A lagging pin is therefore a **downgrade**, not a stale pin:
+
+```
+MeshWeaver.AI.OpenAI -> MeshWeaver.AI -> Microsoft.Extensions.Http 10.0.14 -> Microsoft.Extensions.Options (>= 10.0.14)
+MeshWeaver.AI.OpenAI -> Microsoft.Extensions.Options (>= 10.0.13)                         error NU1605
+```
+
+Core restored clean and every core gate was green. The first build that restored a satellite project
+against the new list was main-cd's control image (run 40300348495). It failed there, and again on
+every later main run that built the control image, so no `memex-control` version was promoted until
+the four pins moved. The publish loop also misread the failure: it recognised compiler and MSBuild
+errors as deterministic, but not a NuGet restore error, so it retried NU1605 twice behind a registry
+re-login. It now fails at once on any `error NU….` except the two network codes: NU1301 (the feed
+could not be reached) and NU1900 (the vulnerability-audit data could not be fetched), which keep the
+bounded retry.
+
+**The gate:** `scripts/check-package-train-lockstep.py` runs in the
+`Satellite package pins (removal declared)` job on every pull request. It requires every stable
+`Microsoft.Extensions.*` pin of the shape `<major>.0.<patch>` to carry one version per major. Other
+release lines (`Microsoft.Extensions.AI*`, `Http.Resilience` and `ServiceDiscovery` on 10.11.x, and
+`Microsoft.Extensions.Azure` on 1.x) are not on the train and are ignored. The script reads only
+this repository's props file and needs no credential. A Dependabot sweep that splits the train is
+red on its own pull request, naming each pin that lags and the version to move it to. Move those
+pins by hand in the same pull request.
+
+**Where its teeth stop:** it covers the `Microsoft.Extensions.*` family only, because that is where
+the inter-package floors were measured. The same blind spot applies to any satellite-only pin of
+another family whose packages floor each other. The `System.*` and `Microsoft.AspNetCore.*` pins on
+10.0.x are not on the same patch today, and nothing has failed on that yet.
+
 
 ### A ninth shape: a RENDERED-UI change the satellite's e2e asserts on (#3401 fallout, 2026-09-06)
 

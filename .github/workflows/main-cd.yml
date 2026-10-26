@@ -1611,6 +1611,16 @@ jobs:
             # either — but it is NOT a compiler diagnostic, and calling it one sent #6889's triage
             # to the source: MSB4018 means a build TASK threw, and an IOException on an obj/ file
             # there is two builds of one project racing (concurrent per-RID inner publishes).
+            # A NuGet RESTORE error is the dependency graph, not the transport — NU1605 (a central pin
+            # lagging a sibling's floor) failed the control leg three times running on #7227, each
+            # retry re-authenticating to a registry that had nothing to do with it. Only the network
+            # codes stay retryable: NU1301 (the feed could not be reached) and NU1900 (the
+            # vulnerability-audit feed could not be read, an error under Directory.Build.props).
+            nu=$(grep -oE 'error NU[0-9]{4}' "$LOG" | sed 's/^error //' | grep -vE '^NU(1301|1900)$' | sort -u | paste -sd, - || true)
+            if [ -n "$nu" ]; then
+              echo "::error::portal-ai publish failed with NuGet restore error(s) $nu (see attempt $attempt above) — the package graph, not the registry transport, so not retried. NU1605 = a central pin lower than a sibling package's floor."
+              exit 1
+            fi
             if grep -qE 'error MSB[0-9]{4}' "$LOG"; then
               codes=$(grep -oE 'error MSB[0-9]{4}' "$LOG" | sed 's/^error //' | sort -u | paste -sd, -)
               echo "::error::portal-ai publish failed with MSBuild error(s) $codes (see attempt $attempt above) — not a compiler diagnostic and not the registry transport, so not retried. MSB4018 = a build task threw: read its exception (an IOException on an obj/ file is two builds of one project racing, #6889)."
@@ -1619,7 +1629,7 @@ jobs:
             if [ "$attempt" -lt 3 ]; then
               # Re-login before retrying: an ACR token can expire during a long multi-arch push,
               # and a re-auth costs seconds against a leg that takes minutes.
-              echo "attempt $attempt failed without compiler or MSBuild diagnostics — re-authenticating and retrying in 30s"
+              echo "attempt $attempt failed without compiler, NuGet or MSBuild diagnostics — re-authenticating and retrying in 30s"
               az acr login --name meshweaver || true
               sleep 30
             fi
@@ -2157,6 +2167,12 @@ jobs:
               echo "::error::control publish failed with COMPILER diagnostics (attempt $attempt) — deterministic, not retried."
               exit 1
             fi
+            # A NuGet restore error is the package graph — see the portal-ai leg's note (#7227).
+            nu=$(grep -oE 'error NU[0-9]{4}' "$LOG" | sed 's/^error //' | grep -vE '^NU(1301|1900)$' | sort -u | paste -sd, - || true)
+            if [ -n "$nu" ]; then
+              echo "::error::control publish failed with NuGet restore error(s) $nu (attempt $attempt) — the package graph, not the registry transport, so not retried. NU1605 = a central pin lower than a sibling package's floor."
+              exit 1
+            fi
             # Not a compiler diagnostic and not the transport — see the portal-ai leg's note.
             if grep -qE 'error MSB[0-9]{4}' "$LOG"; then
               codes=$(grep -oE 'error MSB[0-9]{4}' "$LOG" | sed 's/^error //' | sort -u | paste -sd, -)
@@ -2164,7 +2180,7 @@ jobs:
               exit 1
             fi
             if [ "$attempt" -lt 3 ]; then
-              echo "attempt $attempt failed without compiler or MSBuild diagnostics — re-authenticating and retrying in 30s"
+              echo "attempt $attempt failed without compiler, NuGet or MSBuild diagnostics — re-authenticating and retrying in 30s"
               az acr login --name meshweaver || true
               sleep 30
             fi
