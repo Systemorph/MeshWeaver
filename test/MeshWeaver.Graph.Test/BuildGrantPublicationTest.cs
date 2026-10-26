@@ -666,6 +666,15 @@ public class BuildGrantPublicationTest
         record.Level.Should().Be(LogLevel.Error);
         record.Message.Should().Contain("REFUSING to arbitrate");
         record.Message.Should().Contain("Admin/Build/_Claim");
+
+        // The line ships to the central log store, so it names the row's SHAPE, never its values.
+        // Negative control first: the value really is in the row, so its absence below is the
+        // diagnostic's doing and not the fixture's.
+        ((JsonElement)lockRow.Content!).GetRawText().Should().Contain("written-by-a-shape-this-build-cannot-read");
+        record.Message.Should().NotContain("written-by-a-shape-this-build-cannot-read",
+            "a stored value must never reach a Warning+ log line");
+        record.Message.Should().Contain("\"RequestedClaims\"", "the top-level key is what diagnoses the row");
+        record.Message.Should().Contain("no $type");
     }
 
     /// <summary>
