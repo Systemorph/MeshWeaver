@@ -199,8 +199,11 @@ internal class MeshNodeCompilationService(
     // path even though caller 1 had just finished). Entries clear once the
     // task settles so a future re-compile (e.g. after source edit) starts
     // fresh.
-    private readonly ConcurrentDictionary<string, Lazy<Task<CompileEmit>>> _inflightCompiles =
+    private readonly ConcurrentDictionary<string, Lazy<InflightCompile>> _inflightCompiles =
         new(StringComparer.Ordinal);
+
+    // One in-flight compile: its Task, and the lane moments its leader's bound times against.
+    private sealed record InflightCompile(Task<CompileEmit> Task, CpuLaneWait LaneWait);
 
     /// <summary>
     /// Test seam (InternalsVisibleTo): runs on the emit's own thread with the compilation about to be
@@ -1105,10 +1108,11 @@ internal class MeshNodeCompilationService(
                 // BoundLeg hands in is tripped when the bound fires, so NuGet/Roslyn actually
                 // stop; the TimeoutException propagates (it is not a CompilationException, so the
                 // Catch below leaves it alone) to RunCompile's terminal Error write.
-                return BoundLeg(
-                        ct => OnThreadPool(() =>
-                            CompileAsync(codeFile, configuration, contentCollections, node, ct)),
-                        _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path)
+                return CpuLaneBound.Bound(
+                        (ct, laneWait) => OnThreadPool(() =>
+                            CompileAsync(codeFile, configuration, contentCollections, node, laneWait, ct)),
+                        _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path,
+                        _cpuLane is IoPool lanePool ? () => lanePool.AdmissionsCompleted : null)
                     .Select(emit =>
                     {
                         var actualPath = emit.Path;
@@ -2153,6 +2157,7 @@ internal class MeshNodeCompilationService(
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
         MeshNode node,
+        CpuLaneWait laneWait,
         CancellationToken ct)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -2162,9 +2167,15 @@ internal class MeshNodeCompilationService(
         // once the task settles so a future invalidation triggers a fresh
         // compile instead of returning the stale completed task.
         var lazy = _inflightCompiles.GetOrAdd(nodeName, n =>
-            new Lazy<Task<CompileEmit>>(() => RunCompileAndEvict(
-                codeFile, hubConfiguration, contentCollections, node, n, ct)));
-        return lazy.Value;
+            new Lazy<InflightCompile>(() => new InflightCompile(
+                RunCompileAndEvict(codeFile, hubConfiguration, contentCollections, node, n, laneWait, ct),
+                laneWait)));
+        var inflight = lazy.Value;
+        // A caller that joined a compile already in flight times its bound against the LEADER's
+        // lane moments — its own laneWait is never marked by anyone else.
+        if (!ReferenceEquals(inflight.LaneWait, laneWait))
+            laneWait.Follow(inflight.LaneWait);
+        return inflight.Task;
     }
 
     private async Task<CompileEmit> RunCompileAndEvict(
@@ -2173,11 +2184,12 @@ internal class MeshNodeCompilationService(
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
         MeshNode node,
         string nodeName,
+        CpuLaneWait laneWait,
         CancellationToken ct)
     {
         try
         {
-            return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, ct);
+            return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, laneWait, ct);
         }
         finally
         {
@@ -2191,6 +2203,7 @@ internal class MeshNodeCompilationService(
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
         MeshNode node,
         string nodeName,
+        CpuLaneWait laneWait,
         CancellationToken ct)
     {
         if (cacheService.IsDiskCacheEnabled)
@@ -2241,9 +2254,14 @@ internal class MeshNodeCompilationService(
         // queue. EmitCompiled does nothing but compute and write its own artifact — no pool call, no
         // mesh read — so it can never wait on another lane leaf (the nested-gate deadlock the Compile
         // pool hit). Doc/Architecture/CompileOffTheThreadPool.
+        //
+        // The two marks tell the roslyn-compile bound (CpuLaneBound) where the queue
+        // starts and ends, so a compile waiting its turn for a slot is never timed out as "hung".
+        laneWait.MarkQueued();
         return await _cpuLane
             .InvokeBlocking(laneCt =>
             {
+                laneWait.MarkAdmitted();
                 // The lane's token (pool drain) AND the compile's own bound (BoundLeg) both stop Roslyn.
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, laneCt);
                 return EmitCompiled(
