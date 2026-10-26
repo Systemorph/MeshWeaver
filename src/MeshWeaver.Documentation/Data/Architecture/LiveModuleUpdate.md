@@ -658,8 +658,12 @@ provider under its forwarder's label and reads the provider's real name from the
 subscription leases (`QueryMembers`), which also de-duplicates by that name. A duplicate registration is
 leased once, by the first subscription, to learn its name; later subscriptions leave it out without
 constructing it. A learned name is trusted only while the generation that answered it is current
-(`ModuleServiceProxy.CurrentGeneration`): a same-shape swap may reorder a module's providers, and a
-position must never be skipped under the name its neighbour now answers by.
+(`ModuleServiceProxy.CurrentGenerationId`): a same-shape swap may reorder a module's providers, and a
+position must never be skipped under the name its neighbour now answers by. The cache holds the
+generation's identity (its load context's name), never the generation: a `ModuleGeneration` holds its
+collectible context, and the fan-out lives as long as the mesh, so holding one kept every retired
+generation loaded. `AModuleProviderReorderedByASwapTest` also proves the retired generation is collected
+while the fan-out that learned from it stays alive, with no query after the swap.
 `AModuleProviderReorderedByASwapTest` swaps `[A, B]` for `[B, A]` and both still answer; with the name
 trusted across generations, A is absent after the swap.
 `AModuleProviderNeedingTheMeshServiceTest` pins it with a module provider built over a root singleton that

@@ -98,18 +98,23 @@ public class ModuleServiceProxy : DispatchProxy
     }
 
     /// <summary>
-    /// The generation of the module behind <paramref name="service"/> that is current NOW — or null for an
-    /// ordinary instance, or for a proxy whose module is not held. Reads the registry only; never resolves
-    /// the instance. A consumer that remembers something it learned from a leased instance (the query
-    /// fan-out remembers a provider's name) keys it to the generation current when it learned it, and
-    /// trusts it only while that same generation is current: a live swap may change what a registration
-    /// position holds (MeshWeaver#7218).
+    /// The IDENTITY of the module generation behind <paramref name="service"/> that is current NOW — its
+    /// load context's name, <c>module:&lt;Name&gt;#&lt;sequence&gt;</c>, unique per generation the registry
+    /// loads — or null for an ordinary instance, or for a proxy whose module is not held. Reads the registry
+    /// only; never resolves the instance. A consumer that remembers something it learned from a leased
+    /// instance (the query fan-out remembers a provider's name) keys it to this identity and trusts it only
+    /// while the same identity is current: a live swap may change what a registration position holds
+    /// (MeshWeaver#7218).
+    ///
+    /// <para>🚨 A string, never the <see cref="ModuleGeneration"/>: a generation holds its collectible load
+    /// context and assembly, so a consumer that kept one would keep a retired generation from unloading for
+    /// as long as the consumer lives — an idle query fan-out lives as long as the mesh.</para>
     /// </summary>
     /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
-    public static ModuleGeneration? CurrentGeneration(object service)
+    public static string? CurrentGenerationId(object service)
     {
         ArgumentNullException.ThrowIfNull(service);
-        return service is ModuleServiceProxy proxy ? proxy.contexts?.Current(proxy.module) : null;
+        return service is ModuleServiceProxy proxy ? proxy.contexts?.Current(proxy.module)?.Context.Name : null;
     }
 
     /// <summary>

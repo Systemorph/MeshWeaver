@@ -1,7 +1,10 @@
 using System.Reactive.Linq;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.DependencyInjection;
@@ -63,6 +66,39 @@ public sealed class AModuleProviderReorderedByASwapTest(ITestOutputHelper output
         await Answers(query, BPath).Should().Within(Budget)
             .Match(answered => answered, "provider B still answers after the swap moved it to the first position", cancellationToken: ct);
     }
+
+    /// <summary>
+    /// The learned names never pin a generation (review of #7231). A fan-out the test keeps alive learns both
+    /// names on g1; the module is swapped live and NO query runs afterwards, so nothing re-learns or replaces
+    /// what the fan-out holds. The retired g1 context must still be collected. Negative control: with the
+    /// learned name keyed to the <see cref="ModuleGeneration"/> itself, the idle fan-out keeps g1 loaded.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ARetiredGeneration_IsCollected_WhileAnIdleFanOutThatLearnedFromItStaysAlive()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var fanOut = new MeshWeaver.Hosting.Persistence.Query.MeshQuery(
+            Mesh.ServiceProvider.GetServices<IMeshQueryProvider>(), Mesh);
+        await Answers(fanOut, APath).Where(answered => answered).Should().Within(Budget)
+            .Emit("the fan-out leases provider A on g1 and learns its name", cancellationToken: ct);
+        await Answers(fanOut, BPath).Where(answered => answered).Should().Within(Budget)
+            .Emit("the fan-out leases provider B on g1 and learns its name", cancellationToken: ct);
+        var weakG1 = WeakContextOfHeld();
+
+        var outcome = await Mesh.ServiceProvider.GetRequiredService<ModuleLiveUpdater>()
+            .Swap(Write("g2", aFirst: true), "test: retire g1 under an idle fan-out").Timeout(Budget).Await(ct);
+        outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+
+        var drained = await CollectibleUnloadDrain.WaitUntilCollectedAsync(
+            Mesh.ServiceProvider.GetRequiredService<CollectibleContextUnloads>());
+        drained.Collected.Should().BeTrue($"the idle fan-out must not pin the retired generation ({drained})");
+        weakG1.IsAlive.Should().BeFalse("nothing the fan-out learned holds g1's load context");
+        GC.KeepAlive(fanOut);
+    }
+
+    // In its own frame, so no local of the test method roots the generation.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private WeakReference WeakContextOfHeld() => new(Held().Context);
 
     // A same-shape live swap: two IMeshQueryProvider registrations, as before, in the other order.
     private void SwapIn(string path)
