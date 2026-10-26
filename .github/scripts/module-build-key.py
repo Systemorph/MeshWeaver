@@ -112,6 +112,10 @@ GLOBAL_INPUTS = (
 SKIP_DIRS = {"bin", "obj", ".vs", "node_modules", "TestResults", "test-logs"}
 
 _INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+# The project-relative MSBuild properties a linked item may start with; any other $(…) names a
+# location outside this repository (the platform's), whose bytes the platform digest already keys.
+_PROJECT_DIR_PROPS = ("$(MSBuildThisFileDirectory)", "$(MSBuildProjectDirectory)")
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -155,6 +159,48 @@ def project_references(root: Path, csproj: Path) -> list[Path]:
         if target.is_file():
             found.append(target)
     return found
+
+
+def compile_includes(root: Path, csproj: Path) -> list[Path]:
+    """In-repo files a project's explicit `<Compile Include>` items name, wildcards expanded.
+
+    A project compiles more than its own directory: `<Compile Include="../Shared/Emitter.cs" />`
+    links a file from elsewhere, and a directory tree hash never sees it."""
+    text = csproj.read_text(encoding="utf-8", errors="replace")
+    rroot = root.resolve()
+    found: set[Path] = set()
+    for a, b in re.findall(_COMPILE, text):
+        for include in (a or b).split(";"):
+            include = include.strip().replace("\\", "/")
+            if not include:
+                continue
+            for prop in _PROJECT_DIR_PROPS:
+                if include.startswith(prop):
+                    include = include[len(prop):].lstrip("/")
+                    break
+            if "$(" in include or "@(" in include or "%(" in include:
+                continue
+            if any(c in include for c in "*?["):
+                base = csproj.parent
+                parts = Path(include).parts
+                # walk the literal prefix (it may climb with ..) before handing the rest to glob
+                i = 0
+                while i < len(parts) and not any(c in parts[i] for c in "*?["):
+                    base = base / parts[i]
+                    i += 1
+                rest = "/".join(parts[i:])
+                candidates = list(base.resolve().glob(rest)) if base.is_dir() else []
+            else:
+                candidates = [csproj.parent / include]
+            for c in candidates:
+                c = c.resolve()
+                try:
+                    rel = c.relative_to(rroot)
+                except ValueError:
+                    continue  # outside this checkout — not this repo's bytes
+                if c.is_file() and not any(part in SKIP_DIRS for part in rel.parts):
+                    found.add(c)
+    return sorted(found)
 
 
 def closure_dirs(root: Path, entry_project: str) -> list[str]:
@@ -215,9 +261,22 @@ def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project
             if here == root:
                 break
             here = here.parent
-    return {"project": Path(project).as_posix(),
-            "closure": {d: tree_hash(root, d) for d in dirs},
-            "imports": dict(sorted(imports.items()))}
+    # Linked sources: a `<Compile Include>` naming a file outside every closure directory is
+    # compiled (and published) with the project, so its bytes are an input too. Recorded only when
+    # present, so a project that links nothing keys exactly as it did before this input existed.
+    linked: dict[str, str] = {}
+    for p in sorted(seen):
+        for f in compile_includes(root, p):
+            rel = f.relative_to(root).as_posix()
+            if any(rel.startswith(d + "/") for d in dirs if d != "."):
+                continue  # already inside a hashed closure directory
+            linked[rel] = file_hash(f)
+    result = {"project": Path(project).as_posix(),
+              "closure": {d: tree_hash(root, d) for d in dirs},
+              "imports": dict(sorted(imports.items()))}
+    if linked:
+        result["linked"] = dict(sorted(linked.items()))
+    return result
 
 
 def read_json(path: Path) -> dict | None:
@@ -566,6 +625,42 @@ def self_test() -> int:
         check("a different publishing SDK changes the extension key", with_ext()["key"] != e0["key"])
         sdk = "10.0.200"
         check("…and the same SDK restores it (negative control)", with_ext()["key"] == e0["key"])
+        # A linked source: the extension compiles `../Shared/Emitter.cs`, outside every closure dir.
+        ext_proj = root / "tools" / "Acme.ModuleLibraries" / "Acme.ModuleLibraries.csproj"
+        ext_old = ext_proj.read_text(encoding="utf-8")
+        shared = root / "tools" / "Shared"
+        shared.mkdir(exist_ok=True)
+        (shared / "Emitter.cs").write_text("// emitter v1\n", encoding="utf-8")
+        (shared / "Unlinked.cs").write_text("// not compiled\n", encoding="utf-8")
+        ext_proj.write_text('<Project><ItemGroup><ProjectReference Include="../Acme.ShelfKit/Acme.ShelfKit.csproj" />'
+                            '<Compile Include="../Shared/Emitter.cs" Link="Emitter.cs" /></ItemGroup></Project>\n',
+                            encoding="utf-8")
+        try:
+            l0 = with_ext()
+            check("a linked <Compile Include> outside the extension's folder is a key input",
+                  list(l0["inputs"]["buildExtension"].get("linked", {})) == ["tools/Shared/Emitter.cs"],
+                  str(l0["inputs"]["buildExtension"].get("linked")))
+            (shared / "Emitter.cs").write_text("// emitter v2\n", encoding="utf-8")
+            check("editing ONLY the linked source changes the extension key", with_ext()["key"] != l0["key"])
+            (shared / "Emitter.cs").write_text("// emitter v1\n", encoding="utf-8")
+            check("…and restoring it restores the extension key", with_ext()["key"] == l0["key"])
+            (shared / "Unlinked.cs").write_text("// changed, still not compiled\n", encoding="utf-8")
+            check("a file beside the linked one that no Compile item names leaves the key unchanged "
+                  "(negative control)", with_ext()["key"] == l0["key"])
+            ext_proj.write_text('<Project><ItemGroup><ProjectReference Include="../Acme.ShelfKit/Acme.ShelfKit.csproj" />'
+                                '<Compile Include="$(MSBuildThisFileDirectory)../Shared/*.cs" /></ItemGroup></Project>\n',
+                                encoding="utf-8")
+            check("a wildcard linked include keys every file it matches",
+                  sorted(with_ext()["inputs"]["buildExtension"].get("linked", {}))
+                  == ["tools/Shared/Emitter.cs", "tools/Shared/Unlinked.cs"],
+                  str(with_ext()["inputs"]["buildExtension"].get("linked")))
+        finally:
+            ext_proj.write_text(ext_old, encoding="utf-8")
+            for f in shared.iterdir():
+                f.unlink()
+            shared.rmdir()
+        check("a project that links nothing carries no `linked` input (keys recorded before stay valid)",
+              "linked" not in with_ext()["inputs"]["buildExtension"] and with_ext()["key"] == e0["key"])
         try:
             compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", extensions_project=shelf)
             check("an extension without its publishing SDK is refused", False, "no error raised")
