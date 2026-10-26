@@ -188,6 +188,31 @@ def cohere(entries, root, shipped=None):
     return entries, withdrawn
 
 
+def publication_reuse(entries, fetch, sha, root, shipped=None):
+    """The matrix with publication reuse applied, or the matrix UNCHANGED when it cannot be.
+
+    All or nothing: the annotated list is returned only once coherence has ALSO succeeded. A
+    failure after annotation (an unreadable project, a platform witness that fails or times out)
+    must not leave the annotations behind, because those are exactly the entries `cohere` had not
+    yet cleared, so a reused bundle could sit beside a freshly built one carrying a second build of
+    the same assembly. An ArtifactStoreError propagates: a declared store never falls back.
+    """
+    try:
+        run, artifacts = fetch()
+        coherent, withdrawn = cohere(annotate(entries, run, sha, artifacts), root, shipped)
+    except ArtifactStoreError:
+        raise
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        print("::warning::publication artifacts unavailable; retaining normal builds", file=sys.stderr)
+        return entries
+    for module, built, reasons in withdrawn:
+        why = (f"it shares {', '.join(reasons)} with {built}, which this run builds, so the reused "
+               f"bundle would carry a second build of the same assembly (MeshWeaver#3732)"
+               if built else reasons[0])
+        print(f"publication reuse: BUILD {module}, not reused: {why}", file=sys.stderr)
+    return coherent
+
+
 def self_test():
     entries = [{"module": "Floor", "test": False}, {"module": "Changed", "test": True}]
     run = dict(status="completed", conclusion="success", event="push", head_branch="main",
@@ -279,7 +304,29 @@ def self_test():
         got, withdrawn = cohere(annotate([entry("MeshWeaver.Owned", True), entry("MeshWeaver.Back", False)],
                                          run, "a" * 40, live), root)
         assert "reuse" not in got[1], "an owned project rides, so sharing it still withdraws"
-    print("publication reuse: 20 assertions passed")
+        # All or nothing: a coherence failure AFTER annotation (an unreadable project, a platform
+        # witness that fails or times out) keeps the normal builds, never the annotations it had
+        # not yet cleared (Collab would otherwise stay reused beside the AI built here).
+        class Unreadable:
+            def __contains__(self, name):
+                raise OSError("platform witness failed")
+        fetch = lambda: (run, live)
+        plain = [entry("Collab", False), entry("AI", True)]
+        got = publication_reuse(plain, fetch, "a" * 40, root, Unreadable())
+        assert not any("reuse" in e for e in got), got
+        got = publication_reuse(plain, fetch, "a" * 40, root)
+        assert [("reuse" in e) for e in got] == [False, False], got
+        got = publication_reuse([entry("Maps", False), entry("AI", True)], fetch, "a" * 40, root)
+        assert "reuse" in got[0], "the success path still reuses"
+
+        def store_down():
+            raise ArtifactStoreError("declared store unavailable")
+        try:
+            publication_reuse(plain, store_down, "a" * 40, root)
+            raise AssertionError("a declared store failure must not fall back")
+        except ArtifactStoreError:
+            pass
+    print("publication reuse: 24 assertions passed")
 
 
 def main():
@@ -309,31 +356,25 @@ def main():
             print(f"::error::{exc}", file=sys.stderr)
             return 1
     if a.run and a.sha and any(e.get("test") is False for e in entries):
-        try:
-            if not a.run.isdigit() or not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
-                raise ValueError("invalid run or repository")
+        if not a.run.isdigit() or not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
+            print("::warning::publication artifacts unavailable; retaining normal builds", file=sys.stderr)
+        else:
             def api(path, *args):
                 return json.loads(subprocess.run(["gh", "api", path, *args], capture_output=True,
                                                  text=True, timeout=60, check=True).stdout)
-            run = api(f"repos/{a.repo}/actions/runs/{a.run}")
-            if own_store:
-                artifacts = stored_artifacts(a.artifact_store, a.repo, a.run, run.get("run_attempt"),
-                                             a.expect_store_id)
-            else:
+
+            def fetch():
+                run = api(f"repos/{a.repo}/actions/runs/{a.run}")
+                if own_store:
+                    return run, stored_artifacts(a.artifact_store, a.repo, a.run, run.get("run_attempt"),
+                                                 a.expect_store_id)
                 pages = api(f"repos/{a.repo}/actions/runs/{a.run}/artifacts?per_page=100", "--paginate", "--slurp")
-                artifacts = [art for page in pages for art in page["artifacts"]]
-            entries = annotate(entries, run, a.sha, artifacts)
-            entries, withdrawn = cohere(entries, a.root)
-            for module, built, reasons in withdrawn:
-                why = (f"it shares {', '.join(reasons)} with {built}, which this run builds, so the reused "
-                       f"bundle would carry a second build of the same assembly (MeshWeaver#3732)"
-                       if built else reasons[0])
-                print(f"publication reuse: BUILD {module}, not reused: {why}", file=sys.stderr)
-        except ArtifactStoreError as exc:
-            print(f"::error::{exc}", file=sys.stderr)
-            return 1
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-            print("::warning::publication artifacts unavailable; retaining normal builds", file=sys.stderr)
+                return run, [art for page in pages for art in page["artifacts"]]
+            try:
+                entries = publication_reuse(entries, fetch, a.sha, a.root)
+            except ArtifactStoreError as exc:
+                print(f"::error::{exc}", file=sys.stderr)
+                return 1
     build = [e for e in entries if not e.get("reuse") and e.get("ledger", {}).get("decision") != "reuse"]
     print(f"publication reuse: {sum(bool(e.get('reuse')) for e in entries)} unchanged gate dependencies", file=sys.stderr)
     if os.environ.get("GITHUB_OUTPUT"):
