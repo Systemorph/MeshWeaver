@@ -1,7 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Hosting.Security;
@@ -36,8 +36,8 @@ public class StandingReadPendingTest
     {
         var scheduler = new TestScheduler();
         var standing = new Subject<PermissionCheckOutcome?>();
-        var seen = new List<PermissionCheckOutcome?>();
-        using var _ = DeclaredPointRead.BoundPendingPeriods(standing, Budget, "p/doc", scheduler).Subscribe(seen.Add);
+        var seen = ImmutableList<PermissionCheckOutcome?>.Empty;
+        using var _ = DeclaredPointRead.BoundPendingPeriods(standing, Budget, "p/doc", scheduler).Subscribe(o => seen = seen.Add(o));
 
         standing.OnNext(PermissionCheckOutcome.Granted);
         standing.OnNext(null);
@@ -62,8 +62,8 @@ public class StandingReadPendingTest
         // decides, and nothing undetermined follows it.
         var scheduler = new TestScheduler();
         var standing = new Subject<PermissionCheckOutcome?>();
-        var seen = new List<PermissionCheckOutcome?>();
-        using var _ = DeclaredPointRead.BoundPendingPeriods(standing, Budget, "p/doc", scheduler).Subscribe(seen.Add);
+        var seen = ImmutableList<PermissionCheckOutcome?>.Empty;
+        using var _ = DeclaredPointRead.BoundPendingPeriods(standing, Budget, "p/doc", scheduler).Subscribe(o => seen = seen.Add(o));
 
         standing.OnNext(PermissionCheckOutcome.Granted);
         standing.OnNext(null);
@@ -79,8 +79,8 @@ public class StandingReadPendingTest
     {
         var standing = new Subject<PermissionCheckOutcome?>();
         var declaration = new Subject<bool>();
-        var verdicts = new List<bool>();
-        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration).Subscribe(verdicts.Add);
+        var verdicts = ImmutableList<bool>.Empty;
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration).Subscribe(v => verdicts = verdicts.Add(v));
 
         standing.OnNext(PermissionCheckOutcome.Denied);
         Assert.True(declaration.HasObservers, "a definitive denial hands the decision to the declaration");
@@ -101,14 +101,14 @@ public class StandingReadPendingTest
         // ever stops admitting, the regression above no longer exercises the trap.
         var standing = new Subject<PermissionCheckOutcome?>();
         var declaration = new Subject<bool>();
-        var verdicts = new List<bool>();
+        var verdicts = ImmutableList<bool>.Empty;
         using var _ = standing
             .Where(outcome => outcome is not null)
             .Select(outcome => outcome!.IsGranted
                 ? Observable.Return(true)
                 : outcome.IsUndetermined ? Observable.Return(false) : declaration)
             .Switch()
-            .Subscribe(verdicts.Add);
+            .Subscribe(v => verdicts = verdicts.Add(v));
 
         standing.OnNext(PermissionCheckOutcome.Denied);
         standing.OnNext(null);
@@ -121,8 +121,8 @@ public class StandingReadPendingTest
     public void A_pending_marker_holds_an_admitted_verdict_and_a_settled_grant_admits_again()
     {
         var standing = new Subject<PermissionCheckOutcome?>();
-        var verdicts = new List<bool>();
-        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => Observable.Return(false)).Subscribe(verdicts.Add);
+        var verdicts = ImmutableList<bool>.Empty;
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => Observable.Return(false)).Subscribe(v => verdicts = verdicts.Add(v));
 
         standing.OnNext(PermissionCheckOutcome.Granted);
         standing.OnNext(null);
