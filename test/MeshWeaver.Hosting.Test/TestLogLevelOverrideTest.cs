@@ -4,6 +4,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Reactive.Assertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -44,6 +45,9 @@ public class TestLogLevelOverrideTest
     [InlineData(null, null)]
     [InlineData("", null)]
     [InlineData("loud", null)]
+    [InlineData("999", null)]
+    [InlineData("-1", null)]
+    [InlineData("4", LogLevel.Error)]
     public void TheEnvironmentValue_ParsesCaseInsensitively_AndAnUnknownValueIsNoOverride(string? value, LogLevel? expected)
         => TestLogLevel.Parse(value).Should().Be(expected);
 
@@ -129,9 +133,11 @@ public class TestLogLevelOverrideTest
         {
             logging.ClearProviders();
             logging.AddConfiguration(configuration.GetSection("Logging"));
-            logging.AddXUnitLogger(accessor);
-            // AddXUnitLogger applied the process's MW_TEST_LOG_LEVEL; the explicit argument here
-            // makes the case independent of the developer's shell.
+            // The provider is registered exactly as AddXUnitLogger registers it, but WITHOUT the
+            // process's MW_TEST_LOG_LEVEL, which AddXUnitLogger applies: a developer's shell
+            // setting must not decide the no-override case. The override under test is explicit.
+            logging.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, XUnitLoggerProvider>());
+            logging.Services.AddSingleton(accessor);
             TestLogLevel.ApplyOverride(logging, @override);
         });
         var provider = services.BuildServiceProvider();

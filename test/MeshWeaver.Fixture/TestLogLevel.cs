@@ -43,11 +43,18 @@ public static class TestLogLevel
     /// </summary>
     public static readonly LogLevel? Override = Parse(System.Environment.GetEnvironmentVariable("MW_TEST_LOG_LEVEL"));
 
-    /// <summary>Parses an override value; <c>null</c> for an empty or unknown value.</summary>
+    /// <summary>
+    /// Parses an override value; <c>null</c> for an empty or unknown value. <c>Enum.TryParse</c>
+    /// alone accepts any integer (<c>999</c> parses), and an undefined level above
+    /// <see cref="LogLevel.Critical"/> would silently disable even Error output — so the parsed value
+    /// must also be a DEFINED <see cref="LogLevel"/>.
+    /// </summary>
     /// <param name="value">The raw environment value.</param>
     /// <returns>The level, or <c>null</c>.</returns>
     public static LogLevel? Parse(string? value)
-        => !string.IsNullOrWhiteSpace(value) && System.Enum.TryParse<LogLevel>(value, ignoreCase: true, out var level)
+        => !string.IsNullOrWhiteSpace(value)
+           && System.Enum.TryParse<LogLevel>(value, ignoreCase: true, out var level)
+           && System.Enum.IsDefined(level)
             ? level
             : null;
 
