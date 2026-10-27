@@ -30,6 +30,14 @@ namespace MeshWeaver.Compiler.Pipeline.Test;
 /// </summary>
 public class AnAdoptedBuildCarriesItsEdgesTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>The admission this process runs under — read live by the gate; unarmed unless a test says otherwise.</summary>
+    private MeshAdmission admission = MeshAdmission.Unarmed;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services =>
+                services.AddSingleton<IMeshAdmissionAuthority>(new LiveAdmission(() => admission)));
+
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private IStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
@@ -150,5 +158,48 @@ public class AnAdoptedBuildCarriesItsEdgesTest(ITestOutputHelper output) : Monol
         // …and the control that proves the two above could have written: the served build, covered.
         await WithEdges(typePath, BundleJson(typePath, mvid, "Lib/Used"), PrebuiltAssemblySeeder.SeedOutcome.Adopted, ct);
         (await StoredRow(typePath, ct)).Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// 🚨 A PROVISIONAL process only queues its adoption stamp (<see cref="MeshPublicationGate"/>), so
+    /// at the moment the seed answers <c>Adopted</c> the record still names the previous build. The
+    /// edge write must follow the stamp out of the gate, or admission releases the stamp alone and
+    /// the adopted build is left without its edges.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AProvisionalAdoption_WritesItsEdgesWhenTheHeldStampIsReleased()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var typePath = await AdoptedType(ct);
+        var bytes = EmitAssembly("EdgesP" + Guid.NewGuid().ToString("N")[..6]);
+        var mvid = ServedBuildIdentity.OfBytes(bytes)!;
+        var gate = Mesh.ServiceProvider.GetRequiredService<MeshPublicationGate>();
+        admission = MeshAdmission.Provisional;
+
+        (await Seed(typePath, bytes).Should().Within(TestTimeouts.Convergence).Emit("a seed answers", ct))
+            .Should().Be(PrebuiltAssemblySeeder.SeedOutcome.Adopted, "a held stamp is still an adoption for this process");
+        await WithEdges(typePath, BundleJson(typePath, mvid, "Lib/Used"), PrebuiltAssemblySeeder.SeedOutcome.Adopted, ct);
+        (await StoredRow(typePath, ct)).Should().BeNull("nothing is published while this process is provisional");
+
+        admission = MeshAdmission.Admitted;
+        gate.Reconsider();
+        await SettledOn(typePath, mvid);
+
+        var row = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Storage.Read(DependencyEdgeSetPaths.PathFor(typePath), Mesh.JsonSerializerOptions).Take(1))
+            .Where(n => n is not null)
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the edges follow the released stamp out of the gate", ct);
+        var set = row!.ContentAs<DependencyEdgeSet>(Mesh.JsonSerializerOptions)!;
+        set.BuildMvid.Should().Be(mvid);
+        set.Edges.Select(e => e.Target).Should().Equal(["Lib/Used"]);
+    }
+
+    private sealed class LiveAdmission(Func<MeshAdmission> current) : IMeshAdmissionAuthority
+    {
+        public MeshAdmission Admission => current();
+
+        public string AdmissionReason => $"test admission {current()}";
     }
 }

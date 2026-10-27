@@ -929,7 +929,9 @@ public static class PrebuiltAssemblySeeder
     /// <see cref="DependencyEdgeSet"/> as the bundle carried it) for the build the record now serves,
     /// then passes <paramref name="outcome"/> through unchanged. Only a COVERED outcome writes
     /// (<see cref="IsCovered"/>: adopted, or the standing build kept), and only while the record names
-    /// the bundle's build (<c>DependencyEdgeSetWriter.WriteAdopted</c>). A missing, unreadable or
+    /// the bundle's build (<c>DependencyEdgeSetWriter.WriteAdopted</c>). Offered to the
+    /// <see cref="MeshPublicationGate"/> behind the adoption stamp, so a stamp HELD while this
+    /// process is provisional is released first and the edges follow it. A missing, unreadable or
     /// failed set never changes the seeding verdict — the graph then reads that type as unknown.
     /// </summary>
     /// <param name="hub">The seeding hub.</param>
@@ -955,7 +957,19 @@ public static class PrebuiltAssemblySeeder
         }
         if (set is null || !string.Equals(set.Source, nodeTypePath, StringComparison.Ordinal))
             return Observable.Return(outcome);
-        return MeshWeaver.Graph.Configuration.DependencyEdgeSetWriter.WriteAdopted(hub, set, logger)
+        // 🚨 The edge write is offered to the SAME join point as the adoption stamp, after it. While
+        // this process is provisional the stamp is only QUEUED (SeedObserved → MeshPublicationGate.Offer),
+        // so the record still names the previous build and an immediate write would see it and
+        // write nothing — and admission would then release the stamp alone, leaving the adopted
+        // build without its edges. Queued behind the stamp, the gate releases both in offer order
+        // (sequentially), so the write runs once the record names the adopted build; a refused
+        // process discards both. Unarmed / admitted, the stamp has already committed and this runs
+        // at once.
+        var gate = hub.ServiceProvider.GetService<MeshPublicationGate>();
+        IObservable<System.Reactive.Unit> Edges() =>
+            MeshWeaver.Graph.Configuration.DependencyEdgeSetWriter.WriteAdopted(hub, set, logger)
+                .LastOrDefaultAsync();
+        return (gate is null ? Edges() : gate.Publish($"adopted dependency edges for {nodeTypePath}", Edges))
             .IgnoreElements()
             .Concat(Observable.Return(System.Reactive.Unit.Default))
             .Select(_ => outcome);

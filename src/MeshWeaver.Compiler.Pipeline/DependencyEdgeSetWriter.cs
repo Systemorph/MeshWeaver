@@ -90,8 +90,15 @@ internal static class DependencyEdgeSetWriter
 
     /// <summary>
     /// Whether <paramref name="stored"/> already describes <paramref name="incoming"/>'s build with
-    /// the same edges — a rewrite would change nothing but the row's version. Makes every writer
-    /// idempotent, which the adoption writer needs: it runs on every bundle pass of every boot.
+    /// the same edges AT A GENERATION NO OLDER than <paramref name="incoming"/>'s — a rewrite would
+    /// change nothing but the row's version. Makes every writer idempotent, which the adoption
+    /// writer needs: it runs on every bundle pass of every boot.
+    ///
+    /// <para>🚨 The generation is part of the identity. Same bytes and edges under a NEWER
+    /// <see cref="DependencyEdgeSet.StampVersion"/> must still be written: it is what lets
+    /// <see cref="IsSupersededBy"/> refuse an older, delayed writer. Skipping it would leave the
+    /// old generation stored, and a delayed write of an intermediate build (a generation between
+    /// the two) would then replace this build's edges with its own.</para>
     /// </summary>
     /// <param name="stored">The set currently stored, or null.</param>
     /// <param name="incoming">The set about to be written.</param>
@@ -99,8 +106,15 @@ internal static class DependencyEdgeSetWriter
         stored is not null
         && incoming.BuildMvid is { Length: > 0 }
         && string.Equals(stored.BuildMvid, incoming.BuildMvid, StringComparison.OrdinalIgnoreCase)
+        && !IsNewerGeneration(incoming, stored)
         && stored.Edges.Select(e => (e.Kind, e.Target)).SequenceEqual(incoming.Edges.Select(e => (e.Kind, e.Target)))
         && stored.IncludedWithoutUse.SequenceEqual(incoming.IncludedWithoutUse);
+
+    /// <summary>Whether <paramref name="incoming"/> carries a generation the stored set does not
+    /// reach: a generation where the stored set has none, or a higher one.</summary>
+    private static bool IsNewerGeneration(DependencyEdgeSet incoming, DependencyEdgeSet stored) =>
+        incoming.StampVersion is { } incomingGeneration
+        && (stored.StampVersion is not { } storedGeneration || incomingGeneration > storedGeneration);
 
     /// <summary>
     /// Writes the edges a prebuilt bundle CARRIED for bytes this mesh adopted
