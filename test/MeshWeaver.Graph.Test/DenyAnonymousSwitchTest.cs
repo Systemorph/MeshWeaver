@@ -299,7 +299,8 @@ public class DenyAnonymousSwitchTest(ITestOutputHelper output) : DenyAnonymousSw
             .Should().BeTrue("the control: a signed-in caller still reads through the Public grant");
     }
 
-    /// <summary>A link preview is a disclosure to a logged-out caller — none on a closed instance.</summary>
+    /// <summary>A link preview is a disclosure to a logged-out caller — none on a closed instance unless the operator
+    /// DECLARES it (<see cref="DenyAnonymousPublicPreviewTest"/>); this mesh declares no preview policy.</summary>
     [Fact(Timeout = 60_000)]
     public async Task PublicPreview_IsOff()
     {

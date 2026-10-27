@@ -987,7 +987,7 @@ every future install writes more. The switch is instance-level and sits above ev
 | A permission check for a logged-out caller — the `Anonymous` subject (an empty identity resolves to it), or the id a VIRTUAL ambient context carries (a visitor's `guest-…` circuit, which callers such as `MeshNodeStreamCache` pass straight through) | `Permission.None` — no `_Access` grant, no `PartitionAccessPolicy.PublicRead`, no `NodeTypeGate` public surface is consulted |
 | `AnonymousGate` (navigation, SEO head, sitemap, content routes) | `Denied` — a logged-out visitor goes to `/login` first, and nothing is listed publicly |
 | A query, `Select` or autocomplete whose viewer RESOLVED to the anonymous subject — named so, or an ambient context that is virtual or names nobody | one empty answer, on every backend |
-| `hub.GetPublicPreview(...)` | `false` — a link preview discloses nothing, not even a name |
+| `hub.GetPublicPreview(...)` | only the OPERATOR can open it: a `publicPreview: true` counts only when a STATIC (declared) `_Policy` states it — the portal's `Seo:PublicPreview` root policy is that declaration. A policy written in the mesh can still state `false`, never `true`. With nothing declared, a link preview discloses nothing, not even a name (`DenyAnonymousPublicPreviewTest`) |
 | A signed-in user, including the `Public` grants every signed-in user inherits | unchanged |
 | `System`, hub credentials, the mesh-node-cache identity | unchanged |
 | Sign-in pages, `/health`, `/ready`, `/alive`, static assets | unchanged — they ask the mesh for no permission |
