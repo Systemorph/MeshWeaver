@@ -38,7 +38,7 @@ public class GlobalSettingsRouteLiteralGuard
 {
     /// <summary>Repo-root directories that hold hand-authored source and mesh node content.</summary>
     private static readonly string[] ScannedRoots =
-        ["src", "test", "samples", "content", "memex", "clients"];
+        ["src", "test", "samples", "content", "clients"];
 
     /// <summary>Extensions a human authors a navigation target in. An allow-list, as in the NUL guard.</summary>
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)

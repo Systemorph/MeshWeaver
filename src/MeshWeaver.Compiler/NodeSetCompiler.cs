@@ -348,7 +348,10 @@ public static class NodeSetCompiler
         var nodeName = CodeConventions.SanitizeNodeName(inputs.NodePath);
         var authored = EmitPipeline.CreateEmitCompilation(
             inputs.GeneratedSource, inputs.AssemblyName, allReferences, parsePath: "", ct);
-        var compilation = GeneratorPipeline.RunSourceGenerators(authored, generatorPaths, logger, ct);
+        // The NODE-SUPPLIED generators' trees are the author's code too: the dependency scan reads
+        // them (a generator the node #r'd can emit a reflection lookup just as its source can).
+        var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
+            authored, generatorPaths, logger, ct, out var nodeGeneratedTrees);
 
         var artifact = EmitPipeline.EmitCompilationToDirectory(
             compilation, nodeName, inputs.NodePath, outputDirectory, ct);
@@ -370,10 +373,13 @@ public static class NodeSetCompiler
             // The modules are the files the CALLER names (moduleAssemblyPaths) — told apart by file,
             // never by name and never by subtracting a baseline: a directory host's platform
             // references are fresh instances, and an image-bound module may sit in the baseline.
-            // None named ⇒ no module edges, never a guess.
+            // None named ⇒ no module edges, never a guess. The packages are the files the
+            // `#r "nuget:"` resolution returned (generatorPaths), told apart the same way.
             DependencyEdges = DependencyEdgeExtraction.Extract(
                     compilation, authored.SyntaxTrees, inputs.NodePath, inputs.SourceUnits, inputs.ResolvedIncludes,
-                    DependencyEdgeExtraction.ModuleReferences(references, moduleAssemblyPaths ?? []),
+                    DependencyReferenceClasses.Of(allReferences, moduleAssemblyPaths ?? [], generatorPaths),
+                    () => File.OpenRead(artifact.DllPath),
+                    nodeGeneratedTrees,
                     ct)
                 with { BuildMvid = MvidOfFile(artifact.DllPath), InputDigest = digest },
         };
