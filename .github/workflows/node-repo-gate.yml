@@ -1299,7 +1299,11 @@ jobs:
           # A shard of a LATER attempt ("Re-run failed jobs" keeps the earlier attempt's bake)
           # re-resolves below as before (Education#320); a newer set then makes the bake stale and
           # the shard refreshes it — named, in the gate step.
-          if [ -n "${BAKE_ATTEMPT:-}" ] && [ "$BAKE_ATTEMPT" = "$RUN_ATTEMPT" ]; then
+          # Only a LANE-RESOLVED platform is replayed: a caller's pins, or `allow-unpinned` tags
+          # (plan then hands every shard EMPTY digests, and the bake keeps them empty), are not
+          # re-resolved anyway — the "as called" branch below echoes exactly what the bake used,
+          # and the bake key decides whether adopting it is safe.
+          if [ "${RESOLVED:-}" = "true" ] && [ -n "${BAKE_ATTEMPT:-}" ] && [ "$BAKE_ATTEMPT" = "$RUN_ATTEMPT" ]; then
             [ -n "${BAKE_IMAGE_DIGEST:-}" ] && [ -n "${BAKE_PLATFORM_DIGEST:-}" ] \
               || { echo "::error::the run's bake succeeded in attempt $BAKE_ATTEMPT but handed this shard no platform digests — the bake job and the shard disagree about their contract"; exit 1; }
             {

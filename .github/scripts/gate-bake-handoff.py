@@ -85,22 +85,44 @@ def sha256_file(path: Path) -> str:
 
 
 def tree_digests(root: Path) -> dict[str, str]:
-    """Every file under `root`, by relative path: its content digest, or `link:<target>` for a
-    symbolic link (recorded, never followed). Skips SKIPPED_NAMES only."""
+    """Every file under `root`, by relative path: its content digest. A symbolic link is FOLLOWED,
+    because the compile follows it (LocalNodeRepo.Sweep reads a file link's target and traverses a
+    directory link): a file link records `link:<target>:<digest of the target's bytes>`, a directory
+    link records `link:<target>/` and its resolved contents under the link's own path, and a link
+    that leads back into a directory already on the current path records `link:<target> (cycle)`
+    instead of being walked again. A link whose target is outside every hashed tree is therefore
+    keyed by what it RESOLVES to on this runner — the name alone would let a shard adopt a bake
+    compiled from other bytes. A dangling link records `link:<target> (missing)`. Skips
+    SKIPPED_NAMES only."""
     if not root.is_dir():
         raise Refused(f"'{root}' is not a directory — a key over a missing tree would key less than was compiled")
     out: dict[str, str] = {}
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIPPED_NAMES)
-        base = Path(dirpath)
-        for d in list(dirnames):
-            if (base / d).is_symlink():
-                out[(base / d).relative_to(root).as_posix()] = "link:" + os.readlink(base / d)
-                dirnames.remove(d)
-        for name in sorted(filenames):
-            p = base / name
-            rel = p.relative_to(root).as_posix()
-            out[rel] = "link:" + os.readlink(p) if p.is_symlink() else sha256_file(p)
+
+    def walk(directory: Path, prefix: str, ancestors: frozenset[str]) -> None:
+        ancestors = ancestors | {os.path.realpath(directory)}
+        for name in sorted(os.listdir(directory)):
+            if name in SKIPPED_NAMES:
+                continue
+            p = directory / name
+            rel = prefix + name
+            if p.is_symlink():
+                target = os.readlink(p)
+                if not p.exists():
+                    out[rel] = f"link:{target} (missing)"
+                elif p.is_dir():
+                    if os.path.realpath(p) in ancestors:
+                        out[rel] = f"link:{target} (cycle)"
+                    else:
+                        out[rel] = f"link:{target}/"
+                        walk(p, rel + "/", ancestors)
+                else:
+                    out[rel] = f"link:{target}:" + sha256_file(p)
+            elif p.is_dir():
+                walk(p, rel + "/", ancestors)
+            else:
+                out[rel] = sha256_file(p)
+
+    walk(root, "", frozenset())
     return out
 
 
@@ -295,6 +317,33 @@ def self_test() -> int:
             return ["key", "--out", str(out), "--value", f"identity={identity}", "--value", "source-sha=abc",
                     "--tree", f"host={host}", "--tree", f"repo={repo}", "--tree", f"modules={mods}",
                     "--listing", f"shared={shared}"]
+
+        # LINKS are keyed by what they RESOLVE to: a link out of every hashed tree whose target
+        # bytes differ between two runners must change the key, file link and directory link alike.
+        outside = t / "outside"
+        (outside / "dir").mkdir(parents=True)
+        (outside / "file.cs").write_text("class A {}")
+        (outside / "dir" / "inner.cs").write_text("class B {}")
+        linked = t / "linked"
+        linked.mkdir()
+        os.symlink(outside / "file.cs", linked / "file.cs")
+        os.symlink(outside / "dir", linked / "dir")
+        os.symlink(".", linked / "dir-up")  # a cycle: back to a directory already on the walk
+        before = tree_digests(linked)
+        check("links: a directory link's contents are keyed under the link's path",
+              "dir/inner.cs" in before, json.dumps(before))
+        check("links: a link back up the path is recorded as a cycle, not walked",
+              before.get("dir-up", "").endswith("(cycle)"), json.dumps(before))
+        (outside / "file.cs").write_text("class A { int x; }")
+        after_file = tree_digests(linked)
+        check("links: another FILE-link target's bytes change the key",
+              digest_of(after_file) != digest_of(before) and after_file["file.cs"] != before["file.cs"], json.dumps(after_file))
+        (outside / "dir" / "inner.cs").write_text("class B { int y; }")
+        after_dir = tree_digests(linked)
+        check("links: another DIRECTORY-link target's bytes change the key",
+              after_dir["dir/inner.cs"] != after_file["dir/inner.cs"], json.dumps(after_dir))
+        check("links: an unchanged tree keys the same twice", tree_digests(linked) == after_dir)
+        shutil.rmtree(linked)
 
         rc, out = run(*key(t / "bake.key.json"))
         check("key: writes a key document", rc == 0 and (t / "bake.key.json").is_file(), out)

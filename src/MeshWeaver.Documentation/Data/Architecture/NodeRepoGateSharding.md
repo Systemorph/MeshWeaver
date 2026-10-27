@@ -264,7 +264,11 @@ plan ──▶ bake (once) ──▶ gate (matrix: shard 1..N) ──▶ verify
   composed gate host (the portal's `/app` and the tester), of the staged repository tree and of the
   external-module directory, the names of the shared frameworks (volume mode), and the identity,
   platform reference, source sha and compile arguments. Only `.git` and `__pycache__` are skipped,
-  by name: they differ between two checkouts of one commit and no compile reads them.
+  by name: they differ between two checkouts of one commit and no compile reads them. A symbolic
+  link is keyed by what it RESOLVES to, because the compile follows it: a file link by its target's
+  bytes, a directory link by the target's contents (a link back into a directory already on the
+  walk is recorded as a cycle, not walked again). A link out of every hashed tree whose target
+  differs between two runners therefore changes the key.
 - **Equal key ⇒ adopt an own copy.** The shard copies the hand-off into its own, empty bake
   directory and re-verifies the copy; nothing a shard does to its bake reaches the hand-off or a
   sibling.
@@ -279,6 +283,9 @@ plan ──▶ bake (once) ──▶ gate (matrix: shard 1..N) ──▶ verify
   instead of re-resolving a newer one: a set sealed during the bake would otherwise make every
   shard stale, and a refresh on top of the bake's compile would cross the 45-minute cap. A shard
   of a LATER attempt ("Re-run failed jobs") re-resolves as before and refreshes when the set moved.
+  This applies only to a platform the LANE resolved. A caller's pins, or `allow-unpinned` tags
+  (plan then hands the shards empty digests), are taken "as called", exactly as the bake took them,
+  and the key decides whether the bake is adopted.
 - **One shard is unchanged.** With `shards: 1` no `bake` runs and the single shard compiles its
   own bake exactly as before. A `bake` that fails or is cancelled runs no shard, and `verify` names
   it as the reason.
@@ -286,7 +293,8 @@ plan ──▶ bake (once) ──▶ gate (matrix: shard 1..N) ──▶ verify
 The self-test (`gate-bake-handoff.py --self-test`, run by `dotnet-test.yml`) carries the negative
 controls: another identity, an edited source file, a changed module assembly and another
 shared-framework set each refresh by name; a byte changed, a bundle missing, an extra bundle, no
-manifest, a re-labelled key, a rewritten identity file and a symbolic link are each refused; a
+manifest, a re-labelled key, a rewritten identity file and a symbolic link are each refused; another
+file-link or directory-link target changes the key, and a link cycle is recorded instead of walked; a
 sibling adopts the original bytes after another shard changed its copy; and every rule was
 mutation-checked (removing it turns at least one case red).
 
