@@ -1230,6 +1230,55 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
           r.returncode == 0 and marker == "Systemorph/MeshWeaver",
           f"rc={r.returncode}, repository.txt={marker!r}")
 
+    # ── THE PLATFORM RECORD: the publication names the set it was sealed on. MeshWeaver#7337 ────
+    #
+    # A consumer gate composes its host on THIS record, so the seed and the host are one set by
+    # construction. Run against a script that predates the record (`--script <old>`), the first
+    # check fails — no platform-set.json is published — which is the negative control.
+    print("\nplatform record — the publication names the platform set it was sealed on (#7337):")
+    tester_digest, portal_digest = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+    platform_env = {
+        "BAKE_PLATFORM_SET": "3.1.11076",
+        "BAKE_TESTER_REF": f"meshweaver.azurecr.io/mw-plugin-test@{tester_digest}",
+        "BAKE_PORTAL_REF": f"meshweaver.azurecr.io/memex-portal-ai@{portal_digest}",
+    }
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1401", platform_env)
+    raw = h.shelf().files().get("platform-set.json", "")
+    try:
+        record = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        record = {"<unparseable>": raw[:80]}
+    check("a lane that names its platform seals platform-set.json inside the publication",
+          r.returncode == 0 and h.shelf().sealed()
+          and record == {"set": "3.1.11076", "testerDigest": tester_digest,
+                         "portalDigest": portal_digest, "identity": IDENTITY},
+          f"rc={r.returncode}, sealed={h.shelf().sealed()}, record={record}")
+    check("…and it is VERIFIED like every other file — the denominator counts it",
+          f"{EXPECTED_FILES + 1}/{EXPECTED_FILES + 1} file(s) hold this run's bytes" in r.stdout,
+          "the record is in the manifest and the postcondition, not a side upload")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1402",
+                  {"BAKE_PLATFORM_SET": "3.1.11076", "BAKE_TESTER_REF": platform_env["BAKE_TESTER_REF"]})
+    check("a PARTIAL record is refused before anything is published",
+          r.returncode != 0 and not h.shelf().sealed() and not h.shelf().files()
+          and "PARTIAL" in (r.stdout + r.stderr),
+          f"rc={r.returncode}, sealed={h.shelf().sealed()}, files={len(h.shelf().files())}")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1403",
+                  {**platform_env, "BAKE_PORTAL_REF": "meshweaver.azurecr.io/memex-portal-ai:latest"})
+    check("a TAG-followed bake writes NO record (it could compose another build) and says so — and still publishes",
+          r.returncode == 0 and h.shelf().sealed() and "platform-set.json" not in h.shelf().files()
+          and "carries no sha256 digest" in (r.stdout + r.stderr),
+          f"rc={r.returncode}, sealed={h.shelf().sealed()}, files={sorted(h.shelf().files())}")
+    # The control: a lane that predates the record publishes exactly as before, and SAYS it wrote none.
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1404")
+    check("a lane that names no platform publishes as before — no record, and says so",
+          r.returncode == 0 and h.shelf().sealed() and "platform-set.json" not in h.shelf().files()
+          and "no platform record" in r.stdout,
+          f"rc={r.returncode}, sealed={h.shelf().sealed()}, files={sorted(h.shelf().files())}")
+
     # ── OVERLAP A: the other lane dies mid-publication, having overwritten part of ours. ───────
     print("\noverlap — the other lane is STILL IN FLIGHT when we seal:")
     h.reset()
