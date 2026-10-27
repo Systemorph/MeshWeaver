@@ -126,6 +126,20 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    `/cache/bundles/<h>/`, the set linked under `/cache/plugin-sets/<key>/`, and the key presented
    as `pluginsKey`. An unreadable index, an index for another framework identity, a missing key or
    a failed fetch means no claim this cycle.
+   **The index is read when a module is HANDED OVER, not on every turn.** `GET /hosts/inputs`
+   also answers `modules: {key, packages, via, at}`. The key is a digest of what the operations
+   instance's registry reconciler last read as served: a module's lane hands its bundle to the
+   registry, the registry broadcasts `module-published`, and the reconciler rewrites
+   `Plugins/_RegistryReconcileLedger`. The host reads `inputs` on every loop turn it already makes,
+   an idle one included, and reads the index only when `modules.key` moved since it staged its
+   layer. So an idle host installs a handed-over module ahead of the next build. Three cases still
+   read the index:
+   - there is no signal (a null `modules`, unreadable inputs): the index is read on every turn;
+   - the staged layer is no longer intact on the cache (install-on-miss): it is installed again,
+     whatever the key says;
+   - the host has just started. The installed layer is recorded per framework identity at
+     `/cache/plugin-sets/current-<identity digest>.json`, so a restarted or new host starts with it
+     installed and reads the index only if a hand-over happened since.
 2. **Claim** with `{host, channel, platformVersion, frameworkIdentity, pluginsDigest, pluginsKey,
    claimId}`. `claimId` is a fresh uuid per claim attempt; a network error or a 5xx is retried
    with the SAME claimId, so the instance answers the assignment it already made. A host keeps no
@@ -178,6 +192,20 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    `requestedStages` (empty = every declared stage) runs and plans EXACTLY those; one the
    repository does not declare is RED.
 
+   **A prepared server, never a prepared run.** A declaration whose command stages, resolves,
+   pulls or restores per run is REFUSED, and the refusal names where the step belongs:
+
+   | refused step | where it belongs |
+   |---|---|
+   | `resolve-platform.py` | the claim's set |
+   | `fetch-refs.py`, `platform-mount` | the init containers |
+   | `module-fetch` | the plugins layer |
+   | an image pull or pre-pull | the host image |
+   | `dotnet restore`, a NuGet install | the warm NuGet cache |
+   | an apt/apk/dnf, pip or npm install | the host image |
+
+   Every declaration in the fleet passes it.
+
    **The run budget.** A stage's `timeoutMinutes` is a PER-STAGE CAP. The run's deadline is the
    host's `MW_BUILD_RUN_DEADLINE_SECONDS` (`buildHosts.runDeadlineSeconds`, default 7200 s, refused
    outside [600, 43200]) and must COVER the declared stages: the default fits MeshWeaver.Plugins'
@@ -193,8 +221,13 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    --unshare-user --unshare-pid --unshare-ipc --unshare-uts --clearenv` with a fresh `/proc`, the
    system directories and every cache (`/cache`, the composed host, the portal and tester trees)
    bound **read-only**, and only three writable places: the run's checkout, its outputs directory
-   (`MW_BUILD_OUTPUTS`) and a `tmpfs` scratch (`HOME`, `TMPDIR`, the writable NuGet folder; the
-   shared NuGet cache is the read-only fallback folder). There is no network namespace — a build
+   (`MW_BUILD_OUTPUTS`), a `tmpfs` scratch (`HOME`, `TMPDIR`) and the run's own NuGet package
+   folder (`NUGET_PACKAGES`, in the run's workspace so the host can see it; the shared NuGet cache
+   is the read-only fallback folder). A package a build still had to restore is reported as a
+   warning (`MWPREP001`, naming it). On a succeeded TRUNK build stage it is verified and then
+   promoted into `/cache/nuget`, so the next run restores nothing. Verification checks the
+   `.nupkg` SHA-512 against both `.nupkg.sha512` and `.nupkg.metadata`'s `contentHash`, and
+   requires no symlinks. A pull request never writes the cache. There is no network namespace — a build
    restores packages — and the NetworkPolicy bounds where it can go.
    - **The environment is an allow-list**, set with `--setenv` after `--clearenv`: `PATH`, locale,
      the .NET switches, `MeshWeaverRefs`, the composed gate host (`MW_BUILD_GATE_HOST`,
