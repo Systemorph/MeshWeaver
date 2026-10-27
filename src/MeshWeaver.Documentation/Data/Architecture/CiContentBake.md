@@ -128,6 +128,16 @@ no thread parked on a wait.
 - **Deterministic output.** A compile never writes the console; it carries its lines back and the fold
   prints them, adds the results and the bundle entries in ordinal path order. The only new line is
   `bake: compiled N NodeType(s) in X s wall (Y s of compile work, max-parallel=P)`.
+- **Isolation.** Each compile attempt writes into a directory of its own. The sanitized type name is
+  not unique (`Ctrl/A_B` and `Ctrl/A/B` both become `Ctrl_A_B`, and a case-only pair collides on a
+  case-insensitive file system), and the bundle reads each entry's bytes back from that path when it
+  writes the bundle. The dependency graph is case-insensitive while the work items are ordinal paths,
+  so `BakeSchedule.BuildAfter` orders case-insensitive groups and hands every spelling its group's
+  order. A case-only pair is ordered, not refused.
+- **Cleanup waits for the compiles.** Disposing the pipeline does not interrupt a compile already
+  running on the pool. Termination therefore cancels the running compiles and refuses new ones. The
+  NuGet resolver, the IO pools and the work directory are released only when the last compile that
+  entered has returned (`TreeBake.BakeLifetime`).
 - **Server GC.** `mw-plugin-test` runs with `ServerGarbageCollection`. Roslyn allocates heavily, and
   under workstation GC the parallel compiles serialise on one heap.
 

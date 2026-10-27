@@ -347,8 +347,12 @@ public static class TreeBake
         // out. There is no mesh in this process, so the bake owns the pool registry a mesh would:
         // the resolver gets the same bounded Http and PackageCache lanes it gets in a portal, and
         // both are disposed with the bake.
-        // Both are disposed, and the work directory removed, when the pipeline below terminates —
-        // on completion, on error and on unsubscription alike.
+        // Both are disposed, and the work directory removed, once the pipeline below has
+        // terminated — on completion, on error and on unsubscription alike — AND every compile it
+        // started has returned. Disposing the cascade does not interrupt a compile already running
+        // on the pool, so cleanup at termination alone could dispose the resolver under a running
+        // compile or delete the directory it is writing into (BakeLifetime). Termination cancels
+        // the compiles cooperatively, and no compile starts after it.
         var ioPools = new IoPoolRegistry();
         var nugetResolver = new NuGetAssemblyResolver(
             options.LoggerFactory?.CreateLogger<NuGetAssemblyResolver>()
@@ -357,22 +361,78 @@ public static class TreeBake
 
         var workDirectory = Path.Combine(
             Path.GetTempPath(), $"mw-compiler-bake-{Environment.ProcessId}-{Guid.NewGuid():N}");
-        return Observable.Defer(() => BakeAll(
-                options, treeNodes, nodeSet, packages, snapshot, host, workDirectory, nugetResolver))
-            .Finally(() =>
+        var cancellation = new CancellationTokenSource();
+        var lifetime = new BakeLifetime(cancellation, () =>
+        {
+            nugetResolver.Dispose();
+            ioPools.Dispose();
+            cancellation.Dispose();
+            try
             {
-                nugetResolver.Dispose();
-                ioPools.Dispose();
-                try
-                {
-                    if (Directory.Exists(workDirectory))
-                        Directory.Delete(workDirectory, recursive: true);
-                }
-                catch (IOException)
-                {
-                    // A leftover temp directory costs disk, never correctness.
-                }
-            });
+                if (Directory.Exists(workDirectory))
+                    Directory.Delete(workDirectory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A leftover temp directory costs disk, never correctness.
+            }
+        });
+        return Observable.Defer(() => BakeAll(
+                options, treeNodes, nodeSet, packages, snapshot, host, workDirectory, nugetResolver, lifetime))
+            .Finally(lifetime.Terminate);
+    }
+
+    /// <summary>
+    /// Ties the bake's shared resources to the compiles that use them. A compile
+    /// <see cref="TryEnter">enters</see> before it touches the resolver or the work directory and
+    /// <see cref="Exit">exits</see> when it returns; <see cref="Terminate"/> (the pipeline ended)
+    /// cancels the running compiles and refuses new ones. The cleanup runs ONCE, when the pipeline
+    /// has terminated and no compile is inside — whichever of the two happens last runs it.
+    /// Entering increments BEFORE it reads the termination flag, and terminating sets the flag
+    /// BEFORE it reads the count (both interlocked, full fences), so a compile either is counted
+    /// by the terminator or sees the termination and never starts.
+    /// </summary>
+    internal sealed class BakeLifetime(CancellationTokenSource cancellation, Action cleanup)
+    {
+        private int inside;
+        private int terminated;
+        private int cleaned;
+
+        /// <summary>Cancelled when the pipeline terminates.</summary>
+        public CancellationToken Token { get; } = cancellation.Token;
+
+        /// <summary>Enters a compile; false once the pipeline has terminated (nothing was entered).</summary>
+        public bool TryEnter()
+        {
+            Interlocked.Increment(ref inside);
+            if (Interlocked.CompareExchange(ref terminated, 0, 0) == 0)
+                return true;
+            Exit();
+            return false;
+        }
+
+        /// <summary>Leaves a compile entered by <see cref="TryEnter"/>.</summary>
+        public void Exit()
+        {
+            if (Interlocked.Decrement(ref inside) == 0 && Interlocked.CompareExchange(ref terminated, 0, 0) == 1)
+                Clean();
+        }
+
+        /// <summary>The pipeline terminated: cancel what runs, refuse what would start.</summary>
+        public void Terminate()
+        {
+            if (Interlocked.Exchange(ref terminated, 1) == 1)
+                return;
+            cancellation.Cancel();
+            if (Interlocked.CompareExchange(ref inside, 0, 0) == 0)
+                Clean();
+        }
+
+        private void Clean()
+        {
+            if (Interlocked.Exchange(ref cleaned, 1) == 0)
+                cleanup();
+        }
     }
 
     /// <summary>
@@ -532,7 +592,8 @@ public static class TreeBake
         RepoSnapshot snapshot,
         BakeHost host,
         string workDirectory,
-        INuGetAssemblyResolver nugetResolver)
+        INuGetAssemblyResolver nugetResolver,
+        BakeLifetime lifetime)
     {
         var frameworkIdentity = host.FrameworkIdentity;
         var idOf = host.IdOf;
@@ -566,6 +627,22 @@ public static class TreeBake
         // log line for line, whatever order the compiles finished in.
         TypeOutcome? CompileOne(TreeNodeLoader.TreeNode candidate)
         {
+            // The pipeline ended (an unsubscription): start nothing that would touch the resolver
+            // or the work directory after their cleanup could have run.
+            if (!lifetime.TryEnter())
+                throw new OperationCanceledException(lifetime.Token);
+            try
+            {
+                return CompileEntered(candidate);
+            }
+            finally
+            {
+                lifetime.Exit();
+            }
+        }
+
+        TypeOutcome? CompileEntered(TreeNodeLoader.TreeNode candidate)
+        {
             var log = ImmutableArray.CreateBuilder<string>();
             var definition = (NodeTypeDefinition)candidate.Node.Content!;
             var resolution = nodeSet.ResolveSources(
@@ -593,13 +670,20 @@ public static class TreeBake
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
-                    Path.Combine(workDirectory, CodeConventions.SanitizeNodeName(candidate.Node.Path)),
+                    // 🚨 A directory of its OWN per compile attempt. The sanitized name is not
+                    // unique — `Ctrl/A_B` and `Ctrl/A/B` both sanitize to `Ctrl_A_B`, and a
+                    // case-only pair collides on a case-insensitive file system — and the bundle
+                    // entry reads its bytes back from this path later, so a shared directory hands
+                    // one type the other's DLL, and two parallel compiles overwrite each other.
+                    Path.Combine(workDirectory, Guid.NewGuid().ToString("N"),
+                        CodeConventions.SanitizeNodeName(candidate.Node.Path)),
                     // The ONE Task bridge in the bake, at a console build step — never on a hub
                     // scheduler. NuGet restore is genuine network IO with no reactive surface;
                     // the runtime bridges it through the IoPool for the same reason.
                     resolveNuGet: BlockingNuGetResolution(nugetResolver),
                     logger: options.Logger,
-                    moduleAssemblyPaths: host.ModuleAssemblyPaths);
+                    moduleAssemblyPaths: host.ModuleAssemblyPaths,
+                    ct: lifetime.Token);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake
                 // writes `NodeTypeDefinition.CompiledSources`, which DiscoverSourceVersionSnapshot

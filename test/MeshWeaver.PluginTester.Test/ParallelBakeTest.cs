@@ -131,6 +131,58 @@ public partial class ParallelBakeTest(ITestOutputHelper output)
         Assert.Empty(after["Ctrl/Y"]);
     }
 
+    /// <summary>
+    /// The bake's work items are ORDINAL paths and the dependency graph is case-insensitive. A
+    /// case-only pair (<c>Ctrl/Foo</c>, <c>Ctrl/foo</c>) used to throw out of a case-insensitive
+    /// map and abort the whole bake; now both keep their own entry, and a type that pulls the
+    /// pair's source waits for BOTH spellings. Negative control: the unrelated type waits on nothing.
+    /// </summary>
+    [Fact]
+    public void BuildAfter_KeepsACaseOnlyPairApart_AndOrdersADependentAfterBoth()
+    {
+        var after = BakeSchedule.BuildAfter(
+        [
+            ("Ctrl/Foo", new NodeTypeDefinition()),
+            ("Ctrl/foo", new NodeTypeDefinition()),
+            ("Ctrl/Uses", new NodeTypeDefinition { Sources = ["shared=@Ctrl/foo/Source"] }),
+            ("Ctrl/Free", new NodeTypeDefinition()),
+        ]);
+
+        Assert.Equal(["Ctrl/Foo", "Ctrl/Free", "Ctrl/Uses", "Ctrl/foo"], after.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Empty(after["Ctrl/Foo"]);
+        Assert.Empty(after["Ctrl/foo"]);
+        Assert.Equal(["Ctrl/Foo", "Ctrl/foo"], after["Ctrl/Uses"]);
+        Assert.Empty(after["Ctrl/Free"]);
+    }
+
+    /// <summary>
+    /// The bake's shared resources outlive every compile that entered: terminating the pipeline
+    /// while a compile runs cancels it and refuses new ones, but cleans up only when that compile
+    /// has left — and exactly once. Negative control: with nothing inside, termination cleans at once.
+    /// </summary>
+    [Fact]
+    public void BakeLifetime_CleansUpOnlyAfterTheLastCompileLeft_AndRefusesNewOnes()
+    {
+        var cleaned = 0;
+        var lifetime = new TreeBake.BakeLifetime(new CancellationTokenSource(), () => cleaned++);
+        Assert.True(lifetime.TryEnter());
+
+        lifetime.Terminate();
+        Assert.True(lifetime.Token.IsCancellationRequested, "termination cancels the running compiles");
+        Assert.Equal(0, cleaned); // a compile is still inside — its resolver and directory must survive
+        Assert.False(lifetime.TryEnter(), "no compile starts after termination");
+        Assert.Equal(0, cleaned);
+
+        lifetime.Exit();
+        Assert.Equal(1, cleaned);
+        lifetime.Terminate();
+        Assert.Equal(1, cleaned);
+
+        var idleCleaned = 0;
+        new TreeBake.BakeLifetime(new CancellationTokenSource(), () => idleCleaned++).Terminate();
+        Assert.Equal(1, idleCleaned);
+    }
+
     // ── 2. byte-identical output ──────────────────────────────────────────────────────────────
 
     private const string PackageIndexJson =
@@ -233,6 +285,61 @@ public partial class ParallelBakeTest(ITestOutputHelper output)
             foreach (var d in new[] { repo, changedRepo, serialOut, serialAgainOut, parallelOut, changedOut })
                 Cleanup(d);
         }
+    }
+
+    /// <summary>
+    /// Two types whose SANITIZED names collide — <c>Ctrl/A_B</c> and <c>Ctrl/A/B</c> both become
+    /// <c>Ctrl_A_B</c> — each ship their OWN assembly. The bundle entry reads its bytes back from
+    /// the compile's output path when the bundle is written, so a shared directory handed both
+    /// entries whichever DLL was written last (serially), or two half-written ones (in parallel).
+    /// Each DLL must define its own record and not the other's — at both parallelisms.
+    /// </summary>
+    [Fact(Timeout = 600_000)]
+    public void TypesWhoseSanitizedNamesCollide_EachShipTheirOwnAssembly()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var repo = TempDirectory("mw-par-collide");
+        var serialOut = TempDirectory("mw-par-collide-serial");
+        var parallelOut = TempDirectory("mw-par-collide-parallel");
+        try
+        {
+            Write(repo, "Ctrl/index.json", PackageIndexJson);
+            Write(repo, "Ctrl/A_B.json", NodeTypeJson("A_B").Replace("WithContentType<A_B>", "WithContentType<Underscored>"));
+            Write(repo, "Ctrl/A_B/Source/Underscored.cs", Record("Underscored"));
+            Write(repo, "Ctrl/A/B.json",
+                $$$"""{"$type":"MeshNode","id":"B","namespace":"Ctrl/A","path":"Ctrl/A/B","mainNode":"Ctrl/A/B","name":"B","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"B","configuration":"config => config.WithContentType<Nested>().AddDefaultLayoutAreas()","includeGlobalTypes":true}}""");
+            Write(repo, "Ctrl/A/B/Source/Nested.cs", Record("Nested"));
+
+            foreach (var (outDir, parallel) in new[] { (serialOut, 1), (parallelOut, 4) })
+            {
+                var run = Bake(repo, outDir, parallel);
+                Assert.Null(run.Report.FatalError);
+                Assert.Equal(["Ctrl/A/B", "Ctrl/A_B"], run.Report.Types.Where(t => t.Success).Select(t => t.NodePath));
+                var entries = ZipEntries(File.ReadAllBytes(
+                    Directory.EnumerateFiles(outDir, "*.zip", SearchOption.AllDirectories).Single()));
+                Assert.Equal(["Underscored"], RecordsIn(entries.Single(e => e.Name.EndsWith("/Ctrl/A_B.dll", StringComparison.Ordinal)).Bytes));
+                Assert.Equal(["Nested"], RecordsIn(entries.Single(e => e.Name.EndsWith("/Ctrl/A/B.dll", StringComparison.Ordinal)).Bytes));
+            }
+        }
+        finally
+        {
+            foreach (var d in new[] { repo, serialOut, parallelOut })
+                Cleanup(d);
+        }
+    }
+
+    /// <summary>The names of the test records (<see cref="Record"/>) an assembly defines.</summary>
+    private static ImmutableArray<string> RecordsIn(byte[] dll)
+    {
+        using var pe = new PEReader(new MemoryStream(dll));
+        var metadata = pe.GetMetadataReader();
+        return
+        [
+            .. metadata.TypeDefinitions
+                .Select(h => metadata.GetString(metadata.GetTypeDefinition(h).Name))
+                .Where(n => n is "Underscored" or "Nested")
+                .Order(StringComparer.Ordinal),
+        ];
     }
 
     private sealed record BakeRun(TreeBake.Report Report, string Log);

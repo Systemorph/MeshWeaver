@@ -34,18 +34,48 @@ internal static class BakeSchedule
     /// <see cref="NodeTypeDependencyGraph.DependenciesOf"/>, with the edges inside a dependency
     /// cycle removed (<see cref="NodeTypeDependencyGraph.WithoutCycleEdges"/>). Keyed and valued
     /// with the types' own path spellings.
+    /// <para>🚨 The graph is case-INSENSITIVE and the bake's work items are ORDINAL: the loader,
+    /// the node set and the bake's grouping keep <c>Ctrl/Foo</c> and <c>Ctrl/foo</c> apart, so
+    /// the graph runs over case-insensitive GROUPS (spelled by their ordinal-least member) and
+    /// every member gets its group's order back, expanded to every ordinal spelling of each group
+    /// it waits for. That can only order MORE, never drop a type: a map keyed case-insensitively
+    /// would instead throw on the pair and abort the whole bake.</para>
     /// </summary>
     /// <param name="types">The NodeTypes the bake attempts: path and definition.</param>
     internal static ImmutableDictionary<string, ImmutableArray<string>> BuildAfter(
         IEnumerable<(string Path, NodeTypeDefinition? Definition)> types)
     {
-        var map = types.ToDictionary(
-            t => t.Path, t => t.Definition, StringComparer.OrdinalIgnoreCase);
-        var acyclic = NodeTypeDependencyGraph.WithoutCycleEdges(NodeTypeDependencyGraph.Build(map));
-        return acyclic.ToImmutableDictionary(
-            kv => kv.Key,
-            kv => kv.Value.OrderBy(d => d, StringComparer.Ordinal).ToImmutableArray(),
-            StringComparer.Ordinal);
+        var all = types.ToList();
+        var groups = all
+            .GroupBy(t => t.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (Key: g.Select(t => t.Path).Min(StringComparer.Ordinal)!, Members: g.ToList()))
+            .ToList();
+        var keys = groups.Select(g => g.Key).ToArray();
+        var spellings = groups.ToDictionary(
+            g => g.Key,
+            g => g.Members.Select(t => t.Path).Distinct(StringComparer.Ordinal).ToImmutableArray(),
+            StringComparer.OrdinalIgnoreCase);
+        var groupDependencies = groups.ToDictionary(
+            g => g.Key,
+            g => g.Members
+                .SelectMany(t => NodeTypeDependencyGraph.DependenciesOf(t.Definition, t.Path, keys))
+                .Where(d => !string.Equals(d, g.Key, StringComparison.OrdinalIgnoreCase))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+        var acyclic = NodeTypeDependencyGraph.WithoutCycleEdges(groupDependencies);
+
+        var result = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.Ordinal);
+        foreach (var (key, members) in groups)
+        {
+            var after = acyclic[key]
+                .SelectMany(d => spellings[d])
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(d => d, StringComparer.Ordinal)
+                .ToImmutableArray();
+            foreach (var member in members)
+                result[member.Path] = after;
+        }
+        return result.ToImmutable();
     }
 
     /// <summary>
