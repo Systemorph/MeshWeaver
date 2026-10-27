@@ -54,8 +54,18 @@ publication.** One set identity for host and seed, so there is nothing to race.
 the publication, before the sentinel, in the manifest and verified by the postcondition like every
 other file, and uploaded before `architecture.txt` ([Sealed Publication Generations](../SealedPublicationGenerations)).
 The sealed-skip leaves the incumbent's record in place, which is still the record of the
-incumbent's bytes. It is not a content marker for the convergence verdict: two bakes of one
+incumbent's bytes. A publication that writes NO record removes any record already in its directory
+while that directory is unsealed, before its upload: the plan only adds and overwrites, so without
+the removal a flat directory republished record-less would seal the previous bake's set over bytes
+it does not describe, and consumers would compose on it instead of taking the no-record fallback. It is not a content marker for the convergence verdict: two bakes of one
 commit on two platforms are two publications.
+
+Bundles carried forward from an earlier publication (a narrowed bake, a withheld package) were
+floored by the run that baked them, while the record names the set of the run that seals the whole
+publication. So the floor gate runs a second time over the ASSEMBLED publication, after both carries
+and before the publish: a bake frozen to an older set inside one compatibility epoch that would carry
+a bundle floored above the set it records is refused rather than sealed, because its consumers would
+decline that bundle. `assert-bake-floor.py --self-test` reads the lane and holds that order.
 
 It is optional, and loudly so. A lane at a ref that predates it writes none and says so; a bake that
 followed a TAG writes none and warns (a record naming a tag could compose another build); a partial
@@ -117,9 +127,6 @@ publication's set is RED from the start: that is exactly the declined case.
   repository's main-passed set. A publication sealed on a set the volume no longer holds is RED on
   a volume runner ("moved PAST it") until the refresh also installs the sets the upstream
   publications name; a container-mode runner pulls it by digest.
-- Bundles carried forward from an earlier publication (a withheld package) were floored by the run
-  that baked them, at or below that run's set. The record names the set of the run that sealed the
-  publication; the seal-time floor gate checks only the bundles that run baked.
 - The module set the gate composes (`registry-modules`) is read from the same publication by
   identity; on the registry route it is not pinned to the generation the seed read.
 

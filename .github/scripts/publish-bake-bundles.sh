@@ -1210,6 +1210,34 @@ publish_release_marker() { # <account> <share> <base>
 # `|| rc=$?` its caller needed for `return 3` is what made every "fatal by set -e" inside it a no-op.
 ONE_TARGET_VERDICT=""
 
+# 🚨 A RECORD-LESS publication must not inherit the previous one's record (Copilot on #7423). The
+# upload plan only ADDS and OVERWRITES, and the postcondition reads only what the plan names, so a
+# flat directory republished by a bake that writes no record (a tag-followed bake, a lane at a ref
+# that predates MeshWeaver#7337) would keep the previous bake's platform-set.json under the new
+# seal — and every consumer would compose its host on THAT set for bundles it does not describe,
+# instead of taking the no-record fallback. So before the upload, while the directory is unsealed,
+# the record is removed. A fresh generation directory has none, so there the read answers false.
+# The sealed-skip never reaches this function, so an incumbent's record stays with its own bytes.
+retire_stale_platform_record() { # <account> <share> <dest-dir>
+  local account="$1" share="$2" dest="$3" present
+  present=$(az storage file exists --account-name "$account" --share-name "$share" \
+    --path "$dest/$PLATFORM_RECORD_FILE" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors) || {
+    echo "::error::could not read whether $account/$share/$dest/$PLATFORM_RECORD_FILE exists — this publication writes no platform record, and sealing it over a previous one would hand every consumer a platform these bytes were not baked on. Refusing; nothing is sealed."
+    exit 1
+  }
+  case "$present" in
+    false) return 0 ;;
+    true)
+      az storage file delete --account-name "$account" --share-name "$share" \
+        --path "$dest/$PLATFORM_RECORD_FILE" --auth-mode login --backup-intent --only-show-errors > /dev/null
+      echo "platform record: removed the previous publication's $account/$share/$dest/$PLATFORM_RECORD_FILE — this publication names no platform, so its consumers take the no-record fallback (MeshWeaver#7337)." ;;
+    *)
+      echo "::error::'$present' is not an answer to whether $account/$share/$dest/$PLATFORM_RECORD_FILE exists. Refusing; nothing is sealed."
+      exit 1 ;;
+  esac
+}
+
 publish_one_target() { # <account> <share> <dest-dir> <resealing>
   local account="$1" share="$2" dest="$3" resealing="$4"
   # Republishing OVER a sealed directory: UNSEAL first. Readers must never seed a mid-replace
@@ -1219,6 +1247,9 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
     az storage file delete --account-name "$account" --share-name "$share" \
       --path "$dest/$SENTINEL" --auth-mode login --backup-intent --only-show-errors > /dev/null
     echo "unsealed: $account/$share/$dest ($SENTINEL removed — content changed, republishing)"
+  fi
+  if [ "$HAS_PLATFORM_RECORD" != "true" ]; then
+    retire_stale_platform_record "$account" "$share" "$dest"
   fi
   # THE WHOLE PUBLICATION IN ONE PROCESS: every bundle, every module, modules/_index, the markers
   # and the platform surface — the plan built above, in the order they used to go one by one

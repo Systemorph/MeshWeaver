@@ -2397,6 +2397,17 @@ jobs:
           python3 mw-platform-gate/.github/scripts/seal-packages.py listing
           --bake "$BAKE_DIR" --content "$GITHUB_WORKSPACE" --commit "$CONTENT_SHA"
           --withhold "$WITHHOLD_PACKAGES" --state "${{ runner.temp }}/bake-scope"
+      # 🚨 THE FLOOR GATE AGAIN, over the ASSEMBLED publication (Copilot on #7423). The gate above runs
+      # on this bake's fresh bundles, before the carries; the platform record names ONE set for the
+      # WHOLE publication, carried bundles included. A bake frozen to an older set inside the same
+      # compatibility epoch can carry a bundle whose floor is newer than the set it records, and every
+      # consumer composing its host on the record would decline it despite a successful seal. So the
+      # set that is about to be sealed — fresh and carried — is checked against the set it will name.
+      - name: "Gate: no bundle of the assembled publication (fresh and carried) stamps a floor above the portal it names"
+        if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
+        env:
+          PLATFORM_VERSION: ${{ steps.platform-version.outputs.version }}
+        run: python3 mw-platform-gate/.github/scripts/assert-bake-floor.py --bake "$BAKE_DIR" --platform-version "$PLATFORM_VERSION"
       - name: Publish bundles to every portal target
         id: publish
         if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'

@@ -1271,6 +1271,31 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
           r.returncode == 0 and h.shelf().sealed() and "platform-set.json" not in h.shelf().files()
           and "carries no sha256 digest" in (r.stdout + r.stderr),
           f"rc={r.returncode}, sealed={h.shelf().sealed()}, files={sorted(h.shelf().files())}")
+    # Copilot on #7423: a record-bearing publication REPLACED by a record-less one must not leave
+    # the old record under the new seal — a consumer would compose its host on the previous bake's
+    # set for bytes it does not describe. Against the script before the fix the record survives.
+    h.reset()
+    r1 = h.publish(core, "Systemorph/MeshWeaver", "1405", platform_env)
+    r2 = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "1406",
+                   {**platform_env, "BAKE_PORTAL_REF": "meshweaver.azurecr.io/memex-portal-ai:latest"})
+    check("record-bearing → record-less republish removes the previous record (no stale platform)",
+          r1.returncode == 0 and r2.returncode == 0 and h.shelf().sealed()
+          and "platform-set.json" not in h.shelf().files()
+          and h.shelf().bakes_present().get("satellite", 0) > 0
+          and "removed the previous publication's" in r2.stdout,
+          f"rc={r1.returncode}/{r2.returncode}, sealed={h.shelf().sealed()}, files={sorted(h.shelf().files())}")
+    # …and the sealed-skip is untouched: the same content again, record-less, leaves the incumbent
+    # (its bytes AND its record) exactly as it was.
+    h.reset()
+    r1 = h.publish(core, "Systemorph/MeshWeaver", "1407", platform_env)
+    before = h.shelf().files().get("platform-set.json")
+    r2 = h.publish(core, "Systemorph/MeshWeaver", "1408")
+    check("a sealed-skip keeps the incumbent's record with the incumbent's bytes",
+          r1.returncode == 0 and r2.returncode == 0 and h.shelf().sealed() and before
+          and h.shelf().files().get("platform-set.json") == before
+          and "removed the previous publication's" not in r2.stdout,
+          f"rc={r1.returncode}/{r2.returncode}, record before={bool(before)}, "
+          f"after={bool(h.shelf().files().get('platform-set.json'))}")
     # The control: a lane that predates the record publishes exactly as before, and SAYS it wrote none.
     h.reset()
     r = h.publish(core, "Systemorph/MeshWeaver", "1404")
