@@ -116,7 +116,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// Held at ZERO for every bridge shape. The only tolerated bridges are the sanctioned
     /// IMPLEMENTATIONS in <see cref="SanctionedBridges"/>, and those are verified, not listed.
     /// </summary>
-    private static readonly string[] ProductionRoots = ["src", "tools", "samples", "clients", "memex"];
+    private static readonly string[] ProductionRoots = ["src", "tools", "samples", "clients"];
 
     /// <summary>
     /// The last tree still carrying a seeded inventory. <c>memex/</c> left this list when its sweep
@@ -195,7 +195,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     /// static type, which is the same instrument #4756's name-keyed half is waiting for.</para>
     /// </summary>
     private static readonly ImmutableArray<string> DirectAwaitZeroRoots =
-        ["src", "tools", "samples", "clients", "memex", "test"];
+        ["src", "tools", "samples", "clients", "test"];
 
     /// <summary>
     /// The member names that END an expression whose static type is an

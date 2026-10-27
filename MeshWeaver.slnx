@@ -13,11 +13,6 @@
   <Folder Name="/samples/">
     <File Path="samples/Directory.Build.props" />
   </Folder>
-  <Folder Name="/memex/">
-  </Folder>
-  <Folder Name="/memex/aspire/">
-    <Project Path="memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj" />
-  </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
     <File Path=".gitignore" />

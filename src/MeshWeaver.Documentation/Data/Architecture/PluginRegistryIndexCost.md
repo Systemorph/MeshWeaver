@@ -16,7 +16,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 every request.** For an 8.7 KB document that was measured, from inside two production portals, at
 ~0.03 s to connect and then **12-19 s to first byte** — and the cost grows with the number of
 published packages. The measurement is recorded in the code that had to work around it,
-`memex/aspire/Memex.Portal.ServiceDefaults/ServiceDefaults.cs`.
+MeshWeaver.Plugins `src/Memex.Portal.ServiceDefaults/ServiceDefaults.cs`.
 
 This page exists because that single cost produced **two incidents that look unrelated**, and
 because the obvious remedy for each is the one thing that must not be done.
