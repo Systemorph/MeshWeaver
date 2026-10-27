@@ -580,6 +580,26 @@ activated per-node hub, the "delete wins" tombstone and the subtree write guard 
 the commit), and one tick of the no-progress watchdog per row. A row the batch did not actually
 remove is not reported as removed.
 
+**A batch that fails part-way retires what it removed (#7396).** `DeleteMany` used to report its
+removed set only when the whole batch succeeded, so a batch that removed some rows and then faulted
+left the hubs at those rows activated under addresses that name no node. The storage contract now
+says what a part-way failure removed: the fault is a `BatchDeletePartiallyAppliedException` whose
+`Removed` lists exactly the rows that left storage, and any other fault means no removal was
+confirmed. The default implementation (one row at a time), the composite's union over its writable
+providers (every provider is heard to the end, so one provider's failure does not hide another's
+removals; a provider whose `DeleteMany` throws while being called is that provider's failure, not the
+batch's; and a path one provider removed but a FAILED provider still holds is not reported, because
+the node is still readable), the history-purging and write-guard decorators and the remote partition handler
+(`DeleteBatchResponse.DeletedPaths` alongside its `Error`) all keep it. The commit gives those rows
+the same side effects as a completed batch's rows, and the commit's failure carries them. A row the
+batch did not remove keeps its hub. A backend override that removes in several statements, such as
+the Postgres adapter's one statement per target table (MeshWeaver.Plugins), must report the rows of
+the statements that committed; until it does, its part-way failure is a bare fault and retires
+nothing, as before. The fault's message is the store's own, verbatim, so no framework-authored
+English reaches a move's or a delete's failure text. Pinned by
+`APartWayBatchDeleteRetiresWhatItRemovedTest` (FaultInjection.Test) and
+`ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest` (Hosting.Test).
+
 A satellite whose owner is NOT in the plan, such as `{root}/Ghost/_Activity/x` with no node at
 `{root}/Ghost`, keeps the per-node lane. A
 segment whose rows gain per-node delete semantics must leave the declared set in the same change.

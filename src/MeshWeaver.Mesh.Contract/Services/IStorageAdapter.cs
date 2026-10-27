@@ -311,20 +311,21 @@ public interface IStorageAdapter
     /// unchanged. 🚨 Decorators MUST forward, or the batching is silently lost at the outermost
     /// one that falls back to this default, the same forwarding rule as <see cref="DeleteIfExists"/>
     /// and <see cref="ListDescendantPaths"/>.</para>
+    ///
+    /// <para>🚨 <b>A batch that fails PART-WAY says what it removed (#7396).</b> When rows have left
+    /// storage and the batch then faults, the fault is a
+    /// <see cref="BatchDeletePartiallyAppliedException"/> naming them, so a move or a delete can
+    /// retire the hubs at exactly the paths that are gone. Any other fault means no removal was
+    /// confirmed. An override that removes in several statements MUST keep this: it knows which
+    /// statements committed, and that set is what it reports. A decorator that reacts to removals
+    /// (forgets a mark, purges history) reacts to the reported set on the failure path too.</para>
     /// </summary>
     IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
         // Built on DeleteIfExists, not Delete: the result must be what this adapter ACTUALLY
         // removed (Delete emits its path either way), because the composite unions these to learn
         // what left storage. Backends that cannot observe the outcome inherit DeleteIfExists's
         // documented non-strict default and simply report everything, exactly as they do today.
-        => System.Reactive.Linq.Observable.Select(
-            System.Reactive.Linq.Observable.ToList(
-                System.Reactive.Linq.Observable.Where(
-                    System.Reactive.Linq.Observable.Concat(
-                        paths.Select(p => System.Reactive.Linq.Observable.Select(
-                            DeleteIfExists(p), removed => removed ? p : null))),
-                    p => p is not null)),
-            removed => (IReadOnlyList<string>)removed.Select(p => p!).ToList());
+        => StorageBatchDelete.OneAtATime(paths, DeleteIfExists);
 
     /// <summary>
     /// 🚨 PRE-FLIGHT for <see cref="Delete"/> — names the READ-ONLY storage provider that makes
