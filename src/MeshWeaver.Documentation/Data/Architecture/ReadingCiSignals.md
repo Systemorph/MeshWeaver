@@ -159,6 +159,47 @@ A guard's own *fetch* is deliberately **not** a prerequisite: its consumers run 
 they could not open, which is a second red rather than a silent skip, and the fetch's `::error::` is the
 root.
 
+## A scheduled red is red in an empty room
+
+**A `schedule:` run is attached to no pull request, no reviewer and no check list.** Its red updates
+nothing and pages nobody, so from outside it is indistinguishable from a gate that cannot fail.
+Measured (#7416): core's `lock-pinned-digests.yml` was red on every run from 2026-09-15 to 2026-09-21
+(runs 25–34) and nobody read it for six days, while its green was the committed precondition for
+re-enabling the registry purge. A guard that asserted the lane's *configuration* was green throughout
+— configuration is not outcome.
+
+**The reporter already exists — use it, never a new one.** A scheduled lane ends in the ci-failure
+ledger pair: a job calling `node-repo-ci-failure.yml` with `outcome: failure` and one with
+`outcome: success`, under the lane's **own** `label` and `issue-title` (never `ci-main-red`, which is
+a repository's main build, and never `ci-failure`, which is CD's — the ledger only ever touches an
+issue carrying its label, its title, its ownership mark and the Actions bot as author). One issue per
+lane, a dated entry per red, reopened within seven days rather than re-filed, closed by the next
+green, and a signed event to the control portal's triage inbox. The failure half `needs:` every
+other job and runs `always()`: `!cancelled()` would miss a job cut at its `timeout-minutes`, and an
+implicit `success()` skips the reporter on exactly the runs it exists for. The template is the end of
+`lock-pinned-digests.yml` (`cause` / `lane-red` / `lane-green`). A lane whose state is better kept as
+one standing issue that a single job rewrites uses `sentinel-issue.py` instead (`issue-taxonomy.yml`).
+
+**And say WHICH red it is.** The ten reds above had two causes in the same job and the same step, so
+"step X failed" read as one six-day outage. The caller's `cause` job runs
+`ci-failure-ledger.py --list-failed-jobs <run id>` (granting `actions: read` + `checks: read`) and
+hands the lane each failed job with a **cause signature** — a short hash over the job's error
+annotations, with case, whitespace, digits and long hex runs folded and GitHub's generic
+`Process completed with exit code N.` dropped. Each ledger entry then reads *same as the previous
+red* or *🔀 CHANGED since the previous red*. Only the hash reaches the issue: a lane's error text can
+name a client estate's host, and the issue is public (policy `issue-text-name-scan`); the run link
+carries the text. What a changed signature does not establish: a re-worded error message also changes
+it — read both runs before calling it a new cause.
+
+**Enforced, not remembered.** `check-scheduled-lane-reporters.py` (core's `CI's own shell` lane, on
+every pull request) refuses a workflow with `on: schedule` that has neither the ledger pair nor a
+sentinel report job, a pair whose two halves use different labels, a failure-only or success-only
+reporter, a reporter that does not `needs:` every job, and one with no failure-surviving `if:`. Known
+debt sits in `.github/scheduled-lane-reporters.allow` with a reason per line; that list only shrinks —
+an entry for a lane that is gone, unscheduled, or now reports is stale and reds. Satellites are not
+yet held to it: the gate is not wired into `node-repo-validate.yml`, so a satellite's scheduled lane
+is covered only where its `ci.yml` follows the caller contract in `node-repo-ci-failure.yml`'s header.
+
 ## Required ≠ meaningful, in both directions
 
 Two independent facts, and confusing them costs time in both directions:

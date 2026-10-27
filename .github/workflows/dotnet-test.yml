@@ -2559,6 +2559,17 @@ jobs:
     - name: "Every job is capped at 45 minutes"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 📣 A scheduled workflow reports its red somewhere durable (#7416): lock-pinned-digests.yml was
+    # red for six days on its schedule and nobody read it. Every `on: schedule` workflow carries the
+    # ci-failure ledger pair (or a standing sentinel issue) with a reporter that `needs:` every job and
+    # survives a failure — or a reasoned line in .github/scheduled-lane-reporters.allow, a list that
+    # only shrinks. Self-test first (the incident shape, every reporter defect, every stale entry).
+    - name: "A scheduled workflow's red has an audience — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-scheduled-lane-reporters.py --self-test
+    - name: "A scheduled workflow's red has an audience"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-scheduled-lane-reporters.py --root .
     # 🔐 No doc, runbook, skill or script tells a human to set or read a Key Vault secret by hand
     # (policy `secrets-write-only-entry`, Doc/Architecture/SecretsWriteOnlyEntry): secrets are
     # entered through the write-only GUI of the app that owns them and written by the governed

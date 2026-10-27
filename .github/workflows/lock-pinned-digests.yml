@@ -330,8 +330,114 @@ jobs:
       # A second copy HERE would therefore add no coverage and one new way to red THIS lane — whose
       # green is `pause.reEnableWhen` in .github/acr-retention/tasks.json. Two consecutive nightly
       # runs were already lost that way in September 2026, and the cost was recorded on #3438: the
-      # false `pins no image at all` refusal stood between the fleet and re-enabling cleanup. A
-      # scheduled-only red also has no durable reporter, so it would be red in an empty room.
+      # false `pins no image at all` refusal stood between the fleet and re-enabling cleanup. (A
+      # scheduled-only red used to have no durable reporter at all — #7416; it now lands on this
+      # lane's ci-failure ledger, the `lane-red`/`lane-green` jobs at the end of this file.)
       #
       # If this lane ever becomes the only place a chart can move — a direct push to `main`, say —
       # that is the change that should add the step back, in the same diff.
+
+  # ─────────────────────── A RED HERE HAS AN AUDIENCE (#7416) ───────────────────────
+  # This lane is scheduled and main-only: no pull request, no reviewer and no check list ever
+  # shows its conclusion. It was red on every run from 2026-09-15 to 2026-09-21 (runs 25-34) and
+  # nobody read it for six days — while its green is the stated precondition for re-enabling the
+  # registry purge (`pause.reEnableWhen` in .github/acr-retention/tasks.json). `pinned-digests.yml`
+  # asserted this lane's CONFIGURATION, which was correct on all ten failing days; nothing read its
+  # OUTCOME. So the outcome goes where every other unattended red in the fleet goes: the ci-failure
+  # ledger (node-repo-ci-failure.yml) — ONE issue under this lane's OWN label, a dated entry per red
+  # run, reopened rather than re-filed, closed by the next green, and a signed event to the control
+  # portal's triage inbox each way. `check-scheduled-lane-reporters.py` refuses a scheduled workflow
+  # without such a pair.
+  #
+  # 🔀 The ten reds had TWO causes in the SAME job and the SAME step (an installation's
+  # /api/version timing out, then an undeclared registry), so a ledger naming the step alone would
+  # still read "same red for six days". `cause` lists this run's failed jobs WITH a signature of
+  # their error annotations, and the ledger entry says whether the cause is the same as the previous
+  # red's or CHANGED. Only the signature reaches the (public) issue — the error text can name a
+  # client estate's registry; the run link carries the text.
+  #
+  # No `continue-on-error:` and no input-shaped `if:`. `always()` is deliberate, not `!cancelled()`:
+  # a job cut at its `timeout-minutes` (Memex#219 — the apply run cut at the cap three nights
+  # running) is precisely a red this must report.
+  cause:
+    name: "Which red is this: the failed jobs and their error signatures"
+    needs: [preflight, protect]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read     # list this run's jobs
+      checks: read      # read each failed job's annotations
+    outputs:
+      failed-jobs: ${{ steps.list.outputs.failed-jobs }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: "The ledger can say no (self-test)"
+        run: python3 .github/scripts/ci-failure-ledger.py --self-test
+      # Red when the jobs or their annotations cannot be read — and that red is itself reported
+      # below (the ledger then lists the run's failed jobs on its own, this one among them).
+      - name: List this run's failed jobs with their cause signatures
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 .github/scripts/ci-failure-ledger.py --list-failed-jobs "$RUN_ID"
+
+  lane-red:
+    name: "The lock lane is red: file it, tell the control portal"
+    needs: [preflight, protect, cause]
+    if: always() && (needs.preflight.result != 'success' || needs.protect.result != 'success' || needs.cause.result != 'success')
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      platform-set: ""
+      # Empty when `cause` itself failed: the lane then lists the run's failed jobs on its own.
+      failed-jobs: ${{ needs.cause.outputs.failed-jobs || '[]' }}
+      label: ci-lock-pinned-digests-red
+      issue-title: "lock-pinned-digests: the pinned-manifest lock lane is red"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      # The ledger script at THIS commit (it reads the `cause` field this commit's `cause` job writes).
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  # 🚨 A REPORT-ONLY green does NOT close the ledger. A push run (and a manual `report-only` one)
+  # proves the scan has no blocker but writes no lock, and the green `pause.reEnableWhen` cites is
+  # one whose locks were APPLIED. So only an applying run — the schedule, or a manual run in `apply`
+  # mode — clears the alert; a report-only red still files above, because a blocker it finds is just
+  # as real. The condition reads the EVENT and the dispatch input, never whether a secret is set.
+  lane-green:
+    name: "The lock lane is green: close the ledger"
+    needs: [preflight, protect, cause]
+    if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'report-only')) && needs.preflight.result == 'success' && needs.protect.result == 'success' && needs.cause.result == 'success'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      platform-set: ""
+      label: ci-lock-pinned-digests-red
+      issue-title: "lock-pinned-digests: the pinned-manifest lock lane is red"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

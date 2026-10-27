@@ -246,3 +246,85 @@ jobs:
         run: |
           python3 .github/scripts/check-pin-set-consistency.py \
             --discover --registry meshweaver --check-tags
+
+  # ─────────────────────── A RED HERE HAS AN AUDIENCE (#7416) ───────────────────────
+  # The same gap as lock-pinned-digests.yml, and the same fix: this sweep is scheduled and
+  # main-only, so its red reaches no pull request and no reviewer. It goes to the ci-failure
+  # ledger (node-repo-ci-failure.yml) under this lane's OWN label — one issue, a dated entry per red
+  # run carrying the failed jobs and their error signatures (same cause as the previous red, or
+  # CHANGED), reopened rather than re-filed, closed by the next green, and a signed event to the
+  # control portal's triage inbox each way. Every trigger of this lane is a full read-only sweep, so
+  # every green clears it. `always()`, not `!cancelled()`: a job cut at its timeout is a red to report.
+  cause:
+    name: "Which red is this: the failed jobs and their error signatures"
+    needs: [preflight, sweep]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read     # list this run's jobs
+      checks: read      # read each failed job's annotations
+    outputs:
+      failed-jobs: ${{ steps.list.outputs.failed-jobs }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: "The ledger can say no (self-test)"
+        run: python3 .github/scripts/ci-failure-ledger.py --self-test
+      - name: List this run's failed jobs with their cause signatures
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 .github/scripts/ci-failure-ledger.py --list-failed-jobs "$RUN_ID"
+
+  lane-red:
+    name: "The pinned-digest sweep is red: file it, tell the control portal"
+    needs: [preflight, sweep, cause]
+    if: always() && (needs.preflight.result != 'success' || needs.sweep.result != 'success' || needs.cause.result != 'success')
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      platform-set: ""
+      failed-jobs: ${{ needs.cause.outputs.failed-jobs || '[]' }}
+      label: ci-pinned-digests-red
+      issue-title: "pinned-digests: the pinned-digest sweep is red"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  lane-green:
+    name: "The pinned-digest sweep is green: close the ledger"
+    needs: [preflight, sweep, cause]
+    if: always() && needs.preflight.result == 'success' && needs.sweep.result == 'success' && needs.cause.result == 'success'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      platform-set: ""
+      label: ci-pinned-digests-red
+      issue-title: "pinned-digests: the pinned-digest sweep is red"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

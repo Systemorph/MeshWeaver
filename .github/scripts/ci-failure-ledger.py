@@ -62,6 +62,7 @@ API failure — each is RED naming the cause, never a quiet "nothing to do". The
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -184,8 +185,96 @@ def parse_failed_jobs(raw: str) -> tuple[dict, ...]:
         never_started = item.get("neverStarted", False)
         if not isinstance(never_started, bool):
             raise Red(f"failed-jobs[{i}] (`{name}`) has a non-boolean `neverStarted`")
-        out.append({"name": name.strip(), "url": url, "step": step.strip(), "neverStarted": never_started})
+        entry = {"name": name.strip(), "url": url, "step": step.strip(), "neverStarted": never_started}
+        cause = item.get("cause")
+        if cause is not None:
+            # Rendered inside a markdown table cell and backticks, so it must be a short single-line
+            # token — `--list-failed-jobs` writes `<hash>/<n>` and nothing else ever needs more.
+            if not isinstance(cause, str) or not CAUSE_RE.fullmatch(cause):
+                raise Red(f"failed-jobs[{i}] (`{name}`) has a `cause` that is not a cause signature "
+                          f"(`<10 hex>/<count>` or `-/0`): {cause!r}")
+            entry["cause"] = cause
+        out.append(entry)
     return tuple(out)
+
+
+# ── WHICH red is this? (#7416) ────────────────────────────────────────────────────────────────
+#
+# A lane red ten runs in a row is not necessarily red for ONE reason. Measured on core's
+# lock-pinned-digests lane (runs 25-34, 2026-09-15..21): runs 25-27 died on an installation's
+# `/api/version` timing out, runs 28-34 on an undeclared registry — the SAME job, the SAME step, two
+# unrelated causes. A ledger that names only the failed step therefore reads "same red for six days",
+# and a reader who diagnosed the first cause and came back later had no way to see it had changed.
+#
+# The distinguishing evidence is the failing job's ERROR ANNOTATIONS (every `::error::` line a
+# script prints becomes one). They are NOT copied into the issue: a lane's errors may name a host or
+# a registry of a client estate, and the issue is public text (policy `issue-text-name-scan`). What
+# the ledger records is a SIGNATURE — a short hash over the normalised error lines — so two reds with
+# the same cause carry the same signature and a changed cause reads as CHANGED, with the run link one
+# click away for the text. Normalisation folds what varies run to run without changing the cause:
+# case, whitespace, every digit (counts, timings, timestamps, run ids) and every long hex run (shas,
+# digests). GitHub's own `Process completed with exit code N.` line says nothing about the cause and
+# is dropped. What a signature does NOT establish: two signatures differing is "the error TEXT
+# differs", which a re-worded message can also produce — read both runs before calling it a new cause.
+CAUSE_RE = re.compile(r"(?:[0-9a-f]{10}|-)/\d{1,4}")
+GENERIC_EXIT_RE = re.compile(r"^process completed with exit code \d+\.?$", re.IGNORECASE)
+LISTED_CONCLUSIONS = FAILED_CONCLUSIONS + ("cancelled",)   # a job cut at its timeout-minutes concludes `cancelled`
+_HEX_RUN = re.compile(r"\b[0-9a-f]{7,}\b")
+_DIGITS = re.compile(r"\d+")
+_SPACE = re.compile(r"\s+")
+_CAUSE_ROW = re.compile(r"^\| cause \| `([0-9a-f]{10}|unknown)`", re.MULTILINE)
+
+
+def normalise_error(message: str) -> str:
+    """One error annotation's text with what varies between runs of the SAME cause folded. Pure."""
+    m = _SPACE.sub(" ", (message or "").strip().lower())
+    m = _HEX_RUN.sub("h", m)
+    return _DIGITS.sub("0", m)
+
+
+def cause_signature(messages: list[str]) -> str:
+    """`<10 hex>/<n>` over a job's error annotations (n = distinct normalised lines), `-/0` when the
+    job printed nothing but the generic exit-code line. Pure, order-insensitive."""
+    lines = sorted({normalise_error(x) for x in messages if x and not GENERIC_EXIT_RE.match(x.strip())})
+    lines = [x for x in lines if x]
+    if not lines:
+        return "-/0"
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:10] + f"/{len(lines)}"
+
+
+def run_cause(jobs: tuple[dict, ...]) -> str:
+    """The run's cause identity: a hash over every failed job's (name, step, cause signature). Two
+    reds with the same identity failed the same jobs at the same steps with the same error text."""
+    if not jobs:
+        return "unknown"
+    parts = sorted(f"{j['name']}|{j.get('step', '')}|{j.get('cause', '')}" for j in jobs)
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:10]
+
+
+def previous_cause(body: str) -> str | None:
+    """The cause identity the NEWEST ledger entry in `body` recorded, or None (no entry, or an entry
+    written before causes were recorded)."""
+    entries = entries_of(body or "")
+    if not entries:
+        return None
+    m = _CAUSE_ROW.search(entries[-1])
+    return m.group(1) if m and m.group(1) != "unknown" else None
+
+
+def cause_row(run: Run, previous_body: str) -> str:
+    """The `| cause |` table row: this red's identity and whether it CHANGED since the previous one."""
+    now_cause = run_cause(run.failed_jobs)
+    if now_cause == "unknown":
+        return "| cause | `unknown` — this run's failed jobs could not be listed, so its cause cannot be compared |"
+    before = previous_cause(previous_body)
+    if before is None:
+        verdict = "first recorded red in this ledger (no earlier entry carries a cause)"
+    elif before == now_cause:
+        verdict = "**same** as the previous red"
+    else:
+        verdict = (f"🔀 **CHANGED** since the previous red (`{before}`) — a different job, step or error text "
+                   "failed this time; read THIS run's annotations, not the earlier diagnosis")
+    return f"| cause | `{now_cause}` — {verdict} |"
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -264,17 +353,18 @@ def failed_job_entry(job: dict) -> dict:
     in the annotation, which needs `checks: read` (see NEVER_STARTED_NOTE).
     """
     steps = job.get("steps") or []
-    step = next((s.get("name", "") for s in steps if s.get("conclusion") in FAILED_CONCLUSIONS), "")
+    step = next((s.get("name", "") for s in steps if s.get("conclusion") in LISTED_CONCLUSIONS), "")
     return {"name": job.get("name", "?"), "url": job.get("html_url", ""), "step": step,
             "neverStarted": len(steps) == 0}
 
 
-def ledger_entry(run: Run, now: datetime) -> str:
+def ledger_entry(run: Run, now: datetime, previous_body: str = "") -> str:
     stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     if run.failed_jobs:
         jobs = "<br>".join(
             f"[{j['name']}]({j['url']})"
             + (f" — step `{j['step']}`" if j["step"] else "")
+            + (f" — errors `{j['cause']}`" if j.get("cause") else "")
             + (f" — ⛔ _{NEVER_STARTED_NOTE}_" if j.get("neverStarted") else "")
             for j in run.failed_jobs)
     else:
@@ -288,6 +378,7 @@ def ledger_entry(run: Run, now: datetime) -> str:
         f"| trigger | `{run.trigger}` |",
         f"| platform set | {('`' + run.platform_set + '`') if run.platform_set else '_(none)_'} |",
         f"| failed jobs | {jobs} |",
+        cause_row(run, previous_body),
     ]
     refused = never_started(run.failed_jobs)
     if refused:
@@ -309,9 +400,14 @@ def ledger_entry(run: Run, now: datetime) -> str:
     return "\n".join(rows)
 
 
-def new_body(repo: str, reopen_window_days: int) -> str:
+def new_body(repo: str, reopen_window_days: int, title: str = DEFAULT_TITLE) -> str:
+    # A lane with its own label (a scheduled lane, #7416) is not "main is red": say which lane.
+    subject = (f"`main` of **{repo}** is red. This issue is the ledger: every red run on `main` appends a dated "
+               if title == DEFAULT_TITLE else
+               f"**{title}** — a lane of **{repo}** is red. This issue is the ledger: every red run of the lane "
+               f"appends a dated ")
     return "\n".join([
-        f"`main` of **{repo}** is red. This issue is the ledger: every red run on `main` appends a dated "
+        subject +
         f"entry below, and the run that goes green again closes it. A red within {reopen_window_days} days "
         f"of the close REOPENS this issue rather than filing a second one, so one outage is one story.",
         "",
@@ -363,7 +459,8 @@ def event_body(kind: str, run: Run, issue: Issue) -> str:
         obj = {"event": "ci-failure", "repo": run.repo, "sha": run.sha, "run": int(run.run_id),
                "runUrl": run.run_url, "trigger": run.trigger, "failedJobs": list(run.failed_jobs),
                "neverStarted": len(never_started(run.failed_jobs)),
-               "platformSet": run.platform_set, "issueUrl": issue.html_url, "issueNumber": issue.number}
+               "platformSet": run.platform_set, "issueUrl": issue.html_url, "issueNumber": issue.number,
+               "cause": run_cause(run.failed_jobs)}
     elif kind == "ci-green":
         obj = {"event": "ci-green", "repo": run.repo, "sha": run.sha, "run": int(run.run_id),
                "runUrl": run.run_url, "issueNumber": issue.number}
@@ -479,6 +576,43 @@ class GitHub:
                 break
         return tuple(found)
 
+    def annotations(self, check_run_url: str) -> list[dict]:
+        """Every annotation of one job's check run. Needs `checks: read` on the CALLER's job."""
+        prefix = f"{API}/repos/{self.repo}/"
+        if not check_run_url.startswith(prefix):
+            raise Red(f"check_run_url {check_run_url!r} is not under {prefix}")
+        out: list[dict] = []
+        for page in range(1, 11):
+            _, data = self.call("GET", check_run_url[len(prefix):] + "/annotations", {"per_page": 50, "page": page})
+            data = data or []
+            out.extend(data)
+            if len(data) < 50:
+                break
+        return out
+
+    def failed_jobs_with_causes(self, run_id: str) -> tuple[dict, ...]:
+        """`failed_jobs_of_run`, widened to a job cut at its timeout (`cancelled`), each with its
+        error-annotation `cause` signature. An unreadable listing or annotation is RED, never a
+        job without a cause — a signature computed over nothing would read as "same cause"."""
+        found: list[dict] = []
+        for page in range(1, 11):
+            _, data = self.call("GET", f"actions/runs/{run_id}/jobs", {"per_page": 100, "page": page})
+            jobs = (data or {}).get("jobs", [])
+            for j in jobs:
+                if j.get("conclusion") not in LISTED_CONCLUSIONS:
+                    continue
+                entry = failed_job_entry(j)
+                url = j.get("check_run_url") or ""
+                if not url:
+                    raise Red(f"job {j.get('name')!r} carries no check_run_url — its annotations cannot be read")
+                notes = self.annotations(url)
+                entry["cause"] = cause_signature([a.get("message", "") for a in notes
+                                                  if a.get("annotation_level") == "failure"])
+                found.append(entry)
+            if len(jobs) < 100:
+                break
+        return tuple(found)
+
 
 # ── apply the verdict ─────────────────────────────────────────────────────────────────────────
 
@@ -574,18 +708,19 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
                                   f"{reopen_window_days} days reopens this issue rather than filing a new one.")
         issue = gh.update_issue(verdict.issue, state="closed", state_reason="completed")
         return issue, event_body("ci-green", run, issue)
-    entry = ledger_entry(run, now)
     gh.ensure_label(label)
     if verdict.action == "create":
-        issue = gh.create_issue(title, label, append_entry(new_body(run.repo, reopen_window_days), entry))
+        entry = ledger_entry(run, now)
+        issue = gh.create_issue(title, label, append_entry(new_body(run.repo, reopen_window_days, title), entry))
     elif verdict.action == "append":
         assert verdict.issue is not None
         current = _owned(gh, label, title, verdict.issue)
-        issue = gh.update_issue(verdict.issue, body=append_entry(current.body, entry))
+        issue = gh.update_issue(verdict.issue, body=append_entry(current.body, ledger_entry(run, now, current.body)))
     elif verdict.action == "reopen":
         assert verdict.issue is not None
         current = _owned(gh, label, title, verdict.issue)
-        issue = gh.update_issue(verdict.issue, state="open", body=append_entry(current.body, entry))
+        issue = gh.update_issue(verdict.issue, state="open",
+                                body=append_entry(current.body, ledger_entry(run, now, current.body)))
     else:
         raise Red(f"unknown verdict {verdict.action!r}")
     # 🏷️ Type + severity on the issue it filed, reopened or appended to. Decoration on the ledger, never
@@ -625,10 +760,31 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--check-url", help="validate this control-webhook-url and exit; nothing else runs")
     ap.add_argument("--expected-host", default=env("LEDGER_CONTROL_HOST") or "control.systemorph.com")
+    ap.add_argument("--list-failed-jobs", metavar="RUN_ID",
+                    help="print (and write to GITHUB_OUTPUT as `failed-jobs`) the run's failed jobs WITH their "
+                         "error-annotation cause signatures, for a caller to pass as the lane's `failed-jobs` "
+                         "input. Runs in the CALLER's job, which grants `actions: read` + `checks: read`.")
     a = ap.parse_args(argv)
 
     if a.self_test:
         return self_test()
+    if a.list_failed_jobs is not None:
+        try:
+            token = env("GH_TOKEN") or env("GITHUB_TOKEN") or ""
+            if not token or not a.repo or not a.list_failed_jobs.strip():
+                raise Red("--list-failed-jobs needs GH_TOKEN, GITHUB_REPOSITORY (or --repo) and a run id")
+            jobs = GitHub(a.repo, token).failed_jobs_with_causes(a.list_failed_jobs.strip())
+        except Red as e:
+            print(f"::error title=ci-failure-ledger::could not list run {a.list_failed_jobs}'s failed jobs with their "
+                  f"causes — the job running this must grant `actions: read` and `checks: read`: {e}", file=sys.stderr)
+            return 1
+        listed = json.dumps(list(jobs), separators=(",", ":"), ensure_ascii=False)
+        parse_failed_jobs(listed)            # what the lane will accept, proven before it is handed over
+        print(f"{len(jobs)} failed job(s), run cause `{run_cause(jobs)}`:")
+        for j in jobs:
+            print(f"  {j['name']} — step {j['step'] or '(none)'} — errors {j['cause']}")
+        _emit_outputs(env("GITHUB_OUTPUT"), **{"failed-jobs": listed})
+        return 0
     if a.check_url is not None:
         problem = validate_control_url(a.check_url, a.expected_host)
         if problem:
@@ -1015,12 +1171,99 @@ def self_test() -> int:
     check("a ledger listed twice is never folded into itself (one open, appended once)",
           folded16 == [] and gh16.issues[601].state == "open" and len(entries_of(gh16.issues[601].body)) == 2)
 
+    # 17. #7416 — WHICH red is this. The measured shape: ten reds of ONE job at ONE step, two causes.
+    lock_job = {"name": "Every pinned manifest is locked", "url": "https://github.com/o/r/actions/runs/25/job/1",
+                "step": "Lock every manifest the fleet pins", "neverStarted": False}
+    timeout_errs = ["installation acme: GET https://acme.example.com/api/version timed out after 10.0s",
+                    "Process completed with exit code 1."]
+    timeout_errs_later = ["installation acme: GET https://acme.example.com/api/version timed out after 12.5s",
+                          "Process completed with exit code 1."]
+    registry_errs = ["instances.json does not account for globex.azurecr.io", "Process completed with exit code 1."]
+    sig_a, sig_a2, sig_b = cause_signature(timeout_errs), cause_signature(timeout_errs_later), cause_signature(registry_errs)
+    check("the same cause with different numbers has the SAME signature", sig_a == sig_a2, f"{sig_a} vs {sig_a2}")
+    check("two different causes in the same step have DIFFERENT signatures", sig_a != sig_b)
+    check("the generic exit-code line alone is no cause (`-/0`), and never part of a signature",
+          cause_signature(["Process completed with exit code 2."]) == "-/0"
+          and cause_signature(timeout_errs) == cause_signature(timeout_errs[:1]))
+    check("a signature carries no annotation text (the issue is public; the run has the text)",
+          "acme" not in sig_a and "globex" not in sig_b and CAUSE_RE.fullmatch(sig_a) is not None)
+    red_a, red_b = dict(lock_job, cause=sig_a), dict(lock_job, cause=sig_b)
+    # NEGATIVE CONTROL: what the ledger keyed on before — job + step — cannot tell the two apart.
+    strip = lambda j: {k: v for k, v in j.items() if k != "cause"}  # noqa: E731 — the pre-#7416 job shape
+    check("CONTROL: without the error signature the two incident causes read as ONE red",
+          run_cause((strip(red_a),)) == run_cause((strip(red_b),)))
+    check("with it they are two", run_cause((red_a,)) != run_cause((red_b,)))
+    gh17 = _Fake()
+    go(gh17, run("failure", [red_a]))
+    n17 = next(iter(gh17.issues))
+    check("the first red records a cause and says it is the first", "| cause | `" in gh17.issues[n17].body
+          and "first recorded red" in gh17.issues[n17].body)
+    go(gh17, run("failure", [dict(lock_job, cause=sig_a2)]))
+    newest = entries_of(gh17.issues[n17].body)[-1]
+    check("a further red with the same cause is appended to the SAME issue and says `same`",
+          len(gh17.issues) == 1 and "**same** as the previous red" in newest and "CHANGED" not in newest)
+    go(gh17, run("failure", [red_b]))
+    newest = entries_of(gh17.issues[n17].body)[-1]
+    check("a further red with a DIFFERENT cause says CHANGED and names the previous identity",
+          len(gh17.issues) == 1 and "CHANGED" in newest and f"`{run_cause((red_a,))}`" in newest
+          and f"errors `{sig_b}`" in newest)
+    check("the event carries the run's cause identity",
+          json.loads(event_body("ci-failure", run("failure", [red_b]), gh17.issues[n17]))["cause"] == run_cause((red_b,)))
+    check("an unlisted run's cause is `unknown`, and an `unknown` predecessor is never compared",
+          "`unknown`" in ledger_entry(run("failure", [], "_(could not list)_"), now)
+          and previous_cause(append_entry(new_body("o/r", 7), ledger_entry(run("failure", [], "x"), now))) is None)
+    check("a caller-supplied cause signature round-trips through the lane's parser",
+          parse_failed_jobs(json.dumps([red_b])) == (red_b,))
+    for bad in ("acme.example.com timed out", "abc|def", "`x`/1", 7):
+        try:
+            parse_failed_jobs(json.dumps([dict(lock_job, cause=bad)]))
+            check(f"a cause that is not a signature is refused: {bad!r}", False, "was accepted")
+        except Red:
+            check(f"a cause that is not a signature is refused: {bad!r}", True)
+
+    # 18. the caller-side listing: causes from annotations, a timed-out (`cancelled`) job included,
+    #     and an unreadable annotation is RED — never a job without a cause.
+    class _ApiFake(GitHub):
+        def __init__(self, jobs, notes, broken=False):
+            super().__init__("o/r", "t")
+            self.jobs, self.notes, self.broken = jobs, notes, broken
+
+        def call(self, method, path, params=None, body=None, ok=(200, 201)):
+            if path.startswith("actions/runs/"):
+                return 200, {"jobs": self.jobs}
+            if path.endswith("/annotations"):
+                if self.broken:
+                    raise Red("GET annotations answered HTTP 403")
+                return 200, self.notes.get(path.split("/")[1], [])
+            raise Red(f"unexpected {method} {path}")
+
+    def api_job(n, name, conclusion, step_conclusion="failure"):
+        return {"name": name, "html_url": f"https://github.com/o/r/actions/runs/25/job/{n}", "conclusion": conclusion,
+                "check_run_url": f"{API}/repos/o/r/check-runs/{n}",
+                "steps": [{"name": "Lock every manifest the fleet pins", "conclusion": step_conclusion}]}
+    notes = {"1": [{"annotation_level": "failure", "message": m} for m in registry_errs]
+                  + [{"annotation_level": "warning", "message": "a warning is not a cause"}],
+             "3": []}
+    api = _ApiFake([api_job(1, "protect", "failure"), api_job(2, "preflight", "success", "success"),
+                    api_job(3, "slow", "cancelled", "cancelled")], notes)
+    listed18 = api.failed_jobs_with_causes("25")
+    check("the listing signs each failed job's error annotations (warnings ignored)",
+          [j["name"] for j in listed18] == ["protect", "slow"] and listed18[0]["cause"] == sig_b)
+    check("a job cut at its timeout (`cancelled`) is listed, with the step it was cut in",
+          listed18[1]["step"] == "Lock every manifest the fleet pins" and listed18[1]["cause"] == "-/0")
+    try:
+        _ApiFake([api_job(1, "protect", "failure")], notes, broken=True).failed_jobs_with_causes("25")
+        check("an unreadable annotation is RED", False, "returned a listing")
+    except Red:
+        check("an unreadable annotation is RED", True)
+
     if fails:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
         return 1
     print("✓ ci-failure-ledger self-test: create / append / reopen-recent / create-after-old / close-with-comment / "
           "noop-when-green / refuse-malformed / cd-ci-failure-untouched / unmarked-ci-main-red-untouched / human-authored-is-foreign / "
-          "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed / never-started-said / duplicate-folded — every rule fires and stays silent as designed")
+          "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed / never-started-said / duplicate-folded / "
+          "cause-same-or-changed — every rule fires and stays silent as designed")
     return 0
 
 

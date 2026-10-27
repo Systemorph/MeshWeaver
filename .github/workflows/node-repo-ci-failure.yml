@@ -179,7 +179,10 @@ on:
           Empty (the default) on a failure means "list the run's jobs that concluded failure/timed_out
           yourself, reading neverStarted from each job's step count" — which needs `actions: read` on
           the caller job. Ignored on success. A malformed value (a non-boolean neverStarted included)
-          is refused before any write.
+          is refused before any write. An entry may also carry `cause` — the error-annotation signature
+          `ci-failure-ledger.py --list-failed-jobs <run id>` writes (run in the CALLER's job, which grants
+          `actions: read` + `checks: read`; lock-pinned-digests.yml is the template) — and the ledger
+          entry then says whether this red's cause is the SAME as the previous red's or CHANGED (#7416).
         required: false
         type: string
         default: "[]"
