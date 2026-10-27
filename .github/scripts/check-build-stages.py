@@ -250,10 +250,10 @@ def _block_input(block: str, key: str) -> Optional[str]:
     """`with: <key>:` of one calling job: None when that job does not pass it, and the empty string
     when it passes it EMPTY (`key: ''`) — which a lane reads as "none", not as its default, so the
     two must stay apart."""
-    v = re.search(rf"^\s+{re.escape(key)}:[ \t]*(.*)$", block, re.M)
+    v = re.search(rf"^\s+(['\"]?){re.escape(key)}\1:[ \t]*(.*)$", block, re.M)
     if not v:
         return None
-    value = re.sub(r"(^|\s)#.*$", "", v.group(1)).strip()
+    value = re.sub(r"(^|\s)#.*$", "", v.group(2)).strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
         value = value[1:-1].strip()
     return value
@@ -288,6 +288,13 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
                            "exactly one is required, so the stage's parity is derived from the inputs Actions really passes")
                 continue
             block = blocks[0]
+            # FAIL CLOSED on a `with:` this line reader cannot see into: a flow mapping
+            # (`with: {warning-baseline-file: x}`) is valid YAML, but reading it as "no inputs" would drop
+            # the baselines the Actions lane enforces from what the stage owes.
+            if re.search(r"^\s+['\"]?with['\"]?:[ \t]*[{\[]", block, re.M):
+                out.append(f"{CI_WORKFLOW} passes {lane} its `with:` as a flow mapping — this guard reads only block-style "
+                           "`with:` inputs, so write them one per line (a flow mapping would hide the baselines the lane enforces)")
+                continue
             # Omitted ⇒ the lane's default; passed EMPTY ⇒ no allowlist at all, and then a stage
             # that passes one would tolerate failures the Actions leg fails on.
             allow = _block_input(block, "allow-file")
@@ -521,6 +528,19 @@ def _self_test() -> int:
                                             "    with:\n      warning-baseline-file: strict-warnings.allow\n  tests-ratchet:")
     red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "from 2 job block(s)",
         "a lane called from a SECOND job whose inputs a single stage cannot mirror", second)
+    # A flow-style `with:` is valid YAML the line reader cannot see into — red, never "no inputs".
+    flow = NODE_CI.replace(
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with:\n      executor: actions\n",
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n"
+        "    with: {executor: actions, warning-baseline-file: gate-warnings.allow, dynamic-baseline-file: dynamic.allow}\n")
+    expect(flow != NODE_CI, "self-test fixture: the flow-style-with ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "flow mapping",
+        "a debt-free claim whose ci.yml passes the gate lane a FLOW-STYLE `with:`", flow)
+    # A quoted key is the same input.
+    qk = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      \"warning-baseline-file\": gate-warnings.allow\n  tests-ratchet")
+    expect(qk != NODE_CI, "self-test fixture: the quoted-key ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "--warning-baseline gate-warnings.allow",
+        "a debt-free claim whose gate drops the warning baseline ci.yml passes under a QUOTED key", qk)
     red(node, "node-repo", "calls none of", "a ci.yml that calls no shared heavy lane", "jobs:\n  x:\n    runs-on: y\n")
     red(node, "node-repo", "is absent", "no ci.yml to derive the owed stages from", None)
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every breach is red, every honest declaration is green'}")
