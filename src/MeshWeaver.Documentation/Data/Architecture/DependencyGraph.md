@@ -146,8 +146,24 @@ which is what step 1 does.
 |---|---|---|
 | runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane; modules are the files of the SAME reference snapshot Roslyn compiled against, so a live module swap mid-compile cannot drop a used module | the compile settle, beside the terminal stamp, as the edge-set node |
 | cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate — and only when the stamp LANDED (a refused compare-and-set writes no edges over a newer build's) |
-| build-process bake (`NodeSetCompiler.CompileWithModules`; the published `Compile` forwards with none) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges` for the bundle — writing it into a mesh at adoption is a follow-up |
+| build-process bake (`NodeSetCompiler.CompileWithModules`; the published `Compile` forwards with none) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges`; `TreeBake` writes every attempted type's set to `dependency-edges.json` beside the bundles (`DependencyEdgesFile`), and `node-repo-publish-bake.yml` uploads it as the run artifact `dependency-edges-<identity>` for CI selection. Writing it into a mesh at adoption is a follow-up |
 | module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | not yet | follow-up: it runs in CI with no mesh, so its edges need a transport (the bundle, then the registry) that belongs with step (4); and its one-body-pass discipline means `GetUsedAssemblyReferences`' extra binding cost is measured there before it is added |
+
+### The bake's edge file — the transport to CI (2026-10-27)
+
+CI selection has no mesh to ask, so the build-process bake is where it gets the graph.
+`dependency-edges.json` (`tools/MeshWeaver.PluginTester/DependencyEdgesFile.cs`, schema 1) holds
+`frameworkIdentity`, `commit`, `sets` (one `DependencyEdgeSet` per type that compiled, each with
+`commit` and `buildMvid`) and `failed` (types the bake attempted that produced no set). Every
+attempted type appears exactly once; a type the bake did not attempt — a narrowed bake, a type with
+nothing to compile — is absent and must be read as UNKNOWN. An empty `edges` list means "extracted,
+depends on nothing". A reader refuses a schema it does not know.
+
+The publish-bake lane uploads the file as the run artifact `dependency-edges-<framework identity>`
+(30 days, never part of the publication, never a gate). A narrowed bake writes only what it
+compiled, so a reader merges runs by source, newest first. The reader and its rules (currency
+against the tree, unknown widens) are MeshWeaver.Plugins `scripts/dependency-graph.py` and
+`Hosting/DependencyGraphSelection.md`.
 
 ## The reverse closure (step 3)
 

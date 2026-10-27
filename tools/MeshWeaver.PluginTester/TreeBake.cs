@@ -143,6 +143,15 @@ public static class TreeBake
         /// </summary>
         public ImmutableArray<CompileWarning> Warnings { get; init; } = [];
 
+        /// <summary>
+        /// The forward dependency edges Roslyn read off this type's compile
+        /// (<c>Doc/Architecture/DependencyGraph</c>), or null when the type failed. Written to
+        /// <see cref="DependencyEdgesFile.FileName"/> beside the bundles so a build step with no
+        /// mesh — CI selection above all — can read the graph. An init-only property for the arity
+        /// reason <see cref="Warnings"/> records.
+        /// </summary>
+        public DependencyEdgeSet? DependencyEdges { get; init; }
+
         /// <summary>True when the type produced bytes.</summary>
         public bool Success => Error is null;
     }
@@ -600,6 +609,7 @@ public static class TreeBake
                     // bake log unreadable — a shared source's one missing doc comment arrives once
                     // per NodeType that includes it. They are folded across the whole bake below.
                     Warnings = compiled.Warnings,
+                    DependencyEdges = compiled.DependencyEdges,
                 });
                 // One line per compiled type only under MW_LOG_LEVEL (GateVerbosity): a full bake
                 // is ~1,100 of them, and the verdict is the per-package `bake: … → N assembly(ies)`
@@ -644,6 +654,16 @@ public static class TreeBake
 
         var bundles = WriteBundles(
             options, packages, snapshot, frameworkIdentity, entriesByPackage, host.Surface);
+
+        // The graph's build-process transport (Doc/Architecture/DependencyGraph → Where it runs):
+        // every type this bake ATTEMPTED is in the file — with its edge set when it compiled, in
+        // `failed` when it did not — so a reader tells "no edges" from "never extracted".
+        var attempted = results.ToImmutable();
+        var edgesFile = DependencyEdgesFile.Write(
+            options.OutputDirectory, frameworkIdentity, options.SourceSha ?? snapshot.CommitSha, attempted);
+        options.Output.WriteLine(
+            $"bake: dependency edges for {attempted.Count(t => t.DependencyEdges is not null)} type(s), "
+            + $"{attempted.Count(t => t.DependencyEdges is null)} without → {edgesFile}");
 
         // 🚨 THE WARNING STANDARD, applied where it belongs — in the GATE, never in the compiler
         // options. Every type that COMPILED contributes, including the ones that compiled clean:

@@ -2134,6 +2134,24 @@ jobs:
       # just wrote — the carried-forward ones were sealed (and checked) by the run that baked them.
       # A GATE, so no `continue-on-error` and no input-shaped `if:` — it runs exactly when the bake
       # ran, and zero bundles, an unreadable bundle or an absent floor is RED, never a vacuous pass.
+      # The bake's forward dependency edges (`dependency-edges.json`, written by the tester beside the
+      # bundles — Doc/Architecture/DependencyGraph → Where it runs) are handed to CI SELECTION, which
+      # has no mesh to ask: a pull request reads the edges of the trunk it branched from (MeshWeaver.Plugins
+      # `scripts/dependency-graph.py`). Never part of the publication and never a gate: a tester that
+      # predates the file writes none, the upload says so, and the reader treats a missing graph as
+      # unknown — it widens, never narrows. A narrowed bake writes only the types it compiled; the
+      # reader merges runs by source. Named per framework identity: a caller runs this lane twice in
+      # one run (the current and the previous epoch), and an artifact name is unique within a run.
+      - name: "Hand the bake's dependency edges to CI selection"
+        if: steps.scope.outputs.scope != 'none'
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
+          name: dependency-edges-${{ steps.identity.outputs.identity }}
+          path: ${{ env.BAKE_DIR }}/dependency-edges.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: "Gate: no bundle stamps a platform floor above the portal this publication names"
         if: steps.scope.outputs.scope != 'none'
         env:
