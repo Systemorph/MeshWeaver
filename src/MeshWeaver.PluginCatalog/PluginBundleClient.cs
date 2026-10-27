@@ -1385,6 +1385,9 @@ public sealed class PluginBundleClient
                         // declined loudly outside floor..ceiling, never adopted.
                         manifest.ProducerPlatformVersion,
                         manifest.PlatformCeiling)
+                        // The producer's dependency edges for the build the record now serves
+                        // (Doc/Architecture/DependencyGraph → adopted prebuilts). Never changes the verdict.
+                        .SelectMany(outcome => PrebuiltAssemblySeeder.WithAdoptedEdges(_hub, a.NodePath, a.DependencyEdges, outcome, _logger))
                         .Select(PrebuiltAssemblySeeder.IsCovered))
                     .Concat()
                     .Count(adopted => adopted)

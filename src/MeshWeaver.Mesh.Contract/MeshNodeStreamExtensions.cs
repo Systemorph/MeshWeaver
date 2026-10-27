@@ -3854,6 +3854,21 @@ public static class MeshNodeStreamExtensions
             // there is exactly one copy of the register-before-post ordering.
             void Issue()
             {
+                // 🚨 THE PROBE'S SLOT IS INSTALLED BEFORE IT IS SUBSCRIBED — never assigned after
+                // (#7395). Observe posts at call time, and its response subject is an AsyncSubject:
+                // when the owner's ShuttingDown NACK is dispatched before the Subscribe below runs
+                // (a cold Rx chain, a preempted thread), Subscribe replays the error SYNCHRONOUSLY and
+                // the arm below calls Issue() again, NESTED inside this one. The old shape
+                // `innerSubscription.Disposable = Observe(...).Subscribe(...)` then finished its own
+                // assignment AFTER the nested re-probe had installed itself, and SerialDisposable
+                // disposed the re-probe — removing its response subject, so the owner's answer was
+                // dropped ("No subject found for response") and the read waited out its whole
+                // budget as "still recycling after 1 probe(s)". With the slot installed first, a
+                // nested re-probe replaces (and disposes) THIS slot, and the late assignment into a
+                // disposed slot disposes the finished probe — never its successor.
+                // Pinned by GetMeshNodeReProbeKeepsCallerIdentityTest.
+                var probe = new SingleAssignmentDisposable();
+                innerSubscription.Disposable = probe;
                 try
                 {
                     // 🚨 Register the response subject BEFORE posting. Observe<TResponse> pre-registers the
@@ -3869,7 +3884,7 @@ public static class MeshNodeStreamExtensions
                     // reply was dropped and this read hung to its timeout. That was the intermittent bulk flake
                     // in WorkspaceCacheEvictionTest (ReadNode -> GetMeshNode), proven deterministically by
                     // GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost.
-                    innerSubscription.Disposable = issuingHub
+                    probe.Disposable = issuingHub
                         .Observe<GetDataResponse>(
                             new GetDataRequest(new MeshNodeReference()),
                             o =>
