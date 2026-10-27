@@ -471,12 +471,12 @@ the four Orleans clustering and persistence packages, `ModelContextProtocol` and
 and `Microsoft.Extensions.AI`. A family split across two files drifts on the first grouped version
 bump, and Orleans has already shipped mismatched versions once that way.
 
-**Still pinned for Plugins, and why.** The module-library shelf (`tools/MeshWeaver.ModuleLibraries`)
-is a core csproj listing libraries that only Plugins modules bind: ClosedXML, CsvHelper, the AI
-provider SDKs, MailKit, Microsoft.Graph, `Radzen.Blazor`, ExcelDataReader. Its pins leave together
-with the shelf list; see [Core Carries No GUI Technology](../CoreCarriesNoGuiTechnology) under
-"Build tooling that still names a GUI". `Octokit` leaves under its own two conditions in
-[GitHub Sync](../GitHubSync), "Removing the transitional Octokit reference".
+**The shelf and the split families followed.** The module-library shelf (`tools/MeshWeaver.ModuleLibraries`)
+was a core csproj listing libraries only Plugins modules bind. It moved to Plugins with its pins, and
+so did the members of the Orleans, ModelContextProtocol and Microsoft.Extensions.AI families that only
+Plugins restores: each takes its version from the sibling core still pins, so the family keeps one
+version source ([Core Carries No GUI Technology](../CoreCarriesNoGuiTechnology), "The module-library
+shelf"). `Octokit` left once its two conditions in [GitHub Sync](../GitHubSync) held.
 
 **Before deleting a pin, check every satellite.** A satellite may consume a pin versionless. For
 the 48, the only versionless consumers outside Plugins were two Reinsurance `legacy/` projects.

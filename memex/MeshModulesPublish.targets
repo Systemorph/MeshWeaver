@@ -41,8 +41,8 @@
     <!-- View packs (#1644 step 2, final wave): thin-lane BLOCKED on static web assets. Each pack's CSS/JS
          reaches the browser only through the HOST's build-time static-web-assets graph — i.e.
          through the ProjectReference this lane exists to remove:
-           - Radzen self-loads _content/Radzen.Blazor/{css/material-base.css,Radzen.Blazor.js}
-             (RadzenViewBase.OnAfterRenderAsync) — package assets that enter the host manifest
+           - a component pack self-loads its package's _content/<Package>/{css,js} from its view
+             base class (OnAfterRenderAsync) — package assets that enter the host manifest
              only via the host's reference graph;
            - GoogleMaps imports ./_content/MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.js
              (GoogleMapView.razor.cs) — a collocated-JS static web asset;
@@ -80,8 +80,8 @@
     <!-- The last two packs off the thin lane, which completes the set (#1974). Both were already
          modules — listed under Modules:Assemblies and activated there — so this moves only where
          their bits ship, not whether they run. GoogleMaps carries scoped CSS plus collocated JS.
-         Radzen is the one that needed the provider's dependency mount rather than its own: it
-         self-loads _content/Radzen.Blazor/... from RadzenViewBase and its two views link a theme
+         The chart pack is the one that needed the provider's dependency mount rather than its own: it
+         self-loads its component library's _content/<Package>/... from its view base, and its two views link a theme
          stylesheet from the same namespace — PACKAGE assets, not the pack's own. Dropping the
          portal's reference means the host stops serving that namespace, so the copy under the
          module's wwwroot/_content/ becomes the one that answers, which is exactly the case the
