@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -134,7 +135,7 @@ public static class DeclaredReadSubscriptionFollow
             .AutoConnectOwnedBy(lifetime, owner.ServiceProvider.GetRequiredService<ReleaseLane>(), nameof(DeclaredReadSubscriptionFollow));
 
         return new ClientReadFollow(
-            revision => VerdictOf(standing, () => DeclaredRead(owner, hubPath, caller, shape, revision, logger)),
+            revision => VerdictOf(standing, () => DeclaredRead(owner, hubPath, caller, shape, revision, logger), budget, Scheduler.Default),
             budget,
             lifetime);
     }
@@ -151,10 +152,21 @@ public static class DeclaredReadSubscriptionFollow
     /// undetermined. As <c>Never</c> it cancels that check and holds: a pending revision waits for
     /// the settled answer (bounded by the first-verdict budget), and an admitted one stays admitted.
     /// A pending period itself is bounded upstream (<see cref="DeclaredPointRead.ObserveStandingRead"/>).</para>
+    ///
+    /// <para>🚨 EVERY declaration check the switch selects has its FIRST answer bounded by
+    /// <paramref name="budget"/> (review of #7329, thread 4391891410). <see cref="RevisionAdmission"/>
+    /// bounds only a revision's first verdict; once a revision was admitted under a grant, a later
+    /// Granted → pending → Denied hand-over started a NEW declaration check nobody bounded, and a
+    /// stalled storage or owner lookup there kept the subscription open past the budget on a grant
+    /// that no longer stood. Past the budget, on a fault, or on an empty answer the check is a
+    /// refusal; after its first answer it is followed live, unbounded.</para>
     /// </summary>
     /// <param name="standing">The followed standing Read, <c>null</c> while a re-check is in flight.</param>
     /// <param name="declaredRead">The declaration's live verdict for the revision, subscribed only under a definitive denial.</param>
-    internal static IObservable<bool> VerdictOf(IObservable<PermissionCheckOutcome?> standing, Func<IObservable<bool>> declaredRead) =>
+    /// <param name="budget">How long a newly selected declaration check may take to give its first answer.</param>
+    /// <param name="scheduler">Where that deadline runs.</param>
+    internal static IObservable<bool> VerdictOf(
+        IObservable<PermissionCheckOutcome?> standing, Func<IObservable<bool>> declaredRead, TimeSpan budget, IScheduler scheduler) =>
         standing
             .Select(outcome => outcome is null
                 ? Observable.Never<bool>()
@@ -162,7 +174,10 @@ public static class DeclaredReadSubscriptionFollow
                     ? Observable.Return(true)
                     : outcome.IsUndetermined
                         ? Observable.Return(false)
-                        : Observable.Defer(declaredRead))
+                        : Observable.Defer(declaredRead)
+                            .Timeout(Observable.Timer(budget, scheduler), _ => Observable.Never<long>())
+                            .Catch((Exception _) => Observable.Return(false))
+                            .DefaultIfEmpty(false))
             .Switch();
 
     /// <summary>

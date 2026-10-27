@@ -80,7 +80,7 @@ public class StandingReadPendingTest
         var standing = new Subject<PermissionCheckOutcome?>();
         var declaration = new Subject<bool>();
         var verdicts = ImmutableList<bool>.Empty;
-        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration).Subscribe(v => verdicts = verdicts.Add(v));
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration, Budget, new TestScheduler()).Subscribe(v => verdicts = verdicts.Add(v));
 
         standing.OnNext(PermissionCheckOutcome.Denied);
         Assert.True(declaration.HasObservers, "a definitive denial hands the decision to the declaration");
@@ -122,12 +122,72 @@ public class StandingReadPendingTest
     {
         var standing = new Subject<PermissionCheckOutcome?>();
         var verdicts = ImmutableList<bool>.Empty;
-        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => Observable.Return(false)).Subscribe(v => verdicts = verdicts.Add(v));
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => Observable.Return(false), Budget, new TestScheduler()).Subscribe(v => verdicts = verdicts.Add(v));
 
         standing.OnNext(PermissionCheckOutcome.Granted);
         standing.OnNext(null);
         Assert.Equal(new[] { true }, verdicts);
         standing.OnNext(PermissionCheckOutcome.Granted);
         Assert.Equal(new[] { true, true }, verdicts);
+    }
+
+    [Fact]
+    public void A_declaration_check_selected_after_an_admitted_grant_is_refused_when_its_first_answer_stalls()
+    {
+        // Granted (admitted) → pending → Denied: the declaration check selected under the denial is
+        // NEW, and RevisionAdmission's first-verdict budget was spent on the grant. A stalled lookup
+        // there must still end the subscription at the budget (review of #7329, thread 4391891410).
+        var scheduler = new TestScheduler();
+        var standing = new Subject<PermissionCheckOutcome?>();
+        var declaration = new Subject<bool>();
+        var verdicts = ImmutableList<bool>.Empty;
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration, Budget, scheduler)
+            .Subscribe(v => verdicts = verdicts.Add(v));
+
+        standing.OnNext(PermissionCheckOutcome.Granted);
+        standing.OnNext(null);
+        standing.OnNext(PermissionCheckOutcome.Denied);
+        Assert.True(declaration.HasObservers, "the denial selects a declaration check");
+        scheduler.AdvanceBy(Budget.Ticks - 1);
+        Assert.Equal(new[] { true }, verdicts);
+
+        scheduler.AdvanceBy(2);
+        Assert.Equal(new[] { true, false }, verdicts);
+        Assert.False(declaration.HasObservers, "the stalled check is released once it is refused");
+    }
+
+    [Fact]
+    public void A_declaration_check_that_answers_in_time_is_followed_live_past_the_budget()
+    {
+        // Control: only the FIRST answer is bounded — an admitting declaration is not cut at the
+        // budget, and its later refusal still reaches the verdict.
+        var scheduler = new TestScheduler();
+        var standing = new Subject<PermissionCheckOutcome?>();
+        var declaration = new Subject<bool>();
+        var verdicts = ImmutableList<bool>.Empty;
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration, Budget, scheduler)
+            .Subscribe(v => verdicts = verdicts.Add(v));
+
+        standing.OnNext(PermissionCheckOutcome.Denied);
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
+        declaration.OnNext(true);
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(60).Ticks);
+        Assert.Equal(new[] { true }, verdicts);
+
+        declaration.OnNext(false);
+        Assert.Equal(new[] { true, false }, verdicts);
+    }
+
+    [Fact]
+    public void A_declaration_check_that_completes_without_an_answer_is_a_refusal()
+    {
+        var scheduler = new TestScheduler();
+        var standing = new Subject<PermissionCheckOutcome?>();
+        var verdicts = ImmutableList<bool>.Empty;
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, Observable.Empty<bool>, Budget, scheduler)
+            .Subscribe(v => verdicts = verdicts.Add(v));
+
+        standing.OnNext(PermissionCheckOutcome.Denied);
+        Assert.Equal(new[] { false }, verdicts);
     }
 }
