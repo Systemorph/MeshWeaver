@@ -616,6 +616,20 @@ def self_test() -> int:
     check("forced/route-only on a forced, owing repository is host-forced and POSTs nothing", d.executor == HOST_FORCED and not any(c[0] == "POST" for c in calls), (d, calls))
     d = decide(with_(stages_file=stages), host_q, ok_post, route("MeshWeaver.Crm"), route_only=True)
     check("forced/route-only on an unlisted repository is actions", d.executor == ACTIONS, d)
+    # 5b. wiring: the required context must not let consolidate's SECOND read clear precheck's decision.
+    # `--route-only` reads an unanswering queue as NOT forced; precheck's `host-forced` already skipped
+    # `build`, so `Consolidate test results` must fail on precheck's answer itself, before any re-read.
+    wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows", "dotnet-test.yml")
+    if os.path.isfile(wf):  # core's own tree; a satellite running the platform copy has no such lane
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import workflow_yaml  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+        collect = workflow_yaml.job(workflow_yaml.load(Path(wf)), "collect-results", "dotnet-test.yml")
+        holds = [st for st in collect.get("steps") or []
+                 if "needs.precheck.outputs.executor == 'host-forced'" in str(st.get("if", ""))
+                 and "exit 1" in str(st.get("run", ""))]
+        check("wiring/Consolidate test results fails on precheck's host-forced itself (a transient queue outage on "
+              "its re-read cannot clear the decision)", len(holds) == 1, [st.get("name") for st in holds])
     # 6. outputs and summary
     out, summ = os.path.join(tmp, "out"), os.path.join(tmp, "summary")
     emit(Decision(HOST, "https://control.example.com/api/builds", "queued", []), {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})

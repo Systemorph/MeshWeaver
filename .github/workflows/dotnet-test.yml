@@ -4136,6 +4136,15 @@ jobs:
         REF_NAME: ${{ github.event.pull_request.head.ref }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: python3 .github/scripts/build-executor.py --route-only
+    # The re-ask above reads an unanswering queue as NOT forced — right when nothing was decided yet,
+    # but precheck's `host-forced` already SKIPPED `build` and every leg behind it. A transient outage
+    # on this second read must not clear that decision: with a reused green tree (`skip == 'true'`) the
+    # suite assertions below are exempt, so nothing else would stop the required context going green.
+    - name: Precheck routed this head to the build host (no leg ran here)
+      if: github.event_name == 'pull_request' && needs.precheck.outputs.executor == 'host-forced'
+      run: |
+        echo "::error title=Routed to the build host::precheck answered host-forced for this head, so build and every leg behind it did NOT run on Actions — the required context stays RED until core's host stages owe nothing (policy build-server-routes-all-ci; Doc/Architecture/BuildHosts → \"Host-forced routing\")."
+        exit 1
     # The green-tree marker below must point at the commit whose tree was TESTED — on a pull request
     # that is the fresh merge onto precheck's main sha (byte-identical: a pure function of that sha
     # and the head), not github.sha. Not a gate: it only re-derives the tested commit for the push.
