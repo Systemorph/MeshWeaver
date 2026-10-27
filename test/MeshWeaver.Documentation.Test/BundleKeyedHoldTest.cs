@@ -149,6 +149,76 @@ public class BundleKeyedHoldTest
             + "node's OLD text beside the tree's new siblings — which no bundle carries either");
     }
 
+    /// <summary>
+    /// 🚨 #7410 — a NodeType NEW in the incoming commit that shares a held source is held with it.
+    ///
+    /// <para>Measured: a package release added a type that includes a source shared with an existing
+    /// adopted type, and changed that source. The existing type was held (no bundle carried its new
+    /// fingerprint), so the shared source stayed at its old text — but the new type was never a
+    /// candidate (candidates came only from the partition's existing AdoptedVerified types), so it
+    /// landed and compiled against the old text: <c>CS0117 '…' does not contain a definition for
+    /// '…'</c>, until a roll.</para>
+    /// </summary>
+    [Fact]
+    public void ANewTypeSharingAHeldSource_IsHeldWithIt()
+    {
+        const string NewTypePath = $"{Space}/Digest";
+        const string NewSourcePath = $"{NewTypePath}/Source/DigestView";
+        var reads = new[] { $"namespace:{TypePath}/Source scope:subtree", $"namespace:{NewTypePath}/Source scope:subtree" };
+        var current = new[] { TypeNode(), Source("class V { }") };
+        var incoming = new[]
+        {
+            TypeNode(), Source("class V { public static int RouteOf() => 1; }"),
+            TypeNode(NewTypePath, reads), Source("class D { int r = V.RouteOf(); }", NewSourcePath),
+        };
+        var live = new Dictionary<string, NodeTypeDefinition>
+        {
+            [TypePath] = Adopted(Fingerprint([current[1]])),
+        };
+
+        var decision = Decide(incoming, current, live, Shelf((TypePath, Fingerprint([current[1]]))));
+
+        decision.Held.Select(h => h.Path).Should().Equal(new[] { NewTypePath, TypePath },
+            "the shared source is held at its OLD text, so a new type that reads it would compile "
+            + "against text its own sources were not written for — it must wait with the source");
+        var newcomer = decision.Held.Single(h => h.Path == NewTypePath);
+        newcomer.HeldBySharing.Should().BeTrue(
+            "it is held only because it shares a held source — the root's release re-judges it, so "
+            + "it must never be a release trigger of its own");
+        newcomer.Reason.Should().Contain("new in this commit");
+        decision.HoldsNode(Space, NewTypePath).Should().BeTrue("the new type's own node does not land");
+        decision.HoldsNode(Space, NewSourcePath).Should().BeTrue(
+            "nor do its own new sources — they land together with the type, on the root's release");
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL for #7410: a new type that shares NOTHING held lands as it always did — the
+    /// closure reaches new types only through a held source, never by being new.
+    /// </summary>
+    [Fact]
+    public void ANewTypeThatSharesNothingHeld_Lands()
+    {
+        const string NewTypePath = $"{Space}/Gadget";
+        const string NewSourcePath = $"{NewTypePath}/Source/GadgetView";
+        var current = new[] { TypeNode(), Source("class V { }") };
+        var incoming = new[]
+        {
+            TypeNode(), Source("class V { int n; }"),
+            TypeNode(NewTypePath), Source("class G { }", NewSourcePath),
+        };
+        var live = new Dictionary<string, NodeTypeDefinition>
+        {
+            [TypePath] = Adopted(Fingerprint([current[1]])),
+        };
+
+        var decision = Decide(incoming, current, live, Shelf((TypePath, Fingerprint([current[1]]))));
+
+        decision.Held.Select(h => h.Path).Should().Equal(new[] { TypePath },
+            "PRECONDITION: the adopted type is held, so the closure runs");
+        decision.HoldsNode(Space, NewTypePath).Should().BeFalse("a new type sharing nothing held lands");
+        decision.HoldsNode(Space, NewSourcePath).Should().BeFalse();
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     //  NOT held — five ways, each of which would otherwise freeze a Space
     // ══════════════════════════════════════════════════════════════════════════
