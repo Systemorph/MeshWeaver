@@ -224,6 +224,10 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
             "a release by a token that no longer holds the lease must not free the new holder's lease");
         afterStaleRelease.Lease!.Holder.Should().Be(AfterLapse);
         afterStaleRelease.Lease.Replica.Should().Be("silo-1");
+
+        // Leave the shared lease lapsed: the other tests of this class run on the same cluster, at
+        // epochs this test's hold would otherwise outlast.
+        await PrebuiltBundleRetentionLease.Release(hubB, AfterLapse).Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
     [Fact]
