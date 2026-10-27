@@ -66,7 +66,7 @@ three ways**, and the previous reading knew about one of them.
 |---|---|---|
 | 1 | `<app>/<Name>.dll` | the application closure — a `ProjectReference` from a portal host |
 | 2 | `<app>/meshweaver-surface.manifest` | the host's own record of its `MeshWeaver.*` **compile references** (`MeshWeaverSurfaceManifest.targets`) |
-| 3 | `<app>/modules/<Name>/<Name>.dll` | the **seeded-module** lane — `@(MeshModuleClosure)` in `memex/MeshModulesPublish.targets`, which `MeshBuilder.ResolveModulePath` probes *before* the app directory |
+| 3 | `<app>/modules/<Name>/<Name>.dll` | the **seeded-module** lane — `@(MeshModuleClosure)` in MeshWeaver.Plugins `src/MeshModulesPublish.targets`, which `MeshBuilder.ResolveModulePath` probes *before* the app directory |
 
 🚨 **A `MeshModuleClosure` row touches neither (1) nor (2)** — the portal hosts' own csproj comments
 say so in as many words. So a witness that read `/app` alone answered *"not shipped"* for every

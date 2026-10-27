@@ -40,7 +40,7 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
 {
     /// <summary>Production C# and the in-mesh NodeType sources under <c>samples/</c> and the
     /// documentation tree (compiled at runtime, invisible to <c>dotnet build</c>).</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex", "samples"];
+    private static readonly string[] ScannedRoots = ["src", "samples"];
 
     private const string AllowFileName = "LayoutAreaDataBakeSites.allow";
 

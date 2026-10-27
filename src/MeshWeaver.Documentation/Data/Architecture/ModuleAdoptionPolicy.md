@@ -291,7 +291,7 @@ so its copies carried the **same** version numbers as the store copies over newe
 
 **The record.** A module DLL carries no package version of its own (its informational version is the
 platform's, #3732), so the image build writes it down: the closure lane
-(`memex/MeshModulesPublish.targets`, `WriteMeshModuleSeedStamps`) finds the package that declares
+(MeshWeaver.Plugins `src/MeshModulesPublish.targets`, `WriteMeshModuleSeedStamps`) finds the package that declares
 each closure module (`<package>/index.json` → `content.module`) and writes
 `modules/<Name>/module.seed.json` beside the DLL — `version` and `moduleVersion` from that package's
 `manifest.lock` at the commit the image is built from. `ImageModuleSeed` reads it.
