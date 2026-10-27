@@ -30,6 +30,11 @@ public sealed class MemexConfig
         return new MemexConfig { BaseUrl = baseUrl.TrimEnd('/'), Token = token };
     }
 
+    /// <summary>The base URL alone, resolved in the same order — for reading a cached tool catalog
+    /// when no token is configured.</summary>
+    public static string ResolveBaseUrl(string? flagBaseUrl) =>
+        Pick(flagBaseUrl, Environment.GetEnvironmentVariable(EnvBaseUrl), ReadConfigFile()?.BaseUrl, DefaultBaseUrl)!.TrimEnd('/');
+
     public static string ConfigPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".memex", "config.json");
 
