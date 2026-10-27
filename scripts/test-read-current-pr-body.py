@@ -1,11 +1,15 @@
 """Regression coverage for declaration gates reading corrected PR metadata."""
 
+import base64
 import copy
+import email.message
 import importlib.util
+import io
+import json
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
@@ -65,8 +69,8 @@ class CurrentPrBodyTest(unittest.TestCase):
 
     def test_failed_rest_read_never_falls_back_to_event(self):
         def fail(_):
-            raise subprocess.CalledProcessError(1, ["gh", "api"])
-        with self.assertRaises(subprocess.CalledProcessError):
+            raise reader.ApiRefused("HTTP 401 for GET repos/Systemorph/MeshWeaver/pulls/3844")
+        with self.assertRaises(reader.ApiRefused):
             reader.read_body(self.event, "Systemorph/MeshWeaver", fail)
 
     def test_failed_refresh_removes_previous_output_and_exits_red(self):
@@ -78,6 +82,148 @@ class CurrentPrBodyTest(unittest.TestCase):
                  patch("builtins.print"):
                 self.assertEqual(reader.main(), 1)
             self.assertFalse(output.exists())
+
+
+def http_error(status, headers=None, body=""):
+    message = email.message.Message()
+    for key, value in (headers or {}).items():
+        message[key] = value
+    return urllib.error.HTTPError("https://api.github.com/x", status, "error", message,
+                                  io.BytesIO(body.encode("utf-8")))
+
+
+class FakeApi:
+    """A scripted GitHub: each call pops the next answer (an HTTPError, an OSError or a dict)."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = 0
+        self.now = 1_000_000.0
+        self.slept = []
+
+    def urlopen(self, request, timeout):
+        self.calls += 1
+        answer = self.answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return io.BytesIO(json.dumps(answer).encode("utf-8"))
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def clock(self):
+        return self.now
+
+    def get(self, budget=240):
+        return reader.api_get("repos/o/r/pulls/1", token="t", base_url="https://api.example",
+                              budget_seconds=budget, urlopen=self.urlopen,
+                              sleep=self.sleep, clock=self.clock)
+
+
+RATE_LIMIT_BODY = '{"message":"API rate limit exceeded for installation ID 1."}'
+
+
+class ApiBudgetTest(unittest.TestCase):
+    """Negative controls: an unavailable API is NO VERDICT, never a finding and never a pass."""
+
+    def test_200_is_returned_without_retry(self):
+        api = FakeApi({"number": 1})
+        self.assertEqual(api.get(), {"number": 1})
+        self.assertEqual((api.calls, api.slept), (1, []))
+
+    def test_installation_rate_limit_past_the_budget_is_no_verdict_naming_the_reset(self):
+        reset = 1_000_000 + 1800
+        api = FakeApi(http_error(403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(reset)},
+                                 RATE_LIMIT_BODY))
+        with self.assertRaises(reader.ApiUnavailable) as caught:
+            api.get()
+        # A wait the budget cannot cover is not slept at all.
+        self.assertEqual((api.calls, api.slept), (1, []))
+        sentence = caught.exception.sentence()
+        self.assertIn("NO VERDICT — GitHub API rate-limited until 1970-01-12T14:16:40Z", sentence)
+        self.assertIn("re-run after it", sentence)
+
+    def test_rate_limit_inside_the_budget_is_waited_out_honouring_retry_after(self):
+        api = FakeApi(http_error(403, {"retry-after": "7"}, RATE_LIMIT_BODY), {"number": 1})
+        self.assertEqual(api.get(), {"number": 1})
+        self.assertEqual(api.slept, [7])
+
+    def test_rate_limit_text_alone_without_headers_is_still_rate_limit(self):
+        api = FakeApi(http_error(403, {}, RATE_LIMIT_BODY), {"number": 1})
+        self.assertEqual(api.get(), {"number": 1})
+        self.assertEqual(api.calls, 2)
+
+    def test_5xx_and_transport_failures_are_retried_then_no_verdict(self):
+        api = FakeApi(http_error(502), OSError("reset by peer"), {"number": 1})
+        self.assertEqual(api.get(), {"number": 1})
+        self.assertEqual(api.calls, 3)
+        always = FakeApi(*[http_error(503)] * 50)
+        with self.assertRaises(reader.ApiUnavailable) as caught:
+            always.get(budget=30)
+        self.assertLessEqual(sum(always.slept), 30)
+        self.assertIn("NO VERDICT — GitHub API unavailable (HTTP 503", caught.exception.sentence())
+
+    def test_deliberate_refusals_fail_at_once_without_retry(self):
+        for status, body in ((404, '{"message":"Not Found"}'), (401, "{}"),
+                             (403, '{"message":"Resource not accessible by integration"}')):
+            with self.subTest(status=status):
+                api = FakeApi(http_error(status, {"x-ratelimit-remaining": "4000"}, body))
+                with self.assertRaises(reader.ApiRefused):
+                    api.get()
+                self.assertEqual(api.calls, 1)
+
+    def test_main_exits_no_verdict_red_and_removes_previous_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({"pull_request": {
+                "number": 3844, "head": {"sha": "a" * 40},
+                "base": {"repo": {"full_name": "Systemorph/MeshWeaver"}}}}))
+            output = Path(directory) / "body.md"
+            output.write_text("Mirror-sync: stale declaration")
+            printed = io.StringIO()
+
+            def limited(path):
+                raise reader.ApiUnavailable(path, "HTTP 403 rate limit", 1_000_000)
+            with patch("sys.argv", ["read-current-pr-body.py", "--output", str(output)]), \
+                 patch.dict("os.environ", {"GITHUB_EVENT_PATH": str(event),
+                                           "GITHUB_REPOSITORY": "Systemorph/MeshWeaver"}), \
+                 patch.object(reader, "read_pr", limited), patch("sys.stdout", printed):
+                self.assertEqual(reader.main(), reader.NO_VERDICT_EXIT)
+            self.assertFalse(output.exists())
+            self.assertIn("NO VERDICT — GitHub API rate-limited until", printed.getvalue())
+            self.assertNotIn("Could not read the current PR body", printed.getvalue())
+
+
+class SharedBodyTest(unittest.TestCase):
+    """One read per run attempt — and never a stale body on a re-run of failed jobs."""
+
+    def setUp(self):
+        self.event = {"pull_request": {"head": {"sha": "a" * 40}}}
+        self.env = {"SHARED_PR_BODY_B64": base64.b64encode("Pairs-with: none — ü".encode()).decode(),
+                    "SHARED_PR_BODY_ATTEMPT": "1", "SHARED_PR_BODY_HEAD": "a" * 40,
+                    "GITHUB_RUN_ATTEMPT": "1"}
+
+    def test_same_attempt_same_head_is_reused(self):
+        self.assertEqual(reader.shared_body(self.event, self.env), ("Pairs-with: none — ü", None))
+
+    def test_empty_shared_body_is_a_real_empty_body(self):
+        self.env["SHARED_PR_BODY_B64"] = ""
+        self.assertEqual(reader.shared_body(self.event, self.env), ("", None))
+
+    def test_rerun_of_failed_jobs_reads_the_current_body_instead(self):
+        self.env["GITHUB_RUN_ATTEMPT"] = "2"
+        body, why = reader.shared_body(self.event, self.env)
+        self.assertIsNone(body)
+        self.assertIn("re-run of failed jobs", why)
+
+    def test_other_head_missing_or_corrupt_read_is_not_reused(self):
+        for change in ({"SHARED_PR_BODY_HEAD": "b" * 40}, {"SHARED_PR_BODY_ATTEMPT": ""},
+                       {"SHARED_PR_BODY_B64": "not base64!"}):
+            with self.subTest(change=change):
+                body, why = reader.shared_body(self.event, {**self.env, **change})
+                self.assertIsNone(body)
+                self.assertTrue(why)
 
 
 if __name__ == "__main__":

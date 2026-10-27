@@ -638,7 +638,7 @@ jobs:
   # or `cancelled` holds (stage 0 red), `skipped` passes. The green-tree reuse path is passed in too:
   # nothing is spent there, so it is not held.
   stage-gate:
-    needs: [precheck, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, cross-repo-pair]
+    needs: [precheck, pr-body, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, cross-repo-pair]
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/node-repo-stage-gate.yml
     permissions:
@@ -653,7 +653,7 @@ jobs:
         shared-rules=${{ needs.shared-rules.result }} closing-keywords=${{ needs.closing-keywords.result }}
         package-pin-removal=${{ needs.package-pin-removal.result }} interface-addition=${{ needs.interface-addition.result }}
         i18n-mirror-sync=${{ needs.i18n-mirror-sync.result }} workflow-shell=${{ needs.workflow-shell.result }}
-        cross-repo-pair=${{ needs.cross-repo-pair.result }}
+        cross-repo-pair=${{ needs.cross-repo-pair.result }} pr-body=${{ needs.pr-body.result }}
 
   build:
     name: "Build solution (once)"
@@ -2066,6 +2066,11 @@ jobs:
         set -euo pipefail
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
+    # 🚨 A rate limit / 5xx is NO VERDICT, only a 404 skips a candidate (Doc/Architecture/CiRestBudget).
+    # Proven against a FAKE API first: an unproven fetch is how "not available" was reported over a set
+    # that existed while the token's bucket was empty.
+    - name: "The plugin-set fetch says NO VERDICT on a rate limit, skips only a 404 (self-test)"
+      run: python3 .github/scripts/test-fetch-deployed-plugin-set.py
     - name: "Fetch the deployed plugin set (the newest main-cd module bundles)"
       id: plugins
       env:
@@ -3422,8 +3427,81 @@ jobs:
         python3 .github/scripts/check-shared-rules.py \
           --local Systemorph/MeshWeaver=AGENTS.md
 
+  pr-body:
+    name: "Pull-request body (read once)"
+    # 🚨 ONE READ PER RUN ATTEMPT, ON THE APP'S BUDGET (Doc/Architecture/CiRestBudget). Five
+    # declaration gates below each read the current body through REST with the run's GITHUB_TOKEN,
+    # and that token's bucket (~1,000 requests/hour per repository, shared by every run of every
+    # workflow here) is what ran dry on 2026-10-27 20:37-21:14Z: every gate then said "Could not read
+    # the current PR body" — a fake verdict about the pull request. This job reads the body ONCE,
+    # with a `fleet-reader` installation token (its own, larger budget), and hands it to the gates
+    # as an output; each gate reuses it only when it was read in THIS attempt for THIS head, so a
+    # "re-run failed jobs" after the author corrected the body still reads the CURRENT body.
+    # A rate limit that outlasts the retry budget is RED as "NO VERDICT — … re-run after it", never
+    # a finding (scripts/read-current-pr-body.py).
+    #
+    # 🚨 NO SKIP-TRAPDOOR. The exemption is on the EVENT, once: a pull request whose head lives in
+    # ANOTHER repository (a fork) is given no secret by GitHub, so it reads with the run's own token
+    # (this repository is public). Every same-repository pull request — Dependabot's included, both
+    # stores hold the App secrets — ASSERTS the credential and fails RED naming what to provision.
+    # A failure here holds stage 0 (stage-gate) and fails `Consolidate test results` by name; the
+    # gates that need it are then skipped, and each of their own fail steps there names them too.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      body-b64: ${{ steps.read.outputs.body-b64 }}
+      head: ${{ steps.read.outputs.head }}
+      attempt: ${{ steps.read.outputs.attempt }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 1
+        sparse-checkout: |
+          scripts/read-current-pr-body.py
+          scripts/test-read-current-pr-body.py
+        sparse-checkout-cone-mode: false
+    - name: Assert the App credential, or fail naming what to provision
+      if: github.event.pull_request.head.repo.full_name == github.repository
+      env:
+        FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+        FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+      run: |
+        missing=()
+        [ -n "${FLEET_READER_APP_ID:-}" ] || missing+=("secrets.FLEET_READER_APP_ID            app id of the org's READ-ONLY fleet-reader GitHub App — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
+        [ -n "${FLEET_READER_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY   that App's private key (PEM), in BOTH stores like the id")
+        if [ ${#missing[@]} -gt 0 ]; then
+          echo "::error::The pull-request body cannot be read on the App's budget — provision the following, then re-run:"
+          for m in "${missing[@]}"; do echo "  • $m"; done
+          exit 1
+        fi
+        echo "Credential inputs are present (the mint below proves them)."
+    - name: Mint a read-only installation token for this repository's pull requests
+      id: app
+      if: github.event.pull_request.head.repo.full_name == github.repository
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ secrets.FLEET_READER_APP_ID }}
+        private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-pull-requests: read
+    - name: "The body reader can fail, can pass, and says NO VERDICT on a rate limit (self-test)"
+      run: python3 scripts/test-read-current-pr-body.py
+    - name: Read the current pull-request body once
+      id: read
+      env:
+        # Chosen by the EVENT: the App token for a same-repository head, the run's token for a fork.
+        GH_TOKEN: ${{ github.event.pull_request.head.repo.full_name == github.repository && steps.app.outputs.token || github.token }}
+      run: python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md" --emit-github-output
+
   cross-repo-pair:
     name: "Cross-repo pair (public surface)"
+    # The body is read ONCE per run attempt by `pr-body` (Doc/Architecture/CiRestBudget).
+    needs: [pr-body]
     # 🚨 THE GAP THIS CLOSES (#2689): when a change spans this repo and a plugin repo, nothing made
     # the two halves land together — and the half that lands FIRST decides whether somebody else's
     # trunk goes red. #2678 ("the node-surface views leave the platform for a module") merged HERE,
@@ -3554,11 +3632,15 @@ jobs:
     # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
-        GH_TOKEN: ${{ github.token }}
+        # Reused from `pr-body` when read in THIS attempt for THIS head; read afresh otherwise (a
+        # re-run of failed jobs must see a corrected body).
+        SHARED_PR_BODY_B64: ${{ needs.pr-body.outputs.body-b64 }}
+        SHARED_PR_BODY_HEAD: ${{ needs.pr-body.outputs.head }}
+        SHARED_PR_BODY_ATTEMPT: ${{ needs.pr-body.outputs.attempt }}
+        GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
       run: |
         set -euo pipefail
-        python3 scripts/test-read-current-pr-body.py
-        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/read-current-pr-body.py --reuse-from-env --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Report the public surface this diff removes"
@@ -3592,6 +3674,8 @@ jobs:
 
   package-pin-removal:
     name: "Satellite package pins (removal declared)"
+    # The body is read ONCE per run attempt by `pr-body` (Doc/Architecture/CiRestBudget).
+    needs: [pr-body]
     # 🚨 THE GAP THIS CLOSES (#3349, measured on #3344). MeshWeaver.Plugins'
     # `src/Directory.Packages.props` IMPORTS this repo's, so a satellite project may carry a
     # versionless `<PackageReference Include="X" />` whose ONLY version source is an entry here.
@@ -3653,11 +3737,15 @@ jobs:
     # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
+        # Reused from `pr-body` when read in THIS attempt for THIS head; read afresh otherwise (a
+        # re-run of failed jobs must see a corrected body).
+        SHARED_PR_BODY_B64: ${{ needs.pr-body.outputs.body-b64 }}
+        SHARED_PR_BODY_HEAD: ${{ needs.pr-body.outputs.head }}
+        SHARED_PR_BODY_ATTEMPT: ${{ needs.pr-body.outputs.attempt }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        python3 scripts/test-read-current-pr-body.py
-        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/read-current-pr-body.py --reuse-from-env --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Every removed PackageVersion is declared"
@@ -3676,6 +3764,8 @@ jobs:
 
   interface-addition:
     name: "Interface additions (implementers declared)"
+    # The body is read ONCE per run attempt by `pr-body` (Doc/Architecture/CiRestBudget).
+    needs: [pr-body]
     # 🚨 THE GAP THIS CLOSES (#3465, measured on #3446 and the pin move that followed it).
     # `cross-repo-pair` above triggers on a REMOVAL. This is the mirror image, and it is the half
     # nothing covered: A FORWARDER RESCUES A CALLER, IT CANNOT RESCUE AN IMPLEMENTER.
@@ -3738,11 +3828,15 @@ jobs:
     # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
+        # Reused from `pr-body` when read in THIS attempt for THIS head; read afresh otherwise (a
+        # re-run of failed jobs must see a corrected body).
+        SHARED_PR_BODY_B64: ${{ needs.pr-body.outputs.body-b64 }}
+        SHARED_PR_BODY_HEAD: ${{ needs.pr-body.outputs.head }}
+        SHARED_PR_BODY_ATTEMPT: ${{ needs.pr-body.outputs.attempt }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        python3 scripts/test-read-current-pr-body.py
-        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/read-current-pr-body.py --reuse-from-env --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Report the public surface this diff adds"
@@ -3766,6 +3860,8 @@ jobs:
 
   i18n-mirror-sync:
     name: "i18n catalog (mirror sync handed over)"
+    # The body is read ONCE per run attempt by `pr-body` (Doc/Architecture/CiRestBudget).
+    needs: [pr-body]
     # 🚨 THE GAP THIS CLOSES (#3596, and it is a RECURRENCE — AGENTS.md already records
     # "measured 2026-09-04: pin 70 keys behind, both repos green").
     #
@@ -3829,11 +3925,15 @@ jobs:
     # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
+        # Reused from `pr-body` when read in THIS attempt for THIS head; read afresh otherwise (a
+        # re-run of failed jobs must see a corrected body).
+        SHARED_PR_BODY_B64: ${{ needs.pr-body.outputs.body-b64 }}
+        SHARED_PR_BODY_HEAD: ${{ needs.pr-body.outputs.head }}
+        SHARED_PR_BODY_ATTEMPT: ${{ needs.pr-body.outputs.attempt }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        python3 scripts/test-read-current-pr-body.py
-        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/read-current-pr-body.py --reuse-from-env --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Every catalog change hands the mirror sync over"
@@ -3852,6 +3952,8 @@ jobs:
 
   closing-keywords:
     name: "Closing keywords (no accidental close)"
+    # The body is read ONCE per run attempt by `pr-body` (Doc/Architecture/CiRestBudget).
+    needs: [pr-body]
     # 🚨 THE GAP THIS CLOSES. GitHub's closing-keyword parser binds
     # close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved to the ONE reference that
     # follows it and reads nothing else — not the negation in front of it, not the possessive
@@ -3936,12 +4038,22 @@ jobs:
         fi
         bad=0
         for label in "sev:H" "sev:B"; do
-          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -D "$RUNNER_TEMP/label-headers" \
             --connect-timeout 10 --max-time 30 \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${{ github.repository }}/labels/$label") || code=000
+          # A rate-limited 403/429 is NO VERDICT, never "the token cannot read issues" (2026-10-27,
+          # Doc/Architecture/CiRestBudget): name the reset so the reader re-runs after it.
+          if [ "$code" = 403 ] || [ "$code" = 429 ]; then
+            reset=$(tr -d '\r' < "$RUNNER_TEMP/label-headers" | awk -F': ' 'tolower($1)=="x-ratelimit-remaining"{r=$2} tolower($1)=="x-ratelimit-reset"{t=$2} tolower($1)=="retry-after"{a=$2} END{if (r=="0" && t!="") print t; else if (a!="") print "retry-after " a "s"}')
+            if [ -n "$reset" ]; then
+              case "$reset" in retry*) until="$reset" ;; *) until=$(date -u -d "@$reset" +%Y-%m-%dT%H:%M:%SZ) ;; esac
+              echo "::error title=NO VERDICT — GitHub API::NO VERDICT — GitHub API rate-limited until $until; re-run after it. This is not a finding about the pull request."
+              bad=1; continue
+            fi
+          fi
           case "$code" in
             200) echo "  ok   label $label exists and is readable" ;;
             404) echo "::error::label '$label' does not exist in ${{ github.repository }} — create it (gh label create '$label'). An UNKNOWN label folds every label query to green, so this gate would pass on every pull request while checking nothing."; bad=1 ;;
@@ -3970,11 +4082,15 @@ jobs:
     # and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
+        # Reused from `pr-body` when read in THIS attempt for THIS head; read afresh otherwise (a
+        # re-run of failed jobs must see a corrected body).
+        SHARED_PR_BODY_B64: ${{ needs.pr-body.outputs.body-b64 }}
+        SHARED_PR_BODY_HEAD: ${{ needs.pr-body.outputs.head }}
+        SHARED_PR_BODY_ATTEMPT: ${{ needs.pr-body.outputs.attempt }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        python3 scripts/test-read-current-pr-body.py
-        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/read-current-pr-body.py --reuse-from-env --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Every closing keyword closes something a merge may close"
@@ -4089,7 +4205,7 @@ jobs:
     # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
     # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
     # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
-    needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
+    needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4469,6 +4585,16 @@ jobs:
       if: github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.shared-rules.result != 'success'
       run: |
         echo "::error::The 'AGENTS.md shared rule blocks' gate concluded '${{ needs.shared-rules.result }}' — see that job, which names the repo and the exact drift. Every repo's CLAUDE.md is a one-line @AGENTS.md include, so a block that differs between repos means agents follow different instructions in each of them. The register is .github/shared-rules.json; the rationale is Doc/Architecture/SharedRuleBlocks. The fix is always a pull request in the repo the error names — never a bypass here."
+        exit 1
+
+    # ── …and an UNREAD PULL-REQUEST BODY is named as itself, first ──────────────────────────
+    # Every declaration gate below needs `pr-body`; when it did not succeed they are skipped and
+    # each fails on its own line here. This line names the one cause. Same event predicate as the
+    # job's own `if:`.
+    - name: Fail if the pull-request body could not be read
+      if: github.event_name == 'pull_request' && needs.pr-body.result != 'success'
+      run: |
+        echo "::error::The 'Pull-request body (read once)' job concluded '${{ needs.pr-body.result }}' — see that job. A line there reading 'NO VERDICT — GitHub API rate-limited until …' is not a finding about this pull request: re-run after the reset. Rationale: Doc/Architecture/CiRestBudget."
         exit 1
 
     # ── …and an UNLANDED CROSS-REPO COUNTERPART decides it too ──────────────────────────────
