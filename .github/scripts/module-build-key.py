@@ -503,11 +503,14 @@ def self_test() -> int:
         d1 = compute(root, deep, "sha256:t", "sha256:p", "abc123")["key"]
         between.write_text(pin_v2, encoding="utf-8")
         d2 = compute(root, deep, "sha256:t", "sha256:p", "abc123")["key"]
+        # Read the sibling WHILE the nested pin still exists — after the unlink this would pass even
+        # if the ancestor walk leaked the pin into every module's key.
+        sibling_with_pin = compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"]
         between.unlink()
         check("a pin file in a directory BETWEEN a nested project and src/ changes its key", d1 != d0)
         check("…and a version change in it changes the key again", d2 != d1)
-        check("NEGATIVE CONTROL: that nested pin file leaves the sibling module's key unchanged",
-              compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"] == k0)
+        check("NEGATIVE CONTROL: that nested pin file (still present) leaves the sibling module's key unchanged",
+              sibling_with_pin == k0)
         import shutil
         shutil.rmtree(root / "src" / "Group")
         # NEGATIVE CONTROLS: a Directory.* file no closure project inherits, and a non-Directory file
