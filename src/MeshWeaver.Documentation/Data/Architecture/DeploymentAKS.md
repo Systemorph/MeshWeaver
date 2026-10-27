@@ -117,7 +117,7 @@ The portal container is `memex-portal` in Deployment `memex-portal-deployment`.
 > `deploy/helm/templates/memex-migration/job.yaml` renders a `batch/v1` Job named
 > `memex-migration-<Release.Revision>` with `restartPolicy: Never`; a fresh one is created by **`helm
 > upgrade`**, and `ttlSecondsAfterFinished` cleans it up. `memex-migration-deployment` is a **legacy**
-> resource: per `deploy/aks/SELF-UPDATE.md`, live AKS clusters still carry it **scaled to 0**, so
+> resource: per MeshWeaver.Deploy's [`deploy/aks/SELF-UPDATE.md`](https://github.com/Systemorph/MeshWeaver.Deploy/blob/main/deploy/aks/SELF-UPDATE.md), live AKS clusters still carry it **scaled to 0**, so
 > `set image` / `rollout restart` against it changes a pod spec that never runs, and on a chart-only
 > environment the command simply 404s. Either way it is **silent** — the commands appear to succeed and no
 > migration happens. **A schema change therefore has to go out via `helm upgrade` (which mints a new Job), not
@@ -414,7 +414,7 @@ Steady state is **self-update** (see [ReleaseStrategy.md](/Doc/Architecture/Rele
 
 1. **Provision the UAMI + federated credentials** — included in the infra deploy (`deployPortalIdentity` defaults `true`). Read the client id back:
    ```bash
-   # --name is whatever the infra deploy was created with; deploy/aks/README.md uses memex-aks-infra.
+   # --name is whatever the infra deploy was created with; MeshWeaver.Deploy's deploy/aks/README.md uses memex-aks-infra.
    az deployment sub show --subscription <subscription> --name memex-aks-infra-sc \
      --query "properties.outputs.{clientId:portalIdentityClientId.value, principalId:portalIdentityPrincipalId.value}" -o jsonc
    ```

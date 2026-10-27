@@ -259,6 +259,43 @@ public static class NodeTypeDependencyGraph
         return (componentOf, members);
     }
 
+    /// <summary>
+    /// The dependency map a CONCURRENT scheduler can wait on: the same edges as
+    /// <paramref name="dependencies"/>, minus every edge to an unknown type, every self-edge and
+    /// every edge between two members of one strongly connected component. What remains is acyclic
+    /// by construction (it is the condensation's edge set, expanded back to member paths), so a
+    /// scheduler that starts a type once each of its remaining dependencies has settled can never
+    /// stall.
+    ///
+    /// <para>This is the parallel twin of
+    /// <see cref="TopologicalOrder(IReadOnlyDictionary{string, ImmutableHashSet{string}}, out ImmutableList{string})"/>
+    /// and carries the same ruling (#1347): members of a cycle "cannot be ordered relative to each
+    /// other", so they wait on nothing inside it, while every edge INTO or OUT OF the cycle is
+    /// kept — a type downstream of a cycle still starts only after every member it reaches has
+    /// settled. Every input path is a key of the result, with an empty set when it waits on
+    /// nothing.</para>
+    /// </summary>
+    /// <param name="dependencies">Direct dependencies per type, as <see cref="Build"/> returns them.</param>
+    public static ImmutableDictionary<string, ImmutableHashSet<string>> WithoutCycleEdges(
+        IReadOnlyDictionary<string, ImmutableHashSet<string>> dependencies)
+    {
+        ArgumentNullException.ThrowIfNull(dependencies);
+        var edges = dependencies.ToDictionary(
+            kv => kv.Key,
+            kv => kv.Value
+                .Where(dependencies.ContainsKey)
+                .Where(d => !string.Equals(d, kv.Key, StringComparison.OrdinalIgnoreCase))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+        var (componentOf, _) = Condense(edges);
+        return edges.ToImmutableDictionary(
+            kv => kv.Key,
+            kv => kv.Value
+                .Where(d => !string.Equals(componentOf[d], componentOf[kv.Key], StringComparison.OrdinalIgnoreCase))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
     /// <summary>Convenience overload for callers that do not care which types were cyclic.</summary>
     public static ImmutableList<string> TopologicalOrder(
         IReadOnlyDictionary<string, ImmutableHashSet<string>> dependencies) =>

@@ -241,6 +241,44 @@ public class BroadGrantGuardEnforcedAtTheWriteBoundaryTest(ITestOutputHelper out
         changed.Success.Should().BeFalse("a changed claim is a new claim, checked like a create");
     }
 
+    /// <summary>
+    /// The client-name gate's caller grants (MeshWeaver.Plugins <c>Governance/ClientNameGate</c>):
+    /// each standard's executor writes ONE NameCheckCaller grant for ONE service identity, as
+    /// System, on the scope the standard fixes. That is a <see cref="BroadGrantKind.SystemForOther"/>
+    /// shape, so under Enforce it lands only because the standard is on the default allowlist —
+    /// before it was, triage's publication-check grant was refused and every post was held.
+    /// </summary>
+    [Theory]
+    [InlineData("namecheck.caller.grant", "Governance/NameChecks")]
+    [InlineData("publicationcheck.caller.grant", "Governance/PublicationChecks")]
+    public async Task ACallerGrantByItsExecutingNameGateStandard_Passes(string standard, string scope)
+    {
+        BroadGrantGuard.DefaultGovernedStandards.Should().Contain(standard);
+        await WriteActivity("Executing", $"Governance/Standards/{standard}");
+
+        var failure = await Create(Grant(scope, "svc-name-gate-caller", ActivityPath), Executor);
+
+        failure.Should().BeNull($"{standard} is a governed standard that issues one narrow caller grant");
+    }
+
+    /// <summary>
+    /// The negative control for <see cref="ACallerGrantByItsExecutingNameGateStandard_Passes"/>: the
+    /// same grant, the same executor, an activity that IS executing — but a standard that exists and
+    /// was never meant to grant (<c>hosting.roll</c>). If the allowlist were not consulted, or every
+    /// executing activity counted, this would pass too.
+    /// </summary>
+    [Fact]
+    public async Task ACallerGrantByAnExecutingNonGrantingStandard_IsRefused()
+    {
+        BroadGrantGuard.DefaultGovernedStandards.Should().NotContain("hosting.roll");
+        await WriteActivity("Executing", "Governance/Standards/hosting.roll");
+
+        var failure = await Create(Grant("Governance/PublicationChecks", "svc-name-gate-caller", ActivityPath), Executor);
+
+        failure.Should().NotBeNull("an executing activity authorises a broad grant only when its standard is allowlisted");
+        (failure?.RefusalText()?.MessageKey).Should().Be(BroadGrantGuard.RefusalKey);
+    }
+
     /// <summary>A user's own acquisition stamps OnBehalfOf: Enforce must not refuse every System grant.</summary>
     [Fact]
     public async Task ASystemGrantOnBehalfOfItsOwnSubject_Passes()

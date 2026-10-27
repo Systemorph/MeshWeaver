@@ -179,7 +179,10 @@ on:
           Empty (the default) on a failure means "list the run's jobs that concluded failure/timed_out
           yourself, reading neverStarted from each job's step count" — which needs `actions: read` on
           the caller job. Ignored on success. A malformed value (a non-boolean neverStarted included)
-          is refused before any write.
+          is refused before any write. An entry may also carry `cause` — the error-annotation signature
+          `ci-failure-ledger.py --list-failed-jobs <run id>` writes (run in the CALLER's job, which grants
+          `actions: read` + `checks: read`; lock-pinned-digests.yml is the template) — and the ledger
+          entry then says whether this red's cause is the SAME as the previous red's or CHANGED (#7416).
         required: false
         type: string
         default: "[]"
@@ -205,6 +208,16 @@ on:
         required: false
         type: string
         default: ci-main-red
+      severity:
+        description: >-
+          The severity label the ledger issue is stamped with (with `bug`) when it carries no
+          classification yet — one of sev:B, sev:H, sev:M, sev:L. Default `sev:H`: a red MAIN build is a
+          primary path broken, and every existing caller keeps it. A scheduled lane passes `sev:M`
+          (#7416): tracked and visible, never a release gate by itself; a person raises it when it
+          threatens production. Anything else is refused before any write.
+        required: false
+        type: string
+        default: sev:H
       control-webhook-url:
         description: The control portal's triage inbox — pass vars.CONTROL_WEBHOOK_URL (https://control.systemorph.com/api/hooks/Hosting/PlatformBuilds).
         required: true
@@ -268,6 +281,7 @@ jobs:
           TRIGGER: ${{ inputs.event }}
           SCRIPTS_REF: ${{ inputs.scripts-ref }}
           LEDGER_LABEL: ${{ inputs.label }}
+          LEDGER_SEVERITY: ${{ inputs.severity }}
         run: |
           set -euo pipefail
           missing=()
@@ -281,6 +295,12 @@ jobs:
           [ -n "${TRIGGER:-}" ]                || missing+=("inputs.event                    github.event_name")
           [ -n "${SCRIPTS_REF:-}" ]            || missing+=("inputs.scripts-ref              the Systemorph/MeshWeaver ref the ledger script is fetched at (default main)")
           [ -n "${LEDGER_LABEL:-}" ]           || missing+=("inputs.label                    the ledger's own label (default ci-main-red). Measured, not assumed: the script reads \`env(LEDGER_LABEL) or DEFAULT_LABEL\`, so an EMPTY value does not fail — it silently becomes \`ci-main-red\`, and a lane that meant to keep its own story would append to, reopen and CLOSE the repo's main-build ledger instead. Refused here so the fallback can never be reached by accident")
+          # Same trap as the label: the script reads `env(LEDGER_SEVERITY) or DEFAULT_SEVERITY`, so an
+          # EMPTY value would silently become sev:H. Refused here; an unknown word is refused by the script.
+          case "${LEDGER_SEVERITY:-}" in
+            sev:B|sev:H|sev:M|sev:L) ;;
+            *) missing+=("inputs.severity                 one of sev:B, sev:H, sev:M, sev:L (default sev:H), got '${LEDGER_SEVERITY:-}'") ;;
+          esac
           case "${OUTCOME:-}" in
             failure|success) ;;
             *) missing+=("inputs.outcome                  must be \`failure\` or \`success\`, got '${OUTCOME:-}' — wire two caller jobs, one per outcome, never one job guessing") ;;
@@ -349,6 +369,7 @@ jobs:
           LEDGER_ISSUE_TITLE: ${{ inputs.issue-title }}
           # NEVER ci-failure — that is main-cd.yml's delivery alert; the script refuses that label outright.
           LEDGER_LABEL: ${{ inputs.label }}
+          LEDGER_SEVERITY: ${{ inputs.severity }}
         run: |
           set -euo pipefail
           export LEDGER_EVENT_OUT="$RUNNER_TEMP/event.json"

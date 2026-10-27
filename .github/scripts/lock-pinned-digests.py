@@ -176,8 +176,9 @@ OVERLAY_INLINE_RE = re.compile(
 #       repository: meshweaver.azurecr.io/whisper-swiss-german
 #       tag: "1.7.4"
 #
-# It is not hypothetical and it is not rare: it is how BOTH this repository's `deploy/whisper/helm`
-# and Memex's `deployments/aks/memex-cloud/whisper/helm` write their pin. A reader that saw only
+# It is not hypothetical and it is not rare: it is how BOTH MeshWeaver.Deploy's `deploy/whisper/helm`
+# (this repository's until the service charts moved there) and Memex's vendored copy of it write
+# their pin. A reader that saw only
 # shape A would report those overlays as pinning NOTHING — the exact "not looked at, spelled the
 # same as clean" confusion this whole family of gates exists to remove.
 OVERLAY_REPOSITORY_RE = re.compile(
@@ -5800,7 +5801,7 @@ def self_test() -> int:
     check(is_overlay_path("deployments/aks/memex/values.memex.public.yaml"),
           "ARM 13: Memex's real overlay path was rejected")
     check(is_overlay_path("deploy/whisper/helm/values.yaml"),
-          "ARM 13: this repository's whisper chart values file was rejected")
+          "ARM 13: the whisper chart's values file (MeshWeaver.Deploy) was rejected")
     check(not is_overlay_path("deploy/hosting-operator/test/fixtures/audit/clean/manifest.json"),
           "ARM 13: a TEST FIXTURE was accepted as a deployment overlay — those name tags that "
           "never existed and would red this job nightly")
@@ -7709,9 +7710,26 @@ ingress:
     _repos_table, _repo_problems = read_repository_roster(".")
     check(not _repo_problems,
           f"ARM 35: this repository's own `repositories` table does not validate: {_repo_problems}")
-    check({"Systemorph/Memex", "Systemorph/MeshWeaver"} <= set(_repos_table),
+    check({"Systemorph/Memex", "Systemorph/MeshWeaver.Deploy"} <= set(_repos_table),
           f"ARM 35: the committed repositories carrying deployment overlays are not all "
           f"declared: {sorted(_repos_table)}")
+    # 🚨 THIS repository is declared exactly when its own tree carries an overlay file. The service
+    # charts (s1-extract, whisper, ocr, ollama) were its last ones and moved to MeshWeaver.Deploy, so
+    # the declaration went with them: the nightly `--discover` run reds a declaration nothing answers
+    # to, and a new overlay file here reds an undeclared repository — this pins both, offline.
+    _own_overlays: list[str] = []
+    for _dir, _subdirs, _files in os.walk("."):
+        _subdirs[:] = [d for d in _subdirs if d not in (".git", "bin", "obj", "node_modules")]
+        for _name in _files:
+            _rel = os.path.relpath(os.path.join(_dir, _name), ".").replace(os.sep, "/")
+            if is_overlay_path(_rel):
+                _own_overlays.append(_rel)
+    _own_overlays.sort()
+    check(bool(_own_overlays) == ("Systemorph/MeshWeaver" in _repos_table),
+          f"ARM 35: this repository carries {len(_own_overlays)} overlay file(s) "
+          f"({_own_overlays[:4]}) but the `repositories` table "
+          f"{'declares' if 'Systemorph/MeshWeaver' in _repos_table else 'does not declare'} it — "
+          "the nightly fleet scan would red on exactly this")
     with tempfile.TemporaryDirectory() as scratch:
         folder = Path(scratch) / ".github" / "acr-retention"
         folder.mkdir(parents=True)

@@ -148,6 +148,17 @@ paths and include closures. Two consequences:
   the tree's new siblings, which no bundle carries either — the very thing this gate exists to
   prevent. A sharer that is NOT adopted takes no record: its input is held as a consequence, and it
   simply recompiles from the text that is there, which is what a locally compiled type does anyway.
+- 🚨 **The closure reaches a type NEW in the commit (#7410).** The hold's candidates are the
+  partition's existing adopted types, so a type the commit adds was never one. If such a type read a
+  held source, it landed and compiled against that source's old text, which its own sources were not
+  written for. Measured: a package release added a type that called members its shared source
+  gained in the same commit. It failed with `CS0117 '…' does not contain a definition for '…'` on two
+  instances, until the platform rolls. A new type whose resolved sources or include closure name a
+  held path is now held with its own node and sources. Its entry carries an empty held fingerprint
+  and `HeldBySharing: true`, so it is never a release trigger: the root's release re-imports the
+  commit and lands it beside the source it was written for. A new type is held only through a held
+  source, never for being new. A new type whose definition or source queries the incoming tree
+  cannot establish is listed as abstained and lands as before.
 
 ## What a partially-held Space is — the scope call
 
@@ -236,7 +247,9 @@ away.
   keeps the older commit and names the held type), then a publication carrying the wanted fingerprint
   and the same import landing it.
 - `test/MeshWeaver.Documentation.Test/BundleKeyedHoldTest.cs` — the rows above as data, both
-  directions, including the unreadable shelf and the sharer's non-trigger hold.
+  directions, including the unreadable shelf and the sharer's non-trigger hold, a NEW type that reads
+  a held source (held, as a sharer), and — its negative control — a new type that shares nothing held
+  (lands).
 - `test/MeshWeaver.Documentation.Test/PrebuiltBundleInventoryTest.cs` — what the shelf reading folds
   and refuses, over real archives: this identity's bundle is carried, another identity's is not named
   at all, a legacy bundle names the type and satisfies no hold, and an unsealed publication

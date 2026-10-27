@@ -264,12 +264,23 @@ static int RunCompile(string[] args)
     var compileDynamic = DynamicEdgeBaseline.ObserveOnly;
     string? compileRepoName = null;
     var compileModules = new List<string>();
+    var compileMaxParallel = Math.Max(1, Environment.ProcessorCount);
     for (var i = 0; i < args.Length; i++)
     {
         switch (args[i])
         {
             case "--output" when i + 1 < args.Length:
                 outputDirectory = args[++i];
+                break;
+            // How many NodeTypes compile at once (default: one per core). The output does not
+            // depend on it — 1 is the serial bake, kept for measurement and comparison.
+            case "--max-parallel" when i + 1 < args.Length:
+                if (!int.TryParse(args[++i], NumberStyles.Integer, CultureInfo.InvariantCulture, out compileMaxParallel)
+                    || compileMaxParallel < 1)
+                {
+                    Console.Error.WriteLine("compile: --max-parallel takes a positive integer");
+                    return 2;
+                }
                 break;
             case "--source-sha" when i + 1 < args.Length:
                 compileSourceSha = args[++i];
@@ -451,6 +462,7 @@ static int RunCompile(string[] args)
         // reach. The bake gets paths; it never meets a mesh type.
         ModuleAssemblyPaths = TesterModules.ResolvedPaths(compileModules),
         Warnings = compileWarnings,
+        MaxParallel = compileMaxParallel,
     });
     if (bake.FatalError is not null)
         Console.Error.WriteLine($"compile: FATAL — {bake.FatalError}");
@@ -523,7 +535,11 @@ static int RunCompile(string[] args)
 static string CompileUsage() =>
     "usage: mw-compiler compile <checkout-root> --output <dir> [--allow <file>] "
     + "[--warning-baseline <file>] [--dynamic-baseline <file>] [--repo-name <owner/repo>] "
-    + "[--source-sha <sha>] [--module <dll>]... [--app <dir> --shared-frameworks <dir>]\n"
+    + "[--source-sha <sha>] [--module <dll>]... [--app <dir> --shared-frameworks <dir>] "
+    + "[--max-parallel <n>]\n"
+    + "  --max-parallel caps how many NodeTypes compile at once (default: one per core); each "
+    + "type still waits for the types it is ordered after, and the output is identical at every "
+    + "value — 1 is the serial bake.\n"
     + "  --warning-baseline arms the two shrink-only in-mesh warning ratchets against <file>: one "
     + "over the REAL warnings (CS0219, CS1574, …) and a separate one over CS1591 (a missing XML "
     + "doc comment). Lines are '<NodeType path> <diagnostic id>'; an unlisted (type, code) pair "
