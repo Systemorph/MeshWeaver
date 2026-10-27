@@ -600,6 +600,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Deployment env layers — what a record must be able to hold](DeploymentEnvLayers)
 - [Removing a key from a Deployment record](RemovingAKeyFromTheRecord) — the record-owned manifest every deploy writes into the release, so a key the record stopped rendering is dropped deliberately while a hand-applied live-only value is still refused; the `HOSTING_RETIRE_VALUES` bootstrap for a release with no manifest
 - [DeploymentInventory](DeploymentInventory)
+- [Instance Telemetry](InstanceTelemetry) — every registered instance leaves its platform version and last-online stamp at its registry on the token exchange, and reports its error signatures there so they reach the fleet's bug-triage dispatch; what is collected, what is not, and the trust model
 - [Deployment Options (AKS)](DeploymentOptions)
 - [Environment Composition](EnvironmentComposition)
 - [Feature Flags](FeatureFlags)

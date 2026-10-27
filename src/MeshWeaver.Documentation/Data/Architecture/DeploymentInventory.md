@@ -160,6 +160,7 @@ sources, and a disagreement between any two is the finding.
 ## Related
 
 - [Instances](/Doc/Architecture/Instances) — what an instance is and how its version is read
+- [Instance Telemetry](/Doc/Architecture/InstanceTelemetry) — the SMALL reading EVERY registered instance leaves at its registry (version, last online, error signatures), including the installations this report never sees because they have no `Hosting:Deployment`
 - [ModuleVersioning](/Doc/Architecture/ModuleVersioning) — the framework identity a report carries
 - [CandidateReleaseProtocol](/Doc/Architecture/CandidateReleaseProtocol) — the deploy gate that reads the same combo
 - [ReleaseStrategy](/Doc/Architecture/ReleaseStrategy) — the update policy a report carries
