@@ -1,10 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\..\tools\MeshWeaver.PluginTester\MeshWeaver.PluginTester.csproj" />
-    <!-- The Razor BUILD EXTENSION's own unit tests (RazorBuildTest, ScopedCssTest) call it directly;
-         the end-to-end builds load it from build-extensions/razor/ like the image does, and the
-         loader hands back this referenced copy, so both see one set of types. -->
-    <ProjectReference Include="..\..\tools\MeshWeaver.PluginTester.Razor\MeshWeaver.PluginTester.Razor.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <!-- The combo gate's production seam (DockerImageGate) lives in the sibling tool and had NO
          test and NO caller of any kind (#2274) — its docker argv is pinned by
@@ -29,11 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- RazorBuildTest LOADS the Blazor component it just compiled and reads the generated
-         BuildRenderTree override off it — which resolves ComponentBase, so this host has to be able
-         to bind Microsoft.AspNetCore.App. Without it the assertion cannot run at all, and "the
-         compiler returned" would be the only evidence a component exists, which is exactly the
-         CS0115 blind spot the suite is about. Same reason MeshWeaver.Auth.Test carries it. -->
+    <!-- The tester itself references Microsoft.AspNetCore.App (it composes bundles that bind
+         ASP.NET Core); a test host that loads its types needs the same shared framework. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 

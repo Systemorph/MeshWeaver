@@ -6,7 +6,7 @@ namespace MeshWeaver.PluginTester;
 /// <summary>
 /// The curated ADDITIONAL-libraries shelf (<c>module-libs/</c> beside the builder — the publish of
 /// <c>tools/MeshWeaver.ModuleLibraries</c>, staged into the tester image by CD like
-/// <c>razor-generators/</c> and <c>sdk-generators/</c>). A container build resolves an
+/// <c>sdk-generators/</c>). A container build resolves an
 /// otherwise-unsupplied <c>PackageReference</c> here, and the package's assemblies RIDE the bundle
 /// together with their transitive shelf closure — every ride derived from the shelf's own
 /// <c>deps.json</c>, never guessed (the 2026-08-19/20 outage was a guessed closure, and the lane's
@@ -66,7 +66,7 @@ public sealed class ModuleLibrariesShelf
     /// the staging; a shelf-needing module then fails by name exactly as before.
     ///
     /// <para>🚨 <c>--module-libs</c> REPLACES that search rather than heading it, exactly as
-    /// <c>--razor-generators</c> does: the module repository that names its own shelf has made a
+    /// <c>--extensions</c> does: the module repository that names its own shelf has made a
     /// choice, and quietly falling back to the image's copy would resolve its packages from a list
     /// it did not declare. A named directory that is missing or holds no single <c>deps.json</c> is
     /// therefore a failure, never a null.</para>

@@ -18,7 +18,7 @@
 #   * portal /app first, complete — its manifest IS the host's identity, its assemblies ARE what a
 #     portal loads;
 #   * the tester's files are ADDED only where the portal has none (the CLI, MeshWeaver.Hosting.Monolith,
-#     razor-generators/, sdk-generators/, module-libs/, the console-runtime Microsoft.Extensions.*
+#     build-extensions/, sdk-generators/, module-libs/, the console-runtime Microsoft.Extensions.*
 #     copies) — a file both carry keeps the PORTAL's bytes, because the process is the portal;
 #   * the tester's meshweaver-surface.manifest is NEVER copied — it would make the host resolve the
 #     tester's identity, which is the exact confusion this host exists to end;
@@ -50,7 +50,7 @@ if [ "${1:-}" = "--self-test" ]; then
   trap 'rm -rf "$tmp"' EXIT
   fail() { echo "SELF-TEST FAILED: $1"; exit 1; }
   portal="$tmp/portal"; tester="$tmp/tester"; out="$tmp/host"
-  mkdir -p "$portal/modules/X" "$tester/razor-generators/linux-x64" "$tester/cs"
+  mkdir -p "$portal/modules/X" "$tester/build-extensions/probe" "$tester/cs"
   printf 'MeshWeaver.Layout=aaaa\nMeshWeaver.PortalOnly=bbbb\n' > "$portal/meshweaver-surface.manifest"
   printf 'PORTAL' > "$portal/MeshWeaver.Layout.dll"
   printf 'PORTAL' > "$portal/MeshWeaver.PortalOnly.dll"
@@ -65,7 +65,7 @@ if [ "${1:-}" = "--self-test" ]; then
   printf '{}' > "$tester/mw-plugin-test.deps.json"
   printf '{}' > "$tester/mw-plugin-test.runtimeconfig.json"
   printf 'MONO' > "$tester/MeshWeaver.Hosting.Monolith.dll"
-  printf 'RZ' > "$tester/razor-generators/linux-x64/Razor.dll"
+  printf 'EXT' > "$tester/build-extensions/probe/Probe.Extension.dll"
   printf 'RES' > "$tester/cs/mw-plugin-test.resources.dll"
 
   "$self" "$portal" "$tester" "$out" > "$tmp/log" || fail "the happy path exited non-zero: $(cat "$tmp/log")"
@@ -73,7 +73,7 @@ if [ "${1:-}" = "--self-test" ]; then
   [ "$(cat "$out/MeshWeaver.PortalOnly.dll")" = "PORTAL" ]      || fail "portal-only assemblies must be in the host"
   [ -f "$out/mw-plugin-test.dll" ]                        || fail "the tester CLI must be in the host"
   [ -f "$out/MeshWeaver.Hosting.Monolith.dll" ]           || fail "tester-only assemblies must ride"
-  [ -f "$out/razor-generators/linux-x64/Razor.dll" ]      || fail "tester-only subdirectories must ride"
+  [ -f "$out/build-extensions/probe/Probe.Extension.dll" ] || fail "tester-only subdirectories must ride"
   [ -f "$out/cs/mw-plugin-test.resources.dll" ]           || fail "tester-only satellite resources must ride"
   [ -f "$out/mw-plugin-test.runtimeconfig.json" ]         || fail "the CLI's runtimeconfig must ride"
   [ ! -e "$out/mw-plugin-test.deps.json" ]                || fail "the tester's deps.json must NOT ride (it would shrink the TPA to the tester's closure)"

@@ -127,8 +127,8 @@ internal static class BuildProjectCommandLine
                 case "-h" or "--help":
                     stdout.WriteLine(Usage());
                     return new Parsed(null, 0);
-                // Any other `--name <value>` is an option a build extension declares (the Razor
-                // extension's `--razor-generators <dir>`). Which extension reads it is known only once
+                // Any other `--name <value>` is an option a build extension declares. Which extension
+                // reads it is known only once
                 // they are loaded, so the build refuses one nothing declares rather than ignoring it.
                 case var option when option.StartsWith("--", StringComparison.Ordinal) && option.Length > 2
                                      && i + 1 < args.Length:
@@ -189,7 +189,7 @@ internal static class BuildProjectCommandLine
         "usage: mw-plugin-test build-project <csproj|dir> [--output <dir>] [--app <dir>] "
         + "[--shared-frameworks <dir>] [--prebuilt <dir>]... "
         + "[--extra-refs <dir>]... [--generators <dir|dll>]... [--extensions <dir>]... [--module-libs <dir>] "
-        + "[--<extension option> <value>]... (e.g. --razor-generators <dir>) "
+        + "[--<extension option> <value>]... "
         + "[--accept <construct>]... [--superseded-image-assembly <name>]... "
         + "[-p:Name=Value]... [--bind-to-image] [--allow-warnings] [--max-parallel <n>]\n"
         + "  Compiles a .NET project with NO dotnet SDK and NO NuGet restore: the .csproj is evaluated "
@@ -198,12 +198,11 @@ internal static class BuildProjectCommandLine
         + "with the SDK's diagnostic standard (nullable analysis, DocumentationMode.Diagnose). Warnings "
         + "fail the build unless --allow-warnings. A construct the evaluator cannot reproduce fails the "
         + "run by name; --accept <construct> acknowledges one. A source kind the builder does not know "
-        + "itself is compiled by a BUILD EXTENSION: the image ships them in build-extensions/<name>/ "
-        + "beside this builder, and --extensions <dir> (repeatable) names the set to use instead. "
-        + ".razor/.cshtml are compiled by the Razor extension through the Razor source generator it "
-        + "ships; its option --razor-generators <dir> names another copy. A project carrying a source "
-        + "kind no loaded extension compiles, or Razor files and no generator, FAILS rather than "
-        + "quietly emitting an assembly with no components in it; an option no loaded extension "
+        + "itself is compiled by a BUILD EXTENSION the module repository supplies: one staged in "
+        + "build-extensions/<name>/ beside this builder, or --extensions <dir> (repeatable) to name "
+        + "the set to use instead; the platform ships none. A project carrying a source kind no "
+        + "loaded extension compiles FAILS rather than quietly emitting an assembly without it; an "
+        + "option no loaded extension "
         + "declares is refused. The emitted assembly carries the "
         + "identity GenerateAssemblyInfo would have given it (AssemblyVersion/FileVersion/"
         + "InformationalVersion and the rest); -p:Name=Value supplies the properties it is derived "

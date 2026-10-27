@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <!-- The contract between `mw-plugin-test build-project` and a BUILD EXTENSION: a component that
-         compiles a source kind the builder itself does not know (Razor is the first). An extension
-         is laid beside the builder under build-extensions/<name>/ and loaded at run time, so the
-         builder carries no knowledge of what it compiles (Doc/Architecture/CoreCarriesNoGuiTechnology,
-         "The Razor source generator in the tester image").
+         compiles a source kind the builder itself does not know. An extension is laid beside the
+         builder under build-extensions/<name>/ (or named by the extensions option) and loaded at run
+         time, so the builder carries no knowledge of what it compiles; the repository that owns a
+         source kind supplies its extension (Doc/Architecture/CoreCarriesNoGuiTechnology).
 
          🚨 Part of the TESTER HOST, not of the content surface. FrameworkBuildIdentityTest excludes
          every MeshWeaver.PluginTester* assembly from the framework closure for that reason: a

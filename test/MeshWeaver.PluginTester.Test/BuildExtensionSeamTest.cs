@@ -12,8 +12,8 @@ namespace MeshWeaver.PluginTester.Test;
 
 /// <summary>
 /// The BUILD-EXTENSION seam of <c>mw-plugin-test build-project</c>, held with a fake extension so it
-/// is proven independently of Razor: an extension is LOADED from a directory (the same path the image's
-/// <c>build-extensions/razor/</c> takes), its claimed item operations reach it in order, its
+/// is proven independently of any real source kind: an extension is LOADED from a directory (the
+/// path a module repository's own extension takes through the lane), its claimed item operations reach it in order, its
 /// additional texts and per-file options reach its generator, its generator runs BEFORE the generic
 /// ones, its asset refusal is RED, and a source kind nobody claims is refused by name.
 ///
@@ -52,7 +52,7 @@ public class BuildExtensionSeamTest : IDisposable
         </Project>
         """;
 
-    /// <summary>The <c>/app</c>-shaped fixture <see cref="RazorBuildTest"/> uses.</summary>
+    /// <summary>An <c>/app</c>-shaped fixture: the shipped deps.json plus the process's TPA.</summary>
     private string AppDirectory()
     {
         var app = Path.Combine(_root, "_container");

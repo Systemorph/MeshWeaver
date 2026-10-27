@@ -5,7 +5,8 @@ namespace MeshWeaver.PluginTester.Extensibility;
 
 /// <summary>
 /// A component that teaches <c>mw-plugin-test build-project</c> to compile a source kind the builder
-/// itself does not know — Razor is the first. The builder owns evaluation, the C# compile, the emit
+/// itself does not know (Razor, for one, which MeshWeaver.Plugins supplies — the platform ships no
+/// extension). The builder owns evaluation, the C# compile, the emit
 /// and the generic <c>wwwroot/</c> copy; an extension owns everything specific to its source kind:
 /// which items are its inputs, the source generator that turns them into C#, the assets they imply,
 /// and how its own failures read.
