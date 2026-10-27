@@ -18,6 +18,12 @@ The build-host deployment followed (MeshWeaver.Deploy#5): its runner `.github/sc
 stable roll `build-host-stable.yml` live in MeshWeaver.Deploy and are frozen here the same way, so a
 second copy cannot grow back beside the one Deploy builds the `mw-build-host` image from.
 
+The deployment sidecars followed (core slimming): the service images an instance may run beside its
+portal (`deploy/{ocr,ollama,whisper,s1-extract}` and their `*-image.yml` lanes), the generated
+deployment targets (`deploy/{compose,compose-ha,aca,marketplace}`, `deploy/.env.example`) and the
+AKS bring-up docs (`deploy/aks/{README,SELF-UPDATE,INSTANCE-LIFECYCLE}.md`). They are frozen here
+the same way, so a second publisher of those image names cannot grow back beside Deploy's.
+
 The listing is read NUL-delimited (`-z`): in its default output git C-quotes a path holding a
 non-ASCII byte, a quote or a control character, and a quoted path would match no frozen prefix.
 
@@ -57,6 +63,23 @@ FROZEN = (
     ".github/scripts/build-host-announcement.py",
     ".github/build-hosts.json",
     ".github/workflows/build-host-stable.yml",
+    # The deployment sidecars: the service images, the generated targets, the AKS bring-up docs.
+    "deploy/ocr/",
+    "deploy/ollama/",
+    "deploy/whisper/",
+    "deploy/s1-extract/",
+    ".github/workflows/ocr-image.yml",
+    ".github/workflows/ollama-image.yml",
+    ".github/workflows/whisper-image.yml",
+    ".github/workflows/s1-extract-image.yml",
+    "deploy/compose/",
+    "deploy/compose-ha/",
+    "deploy/aca/",
+    "deploy/marketplace/",
+    "deploy/.env.example",
+    "deploy/aks/README.md",
+    "deploy/aks/SELF-UPDATE.md",
+    "deploy/aks/INSTANCE-LIFECYCLE.md",
 )
 
 # The status letters `git diff --name-status` prints (C and R do not occur with --no-renames).
@@ -150,9 +173,22 @@ def self_test() -> int:
          _z("D\t.github/scripts/build-run.py\nD\tdeploy/build-host/Dockerfile\n"
             "D\tdeploy/build-host/Dockerfile.dockerignore\nD\t.github/scripts/build-host-announcement.py\n"
             "D\t.github/build-hosts.json\nD\t.github/workflows/build-host-stable.yml"), 0),
+        ("the deployment sidecars are frozen too (re-added or edited is refused)",
+         _z("A\tdeploy/ocr/Dockerfile\nM\tdeploy/aks/INSTANCE-LIFECYCLE.md\n"
+            "A\t.github/workflows/whisper-image.yml\nM\tdeploy/compose/docker-compose.yaml\n"
+            "A\tdeploy/.env.example"), 5),
+        ("deleting the deployment sidecars is allowed (the sidecar move's shape)",
+         _z("D\tdeploy/ocr/Dockerfile\nD\tdeploy/ollama/helm/values.yaml\nD\tdeploy/whisper/README.md\n"
+            "D\tdeploy/s1-extract/app/server.py\nD\t.github/workflows/ollama-image.yml\n"
+            "D\tdeploy/aca/main.bicep\nD\tdeploy/marketplace/mainTemplate.json\n"
+            "D\tdeploy/compose-ha/docker-compose.yaml\nD\tdeploy/.env.example\nD\tdeploy/aks/SELF-UPDATE.md"), 0),
+        ("what core keeps under deploy/ is not frozen (its own images and CI)",
+         _z("M\tdeploy/base-images/portal-ai/Dockerfile\nM\tdeploy/core-tests/core-tests.py\n"
+            "M\tdeploy/python-gate/Dockerfile\nM\tdeploy/node-gate/README.md\nM\tdeploy/pandas-gate/Dockerfile\n"
+            "M\tdeploy/CHANGE-PROPAGATION.md"), 0),
         ("unrelated paths are not this gate's business",
-         _z("M\tsrc/MeshWeaver.Hosting/NodeTypeBakeGate.cs\nA\tdeploy/ocr/Dockerfile\n"
-            "M\tdeploy/aks/INSTANCE-LIFECYCLE.md\nM\t.github/scripts/lock-pinned-digests.py"), 0),
+         _z("M\tsrc/MeshWeaver.Hosting/NodeTypeBakeGate.cs\nA\tdeploy/ocrx/Dockerfile\n"
+            "M\tdeploy/aks/README.md.bak\nM\t.github/scripts/lock-pinned-digests.py"), 0),
         ("a prefix lookalike is not frozen",
          _z("M\tdeploy/helmfile.yaml\nM\tdeploy/aks/values.aks.yaml.bak\nA\tdeploy/helm-other"), 0),
         ("a mixed diff counts only the non-deletions",

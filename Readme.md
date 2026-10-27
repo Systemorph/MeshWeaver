@@ -52,12 +52,14 @@ Opens at `https://memex.localhost:8443`.
 
 ### Deploy to production
 
-Production deployment recipes live under [`deploy/`](deploy/):
+Production deployment recipes live in the public
+[MeshWeaver.Deploy](https://github.com/Systemorph/MeshWeaver.Deploy) repository:
 
-- [`deploy/helm`](deploy/helm) — generic Kubernetes/Helm chart (Azure-free self-host)
-- [`deploy/aks`](deploy/aks) — production-grade AKS sample (private cluster, P2S VPN, ACR, pgBackRest PITR)
-- [`deploy/aca`](deploy/aca) — Azure Container Apps (Bicep)
-- [`deploy/compose`](deploy/compose) · [`deploy/compose-ha`](deploy/compose-ha) — Docker Compose (single-node / HA)
+- [`deploy/helm`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/helm) — generic Kubernetes/Helm chart (Azure-free self-host)
+- [`deploy/aks`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/aks) — production-grade AKS sample (private cluster, P2S VPN, ACR, pgBackRest PITR)
+- [`deploy/aca`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/aca) — Azure Container Apps (Bicep)
+- [`deploy/compose`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/compose) · [`deploy/compose-ha`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/compose-ha) — Docker Compose (single-node / HA)
+- [`deploy/ocr`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/ocr) · [`deploy/ollama`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/ollama) · [`deploy/whisper`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/whisper) · [`deploy/s1-extract`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/s1-extract) — the optional service images an instance runs beside its portal
 
 **These are recipes, not the configuration of any running service.** Point them at your own
 infrastructure: copy the example environment (`deployments/aks/example/` in the private Systemorph/Memex
