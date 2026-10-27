@@ -107,6 +107,26 @@ public class TheEdgeSetWriterKeepsTheNewestGenerationTest(ITestOutputHelper outp
     }
 
     [Fact]
+    public void ASettleWhoseStampUpdateWasAGuardedNoOp_PublishesNoEdges()
+    {
+        // The stamp lambda returns the node unchanged when its content stopped being a
+        // NodeTypeDefinition mid-compile; the saved node's version then belongs to whatever the node
+        // holds now, and the compile's edges must not be published under it.
+        var edges = Set(null, "dddddddddddddddddddddddddddddddd", "Lib/X");
+        var saved = MeshNode.FromPath(SourcePath) with { Version = 9 };
+
+        DependencyEdgeSetWriter.ToPublish(edges, successStamped: false, saved).Should().BeNull(
+            "a no-op stamp names no build of this compile");
+        DependencyEdgeSetWriter.ToPublish(null, successStamped: true, saved).Should().BeNull("no edges, nothing to publish");
+
+        // Control: the stamp that landed publishes the edges under the version it landed at.
+        var published = DependencyEdgeSetWriter.ToPublish(edges, successStamped: true, saved);
+        published.Should().NotBeNull();
+        published!.StampVersion.Should().Be(9L);
+        published.BuildMvid.Should().Be(edges.BuildMvid);
+    }
+
+    [Fact]
     public void IsTie_AndRecordNamesAnotherBuild()
     {
         DependencyEdgeSet At(long? generation, string mvid) => new() { Source = "x", StampVersion = generation, BuildMvid = mvid };

@@ -338,7 +338,7 @@ public static class TreeBake
     }
 
     /// <summary>
-    /// The compiler's NuGet hook is synchronous by contract (<see cref="NodeSetCompiler.Compile"/>
+    /// The compiler's NuGet hook is synchronous by contract (<c>NodeSetCompiler.Compile</c>
     /// takes a plain delegate), and the resolver is genuinely async, so this is the ONE place the
     /// bake lane blocks on it. Shared with the build verb so the production blocking-bridge
     /// inventory keeps counting exactly one site, here.

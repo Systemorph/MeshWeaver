@@ -133,7 +133,7 @@ public static class NodeSetCompiler
         /// <summary>
         /// The forward dependency edges Roslyn read off this compile, stamped with the emitted
         /// assembly's MVID (<c>Doc/Architecture/DependencyGraph</c>). Null only for a
-        /// <see cref="CompiledNode"/> built by hand; <see cref="Compile"/> always sets it. An
+        /// <see cref="CompiledNode"/> built by hand; <c>Compile</c> always sets it. An
         /// init-only property for the arity reason <see cref="Warnings"/> records.
         /// </summary>
         public DependencyEdgeSet? DependencyEdges { get; init; }
@@ -257,8 +257,11 @@ public static class NodeSetCompiler
     /// would emit an assembly missing the very types the directive exists to supply.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <param name="ct">Cancellation.</param>
-    /// <param name="moduleAssemblyPaths">The installed module assemblies' files, for the
-    /// <c>Module</c> dependency edges; null or empty records none.</param>
+    /// <remarks>🚨 The PUBLISHED signature, kept as it was before the dependency edges: a public
+    /// method's parameter list is its binary identity, so a trailing optional parameter would have
+    /// replaced it and every already-compiled caller would get <see cref="MissingMethodException"/>.
+    /// It forwards with no module files, i.e. records no <c>Module</c> edges. Pinned by
+    /// <c>NodeSetCompilerPublishedSignatureTest</c>.</remarks>
     public static CompiledNode Compile(
         NodeSet nodes,
         MeshNode typeNode,
@@ -272,8 +275,44 @@ public static class NodeSetCompiler
         string outputDirectory,
         Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>? resolveNuGet = null,
         ILogger? logger = null,
-        CancellationToken ct = default,
-        IReadOnlyCollection<string>? moduleAssemblyPaths = null)
+        CancellationToken ct = default)
+        => Compile(nodes, typeNode, sources, tests, configuration, contentCollections, references,
+            dependencyIdOf, toolchainId, outputDirectory, moduleAssemblyPaths: null, resolveNuGet, logger, ct);
+
+    /// <summary>
+    /// <see cref="Compile(NodeSet, MeshNode, IReadOnlyList{string}?, IReadOnlyList{string}?, string?, IReadOnlyList{ContentCollectionConfig}?, IReadOnlyList{MetadataReference}, Func{string, string?}, string, string, Func{IReadOnlyList{NuGetPackageReference}, CancellationToken, IReadOnlyList{string}}?, ILogger?, CancellationToken)"/>,
+    /// naming the installed module files so the dependency edges include the <c>Module</c> edges.
+    /// </summary>
+    /// <param name="nodes">The node set the sources are resolved from.</param>
+    /// <param name="typeNode">The NodeType's own MeshNode.</param>
+    /// <param name="sources">The type's declared <c>Sources</c> queries, or null for the default.</param>
+    /// <param name="tests">The type's declared <c>Tests</c> queries, or null for the default.</param>
+    /// <param name="configuration">The type's <c>configuration</c> lambda source.</param>
+    /// <param name="contentCollections">The type's content-collection registrations.</param>
+    /// <param name="references">The metadata references to compile against.</param>
+    /// <param name="dependencyIdOf">The surface-id resolver for the dependency record.</param>
+    /// <param name="toolchainId">This process's toolchain id.</param>
+    /// <param name="outputDirectory">Directory the DLL/PDB are written into. Created if absent.</param>
+    /// <param name="moduleAssemblyPaths">The installed module assemblies' files, for the
+    /// <c>Module</c> dependency edges; null or empty records none.</param>
+    /// <param name="resolveNuGet">Resolves <c>#r "nuget:"</c> references to assembly paths.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="ct">Cancellation.</param>
+    public static CompiledNode Compile(
+        NodeSet nodes,
+        MeshNode typeNode,
+        IReadOnlyList<string>? sources,
+        IReadOnlyList<string>? tests,
+        string? configuration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections,
+        IReadOnlyList<MetadataReference> references,
+        Func<string, string?> dependencyIdOf,
+        string toolchainId,
+        string outputDirectory,
+        IReadOnlyCollection<string>? moduleAssemblyPaths,
+        Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>? resolveNuGet = null,
+        ILogger? logger = null,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(references);
         ArgumentNullException.ThrowIfNull(dependencyIdOf);

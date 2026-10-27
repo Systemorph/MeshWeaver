@@ -5627,6 +5627,10 @@ internal static class NodeTypeCompilationHelpers
                     // lifted by THIS compile, emitted after the write lands.
                     BuildDeliveryHold.DeliveryEvent? lifted = null;
                     NodeTypeDefinition? liftedDef = null;
+                    // Whether the stamp lambda actually wrote THIS build's success stamp — false for
+                    // the guarded no-op (the content stopped being a NodeTypeDefinition), whose saved
+                    // node is an unrelated version the edges must not be published under.
+                    var successStamped = false;
                     // 🚨 THE STAMP IS ADDRESSED TO THE NODE, NOT TO AN ACTIVATION (#5358). While
                     // the hub the compile settled on still serves, the stamp is its own-node write,
                     // exactly as before — the lambda runs against the owner's live state, which the
@@ -5653,6 +5657,8 @@ internal static class NodeTypeCompilationHelpers
                         // instance hub falls back to the default config. ContentAs recovers the
                         // JsonElement into NodeTypeDefinition (logging loud on a genuine degrade)
                         // so the terminal status — and the typed write-back below — always lands.
+                        // Re-derived on every run of the lambda (a version conflict re-runs it).
+                        successStamped = false;
                         var def = curr.ContentAs<NodeTypeDefinition>(SettleHub().JsonSerializerOptions, logger);
                         if (def is null)
                             return curr;
@@ -5678,6 +5684,7 @@ internal static class NodeTypeCompilationHelpers
                                 unreleasedBuildFailureClass: settle.UnreleasedBuildFailureClass);
                             lifted = BuildDeliveryHold.EventOf(def, succeeded);
                             liftedDef = succeeded;
+                            successStamped = true;
                             return curr with { Content = succeeded };
                         }
 
@@ -5768,12 +5775,12 @@ internal static class NodeTypeCompilationHelpers
                     // (DependencyEdgeSetWriter.Write).
                     var dependencyEdges = ok ? outcome.Result?.DependencyEdges : null;
                     IObservable<Unit> StampThenEdges() =>
-                        StampCompileState().SelectMany(saved => dependencyEdges is null
-                            ? Observable.Return(Unit.Default)
-                            : DependencyEdgeSetWriter.Write(
-                                    SettleHub(), dependencyEdges with { StampVersion = saved.Version }, logger)
-                                .IgnoreElements()
-                                .Concat(Observable.Return(Unit.Default)));
+                        StampCompileState().SelectMany(saved =>
+                            DependencyEdgeSetWriter.ToPublish(dependencyEdges, successStamped, saved) is not { } published
+                                ? Observable.Return(Unit.Default)
+                                : DependencyEdgeSetWriter.Write(SettleHub(), published, logger)
+                                    .IgnoreElements()
+                                    .Concat(Observable.Return(Unit.Default)));
                     (admission is null
                             ? Observable.Defer(StampThenEdges)
                             : admission.Publish($"NodeType compile stamp for {hubPath}", StampThenEdges))

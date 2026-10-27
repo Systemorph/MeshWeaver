@@ -35,6 +35,18 @@ internal static class DependencyEdgeSetWriter
             Content = edges,
         };
 
+    /// <summary>
+    /// The set the activation's settle publishes after its stamp update: <paramref name="edges"/>
+    /// under the generation the update landed at — or nothing, when there are no edges or the
+    /// update did not write this build's success stamp (the guarded no-op returns the node
+    /// unchanged, and its version belongs to whatever the node holds now, not to this build).
+    /// </summary>
+    /// <param name="edges">The compile's edges, or null.</param>
+    /// <param name="successStamped">Whether the update wrote this build's success stamp.</param>
+    /// <param name="saved">The node the update emitted.</param>
+    internal static DependencyEdgeSet? ToPublish(DependencyEdgeSet? edges, bool successStamped, MeshNode saved) =>
+        edges is not null && successStamped ? edges with { StampVersion = saved.Version } : null;
+
     /// <summary>How often a write that lost its compare-and-set re-reads and tries again. Each
     /// retry follows a write that LANDED meanwhile, and every writer of one source converges on the
     /// highest generation, so this bounds a burst rather than a livelock.</summary>
