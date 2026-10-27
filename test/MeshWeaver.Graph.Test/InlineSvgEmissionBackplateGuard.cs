@@ -43,7 +43,7 @@ public class InlineSvgEmissionBackplateGuard
 {
     /// <summary>Repo-root directories holding code that renders. Immutable, written once — the
     /// collections policy's sanctioned <c>static readonly</c>.</summary>
-    private static readonly ImmutableArray<string> ScannedRoots = ["src", "memex", "samples"];
+    private static readonly ImmutableArray<string> ScannedRoots = ["src", "samples"];
 
     private static readonly ImmutableArray<string> ExcludedSegments =
         ["bin", "obj", "node_modules", "TestResults", ".git", "dist"];

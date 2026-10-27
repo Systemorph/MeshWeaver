@@ -15,10 +15,16 @@ public sealed record DependencySourceUnit(string Path, string Code);
 
 /// <summary>
 /// Reads the FORWARD dependency edges of one compiled NodeType off the Roslyn compilation that
-/// produced it — <c>Doc/Architecture/DependencyGraph</c>. Pure: no mesh, no IO; the caller decides
-/// where the result is written.
+/// produced it — <c>Doc/Architecture/DependencyGraph</c>. Pure: no mesh; the only IO is reading the
+/// emitted image the caller hands over; the caller decides where the result is written.
 ///
-/// <para><b>Two kinds of edge.</b> A <see cref="DependencyEdgeKinds.NodeType"/> edge is a symbol
+/// <para><b>Static and dynamic edges.</b> Beyond the two described next,
+/// <see cref="DependencyEdgeKinds.Platform"/> and <see cref="DependencyEdgeKinds.Package"/> edges are
+/// read off the EMITTED image's metadata (<see cref="EmittedReferenceEdges(CSharpCompilation, Stream, DependencyReferenceClasses)"/>)
+/// and the dynamic ones off reflection calls in the type's own code
+/// (<see cref="DynamicBindingExtraction"/>).</para>
+///
+/// <para><b>The NodeType and Module edges.</b> A <see cref="DependencyEdgeKinds.NodeType"/> edge is a symbol
 /// the compiling type's own code binds whose declaration ANOTHER NodeType owns — found by a
 /// <see cref="SemanticModel"/> walk, with ownership read from which Code file declared the type
 /// (<see cref="CodeConventions.OwnerOfCodePath"/>). A NodeType compile is never referenced against
@@ -34,7 +40,8 @@ public static class DependencyEdgeExtraction
     public const int MaxEvidence = 5;
 
     /// <summary>
-    /// Extracts the forward edge set of <paramref name="selfPath"/>'s compile.
+    /// Extracts the forward edge set of <paramref name="selfPath"/>'s compile, with only the
+    /// module references classified — every other reference counts as the platform host's.
     /// </summary>
     /// <param name="compilation">The compilation the emit used (after source generators).</param>
     /// <param name="authoredTrees">The trees to walk for references — the AUTHORED input (skeleton
@@ -53,10 +60,50 @@ public static class DependencyEdgeExtraction
         IReadOnlyList<DependencySourceUnit> roots,
         IReadOnlyDictionary<string, string>? includes,
         IReadOnlySet<MetadataReference> moduleReferences,
+        CancellationToken ct = default) =>
+        Extract(compilation, authoredTrees, selfPath, roots, includes,
+            new DependencyReferenceClasses(moduleReferences, ImmutableDictionary<MetadataReference, string>.Empty),
+            emittedImage: null, nodeGeneratedTrees: null, ct);
+
+    /// <summary>
+    /// Extracts the forward edge set of <paramref name="selfPath"/>'s compile: the STATIC edges
+    /// (<see cref="DependencyEdgeKinds.NodeType"/>, <see cref="DependencyEdgeKinds.Module"/>,
+    /// <see cref="DependencyEdgeKinds.Platform"/>, <see cref="DependencyEdgeKinds.Package"/>) and
+    /// the DYNAMIC ones (<see cref="DependencyEdgeKinds.Dynamic"/>,
+    /// <see cref="DependencyEdgeKinds.DynamicUnresolved"/>) — reflection calls in the compiling
+    /// type's own code (<see cref="DynamicBindingExtraction"/>).
+    /// </summary>
+    /// <param name="compilation">The compilation the emit used (after source generators).</param>
+    /// <param name="authoredTrees">The trees to walk for references — the AUTHORED input.</param>
+    /// <param name="selfPath">The compiling NodeType's path.</param>
+    /// <param name="roots">The Code files the source queries matched, with their resolved text.</param>
+    /// <param name="includes">The <c>@@</c> include closure (included node path → its text).</param>
+    /// <param name="references">What each reference is — module, package, or the platform host's.</param>
+    /// <param name="emittedImage">Opens the EMITTED assembly's bytes, which the platform and package
+    /// edges are read from (<see cref="EmittedReferenceEdges(CSharpCompilation, Stream, DependencyReferenceClasses)"/>);
+    /// null records neither kind — the set then says nothing about them, which a reader treats as
+    /// unknown, never as "binds no platform assembly".</param>
+    /// <param name="nodeGeneratedTrees">The trees a NODE-SUPPLIED source generator emitted (one the
+    /// node <c>#r</c>'d) — the compiling type's own code by PROVENANCE, even where they extend a
+    /// partial type a foreign owner declares, because no other compile ever sees them.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns>The edge set, without build identity (the caller stamps the emitted MVID).</returns>
+    public static DependencyEdgeSet Extract(
+        CSharpCompilation compilation,
+        IEnumerable<SyntaxTree> authoredTrees,
+        string selfPath,
+        IReadOnlyList<DependencySourceUnit> roots,
+        IReadOnlyDictionary<string, string>? includes,
+        DependencyReferenceClasses references,
+        Func<Stream>? emittedImage,
+        IReadOnlyCollection<SyntaxTree>? nodeGeneratedTrees = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(compilation);
         ArgumentException.ThrowIfNullOrEmpty(selfPath);
+        ArgumentNullException.ThrowIfNull(references);
+        var generated = (nodeGeneratedTrees ?? []).ToImmutableHashSet();
+        var trees = authoredTrees.Concat(generated).Distinct().ToList();
 
         // The foreign owners whose code this compile CONSUMED — read off the files (roots and
         // includes), not off the declared types, so a foreign file that declares no type (only
@@ -69,9 +116,12 @@ public static class DependencyEdgeExtraction
             .ToImmutableSortedSet(StringComparer.OrdinalIgnoreCase);
 
         // A self-contained compile (no foreign file) pays for neither the per-file parse nor the walk.
+        var owners = foreignOwners.IsEmpty
+            ? ImmutableDictionary<string, ImmutableSortedSet<string>>.Empty
+            : DeclaredTypeOwners(selfPath, roots, includes, ct);
         var nodeTypeEvidence = foreignOwners.IsEmpty
             ? ImmutableDictionary<string, ImmutableSortedSet<string>>.Empty
-            : WalkReferences(compilation, authoredTrees, selfPath, DeclaredTypeOwners(selfPath, roots, includes, ct), ct);
+            : WalkReferences(compilation, trees, selfPath, owners, generated, ct);
 
         var edges = ImmutableList.CreateBuilder<DependencyEdge>();
         foreach (var (target, evidence) in nodeTypeEvidence.OrderBy(kv => kv.Key, StringComparer.Ordinal))
@@ -81,13 +131,30 @@ public static class DependencyEdgeExtraction
                 Kind = DependencyEdgeKinds.NodeType,
                 Evidence = [.. evidence.Take(MaxEvidence)],
             });
-        foreach (var module in UsedModules(compilation, moduleReferences, ct))
-            edges.Add(module);
+        var modules = UsedModules(compilation, references.Modules, ct).ToList();
+        edges.AddRange(modules);
+        if (emittedImage is not null)
+        {
+            using var image = emittedImage();
+            // One assembly name is one runtime identity: when a module and a host assembly share a
+            // name, the installed module (classified by FILE) is the edge, never a second one.
+            var moduleNames = modules.Select(m => m.Target).ToHashSet(StringComparer.Ordinal);
+            edges.AddRange(EmittedReferenceEdges(compilation, image, references)
+                .Where(e => !(e.Kind == DependencyEdgeKinds.Platform && moduleNames.Contains(e.Target))));
+        }
+        // Dynamic bindings count only in code the compiling type OWNS — a reflection call inside a
+        // foreign owner's code is that owner's edge, recorded by its own compile.
+        edges.AddRange(DynamicBindingExtraction.Extract(
+            compilation, trees, references,
+            // Generated by a node-supplied generator ⇒ this type's code, whatever partial it extends.
+            node => generated.Contains(node.SyntaxTree)
+                    || owners.IsEmpty || OwnerOfLocation(node, owners) is not { } o || ContainsSelf(o, selfPath),
+            ct));
 
         return new DependencyEdgeSet
         {
             Source = selfPath,
-            Edges = edges.ToImmutable(),
+            Edges = UniqueTargets(selfPath, edges.ToImmutable()),
             IncludedWithoutUse = [.. foreignOwners
                 .Where(o => !nodeTypeEvidence.ContainsKey(o))
                 .OrderBy(o => o, StringComparer.Ordinal)],
@@ -191,7 +258,7 @@ public static class DependencyEdgeExtraction
                 yield return name;
     }
 
-    private static string? TypeDeclarationName(SyntaxNode declaration)
+    internal static string? TypeDeclarationName(SyntaxNode declaration)
     {
         string? Simple(SyntaxNode node) => node switch
         {
@@ -240,6 +307,7 @@ public static class DependencyEdgeExtraction
         IEnumerable<SyntaxTree> authoredTrees,
         string selfPath,
         ImmutableDictionary<string, ImmutableSortedSet<string>> owners,
+        ImmutableHashSet<SyntaxTree> selfTrees,
         CancellationToken ct)
     {
         var found = new Dictionary<string, ImmutableSortedSet<string>.Builder>(StringComparer.OrdinalIgnoreCase);
@@ -256,7 +324,8 @@ public static class DependencyEdgeExtraction
                     continue;
                 var bound = BoundSymbols(node, model, ct).ToArray();
                 if (bound.Length == 0
-                    || OwnerOfLocation(node, owners) is { } locationOwners && !ContainsSelf(locationOwners, selfPath))
+                    || !selfTrees.Contains(tree)
+                       && OwnerOfLocation(node, owners) is { } locationOwners && !ContainsSelf(locationOwners, selfPath))
                     continue;
                 foreach (var (typeName, typeOwners) in bound.SelectMany(symbol => OwnedSourceTypes(symbol, compilation, owners)))
                 {
@@ -387,7 +456,7 @@ public static class DependencyEdgeExtraction
     /// declaration the ownership map names, or null when it sits outside every attributed type (the generated skeleton, the
     /// <c>configuration</c> lambda, an assembly attribute) — which the caller reads as the compiling
     /// type's own code.</summary>
-    private static ImmutableSortedSet<string>? OwnerOfLocation(
+    internal static ImmutableSortedSet<string>? OwnerOfLocation(
         SyntaxNode node, ImmutableDictionary<string, ImmutableSortedSet<string>> owners)
     {
         // Innermost enclosing declaration the map names: a foreign record spliced into the compiling
@@ -460,8 +529,9 @@ public static class DependencyEdgeExtraction
         }
     }
 
-    /// <summary>The module edges: every reference the compilation USED that is an installed module,
-    /// with the module's MVID read from its metadata. Ordinal by assembly name.</summary>
+    /// <summary>The MODULE edges: every reference the compilation USED
+    /// (<see cref="Compilation.GetUsedAssemblyReferences"/>) that is an installed module, with the
+    /// module's MVID. Ordinal by assembly name — unchanged from before the other kinds existed.</summary>
     private static IEnumerable<DependencyEdge> UsedModules(
         CSharpCompilation compilation, IReadOnlySet<MetadataReference> moduleReferences, CancellationToken ct)
     {
@@ -483,7 +553,170 @@ public static class DependencyEdgeExtraction
         return edges.Values;
     }
 
-    private static string? MvidOf(MetadataReference reference)
+    /// <summary>
+    /// The PLATFORM and PACKAGE edges of an EMITTED assembly, read off its metadata: every
+    /// <c>AssemblyRef</c> the compiler wrote, classified by the compile's reference FILES, with the
+    /// <c>TypeRef</c>s resolved through it as evidence. Ordered platform, then package; ordinal.
+    ///
+    /// <para>🚨 <b>Why metadata, not <see cref="Compilation.GetUsedAssemblyReferences"/> and not a
+    /// semantic walk.</b> Roslyn's used-reference set counts an assembly whose namespace a
+    /// <c>using</c> merely imports, and every NodeType compile carries the skeleton's global usings:
+    /// measured on core's doc tree, every type reported the SAME 21 MeshWeaver assemblies — which
+    /// answers "who binds MeshWeaver.Graph" with "everyone". A semantic walk that re-binds every
+    /// name gives the right set at a price: measured on a 90-file module, 792 ms against 621 ms for
+    /// the emit itself, and the runtime compile runs on every portal. The C# compiler writes an
+    /// <c>AssemblyRef</c> only for an assembly the IL or metadata actually needs, so reading two
+    /// metadata tables gives the bound set for ~50 ms. What metadata cannot show — a constant
+    /// inlined from a platform type, a <c>nameof</c> — is not an edge.</para>
+    ///
+    /// <para><b>Known limit.</b> A NodeType's emitted assembly also carries the foreign owners' code
+    /// compiled in through <c>shared=</c>/<c>@@</c>, so a platform assembly only that code binds is
+    /// still this type's edge — an extra edge, never a missing one (the direction every limit of this
+    /// extractor fails in).</para>
+    /// </summary>
+    /// <param name="compilation">The compilation that produced the image — its references classify
+    /// each <c>AssemblyRef</c> by file.</param>
+    /// <param name="image">The emitted assembly's bytes.</param>
+    /// <param name="references">What each reference is.</param>
+    public static IReadOnlyList<DependencyEdge> EmittedReferenceEdges(
+        CSharpCompilation compilation, Stream image, DependencyReferenceClasses references)
+    {
+        ArgumentNullException.ThrowIfNull(compilation);
+        ArgumentNullException.ThrowIfNull(image);
+        ArgumentNullException.ThrowIfNull(references);
+        var identities = compilation.References
+            .Select(r => (Reference: r, Assembly: compilation.GetAssemblyOrModuleSymbol(r) as IAssemblySymbol))
+            .Where(x => x.Assembly is not null)
+            .Select(x => (x.Assembly!.Identity, x.Reference))
+            .ToList();
+
+        using var pe = new System.Reflection.PortableExecutable.PEReader(image, System.Reflection.PortableExecutable.PEStreamOptions.LeaveOpen);
+        var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+        var typesByScope = new Dictionary<System.Reflection.Metadata.AssemblyReferenceHandle, ImmutableSortedSet<string>.Builder>();
+        foreach (var handle in reader.TypeReferences)
+        {
+            var typeRef = reader.GetTypeReference(handle);
+            if (typeRef.ResolutionScope.Kind != System.Reflection.Metadata.HandleKind.AssemblyReference)
+                continue;
+            var scope = (System.Reflection.Metadata.AssemblyReferenceHandle)typeRef.ResolutionScope;
+            if (!typesByScope.TryGetValue(scope, out var names))
+                typesByScope[scope] = names = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
+            var ns = reader.GetString(typeRef.Namespace);
+            names.Add(ns.Length == 0 ? reader.GetString(typeRef.Name) : $"{ns}.{reader.GetString(typeRef.Name)}");
+        }
+
+        var platform = new SortedDictionary<string, DependencyEdge>(StringComparer.Ordinal);
+        var packages = new SortedDictionary<string, ImmutableSortedSet<string>>(StringComparer.Ordinal);
+        foreach (var handle in reader.AssemblyReferences)
+        {
+            var assemblyRef = reader.GetAssemblyReference(handle);
+            var name = reader.GetString(assemblyRef.Name);
+            var emitted = new EmittedAssemblyRef(
+                name, assemblyRef.Version, reader.GetString(assemblyRef.Culture),
+                [.. reader.GetBlobBytes(assemblyRef.PublicKeyOrToken)],
+                (assemblyRef.Flags & System.Reflection.AssemblyFlags.PublicKey) != 0);
+            // By FULL identity first; ambiguous ⇒ every candidate (an extra edge, never a lost one).
+            foreach (var reference in ReferencesFor(emitted, identities))
+            {
+                if (references.Modules.Contains(reference))
+                    continue;
+                if (references.Packages.TryGetValue(reference, out var packageId))
+                    packages[packageId] = packages.TryGetValue(packageId, out var names)
+                        ? names.Add(name)
+                        : ImmutableSortedSet.Create(StringComparer.Ordinal, name);
+                else if (DependencyReferenceClasses.IsPlatformName(name))
+                    platform[name] = new DependencyEdge
+                    {
+                        Target = name,
+                        Kind = DependencyEdgeKinds.Platform,
+                        TargetBuildMvid = MvidOf(reference),
+                        Evidence = typesByScope.TryGetValue(handle, out var types) ? [.. types.Take(MaxEvidence)] : [],
+                    };
+            }
+        }
+        return [
+            .. platform.Values,
+            .. packages.Select(p => new DependencyEdge
+            {
+                Target = DependencyEdgeTargets.ForPackage(p.Key),
+                Kind = DependencyEdgeKinds.Package,
+                Evidence = [.. p.Value.Take(MaxEvidence)],
+            }),
+        ];
+    }
+
+    /// <summary>An <c>AssemblyRef</c> as the emitted metadata spells it.</summary>
+    /// <param name="Name">The simple name.</param>
+    /// <param name="Version">The version.</param>
+    /// <param name="Culture">The culture name, empty for neutral.</param>
+    /// <param name="PublicKeyOrToken">The public key or its token, empty when unsigned.</param>
+    /// <param name="IsFullKey">Whether <paramref name="PublicKeyOrToken"/> is the full key.</param>
+    public sealed record EmittedAssemblyRef(
+        string Name, Version Version, string Culture, ImmutableArray<byte> PublicKeyOrToken, bool IsFullKey);
+
+    /// <summary>
+    /// The compilation references an emitted <c>AssemblyRef</c> names, matched by FULL identity —
+    /// name, version, culture and public key (or token) — because a host assembly and a package
+    /// assembly may share a simple name with different publishers and BOTH stay referenced
+    /// (<c>CompileReferences.WithPackageAssemblies</c>); a name-only lookup would classify the
+    /// package reference as the host's (or as a module) and lose its edge. When no candidate matches
+    /// the full identity, EVERY candidate of that name is returned — an extra edge, never a lost one.
+    /// </summary>
+    /// <param name="emitted">The emitted reference.</param>
+    /// <param name="references">The compilation's references with their identities.</param>
+    public static IReadOnlyList<MetadataReference> ReferencesFor(
+        EmittedAssemblyRef emitted, IReadOnlyList<(AssemblyIdentity Identity, MetadataReference Reference)> references)
+    {
+        ArgumentNullException.ThrowIfNull(emitted);
+        ArgumentNullException.ThrowIfNull(references);
+        var candidates = references
+            .Where(r => string.Equals(r.Identity.Name, emitted.Name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var exact = candidates.Where(r =>
+                r.Identity.Version == emitted.Version
+                && string.Equals(r.Identity.CultureName ?? string.Empty, emitted.Culture, StringComparison.OrdinalIgnoreCase)
+                && (emitted.PublicKeyOrToken.IsDefaultOrEmpty
+                    ? r.Identity.PublicKeyToken.IsDefaultOrEmpty
+                    : (emitted.IsFullKey ? r.Identity.PublicKey : r.Identity.PublicKeyToken)
+                        .SequenceEqual(emitted.PublicKeyOrToken)))
+            .ToList();
+        return [.. (exact.Count > 0 ? exact : candidates).Select(r => r.Reference).Distinct()];
+    }
+
+    /// <summary>The platform and package edges of an emitted assembly ON DISK — see
+    /// <see cref="EmittedReferenceEdges(CSharpCompilation, Stream, DependencyReferenceClasses)"/>.</summary>
+    /// <param name="compilation">The compilation that produced the assembly.</param>
+    /// <param name="assemblyPath">The emitted assembly.</param>
+    /// <param name="references">What each reference is.</param>
+    public static IReadOnlyList<DependencyEdge> EmittedReferenceEdges(
+        CSharpCompilation compilation, string assemblyPath, DependencyReferenceClasses references)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(assemblyPath);
+        using var stream = File.OpenRead(assemblyPath);
+        return EmittedReferenceEdges(compilation, stream, references);
+    }
+
+    /// <summary>
+    /// The set's edges, PROVEN to have unique targets — the invariant every target-keyed reader (and
+    /// the Postgres projection's <c>(source, target)</c> key) relies on. Disjoint by construction
+    /// (<see cref="DependencyEdgeTargets"/>); a collision here is an extractor defect and fails LOUDLY
+    /// (the runtime compile logs it at Error and the build carries no edge set — "not extracted",
+    /// never a set that silently lost a dependency).
+    /// </summary>
+    /// <param name="source">The source, for the message.</param>
+    /// <param name="edges">The edges.</param>
+    public static ImmutableList<DependencyEdge> UniqueTargets(string source, ImmutableList<DependencyEdge> edges)
+    {
+        ArgumentNullException.ThrowIfNull(edges);
+        var collision = edges.GroupBy(e => e.Target, StringComparer.Ordinal).FirstOrDefault(g => g.Count() > 1);
+        if (collision is not null)
+            throw new InvalidOperationException(
+                $"dependency edges of '{source}': target '{collision.Key}' is claimed by "
+                + string.Join(" and ", collision.Select(e => e.Kind)) + " — targets must be unique per set");
+        return edges;
+    }
+
+    internal static string? MvidOf(MetadataReference reference)
     {
         try
         {
@@ -528,6 +761,6 @@ public static class DependencyEdgeExtraction
         string.Equals(owner, selfPath, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>A declaration the compiling type (partly) owns is its own: never an edge to itself.</summary>
-    private static bool ContainsSelf(ImmutableSortedSet<string> owners, string selfPath) =>
+    internal static bool ContainsSelf(ImmutableSortedSet<string> owners, string selfPath) =>
         owners.Any(o => IsSelf(o, selfPath));
 }

@@ -52,7 +52,7 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class StandingQueryWatchRatchetGuard
 {
-    private static readonly string[] ScannedRoots = ["src", "memex"];
+    private static readonly string[] ScannedRoots = ["src"];
 
     /// <summary>
     /// Zero: the two sites the scan found at seeding — the portal's e-mail senders

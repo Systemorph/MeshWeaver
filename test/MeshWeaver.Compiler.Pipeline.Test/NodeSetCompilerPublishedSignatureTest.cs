@@ -124,7 +124,7 @@ public class NodeSetCompilerPublishedSignatureTest
                 null, null, ct,
             ])!;
             compiled.DependencyEdges.Should().NotBeNull("the forwarder runs the same compile");
-            compiled.DependencyEdges!.Edges.Should().BeEmpty("no module files are named, so no Module edges");
+            compiled.DependencyEdges!.GraphEdges().Edges.Should().BeEmpty("no module files are named, so no Module edges");
         }
         finally
         {
