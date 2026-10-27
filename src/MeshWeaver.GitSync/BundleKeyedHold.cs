@@ -294,8 +294,8 @@ public static class BundleKeyedHold
         // package's shared source gained in the same commit, and it failed `CS0117` until a roll).
         // A new type is held only THROUGH a held source, never for being new, and only as a sharer:
         // the root's release re-imports the commit and lands it with the source it was written for.
-        var sharers = candidates.Concat(NewTypes(partition, incomingSet, incoming, live, definitionOf,
-            abstained, logger)).ToList();
+        var sharers = candidates.Concat(NewTypes(partition, incomingSet, currentSet, incoming, live,
+            definitionOf, abstained, logger)).ToList();
         bool grew;
         do
         {
@@ -360,10 +360,19 @@ public static class BundleKeyedHold
     /// their incoming fold and every source path they name, so the sharing closure can hold one that
     /// reads a held source (#7410). A new type whose definition or source queries the incoming tree
     /// cannot establish is not judged, and says so: it imports exactly as it did before.
+    ///
+    /// <para>🚨 Its source paths are resolved over BOTH trees with its INCOMING definition (review of
+    /// #7427, thread 4392214514). A source this commit deletes or moves away, but that an existing
+    /// type's hold keeps in the partition, is absent from the incoming tree — yet the new type's
+    /// queries still reach it once it lands, beside its replacement, and it compiles both
+    /// declarations. Resolved over the incoming tree alone, that retained source never made the new
+    /// type a sharer. Its fingerprints are unaffected: none current, the wanted one from the incoming
+    /// tree.</para>
     /// </summary>
     private static IEnumerable<Candidate> NewTypes(
         string partition,
         NodeSet incomingSet,
+        NodeSet currentSet,
         IReadOnlyList<MeshNode> incoming,
         IReadOnlyDictionary<string, NodeTypeDefinition> live,
         Func<MeshNode, NodeTypeDefinition?> definitionOf,
@@ -395,7 +404,11 @@ public static class BundleKeyedHold
                 node.Path,
                 CurrentFold: string.Empty,
                 incomingFold,
-                [.. SourcePathsOf(incomingSet, node.Path, definition, logger).Select(p => Relative(partition, p))],
+                [
+                    .. SourcePathsOf(currentSet, node.Path, definition, logger)
+                        .Concat(SourcePathsOf(incomingSet, node.Path, definition, logger))
+                        .Select(p => Relative(partition, p)),
+                ],
                 IsNew: true);
         }
     }
