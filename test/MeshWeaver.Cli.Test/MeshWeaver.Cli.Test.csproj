@@ -9,6 +9,11 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Cli\MeshWeaver.Cli.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Kestrel for FakeMcpServer, the loopback MCP endpoint DynamicMcpCommandsTest drives the CLI
+         against. Test-side only: the CLI itself stays a thin client with no ASP.NET dependency. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- The one repo-root lookup (MeshWeaver.Fixture/RepoPaths.cs), compiled in rather than referenced:
          this project stays free of the test fixture's framework dependencies. -->
     <Compile Include="..\MeshWeaver.Fixture\RepoPaths.cs" Link="RepoPaths.cs" />
