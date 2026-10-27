@@ -118,6 +118,8 @@ public static class GraphConfigurationExtensions
                 .AddApiTokenType()
                 // Non-person principals (Admin/_ServiceIdentity) — Doc/Architecture/ServiceIdentities.
                 .AddServiceIdentityType()
+                // Declared type-scoped grants (Admin/_GrantRule) — Doc/Architecture/AccessControl.
+                .AddGrantRuleType()
                 .AddLicenseType()
                 .AddMeshWeaverInstanceType()
                 .AddMeshDataSourceType()
