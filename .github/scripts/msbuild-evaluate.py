@@ -168,6 +168,10 @@ def _is_glob(path: str) -> bool:
 #     declares is produced by the SDK's own targets, e.g. @(ReferencePath)).
 # Anything else (an in-repo path outside them, an item transform `@(X->'…')`, a metadata path,
 # a property no evaluation resolves) is REFUSED, naming the target and the file.
+# Task attributes that only carry TEXT to be printed or written, never a path that is read.
+_TEXT_ONLY_ATTRIBUTES = frozenset({("Message", "Text"), ("Message", "Importance"), ("Warning", "Text"),
+                                   ("Warning", "Code"), ("Error", "Text"), ("Error", "Code"),
+                                   ("WriteLinesToFile", "Lines")})
 _OUTPUT_PROPERTIES = ("BaseIntermediateOutputPath", "IntermediateOutputPath", "BaseOutputPath",
                       "OutputPath", "OutDir", "TargetDir", "PublishDir")
 
@@ -207,6 +211,9 @@ def target_item_violations(root: Path, files: list[str], project_rel: str, prope
     outputs = _output_dirs(root / project_rel, properties)
     declarations: dict[str, list[tuple[str, Path]]] = {}
     in_targets: list[tuple[str, str, str, Path, str]] = []   # (target, tag, include, file, rel)
+    task_sites: list[tuple[str, str, str, str, Path, str]] = []  # (target, task, attribute, value, file, rel)
+    target_props: dict[str, list[str]] = {}
+    target_prop_sites: list[tuple[str, str, str, str]] = []  # (target, property, raw value, rel)
     for rel in files:
         try:
             tree = ET.parse(root / rel)
@@ -218,6 +225,18 @@ def target_item_violations(root: Path, files: list[str], project_rel: str, prope
                 tag = _local(el.tag)
                 if tag == "Target":
                     walk(el, el.get("Name") or "?")
+                elif tag == "PropertyGroup" and target:
+                    for prop in el:
+                        if _local(prop.tag):
+                            target_props.setdefault(_local(prop.tag), []).append(prop.text or "")
+                            target_prop_sites.append((target, _local(prop.tag), prop.text or "", rel))
+                elif target and tag not in ("ItemGroup", "PropertyGroup", "OnError") and tag:
+                    # a TASK: every attribute is checked except a Condition (it decides, it reads no
+                    # path) and the attributes that only carry TEXT to be written or printed
+                    for attr, value in el.attrib.items():
+                        if attr == "Condition" or (tag, attr) in _TEXT_ONLY_ATTRIBUTES:
+                            continue
+                        task_sites.append((target, tag, attr, value, root / rel, rel))
                 elif tag == "ItemGroup":
                     for item in el:
                         name = _local(item.tag)
@@ -264,11 +283,54 @@ def target_item_violations(root: Path, files: list[str], project_rel: str, prope
             return f"'{piece}' resolves to {rel}, an in-repo path that is not a tracked input"
         return None
 
+    def inline(value: str) -> str:
+        """Target-defined properties replaced by EVERY raw definition (a later definition may win)."""
+        for _ in range(6):
+            new_value = _PROPERTY.sub(lambda m: " ; ".join(target_props[m.group(1)]) if m.group(1) in target_props
+                                      else m.group(0), value)
+            if new_value == value:
+                break
+            value = new_value
+        return value
+
+    def function_reason(value: str) -> str | None:
+        """A property function is statically resolved when it depends on no item: its arguments are
+        then fixed strings, and any file it reads is named in the project text the sweep reads."""
+        for m in re.finditer(r"\$\(\[", value):
+            body = value[m.start():]
+            if "@(" in body or "%(" in body:
+                return f"a property function over items ('{value.strip()[:120]}') is not statically resolved"
+        return None
+
+    def dynamic_reason(value: str) -> str | None:
+        if "->" in value:
+            return f"an item transform ('{value.strip()[:120]}') produces paths that are not modelled"
+        if "%(" in value:
+            return f"metadata batching ('{value.strip()[:120]}') produces paths that are not modelled"
+        return function_reason(value)
+
     out = []
     for target, tag, include, f, rel in in_targets:
         why = reason(include, f, frozenset())
         if why:
             out.append(f"{rel}: <Target Name=\"{target}\"> adds <{tag} Include=\"{include}\"> — {why}")
+    for target, task, attr, value, f, rel in task_sites:
+        expanded = inline(value)
+        why = dynamic_reason(expanded)
+        if why is None:
+            for piece in expanded.split(";"):
+                piece = piece.strip()
+                if re.fullmatch(r"@\(([A-Za-z_][\w.-]*)\)", piece):
+                    why = reason(piece, f, frozenset())
+                    if why:
+                        break
+        if why:
+            out.append(f"{rel}: <Target Name=\"{target}\"> task <{task} {attr}=\"{value}\"> — {why}")
+    for target, prop, raw, rel in target_prop_sites:
+        why = function_reason(inline(raw))
+        if why:
+            out.append(f"{rel}: <Target Name=\"{target}\"> property <{prop}> — {why} (a property function may "
+                       "read a file, so it must be statically resolvable)")
     return out
 
 

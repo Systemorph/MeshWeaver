@@ -254,7 +254,29 @@ def main() -> int:
                  '<Target Name="Fn" BeforeTargets="CoreCompile"><ItemGroup>'
                  "<Compile Include=\"$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)','..','Gen2','Extra.cs'))\" />"
                  '</ItemGroup></Target>',
-                 "cannot resolve")):
+                 "cannot resolve"),
+                # TASK attributes: every dynamic expression shape that is not statically resolved
+                ("a TRANSFORM in a task attribute (Copy SourceFiles)",
+                 '<ItemGroup><_GeneratorName Include="Extra" /></ItemGroup><Target Name="CopyGen" AfterTargets="Build">'
+                 "<Copy SourceFiles=\"@(_GeneratorName->'../Gen2/%(Identity).cs')\" DestinationFolder=\"$(OutDir)\" /></Target>",
+                 "item transform"),
+                ("METADATA BATCHING in a task attribute",
+                 '<ItemGroup><_G Include="Local.cs" /></ItemGroup><Target Name="Batch" AfterTargets="Build">'
+                 '<Copy SourceFiles="../Gen2/%(_G.Filename).cs" DestinationFolder="$(OutDir)" /></Target>',
+                 "metadata batching"),
+                ("a PROPERTY FUNCTION over items in a task attribute",
+                 '<ItemGroup><_G Include="Local.cs" /></ItemGroup><Target Name="Fn2" AfterTargets="Build">'
+                 "<Copy SourceFiles=\"$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '@(_G)'))\" DestinationFolder=\"$(OutDir)\" /></Target>",
+                 "property function over items"),
+                ("a transform reaching a task attribute THROUGH a target property",
+                 '<ItemGroup><_GeneratorName Include="Extra" /></ItemGroup><Target Name="Via" AfterTargets="Build">'
+                 "<PropertyGroup><_Src>@(_GeneratorName->'../Gen2/%(Identity).cs')</_Src></PropertyGroup>"
+                 '<Copy SourceFiles="$(_Src)" DestinationFolder="$(OutDir)" /></Target>',
+                 "item transform"),
+                ("a target PROPERTY reading a file through a property function over items",
+                 '<ItemGroup><_G Include="Local.cs" /></ItemGroup><Target Name="Read" AfterTargets="Build">'
+                 "<PropertyGroup><_Text>$([System.IO.File]::ReadAllText('@(_G)'))</_Text></PropertyGroup></Target>",
+                 "property <_Text>")):
             r = tgt_eval(body)
             check(f"{label} ⇒ REFUSED red, naming the target and the file",
                   r.returncode != 0 and "Tgt/Tgt.csproj" in r.stderr and "<Target Name=" in r.stderr and needle in r.stderr,
@@ -265,7 +287,17 @@ def main() -> int:
                 ("a target adding a file inside the project's own (tree-hashed) directory",
                  '<Target Name="Own" BeforeTargets="CoreCompile"><ItemGroup><Compile Include="Local.cs" /></ItemGroup></Target>'),
                 ("a target drawing on an SDK-produced item (@(ReferencePath))",
-                 '<Target Name="Refs" AfterTargets="ResolveAssemblyReferences"><ItemGroup><_R Include="@(ReferencePath)" /></ItemGroup></Target>')):
+                 '<Target Name="Refs" AfterTargets="ResolveAssemblyReferences"><ItemGroup><_R Include="@(ReferencePath)" /></ItemGroup></Target>'),
+                ("a PLAIN @(X) over already-tracked items in a task attribute",
+                 '<ItemGroup><_Mine Include="Local.cs" /></ItemGroup><Target Name="CopyMine" AfterTargets="Build">'
+                 '<Copy SourceFiles="@(_Mine);@(Compile)" DestinationFolder="$(OutDir)" /></Target>'),
+                ("transforms and batching in a Condition, Message Text and WriteLinesToFile Lines (text, not paths)",
+                 '<ItemGroup><_G Include="Local.cs" /></ItemGroup><Target Name="Text" AfterTargets="Build">'
+                 "<Message Condition=\"'%(_G.Filename)' != ''\" Text=\"@(_G->'%(Filename)')\" />"
+                 "<WriteLinesToFile File=\"$(IntermediateOutputPath)names.txt\" Lines=\"@(_G->'%(Filename)')\" /></Target>"),
+                ("a statically resolved property function reading a file in a target property",
+                 '<Target Name="ReadStatic" AfterTargets="Build"><PropertyGroup>'
+                 "<_Text>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/Local.cs'))</_Text></PropertyGroup></Target>")):
             r = tgt_eval(body)
             check(f"negative control — {label} is accepted", r.returncode == 0, r.stderr[-300:])
 
