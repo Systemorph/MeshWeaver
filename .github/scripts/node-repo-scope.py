@@ -498,7 +498,8 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
            override: list[str] | None, say, publishing: bool = False,
            always: frozenset[str] = frozenset(), publication_base: str = "",
            publication_reach: bool = False, shelf_project: str = "",
-           extensions_project: str = "", msbuild_evaluation: dict | None = None) -> dict:
+           extensions_project: str = "", msbuild_evaluation: dict | None = None,
+           carry: frozenset[str] = frozenset()) -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -720,10 +721,19 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
                     "the module matrix does not carry — the floor and the matrix have drifted. "
                     "Packing every module.")
 
+    # 🚨 THE CARRY IS NOT OPTIONAL ONCE GIVEN. A push narrowed by a PARTIAL publication
+    # (node-repo-publication-base.py --carry-withheld) names the packages that baseline run
+    # WITHHELD: built, tested, never handed over. Their sources may not change again for days, so
+    # the diff alone would never select them and they would never ship. They are selected here on
+    # top of the diff until a run publishes them (that run's marker no longer names them).
+    carried = carry if publication_diff else frozenset()
     selected: list[dict] = []
     why: dict[str, str] = {}
     for e in entries:
         reasons = []
+        if e["package"] in carried:
+            reasons.append(f"package `{e['package']}` was WITHHELD by the publication baseline run — "
+                           "carried until a run publishes it")
         if e["package"] in affected:
             reasons.append(f"node package `{e['package']}` is in the affected closure")
         if hits.get(e["project"]):
@@ -901,6 +911,25 @@ def self_test() -> int:
         result = _run(root, "modules", "push", None,
                       extra=["--publication-base", base, "--publishing"])
         check("a reverted partial publication is repaired", result["selected"] == ["Acme.Alpha"])
+        # THE CARRY (node-repo-publication-base.py --carry-withheld): the packages a PARTIAL
+        # baseline withheld are selected on top of the diff — Beta did not change since `base`.
+        result = _run(root, "modules", "push", None,
+                      extra=["--publication-base", base, "--publishing", "--carry", "Beta Gamma"])
+        beta = next((m for m in result["modules"] if m["module"] == "Acme.Beta"), {})
+        check("a package the baseline WITHHELD is carried into a push narrowed by it, and tested",
+              result["selected"] == ["Acme.Alpha", "Acme.Beta"] and beta.get("test") is True
+              and "WITHHELD" in result["why"].get("Acme.Beta", ""),
+              f"selected={result['selected']} why={result['why']}")
+        check("NEGATIVE CONTROL: the same push without a carry selects only the diff",
+              _run(root, "modules", "push", None,
+                   extra=["--publication-base", base, "--publishing"])["selected"] == ["Acme.Alpha"])
+        got = _run(root, "modules", "pull_request", ["Alpha/index.json"], extra=["--carry", "Beta"])
+        check("a carry on a pull request (no publication baseline) selects nothing extra",
+              got["selected"] == ["Acme.Alpha"], f"selected={got['selected']}")
+        bad = _raw(root, "modules", "push", None,
+                   extra=["--publication-base", base, "--publishing", "--carry", "Be;ta"])
+        check("a carry that is not a package id is refused (non-zero), never ignored",
+              bad.returncode != 0, f"exit {bad.returncode}")
         # 🚨 policy ci-paths-owe-no-module-leg lets a PULL REQUEST skip module legs for a CI path
         # because main's push run covers them — so that push run must never take the same shortcut.
         # The history also carries the Alpha change above, so deferring the CI path to the selector
@@ -1396,6 +1425,10 @@ def main() -> int:
     p.add_argument("--always", default="",
                    help="comma-separated module names the caller's gates compose on EVERY run — "
                         "a floor the narrowing always keeps (--for modules)")
+    p.add_argument("--carry", default="",
+                   help="packages (comma/space separated) the --publication-base run WITHHELD; on a push "
+                        "narrowed by that baseline every matrix entry of these packages is selected "
+                        "(--for modules; node-repo-publication-base.py's publication-carry)")
     p.add_argument("--module-libraries-project", default="", dest="shelf_project",
                    help="the caller's module-libraries shelf csproj (relative to --root): a diff "
                         "that touches it or a project it reaches runs the full set")
@@ -1434,11 +1467,16 @@ def main() -> int:
         return 2
     changed = None if args.changed_list is None else [c for c in args.changed_list.split(",") if c]
     always = frozenset(a.strip() for a in args.always.split(",") if a.strip())
+    carry = frozenset(re.split(r"[\s,]+", args.carry.strip())) - {""}
+    bad_carry = sorted(c for c in carry if not re.fullmatch(r"[\w.-]+", c))
+    if bad_carry:
+        sys.exit(f"✗ --carry names something that is not a package id: {bad_carry[0]!r}")
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
                     publishing=args.publishing, always=always, publication_base=args.publication_base,
                     publication_reach=args.publication_reach, shelf_project=args.shelf_project,
-                    extensions_project=args.extensions_project, msbuild_evaluation=evaluation)
+                    extensions_project=args.extensions_project, msbuild_evaluation=evaluation,
+                    carry=carry)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"

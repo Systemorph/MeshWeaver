@@ -814,6 +814,17 @@ on:
         required: false
         type: string
         default: ''
+      publication-carry:
+        description: >
+          Packages (space or comma separated) the publication-base run WITHHELD — the
+          `publication-carry` output of node-repo-publication-base.py --carry-withheld. Used only
+          when publication-base narrows a push: every matrix entry of these packages is selected
+          (and tested) on top of the diff, so a package a partial publication withheld is rebuilt
+          until a run publishes it. 🚨 A caller that passes a publication-base from a
+          --carry-withheld walk MUST pass this too, or the withheld packages never ship. Empty: none.
+        required: false
+        type: string
+        default: ''
       ledger:
         description: >
           The CI MODULE BUILD LEDGER on the registry portal (Doc/Architecture/ModuleBuildArchitecture →
@@ -1388,6 +1399,7 @@ jobs:
           ALWAYS: ${{ inputs.always-modules }}
           PUBLICATION_BASE: ${{ inputs.publication-base }}
           PUBLICATION_RUN: ${{ inputs.publication-run }}
+          PUBLICATION_CARRY: ${{ inputs.publication-carry }}
           BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -1411,6 +1423,8 @@ jobs:
           publication_args=()
           if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
             publication_args=(--publication-base "$PUBLICATION_BASE")
+            # The packages that baseline WITHHELD ride along until a run publishes them.
+            [ -z "$(printf '%s' "${PUBLICATION_CARRY:-}" | tr -d '[:space:],')" ] || publication_args+=(--carry "$PUBLICATION_CARRY")
           fi
           shelf_args=()
           [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
