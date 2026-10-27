@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -179,7 +180,7 @@ public static class DeclaredPointRead
     public static IObservable<PermissionCheckOutcome> ObserveStandardRead(IMessageHub hub, string path, AccessContext? viewer)
     {
         ArgumentNullException.ThrowIfNull(hub);
-        return ObserveStandingRead(hub, path, viewer)
+        return StandingReadWithPendingMarker(hub, path, viewer)
             .Select(outcome => outcome ?? PermissionCheckOutcome.Undetermined($"the Read check on '{path}' is being re-decided"))
             .DistinctUntilChanged();
     }
@@ -190,7 +191,9 @@ public static class DeclaredPointRead
     /// classification — except that while a signal has withdrawn an established verdict and its
     /// re-check has not answered yet, it emits <c>null</c> ("being re-decided") where
     /// <see cref="ObserveStandardRead"/> emits an undetermined outcome. The re-check is bounded by the
-    /// permission-establishment budget; past it the answer IS undetermined.
+    /// permission-establishment budget; past it the answer IS undetermined — and that budget bounds
+    /// the whole PENDING PERIOD, not each evaluation, so access commits that keep replacing a stalled
+    /// re-check cannot hold it pending past the budget (<see cref="BoundPendingPeriods"/>).
     ///
     /// <para>🚨 For an owner-side subscription that follows a STANDING grant (MeshWeaver#7298, the
     /// residual of #7016). Ending a subscription is terminal, and every access commit on the node's
@@ -205,6 +208,42 @@ public static class DeclaredPointRead
     public static IObservable<PermissionCheckOutcome?> ObserveStandingRead(IMessageHub hub, string path, AccessContext? viewer)
     {
         ArgumentNullException.ThrowIfNull(hub);
+        var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
+        return BoundPendingPeriods(StandingReadWithPendingMarker(hub, path, viewer), budget, path, Scheduler.Default);
+    }
+
+    /// <summary>
+    /// 🚨 Gives every CONTINUOUS pending period of <paramref name="standing"/> one deadline, however
+    /// many withdrawals it spans (review of #7329, thread 4391236664). Each evaluation is bounded by
+    /// the budget, but every access commit replaces the evaluation in flight and restarts ITS
+    /// timeout — so a stalled rule under commits arriving faster than the budget stayed pending
+    /// forever, and an already-admitted subscription that holds on pending stayed open on a verdict
+    /// nobody could reach. A <c>null</c> repeated by a further invalidation is the SAME period and
+    /// never restarts the deadline; past it the answer IS undetermined, and only a settled verdict
+    /// ends the period.
+    /// </summary>
+    /// <param name="standing">The standing verdict with its pending marker (<c>null</c>).</param>
+    /// <param name="budget">The permission-establishment budget one pending period may last.</param>
+    /// <param name="path">The path being read, for the undetermined outcome's reason.</param>
+    /// <param name="scheduler">Where the deadline runs.</param>
+    internal static IObservable<PermissionCheckOutcome?> BoundPendingPeriods(
+        IObservable<PermissionCheckOutcome?> standing, TimeSpan budget, string path, IScheduler scheduler) =>
+        standing
+            // One pending period: consecutive nulls collapse, so the deadline below starts once.
+            .DistinctUntilChanged()
+            .Select(outcome => outcome is null
+                ? Observable.Timer(budget, scheduler)
+                    .Select(_ => (PermissionCheckOutcome?)PermissionCheckOutcome.Undetermined(
+                        $"the Read check on '{path}' stayed undecided past the permission-establishment budget ({budget})"))
+                    .StartWith((PermissionCheckOutcome?)null)
+                : Observable.Return(outcome))
+            .Switch()
+            .DistinctUntilChanged();
+
+    /// <summary>The live standing Read with its pending marker and no bound on a pending period; see <see cref="ObserveStandingRead"/>.</summary>
+    private static IObservable<PermissionCheckOutcome?> StandingReadWithPendingMarker(IMessageHub hub, string path, AccessContext? viewer)
+    {
         return Observable.Defer(() =>
         {
             if (string.IsNullOrEmpty(path))

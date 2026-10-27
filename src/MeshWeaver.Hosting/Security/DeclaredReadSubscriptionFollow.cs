@@ -134,19 +134,36 @@ public static class DeclaredReadSubscriptionFollow
             .AutoConnectOwnedBy(lifetime, owner.ServiceProvider.GetRequiredService<ReleaseLane>(), nameof(DeclaredReadSubscriptionFollow));
 
         return new ClientReadFollow(
-            revision => standing
-                // A re-check in flight holds: the revision's verdict waits for the settled answer
-                // (bounded by the first-verdict budget), and an admitted revision stays admitted.
-                .Where(outcome => outcome is not null)
-                .Select(outcome => outcome!.IsGranted
-                    ? Observable.Return(true)
-                    : outcome.IsUndetermined
-                        ? Observable.Return(false)
-                        : DeclaredRead(owner, hubPath, caller, shape, revision, logger))
-                .Switch(),
+            revision => VerdictOf(standing, () => DeclaredRead(owner, hubPath, caller, shape, revision, logger)),
             budget,
             lifetime);
     }
+
+    /// <summary>
+    /// One revision's live verdict from the standing Read: a grant admits, an undetermined outcome
+    /// refuses, a definitive denial hands the decision to <paramref name="declaredRead"/>.
+    ///
+    /// <para>🚨 A re-check IN FLIGHT (<c>null</c>) maps to <see cref="Observable.Never{TResult}()"/>
+    /// INSIDE the switch — never filtered out ahead of it (review of #7329, thread 4391236736).
+    /// Filtered, the pending marker never reached <c>Switch</c>, so a declaration check started under
+    /// the withdrawn denial stayed subscribed and could still answer <c>true</c> — forwarding a
+    /// revision on a verdict that was already being re-decided, even when the re-check then settled
+    /// undetermined. As <c>Never</c> it cancels that check and holds: a pending revision waits for
+    /// the settled answer (bounded by the first-verdict budget), and an admitted one stays admitted.
+    /// A pending period itself is bounded upstream (<see cref="DeclaredPointRead.ObserveStandingRead"/>).</para>
+    /// </summary>
+    /// <param name="standing">The followed standing Read, <c>null</c> while a re-check is in flight.</param>
+    /// <param name="declaredRead">The declaration's live verdict for the revision, subscribed only under a definitive denial.</param>
+    internal static IObservable<bool> VerdictOf(IObservable<PermissionCheckOutcome?> standing, Func<IObservable<bool>> declaredRead) =>
+        standing
+            .Select(outcome => outcome is null
+                ? Observable.Never<bool>()
+                : outcome.IsGranted
+                    ? Observable.Return(true)
+                    : outcome.IsUndetermined
+                        ? Observable.Return(false)
+                        : Observable.Defer(declaredRead))
+            .Switch();
 
     /// <summary>
     /// The declaration's live verdict for one served revision: decided on the node revision itself
