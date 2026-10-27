@@ -410,30 +410,17 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
         // Observable.Empty and would never emit Initial, so the side-channels
         // must stay observable (as before) instead of wedging forever.
         return allChanges
-            .Scan(
-                (Dict: ImmutableDictionary<string, MeshNode>.Empty, SeenInitial: queryCore == null),
-                (state, change) => change.ChangeType switch
-                {
-                    // Only the upstream query emits Initial/Reset — this is
-                    // what flips the gate open.
-                    QueryChangeType.Initial or QueryChangeType.Reset =>
-                        (change.Items.Aggregate(state.Dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)), true),
-                    QueryChangeType.Added or QueryChangeType.Updated =>
-                        (change.Items.Aggregate(state.Dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.SetItem(n.Path, n)), state.SeenInitial),
-                    QueryChangeType.Removed =>
-                        (change.Items.Aggregate(state.Dict, (d, n) =>
-                            string.IsNullOrEmpty(n.Path) ? d : d.Remove(n.Path)), state.SeenInitial),
-                    _ => state,
-                })
+            .Scan(SyncedQueryFold.Seed(seenInitial: queryCore == null), SyncedQueryFold.Apply)
             .Where(state => state.SeenInitial)
+            // The path set is folded ALONGSIDE the dictionary (SyncedQueryFold), never re-derived
+            // from it: dict.Keys.ToImmutableHashSet() on every frame cost O(N log N) tree nodes per
+            // change on an N-result query (MeshWeaver#5799).
+            .Do(state => pathSet.OnNext(state.Paths))
             .Select(state => state.Dict)
             .Do(dict => diagLogger?.LogDebug(
                 "[SyncedQuery] snapshot hub={HubAddress} count={Count} keys=[{Keys}]",
                 workspace.Hub.Address, dict.Count,
                 string.Join(", ", dict.Keys.Take(10))))
-            .Do(dict => pathSet.OnNext(dict.Keys.ToImmutableHashSet()))
             // #19 Grain warming. For a USER-facing query (a real userIdentity — NOT the System
             // framework walks: SecurityService _Access, NodeType compiles, seeds; NOT anonymous
             // guests), warm the per-node grain of each NEWLY-added result through the shared
@@ -459,5 +446,88 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
             })
             .DistinctUntilChanged()
             .Select(dict => (IEnumerable<MeshNode>)dict.Values);
+    }
+}
+
+/// <summary>
+/// The fold behind <see cref="SyncedQueryMeshNodes"/>: one query-change frame applied to the
+/// path-keyed snapshot AND to the snapshot's path set, in the same step.
+///
+/// <para>🚨 <b>Why the path set is folded, never derived.</b> It used to be re-derived from the
+/// snapshot on every frame (<c>dict.Keys.ToImmutableHashSet()</c>). The process-wide query cache
+/// (<c>MeshNodeStreamCache</c>) backs GUI queries with these collections, so an <c>Updated</c> frame
+/// for ONE node rebuilt the whole N-entry set — on the order of N·log N hash-bucket tree nodes per
+/// change — which is the type that led a multi-GiB heap step on a production portal
+/// (<c>SortedInt32KeyNode&lt;ImmutableHashSet&lt;string&gt;.HashBucket&gt;</c>, MeshWeaver#5799).
+/// Folded, an upsert of a path already present costs the set nothing
+/// (<see cref="ImmutableHashSet{T}.Add"/> returns the same instance), and a genuine add or remove
+/// costs one O(log N) path.</para>
+/// </summary>
+internal static class SyncedQueryFold
+{
+    /// <summary>One step of the fold.</summary>
+    /// <param name="Dict">The live snapshot, keyed by <see cref="MeshNode.Path"/>.</param>
+    /// <param name="Paths">Exactly the keys of <paramref name="Dict"/>, maintained incrementally.</param>
+    /// <param name="SeenInitial">Whether the upstream query has produced its first Initial/Reset —
+    /// the gate that keeps a pre-Initial (empty) snapshot from being emitted.</param>
+    internal readonly record struct State(
+        ImmutableDictionary<string, MeshNode> Dict,
+        ImmutableHashSet<string> Paths,
+        bool SeenInitial);
+
+    /// <summary>The empty state the fold starts from.</summary>
+    /// <param name="seenInitial">True when there is no query core, so nothing will ever emit Initial.</param>
+    /// <returns>The seed.</returns>
+    internal static State Seed(bool seenInitial) =>
+        new(ImmutableDictionary<string, MeshNode>.Empty, ImmutableHashSet<string>.Empty, seenInitial);
+
+    /// <summary>
+    /// Applies one change frame, with the semantics the inline fold always had: Initial/Reset and
+    /// Added/Updated upsert (Initial/Reset also open the gate), Removed deletes, an item without a
+    /// path is ignored, and any other change type leaves the state as it is.
+    /// </summary>
+    /// <param name="state">The current state.</param>
+    /// <param name="change">The frame.</param>
+    /// <returns>The next state.</returns>
+    internal static State Apply(State state, QueryResultChange<MeshNode> change) =>
+        change.ChangeType switch
+        {
+            // Only the upstream query emits Initial/Reset — this is what flips the gate open.
+            QueryChangeType.Initial or QueryChangeType.Reset =>
+                Upsert(state, change.Items) with { SeenInitial = true },
+            QueryChangeType.Added or QueryChangeType.Updated => Upsert(state, change.Items),
+            QueryChangeType.Removed => Remove(state, change.Items),
+            _ => state,
+        };
+
+    private static State Upsert(State state, IReadOnlyList<MeshNode> items)
+    {
+        var dict = state.Dict;
+        var paths = state.Paths;
+        foreach (var node in items)
+        {
+            // MeshNode.Path is computed on every read; read it once.
+            var path = node.Path;
+            if (string.IsNullOrEmpty(path))
+                continue;
+            dict = dict.SetItem(path, node);
+            paths = paths.Add(path);
+        }
+        return state with { Dict = dict, Paths = paths };
+    }
+
+    private static State Remove(State state, IReadOnlyList<MeshNode> items)
+    {
+        var dict = state.Dict;
+        var paths = state.Paths;
+        foreach (var node in items)
+        {
+            var path = node.Path;
+            if (string.IsNullOrEmpty(path))
+                continue;
+            dict = dict.Remove(path);
+            paths = paths.Remove(path);
+        }
+        return state with { Dict = dict, Paths = paths };
     }
 }
