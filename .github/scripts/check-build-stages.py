@@ -144,7 +144,8 @@ def debt_problems(doc: dict) -> list[str]:
         out.append("build-stages.json `owes` must be a list of non-empty strings — each one thing the stages still check less than Actions")
         owes = ["(unreadable)"]
     claims = doc.get("ciEquivalent")
-    if claims not in (None, True, False):
+    # `in (None, True, False)` would let 0 and 1 through (1 == True in Python), so the type is checked.
+    if claims is not None and not isinstance(claims, bool):
         out.append(f"build-stages.json `ciEquivalent` is {claims!r} — true, false or absent")
     if claims is True and owes:
         out.append(f"build-stages.json claims \"ciEquivalent\": true while it owes {len(owes)} item(s) — a host green would "
@@ -200,14 +201,32 @@ def lanes_called(workflow_text: str) -> list[str]:
     return [lane for lane in LANE_STAGE if lane in called]
 
 
+def _calling_job(workflow_text: str, lane: str) -> Optional[str]:
+    """The WHOLE job block (from its `  <job>:` line to the next job's) that calls `lane` —
+    independent of whether `with:` comes before or after `uses:`, which YAML allows either way."""
+    jobs = list(re.finditer(r"^  [A-Za-z0-9_-]+:[ \t]*(?:#.*)?$", workflow_text, re.M))
+    calls = re.compile(rf"^\s+uses:\s*Systemorph/MeshWeaver/\.github/workflows/{re.escape(lane)}@\S+", re.M)
+    for i, job in enumerate(jobs):
+        block = workflow_text[job.start():jobs[i + 1].start() if i + 1 < len(jobs) else len(workflow_text)]
+        if calls.search(block):
+            return block
+    return None
+
+
 def _lane_input(workflow_text: str, lane: str, key: str) -> Optional[str]:
-    """`with: <key>:` of the job that calls `lane` — None when that job does not pass it."""
-    m = re.search(rf"uses:\s*Systemorph/MeshWeaver/\.github/workflows/{re.escape(lane)}@\S+(.*?)(?=\n  [A-Za-z0-9_-]+:\s*\n|\Z)",
-                  workflow_text, re.S)
-    if not m:
+    """`with: <key>:` of the job that calls `lane`: None when that job does not pass it, and the
+    empty string when it passes it EMPTY (`key: ''`) — which a lane reads as "none", not as its
+    default, so the two must stay apart."""
+    block = _calling_job(workflow_text, lane)
+    if block is None:
         return None
-    v = re.search(rf"^\s+{re.escape(key)}:\s*['\"]?([^'\"\s#]+)", m.group(1), re.M)
-    return v.group(1) if v else None
+    v = re.search(rf"^\s+{re.escape(key)}:[ \t]*(.*)$", block, re.M)
+    if not v:
+        return None
+    value = re.sub(r"(^|\s)#.*$", "", v.group(1)).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1].strip()
+    return value
 
 
 def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
@@ -228,11 +247,22 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
         if want == "compile-check":
             out += _markers(want, cmd, NODE_COMPILE_CHECK_PARITY)
         else:
-            allow = _lane_input(workflow_text, lane, "allow-file") or "plugin-gate.allow"
-            needles = NODE_GATE_PARITY + [(f"--allow {allow}", "the gate's known-debt ratchet (the lane's allow-file)")]
+            # Omitted ⇒ the lane's default; passed EMPTY ⇒ no allowlist at all, and then a stage
+            # that passes one would tolerate failures the Actions leg fails on.
+            allow = _lane_input(workflow_text, lane, "allow-file")
+            allow = "plugin-gate.allow" if allow is None else allow
+            needles = list(NODE_GATE_PARITY)
+            if allow:
+                needles.append((f"--allow {allow}", "the gate's known-debt ratchet (the lane's allow-file)"))
+            elif "--allow " in cmd:
+                out.append(f"stage `{want}` passes `--allow` while {CI_WORKFLOW} passes the lane an EMPTY allow-file — "
+                           "the host would tolerate failures the Actions leg fails on")
             baseline = _lane_input(workflow_text, lane, "warning-baseline-file")
             if baseline:
                 needles.append((f"--warning-baseline {baseline}", "the in-mesh warning ratchet ci.yml passes the lane"))
+            dynamic = _lane_input(workflow_text, lane, "dynamic-baseline-file")
+            if dynamic:
+                needles.append((f"--dynamic-baseline {dynamic}", "the dynamic-edge ratchet ci.yml passes the lane"))
             out += _markers(want, cmd, needles)
         if HARD_CODED_HOST.search(cmd):
             out.append(f"stage `{want}` hard-codes a `/host/…` path — the runner binds only $MW_BUILD_GATE_HOST / $MeshWeaverRefs into the sandbox")
@@ -380,6 +410,28 @@ def _self_test() -> int:
     red(node, "node-repo", "--warning-baseline gate-warnings.allow", "ci.yml passes a warning baseline the gate stage drops", wb)
     af = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      allow-file: other-gate.allow\n  tests-ratchet")
     red(node, "node-repo", "--allow other-gate.allow", "ci.yml passes another allow-file than the stage's", af)
+    # `with:` BEFORE `uses:` is the same job — the inputs must still be read.
+    wb_first = NODE_CI.replace(
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with:\n      executor: actions\n",
+        "  test-repos:\n    with:\n      executor: actions\n      warning-baseline-file: gate-warnings.allow\n"
+        "    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n")
+    expect(wb_first != NODE_CI, "self-test fixture: the with-before-uses ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "--warning-baseline gate-warnings.allow",
+        "a debt-free claim whose gate drops the warning baseline ci.yml passes with `with:` BEFORE `uses:`", wb_first)
+    db = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      dynamic-baseline-file: dynamic.allow\n  tests-ratchet")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "--dynamic-baseline dynamic.allow",
+        "a debt-free claim whose gate drops the dynamic baseline ci.yml passes", db)
+    expect(problems(json.dumps(mutate(node, lambda d: d["stages"][1].update(command=d["stages"][1]["command"] + " --dynamic-baseline dynamic.allow"))),
+                    "node-repo", db)[0] == [], "a gate that passes the dynamic baseline ci.yml passes is green")
+    red(mutate(node, lambda d: d.update(ciEquivalent=1)), "node-repo", "`ciEquivalent` is", "a numeric ciEquivalent 1 (1 == True)")
+    red(mutate(node, lambda d: d.update(ciEquivalent=0)), "node-repo", "`ciEquivalent` is", "a numeric ciEquivalent 0 (0 == False)")
+    empty_allow = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      allow-file: ''\n  tests-ratchet")
+    no_allow = mutate(node, lambda d: d["stages"][1].update(command=d["stages"][1]["command"].replace("--allow plugin-gate.allow ", "")))
+    expect("--allow" not in no_allow["stages"][1]["command"], "self-test fixture: the gate without an allowlist was built")
+    expect(problems(json.dumps(no_allow), "node-repo", empty_allow)[0] == [],
+           "an EMPTY allow-file in ci.yml and a gate stage with no --allow is green")
+    red(node, "node-repo", "EMPTY allow-file", "a gate that passes --allow while ci.yml passes an EMPTY allow-file", empty_allow)
+    red(no_allow, "node-repo", "--allow plugin-gate.allow", "an OMITTED allow-file still owes the lane's default allowlist")
     red(node, "node-repo", "calls none of", "a ci.yml that calls no shared heavy lane", "jobs:\n  x:\n    runs-on: y\n")
     red(node, "node-repo", "is absent", "no ci.yml to derive the owed stages from", None)
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every breach is red, every honest declaration is green'}")
