@@ -160,9 +160,15 @@ def _is_glob(path: str) -> bool:
 # into a tracked input, a build output or an exempt root, (b) a plain @(X) over allowed items,
 # (c) empty — after evaluation-time properties only — and refuses everything else by name.
 # Task attributes that only carry TEXT to be printed or written, never a path that is read.
+# XmlPeek/XmlPoke's Query, Namespaces and Value are XPath and XML text: `//PlatformVersion/text()` is an
+# expression over the document named by XmlInputPath, which stays checked like any task input. Read
+# as a path, the leading `//` resolved to the filesystem root and refused the Plugins repository's
+# AssemblyVersion check (src/Directory.Build.props, VerifyAssemblyVersionMatchesPlatform).
 _TEXT_ONLY_ATTRIBUTES = frozenset({("Message", "Text"), ("Message", "Importance"), ("Warning", "Text"),
                                    ("Warning", "Code"), ("Error", "Text"), ("Error", "Code"),
-                                   ("WriteLinesToFile", "Lines")})
+                                   ("WriteLinesToFile", "Lines"),
+                                   ("XmlPeek", "Query"), ("XmlPeek", "Namespaces"),
+                                   ("XmlPoke", "Query"), ("XmlPoke", "Namespaces"), ("XmlPoke", "Value")})
 # Roots OUTSIDE the repository a target may read from: keyed by the SDK version, the NuGet lock and
 # the platform ref + digest, never per file here.
 _EXEMPT_ROOT_PROPERTIES = ("NetCoreRoot", "NetCoreTargetingPackRoot", "NuGetPackageRoot", "MeshWeaverRoot")
