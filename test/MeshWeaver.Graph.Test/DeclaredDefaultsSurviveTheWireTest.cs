@@ -96,6 +96,30 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         public bool Flag { get; set; } = left;
     }
 
+    /// <summary>Counts its own constructor calls, so a test can see how many rebuilds one write costs.</summary>
+    public sealed class ConstructorCalls
+    {
+        public int Count { get; set; }
+    }
+
+    /// <summary>A sparse constructor-built type: several unset members whose CLR default must be checked by a rebuild.</summary>
+    public sealed record Sparse
+    {
+        public Sparse(string id, ConstructorCalls calls)
+        {
+            Id = id;
+            Calls = calls;
+            calls.Count++;
+        }
+
+        public string Id { get; }
+        public ConstructorCalls Calls { get; }
+        public string? Name { get; init; }
+        public string? Description { get; init; }
+        public string? Icon { get; init; }
+        public int? Order { get; init; }
+    }
+
     /// <summary>Proven CLR default on a constructor-built type — must still be omitted.</summary>
     public sealed record ProvenDefault(string Id)
     {
@@ -266,6 +290,32 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         var instance = new MixedArguments(true, true);
         JsonSerializer.Serialize(instance, options);
         return new WeakReference(instance);
+    }
+
+    [Fact]
+    public void A_sparse_instance_costs_one_rebuild_per_write_not_one_per_unset_member()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var calls = new ConstructorCalls();
+        var sparse = new Sparse("s", calls);
+        calls.Count.Should().Be(1);
+
+        var json = JsonSerializer.Serialize(sparse, options);
+        json.Should().NotContain("name").And.NotContain("description").And.NotContain("icon").And.NotContain("order");
+        calls.Count.Should().Be(2, "one rebuild answers all four unset members of one write");
+
+        JsonSerializer.Serialize(sparse, options);
+        calls.Count.Should().Be(3, "the next write rebuilds again from its own current inputs");
+    }
+
+    [Fact]
+    public void A_sparse_mesh_node_round_trips_compactly()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var node = new MeshNode("n", "a");
+        var json = JsonSerializer.Serialize(node, options);
+        json.Should().NotContain("\"name\"").And.NotContain("\"description\"").And.NotContain("\"icon\"");
+        MeshNode.SerializedEquals(node, RoundTrip(node, options), options).Should().BeTrue();
     }
 
     [Fact]

@@ -156,7 +156,10 @@ with these settings:
 > reader will, and a CLR-default value is omitted only when the rebuilt instance reads it too. No
 > fixed set of probes can prove an initializer ignores its arguments (`Flag = Left != Right` agrees
 > on `(false,false)` and `(true,true)`), so none is used. This covers initializers computed from an
-> argument, like `MeshNode.MainNode`. A probe, rebuild or getter that throws, or a constructor
+> argument, like `MeshNode.MainNode`. ONE rebuild answers every member of one write (a sparse
+> `MeshNode` with several unset members costs one constructor call, not one per member); the
+> per-write verdicts are keyed weakly by the instance and dropped once every member was checked,
+> so the next write judges its own current inputs and nothing is retained. A probe, rebuild or getter that throws, or a constructor
 > parameter with no serialized member, means "not proven" and the member is written. The conservative branch costs bytes, never
 > a value: an explicit CLR default reads back identically. A member carrying its own
 > `[JsonIgnore(...)]` keeps its author's condition, so the per-property

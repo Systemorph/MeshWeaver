@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.Logging;
@@ -65,6 +66,7 @@ internal static class DeclaredDefaultsSurviveTheWire
         var probed = false;
         Rebuilder? rebuilder = null;
         var rebuilderBuilt = false;
+        List<(JsonPropertyInfo Property, object? ClrDefault)>? rebuilt = null;
         foreach (var property in candidates)
         {
             var clrDefault = ClrDefault(property.PropertyType);
@@ -100,10 +102,20 @@ internal static class DeclaredDefaultsSurviveTheWire
                 property.ShouldSerialize = static (_, _) => true;
                 continue;
             }
-            var get = property.Get!;
-            var captured = rebuilder;
-            property.ShouldSerialize = (instance, value) =>
-                !Equals(value, clrDefault) || !captured.RebuildsTo(instance, get, value);
+            (rebuilt ??= []).Add((property, clrDefault));
+        }
+
+        if (rebuilder is null || rebuilt is null)
+            return;
+        var check = new PerWriteCheck(rebuilder,
+            rebuilt.Select(r => r.Property.Get!).ToArray(),
+            rebuilt.Select(r => r.ClrDefault).ToArray());
+        for (var i = 0; i < rebuilt.Count; i++)
+        {
+            var index = i;
+            var clrDefault = rebuilt[i].ClrDefault;
+            rebuilt[i].Property.ShouldSerialize = (instance, value) =>
+                !check.Omittable(instance, index, Equals(value, clrDefault));
         }
     }
 
@@ -168,6 +180,9 @@ internal static class DeclaredDefaultsSurviveTheWire
     /// </summary>
     private sealed class Rebuilder(ConstructorInfo constructor, Func<object, object?>[] arguments, Type type, ILogger? logger)
     {
+        public Type Type => type;
+        public ILogger? Logger => logger;
+
         public static Rebuilder? For(JsonTypeInfo typeInfo, ILogger? logger)
         {
             if (typeInfo.ConstructorAttributeProvider is not ConstructorInfo constructor)
@@ -190,27 +205,13 @@ internal static class DeclaredDefaultsSurviveTheWire
             return new Rebuilder(constructor, arguments, typeInfo.Type, logger);
         }
 
-        /// <summary>Whether the reader, given <paramref name="instance"/>'s constructor arguments, rebuilds <paramref name="value"/>.</summary>
-        public bool RebuildsTo(object instance, Func<object, object?> get, object? value)
-        {
-            // Rebuilt on every check from the instance's CURRENT constructor inputs — never cached:
-            // a mutable instance can change between writes, and a cache on this metadata-owned
-            // object would also keep the last payload graph reachable after serialization ends.
-            var rebuilt = Rebuild(instance);
-            if (rebuilt is null)
-                return false;
-            try
-            {
-                return Equals(get(rebuilt), value);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogDebug(ex, "Reading a member of a rebuilt {Type} threw; the member is written", type.FullName);
-                return false;
-            }
-        }
-
-        private object? Rebuild(object instance)
+        /// <summary>
+        /// The instance the reader would build from <paramref name="instance"/>'s CURRENT constructor
+        /// arguments, or null when building it threw. Never cached here: a mutable instance can change
+        /// between writes, and a field on this metadata-owned object would keep the last payload
+        /// graph reachable after serialization ends.
+        /// </summary>
+        public object? Rebuild(object instance)
         {
             try
             {
@@ -224,6 +225,77 @@ internal static class DeclaredDefaultsSurviveTheWire
                 logger?.LogDebug(ex, "Rebuilding {Type} from its constructor arguments threw; its initialized scalar members are written", type.FullName);
                 return null;
             }
+        }
+    }
+
+    /// <summary>
+    /// The per-instance verdicts of ONE write: which rebuilt members of a constructor-built type the
+    /// reader would rebuild to their CLR default. One rebuild answers every member of the write — a
+    /// sparse <c>MeshNode</c> with several unset members costs one constructor call, not one per
+    /// member — and nothing outlives the write.
+    ///
+    /// <para><b>Write scope without write state.</b> System.Text.Json offers no per-write context, so
+    /// the scope is keyed by the instance being written, weakly (<see cref="ConditionalWeakTable{TKey,TValue}"/>
+    /// on this instance, never static): the table never keeps an instance alive, and its value holds
+    /// verdicts only, never the rebuilt object or the payload. Every member's check marks itself
+    /// visited; a member finding itself ALREADY visited is the start of the next write, which
+    /// rebuilds from that write's current inputs (a mutated instance is never judged against an
+    /// earlier write); the entry is dropped once every member was visited. A write that aborts
+    /// mid-object leaves a prefix of the members visited — always including the first in write order —
+    /// so the next write still starts fresh.</para>
+    /// </summary>
+    private sealed class PerWriteCheck(Rebuilder rebuilder, Func<object, object?>[] getters, object?[] clrDefaults)
+    {
+        private readonly ConditionalWeakTable<object, Scope> writes = new();
+
+        /// <summary>Whether the member at <paramref name="index"/> may be omitted from this write of <paramref name="instance"/>.</summary>
+        public bool Omittable(object instance, int index, bool isClrDefault)
+        {
+            Scope scope;
+            lock (writes)
+            {
+                if (!writes.TryGetValue(instance, out scope!) || scope.Visited[index])
+                {
+                    scope = new Scope(getters.Length);
+                    writes.AddOrUpdate(instance, scope);
+                }
+                scope.Visited[index] = true;
+                if (++scope.VisitedCount == getters.Length)
+                    writes.Remove(instance);
+            }
+            if (!isClrDefault)
+                return false;
+            // Outside the lock: two threads writing the SAME instance at once may both judge it, from
+            // the same inputs, so either verdict array is the right one.
+            var verdicts = scope.Verdicts ??= Judge(instance);
+            return verdicts[index];
+        }
+
+        private bool[] Judge(object instance)
+        {
+            var verdicts = new bool[getters.Length];
+            var rebuilt = rebuilder.Rebuild(instance);
+            if (rebuilt is null)
+                return verdicts;
+            for (var i = 0; i < getters.Length; i++)
+            {
+                try
+                {
+                    verdicts[i] = Equals(getters[i](rebuilt), clrDefaults[i]);
+                }
+                catch (Exception ex)
+                {
+                    rebuilder.Logger?.LogDebug(ex, "Reading a member of a rebuilt {Type} threw; the member is written", rebuilder.Type.FullName);
+                }
+            }
+            return verdicts;
+        }
+
+        private sealed class Scope(int members)
+        {
+            public readonly bool[] Visited = new bool[members];
+            public int VisitedCount;
+            public bool[]? Verdicts;
         }
     }
 }
