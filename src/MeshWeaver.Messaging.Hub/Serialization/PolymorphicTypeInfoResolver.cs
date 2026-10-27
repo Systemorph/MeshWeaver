@@ -34,7 +34,12 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
     /// <returns>The type info, with polymorphism configured when derived types are available.</returns>
     public override JsonTypeInfo GetTypeInfo(Type type, JsonSerializerOptions options)
     {
-        var jsonTypeInfo = base.GetTypeInfo(type, options);        // Only configure polymorphism for supported types that need it
+        var jsonTypeInfo = base.GetTypeInfo(type, options);
+        // An explicitly stored value must never come back as the member's declared default
+        // (e.g. `bool Enabled = true` stored false) — WhenWritingDefault alone would drop it.
+        if (options.DefaultIgnoreCondition == JsonIgnoreCondition.WhenWritingDefault)
+            DeclaredDefaultsSurviveTheWire.Apply(jsonTypeInfo, logger);
+        // Only configure polymorphism for supported types that need it
         if (ShouldConfigurePolymorphism(type) && CanConfigurePolymorphism(jsonTypeInfo))
         {
             var derivedTypes = GetDerivedTypes(type);
