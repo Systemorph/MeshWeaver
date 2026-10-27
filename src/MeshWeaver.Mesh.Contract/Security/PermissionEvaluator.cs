@@ -581,29 +581,47 @@ internal static class PermissionEvaluator
     /// </summary>
     public static IObservable<bool> GetPublicPreview(IMessageHub hub, string targetNamespace)
     {
-        // A link preview is a disclosure TO a logged-out caller (the unfurler), so an instance
-        // closed to anonymous callers (Access:DenyAnonymous) discloses nothing — not even a name.
-        if (AnonymousAccess.IsDenied(hub.ServiceProvider))
-            return Observable.Return(false);
-
         var ns = ToMeshPath(targetNamespace);
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);
+        // A link preview is a disclosure TO a logged-out caller (the unfurler). On an instance closed to
+        // anonymous callers (Access:DenyAnonymous) only the OPERATOR may open it: a `true` counts only
+        // when a STATIC policy — the instance's own declaration, e.g. the portal's `Seo:PublicPreview`
+        // root policy — states it. A policy written in the mesh can still say `false`, never `true`.
+        // Refusing every preview there made the declared instance-wide opt-in inert on exactly the
+        // private instances that set it.
+        var declaredOnly = AnonymousAccess.IsDenied(hub.ServiceProvider);
         return ObserveScopePolicies(hub, cache, ns, staticPolicies)
-            .Select(policies =>
-            {
-                // Nearest scope (self first) that STATES a value wins; walk to root. A stated
-                // `false` is an answer and stops the walk — that is what makes opting a subtree
-                // back out of an inherited `true` possible at all.
-                for (var s = ns; ; s = GetParentScope(s))
-                {
-                    if (policies.TryGetValue(s, out var p) && p.PublicPreview is { } stated)
-                        return stated;
-                    if (string.IsNullOrEmpty(s)) break;
-                }
-                return false;
-            })
+            .Select(policies => EffectivePublicPreview(policies, staticPolicies, ns, declaredOnly))
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// The nearest scope (self first, walking to root) that STATES <see cref="PartitionAccessPolicy.PublicPreview"/>
+    /// decides; <c>false</c> when none does. A stated <c>false</c> is an answer and stops the walk — that is what
+    /// makes opting a subtree back out of an inherited <c>true</c> possible at all. With
+    /// <paramref name="declaredOnly"/> (an instance closed to anonymous callers) a stated <c>true</c> counts only
+    /// when <paramref name="staticPolicies"/> states it at that scope. Pure.
+    /// </summary>
+    /// <param name="policies">The effective policy per scope (static and stored).</param>
+    /// <param name="staticPolicies">The statically declared policies per scope.</param>
+    /// <param name="ns">The target scope.</param>
+    /// <param name="declaredOnly">Whether only a declared policy may switch previews on.</param>
+    /// <returns>Whether the scope's pages may describe themselves in a link preview.</returns>
+    internal static bool EffectivePublicPreview(
+        IReadOnlyDictionary<string, PartitionAccessPolicy> policies,
+        IReadOnlyDictionary<string, PartitionAccessPolicy> staticPolicies,
+        string ns,
+        bool declaredOnly)
+    {
+        for (var s = ns; ; s = GetParentScope(s))
+        {
+            if (policies.TryGetValue(s, out var p) && p.PublicPreview is { } stated)
+                return stated && (!declaredOnly
+                    || (staticPolicies.TryGetValue(s, out var declared) && declared.PublicPreview == true));
+            if (string.IsNullOrEmpty(s)) break;
+        }
+        return false;
     }
 
     #endregion
