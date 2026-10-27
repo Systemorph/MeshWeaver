@@ -171,16 +171,20 @@ public sealed class DependencyReconciliationTest : IDisposable
         // Used but undeclared: a module no required package declares, and a package no directive names.
         Assert.Equal(["Module Other.Module", "Package package:acme.undeclared"],
             app.UsedButUndeclared.Select(f => $"{f.Kind} {f.Target}").ToArray());
-        // Declared but unused: the #r directive nothing binds. Lib IS used (NodeType + module edge).
-        Assert.Equal(["nuget Acme.Declared"], app.DeclaredButUnused.Select(f => $"{f.Kind} {f.Target}").ToArray());
+        // THE RULE: the #r directive nothing binds is NOT "unused" — a package can be used through host
+        // unification or as a source generator, neither of which a compile edge shows.
+        Assert.Empty(app.DeclaredButUnused);
+        Assert.Contains(app.Unverifiable, u => u.StartsWith("nuget Acme.Declared — not judged: its use through assemblies the host supplies", StringComparison.Ordinal));
         // A requirement outside the tree cannot be judged — said, not guessed.
         Assert.Contains(app.Unverifiable, u => u.StartsWith("requires Elsewhere", StringComparison.Ordinal));
         Assert.Equal(HomeAppSource, Assert.Single(app.DynamicIntoCore).Target);
         Assert.Equal(1, app.Platform["MeshWeaver.Graph"]);
 
-        // Lib declares a module no Lib source compiles against.
+        // Lib declares a module no Lib source compiles against — and a module is HOSTED at run time,
+        // which no compile sees, so it is unverifiable, never "unused".
         var lib = report.Units.Single(u => u.Unit == "Lib");
-        Assert.Equal(["module Lib.Module"], lib.DeclaredButUnused.Select(f => $"{f.Kind} {f.Target}").ToArray());
+        Assert.Empty(lib.DeclaredButUnused);
+        Assert.Contains(lib.Unverifiable, u => u.StartsWith("module Lib.Module — not judged: its use through runtime hosting", StringComparison.Ordinal));
         Assert.Empty(lib.UsedButUndeclared);
     }
 
@@ -198,12 +202,14 @@ public sealed class DependencyReconciliationTest : IDisposable
                 Edge(DependencyEdgeKinds.Module, "Used"),
                 Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Graph"),
                 Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Hosted"),
-                Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Mesh.Contract"))) with
+                Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Mesh.Contract"),
+                // A MeshWeaver.* package the module-libraries SHELF supplied is a Package edge.
+                Edge(DependencyEdgeKinds.Package, "package:MeshWeaver.Shelved"))) with
         {
             Measured = DependencyEdgesFile.Measures.ModuleBuild,
             Declarations = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, [
                 new KeyValuePair<string, DependencyEdgesFile.DeclaredDependencies>("App",
-                    new(["MeshWeaver.Hosted", "Unused", "Used"], ["MeshWeaver.Graph", "MeshWeaver.Layout"])),
+                    new(["MeshWeaver.Hosted", "Unused", "Used"], ["MeshWeaver.Graph", "MeshWeaver.Layout", "MeshWeaver.Shelved"])),
             ]),
         };
 
@@ -211,9 +217,45 @@ public sealed class DependencyReconciliationTest : IDisposable
         Assert.Equal("module", app.Shape);
         Assert.Equal(["Platform MeshWeaver.Mesh.Contract"],
             app.UsedButUndeclared.Select(f => $"{f.Kind} {f.Target}").ToArray());
-        Assert.Equal(["PackageReference MeshWeaver.Layout", "ProjectReference Unused"],
-            app.DeclaredButUnused.Select(f => $"{f.Kind} {f.Target}").ToArray());
-        Assert.Empty(app.Unverifiable);
+        // A ProjectReference is a compile reference whose every use channel was measured (compiled
+        // code, and by-name loading — this project has no dynamic edge), so it CAN be proven unused.
+        Assert.Equal(["ProjectReference Unused"], app.DeclaredButUnused.Select(f => $"{f.Kind} {f.Target}").ToArray());
+        // A PackageReference may ship analyzers or generators — never provably unused.
+        Assert.Equal(["PackageReference MeshWeaver.Layout — not judged: its use through analyzers and source generators the package ships is not measured"],
+            app.Unverifiable.ToArray());
+        // The shelf package's Package edge IS its use (not "declared but unused").
+        Assert.DoesNotContain(app.Unverifiable, u => u.Contains("MeshWeaver.Shelved", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// THE RULE, from the other side: a declaration is "unused" only when EVERY way it can be used
+    /// was measured. The very ProjectReference proven unused above becomes UNVERIFIABLE the moment
+    /// the project carries a dynamic edge — a by-name load could be its use — and when the producer
+    /// did not measure dynamic bindings at all.
+    /// </summary>
+    [Fact]
+    public void AProjectReference_IsProvablyUnused_OnlyWhenEveryUseChannelWasMeasured()
+    {
+        DependencyEdgesFile.Document Doc(ImmutableArray<string> measured, params DependencyEdge[] edges) =>
+            Document([], Set("App", edges)) with
+            {
+                Measured = measured,
+                Declarations = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, [
+                    new KeyValuePair<string, DependencyEdgesFile.DeclaredDependencies>("App", new(["Unused"], [])),
+                ]),
+            };
+        string Verdict(DependencyEdgesFile.Document d)
+        {
+            var unit = Assert.Single(DependencyReconciliation.Reconcile(d, treeRoot: null).Units);
+            return unit.DeclaredButUnused.Any() ? "unused"
+                : unit.Unverifiable.Any(u => u.StartsWith("ProjectReference Unused — not judged", StringComparison.Ordinal)) ? "unverifiable"
+                : "neither";
+        }
+
+        Assert.Equal("unused", Verdict(Doc(DependencyEdgesFile.Measures.ModuleBuild)));
+        Assert.Equal("unverifiable", Verdict(Doc(DependencyEdgesFile.Measures.ModuleBuild,
+            Edge(DependencyEdgeKinds.DynamicUnresolved, "?System.Reflection.Assembly.Load"))));
+        Assert.Equal("unverifiable", Verdict(Doc([DependencyEdgesFile.Measures.ReferencedAssemblies, DependencyEdgesFile.Measures.Declarations])));
     }
 
     /// <summary>A file that carries no evaluated declarations leaves every declaration-level flag
@@ -278,9 +320,13 @@ public sealed class DependencyReconciliationTest : IDisposable
         Assert.Contains(app.Unverifiable, u => u.StartsWith("requires Lib — not judged: 1 source(s)", StringComparison.Ordinal));
         Assert.Equal(["App/Broken"], app.NotExtracted.ToArray());
 
+        // Negative control: with every source extracted the failed-source reason is gone — the
+        // requirement is still unverifiable, now because its RUNTIME use is never measured.
         var complete = DependencyReconciliation.Reconcile(Document([], Set("App/Other"), Set("Lib/Thing")), _root)
             .Units.Single(u => u.Unit == "App");
-        Assert.Equal(["requires Lib"], complete.DeclaredButUnused.Select(f => $"{f.Kind} {f.Target}").ToArray());
+        Assert.Empty(complete.DeclaredButUnused);
+        Assert.Contains(complete.Unverifiable, u => u.StartsWith("requires Lib — not judged: its use through runtime use", StringComparison.Ordinal));
+        Assert.DoesNotContain(complete.Unverifiable, u => u.Contains("were not extracted", StringComparison.Ordinal));
     }
 
     /// <summary>

@@ -226,6 +226,10 @@ assemblies per type, differing by type. What metadata cannot show — a constant
 platform type, a `nameof` — is not an edge. A NodeType's emitted image also carries the foreign
 owners' code compiled in through `shared=`/`@@`, so a platform assembly only that code binds is
 still this type's edge: an extra edge, never a missing one, the direction every limit here fails in.
+Each emitted `AssemblyRef` is matched to the compilation's references by FULL identity — name,
+version, culture, public key (token) — because a host assembly and a package assembly can share a
+simple name with different publishers and both stay referenced; when no reference matches the full
+identity, every candidate of that name is classified (an extra edge, never a lost one).
 
 **Why the BCL is not an edge.** Only `MeshWeaver` and `MeshWeaver.*` host assemblies are recorded.
 The base class library and the host's third-party libraries are on every host, at the version the
@@ -282,7 +286,9 @@ group handed along (`names.Select(Type.GetType)`) is unresolved.
   never knowable at compile time.
 - **What is scanned** is the source's own code AND the trees a NODE-SUPPLIED source generator (one
   the node `#r`'d) emitted — the author's code, as the impersonation scan already treats it; the
-  platform's built-in generators' output is left out.
+  platform's built-in generators' output is left out. Node-generated trees are owned by the
+  compiling type by PROVENANCE (both compile callers pass them separately), even where they extend
+  a partial type a foreign owner declares: no other compile ever sees that code.
 - **Anything else** is `DynamicUnresolved`, one edge per API (`?System.Type.GetType`), the call sites
   as evidence. Unknown is recorded as unknown — never dropped.
 - **Cost**: a syntactic prefilter on the invoked name means only candidate invocations are ever
@@ -319,7 +325,7 @@ module (a project, for a module workspace build's sources):
 | flag | NodeType package | module project |
 |---|---|---|
 | **used-but-undeclared** | a `NodeType` edge into a package outside its declared closure (`requires`, source queries, node types — `LocalNodeRepo.DependencyMap`, transitively); a `Module` edge no package in that closure declares as its `module`; a `Package` edge no `#r "nuget:"` names | a `Module` edge that is not a direct `ProjectReference` (a transitive use); a `Platform` edge no `PackageReference`/`ProjectReference` names; a `Package` edge no `PackageReference` names |
-| **declared-but-unused** | a `requires` no edge reaches; a `module` no source compiles against; a `#r "nuget:"` no `Package` edge matches | a `ProjectReference` no `Module` edge matches; a `MeshWeaver.*` `PackageReference` no `Platform` edge matches (third-party ones are not judged — the image's copy is no `Package` edge, so "unused" would lie) |
+| **declared-but-unused** | never — see THE RULE below: each of `requires`, `module` and `#r "nuget:"` has a use channel no compile measures, so an unmatched one is unverifiable | a `ProjectReference` no `Module`/`Platform`/`Package` edge matches, when compiled code AND by-name loading were both measured clean |
 | **dynamic into core** | every `Dynamic` edge whose `TargetKind` is `Platform` or unknown, and every `DynamicUnresolved` edge | the same |
 
 Plus, per unit, the platform assemblies its sources bind and how many sources bind each — the
@@ -337,8 +343,25 @@ carve-out question's direct answer — and everything it could NOT judge, each n
 `#r "nuget:"` directives are read with `NuGetDirectiveParser` from the DECODED code — a `.json` Code
 node's `content.code` string, not its escaped JSON text. A module-libraries shelf is a flat
 directory, so a shelf `Package` edge is named by the shelf's deps.json ownership
-(`ModuleLibrariesShelf.OwnerOf`), never by the DLL's file name. It is a report, never a gate: a `requires` can be legitimately runtime-only. Measured on
-core's trees when it landed: 0 used-but-undeclared, 0 declared-but-unused, 0 dynamic edges.
+(`ModuleLibrariesShelf.OwnerOf`), never by the DLL's file name. It is a report, never a gate.
+Measured on core's trees when it landed: 0 used-but-undeclared, 0 declared-but-unused, 0 dynamic
+edges.
+
+**THE RULE for declared-vs-used** (the reconciliation's counterpart of the scanner's rule): a
+declaration is "unused" ONLY when the extractor PROVABLY saw every way it can be used; otherwise it
+is UNVERIFIABLE, naming the first channel nobody measured. Each kind lists its channels
+(`DependencyReconciliation`):
+
+| declaration | measured | not measured — so never provably unused |
+|---|---|---|
+| package `requires` | compiled code (NodeType, Module edges) | runtime use of the package's node types, data and layout areas |
+| package `module` | compiled code (Module edges) | runtime hosting of the module with its package |
+| `#r "nuget:"` | bound assemblies (Package edges) | host unification (the host's copy keeps no package provenance); source generation (no AssemblyRef) |
+| `ProjectReference` | compiled code; by-name loading (clean only when the project has no dynamic edge) | — |
+| `PackageReference` | compiled code (Platform or Package edge — a shelf `MeshWeaver.*` package is a Package edge) | analyzers and source generators the package ships |
+
+So only a `ProjectReference` can ever be reported unused; every other unmatched declaration is
+listed as unverifiable with its reason. A use is ANY edge naming it, including a `package:` edge.
 
 ## The ratchet
 

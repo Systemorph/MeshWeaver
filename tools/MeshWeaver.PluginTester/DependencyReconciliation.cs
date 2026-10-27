@@ -392,12 +392,12 @@ public static class DependencyReconciliation
             // until all of its sources were measured — never reported unused on partial evidence.
             var unused = new List<Finding>();
             var unverifiable = new List<string>(Unmeasured(document));
-            void Unused(string kind, string target, bool measured)
+            void Unused(string kind, string target, IEnumerable<UseChannel> channels)
             {
-                if (!measured)
-                    unverifiable.Add($"{kind} {target} — not judged: the producer did not measure the edges that would use it");
-                else if (notExtracted.Count > 0)
+                if (notExtracted.Count > 0)
                     unverifiable.Add($"{kind} {target} — not judged: {notExtracted.Count} source(s) of this package were not extracted ({string.Join(", ", notExtracted)})");
+                else if (NotProvablyUnused(channels) is { } why)
+                    unverifiable.Add($"{kind} {target} — not judged: {why}");
                 else
                     unused.Add(new Finding(kind, target, []));
             }
@@ -416,15 +416,15 @@ public static class DependencyReconciliation
                         || (x.Edge.Kind == DependencyEdgeKinds.Module && required.Module is not null
                             && string.Equals(x.Edge.Target, required.Module, StringComparison.Ordinal)));
                     if (!used)
-                        Unused("requires", requirement, measured: true);
+                        Unused("requires", requirement, RequiresChannels);
                 }
                 if (declared.Module is { } module
                     && !edges.Any(x => x.Edge.Kind == DependencyEdgeKinds.Module && x.Edge.Target == module))
-                    Unused("module", module, measured: true);
+                    Unused("module", module, ModuleChannels);
                 foreach (var nuget in declared.NuGet.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
                     if (!edges.Any(x => x.Edge.Kind == DependencyEdgeKinds.Package
                                         && string.Equals(DependencyEdgeTargets.PackageIdOf(x.Edge.Target), nuget, StringComparison.OrdinalIgnoreCase)))
-                        Unused("nuget", nuget, referencesMeasured);
+                        Unused("nuget", nuget, NuGetChannels(referencesMeasured));
             }
             else if (treeRoot is not null)
                 unverifiable.Add($"no package manifest for '{id}' under the tree");
@@ -499,6 +499,69 @@ public static class DependencyReconciliation
         }
     }
 
+    // ── the ONE rule for "declared but unused" ──────────────────────────────────────────────────
+
+    /// <summary>One way a declaration can be used, and whether the producer MEASURED it.</summary>
+    /// <param name="Name">The channel, as the unverifiable note names it.</param>
+    /// <param name="Measured">Whether every use through it is visible to the extractor.</param>
+    private sealed record UseChannel(string Name, bool Measured);
+
+    /// <summary>
+    /// 🚨 THE RULE: a declaration is "unused" ONLY when the extractor PROVABLY saw every way it can be
+    /// used; otherwise it is UNVERIFIABLE, naming the first channel nobody measured. The same shape as
+    /// the scanner's rule for dynamic edges — missing evidence is never read as absence. Each
+    /// declaration kind lists its channels below; a channel this extractor cannot observe at all is
+    /// listed as unmeasured, so that kind can only ever be "used" or "unverifiable".
+    /// </summary>
+    private static string? NotProvablyUnused(IEnumerable<UseChannel> channels) =>
+        channels.FirstOrDefault(c => !c.Measured) is { } unmeasured
+            ? $"its use through {unmeasured.Name} is not measured"
+            : null;
+
+    /// <summary>A package <c>requires</c>: compiled code (NodeType/Module edges) is measured; the
+    /// RUNTIME use — node types, data and layout the required package supplies, reached by path — is
+    /// never visible to a compile.</summary>
+    private static readonly ImmutableArray<UseChannel> RequiresChannels =
+    [
+        new("compiled code (NodeType and Module edges)", true),
+        new("runtime use of the package's node types, data and layout areas", false),
+    ];
+
+    /// <summary>A package's own <c>module</c>: it is HOSTED at run time whether or not a source of
+    /// the package compiles against it.</summary>
+    private static readonly ImmutableArray<UseChannel> ModuleChannels =
+    [
+        new("compiled code (Module edges)", true),
+        new("runtime hosting of the module with its package", false),
+    ];
+
+    /// <summary>A <c>#r "nuget:"</c>: bound assemblies are Package edges, but an assembly the HOST
+    /// already supplies keeps no package provenance (host unification), and a package used as a
+    /// SOURCE GENERATOR leaves no AssemblyRef at all.</summary>
+    private static ImmutableArray<UseChannel> NuGetChannels(bool referencesMeasured) =>
+    [
+        new("bound assemblies (Package edges)", referencesMeasured),
+        new("assemblies the host supplies instead of the package (host unification)", false),
+        new("source generation (a generator leaves no AssemblyRef)", false),
+    ];
+
+    /// <summary>A module's <c>ProjectReference</c> is a compile reference (this builder compiles every
+    /// one): compiled code is measured by the emitted metadata; a by-name load is measured by the
+    /// dynamic scan, and is CLEAN only when the project has no dynamic edge at all (any one could be that load).</summary>
+    private static ImmutableArray<UseChannel> ProjectReferenceChannels(bool referencesMeasured, bool reflectionClean) =>
+    [
+        new("compiled code (Module, Platform and Package edges)", referencesMeasured),
+        new("by-name loading in the project's own code", reflectionClean),
+    ];
+
+    /// <summary>A <c>PackageReference</c> may ship analyzers or source generators, which leave no
+    /// AssemblyRef — so an unmatched one is never provably unused.</summary>
+    private static ImmutableArray<UseChannel> PackageReferenceChannels(bool referencesMeasured) =>
+    [
+        new("compiled code (Platform and Package edges)", referencesMeasured),
+        new("analyzers and source generators the package ships", false),
+    ];
+
     // ── module projects ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -536,29 +599,28 @@ public static class DependencyReconciliation
                     if (!covered)
                         undeclared.Add(new Finding(edge.Kind, edge.Target, [set.Source]));
                 }
-                // A ProjectReference OUTSIDE the source root resolves from the host and shows up as a
-                // Platform edge, not a Module edge — either one is a use.
+                void Unused(string kind, string target, IEnumerable<UseChannel> channels)
+                {
+                    if (NotProvablyUnused(channels) is { } why)
+                        unverifiable.Add($"{kind} {target} — not judged: {why}");
+                    else
+                        unused.Add(new Finding(kind, target, []));
+                }
+                // A USE is any edge that names it: a ProjectReference outside the source root resolves
+                // from the host (a Platform edge), a shelf-supplied package is a Package edge.
+                bool UsedAs(string target) => set.Edges.Any(e =>
+                    (e.Kind is DependencyEdgeKinds.Module or DependencyEdgeKinds.Platform
+                     && string.Equals(e.Target, target, StringComparison.OrdinalIgnoreCase))
+                    || (e.Kind == DependencyEdgeKinds.Package
+                        && string.Equals(DependencyEdgeTargets.PackageIdOf(e.Target), target, StringComparison.OrdinalIgnoreCase)));
+                var reflectionClean = document.Has(DependencyEdgesFile.Measures.DynamicBindings)
+                                      && !set.Edges.Any(e => e.EvidenceClass == DependencyEvidenceClasses.Dynamic);
                 foreach (var reference in projectRefs.OrderBy(r => r, StringComparer.Ordinal))
-                    if (!set.Edges.Any(e => e.Kind is DependencyEdgeKinds.Module or DependencyEdgeKinds.Platform
-                                            && string.Equals(e.Target, reference, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        if (referencesMeasured)
-                            unused.Add(new Finding("ProjectReference", reference, []));
-                        else
-                            unverifiable.Add($"ProjectReference {reference} — not judged: platform references were not measured");
-                    }
-                // Only the CORE package references are judged: a third-party package the image also
-                // carries resolves to the host's copy and is no Package edge, so "unused" would lie.
-                foreach (var package in packageRefs
-                             .Where(DependencyReferenceClasses.IsPlatformName).OrderBy(r => r, StringComparer.Ordinal))
-                    if (!set.Edges.Any(e => e.Kind == DependencyEdgeKinds.Platform
-                                            && string.Equals(e.Target, package, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        if (referencesMeasured)
-                            unused.Add(new Finding("PackageReference", package, []));
-                        else
-                            unverifiable.Add($"PackageReference {package} — not judged: platform references were not measured");
-                    }
+                    if (!UsedAs(reference))
+                        Unused("ProjectReference", reference, ProjectReferenceChannels(referencesMeasured, reflectionClean));
+                foreach (var package in packageRefs.OrderBy(r => r, StringComparer.Ordinal))
+                    if (!UsedAs(package))
+                        Unused("PackageReference", package, PackageReferenceChannels(referencesMeasured));
             }
             yield return Unit(set.Source, "module", [set], undeclared, unused, edges, unverifiable, []);
         }

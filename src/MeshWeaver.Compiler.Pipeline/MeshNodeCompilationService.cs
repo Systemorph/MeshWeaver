@@ -2428,7 +2428,7 @@ internal class MeshNodeCompilationService(
         return new CompileEmit(actualPath, generatedInputDigest, warnings,
             // Authored + NODE-SUPPLIED generator output (the author's code, as the impersonation scan
             // above already treats it); the platform's built-in generators' output is left out.
-            ExtractDependencyEdges(compilation, authored.SyntaxTrees.Concat(nodeGeneratedTrees), node.Path, references, moduleLocations,
+            ExtractDependencyEdges(compilation, authored.SyntaxTrees, nodeGeneratedTrees, node.Path, references, moduleLocations,
                 nugetAssemblyPaths, emittedImage, dependencyInputs, ct));
     }
 
@@ -2442,6 +2442,7 @@ internal class MeshNodeCompilationService(
     private DependencyEdgeSet? ExtractDependencyEdges(
         CSharpCompilation compilation,
         IEnumerable<SyntaxTree> authoredTrees,
+        IReadOnlyCollection<SyntaxTree> nodeGeneratedTrees,
         string nodePath,
         IEnumerable<MetadataReference> references,
         ImmutableArray<string> moduleLocations,
@@ -2458,7 +2459,8 @@ internal class MeshNodeCompilationService(
             // The package files are this compile's own `#r "nuget:"` resolution.
             var classes = DependencyReferenceClasses.Of(references, moduleLocations, nugetAssemblyPaths);
             var edges = DependencyEdgeExtraction.Extract(
-                compilation, authoredTrees, nodePath, inputs.Roots, inputs.Includes, classes, emittedImage, ct);
+                compilation, authoredTrees, nodePath, inputs.Roots, inputs.Includes, classes, emittedImage,
+                nodeGeneratedTrees, ct);
             logger.LogDebug(
                 "Dependency edges for {NodePath}: {EdgeCount} edge(s), {Included} included without use, in {Ms}ms",
                 nodePath, edges.Edges.Count, edges.IncludedWithoutUse.Count, clock.ElapsedMilliseconds);

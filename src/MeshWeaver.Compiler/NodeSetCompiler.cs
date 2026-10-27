@@ -376,9 +376,10 @@ public static class NodeSetCompiler
             // None named ⇒ no module edges, never a guess. The packages are the files the
             // `#r "nuget:"` resolution returned (generatorPaths), told apart the same way.
             DependencyEdges = DependencyEdgeExtraction.Extract(
-                    compilation, authored.SyntaxTrees.Concat(nodeGeneratedTrees), inputs.NodePath, inputs.SourceUnits, inputs.ResolvedIncludes,
+                    compilation, authored.SyntaxTrees, inputs.NodePath, inputs.SourceUnits, inputs.ResolvedIncludes,
                     DependencyReferenceClasses.Of(allReferences, moduleAssemblyPaths ?? [], generatorPaths),
                     () => File.OpenRead(artifact.DllPath),
+                    nodeGeneratedTrees,
                     ct)
                 with { BuildMvid = MvidOfFile(artifact.DllPath), InputDigest = digest },
         };

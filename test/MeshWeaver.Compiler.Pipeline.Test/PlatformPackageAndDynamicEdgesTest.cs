@@ -393,6 +393,108 @@ public class PlatformPackageAndDynamicEdgesTest
         }
     }
 
+    /// <summary>
+    /// PROVENANCE beats location for node-generated code: a node-supplied generator that adds a
+    /// reflection lookup to a partial type a FOREIGN owner (Lib/A) declares is still the compiling
+    /// type's code — Lib/A's own compile never sees it, so dropping it there would lose the edge.
+    /// Negative control: the very same member authored in Lib/A's own source is Lib/A's edge, not B's.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void NodeGeneratedCodeExtendingAForeignPartial_IsTheCompilingTypesOwn()
+    {
+        const string member = "public static System.Type? Home() => System.Type.GetType(\"MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph\");";
+        var generator = BuildGeneratorEmitting("public partial class Shared { " + member + " }");
+        try
+        {
+            var foreignPartial = Code(A, "Shared", """
+                /// <summary>Lib/A's partial.</summary>
+                public partial class Shared { }
+                """);
+            var viaGenerator = CompileB(TestContext.Current.CancellationToken,
+                [foreignPartial, Code(B, "Plain", """
+                    #r "nuget:Probe.PartialGenerator, 1.0.0"
+                    /// <summary>Uses Lib/A's partial.</summary>
+                    public static class Plain { /// <summary>The type.</summary>
+                    public static System.Type? T() => Shared.Home(); }
+                    """)],
+                ["namespace:Source scope:subtree", $"shared=@{A}/Source"], (_, _) => [generator]);
+            viaGenerator.Edges.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Dynamic
+                    && e.Target == "MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph",
+                "the generated lookup is B's own code by provenance, whatever partial it extends");
+
+            var authoredInA = CompileB(TestContext.Current.CancellationToken,
+                [Code(A, "Shared", "/// <summary>Lib/A's partial, with the lookup.</summary>\npublic partial class Shared { /// <summary>The type.</summary>\n" + member + " }"),
+                 Code(B, "Plain", """
+                    /// <summary>Uses Lib/A's partial.</summary>
+                    public static class Plain { /// <summary>The type.</summary>
+                    public static System.Type? T() => Shared.Home(); }
+                    """)],
+                ["namespace:Source scope:subtree", $"shared=@{A}/Source"]);
+            authoredInA.Edges.Should().NotContain(e => e.EvidenceClass == DependencyEvidenceClasses.Dynamic,
+                "negative control: authored in Lib/A, the lookup is Lib/A's edge, recorded by Lib/A's compile");
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(generator)!, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>
+    /// An emitted <c>AssemblyRef</c> is matched to the compilation's references by FULL identity: a
+    /// host assembly and a package assembly sharing a simple name with different publishers both stay
+    /// referenced, and the edge must follow the one the IL actually names. Negative control: when no
+    /// candidate matches the full identity, every candidate of the name is returned — an extra edge,
+    /// never a lost one.
+    /// </summary>
+    [Fact]
+    public void EmittedAssemblyRefs_MatchByFullIdentity_AndAmbiguityKeepsEveryCandidate()
+    {
+        var host = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+        var package = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+        byte[] hostToken = [1, 2, 3, 4, 5, 6, 7, 8];
+        byte[] packageToken = [8, 7, 6, 5, 4, 3, 2, 1];
+        var version = new Version(9, 0, 0, 0);
+        IReadOnlyList<(AssemblyIdentity, MetadataReference)> references =
+        [
+            (new AssemblyIdentity("Acme.Shared", version, "", [.. hostToken]), host),
+            (new AssemblyIdentity("Acme.Shared", version, "", [.. packageToken]), package),
+        ];
+
+        DependencyEdgeExtraction.ReferencesFor(
+                new DependencyEdgeExtraction.EmittedAssemblyRef("Acme.Shared", version, "", [.. packageToken], false), references)
+            .Should().Equal([package], "the IL names the PACKAGE's publisher — never the first copy by name");
+        DependencyEdgeExtraction.ReferencesFor(
+                new DependencyEdgeExtraction.EmittedAssemblyRef("Acme.Shared", version, "", [.. hostToken], false), references)
+            .Should().Equal([host]);
+        DependencyEdgeExtraction.ReferencesFor(
+                new DependencyEdgeExtraction.EmittedAssemblyRef("Acme.Shared", new Version(1, 0, 0, 0), "", [], false), references)
+            .Should().HaveCount(2, "negative control: no full match ⇒ every candidate, an extra edge rather than a lost one");
+    }
+
+    /// <summary>A node-supplied generator that adds <paramref name="code"/> as one source.</summary>
+    private static string BuildGeneratorEmitting(string code)
+    {
+        var source = "using Microsoft.CodeAnalysis;\n[Generator]\npublic sealed class EmitGenerator : ISourceGenerator\n{\n"
+            + "    public void Initialize(GeneratorInitializationContext context) { }\n"
+            + "    public void Execute(GeneratorExecutionContext context) => context.AddSource(\"Emitted.g.cs\", @\""
+            + code.Replace("\"", "\"\"") + "\");\n}\n";
+        var name = $"Probe.PartialGenerator_{Guid.NewGuid():N}";
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Append(typeof(ISourceGenerator).Assembly.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p));
+        var compilation = CSharpCompilation.Create(name, [CSharpSyntaxTree.ParseText(source)], references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var directory = Directory.CreateTempSubdirectory("emit-gen-").FullName;
+        var path = Path.Combine(directory, name + ".dll");
+        var emitted = compilation.Emit(path, cancellationToken: TestContext.Current.CancellationToken);
+        emitted.Success.Should().BeTrue(string.Join("; ", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return path;
+    }
+
     /// <summary>A generator assembly built here, on disk, the way a node's <c>#r "nuget:"</c>
     /// resolve hands one over; it emits a reflection lookup into the platform.</summary>
     private static string BuildLookupGenerator()
@@ -515,7 +617,7 @@ public class PlatformPackageAndDynamicEdgesTest
                 new Dictionary<string, string> { [widget] = "Acme.Bundle" });
 
             var set = DependencyEdgeExtraction.Extract(compilation, [tree], "App/P", [], null, classes,
-                () => new MemoryStream(image.ToArray(), writable: false), TestContext.Current.CancellationToken);
+                () => new MemoryStream(image.ToArray(), writable: false), ct: TestContext.Current.CancellationToken);
 
             var described = set.Edges.Select(e => $"{e.Kind} {e.Target}").ToList();
             described.Should().Contain("Module Acme.Bundle");
