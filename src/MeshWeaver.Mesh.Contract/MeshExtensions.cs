@@ -6285,7 +6285,9 @@ public static class MeshExtensions
     /// removed, which is the same truthfulness the per-node lane keeps.</para>
     ///
     /// <para>A failing batch fails the commit like a failing leaf does. The exception carries the
-    /// paths the earlier batches removed.</para>
+    /// paths the earlier batches removed, and the rows the failing batch itself names as removed
+    /// (<see cref="BatchDeletePartiallyAppliedException"/>, #7396), which are retired like any
+    /// other removed row.</para>
     /// </summary>
     private static IObservable<IReadOnlyList<string>> DeleteRecordSatellitesInBatches(
         IMessageHub meshHub,
@@ -6312,28 +6314,10 @@ public static class MeshExtensions
         return ordered
             .Chunk(batchSize)
             .Select(batch => Observable.Defer(() => storage.DeleteMany(batch)).Take(1)
-                .Do(removed =>
-                {
-                    foreach (var p in removed)
-                    {
-                        changeFeed?.Publish(MeshChangeEvent.Deleted(p));
-                        streamCache?.Invalidate(p);
-                        try
-                        {
-                            meshHub.GetHostedHub(new Address(p), c => c, HostedHubCreation.Never)?.Dispose();
-                        }
-                        catch (Exception ex)
-                        {
-                            // The same best-effort disposal the root branch performs: the row is
-                            // gone and its cache entry invalidated, so a hub that refuses to dispose
-                            // still re-reads storage on its next activation.
-                            logger.LogDebug(ex,
-                                "[DeleteNode] best-effort hub disposal failed for {Path}", p);
-                        }
-                        removedSoFar = removedSoFar.Add(p);
-                        recordDeleted(p);
-                    }
-                }))
+                // 🚨 A batch that fails PART-WAY names the rows it removed (#7396). They get the
+                // same per-node side effects as a completed batch's rows, and they join the
+                // removed set the failure carries, so the commit's failure report names them.
+                .Do(Retire, error => Retire(BatchDeletePartiallyAppliedException.RemovedBy(error))))
             .Concat()
             .Aggregate(ImmutableList<string>.Empty, (all, removed) => all.AddRange(removed))
             .Select(all => (IReadOnlyList<string>)all)
@@ -6342,6 +6326,29 @@ public static class MeshExtensions
                 ex.Data[DeletedPathsDataKey] = (IReadOnlyList<string>)removedSoFar;
                 return Observable.Throw<IReadOnlyList<string>>(ex);
             });
+
+        void Retire(IReadOnlyList<string> removed)
+        {
+            foreach (var p in removed)
+            {
+                changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                streamCache?.Invalidate(p);
+                try
+                {
+                    meshHub.GetHostedHub(new Address(p), c => c, HostedHubCreation.Never)?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    // The same best-effort disposal the root branch performs: the row is
+                    // gone and its cache entry invalidated, so a hub that refuses to dispose
+                    // still re-reads storage on its next activation.
+                    logger.LogDebug(ex,
+                        "[DeleteNode] best-effort hub disposal failed for {Path}", p);
+                }
+                removedSoFar = removedSoFar.Add(p);
+                recordDeleted(p);
+            }
+        }
     }
 
     /// <summary>
@@ -10344,29 +10351,37 @@ public static class MeshExtensions
                             var ordered = paths.OrderByDescending(p => p.Length).ToList();
                             return storage.DeleteMany(ordered)
                                 .Take(1)
-                                .Do(deleted =>
-                                {
-                                    foreach (var p in deleted)
-                                    {
-                                        changeFeed?.Publish(MeshChangeEvent.Deleted(p));
-                                        // 🚨 A MOVED-AWAY ADDRESS IS RETIRED, exactly as a deleted
-                                        // one is (#7171). The delete commit invalidates the stream
-                                        // cache and disposes the per-node hub of every path it
-                                        // removes; this leg removed the source rows and did
-                                        // neither, so the source's activation went on serving
-                                        // under an address that names no node — fanning frames
-                                        // out to its old subscribers, while the router, which
-                                        // resolves that address to "no node", could carry neither
-                                        // forward traffic nor the terminal NACK that would have
-                                        // made it evict a dead circuit. Measured on memex,
-                                        // 2026-10-26: after `BusinessPlan2026/Plyona` moved, the
-                                        // router logged hundreds of undeliverable NACKs a minute
-                                        // to sender `BusinessPlan2026/Plyona`.
-                                        if (RetireRemovedPath(meshHub, hub, streamCache, logger, p, "MoveNode"))
-                                            System.Threading.Interlocked.Exchange(ref executingHubRemoved, 1);
-                                    }
-                                })
+                                // 🚨 A delete leg that fails PART-WAY retires what it removed too
+                                // (#7396): the rows the batch names as gone are gone whatever the
+                                // verdict, so their hubs and cache entries go with them, and the
+                                // rows it did not remove keep theirs. The failure itself still
+                                // reaches the move's verdict unchanged.
+                                .Do(RetireMovedAway, error => RetireMovedAway(
+                                    BatchDeletePartiallyAppliedException.RemovedBy(error)))
                                 .Select(_ => copied);
+
+                            void RetireMovedAway(IReadOnlyList<string> deleted)
+                            {
+                                foreach (var p in deleted)
+                                {
+                                    changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                                    // 🚨 A MOVED-AWAY ADDRESS IS RETIRED, exactly as a deleted
+                                    // one is (#7171). The delete commit invalidates the stream
+                                    // cache and disposes the per-node hub of every path it
+                                    // removes; this leg removed the source rows and did
+                                    // neither, so the source's activation went on serving
+                                    // under an address that names no node — fanning frames
+                                    // out to its old subscribers, while the router, which
+                                    // resolves that address to "no node", could carry neither
+                                    // forward traffic nor the terminal NACK that would have
+                                    // made it evict a dead circuit. Measured on memex,
+                                    // 2026-10-26: after `BusinessPlan2026/Plyona` moved, the
+                                    // router logged hundreds of undeliverable NACKs a minute
+                                    // to sender `BusinessPlan2026/Plyona`.
+                                    if (RetireRemovedPath(meshHub, hub, streamCache, logger, p, "MoveNode"))
+                                        System.Threading.Interlocked.Exchange(ref executingHubRemoved, 1);
+                                }
+                            }
                         }));
     }
 

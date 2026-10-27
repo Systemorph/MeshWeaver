@@ -233,9 +233,25 @@ internal class VersionWritingStorageAdapter(
             return inner.DeleteMany(paths);
         return PathsWithoutHistory(paths)
             .SelectMany(purge => inner.DeleteMany(paths)
-                .SelectMany(deleted => PurgeAll(purge.Where(p => deleted.Contains(p, StringComparer.OrdinalIgnoreCase)).ToArray())
-                    .Select(_ => deleted)));
+                .SelectMany(deleted => PurgeRemoved(purge, deleted).Select(_ => deleted))
+                // 🚨 The rows a batch removed before it failed are gone just the same, so their
+                // history is purged too, and the failure still carries them (#7396). A purge that
+                // fails itself is raised carrying the same set: the caller's retirement of those
+                // paths must not depend on the history purge.
+                .Catch<IReadOnlyList<string>, Exception>(error =>
+                {
+                    var removed = BatchDeletePartiallyAppliedException.RemovedBy(error);
+                    return removed.Count == 0
+                        ? Observable.Throw<IReadOnlyList<string>>(error)
+                        : PurgeRemoved(purge, removed)
+                            .Catch<Unit, Exception>(purgeError => Observable.Throw<Unit>(
+                                BatchDeletePartiallyAppliedException.Including(purgeError, removed)))
+                            .SelectMany(_ => Observable.Throw<IReadOnlyList<string>>(error));
+                }));
     }
+
+    private IObservable<Unit> PurgeRemoved(IReadOnlyCollection<string> purge, IReadOnlyList<string> removed)
+        => PurgeAll(purge.Where(p => removed.Contains(p, StringComparer.OrdinalIgnoreCase)).ToArray());
 
     /// <summary>
     /// Whether nodes of <paramref name="nodeType"/> keep version history — the type's
