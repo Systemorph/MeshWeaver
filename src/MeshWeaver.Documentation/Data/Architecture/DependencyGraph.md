@@ -36,7 +36,7 @@ One node per compiled source, holding that source's whole forward edge set:
 | kind | target | evidence class | read from |
 |---|---|---|---|
 | `NodeType` | the owning NodeType's path | Static | the `SemanticModel` walk (below) |
-| `Module` | the module assembly's simple name | Static | `GetUsedAssemblyReferences()` ∩ the installed module files |
+| `Module` | the module assembly's simple name | Static | the EMITTED assembly's `AssemblyRef`s ∩ the installed module files (`GetUsedAssemblyReferences()` only for a caller with no image) |
 | `Platform` | a `MeshWeaver.*` host assembly's simple name | Static | the EMITTED assembly's `AssemblyRef`/`TypeRef` tables |
 | `Package` | `package:{id}` — the package id (`#r "nuget:"`, or a shelf package for a module build) in its own namespace | Static | the emitted `AssemblyRef`s ∩ the package files |
 | `Dynamic` | `{type}, {assembly}` — `*` for a whole-assembly load, `?` for an unknown part | Dynamic | a reflection call with a CONSTANT argument |
@@ -111,10 +111,12 @@ used — after the source generators, before the emitted bytes are loaded — an
    type another NodeType owns is an edge `self → owner`, with the referenced type names as
    evidence. References inside a foreign owner's code are NOT this type's edges — that owner's own
    compile records them, and the closure joins the two.
-3. **Module edges — `Compilation.GetUsedAssemblyReferences()`.** Every used reference that is one
-   of the mesh's installed modules is an edge `self → module assembly`, carrying the module's MVID
-   as `TargetBuildMvid`. Platform and package assemblies are their own kinds, read off the emitted
-   image — see *Platform and package edges* below.
+3. **Module edges — the emitted image's `AssemblyRef`s.** Every `AssemblyRef` the compiler wrote
+   that resolves (by full identity) to one of the mesh's installed modules is an edge
+   `self → module assembly`, carrying the module's MVID as `TargetBuildMvid` — the same instrument
+   as the platform and package edges (*Platform and package edges* below), for the same reasons.
+   `Compilation.GetUsedAssemblyReferences()` is used only by a caller that hands no image. See
+   *What the extraction costs* below for why it is not the default.
 4. **Included but unused.** A foreign owner whose code was compiled in but never referenced from
    the compiling type's own code is listed in `IncludedWithoutUse`, not as an edge — the inclusion
    is a declared source query, the edge is what Roslyn bound. The candidates are read off the
@@ -152,7 +154,31 @@ Telling these apart exactly needs each reference's file origin carried through s
 is a change to the emitted input, and it moves every content key.
 
 The walk is skipped entirely when the compile consumed no foreign-owned code, so a self-contained
-type pays one `GetUsedAssemblyReferences` call and nothing else.
+type pays two metadata-table reads and the dynamic scan's name filter, and nothing else. A node inside
+a foreign owner's code is skipped BEFORE it is bound, so the walk binds only the compiling type's own
+code.
+
+### What the extraction costs
+
+Edge extraction runs after EVERY NodeType compile — the portal's runtime compile, the batch bake and
+the build-process bake (`mw-plugin-test compile`, which every gate shard runs) — so its price is paid
+per type, per portal, per CI shard. The first version doubled the compile: on the MeshWeaver.Plugins
+tree a gate shard's compile phase went from 530–554 s (platform set 3.1.11752/3.1.11754, before the
+extraction) to 1631–1987 s (3.1.11792 and later, after it) for the SAME 131 and 165 NodeTypes. Two
+costs dominated, measured locally over 30 compiled types (emit ≈ 6 s in total):
+
+| phase | before | after |
+|---|---|---|
+| the `SemanticModel` walk | 5.4 s — it bound every node, foreign code included, and dropped foreign-located results afterwards | 2.4 s — the location is checked first, so only the compiling type's own code is bound |
+| module edges | 3.4 s — `GetUsedAssemblyReferences()` re-binds and lowers every method body a second time | ≈ 0 — the emitted `AssemblyRef`s, already read for the platform edges |
+
+The NodeType and platform/package/dynamic output is byte-identical before and after. The module
+edges changed only where `GetUsedAssemblyReferences()` over-counted: a module the compile merely
+looked into — its namespace imported, its extension methods considered — is no longer an edge of a
+type whose emitted code references nothing in it (measured: MeshWeaver.Markdown.Collaboration, which
+declares types in the `MeshWeaver.Graph` namespace, dropped out of 2 of 30 sets) — the same over-count the
+platform edges were moved off for. What metadata cannot show — a constant inlined from a module, a
+`nameof` — is not an edge, the platform edges' limit.
 
 🚨 **Why not "a symbol whose containing assembly is another NodeType's assembly".** A NodeType
 compile is never referenced against another NodeType's emitted assembly: its reference set is the
