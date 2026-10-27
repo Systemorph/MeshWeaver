@@ -294,6 +294,10 @@ def main() -> int:
                 ("a literal OUTSIDE the repository and every exempt root",
                  '<Target Name="Outside" AfterTargets="Build">'
                  '<Copy SourceFiles="/etc/hosts" DestinationFolder="$(OutDir)" /></Target>',
+                 "outside every exempt root"),
+                ("an XmlPeek whose XmlInputPath (the file it READS) lies outside every exempt root — the XPath exemption covers Query only",
+                 '<Target Name="PeekOutside" BeforeTargets="CoreCompile">'
+                 '<XmlPeek XmlInputPath="/etc/hosts" Query="//x/text()"><Output TaskParameter="Result" ItemName="_V" /></XmlPeek></Target>',
                  "outside every exempt root")):
             r = tgt_eval(body)
             check(f"{label} ⇒ REFUSED red, naming the target and the file",
@@ -313,6 +317,11 @@ def main() -> int:
                  '<ItemGroup><_G Include="Local.cs" /></ItemGroup><Target Name="Text" AfterTargets="Build">'
                  "<Message Condition=\"'%(_G.Filename)' != ''\" Text=\"@(_G->'%(Filename)')\" />"
                  "<WriteLinesToFile File=\"$(IntermediateOutputPath)names.txt\" Lines=\"@(_G->'%(Filename)')\" /></Target>"),
+                ("an XmlPeek/XmlPoke Query is XPath, not a path: `//PlatformVersion/text()` (the Plugins AssemblyVersion check)",
+                 '<Target Name="Peek" BeforeTargets="CoreCompile">'
+                 '<XmlPeek XmlInputPath="$(MSBuildProjectDirectory)/Tgt.csproj" Query="//TargetFramework/text()">'
+                 '<Output TaskParameter="Result" ItemName="_V" /></XmlPeek>'
+                 '<XmlPoke XmlInputPath="$(IntermediateOutputPath)x.xml" Query="/a/@b" Value="//c" /></Target>'),
                 ("(a) a literal in-repo path the sweep tracks, an evaluation-time property and scalars",
                  '<Target Name="Lit" AfterTargets="Build">'
                  '<Copy SourceFiles="../Gen2/Extra.cs" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Retries="2" /></Target>'),
