@@ -20,7 +20,7 @@ the runner that reads a manifest is always the one that wrote it.
         REFUSES: a shard with no units (unless a narrowed TEST_SELECTION was asked for), an assigned
         project with no built bin, a symlink in a bin, a tester that was not built.
 
-    core-tests.py run --shard <i> --total <n> [--root /core-tests] [--work <dir>]
+    core-tests.py run --shard <i> --total <n> [--root <dir> ...] [--require-sha <40 hex>] [--work <dir>]
         One shard, as one build-host stage (`.github/build-stages.json`, stage `test-shard-<i>`).
         Materialises the shard's projects from the blobs into a WRITABLE work directory (the image
         tree is bound read-only and a test host writes its TestResults beside its assembly),
@@ -33,12 +33,20 @@ the runner that reads a manifest is always the one that wrote it.
         or writes no trx (a trx left by an earlier run is deleted first). Each unit leads its own
         process group, and whatever remains in it when the host ends is terminated (TERM, then KILL).
 
-    core-tests.py doc-gate [--root /core-tests] [--work <dir>] [--repo .]
+    core-tests.py doc-gate [--root <dir> ...] [--require-sha <40 hex>] [--work <dir>] [--repo .]
         The doc and samples gates (dotnet-test.yml's doc-gate job), against the checkout at the
         set's commit, with the plugin tester from this image: stage-doc-gate.sh /
         stage-samples-gate.sh, then bake-then-gate.sh with each tree's allow file, warning
         baseline and dynamic-edge baseline, then check-tests-area-verdicts.py over each tree and its gate log (`--require-tests`
         for Doc), as dotnet-test.yml's doc-gate job does. RED when either gate or verifier is.
+
+    WHICH PACK (`--root`, repeatable, with `--require-sha`). The same stages serve two runs: a
+        candidate DEPLOYMENT (the set's image at /core-tests, built by main-cd from the set's commit)
+        and a pull request or trunk run on a build host, whose `build` stage packed THIS run's tree
+        into $MW_BUILD_OUTPUTS/core-tests. With `--require-sha` the runner takes the FIRST root whose
+        manifest's `coreSha` is that commit, and is RED when none is — so the tests that run are always
+        the run's own commit's, never the image of whatever set the host happens to have installed.
+        Without it exactly one `--root` (default: beside this file) is read, as before.
 
     core-tests.py --self-test
         Proves each refusal fires and the green path is green, against a fake repository and a fake
@@ -191,6 +199,31 @@ def load_manifest(root: str) -> dict:
     if m.get("schema") != SCHEMA:
         raise Refusal(f"{path} is schema {m.get('schema')!r}; this runner reads schema {SCHEMA}")
     return m
+
+
+def select_root(roots: list[str], require_sha: Optional[str]) -> str:
+    """The pack this run reads. Without `require_sha` exactly one root, as before. With it, the FIRST
+    root whose manifest names that commit — RED when none does, naming what each root holds."""
+    if not roots:
+        raise Refusal("no --root was given — there is no test pack to read")
+    if require_sha is None:
+        if len(roots) != 1:
+            raise Refusal(f"{len(roots)} roots were given without --require-sha — nothing says which pack is this run's")
+        return roots[0]
+    if not SHA_RE.match(require_sha):
+        raise Refusal(f"--require-sha {require_sha!r} is not a 40-hex commit")
+    seen: list[str] = []
+    for root in roots:
+        try:
+            m = load_manifest(root)
+        except Refusal as e:
+            seen.append(f"{root}: {str(e)[:120]}")
+            continue
+        if m.get("coreSha") == require_sha:
+            return root
+        seen.append(f"{root}: packed from {str(m.get('coreSha'))[:12]}")
+    raise Refusal(f"no test pack was built from {require_sha[:12]} — " + "; ".join(seen)
+                  + " (a host run's `build` stage packs its own tree; a deployment reads the set's image)")
 
 
 def materialise(root: str, manifest: dict, csproj: str, work: str) -> str:
@@ -457,6 +490,19 @@ def _self_test() -> int:
         expect(log == ["Ns.A,Ns.C"], f"part 1/2 runs every 2nd class of the SORTED list from the first ({log})")
         expect(run_shard(img, 1, 2, os.path.join(t, "w1"), dotnet) == 0, "shard 1/2 runs green (a helper bin is not a failure)")
 
+        print("which pack — by commit identity:")
+        other = os.path.join(t, "other")
+        pack(repo, other, "b" * 40, "run-b")
+        missing = os.path.join(t, "absent")
+        expect(select_root([missing, img], sha) == img, "the first root packed from the required commit is taken (an absent run pack is passed over)")
+        expect(select_root([other, img], sha) == img, "a pack of ANOTHER commit is passed over, never read")
+        expect(select_root([img], None) == img, "one root without --require-sha reads it, as before")
+        refused(lambda: select_root([other, missing], sha), "no test pack was built from",
+                "no root packed from the run's commit (a host's installed image of another set)")
+        refused(lambda: select_root([img, other], None), "without --require-sha", "two roots and nothing to choose between them")
+        refused(lambda: select_root([img], "main"), "not a 40-hex", "a --require-sha that is not a commit")
+        refused(lambda: select_root([], sha), "no --root", "no root at all")
+
         print("negative controls — each must be RED:")
         refused(lambda: run_shard(img, 0, 3, os.path.join(t, "wx"), dotnet), "packed for 2",
                 "a stage total the image was not packed for")
@@ -577,10 +623,12 @@ def main(argv: list[str]) -> int:
     r = sub.add_parser("run")
     r.add_argument("--shard", type=int, required=True)
     r.add_argument("--total", type=int, required=True)
-    r.add_argument("--root", default=os.path.dirname(os.path.abspath(__file__)))
+    r.add_argument("--root", action="append", default=None)
+    r.add_argument("--require-sha", default=None)
     r.add_argument("--work", default=None)
     g = sub.add_parser("doc-gate")
-    g.add_argument("--root", default=os.path.dirname(os.path.abspath(__file__)))
+    g.add_argument("--root", action="append", default=None)
+    g.add_argument("--require-sha", default=None)
     g.add_argument("--repo", default=".")
     g.add_argument("--work", default=None)
     a = ap.parse_args(argv)
@@ -588,10 +636,11 @@ def main(argv: list[str]) -> int:
         if a.cmd == "pack":
             pack(a.repo, a.out, a.sha, a.version)
             return 0
+        root = select_root(a.root or [os.path.dirname(os.path.abspath(__file__))], a.require_sha)
         # The image tree is read-only on a host; the run's checkout (the CWD) is writable disk.
         if a.cmd == "run":
-            return run_shard(a.root, a.shard, a.total, a.work or os.path.abspath(f".core-tests/shard-{a.shard}"))
-        return doc_gate(a.root, os.path.abspath(a.repo), a.work or os.path.abspath(".core-tests/doc-gate"))
+            return run_shard(root, a.shard, a.total, a.work or os.path.abspath(f".core-tests/shard-{a.shard}"))
+        return doc_gate(root, os.path.abspath(a.repo), a.work or os.path.abspath(".core-tests/doc-gate"))
     except Refusal as e:
         print(f"::error::{e}", flush=True)
         return 2

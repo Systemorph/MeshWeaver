@@ -143,6 +143,17 @@ def declared_stages(path: str) -> tuple[list[str], str]:
     if doc.get("ciEquivalent") is not True:
         return [], (f"{path} does not claim CI equivalence (\"ciEquivalent\": true) — its stages can be probed on a "
                     f"host but do not yet check everything the Actions legs check, so CI is not routed there")
+    # 🚨 THE CLAIM IS VOID WHILE ANYTHING IS OWED (check-build-stages.py, rule 7; MeshWeaver.Plugins
+    # check-build-queue-admission.py rule 7). The declaration's own gate refuses that combination,
+    # but this is where a run is ROUTED, so it is refused here too: a declaration that reached a
+    # branch without its gate (a repository that does not run it yet, a hand edit) must still not
+    # send a run to a host that checks less than Actions.
+    owes = doc.get("owes", [])
+    if not isinstance(owes, list) or not all(isinstance(o, str) and o.strip() for o in owes):
+        return [], f"{path} carries a malformed `owes` (a list of non-empty strings) — the claim cannot be read against it"
+    if owes:
+        return [], (f"{path} claims CI equivalence but still owes {len(owes)} item(s) (first: {owes[0][:100]}) — "
+                    f"the claim is void until every item is paid")
     return names, ""
 
 
@@ -327,6 +338,15 @@ def self_test() -> int:
     not_equivalent = os.path.join(tmp, "probe-only.json")
     with open(not_equivalent, "w") as fh:
         json.dump({"stages": [{"name": "compile-check"}, {"name": "gate"}]}, fh)
+    claims_with_debt = os.path.join(tmp, "claims-with-debt.json")
+    with open(claims_with_debt, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": ["the in-mesh lane"], "stages": [{"name": "gate"}]}, fh)
+    claims_bad_owes = os.path.join(tmp, "claims-bad-owes.json")
+    with open(claims_bad_owes, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": "nothing", "stages": [{"name": "gate"}]}, fh)
+    claims_paid = os.path.join(tmp, "claims-paid.json")
+    with open(claims_paid, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "gate"}]}, fh)
     base = Inputs(queue_url="https://control.example.com/api/hooks/Hosting/PlatformBuilds", secret="s3cret",
                   repo="Systemorph/MeshWeaver.Plugins", sha="a" * 40, event="pull_request", ref_name="feat/x", pr=7,
                   base_ref="main", main_sha="b" * 40, run_id=42, run_attempt=1, run_url="https://github.com/r/1",
@@ -380,6 +400,8 @@ def self_test() -> int:
     cases = [
         ("no stages declared", with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post, "declares no stages", False),
         ("stages that do not claim CI equivalence", with_(stages_file=not_equivalent), host_q, ok_post, "does not claim CI equivalence", False),
+        ("a claim with an open debt is void", with_(stages_file=claims_with_debt), host_q, ok_post, "still owes 1 item", False),
+        ("a claim beside a malformed owes is void", with_(stages_file=claims_bad_owes), host_q, ok_post, "malformed `owes`", False),
         ("no build API", with_(queue_url="", build_api=""), host_q, ok_post, "no build API", False),
         ("plain-http API refused", with_(build_api="http://control.example.com/api/builds", queue_url=""), host_q, ok_post, "no build API", False),
         ("credentials in the URL refused", with_(build_api="https://user@control.example.com/api/builds"), host_q, ok_post, "no build API", False),
@@ -409,6 +431,12 @@ def self_test() -> int:
     calls.clear()
     decide(with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post)
     check("actions/a repository with no stages asks nothing and queues nothing", calls == [], calls)
+    calls.clear()
+    decide(with_(stages_file=claims_with_debt), host_q, ok_post)
+    check("actions/a claim with an open debt asks nothing and queues nothing", calls == [], calls)
+    calls.clear()
+    d = decide(with_(stages_file=claims_paid), host_q, ok_post)
+    check("host/a claim whose debt is paid (owes: []) is routed", d.executor == HOST, d)
     for inp in (with_(build_api="https://control.example.com/api/builds", queue_url="http://inbox.example.com/x"), with_(channel="stable")):
         calls.clear()
         decide(inp, host_q, ok_post)
