@@ -1,7 +1,7 @@
 ---
 title: Granting Access via AccessAssignments
 order: 25
-Description: "Grant user permissions in MeshWeaver by creating AccessAssignment MeshNodes in _Access satellite namespaces — field anatomy, three ready-to-run recipes, and common pitfalls."
+Description: "Grant user permissions in MeshWeaver by creating AccessAssignment MeshNodes in _Access satellite namespaces — field anatomy, four ready-to-run recipes, and common pitfalls."
 ---
 
 # Granting Access via AccessAssignments
@@ -223,6 +223,67 @@ The shape is identical to Recipe 1 — only `accessObject` and `displayName` dif
 
 ---
 
+## Recipe 4 — A declared grant rule: every partition of a type
+
+Use this when a team must hold a role on EVERY partition of one kind — every client of the CRM,
+say — including the ones created tomorrow. One `GrantRule` in `Admin/_GrantRule` does it; no
+`AccessAssignment` is written per partition, and nothing has to run when a partition is created or
+retyped. The model and its guarantees are in
+[Access Control → Declared grant rules](../AccessControl#declared-grant-rules-grantrule).
+
+**The rule** — Sales members edit every client counterparty:
+
+```json
+{
+  "id": "sales-members-clients-editor",
+  "namespace": "Admin/_GrantRule",
+  "nodeType": "GrantRule",
+  "name": "Sales/Members — Editor on every client",
+  "content": {
+    "$type": "GrantRule",
+    "nodeType": "Crm/Counterparty",
+    "contentField": "type",
+    "contentValue": "Crm/CounterpartyType/Client",
+    "accessObject": "Sales/Members",
+    "role": "Editor"
+  }
+}
+```
+
+A second rule with `accessObject: "Sales/Admins"` and `role: "Admin"` gives the team's admins
+Admin on the same set. One rule per subject and role, so each one can be reviewed and revoked on
+its own.
+
+**How it is written.** A rule is a broad grant, so it is written by a governed activity, never by
+a person's standing rights: propose an activity of the standard **`access.grant-rule`**
+(MeshWeaver.Plugins `Governance/Standards/access.grant-rule`) with the inputs `id`, `nodeType`,
+`contentField`, `contentValue`, `subject` and `role`; once it is signed, its executor writes
+`Admin/_GrantRule/{id}` as System with `governedBy` set. Under `Access:BroadGrantGuard:Mode =
+Enforce` any other writer is refused; under `LogOnly` the write lands and logs
+`[BroadGrantGuard] WOULD REFUSE GrantRule …`.
+
+**Revoking it** is deleting the node (`Admin/_GrantRule/{id}`) — removing access needs no
+governance.
+
+**Verify:**
+
+1. `search path:Admin/_GrantRule scope:descendants nodeType:GrantRule` — the rule is there.
+2. As a member of the group, `get` a node in a matching partition, and run a `search` anchored there
+   — both must answer (the second proves the SQL projection, the first the C# fold).
+3. Optional SQL check, in a matching partition's schema:
+   ```sql
+   select * from "acme".user_effective_permissions where user_id = 'max.muster' and node_path_prefix = 'Acme';
+   select * from public.partition_access where user_id = 'max.muster' and partition = 'acme';
+   ```
+
+| Pitfall | Cause |
+|---|---|
+| The rule grants nothing | the root's `contentField` is not a JSON string or boolean (a number, array or object never matches in either evaluator, because `jsonb` re-renders their text), `contentValue` differs from the root's text (compare `get @{partition}/data/` exactly — no leading `/`), the node is not in `Admin/_GrantRule`, or `accessObject` is `Public`/`Anonymous` (never honoured) |
+| A member can read but not write | The partition is system-owned (one-way `_GitSync`) — no role writes there — or a `_Policy` caps the write, or an assignment denies the role |
+| Search lists nothing though `get` works | The portal's Postgres projection predates grant rules — the MeshWeaver.Plugins half has not reached that instance |
+
+---
+
 ## Verification
 
 After creating or updating an assignment, run through this checklist:
@@ -263,6 +324,7 @@ After creating or updating an assignment, run through this checklist:
 | `src/MeshWeaver.Graph/Configuration/AccessAssignmentNodeType.cs` | NodeType definition and post-create handler that rebuilds permissions |
 | `src/MeshWeaver.Graph/Security/RlsNodeValidator.cs` | Read-side enforcer that surfaces `Access denied` |
 | `src/MeshWeaver.Mesh.Contract/Security/PermissionEvaluator.cs` | Synced query that aggregates AccessAssignments per user |
+| `src/MeshWeaver.Mesh.Contract/Security/GrantRule.cs` | The declared type-scoped grant (`Admin/_GrantRule/{id}`) and its pure matcher; evaluated by `PermissionEvaluator.ObserveRuleGrants` |
 | `src/MeshWeaver.Mesh.Contract/Services/AccessAssignmentGuard.cs` | Write-boundary guard: `mainNode` must equal the scope the path encodes; no write-conferring grant on a system-owned (GitSynced) partition |
 | `src/MeshWeaver.Mesh.Contract/Security/PermissionEvaluator.cs` (`ObserveRepositoryOwnedContent`) | Same predicate, asked by the fold: no role confers Create/Update/Delete on the CONTENT of a system-owned partition, whatever grants exist |
 | `src/MeshWeaver.GitSync/SystemOwnedAccessRetractionHandler.cs` | Same predicate, applied as a sweep when a `_GitSync` is wired — retracts privileged grants that predate the sync |

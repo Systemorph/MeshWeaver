@@ -920,6 +920,61 @@ public static class PrebuiltAssemblySeeder
                 sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes, producerPlatformVersion,
                 platformCeiling));
 
+    /// <summary>The producer's edge JSON is plain web JSON (camelCase, no type discriminator).</summary>
+    private static readonly System.Text.Json.JsonSerializerOptions BundleEdgeJson =
+        new(System.Text.Json.JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// After a seed, writes the producer's forward dependency edges (<paramref name="edges"/>, a
+    /// <see cref="DependencyEdgeSet"/> as the bundle carried it) for the build the record now serves,
+    /// then passes <paramref name="outcome"/> through unchanged. Only a COVERED outcome writes
+    /// (<see cref="IsCovered"/>: adopted, or the standing build kept), and only while the record names
+    /// the bundle's build (<c>DependencyEdgeSetWriter.WriteAdopted</c>). Offered to the
+    /// <see cref="MeshPublicationGate"/> behind the adoption stamp, so a stamp HELD while this
+    /// process is provisional is released first and the edges follow it. A missing, unreadable or
+    /// failed set never changes the seeding verdict — the graph then reads that type as unknown.
+    /// </summary>
+    /// <param name="hub">The seeding hub.</param>
+    /// <param name="nodeTypePath">The NodeType the bytes implement.</param>
+    /// <param name="edges">The bundle's edge set JSON, or null (a producer that recorded none).</param>
+    /// <param name="outcome">The seed's verdict.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static IObservable<SeedOutcome> WithAdoptedEdges(
+        IMessageHub hub, string nodeTypePath, System.Text.Json.JsonElement? edges, SeedOutcome outcome, ILogger? logger)
+    {
+        if (edges is not { ValueKind: System.Text.Json.JsonValueKind.Object } json || !IsCovered(outcome))
+            return Observable.Return(outcome);
+        DependencyEdgeSet? set;
+        try
+        {
+            // Plain web (camelCase) JSON, as the producer wrote it — no type discriminator.
+            set = System.Text.Json.JsonSerializer.Deserialize<DependencyEdgeSet>(json.GetRawText(), BundleEdgeJson);
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            logger?.LogWarning(ex, "The bundle's dependency edges for {NodeTypePath} are unreadable — not written", nodeTypePath);
+            return Observable.Return(outcome);
+        }
+        if (set is null || !string.Equals(set.Source, nodeTypePath, StringComparison.Ordinal))
+            return Observable.Return(outcome);
+        // 🚨 The edge write is offered to the SAME join point as the adoption stamp, after it. While
+        // this process is provisional the stamp is only QUEUED (SeedObserved → MeshPublicationGate.Offer),
+        // so the record still names the previous build and an immediate write would see it and
+        // write nothing — and admission would then release the stamp alone, leaving the adopted
+        // build without its edges. Queued behind the stamp, the gate releases both in offer order
+        // (sequentially), so the write runs once the record names the adopted build; a refused
+        // process discards both. Unarmed / admitted, the stamp has already committed and this runs
+        // at once.
+        var gate = hub.ServiceProvider.GetService<MeshPublicationGate>();
+        IObservable<System.Reactive.Unit> Edges() =>
+            MeshWeaver.Graph.Configuration.DependencyEdgeSetWriter.WriteAdopted(hub, set, logger)
+                .LastOrDefaultAsync();
+        return (gate is null ? Edges() : gate.Publish($"adopted dependency edges for {nodeTypePath}", Edges))
+            .IgnoreElements()
+            .Concat(Observable.Return(System.Reactive.Unit.Default))
+            .Select(_ => outcome);
+    }
+
     private static IObservable<SeedOutcome> NotSeededLeaving(string nodeTypePath, ILogger? logger)
     {
         logger?.LogInformation(

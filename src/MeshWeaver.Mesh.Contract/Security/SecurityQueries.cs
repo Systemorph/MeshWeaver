@@ -237,6 +237,38 @@ public static class SecurityQueries
     public static string PartitionSyncConfig(string partition)
         => Enumeration($"path:{AccessAssignmentGuard.SyncConfigPath(partition)} {ContentProjection}");
 
+    /// <summary>
+    /// Every declared <see cref="GrantRule"/> (<c>$security-grant-rules</c>) — anchored on
+    /// <see cref="GrantRule.Namespace"/> in the Admin partition, so it is served by ONE schema and
+    /// never fans out. A GLOBAL fold input (a rule can apply to any partition), read once per process.
+    /// </summary>
+    public static string GrantRules
+        => Enumeration($"path:{GrantRule.Namespace} scope:descendants "
+            + $"nodeType:{GrantRule.NodeTypeName} {ContentProjection}");
+
+    /// <summary>The cache id of <see cref="GrantRules"/>.</summary>
+    public const string GrantRulesQueryId = QueryIdPrefix + "grant-rules";
+
+    /// <summary>
+    /// ONE partition's ROOT node — the node at exactly <c>{partition}</c>, with its content — the
+    /// half of <see cref="GrantRule"/> evaluation that says whether a rule's node type and content
+    /// filter hold for this partition. A point read in the partition's own schema; opened only
+    /// while at least one rule is declared.
+    /// </summary>
+    /// <param name="partition">The partition (first path segment).</param>
+    /// <returns>The query string.</returns>
+    public static string PartitionRoot(string partition)
+        => Enumeration($"path:{partition} {ContentProjection}");
+
+    /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the partition-root read.</summary>
+    public const string PartitionRootQueryIdPrefix = QueryIdPrefix + "root:";
+
+    /// <summary>The cache id of <see cref="PartitionRoot"/> for <paramref name="partition"/>.</summary>
+    /// <param name="partition">The partition (first path segment).</param>
+    /// <returns>The process-wide cache id.</returns>
+    public static string PartitionRootQueryId(string partition)
+        => PartitionRootQueryIdPrefix + partition;
+
     /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the sync-config read.</summary>
     public const string SyncConfigQueryIdPrefix = QueryIdPrefix + "sync:";
 
@@ -296,7 +328,7 @@ public static class SecurityQueries
         => string.IsNullOrEmpty(partition)
             ? ImmutableArray<string>.Empty
             : [PartitionAssignmentsQueryId(partition), PartitionPoliciesQueryId(partition),
-                PartitionSyncConfigQueryId(partition)];
+                PartitionSyncConfigQueryId(partition), PartitionRootQueryId(partition)];
 
     /// <summary>
     /// The prefix EVERY permission-fold read is cached under in <c>IMeshNodeStreamCache</c> — the
@@ -339,7 +371,7 @@ public static class SecurityQueries
     }
 
     private static readonly ImmutableArray<string> AnchoredPrefixes =
-        [AssignmentsQueryIdPrefix, PoliciesQueryIdPrefix, SyncConfigQueryIdPrefix];
+        [AssignmentsQueryIdPrefix, PoliciesQueryIdPrefix, SyncConfigQueryIdPrefix, PartitionRootQueryIdPrefix];
 
     /// <summary>
     /// The root-scope <c>AccessAssignment</c>s naming ONE subject — <see cref="RootAssignments"/>
@@ -396,6 +428,8 @@ public static class SecurityQueries
         PartitionAssignments("acme"),
         PartitionPolicies("acme"),
         PartitionSyncConfig("acme"),
+        GrantRules,
+        PartitionRoot("acme"),
         RootAssignmentsFor("rbuergi"),
         PartitionAssignmentsFor("Admin", "rbuergi"),
         PartitionAssignmentsFor("rbuergi", "rbuergi"),

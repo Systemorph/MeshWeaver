@@ -1553,17 +1553,32 @@ public static class ShippedPrebuiltBundles
                                 if (check.Current)
                                     onCovered(check.Entry.NodePath);
 
+                        // An already-current entry never reaches SeedPayloads, so its edges are
+                        // written HERE (Doc/Architecture/DependencyGraph → adopted prebuilts): a
+                        // build adopted before its bundle carried edges, or whose first edge write
+                        // failed, gets its set on the next pass. Only the manifest's JSON is read —
+                        // no DLL is decompressed — and the writer's served-MVID guard and
+                        // idempotency make it a no-op for a set already stored.
+                        var currentEdges = checks
+                            .Where(c => c.Current && c.Entry.DependencyEdges is not null)
+                            .Select(c => PrebuiltAssemblySeeder.WithAdoptedEdges(
+                                mesh, c.Entry.NodePath, c.Entry.DependencyEdges,
+                                PrebuiltAssemblySeeder.SeedOutcome.AlreadyServed, logger))
+                            .Concat()
+                            .IgnoreElements()
+                            .Select(_ => default(SeedTally));
+
                         if (deviating.IsEmpty)
                         {
                             logger?.LogDebug(
                                 "ShippedPrebuiltBundles: bundle {Bundle}: all {Current} NodeType(s) "
                                 + "already carry this build and the store holds their bytes — no "
-                                + "assembly read, no hub activated, no write",
+                                + "assembly read, no hub activated, no write but their edge sets",
                                 Path.GetFileName(bundlePath), alreadyCurrent);
-                            return Observable.Return(new SeedTally(0, alreadyCurrent));
+                            return currentEdges.Concat(Observable.Return(new SeedTally(0, alreadyCurrent)));
                         }
 
-                        return pool
+                        return currentEdges.Concat(pool
                             // One decompressing read per selected assembly (DLL + PDB): the reader
                             // checks the pool's token before each (review on #7121).
                             .InvokeBlocking(ct => Plugin.Packaging.BundleReader
@@ -1575,7 +1590,7 @@ public static class ShippedPrebuiltBundles
                                 // The bytes' platform RANGE (policy
                                 // platform-backwards-compatibility) — floor and ceiling as the
                                 // producer stated them; the seeder declines outside it, loudly.
-                                manifest.ProducerPlatformVersion, manifest.PlatformCeiling));
+                                manifest.ProducerPlatformVersion, manifest.PlatformCeiling)));
                     });
                 }
             })
@@ -1752,6 +1767,9 @@ public static class ShippedPrebuiltBundles
                             platformCeiling)
                         .Take(1)
                         .Timeout(SeedBudget)
+                        // The producer's dependency edges for the build the record now serves
+                        // (Doc/Architecture/DependencyGraph → adopted prebuilts). Never changes the verdict.
+                        .SelectMany(outcome => PrebuiltAssemblySeeder.WithAdoptedEdges(mesh, a.NodePath, a.DependencyEdges, outcome, logger))
                         .Do(outcome =>
                         {
                             if (outcome is PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSources

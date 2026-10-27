@@ -88,6 +88,15 @@ public static class BundleWriter
         /// the binary-break reason above.
         /// </summary>
         public IReadOnlyList<string>? SourceIncludes { get; init; }
+
+        /// <summary>
+        /// The forward dependency edges Roslyn read off the compile that produced these bytes
+        /// (<c>Doc/Architecture/DependencyGraph</c>) — a <c>DependencyEdgeSet</c> as JSON, carried
+        /// verbatim. A consumer that ADOPTS these bytes compiles nothing and so reads no edges of its
+        /// own; with this it writes the producer's set for the build it now serves. Null from a
+        /// producer that recorded none; init property for the binary-break reason above.
+        /// </summary>
+        public JsonElement? DependencyEdges { get; init; }
     }
 
     /// <summary>
@@ -208,6 +217,9 @@ public static class BundleWriter
                     // #4280 — the include paths the fingerprint folded over, so the consumer's
                     // completeness witness covers includes as well as query-resolved sources.
                     sourceIncludes = a.SourceIncludes,
+                    // The dependency graph's build-process edges, so an adopting consumer can
+                    // write them for the build it serves (Doc/Architecture/DependencyGraph).
+                    dependencyEdges = a.DependencyEdges,
                 })
                 .ToList(),
             // DECLARED, never left to be discovered by enumerating the folder — the same rule the
