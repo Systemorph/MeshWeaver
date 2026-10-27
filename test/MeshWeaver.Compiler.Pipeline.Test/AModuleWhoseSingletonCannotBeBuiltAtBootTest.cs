@@ -26,7 +26,7 @@ public sealed class CircuitBoundState
     /// <summary>What the circuit does when it starts.</summary>
     public void Initialize() => Volatile.Write(ref initialized, 1);
 
-    /// <summary>What a consumer's constructor does — Radzen's <c>DialogService</c> subscribes to
+    /// <summary>What a consumer's constructor does — a component library's <c>DialogService</c> subscribes to
     /// <c>NavigationManager.LocationChanged</c>.</summary>
     public void Subscribe()
     {
@@ -40,11 +40,11 @@ public sealed class CircuitBoundState
     /// the services it owns.</summary>
     public int Released => Volatile.Read(ref released);
 
-    /// <summary>What a consumer's <c>Dispose</c> does — Radzen's <c>DialogService</c> unsubscribes.</summary>
+    /// <summary>What a consumer's <c>Dispose</c> does — a component library's <c>DialogService</c> unsubscribes.</summary>
     public void Release() => Interlocked.Increment(ref released);
 }
 
-/// <summary>A platform CLASS a module registers SCOPED over circuit state — the route a Radzen service
+/// <summary>A platform CLASS a module registers SCOPED over circuit state — the route a component-library service
 /// takes when its assembly is in the image (<c>Current</c>).</summary>
 public sealed class CircuitPlatformService
 {
@@ -200,7 +200,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     private const string ContributedInstalledModule =
         "services.AddSingleton(new MeshWeaver.Mesh.InstalledModuleAssembly(typeof(Probe).Assembly));";
 
-    // The Radzen shape: scoped services over circuit state (a module class and a platform class), a
+    // The circuit-scoped shape: scoped services over circuit state (a module class and a platform class), a
     // singleton that takes circuit state, and a singleton that takes that singleton.
     private const string CircuitBoundRegistrations = """
         services.AddScoped<CircuitDialog>();
@@ -288,7 +288,7 @@ public sealed class AModuleWhoseSingletonsBuildAtBootTest(ITestOutputHelper outp
 }
 
 /// <summary>
-/// MeshWeaver#6556 — the Radzen shape. A module registers services that belong to a CIRCUIT: scoped
+/// MeshWeaver#6556 — the circuit-scoped shape. A module registers services that belong to a CIRCUIT: scoped
 /// ones over circuit state (a module class and a platform class), a singleton whose constructor takes
 /// circuit state, and a singleton that takes THAT one. None is a process-lifetime instance the root
 /// reaches, so none is built at boot — building one ran against state no circuit had initialised,
@@ -319,7 +319,7 @@ public sealed class AModuleWithCircuitBoundServicesLoadsAtBootTest(ITestOutputHe
 /// that caller owns, against the caller's own scoped state (Blazor's <c>NavigationManager</c> and
 /// <c>IJSRuntime</c>, here <see cref="CircuitBoundState"/>), and ends with the caller. Before, it was one
 /// instance per module generation, shared by every circuit and built against a root child scope no
-/// circuit had initialised — Radzen's <c>ThemeService</c> for every user at once, and a
+/// circuit had initialised — a component library's <c>ThemeService</c> for every user at once, and a
 /// <c>DialogService</c> that threw on its first real resolve. Both roads the root reaches a module by are
 /// measured: a type the module declares (<see cref="ModuleOwnedRootSource"/>) and a platform class it
 /// registers (the <c>Current</c> forwarder).
@@ -391,7 +391,7 @@ public sealed class AModulesScopedServicesAreTheCallersTest(ITestOutputHelper ou
     /// <summary>
     /// The negative control: asked with NO caller — off the root provider itself, which is where every
     /// resolve of a module service used to land — the same registration is built against state no circuit
-    /// initialised, and throws exactly as Radzen's <c>DialogService</c> did. So the test above tells a
+    /// initialised, and throws exactly as a component library's <c>DialogService</c> did. So the test above tells a
     /// caller-bound build from a lucky one.
     /// </summary>
     [Fact]

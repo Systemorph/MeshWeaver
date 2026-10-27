@@ -37,7 +37,7 @@ public static class CessionResultsArea
             $"**Retained:** {totalRetained:N0} | " +
             $"**Ratio:** {ratio:P1}");
 
-        // Column chart: retained + ceded per claim — framework ChartControl (Radzen-rendered).
+        // Column chart: retained + ceded per claim — framework ChartControl (rendered by the chart module).
         var labels = results.Select(r => $"{r.ClaimId}").ToArray();
         var retainedData = results.Select(r => (object)r.RetainedAmount);
         var cededData = results.Select(r => (object)r.CededAmount);
