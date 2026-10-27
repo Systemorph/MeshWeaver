@@ -78,10 +78,6 @@
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.20.1" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.20.1" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.20.1" />
-    <!-- The memex test container package (src/MeshWeaver.Testcontainers): a real memex from the
-         platform build as a test substrate, the way Testcontainers.PostgreSql gives a test a real
-         Postgres. Same version as the test tree pins. -->
-    <PackageVersion Include="Testcontainers" Version="4.16.0" />
     <PackageVersion Include="SSH.NET" Version="2026.0.0" /> <!-- High GHSA-q939-rpr3-3284; transitive via Testcontainers, direct-ref override in test/Directory.Build.props -->
     <!-- 🚨 THESE TWO ARE ONE FAMILY AND MUST MOVE TOGETHER — they were SPLIT, and the split was
          invisible because both halves were green.

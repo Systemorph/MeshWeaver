@@ -96,7 +96,7 @@ merge — and it is now the ONLY localization guard in this repo.
 
 The web clients' catalog lives at **`MeshWeaver.Plugins/clients/react/src/i18n/`**. `044a85618`
 ("The GUI leaves the platform", 2026-08-25) moved the web clients out; `clients/` in core now holds
-only `python/` and `voice-gateway/`, and the six guards the old text and the `Clients` workflow
+only `python/` (`voice-gateway/` followed to MeshWeaver.Plugins `clients/` in the core slimming), and the six guards the old text and the `Clients` workflow
 named — `i18n/localize.test.ts`, `render/parity.test.ts`, `ciTrigger.test.ts`,
 `grpc-web/src/{wire,rest}Contract.test.ts`, `portal-next/e2e` — no longer exist **in this repo**. Do
 not recreate them here; the mirror belongs where the client lives.
