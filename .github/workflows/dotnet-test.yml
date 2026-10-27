@@ -3155,6 +3155,12 @@ jobs:
     # The MSBuild reading behind the extension/shelf key and scope REFUSES what it cannot model, and a
     # rule written against fixtures alone once refused the one real extension. This positive control
     # runs both scripts over the real tools/MeshWeaver.PluginTester.Razor, with a negative control.
+    # The conservative sweep's ONE path parser (paths_in), held by a table of every spelling class:
+    # spaces, separators after a property, `\`, `..`, quotes, `;`-lists, globs, trailing separators,
+    # and the negatives (nonexistent, outside, root, output, .git, unresolved).
+    - name: "The MSBuild sweep's path parser resolves every spelling in its table"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/msbuild-evaluate.py --self-test
     - name: "The real Razor build extension parses and keys cleanly"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-build-extension-reading.py

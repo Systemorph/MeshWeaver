@@ -323,63 +323,180 @@ def pp_properties(root: Path, text: str, project: Path) -> list[str]:
     return sorted(names)
 
 
-def sweep(root: Path, text: str, project: Path, properties: dict[str, str], outputs: list[str]) -> tuple[list[str], list[str]]:
-    """(existing in-repo files, in-repo glob patterns) the preprocessed project names anywhere."""
-    project_dir = project.parent
+def _scope_matcher():
+    """node-repo-scope.py's msbuild_glob_matches: the ONE MSBuild glob matcher (`**/` = zero or
+    more directories), loaded from the sibling so evaluation and scope cannot disagree."""
+    import importlib.util
+    path = Path(__file__).resolve().with_name("node-repo-scope.py")
+    spec = importlib.util.spec_from_file_location("node_repo_scope_for_evaluate", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.msbuild_glob_matches
+
+
+_GLOB_MATCHES = _scope_matcher()
+_DIRECTORY_PREFIXES = {"MSBuildThisFileDirectory": "this", "MSBuildProjectDirectory": "project"}
+
+
+def paths_in(root: Path, value: str, project_dir: Path, this_dir: Path, properties: dict[str, str],
+             outputs: list[str]) -> tuple[set[str], set[str]]:
+    """THE one parser of a path-ish value for the conservative sweep: (existing in-repo FILES it
+    names, in-repo glob PATTERNS it names). Every rule lives here, and the table in --self-test
+    holds them:
+      - a `;`-list is split; each piece is stripped of whitespace and of surrounding quotes;
+      - `\\` separators become `/`; spaces are kept (a file may have one);
+      - `$(MSBuildThisFileDirectory)` is the DEFINING file's directory and
+        `$(MSBuildProjectDirectory)` the project's, with any separator after them dropped, so the
+        join never becomes root-absolute; other properties take MSBuild's evaluated value, and a
+        piece with one still unresolved names nothing;
+      - a plain relative piece is the project's; `..` segments and doubled or trailing separators
+        are normalized;
+      - a GLOB (`*`, `**`, `?`) contributes its pattern AND every in-repo file it matches today,
+        when its static root is an existing in-repo directory other than the root;
+      - only EXISTING FILES count: never a directory, never the repository root, never `.git`,
+        never a build output, never anything outside the repository;
+      - item references (`@(…)`, `%(…)`) name nothing here: the items they draw on are read
+        where they are declared."""
+    root = root.resolve()
     files: set[str] = set()
     patterns: set[str] = set()
 
     def admit(path: str) -> str | None:
-        rel = _in_repo(root, path)
-        if rel is None or rel in ("", ".") or rel == ".git" or rel.startswith(".git/"):
+        try:
+            rel = Path(path).resolve().relative_to(root).as_posix()
+        except (ValueError, OSError):
+            return None
+        if rel in ("", ".") or rel == ".git" or rel.startswith(".git/"):
             return None
         if any(path == o or path.startswith(o.rstrip("/") + "/") for o in outputs):
             return None
         return rel
 
+    for piece in value.split(";"):
+        piece = piece.strip()
+        if len(piece) >= 2 and piece[0] == piece[-1] and piece[0] in "'\"":
+            piece = piece[1:-1].strip()
+        piece = piece.replace("\\", "/")
+        if not piece or "@(" in piece or "%(" in piece:
+            continue
+        base = project_dir
+        m = re.match(r"\$\((MSBuildThisFileDirectory|MSBuildProjectDirectory)\)", piece)
+        if m:
+            base = this_dir if _DIRECTORY_PREFIXES[m.group(1)] == "this" else project_dir
+            piece = piece[m.end():].lstrip("/")
+        piece = _PROPERTY.sub(lambda p: properties.get(p.group(1), p.group(0)), piece).replace("\\", "/")
+        if "$(" in piece:
+            continue
+        path = os.path.normpath(piece if piece.startswith("/") else os.path.join(str(base), piece)) if piece \
+            else os.path.normpath(str(base))
+        if not _is_glob(path):
+            if os.path.isfile(path):
+                rel = admit(path)
+                if rel is not None:
+                    files.add(rel)
+            continue
+        cut = min(i for i in (path.find("*"), path.find("?")) if i >= 0)
+        static_dir = path[:cut] if path[:cut].endswith("/") else os.path.dirname(path[:cut])
+        static_dir = static_dir.rstrip("/") or "/"
+        static_rel = admit(static_dir)
+        if static_rel is None or not os.path.isdir(static_dir):
+            continue  # rooted at the root, outside, an output, or nowhere: never swept
+        try:
+            pattern = Path(static_dir).resolve().relative_to(root).as_posix() + path[len(static_dir):]
+        except (ValueError, OSError):
+            continue
+        patterns.add(pattern)
+        for dirpath, dirnames, filenames in os.walk(static_dir):
+            dirnames[:] = [d for d in dirnames if d != ".git"]
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                rel = admit(full)
+                if rel is not None and _GLOB_MATCHES(rel, pattern):
+                    files.add(rel)
+    return files, patterns
+
+
+def sweep(root: Path, text: str, project: Path, properties: dict[str, str], outputs: list[str]) -> tuple[list[str], list[str]]:
+    """(existing in-repo files, in-repo glob patterns) the preprocessed project names anywhere:
+    every attribute value, text node and quoted piece, through paths_in()."""
+    project_dir = project.parent
+    own = None
+    try:
+        own = project_dir.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        pass
+    files: set[str] = set()
+    patterns: set[str] = set()
     for f, seg in pp_segments(text, project):
         seg = _COMMENT.sub("", seg)
         for value in _candidates(seg):
             for chunk in [value] + _QUOTED.findall(value):
-                for piece in chunk.split(";"):
-                    piece = piece.strip().replace("\\", "/")
-                    if not piece or "@(" in piece or "%(" in piece or not any(c in piece for c in "/."):
-                        continue
-                    if any(c in piece for c in "<>\n'\"") or " " in piece.strip():
-                        continue
-                    v = piece
-                    # A plain relative path is the PROJECT's (items, task inputs, HintPath): MSBuild
-                    # runs with the project directory as its base. Import paths, the one kind
-                    # relative to the defining file, come from the banners above.
-                    bases = [project_dir]
-                    if v.startswith("$(MSBuildThisFileDirectory)"):
-                        v, bases = v[len("$(MSBuildThisFileDirectory)"):], [f.parent]
-                    elif v.startswith("$(MSBuildProjectDirectory)"):
-                        v, bases = v[len("$(MSBuildProjectDirectory)"):].lstrip("/"), [project_dir]
-                    v = _PROPERTY.sub(lambda m: properties.get(m.group(1), m.group(0)), v).replace("\\", "/")
-                    if "$(" in v or not v:
-                        continue
-                    for base in ([Path("/")] if v.startswith("/") else bases):
-                        path = os.path.normpath(v if v.startswith("/") else str(base / v))
-                        if _is_glob(v):
-                            cut = min(i for i in (path.find("*"), path.find("?")) if i >= 0)
-                            static_dir = path[:cut] if path[:cut].endswith("/") else os.path.dirname(path[:cut])
-                            # rooted at an in-repo directory, never the repository root itself
-                            # rooted at an EXISTING in-repo directory: never the root, never an
-                            # output, and not the project's own (already tree-hashed) directory
-                            sd = admit(static_dir.rstrip("/") or "/")
-                            own = _in_repo(root, str(project_dir)) or ""
-                            if sd is not None and os.path.isdir(static_dir) and not (sd == own or sd.startswith(own + "/")):
-                                try:
-                                    patterns.add(Path(path).resolve().relative_to(root).as_posix())
-                                except (ValueError, OSError):
-                                    pass
-                            continue
-                        if os.path.isfile(path):
-                            rel = admit(path)
-                            if rel is not None:
-                                files.add(rel)
+                got_files, got_patterns = paths_in(root, chunk, project_dir, f.parent, properties, outputs)
+                files |= got_files
+                # the project's own directory is tree-hashed already; a pattern there adds nothing
+                patterns |= {p for p in got_patterns if not (own and (p == own or p.startswith(own + "/")))}
     return sorted(files), sorted(patterns)
+
+
+def self_test() -> int:
+    """The TABLE behind paths_in(): every spelling class, each with its expected files/patterns."""
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        top = Path(tmp).resolve()
+        root = top / "repo"
+        for rel in ("Proj/Proj.csproj", "Lib/Ext.props", "Lib/Beside.props", "Libs/Helper File.dll", "Libs/a.dll",
+                    "Shared/x.dll", "Shared/y.dll", "Shared/deep/z.dll", "Shared/notes.txt", "Shared/ab.dll",
+                    "root.dll", "Proj/bin/out.dll", ".git/config"):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text("x\n", encoding="utf-8")
+        (top / "outside.dll").write_text("x\n", encoding="utf-8")
+        project_dir, this_dir = root / "Proj", root / "Lib"
+        props = {"Libs": "../Libs", "LibsAbs": str(root / "Libs"), "OutDir": str(root / "Proj/bin") + "/"}
+        outputs = [str(root / "Proj/bin")]
+        table = (
+            # (label, value, expected files, expected patterns)
+            ("a space in the name", "../Libs/Helper File.dll", {"Libs/Helper File.dll"}, set()),
+            ("a leading / after $(MSBuildThisFileDirectory)", "$(MSBuildThisFileDirectory)/Beside.props", {"Lib/Beside.props"}, set()),
+            ("a leading \\ after $(MSBuildThisFileDirectory)", "$(MSBuildThisFileDirectory)\\Beside.props", {"Lib/Beside.props"}, set()),
+            ("a leading / after $(MSBuildProjectDirectory)", "$(MSBuildProjectDirectory)/../Libs/a.dll", {"Libs/a.dll"}, set()),
+            ("\\ separators", "..\\Libs\\a.dll", {"Libs/a.dll"}, set()),
+            (".. segments", "../Shared/../Libs/a.dll", {"Libs/a.dll"}, set()),
+            ("a single-quoted value", "'../Libs/a.dll'", {"Libs/a.dll"}, set()),
+            ("a double-quoted value", '"../Libs/a.dll"', {"Libs/a.dll"}, set()),
+            ("a ;-list, spaced", " ../Libs/a.dll ; ../Shared/x.dll ;", {"Libs/a.dll", "Shared/x.dll"}, set()),
+            ("a property", "$(Libs)/a.dll", {"Libs/a.dll"}, set()),
+            ("an absolute property", "$(LibsAbs)/a.dll", {"Libs/a.dll"}, set()),
+            ("a * glob: pattern AND matches", "../Shared/*.dll",
+             {"Shared/x.dll", "Shared/y.dll", "Shared/ab.dll"}, {"Shared/*.dll"}),
+            ("a ** glob: zero or more directories", "../Shared/**/*.dll",
+             {"Shared/x.dll", "Shared/y.dll", "Shared/ab.dll", "Shared/deep/z.dll"}, {"Shared/**/*.dll"}),
+            ("a ? glob", "../Shared/?.dll", {"Shared/x.dll", "Shared/y.dll"}, {"Shared/?.dll"}),
+            ("a glob in a custom item, \\-separated", "..\\Shared\\*.dll",
+             {"Shared/x.dll", "Shared/y.dll", "Shared/ab.dll"}, {"Shared/*.dll"}),
+            ("a doubled and a trailing separator on a file", "..//Libs//a.dll/", {"Libs/a.dll"}, set()),
+            ("NEGATIVE: a trailing separator names a DIRECTORY", "../Libs/", set(), set()),
+            ("NEGATIVE: a nonexistent path", "../Libs/missing.dll", set(), set()),
+            ("NEGATIVE: a path outside the repository", "../../outside.dll", set(), set()),
+            ("NEGATIVE: the repository root", "$(MSBuildProjectDirectory)/..", set(), set()),
+            ("NEGATIVE: a glob rooted at the repository root", "../*.dll", set(), set()),
+            ("NEGATIVE: a build output", "$(OutDir)out.dll", set(), set()),
+            ("NEGATIVE: .git", "../.git/config", set(), set()),
+            ("NEGATIVE: an unresolved property", "$(Nope)/a.dll", set(), set()),
+            ("NEGATIVE: an item reference", "@(Compile)", set(), set()),
+        )
+        for label, value, want_files, want_patterns in table:
+            got_files, got_patterns = paths_in(root, value, project_dir, this_dir, props, outputs)
+            ok = got_files == want_files and got_patterns == want_patterns
+            print(f"  {'✓' if ok else '✗'} {label}: {value!r}"
+                  + ("" if ok else f" → files {sorted(got_files)} patterns {sorted(got_patterns)}, "
+                                   f"want {sorted(want_files)} {sorted(want_patterns)}"))
+            if not ok:
+                failures.append(label)
+    if failures:
+        print(f"\n::error title=msbuild-evaluate self-test failed::{len(failures)} case(s): " + "; ".join(failures))
+        return 1
+    print(f"\n✓ msbuild-evaluate self-test: {len(table)} path spellings resolve as the table says")
+    return 0
 
 
 def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -> dict:
@@ -486,6 +603,8 @@ def evaluate(root: Path, projects: list[str], properties: list[str], dotnet: str
 
 
 def main() -> int:
+    if "--self-test" in sys.argv[1:]:
+        return self_test()
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--root", required=True)
     p.add_argument("--project", action="append", required=True)
