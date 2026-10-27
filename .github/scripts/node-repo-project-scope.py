@@ -149,11 +149,14 @@ def select(root, policy, files):
                     # An OPTIONAL hook in the caller's code: ANY ordinary failure of it — a
                     # RuntimeError, a caller-defined layout exception, an answer that is not a
                     # collection of project dirs — leaves the file unclassified (full validation);
-                    # it must never escape and end the CLI without the promised fallback.
+                    # it must never escape and end the CLI without the promised fallback. And EVERY
+                    # billed dir must be a project of THIS graph: a stale path or a `None` member
+                    # matches no entry's closure, so accepting it would silently skip every leg.
                     try:
                         got = msbuild_of(root, path)
-                        billed = ({str(d) for d in got}
-                                  if isinstance(got, (set, frozenset, list, tuple)) else None)
+                        billed = (set(got)
+                                  if isinstance(got, (set, frozenset, list, tuple))
+                                  and all(isinstance(d, str) and d in graph for d in got) else None)
                     except Exception:  # noqa: BLE001 — the fallback IS the handling
                         billed = None
                 if not billed:
@@ -278,7 +281,9 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
         assert select(root, policy, ["src/cluster/X.props"])["build"] == [a["project"]]
         for failing in ("raise ValueError('x')", "raise RuntimeError('x')",
                         "class LayoutError(Exception): pass\n    raise LayoutError('x')",
-                        "return 'src/Acme.Shared'", "return 42"):
+                        "return 'src/Acme.Shared'", "return 42",
+                        "return {'src/old/Acme.Alpha'}", "return [None]",
+                        "return ['src/Acme.Shared', 'src/old/Acme.Alpha']"):
             (root / scope.PROJECTS).write_text(
                 graph_src + f"def msbuild_scope(root, path):\n    {failing}\n")
             got = select(root, policy, [cluster])  # must RETURN, never raise
@@ -304,7 +309,7 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
         assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
         (isolated / "node-repo-scope.py").write_text("this is invalid Python !")
         assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
-    print("compiled project scope: 42 assertions passed")
+    print("compiled project scope: 45 assertions passed")
 
 
 def main():
