@@ -172,6 +172,21 @@ that a published plugin still binds is red, and it has exactly three answers:
 reached that way links green and fails at runtime, so search for it by hand (see `Graph/Apps`
 below).
 
+🚨 **The pull-request ladder links only FOUR plugins.** Its input is
+`.github/scripts/fetch-deployed-plugin-set.sh`, whose `modules=` list is fixed:
+`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps` and `.Payments.Stripe`. Every other published
+module is outside the check. That includes the `Mail.MicrosoftGraph`, `Mail.Gmail` and `OgCard`
+modules, and also `Memex.Portal.Shared`, which ships in the image rather than as a module. So a
+removal that only those consumers bind leaves the ladder **green with nothing checked**. A green
+ladder is evidence only for the four. A carve that removes types any other plugin binds needs its
+own compatibility check of those consumers:
+- build each one from source against the candidate core, with Release `-warnaserror`;
+- or, better, link its published bytes against the candidate.
+
+Answer 2 above is then shown by that check, not by the gate. (Measured on the pull-request lane,
+`dotnet-test.yml`. Whether the promoted-image rung in `main-cd.yml` reads a wider set was not
+measured here.)
+
 **Both projects moved in the first wave were OUTSIDE the content surface, and that is why they
 were free.** Nothing in any mesh bound `MeshWeaver.Hosting.Embeddings` or
 `MeshWeaver.Observability.Contract`, so the move was a `.csproj` edit.
@@ -315,7 +330,9 @@ two plugin modules, and the core-side ties are both data, not code:
   that bind `MeshWeaver.Graph`'s MailCopy types. Core cannot `[TypeForwardedTo]` into a plugins
   assembly, so the answer is "no published plugin binds it any more". Both modules move to the new
   home and republish first, and the core removal lands after. No epoch bump is needed if that order
-  holds.
+  holds. Neither module is in the pull-request ladder's input (see above), so a green ladder says
+  nothing about them. Before the removal lands, link the two republished modules against the
+  candidate explicitly.
 - **Persisted content is safe.** `MailCopySource` and `MailMessageCopy` are registered under
   `nameof(...)`, so the stored discriminator does not carry the assembly.
 
