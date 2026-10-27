@@ -86,6 +86,15 @@ public static class NodeSetCompiler
         /// i.e. a refused adoption.</para>
         /// </summary>
         public required ImmutableSortedDictionary<string, string> ResolvedIncludes { get; init; }
+
+        /// <summary>
+        /// The matched Code files with the text Roslyn saw for each (after include substitution),
+        /// in concatenation order — what the dependency-edge extraction attributes declared types
+        /// by (<see cref="DependencyEdgeExtraction"/>). <c>required</c> for the same reason as
+        /// <see cref="ResolvedIncludes"/>: an empty list for a type that has sources would make
+        /// every foreign type unattributed, i.e. an edge set that is silently empty.
+        /// </summary>
+        public required ImmutableArray<DependencySourceUnit> SourceUnits { get; init; }
     }
 
     /// <summary>One compiled NodeType's artifacts.</summary>
@@ -120,6 +129,14 @@ public static class NodeSetCompiler
         /// empty keeps every existing construction meaning exactly what it meant.</para>
         /// </summary>
         public ImmutableArray<CompileWarning> Warnings { get; init; } = [];
+
+        /// <summary>
+        /// The forward dependency edges Roslyn read off this compile, stamped with the emitted
+        /// assembly's MVID (<c>Doc/Architecture/DependencyGraph</c>). Null only for a
+        /// <see cref="CompiledNode"/> built by hand; <see cref="Compile"/> always sets it. An
+        /// init-only property for the arity reason <see cref="Warnings"/> records.
+        /// </summary>
+        public DependencyEdgeSet? DependencyEdges { get; init; }
     }
 
     /// <summary>
@@ -213,6 +230,7 @@ public static class NodeSetCompiler
             [.. nugetRefs])
         {
             ResolvedIncludes = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, closure),
+            SourceUnits = [.. matchedPaths.Select((path, i) => new DependencySourceUnit(path, resolvedFiles[i].Code ?? string.Empty))],
         };
     }
 
@@ -239,6 +257,8 @@ public static class NodeSetCompiler
     /// would emit an assembly missing the very types the directive exists to supply.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <param name="ct">Cancellation.</param>
+    /// <param name="moduleAssemblyPaths">The installed module assemblies' files, for the
+    /// <c>Module</c> dependency edges; null or empty records none.</param>
     public static CompiledNode Compile(
         NodeSet nodes,
         MeshNode typeNode,
@@ -252,7 +272,8 @@ public static class NodeSetCompiler
         string outputDirectory,
         Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>? resolveNuGet = null,
         ILogger? logger = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyCollection<string>? moduleAssemblyPaths = null)
     {
         ArgumentNullException.ThrowIfNull(references);
         ArgumentNullException.ThrowIfNull(dependencyIdOf);
@@ -283,10 +304,9 @@ public static class NodeSetCompiler
 
         Directory.CreateDirectory(outputDirectory);
         var nodeName = CodeConventions.SanitizeNodeName(inputs.NodePath);
-        var compilation = GeneratorPipeline.RunSourceGenerators(
-            EmitPipeline.CreateEmitCompilation(
-                inputs.GeneratedSource, inputs.AssemblyName, allReferences, parsePath: "", ct),
-            generatorPaths, logger, ct);
+        var authored = EmitPipeline.CreateEmitCompilation(
+            inputs.GeneratedSource, inputs.AssemblyName, allReferences, parsePath: "", ct);
+        var compilation = GeneratorPipeline.RunSourceGenerators(authored, generatorPaths, logger, ct);
 
         var artifact = EmitPipeline.EmitCompilationToDirectory(
             compilation, nodeName, inputs.NodePath, outputDirectory, ct);
@@ -295,16 +315,25 @@ public static class NodeSetCompiler
                 $"the assembly emitted for '{inputs.NodePath}' could not be persisted: {mismatch}");
 
         var pdbPath = Path.ChangeExtension(artifact.DllPath, ".pdb");
+        var digest = GeneratedInputDigestOf(inputs, generatorPaths);
         return new CompiledNode(
             inputs.NodePath,
             artifact.DllPath,
             File.Exists(pdbPath) ? pdbPath : null,
             inputs,
             CompiledDependencies.Compute(
-                ReferencedAssemblyNames(artifact.DllPath), dependencyIdOf, toolchainId,
-                GeneratedInputDigestOf(inputs, generatorPaths)))
+                ReferencedAssemblyNames(artifact.DllPath), dependencyIdOf, toolchainId, digest))
         {
             Warnings = [.. artifact.Warnings],
+            // The modules are the files the CALLER names (moduleAssemblyPaths) — told apart by file,
+            // never by name and never by subtracting a baseline: a directory host's platform
+            // references are fresh instances, and an image-bound module may sit in the baseline.
+            // None named ⇒ no module edges, never a guess.
+            DependencyEdges = DependencyEdgeExtraction.Extract(
+                    compilation, authored.SyntaxTrees, inputs.NodePath, inputs.SourceUnits, inputs.ResolvedIncludes,
+                    DependencyEdgeExtraction.ModuleReferences(references, moduleAssemblyPaths ?? []),
+                    ct)
+                with { BuildMvid = MvidOfFile(artifact.DllPath), InputDigest = digest },
         };
     }
 
@@ -352,6 +381,16 @@ public static class NodeSetCompiler
     /// reader so a bake never loads content bytes into the process (no collectible ALC, no unload
     /// race, no #890 exposure in a build tool).
     /// </summary>
+    /// <summary>The emitted assembly's MVID ("N" format), read from its metadata — the build
+    /// identity the dependency edges are stamped with.</summary>
+    private static string MvidOfFile(string dllPath)
+    {
+        using var stream = File.OpenRead(dllPath);
+        using var pe = new PEReader(stream);
+        var reader = pe.GetMetadataReader();
+        return reader.GetGuid(reader.GetModuleDefinition().Mvid).ToString("N");
+    }
+
     private static IEnumerable<string?> ReferencedAssemblyNames(string dllPath)
     {
         using var stream = File.OpenRead(dllPath);

@@ -41,7 +41,18 @@ public record NodeCompilationResult(
     // surface-id) pairs read from the EMITTED assembly's AssemblyRef table, plus the reserved
     // toolchain entry. Stamped onto NodeTypeDefinition.CompiledDependencies by the compile
     // watcher; validated at adopt time by HasUsableBuild / the bake probe / the prebuilt seeder.
-    ImmutableSortedDictionary<string, string>? CompiledDependencies = null);
+    ImmutableSortedDictionary<string, string>? CompiledDependencies = null)
+{
+    /// <summary>
+    /// The forward dependency edges Roslyn read off THIS compile (<see cref="DependencyEdgeSet"/>,
+    /// <c>Doc/Architecture/DependencyGraph</c>), stamped with the emitted assembly's MVID — or null
+    /// when no compilation ran (a cache hit, an adopted prebuilt, a failure), which is "not
+    /// extracted", never "no edges". An init-only property, not a positional parameter: a new
+    /// primary-constructor parameter changes the record's arity, a binary break between a module
+    /// and the platform it loads into.
+    /// </summary>
+    public DependencyEdgeSet? DependencyEdges { get; init; }
+}
 
 /// <summary>
 /// Service for on-demand compilation of dynamic MeshNode assemblies.
