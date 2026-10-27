@@ -299,7 +299,8 @@ internal static class PermissionEvaluator
                 ObserveAllMembershipNodes(cache, options),
                 ObserveGatedNodes(hub, cache, gates, staticGatedNodes),
                 ObserveRepositoryOwnedContent(cache, options, nodePath),
-                (nodes, policies, memberships, gatedNodes, repositoryOwned) =>
+                ObserveRuleGrants(cache, options, nodePath),
+                (nodes, policies, memberships, gatedNodes, repositoryOwned, ruleGrants) =>
                 {
                     // Match grants to the viewer OR any group they belong to (transitively). A group
                     // grant's subject is the group path, and memberships live UNDER the group node —
@@ -308,6 +309,12 @@ internal static class PermissionEvaluator
                     // matches on. Consistent with the Postgres rebuild's global group expansion.
                     var subjects = ResolveUserGroups(userId, memberships, options).Add(userId);
                     var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, options);
+                    // Declared type-scoped grants (GrantRule) join the GRANTED map at the partition
+                    // root's scope — exactly where an AccessAssignment at `{partition}/_Access`
+                    // would sit — so every later step (deny subtraction, _Policy caps and
+                    // inheritance breaks, the repository-owned write cap) treats them as the
+                    // ordinary roles they are.
+                    granted = AddRuleGrants(granted, subjects, ruleGrants);
                     return (Granted: granted, Denied: denied, RuntimePolicies: policies, GatedNodes: gatedNodes,
                         RepositoryOwned: repositoryOwned);
                 })
@@ -1087,6 +1094,80 @@ internal static class PermissionEvaluator
                 string.Equals(n.Path, AccessAssignmentGuard.SyncConfigPath(partition), StringComparison.OrdinalIgnoreCase)
                 && AccessAssignmentGuard.IsSystemOwned(n, options)))
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// The declared <see cref="GrantRule"/>s that apply to <paramref name="nodePath"/>'s partition,
+    /// paired with that partition (the scope the granted role sits at) — subject-agnostic; the fold
+    /// keeps the rules whose subject is the viewer or one of the viewer's groups.
+    ///
+    /// <para>Two reads, both cached process-wide: the rule set (<c>$security-grant-rules</c>, one
+    /// anchored read of <c>Admin/_GrantRule</c>), and — only while at least one rule is declared —
+    /// the partition ROOT (<c>$security-root:{partition}</c>, a point read in the partition's own
+    /// schema). A mesh that declares no rule never opens the second. Both re-emit on change, so a
+    /// new matching partition, a retyped root, or an edited or deleted rule takes effect on the
+    /// next emission — nothing is materialised, so nothing has to be swept.</para>
+    ///
+    /// <para>🚨 <b>Not seeded</b>, although the leg is purely additive: an empty seed would give an
+    /// entitled member a spurious first DENIAL, which every one-shot gate takes as its verdict (the
+    /// reasoning in <see cref="GetEffectivePermissionsCore"/>). It is an ordinary anchored read and
+    /// answers like the grant leg does.</para>
+    /// </summary>
+    private static IObservable<(string Scope, ImmutableArray<GrantRule> Rules)> ObserveRuleGrants(
+        IMeshNodeStreamCache cache, JsonSerializerOptions options, string nodePath)
+    {
+        var partition = GetPartition(nodePath);
+        var none = (Scope: partition, Rules: ImmutableArray<GrantRule>.Empty);
+        if (string.IsNullOrEmpty(partition) || partition.StartsWith('_'))
+            return Observable.Return(none);
+
+        return SecurityQuery(cache, SecurityQueries.GrantRulesQueryId, options, SecurityQueries.GrantRules)
+            .Select(nodes => GrantRuleEvaluator.ReadRules(nodes, options))
+            .Select(rules => rules.IsEmpty
+                ? Observable.Return(ImmutableArray<GrantRule>.Empty)
+                : SecurityQuery(cache, SecurityQueries.PartitionRootQueryId(partition), options,
+                        SecurityQueries.PartitionRoot(partition))
+                    .Select(roots => GrantRuleEvaluator.Matching(rules,
+                        roots.FirstOrDefault(n => string.Equals(n.Path, partition, StringComparison.Ordinal)),
+                        options)))
+            .Switch()
+            .DistinctUntilChanged(GrantRuleListEquality.Instance)
+            .Select(rules => (Scope: partition, Rules: rules));
+    }
+
+    /// <summary>
+    /// Adds every rule in <paramref name="ruleGrants"/> whose subject is in
+    /// <paramref name="subjects"/> (the viewer plus their groups, transitively) to the granted map
+    /// at the partition root's scope. Pure.
+    /// </summary>
+    private static ImmutableDictionary<string, ImmutableHashSet<string>> AddRuleGrants(
+        ImmutableDictionary<string, ImmutableHashSet<string>> granted,
+        IReadOnlySet<string> subjects,
+        (string Scope, ImmutableArray<GrantRule> Rules) ruleGrants)
+    {
+        if (ruleGrants.Rules.IsDefaultOrEmpty || string.IsNullOrEmpty(ruleGrants.Scope))
+            return granted;
+        foreach (var rule in ruleGrants.Rules)
+        {
+            if (!subjects.Contains(rule.AccessObject.Trim()))
+                continue;
+            var existing = granted.TryGetValue(ruleGrants.Scope, out var roles)
+                ? roles
+                : ImmutableHashSet<string>.Empty;
+            granted = granted.SetItem(ruleGrants.Scope, existing.Add(rule.Role.Trim()));
+        }
+        return granted;
+    }
+
+    /// <summary>Value equality over a matched rule list — records compare by value.</summary>
+    private sealed class GrantRuleListEquality : IEqualityComparer<ImmutableArray<GrantRule>>
+    {
+        public static readonly GrantRuleListEquality Instance = new();
+
+        public bool Equals(ImmutableArray<GrantRule> x, ImmutableArray<GrantRule> y)
+            => x.IsDefaultOrEmpty ? y.IsDefaultOrEmpty : !y.IsDefault && x.SequenceEqual(y);
+
+        public int GetHashCode(ImmutableArray<GrantRule> obj) => obj.IsDefault ? 0 : obj.Length;
     }
 
     /// <summary>
