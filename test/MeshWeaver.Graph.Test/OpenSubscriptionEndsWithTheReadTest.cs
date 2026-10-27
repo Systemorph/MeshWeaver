@@ -386,6 +386,61 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         Assert.Equal(link, MeshWeaver.Layout.AreaErrorClassifier.TryGetAccessDeniedPath(end.Exception));
     }
 
+    /// <summary>
+    /// 🚨 The residual of #7016 (MeshWeaver#7298): a STANDING grant on a direct owner-side
+    /// subscription is followed live. grace subscribes to a node her Viewer grant admits; the grant
+    /// row is deleted after the subscription was admitted — and NOTHING writes the node. The
+    /// subscription ends with the refusal, and the node's next revision never reaches her. Pre-fix
+    /// the standing Read was decided ONCE at subscribe time, so the revoked subscription kept
+    /// receiving every revision.
+    ///
+    /// <para>POSITIVE CONTROL: henry's subscription to the SAME node, through a grant that stays, is
+    /// still open after grace's revocation and receives that next revision — the revocation is
+    /// honoured per caller, and an access commit elsewhere on the node's scopes (grace's deletion IS
+    /// one, for henry's verdict too) only re-decides, never ends, a subscription whose grant
+    /// holds.</para>
+    /// </summary>
+    [HubFact]
+    public async Task ADirectSubscription_EndsWhenItsStandingGrantIsRevoked()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var doc = (await AsSystem(new MeshNode("granted-doc", Partition) { NodeType = "Markdown", Name = "v1" }, ct)).Path;
+        var graceGrant = (await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", doc), ct)).Path;
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", doc), ct);
+
+        var grace = Record(DirectStream(ClientAs(Grace), doc));
+        var henry = Record(DirectStream(ClientAs(Henry), doc));
+        using var openGrace = grace.Connect();
+        using var openHenry = henry.Connect();
+        await FirstNode(grace, doc, "grace's standing grant admits her direct subscription", ct);
+        await FirstNode(henry, doc, "henry's standing grant admits his direct subscription", ct);
+
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => NodeFactory.DeleteNode(graceGrant))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        var end = await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext, "the subscription ends when its standing grant is revoked", cancellationToken: ct);
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.Contains("Access denied", end.Exception!.Message);
+        Assert.Equal(doc, MeshWeaver.Layout.AreaErrorClassifier.TryGetAccessDeniedPath(end.Exception));
+
+        // The node's next revision: henry receives it (POSITIVE CONTROL), grace never does.
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream(doc).Update(node => node with { Name = "v2" }))
+            .Should().Emit(cancellationToken: ct);
+        await henry.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2",
+                "a subscription whose grant stands keeps receiving revisions after another caller's revocation", cancellationToken: ct);
+        // grace's recording has terminated (asserted above), so its replay completes at once.
+        Assert.DoesNotContain(await grace.ToList().Should().Emit(cancellationToken: ct),
+            n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2");
+    }
+
+    private static readonly AccessContext Grace = new() { ObjectId = "grace", Name = "grace" };
+    private static readonly AccessContext Henry = new() { ObjectId = "henry", Name = "henry" };
+
     private async Task AsSystemSyncConfig(bool twoWay, CancellationToken ct)
         => await Mesh.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => Mesh.GetMeshNodeStream($"pkg/{AccessAssignmentGuard.SyncConfigId}").Update(node => node with
