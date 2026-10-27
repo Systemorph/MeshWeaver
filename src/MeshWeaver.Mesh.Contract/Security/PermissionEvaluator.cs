@@ -600,8 +600,9 @@ internal static class PermissionEvaluator
     /// The nearest scope (self first, walking to root) that STATES <see cref="PartitionAccessPolicy.PublicPreview"/>
     /// decides; <c>false</c> when none does. A stated <c>false</c> is an answer and stops the walk — that is what
     /// makes opting a subtree back out of an inherited <c>true</c> possible at all. With
-    /// <paramref name="declaredOnly"/> (an instance closed to anonymous callers) a stated <c>true</c> counts only
-    /// when <paramref name="staticPolicies"/> states it at that scope. Pure.
+    /// <paramref name="declaredOnly"/> (an instance closed to anonymous callers) a stated <c>true</c> decides only
+    /// when <paramref name="staticPolicies"/> states it at that scope; a stored <c>true</c> is skipped and the walk
+    /// continues. Pure.
     /// </summary>
     /// <param name="policies">The effective policy per scope (static and stored).</param>
     /// <param name="staticPolicies">The statically declared policies per scope.</param>
@@ -617,8 +618,16 @@ internal static class PermissionEvaluator
         for (var s = ns; ; s = GetParentScope(s))
         {
             if (policies.TryGetValue(s, out var p) && p.PublicPreview is { } stated)
-                return stated && (!declaredOnly
-                    || (staticPolicies.TryGetValue(s, out var declared) && declared.PublicPreview == true));
+            {
+                // On a closed instance a STORED `true` is not a decision either way: it is skipped and the walk
+                // continues, so a subtree that opted in itself still inherits the operator's declared `true`
+                // above it — answering `false` there showed it the generic card the declaration exists to
+                // replace (PR #7293 review). A `false`, stored or declared, always decides.
+                var eligible = !stated || !declaredOnly
+                    || (staticPolicies.TryGetValue(s, out var declared) && declared.PublicPreview == true);
+                if (eligible)
+                    return stated;
+            }
             if (string.IsNullOrEmpty(s)) break;
         }
         return false;

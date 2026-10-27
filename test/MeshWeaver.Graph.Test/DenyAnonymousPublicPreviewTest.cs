@@ -133,6 +133,15 @@ public class EffectivePublicPreviewTest
     }
 
     [Fact]
+    public void AStoredTrue_UnderADeclaredTrue_KeepsTheDeclaredAnswer_OnAClosedInstance()
+    {
+        var declared = Stating("", true);
+        var policies = declared.Add("A", new PartitionAccessPolicy { PublicPreview = true });
+        PermissionEvaluator.EffectivePublicPreview(policies, declared, "A/B", declaredOnly: true)
+            .Should().BeTrue("a stored opt-in is skipped, not read as an opt-out of the operator's declaration");
+    }
+
+    [Fact]
     public void ANearerFalse_OptsOutOfADeclaredTrue()
     {
         var policies = Stating("", true).Add("A", new PartitionAccessPolicy { PublicPreview = false });
