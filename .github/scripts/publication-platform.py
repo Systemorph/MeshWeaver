@@ -275,13 +275,16 @@ def verify(composed: Platform, mode: str, source: str, reading: Reading,
     adopt. Returns warnings; raises Refusal when it cannot.
 
     `recorded` — the upstreams that carried a record when the host was chosen (`choose`'s
-    `recorded-sources`). A missing record is a reseal only for one of THOSE: an upstream that had
-    none then (beside a recorded one, mode `publication`) is the documented fallback. None = not
-    told, which presumes every upstream was recorded (the strict reading)."""
+    `recorded-sources`). A missing record is a reseal for one of THOSE in EVERY mode — a pinned or
+    frozen host recorded the upstream too, and a pre-record reseal under it carries floors nobody
+    named — while an upstream that had none then (beside a recorded one) is the documented
+    fallback. None = not told: only then does the mode decide (`publication` presumes every
+    upstream was recorded, the strict reading)."""
     if reading.kind == "absent":
         return []                                   # the seed step's own refusal names it
     if reading.kind == "no-record":
-        if mode == "publication" and (recorded is None or source in recorded):
+        lost = (source in recorded) if recorded is not None else (mode == "publication")
+        if lost:
             raise Refusal(f"the '{source}' publication this shard composed from carried a platform record, and "
                           f"the one it now reads ({reading.where}) carries none — it was resealed by a lane that "
                           f"predates the record, whose floors are unknown. Re-run: the gate then reads the "
@@ -296,6 +299,13 @@ def verify(composed: Platform, mode: str, source: str, reading: Reading,
                       f"on {composed.text()} — the seed and the host would be two sets. Re-run: the gate then "
                       f"composes on the set the publication names ({TRANSITIONAL}).")
     order = compare_sets(rec.set, composed.set)
+    if order == 0:
+        # The SAME set name over a different build is the pair `decide()` refuses — a reseal under
+        # the same name must not slip past the image-pair check by being re-read here.
+        raise Refusal(f"the '{source}' publication is sealed on {rec.text()} — the same set NAME as, but a different "
+                      f"build from, the host this shard composed ({composed.text()}). One name, two builds: the "
+                      f"floors cannot be ordered against the host. Re-run: the gate then reads the publication "
+                      f"that applies ({TRANSITIONAL}).")
     if order is not None and order > 0:
         raise Refusal(f"the '{source}' publication is sealed on {rec.text()}, NEWER than the host this shard composed "
                       f"({composed.text()}) — every bundle floored above it would be DECLINED. Re-run with no pinned "
@@ -642,6 +652,29 @@ def self_test() -> int:
     check("a pinned host under a NEWER seed: RED before the DECLINE wall", "NEWER than the host" in why, why)
     check("a pinned host above an older seed: fine", verify(Platform("3.1.11080", T[5], T[6]), "pin", "plugins", rec(new)) == [])
     check("legacy host, no record: fine", verify(old, "legacy", "plugins", Reading("no-record", None, "x")) == [])
+    # A PINNED or FROZEN host recorded the upstream too (decide() returns its `recorded`), so a
+    # pre-record reseal under it is a reseal. NEGATIVE CONTROL: the mode-only reading accepted it.
+    d = decide(new, pinned=True, ceiling=None, readings=race)
+    pinned_recorded = frozenset(d.recorded)
+    check("pin mode records the upstream (the input the next two cases rely on)", d.mode == "pin" and pinned_recorded == {"plugins"}, d)
+    why = refused(lambda: verify(new, d.mode, "plugins", Reading("no-record", None, "x"), pinned_recorded))
+    check("pin mode: a RECORDED upstream resealed by a pre-record lane is RED", "predates the record" in why, why)
+    d = decide(new, pinned=False, ceiling=None, readings=race, frozen="3.1.11076")
+    why = refused(lambda: verify(new, d.mode, "plugins", Reading("no-record", None, "x"), frozenset(d.recorded)))
+    check("freeze: a RECORDED upstream resealed by a pre-record lane is RED", d.mode == "pin" and "predates the record" in why, why)
+    check("pin mode NEGATIVE CONTROL: with no per-source list the mode default still applies (no list = not told)",
+          verify(new, "pin", "plugins", Reading("no-record", None, "x")) == [])
+    check("pin mode: an upstream that never had a record (beside a recorded one) stays the fallback",
+          verify(new, "pin", "crm", Reading("no-record", None, "x"), pinned_recorded) == [])
+    # Same set NAME, different build after a pinned/frozen host was chosen: decide() refuses that
+    # pair, so verify must too. NEGATIVE CONTROL: a genuinely OLDER set under the pin still passes.
+    twin = Platform(new.set, T[5], T[6])
+    why = refused(lambda: verify(new, "pin", "plugins", rec(twin)))
+    check("pin mode: a reseal with the host's set NAME and another build is RED", "different build" in why and new.set in why, why)
+    why = refused(lambda: verify(new, "pin", "plugins", rec(twin), pinned_recorded))
+    check("…and under a freeze (mode pin, recorded) the same", "different build" in why, why)
+    check("pin mode NEGATIVE CONTROL: an OLDER set under the pin still passes",
+          verify(new, "pin", "plugins", rec(old), pinned_recorded) == [])
 
     print("\nreaders, against fakes (no network):")
     idx = {"identity": "c003e001", "source": "plugins", "bundles": ["a.zip"], "generation": "g1",

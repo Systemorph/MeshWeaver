@@ -78,7 +78,7 @@ GEN_BYTES = "GENERATION-BYTES"
 STUB_AZ = r"""#!/usr/bin/env bash
 group="$2"
 verb=""
-for a in "$@"; do case "$a" in exists|download-batch|download|list) verb="$a"; break;; esac; done
+for a in "$@"; do case "$a" in exists|download-batch|download|list|show) verb="$a"; break;; esac; done
 account=""; share=""; path=""; dest=""; name=""; source=""; destination=""; pattern=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -104,8 +104,16 @@ case "$group/$verb" in
     ;;
   file/exists)      { [ -f "$file" ] && echo true; } || echo false;;
   file/download)    [ -f "$file" ] || exit 1; mkdir -p "$(dirname "$dest")"; cp "$file" "$dest";;
+  file/show)
+    # Only the one --query the seed issues: properties.etag, -o tsv. The ETag is a sidecar
+    # `<file>.etag` when a case wrote one (a reseal re-uploads the sentinel → a new ETag).
+    [ -f "$file" ] || exit 3
+    if [ -f "$file.etag" ]; then cat "$file.etag"; else echo '"0x8DC0000000000001"'; fi
+    ;;
   file/download-batch)
     # --source is "<share>/<dir>", and the tree already starts at <root>/<account>/<share>.
+    # A case may RESEAL the publication while the batch runs (MOCK_AZ_DURING_BATCH, a script).
+    if [ -n "${MOCK_AZ_DURING_BATCH:-}" ]; then bash "$MOCK_AZ_DURING_BATCH"; fi
     src="$MOCK_AZ_ROOT/$account/$source"
     [ -d "$src" ] || exit 1
     mkdir -p "$destination"
@@ -644,6 +652,39 @@ def main() -> int:
             else:
                 check(f"{label}: REFUSED", proc.returncode != 0 and "predates the record" in proc.stdout,
                       "a recorded upstream resealed by a pre-record lane has unknown floors", proc)
+        # ── A RESEAL DURING THE FETCH on the FLAT share route (no pointer, resealed in place) ──
+        # The record is checked, then `download-batch` runs; a publisher that reseals the prefix in
+        # between (deletes `_complete`, uploads new bundles and record, re-uploads `_complete`) must
+        # not be seeded as the publication that was checked. The seal's ETag and the record's bytes
+        # are held across the batch. NEGATIVE CONTROL first: the same flat prefix with no reseal seeds.
+        print("a reseal of a FLAT publication while the seed fetches it (#7337):")
+        for slug, label, reseal, ok in (
+                ("flat-steady", "NEGATIVE CONTROL: flat prefix, record names the host, nothing resealed", None, True),
+                ("flat-reseal-newer", "resealed on a NEWER set during the batch", resealed, False),
+                ("flat-reseal-same", "resealed by a pre-record lane during the batch (record unchanged, new seal)", "same", False)):
+            root = base / slug / "remote"
+            stage(root, pointer=None, generation=False, flat_copy=True)
+            prefix = root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / SOURCE
+            (prefix / "platform-set.json").write_text(json.dumps(host), encoding="utf-8")
+            workdir = base / slug / "seed"
+            platform = dict(composed)
+            if reseal is not None:
+                hook = base / slug / "reseal.sh"
+                lines = ["set -e", f"echo NEW-BYTES > '{prefix / BUNDLE}'",
+                         f"echo '\"0x8DC00000000000FF\"' > '{prefix / '_complete'}.etag'"]
+                if isinstance(reseal, dict):
+                    lines.append(f"cat > '{prefix / 'platform-set.json'}' <<'J'\n{json.dumps(reseal)}\nJ")
+                hook.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                platform["MOCK_AZ_DURING_BATCH"] = str(hook)
+            proc, bundle = run_seed(workdir, root, body, platform={**platform, "RECORDED_SOURCES": SOURCE})
+            if ok:
+                check(f"{label}: the seed proceeds", proc.returncode == 0 and read(bundle) == FLAT_BYTES,
+                      f"seeded {read(bundle)!r}", proc)
+            else:
+                check(f"{label}: REFUSED, naming the reseal",
+                      proc.returncode != 0 and "RESEALED while this seed fetched it" in proc.stdout + proc.stderr,
+                      "bundles from a publication nobody checked against the host would be seeded", proc)
+
         root = base / "rec-identity" / "remote"
         stage(root, pointer=GENERATION)
         proc, _ = run_seed(base / "rec-identity" / "seed", root, body,

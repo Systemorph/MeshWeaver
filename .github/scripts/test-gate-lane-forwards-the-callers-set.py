@@ -117,6 +117,17 @@ def main() -> int:
         check(f"17 EXECUTED: '{good}' is accepted (the resolver's SET_NAME accepts it)",
               rc == 0 and rows.get("platform-set") == good)
 
+    # platform-ceiling + allow-unpinned: the unpinned branch exits with empty outputs and never
+    # consults the ceiling, so the combination must be refused before it. NEGATIVE CONTROL:
+    # allow-unpinned alone still takes the tag branch (rc 0, empty set).
+    unpinned = {"IMAGE_DIGEST": "", "PLATFORM_DIGEST": "", "PINNED_SET": "", "ALLOW_UNPINNED": "true"}
+    rc, rows, said = execute(script, {**unpinned, "CEILING": "3.1.11069"})
+    check("18 EXECUTED: platform-ceiling beside allow-unpinned → rc != 0, named (the ceiling could not be enforced)",
+          rc != 0 and "allow-unpinned" in said and "3.1.11069" in said and rows.get("resolved") is None)
+    rc, rows, said = execute(script, {**unpinned, "CEILING": ""})
+    check("18 NEGATIVE CONTROL: allow-unpinned with no ceiling still follows the tags (rc 0, empty set)",
+          rc == 0 and rows.get("resolved") == "false" and rows.get("platform-set") == "")
+
     shard = step(text, "The platform for this shard: the caller's pins, or plan's set re-checked")
     check("7 the shard reads plan's set", "PLAN_SET: ${{ needs.plan.outputs.platform-set }}" in shard)
     as_called = shard[shard.index('if [ "${RESOLVED:-}" != "true" ]; then'):]

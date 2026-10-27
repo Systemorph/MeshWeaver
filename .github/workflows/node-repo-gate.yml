@@ -1024,6 +1024,13 @@ jobs:
               echo "::error::platform-ceiling '${CEILING}' was passed beside pinned digests — a pin and a ceiling are two answers to one question. Pass the ceiling with BOTH digests empty (the lane then composes on the set the upstream publication names, at or below it), or pin and drop the ceiling."
               exit 1
             fi
+            # allow-unpinned follows the image TAGS verbatim and resolves no set, so nothing would
+            # ever hold the run to the ceiling: with no upstream record (or none seeded) the shard
+            # would compose on whatever the tags point at — possibly above the ceiling. Refused.
+            if [ "${ALLOW_UNPINNED:-}" = "true" ]; then
+              echo "::error::platform-ceiling '${CEILING}' was passed with allow-unpinned — allow-unpinned follows the image tags verbatim and resolves no set, so the ceiling could never be enforced (the run could compose above it). Drop allow-unpinned so the lane resolves the ceiling set, or drop the ceiling."
+              exit 1
+            fi
             if ! [[ "$CEILING" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?[.-]ci\.[0-9]+$ || "$CEILING" =~ ^[0-9]+\.[0-9]+\.[1-9][0-9]*$ ]]; then
               echo "::error::platform-ceiling '${CEILING}' is not a set name (X.Y.Z[-prerelease]-ci.N, or <major>.<minor>.N from 3.1 on) — pass the caller's resolved \`set\`, or nothing"
               exit 1
@@ -2000,6 +2007,30 @@ jobs:
             return 0
           }
 
+          # The seal's token (`_complete`'s ETag; every reseal re-uploads the sentinel) — empty when
+          # it is gone or unreadable. And the platform record's bytes ("absent" when there is none),
+          # left at $SEED_DIR/.platform-set.json for the check; an unreadable one fails (MeshWeaver#7337).
+          seal_token() { # <dir>
+            az storage file show --account-name "$account" --share-name "$share" --path "$1/_complete" \
+              --auth-mode login --backup-intent --query properties.etag -o tsv --only-show-errors 2>/dev/null || true
+          }
+          record_snapshot() { # <dir>
+            local present
+            rm -f "$SEED_DIR/.platform-set.json"
+            present=$(az storage file exists --account-name "$account" --share-name "$share" \
+              --path "$1/platform-set.json" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors 2>/dev/null || echo unknown)
+            case "$present" in
+              false) echo absent ;;
+              true)
+                az storage file download --account-name "$account" --share-name "$share" \
+                  --path "$1/platform-set.json" --dest "$SEED_DIR/.platform-set.json" \
+                  --auth-mode login --backup-intent --only-show-errors > /dev/null \
+                  || { echo "::error::$account/$share/$1/platform-set.json exists but could not be read — an unreadable platform record is not an absent one" >&2; return 1; }
+                printf 'record:'; cksum < "$SEED_DIR/.platform-set.json" ;;
+              *) echo "::error::could not determine whether $account/$share/$1 carries platform-set.json (exists=$present) — a hold, not an absence" >&2; return 1 ;;
+            esac
+          }
+
           # The FIRST target is read — every target holds the same publication (publish-bake
           # writes them all-or-nothing), so one read is the set.
           target=$(printf '%s\n' $TARGETS | head -1)
@@ -2064,20 +2095,21 @@ jobs:
             # upstream publication when the real fault was an unreadable share.
             case "$sealed" in
               true)
+                # 🚨 THE SEAL'S TOKEN, taken BEFORE the record is read and compared AFTER the batch
+                # (MeshWeaver#7337). A generation directory is immutable, but a FLAT prefix is
+                # resealed IN PLACE — the publisher deletes `_complete`, uploads, and re-uploads it
+                # LAST — so a reseal between the record check and `download-batch` would seed bundles
+                # floored above the host the record just vouched for. Every reseal re-uploads the
+                # sentinel, so its ETag is the publication's token: unchanged across the batch (and the
+                # record's bytes unchanged) means the bytes seeded ARE the publication checked.
+                token_before=$(seal_token "$dir")
+                [ -n "$token_before" ] || { echo "::error::could not read the ETag of $account/$share/$dir/_complete — the publication's token cannot be held across the fetch (a hold, not an absence)"; exit 1; }
+                record_before=$(record_snapshot "$dir") || exit 1
                 # The generation this seed reads must name the platform the host was composed on
                 # (MeshWeaver#7337). Absent and unreadable are two answers here too.
-                rec_exists=$(az storage file exists --account-name "$account" --share-name "$share" \
-                  --path "$dir/platform-set.json" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors 2>/dev/null || echo unknown)
-                case "$rec_exists" in
-                  true)
-                    az storage file download --account-name "$account" --share-name "$share" \
-                      --path "$dir/platform-set.json" --dest "$SEED_DIR/.platform-set.json" \
-                      --auth-mode login --backup-intent --only-show-errors > /dev/null \
-                      || { echo "::error::$account/$share/$dir/platform-set.json exists but could not be read — an unreadable platform record is not an absent one"; exit 1; }
-                    seed_matches_host "$src" --record "$SEED_DIR/.platform-set.json" || exit 1
-                    rm -f "$SEED_DIR/.platform-set.json" ;;
-                  false) seed_matches_host "$src" --no-record || exit 1 ;;
-                  *) echo "::error::could not determine whether $account/$share/$dir carries platform-set.json (exists=$rec_exists) — a hold, not an absence"; exit 1 ;;
+                case "$record_before" in
+                  absent) seed_matches_host "$src" --no-record || exit 1 ;;
+                  *) seed_matches_host "$src" --record "$SEED_DIR/.platform-set.json" || exit 1 ;;
                 esac ;;
               false) upstream_not_ready "$src" "$account/$share/$dir" "" ;;
               *) echo "::error::could not read $account/$share/$dir/_complete for framework identity $IDENTITY (exists=$sealed) — availability CANNOT BE DETERMINED, which is a hold and not an absence. Check the storage credential and the share, not the upstream's publication."
@@ -2086,6 +2118,17 @@ jobs:
             az storage file download-batch --account-name "$account" --share-name "$share" \
               --source "$share/$dir" --destination "$SEED_DIR" --pattern '*.zip' \
               --auth-mode login --backup-intent --only-show-errors > /dev/null
+            # The same publication after the batch: the seal still there with the SAME token, and the
+            # record the host was checked against byte-identical. Anything else is a reseal DURING the
+            # fetch — the bundles just seeded may be the new publication's, floored on a set nobody
+            # checked. RED by name; a re-run reads the publication that then applies.
+            token_after=$(seal_token "$dir")
+            record_after=$(record_snapshot "$dir") || exit 1
+            rm -f "$SEED_DIR/.platform-set.json"
+            if [ "$token_after" != "$token_before" ] || [ "$record_after" != "$record_before" ]; then
+              echo "::error::the '$src' publication at $account/$share/$dir was RESEALED while this seed fetched it (seal token ${token_before} → ${token_after:-<no seal>}; platform record $([ "$record_after" = "$record_before" ] && echo unchanged || echo CHANGED)) — the bundles just downloaded may not be the publication whose platform record was checked against the host. Re-run: the gate then reads the publication that applies (MeshWeaver#7337)."
+              exit 1
+            fi
             n=$(ls "$SEED_DIR"/*.zip 2>/dev/null | wc -l | tr -d ' ')
             echo "upstream '$src': $n bundle(s) from $account/$share/$dir"
             fetched=$((fetched + n))
