@@ -176,9 +176,36 @@ def problems(committed_text: str | None, workflow_text: str) -> list[str]:
 # left core (#2847 and its successors) and the `test` job pulls no image. That is a FACT about the tree,
 # so it is checked, not assumed — a suite that starts a container again reds here, and either moves to
 # the host's prepared service or re-opens the debt (`containers:` in OWES) in the same change.
-# Any valid MSBuild spelling of the attribute: either quote style, whitespace around `=`.
-CONTAINER_PACKAGE = re.compile(r"""Include\s*=\s*(["'])\s*(Testcontainers[^"']*|Docker\.DotNet[^"']*)\1""", re.I)
-CONTAINER_CODE = re.compile(r"^\s*using\s+(DotNet\.Testcontainers|Testcontainers)\b|new\s+ContainerBuilder\b", re.M)
+# The package check reads the MSBuild XML itself — PackageReference / PackageVersion /
+# GlobalPackageReference elements, any quoting, comments ignored — so a `<Compile Include="Testcontainers…cs"/>`
+# or a commented-out reference is not a dependency, and the legacy `DotNet.Testcontainers` package is one.
+CONTAINER_PACKAGE_ITEMS = {"PackageReference", "PackageVersion", "GlobalPackageReference"}
+CONTAINER_PACKAGE_NAME = re.compile(r"^\s*(Testcontainers|DotNet\.Testcontainers|Docker\.DotNet)(\.|\s*$)", re.I)
+# Code: a using of either namespace, a ContainerBuilder, or a fully qualified (DotNet.)Testcontainers.<Type> use.
+CONTAINER_CODE = re.compile(r"^\s*using\s+(DotNet\.Testcontainers|Testcontainers)\b|new\s+ContainerBuilder\b"
+                            r"|(?<![\w.])(DotNet\.)?Testcontainers\.[A-Z]\w*\.", re.M)
+
+
+def container_package_hit(text: str) -> str | None:
+    """The first container package an MSBuild file references (None when it references none). Raises
+    ValueError when the file is not XML — no verdict is ever read off a file that could not be parsed."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        raise ValueError(f"not parseable as MSBuild XML: {e}") from e
+    for el in root.iter():
+        tag = el.tag.rsplit("}", 1)[-1] if isinstance(el.tag, str) else ""
+        if tag not in CONTAINER_PACKAGE_ITEMS:
+            continue
+        for attr in ("Include", "Update"):
+            value = el.get(attr) or ""
+            for item in value.split(";"):
+                if CONTAINER_PACKAGE_NAME.match(item):
+                    return f'<{tag} {attr}="{item.strip()}">'
+    return None
+
+
 SKIP_DIRS = {"bin", "obj", "node_modules", ".git", ".core-tests"}
 
 
@@ -199,20 +226,26 @@ def container_problems(root: str, owes: list[str] | None = None) -> list[str]:
         rel_dir = os.path.relpath(dirpath, root)
         for n in sorted(filenames):
             rel = os.path.normpath(os.path.join(rel_dir, n))
-            if n.endswith((".csproj", ".props", ".targets")):
-                pattern, what = CONTAINER_PACKAGE, "references a container package"
+            is_msbuild = n.endswith((".csproj", ".props", ".targets"))
+            if is_msbuild:
+                what = "references a container package"
             elif n.endswith(".cs") and (rel.startswith("test" + os.sep) or rel == "test"):
-                pattern, what = CONTAINER_CODE, "starts a container"
+                what = "starts a container"
             else:
                 continue
             try:
-                with open(os.path.join(dirpath, n), errors="replace") as fh:
-                    hit = pattern.search(fh.read())
-            except OSError as e:
+                with open(os.path.join(dirpath, n), encoding="utf-8-sig", errors="replace") as fh:
+                    text = fh.read()
+                if is_msbuild:
+                    hit = container_package_hit(text)
+                else:
+                    m = CONTAINER_CODE.search(text)
+                    hit = m.group(0).strip() if m else None
+            except (OSError, ValueError) as e:
                 out.append(f"{rel}: unreadable ({e}) — the no-container check reached no verdict on it")
                 continue
             if hit:
-                out.append(f"{rel} {what} ({hit.group(0).strip()[:80]}) — a build host's sandbox has no Docker daemon; "
+                out.append(f"{rel} {what} ({hit[:80]}) — a build host's sandbox has no Docker daemon; "
                            f"run the suite against the host's prepared service, or re-open the `containers:` debt in "
                            f"core-build-stages.py OWES in this change")
     return out
@@ -300,6 +333,22 @@ def _self_test() -> int:
         open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n")
         open(os.path.join(t, "test", "A", "bin", "X.props"), "w").write('<PackageReference Include="Testcontainers" />')
         expect(container_problems(t, debt_free) == [], "build output (bin/) is not the tree")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write(
+            '<Project><ItemGroup><Compile Include="TestcontainersPolicyTest.cs" />'
+            '<!-- <PackageReference Include="Docker.DotNet" /> --></ItemGroup></Project>')
+        expect(container_problems(t, debt_free) == [],
+               "a Compile item named Testcontainers… and a commented-out Docker.DotNet reference are no dependency")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write(
+            '<Project><ItemGroup><PackageReference Include="DotNet.Testcontainers" Version="1.6.0" /></ItemGroup></Project>')
+        expect(any("container package" in p for p in container_problems(t, debt_free)), "RED: the legacy DotNet.Testcontainers package")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project/>")
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write(
+            "public class T { object B() => new DotNet.Testcontainers.Builders.TestcontainersBuilder<object>(); }\n")
+        expect(any("starts a container" in p for p in container_problems(t, debt_free)),
+               "RED: a fully qualified DotNet.Testcontainers builder with no using")
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project><ItemGroup>")
+        expect(any("no verdict" in p for p in container_problems(t, debt_free)), "RED: an unparseable project file reaches no verdict")
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every drift is red, the generated file is green'}")
     return 1 if fails else 0
 
