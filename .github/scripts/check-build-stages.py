@@ -195,31 +195,57 @@ def core_problems(doc: dict) -> list[str]:
     return out
 
 
+# A `uses:` value, plain or quoted — quoting a workflow reference must not hide it.
+_USES = r"""uses:[ \t]*['"]?Systemorph/MeshWeaver/\.github/workflows/"""
+
+
 def lanes_called(workflow_text: str) -> list[str]:
     """The shared heavy lanes a satellite's ci.yml calls (`uses: …/<lane>@…`), in LANE_STAGE order."""
-    called = set(re.findall(r"uses:\s*Systemorph/MeshWeaver/\.github/workflows/([A-Za-z0-9._-]+\.yml)@", workflow_text))
+    called = set(re.findall(_USES + r"([A-Za-z0-9._-]+\.yml)@", workflow_text))
     return [lane for lane in LANE_STAGE if lane in called]
 
 
-def _calling_job(workflow_text: str, lane: str) -> Optional[str]:
-    """The WHOLE job block (from its `  <job>:` line to the next job's) that calls `lane` —
-    independent of whether `with:` comes before or after `uses:`, which YAML allows either way."""
-    jobs = list(re.finditer(r"^  [A-Za-z0-9_-]+:[ \t]*(?:#.*)?$", workflow_text, re.M))
-    calls = re.compile(rf"^\s+uses:\s*Systemorph/MeshWeaver/\.github/workflows/{re.escape(lane)}@\S+", re.M)
-    for i, job in enumerate(jobs):
-        block = workflow_text[job.start():jobs[i + 1].start() if i + 1 < len(jobs) else len(workflow_text)]
-        if calls.search(block):
-            return block
-    return None
+def _job_blocks(workflow_text: str) -> list[str]:
+    """Every job block under the top-level `jobs:` mapping, whatever indentation the file uses:
+    the indent of the first key under `jobs:` IS the job indent, a job runs to the next key at
+    that indent, and the mapping ends at the next top-level key."""
+    lines = workflow_text.splitlines(keepends=True)
+    blocks: list[str] = []
+    in_jobs, indent, current = False, None, None
+    for line in lines:
+        bare = line.strip()
+        meaningful = bare and not bare.startswith("#")
+        lead = len(line) - len(line.lstrip(" "))
+        if not in_jobs:
+            if re.match(r"^jobs:[ \t]*(?:#.*)?$", line.rstrip("\r\n")):
+                in_jobs = True
+            continue
+        if meaningful and lead == 0:
+            break  # the next top-level key ends `jobs:`
+        if meaningful and indent is None:
+            indent = lead
+        if meaningful and lead == indent and re.match(r"^[ ]*['\"]?[A-Za-z0-9_-]+['\"]?:[ \t]*(?:#.*)?$", line.rstrip("\r\n")):
+            if current is not None:
+                blocks.append("".join(current))
+            current = [line]
+        elif current is not None:
+            current.append(line)
+    if current is not None:
+        blocks.append("".join(current))
+    return blocks
 
 
-def _lane_input(workflow_text: str, lane: str, key: str) -> Optional[str]:
-    """`with: <key>:` of the job that calls `lane`: None when that job does not pass it, and the
-    empty string when it passes it EMPTY (`key: ''`) — which a lane reads as "none", not as its
-    default, so the two must stay apart."""
-    block = _calling_job(workflow_text, lane)
-    if block is None:
-        return None
+def _calling_jobs(workflow_text: str, lane: str) -> list[str]:
+    """The WHOLE job blocks that call `lane` — independent of whether `with:` comes before or after
+    `uses:`, which YAML allows either way."""
+    calls = re.compile(r"^\s+" + _USES + re.escape(lane) + r"@\S+", re.M)
+    return [b for b in _job_blocks(workflow_text) if calls.search(b)]
+
+
+def _block_input(block: str, key: str) -> Optional[str]:
+    """`with: <key>:` of one calling job: None when that job does not pass it, and the empty string
+    when it passes it EMPTY (`key: ''`) — which a lane reads as "none", not as its default, so the
+    two must stay apart."""
     v = re.search(rf"^\s+{re.escape(key)}:[ \t]*(.*)$", block, re.M)
     if not v:
         return None
@@ -247,9 +273,19 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
         if want == "compile-check":
             out += _markers(want, cmd, NODE_COMPILE_CHECK_PARITY)
         else:
+            # FAIL CLOSED: the inputs that set the parity are read from the ONE job that calls the
+            # lane. A call no job block could be found for (an unreadable layout), or a lane called
+            # from several jobs (one host stage cannot mirror two callers' inputs), is red — never
+            # read as "no inputs", which would drop the baselines from what the stage owes.
+            blocks = _calling_jobs(workflow_text, lane)
+            if len(blocks) != 1:
+                out.append(f"{CI_WORKFLOW} calls {lane} from {len(blocks)} job block(s) this guard could read — "
+                           "exactly one is required, so the stage's parity is derived from the inputs Actions really passes")
+                continue
+            block = blocks[0]
             # Omitted ⇒ the lane's default; passed EMPTY ⇒ no allowlist at all, and then a stage
             # that passes one would tolerate failures the Actions leg fails on.
-            allow = _lane_input(workflow_text, lane, "allow-file")
+            allow = _block_input(block, "allow-file")
             allow = "plugin-gate.allow" if allow is None else allow
             needles = list(NODE_GATE_PARITY)
             if allow:
@@ -257,10 +293,10 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
             elif "--allow " in cmd:
                 out.append(f"stage `{want}` passes `--allow` while {CI_WORKFLOW} passes the lane an EMPTY allow-file — "
                            "the host would tolerate failures the Actions leg fails on")
-            baseline = _lane_input(workflow_text, lane, "warning-baseline-file")
+            baseline = _block_input(block, "warning-baseline-file")
             if baseline:
                 needles.append((f"--warning-baseline {baseline}", "the in-mesh warning ratchet ci.yml passes the lane"))
-            dynamic = _lane_input(workflow_text, lane, "dynamic-baseline-file")
+            dynamic = _block_input(block, "dynamic-baseline-file")
             if dynamic:
                 needles.append((f"--dynamic-baseline {dynamic}", "the dynamic-edge ratchet ci.yml passes the lane"))
             out += _markers(want, cmd, needles)
@@ -432,6 +468,22 @@ def _self_test() -> int:
            "an EMPTY allow-file in ci.yml and a gate stage with no --allow is green")
     red(node, "node-repo", "EMPTY allow-file", "a gate that passes --allow while ci.yml passes an EMPTY allow-file", empty_allow)
     red(no_allow, "node-repo", "--allow plugin-gate.allow", "an OMITTED allow-file still owes the lane's default allowlist")
+    # Layout must not hide a caller's inputs: four-space indentation, a quoted `uses:`, a second caller.
+    wb4 = "\n".join(("  " + l) if l.startswith("  ") else l for l in wb.split("\n"))
+    expect(wb4 != wb and "\n    test-repos:\n" in wb4, "self-test fixture: the four-space ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "--warning-baseline gate-warnings.allow",
+        "a debt-free claim whose gate drops the warning baseline a FOUR-SPACE-indented ci.yml passes", wb4)
+    expect(problems(json.dumps(node), "node-repo", "\n".join(("  " + l) if l.startswith("  ") else l for l in NODE_CI.split("\n")))[0] == [],
+           "a FOUR-SPACE-indented ci.yml with an honest declaration is green")
+    quoted = NODE_CI.replace("uses: Systemorph/MeshWeaver/.github/workflows/node-repo-compile-check.yml@main",
+                             "uses: 'Systemorph/MeshWeaver/.github/workflows/node-repo-compile-check.yml@main'")
+    expect(quoted != NODE_CI, "self-test fixture: the quoted-uses ci.yml was built")
+    red(mutate(node, lambda d: (d.update(owes=[], ciEquivalent=True), d["stages"].pop(0))), "node-repo", "no `compile-check` stage",
+        "a debt-free claim with only `gate` while a QUOTED `uses:` still calls compile-check", quoted)
+    second = wb.replace("  tests-ratchet:", "  test-repos-strict:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n"
+                                            "    with:\n      warning-baseline-file: strict-warnings.allow\n  tests-ratchet:")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "from 2 job block(s)",
+        "a lane called from a SECOND job whose inputs a single stage cannot mirror", second)
     red(node, "node-repo", "calls none of", "a ci.yml that calls no shared heavy lane", "jobs:\n  x:\n    runs-on: y\n")
     red(node, "node-repo", "is absent", "no ci.yml to derive the owed stages from", None)
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every breach is red, every honest declaration is green'}")
