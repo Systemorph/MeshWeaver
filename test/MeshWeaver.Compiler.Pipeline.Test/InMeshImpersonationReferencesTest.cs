@@ -31,19 +31,48 @@ public class InMeshImpersonationReferencesTest
         using MeshWeaver.Mesh.Security;
         using MeshWeaver.Mesh.Services;
         using MeshWeaver.ContentCollections;
-        using MeshWeaver.Mail.MailCopy;
         """;
 
+    private static Compilation Compile(string body) =>
+        CompileSource($"{Usings}\npublic static class Probe {{\n{body}\n}}");
+
+    private static CSharpCompilation CompileSource(string source, string? extraTree = null)
+    {
+        // Touch every assembly the snippets bind against so it is loaded and has a Location.
+        _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
+                    typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable),
+                    typeof(System.Text.Json.JsonSerializerOptions), typeof(MessageDelivery<>),
+                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>) };
+        // 🚨 Only assemblies whose file is STILL on disk. Other classes of this project compile
+        // node assemblies into temp folders, load them and delete the folder when they finish; such
+        // an assembly stays in the AppDomain with a Location that no longer exists, and referencing
+        // it fails the compilation with FileNotFoundException. Which classes ran before this one is
+        // a matter of class order, so the reference set must not depend on it.
+        var references = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && System.IO.File.Exists(a.Location))
+            .Select(a => MetadataReference.CreateFromFile(a.Location));
+        var compilation = CSharpCompilation.Create("InMeshProbe",
+            extraTree is null
+                ? [CSharpSyntaxTree.ParseText(source, path: "Probe.cs")]
+                : [CSharpSyntaxTree.ParseText(source, path: "Probe.cs"), CSharpSyntaxTree.ParseText(extraTree, path: "ModuleMailCopyStubs.cs")],
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, "the probe must bind, or the scan proves nothing: " + string.Join("; ", errors));
+        return compilation;
+    }
+
+    private static string[] Found(string body) =>
+        InMeshImpersonationReferences.Find(Compile(body)).Select(r => r.Symbol).ToArray();
+
     /// <summary>
-    /// 🚨 STUBS of the mail copy's entry points, under the full names the table keys them by. The mail copy left
-    /// core for the Mail module (MeshWeaver.Plugins, design page Mail/MailCopy), so this project cannot reference
-    /// the real types — and the table is core's subject, so the proof that it FIRES on those names stays here. The
-    /// table is keyed by <c>Namespace.TypeName</c> with no assembly, which is exactly what makes a same-named stub
-    /// an honest stand-in. Signatures mirror the module's. That the table is COMPLETE against the real types is
-    /// checked where both are visible: the Plugins repository's <c>MailCopySurfaceRegistrationTest</c>.
-    /// Every probe compiles with this tree, so the negative controls below also prove the stubs report nothing.
+    /// 🚨 STUBS of the mail copy's entry points under the namespace they carry in the Mail MODULE
+    /// (MeshWeaver.Plugins, <c>MeshWeaver.Mail.MailCopy</c>). That module is not referenceable from core, and the
+    /// table is keyed <c>Namespace.TypeName</c> with no assembly — so a same-named stub is an honest stand-in for
+    /// proving the table FIRES on those names. Signatures mirror the module's. That the table is COMPLETE against the
+    /// real moved types is checked where both are visible: MeshWeaver.Plugins' <c>MailCopySurfaceRegistrationTest</c>.
     /// </summary>
-    private const string MailCopyStubs = """
+    private const string ModuleMailCopyStubs = """
         using System;
         using System.Reactive;
         namespace MeshWeaver.Mail.MailCopy
@@ -97,36 +126,13 @@ public class InMeshImpersonationReferencesTest
         }
         """;
 
-    private static Compilation Compile(string body) =>
-        CompileSource($"{Usings}\npublic static class Probe {{\n{body}\n}}");
-
-    private static CSharpCompilation CompileSource(string source)
+    // The probe with the module stubs as a second tree. The probe names the stubs FULLY QUALIFIED, as in-mesh code that
+    // references the Mail module may.
+    private static string[] FoundWithModuleStubs(string body)
     {
-        // Touch every assembly the snippets bind against so it is loaded and has a Location.
-        _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
-                    typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable),
-                    typeof(System.Text.Json.JsonSerializerOptions), typeof(MessageDelivery<>),
-                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>) };
-        // 🚨 Only assemblies whose file is STILL on disk. Other classes of this project compile
-        // node assemblies into temp folders, load them and delete the folder when they finish; such
-        // an assembly stays in the AppDomain with a Location that no longer exists, and referencing
-        // it fails the compilation with FileNotFoundException. Which classes ran before this one is
-        // a matter of class order, so the reference set must not depend on it.
-        var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && System.IO.File.Exists(a.Location))
-            .Select(a => MetadataReference.CreateFromFile(a.Location));
-        var compilation = CSharpCompilation.Create("InMeshProbe",
-            [CSharpSyntaxTree.ParseText(source, path: "Probe.cs"),
-             CSharpSyntaxTree.ParseText(MailCopyStubs, path: "MailCopyStubs.cs")],
-            references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-        Assert.True(errors.Count == 0, "the probe must bind, or the scan proves nothing: " + string.Join("; ", errors));
-        return compilation;
+        var compilation = CompileSource($"{Usings}\npublic static class Probe {{\n{body}\n}}", ModuleMailCopyStubs);
+        return InMeshImpersonationReferences.Find(compilation).Select(r => r.Symbol).ToArray();
     }
-
-    private static string[] Found(string body) =>
-        InMeshImpersonationReferences.Find(Compile(body)).Select(r => r.Symbol).ToArray();
 
     [Theory]
     // Direct call, the shape the runtime guard also sees.
@@ -227,48 +233,55 @@ public class InMeshImpersonationReferencesTest
     }
 
     /// <summary>
-    /// The mail copy's stores (and the engine's background sync) run as System on the owner's behalf. Their
-    /// runtime check judges the immediate caller, which a method group handed to a later platform callback
-    /// replaces — so every reference, a DEFERRED method group included, is reported at compile time, on the
-    /// interface as on the concrete store. The types live in the Mail module now; these probes bind the
-    /// same-named stubs in <see cref="MailCopyStubs"/>.
+    /// The SAME surfaces under the namespace they carry in the Mail module, registered before the module ships them, so
+    /// no window exists in which a method group handed to a platform callback reaches a moved System entry point
+    /// unreported. Bound against <see cref="ModuleMailCopyStubs"/>.
     /// </summary>
     [Theory]
-    [InlineData("public static IObservable<MailMessageCopy> M(IMailCopyStore s, MailMessageCopy c) => s.Upsert(\"owner\", c);",
+    [InlineData("public static IObservable<MeshWeaver.Mail.MailCopy.MailMessageCopy> M(MeshWeaver.Mail.MailCopy.IMailCopyStore s, MeshWeaver.Mail.MailCopy.MailMessageCopy c) => s.Upsert(\"owner\", c);",
         "MeshWeaver.Mail.MailCopy.IMailCopyStore.Upsert")]
-    [InlineData("public static IObservable<MailMessageCopy> M(MeshMailCopyStore s, MailMessageCopy c) => s.Upsert(\"owner\", c);",
+    [InlineData("public static IObservable<MeshWeaver.Mail.MailCopy.MailMessageCopy> M(MeshWeaver.Mail.MailCopy.MeshMailCopyStore s, MeshWeaver.Mail.MailCopy.MailMessageCopy c) => s.Upsert(\"owner\", c);",
         "MeshWeaver.Mail.MailCopy.MeshMailCopyStore.Upsert")]
-    // DEFERRED: a method group handed on, invoked later by whoever holds it.
-    [InlineData("public static Func<string, MailMessageCopy, IObservable<MailMessageCopy>> M(IMailCopyStore s) => s.Upsert;",
+    // DEFERRED: a method group handed on, invoked later by whoever holds it — the shape only this check sees.
+    [InlineData("public static Func<string, MeshWeaver.Mail.MailCopy.MailMessageCopy, IObservable<MeshWeaver.Mail.MailCopy.MailMessageCopy>> M(MeshWeaver.Mail.MailCopy.IMailCopyStore s) => s.Upsert;",
         "MeshWeaver.Mail.MailCopy.IMailCopyStore.Upsert")]
-    [InlineData("public static Func<string, IObservable<MailMessageCopy>> M(MeshMailCopyStore s) => o => s.Read(o, \"outlook\", \"g1\", \"m1\");",
+    [InlineData("public static Func<string, IObservable<MeshWeaver.Mail.MailCopy.MailMessageCopy>> M(MeshWeaver.Mail.MailCopy.MeshMailCopyStore s) => o => s.Read(o, \"outlook\", \"g1\", \"m1\");",
         "MeshWeaver.Mail.MailCopy.MeshMailCopyStore.Read")]
-    [InlineData("public static Func<string, string, IObservable<System.Reactive.Unit>> M(IMailAttachmentStore s) => s.DeleteAll;",
+    [InlineData("public static Func<string, string, IObservable<System.Reactive.Unit>> M(MeshWeaver.Mail.MailCopy.IMailAttachmentStore s) => s.DeleteAll;",
         "MeshWeaver.Mail.MailCopy.IMailAttachmentStore.DeleteAll")]
-    [InlineData("public static IObservable<string> M(MeshMailAttachmentStore s, byte[] b) => s.Save(\"owner\", \"p\", \"r\", b);",
+    [InlineData("public static IObservable<string> M(MeshWeaver.Mail.MailCopy.MeshMailAttachmentStore s, byte[] b) => s.Save(\"owner\", \"p\", \"r\", b);",
         "MeshWeaver.Mail.MailCopy.MeshMailAttachmentStore.Save")]
-    [InlineData("public static Action<string, bool> M(MailCopyEngine e) => e.Kick;",
+    [InlineData("public static Action<string, bool> M(MeshWeaver.Mail.MailCopy.MailCopyEngine e) => e.Kick;",
         "MeshWeaver.Mail.MailCopy.MailCopyEngine.Kick")]
-    [InlineData("public static Func<string, IObservable<MailCopySource>> M(MailCopyEngine e) => e.Sync;",
+    [InlineData("public static Func<string, IObservable<MeshWeaver.Mail.MailCopy.MailCopySource>> M(MeshWeaver.Mail.MailCopy.MailCopyEngine e) => e.Sync;",
         "MeshWeaver.Mail.MailCopy.MailCopyEngine.Sync")]
-    [InlineData("public static Action<string> M(IMailAccountCopy a) => a.KickAll;",
-        "MeshWeaver.Mail.MailCopy.IMailAccountCopy.KickAll")]
-    [InlineData("public static void M(MailFeedAccountCopy a) => a.KickAll(\"owner\");",
-        "MeshWeaver.Mail.MailCopy.MailFeedAccountCopy.KickAll")]
-    // Enable starts the System backfill: every public road to it.
-    [InlineData("public static IObservable<MailCopySource> M(MailCopyEngine e) => e.Enable(\"owner\", 30);",
+    [InlineData("public static IObservable<MeshWeaver.Mail.MailCopy.MailCopySource> M(MeshWeaver.Mail.MailCopy.MailCopyEngine e) => e.Enable(\"owner\", 30);",
         "MeshWeaver.Mail.MailCopy.MailCopyEngine.Enable")]
-    [InlineData("public static IObservable<bool> M(MailFeedAccountCopy a) => a.Enable(\"owner\", \"acct\", 30);",
+    [InlineData("public static Action<string> M(MeshWeaver.Mail.MailCopy.IMailAccountCopy a) => a.KickAll;",
+        "MeshWeaver.Mail.MailCopy.IMailAccountCopy.KickAll")]
+    [InlineData("public static void M(MeshWeaver.Mail.MailCopy.MailFeedAccountCopy a) => a.KickAll(\"owner\");",
+        "MeshWeaver.Mail.MailCopy.MailFeedAccountCopy.KickAll")]
+    [InlineData("public static IObservable<bool> M(MeshWeaver.Mail.MailCopy.MailFeedAccountCopy a) => a.Enable(\"owner\", \"acct\", 30);",
         "MeshWeaver.Mail.MailCopy.MailFeedAccountCopy.Enable")]
-    [InlineData("public static Func<string, string, int, IObservable<bool>> M(IMailAccountCopy a) => a.Enable;",
+    [InlineData("public static Func<string, string, int, IObservable<bool>> M(MeshWeaver.Mail.MailCopy.IMailAccountCopy a) => a.Enable;",
         "MeshWeaver.Mail.MailCopy.IMailAccountCopy.Enable")]
-    [InlineData("public static IObservable<bool> M(IMailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
+    [InlineData("public static IObservable<bool> M(MeshWeaver.Mail.MailCopy.IMailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
         "MeshWeaver.Mail.MailCopy.IMailCopySwitch.Enable")]
-    [InlineData("public static IObservable<bool> M(MailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
+    [InlineData("public static IObservable<bool> M(MeshWeaver.Mail.MailCopy.MailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
         "MeshWeaver.Mail.MailCopy.MailCopySwitch.Enable")]
-    public void AMailCopyStoreReference_IsFound(string body, string expected)
+    public void AModuleMailCopyReference_IsFound(string body, string expected)
     {
-        Assert.Contains(expected, Found(body));
+        Assert.Contains(expected, FoundWithModuleStubs(body));
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL for the module names: the stubs themselves and code that merely holds the types report
+    /// nothing, so a pass above is the references, not the tree they were bound against.
+    /// </summary>
+    [Fact]
+    public void ModuleMailCopyTypes_Untouched_AreNotReported()
+    {
+        Assert.Empty(FoundWithModuleStubs($"public static object M(MeshWeaver.Mail.MailCopy.IMailCopyStore s, MeshWeaver.Mail.MailCopy.MailCopyEngine e) => (s, e);"));
     }
 
     [Fact]

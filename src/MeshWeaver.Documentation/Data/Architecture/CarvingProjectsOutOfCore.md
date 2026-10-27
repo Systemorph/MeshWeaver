@@ -104,8 +104,8 @@ So the keystone was narrower than it looked: it gated `GitSync`, and it never ga
 ### What the move carried with it, and what it left unguarded
 
 - 🚨 **The `InternalsVisibleTo` grants stay in core.** `MeshWeaver.Graph`, `.Hosting`,
-  `.Hosting.AspNetCore`, `.Compiler`, `.Mesh.Operations`, `.PluginCatalog` and `.Testcontainers`
-  name `Memex.Portal.Shared` / `Memex.Portal.Shared.Test`, which are now assemblies of ANOTHER
+  `.Hosting.AspNetCore`, `.Compiler`, `.Mesh.Operations` and `.PluginCatalog` (and `.Testcontainers`
+  until it followed the suite to plugins, below) name `Memex.Portal.Shared` / `Memex.Portal.Shared.Test`, which are now assemblies of ANOTHER
   repository. That is the #2689 shape — a refactor of one of those internals can red the plugins
   trunk with no local signal — and what catches it is the required
   `Dependent suites (MeshWeaver.Plugins)` verdict, which selects the moved suite by compiled reach.
@@ -212,9 +212,35 @@ the departing types, and which of the three answers each of them gets.
 | `PluginCatalog` | 21 245 | **yes** | PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
 | `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
 | `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
+| `Testcontainers` | 385 | no | nothing: its two consumers (`Memex.Portal.Shared.Test`, `MeshWeaver.Testcontainers.Test`) were already in plugins | moved out — free |
+| `Hosting.AspNetCore` | 3 970 | no | `memex/aspire/Memex.Portal.ServiceDefaults` (leaving with #7297); **the satellite MeshWeaver.SocialMedia**, whose compiled module `MeshWeaver.Social` derives from `MeshEndpointProviderAttribute` and compiles against core SOURCE | **stays** for now — a move makes a satellite depend on plugins (see below) |
+| `Markdown.Export.Contract` | 355 | no | `Hosting.AspNetCore` (`PortalApplication`) | stays while `Hosting.AspNetCore` does |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
 and NuGet resolution, packaging.
+
+### Outside the content surface is not the same as free
+
+The content-surface test answers "does a move flip the framework identity". It does not answer "who
+else compiles against this from source". `Hosting.AspNetCore` is outside the surface, and no project
+in core's `src/`, `test/` or `tools/` references it, so it looked free. Two consumers say otherwise:
+
+- `memex/aspire/Memex.Portal.ServiceDefaults` references it. That project is itself leaving core
+  (Systemorph/MeshWeaver#7297, Plugins#4333), so this pin goes away on its own.
+- **A satellite references it.** MeshWeaver.SocialMedia's compiled module `MeshWeaver.Social` declares
+  its HTTP endpoints through `MeshEndpointProviderAttribute`, the endpoint-contribution hook (design
+  #1655), and compiles it from `$(MeshWeaverRoot)/src/MeshWeaver.Hosting.AspNetCore`. Satellites
+  depend on the platform and on nothing else (see
+  [Repository Dependency Direction](../RepositoryDependencyDirection)); none checks out
+  MeshWeaver.Plugins. Moving the project would leave that module with no source to compile against.
+
+So `Hosting.AspNetCore` stays until the hook is split from the portal infrastructure in `Portal/`:
+the hook (`MeshEndpointProviderAttribute`, `ModuleEndpointDataSource`, the endpoint and static-asset
+extensions) is a platform extension point, and `Portal/` is host code. That split changes which
+assembly declares public types, so it needs type forwarders and is a design change, not a move.
+`Markdown.Export.Contract` is pinned by `Hosting.AspNetCore` alone (`PortalApplication`), so it waits
+with it. 🚨 **Before calling any move free, grep the satellites' `.csproj` files for
+`$(MeshWeaverRoot)/src/<Project>`**, not only core's.
 
 ### The `ProjectReference` graph lies about all of them
 
@@ -534,6 +560,19 @@ policies name a repository **and a workflow file**. The policy for core's `publi
 not cover MeshWeaver.Plugins' `publish-aspire-package.yml`. The package owner has to add the new
 policy, and set `vars.NUGET_TRUSTED_USER` there, before the next Aspire package release. Until then
 that lane's `preflight` is red by name.
+
+## The `clients/` tree
+
+Each client goes where its consumers are, like the deployment material above.
+
+| Piece | Went to | Why there |
+|---|---|---|
+| `clients/voice-gateway` | MeshWeaver.Plugins `clients/voice-gateway` | A standalone Python container that talks to a memex over HTTP and MCP. Nothing in core builds or reads it, and core ran no job for it. It now sits beside the other clients and the Speech module, with its own `Voice gateway` workflow running its 44 pytest cases. |
+| `clients/python` (the `meshweaver` SDK) | **stays** | `deploy/python-gate` and `deploy/pandas-gate`, both core-built images, `COPY` it, and it generates from core's canonical `mesh.proto`. Moving it would make a core image depend on another repository. `clients.yml` stays with it. |
+| `clients/README.md` | stays, rewritten | It describes what is left and where the rest went. |
+
+Nothing here belongs in MeshWeaver.Deploy: neither piece puts a sealed set anywhere or watches where it
+runs.
 
 ## The product demo samples
 

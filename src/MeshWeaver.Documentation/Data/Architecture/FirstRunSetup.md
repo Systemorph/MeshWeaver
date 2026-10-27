@@ -235,7 +235,7 @@ should be checked the same way once, at ramp-up.
 
 ### A deployment path nobody listed: the test container (#6037)
 
-`MeshWeaver.Testcontainers` starts the portal image as a test substrate, and it is a deployment
+`MeshWeaver.Testcontainers` (MeshWeaver.Plugins `src/`) starts the portal image as a test substrate, and it is a deployment
 path too — one that stated `ConnectionStrings:memex` and **not** `Graph:Storage:Type`. Every
 container it ever started therefore served the wizard. Nothing noticed, because its wait was
 `200` on `/healthz`, and the wizard answers **every** probe path (`/healthz`, `/health`, `/alive`,
@@ -322,6 +322,17 @@ copy lives in this repository's string catalog (`setup.*`, `view.pending*`, `hom
 6. **The CLI hands the person straight into the wizard** — `memex-local up`/`update` open the URL
    with the token, and a portal that is still installing its packages is reported as a state, not as
    "NOT USABLE" (MeshWeaver.Deploy).
+7. **The package step is grouped and pre-checked** — "it is too much on this screen / maybe
+   categories, and pre-check what's sensible". Packages are grouped by their root's `category`
+   (Platform, Daily work, Communication, AI, Productivity, …; Developer Tools, Showcase and Games
+   folded away), the sensible first-start set is ticked by ONE pure, tested rule (Essentials; plus
+   Google, iMessage and WhatsApp when the deployment states `InstanceSetup:HostPlatform = mac`),
+   Essentials' dependency closure is listed as "included by Essentials" rather than as checkboxes,
+   and a one-line summary says how many are selected and that the Store can change it later.
+8. **A sign-in route the installation already configures is shown as such** — client ID and tenant
+   as text, the secret as "configured"/"missing", no input fields, nothing echoed — and the manifest
+   records nothing for it (configuration outranks the manifest). Only routes the host leaves blank
+   get inputs.
 
 ## Related
 

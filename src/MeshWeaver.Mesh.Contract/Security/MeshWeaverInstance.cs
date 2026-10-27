@@ -83,6 +83,33 @@ public record MeshWeaverInstance
     /// discipline as <c>ApiToken.LastUsedAt</c> so a busy instance does not write on every call.</summary>
     public DateTimeOffset? LastSeenAt { get; init; }
 
+    /// <summary>
+    /// The platform version the instance REPORTED when it was last seen — the same string its
+    /// <c>/api/version</c> answers and its Settings ▸ About shows (<c>PlatformBuildInfo.PlatformVersion</c>).
+    /// Carried by the consumer on its token exchange (<c>SyncTokenPayloads.Request.Telemetry</c>) and
+    /// stamped by the registry together with <see cref="LastSeenAt"/>; absent for a consumer that
+    /// predates the field. Informational: nothing authenticates or authorizes on it
+    /// (<c>Doc/Architecture/InstanceTelemetry</c>).
+    /// </summary>
+    public string? LastSeenVersion { get; init; }
+
+    /// <summary>The core commit the reported platform build was built from, as the instance reported it.</summary>
+    public string? LastSeenCommit { get; init; }
+
+    /// <summary>
+    /// The home URL the instance reported when last seen. <see cref="HomeUrl"/> is what the REGISTRANT
+    /// typed once; this is what the running instance says about itself, refreshed on every stamp.
+    /// </summary>
+    public string? LastSeenHomeUrl { get; init; }
+
+    /// <summary>
+    /// A compact, human-readable summary of what the instance carries when last seen — the package
+    /// count and a content digest (<c>"87 packages · 3f9a1c2e"</c>), never the list itself. The full
+    /// inventory is the consumer report at <c>{Ops}/ConsumerReports/{instanceId}</c> for the
+    /// instances that send one; this field is what EVERY registered instance leaves behind.
+    /// </summary>
+    public string? LastSeenSummary { get; init; }
+
     /// <summary>Owner- or admin-set kill switch. A disabled instance fails authentication even
     /// while its grants remain, so access can be cut without losing the grant history.</summary>
     public bool IsDisabled { get; init; }

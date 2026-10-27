@@ -92,20 +92,18 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.ContentCollections.SyncContentFilesBuilder"] = ["ImpersonateAsSystem"],
             // The mail copy's stores write and read as System on the owner's behalf. Their runtime check judges
             // the immediate caller, which a method group handed to a platform callback replaces — so both the
-            // interfaces and the concrete stores are reported here.
+            // interfaces and the concrete stores are reported here, and every public road to Enable (it starts the
+            // System backfill): the engine, the per-account copy and the switch over the providers.
             // 🚨 These types are NOT core's: the mail copy lives in the Mail MODULE (MeshWeaver.Plugins,
-            // MeshWeaver.Mail.MicrosoftGraph, design page Mail/MailCopy). The table is keyed by
-            // Namespace.TypeName with no assembly, so naming them here reaches the module's types in any
-            // in-mesh compile that references the module, and names nothing where it is not installed. It is
-            // a recorded core→plugins edge by NAME (Doc/Architecture/CarvingProjectsOutOfCore → MailCopy):
-            // renaming the namespace there silences these entries, which is why that repository's
-            // MailCopySurfaceRegistrationTest compares this table with the module's [ImpersonationSurface]s.
+            // MeshWeaver.Mail.MicrosoftGraph, namespace MeshWeaver.Mail.MailCopy; design page Mail/MailCopy). The
+            // table is keyed Namespace.TypeName with no assembly, so these names reach the module's types in any
+            // in-mesh compile that references the module, and name nothing where it is not installed. A recorded
+            // core→plugins edge by name (Doc/Architecture/CarvingProjectsOutOfCore → MailCopy); the module's
+            // MailCopySurfaceRegistrationTest compares this list with its [ImpersonationSurface]s.
             ["MeshWeaver.Mail.MailCopy.IMailCopyStore"] = MailCopyStoreMembers,
             ["MeshWeaver.Mail.MailCopy.MeshMailCopyStore"] = MailCopyStoreMembers,
             ["MeshWeaver.Mail.MailCopy.IMailAttachmentStore"] = MailAttachmentStoreMembers,
             ["MeshWeaver.Mail.MailCopy.MeshMailAttachmentStore"] = MailAttachmentStoreMembers,
-            // Enable starts the System backfill, so every public road to it is a surface: the engine, the
-            // per-account copy and the switch over the providers.
             ["MeshWeaver.Mail.MailCopy.MailCopyEngine"] = ["Kick", "Sync", "Enable", "ServesFromCopy", "FollowMove"],
             ["MeshWeaver.Mail.MailCopy.IMailAccountCopy"] = ["KickAll", "Enable"],
             ["MeshWeaver.Mail.MailCopy.MailFeedAccountCopy"] = ["KickAll", "Enable"],
