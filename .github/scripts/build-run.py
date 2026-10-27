@@ -1031,7 +1031,9 @@ def _is_zombie(proc_root: str, pid: str) -> bool:
     (measured on the user-namespace pool, 2026-10-27: `bwrap` State Z, PPid 1, after the startup
     probe). Counting them as survivors made the host refuse to claim on every start."""
     try:
-        with open(os.path.join(proc_root, pid, "status")) as fh:
+        # errors="replace": a task name may hold non-UTF-8 bytes, and the name is read before State
+        # — a decode error must never abort cleanup (review of #7287).
+        with open(os.path.join(proc_root, pid, "status"), encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 if line.startswith("State:"):
                     return line.split()[1:2] == ["Z"]
@@ -2373,10 +2375,24 @@ def self_test() -> int:
             fh.write("Name:\tpython3\nState:\tS (sleeping)\nPPid:\t1\n")
         check("leftovers/a zombie is not a survivor, a sleeping process is", pid_namespace_leftovers(fake) == [11],
               pid_namespace_leftovers(fake))
+        with open(os.path.join(fake, "12", "status"), "wb") as fh:
+            fh.write(b"Name:\tbw\xff\xferap\nState:\tZ (zombie)\nPPid:\t1\n")
+        check("leftovers/a non-UTF-8 task name neither raises nor hides a zombie", pid_namespace_leftovers(fake) == [11],
+              pid_namespace_leftovers(fake))
         # reap_children really reaps: a child that exited is collected without blocking.
         child = subprocess.Popen(["true"])
-        time.sleep(0.3)
-        reaped = reap_children()
+        # Wait for the child to EXIT without consuming its status (Popen waits only for exec), so the
+        # reaper is what collects it — never a fixed sleep that a loaded runner can outrun (review of #7287).
+        if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
+            os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+            reaped = reap_children()
+        else:  # no waitid (macOS): retry the reaper until the child has exited, bounded
+            reaped = 0
+            for _ in range(200):
+                reaped += reap_children()
+                if reaped:
+                    break
+                time.sleep(0.05)
         child.returncode = 0  # reaped behind Popen's back; keep its finalizer quiet
         gone = True
         try:
