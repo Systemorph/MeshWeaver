@@ -450,6 +450,39 @@ The fix shape: a mesh-scoped INSTANCE cache, never `static`, of the assembly nam
 dominates is NOT established: the sampler records types, not stacks. The next reading is an
 allocation trace with stacks (`dotnet-trace` with `gc-verbose`) over one boot.
 
+`CoffHeader` also appears well after boot, so the compile path cannot be the only caller (MeshWeaver#5799:
+0.80 GiB in a 10-second step on 10-26, on a pod up for hours). A path that runs outside compiles is
+the **build guards**. `NodeTypeCompilationHelpers.GuardsOf` reads `InstalledModuleAssembly.Version`
+and `.PackageVersion` of every installed module, and each property opened the module's file and
+parsed its PE headers. By code reading, the guards and the dependency-id resolver run from six
+call sites in `NodeTypeEnrichmentHelpers` on the instance-hub activation path, inside `Update`
+lambdas of the release watcher, in the pre-warmer per catalog emission, and in
+`GetConfigurationsFromExistingAssembly`, which content writes reach through schema validation.
+That is two `PEHeaders` per module per call. The stamps of a loaded assembly cannot change, so they are now held per assembly
+(`InstalledModules.StampsOf`, weakly keyed so a retired collectible module drops its entry). Other
+paths still parse per call: the store's MVID probes on activation
+(`FileSystemAssemblyStore.MvidOf`, `ShippedBuildRefetch`, `ServedBuildIdentity.OfFile`) and
+`NuGetBuildRecord.Read` in `GetConfigurationsFromExistingAssembly`. Whether the build guards were
+the largest caller is NOT measured. The next `[HEAPSTEP]` reading on an image that holds the stamps
+answers it: if `CoffHeader` still leads a step, the MVID probes are next.
+
+**`SortedInt32KeyNode<ImmutableHashSet<string>.HashBucket>`** (2.57 GiB sampled, 35 % of the
+10-26 step). These are the tree nodes of an `ImmutableHashSet<string>`. Building an N-entry set
+allocates on the order of N·log N of them. Two places rebuilt a large set on every call:
+
+- `SyncedQueryMeshNodes` derived its path set with `dict.Keys.ToImmutableHashSet()` after every
+  change frame. The process-wide query cache backs queries with these collections, so ONE node's
+  update rebuilt the whole result set's paths. The set is now folded beside the snapshot
+  (`SyncedQueryFold`): at 2,000 results, an update frame costs 689 bytes instead of 112,865.
+- `LocalizationCatalog.Keys` copied the ~2,657-key English catalog into a new set on every read,
+  and module layout areas call `Keys.Contains(key)` per rendered label. The key sets are now built
+  once with the catalogs: 32 bytes per read instead of 148,922.
+
+Which of the two led the step is NOT established; both were fixed because both are wrong by
+construction. A third rebuild of the same shape sits in the PostgreSQL partitioned query
+(MeshWeaver.Plugins `PostgreSqlPartitionedMeshQuery`, `livePaths` after each re-query). It costs
+in proportion to the re-query it follows, so it is not an amplifier.
+
 ## Why the LIVE ones are never released
 
 `HostedHubsCollection.messageHubs` (the field in `src/MeshWeaver.Messaging.Hub/HostedHubsCollection.cs`):

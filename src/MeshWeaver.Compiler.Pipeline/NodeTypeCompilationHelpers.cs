@@ -3872,10 +3872,18 @@ internal static class NodeTypeCompilationHelpers
     {
         var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Held per assembly by the mesh's registry: a direct module.Version read opens the file
+        // every time, and this runs per activation and per content write (MeshWeaver#5799).
+        // Resolved only once there IS a module to stamp: a hub built without a mesh (MeshBuilder
+        // registers the registry) carries no installed module, so it has nothing to read either.
+        InstalledModules? stamps = null;
         foreach (var module in modules)
         {
             var name = module.Assembly.GetName().Name;
-            if (!string.IsNullOrEmpty(name) && module.Version is { Length: > 0 } version)
+            if (string.IsNullOrEmpty(name))
+                continue;
+            stamps ??= hub.ServiceProvider.GetRequiredService<InstalledModules>();
+            if (stamps.StampsOf(module.Assembly).Version is { Length: > 0 } version)
                 map[name] = version;
         }
         return map;
@@ -3890,10 +3898,15 @@ internal static class NodeTypeCompilationHelpers
     {
         var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Resolved only once there is a module to stamp — see ModuleVersionsOf.
+        InstalledModules? stamps = null;
         foreach (var module in modules)
         {
             var name = module.Assembly.GetName().Name;
-            if (!string.IsNullOrEmpty(name) && module.PackageVersion is { Length: > 0 } version)
+            if (string.IsNullOrEmpty(name))
+                continue;
+            stamps ??= hub.ServiceProvider.GetRequiredService<InstalledModules>();
+            if (stamps.StampsOf(module.Assembly).PackageVersion is { Length: > 0 } version)
                 map[name] = version;
         }
         return map;

@@ -336,6 +336,42 @@ Consequences:
 - **Pre-existing, untouched nodes** are still findable lexically immediately, and become semantically rankable once the backfill migration has run.
 - Enabling a provider is therefore an **enhancement, not a cliff** — but until the backfill runs, older rows only match on name/id/description substrings.
 
+### 🚨 A model change never breaks a query — stale columns degrade to lexical, by name
+
+pgvector refuses to compare vectors of different dimension: `a <=> b` raises
+`22000: different vector dimensions N and M`, and the error fails the **whole statement**. A
+free-text search is one statement over many partition schemas, and over their `content_chunks`
+too, so a single column still holding the previous model's vectors used to fail every free-text
+search on the instance (MeshWeaver#7302: measured on memex when its model moved from a
+1536-dimension model to `bge-m3`, 1024 — the portal embedded queries with the new model while
+`mesh_nodes` columns were re-sized schema by schema by the backfill, and `content_chunks` not at
+all).
+
+The rule since then (`EmbeddingColumnDimensions`, MeshWeaver.Plugins): before a semantic search
+compares anything, it reads the **declared** dimension of every `embedding` column the statement
+would touch (the `vector(N)` typmod; pgvector enforces it on every stored row, so it is exact for
+the whole column — one catalog query per table). An arm whose column matches the query vector's
+length ranks semantically; every other arm stays in the result and answers **lexically** (every
+typed word required, NULL distance, so it sorts after the semantic hits of its tier). Both routes
+apply it: the cross-partition fan-out (`GenerateCrossSchemaSelectQuery`, per schema) and the pinned
+search (`GenerateVectorSearchQuery`, per arm). The degradation is logged as a `Warning`, never
+silently:
+
+```
+[VectorSearch] DEGRADED to lexical on the cross-partition search for 3 content_chunks column(s): the
+query model emits 1024 dimensions and these columns hold another model's vectors [acme=vector(1536), …].
+```
+
+It ends per column when that column is re-embedded with the current model:
+`MeshNodeEmbeddingBackfill` (migration) for `mesh_nodes`, a Content Indexing **Rebuild** for
+`content_chunks`. Until then search answers, partially, and the log says where. What the gate
+does **not** see: two models of the SAME dimension — the column records its dimension, not the
+model that produced its vectors, so such a switch still mixes vector spaces until the re-embed.
+
+Pinned by `EmbeddingModelSwitchTests` (MeshWeaver.Plugins): partitions on 1536 and 1024 queried
+after the switch on both routes, plus a negative control in which the same arm, on the query
+model, finds its purely semantic neighbour.
+
 ### Apple Intelligence / on-device — not a fit here
 
 There is no Apple service you can call from a containerized .NET portal to get embeddings or a vector index. The Natural Language framework's `NLEmbedding` is in-process macOS/iOS only; the Foundation Models framework (on-device Apple Intelligence) is Swift-only, exposes tool calling but **no embeddings API**, and its vector space wouldn't match the server's index anyway. The local answer is pgvector (already installed via the `pgvector/pgvector:pg17` image) plus a local Ollama embedding model, as above.
