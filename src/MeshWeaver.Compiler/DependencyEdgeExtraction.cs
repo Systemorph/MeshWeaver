@@ -545,11 +545,11 @@ public static class DependencyEdgeExtraction
     /// for the reason <see cref="EmittedReferenceEdges(CSharpCompilation, Stream, DependencyReferenceClasses)"/>
     /// gives: <see cref="Compilation.GetUsedAssemblyReferences"/> also counts a module whose namespace
     /// a <c>using</c> merely imports, and it pays for that answer with a second full binding pass
-    /// over every method body. What metadata cannot show — a constant (an enum member included) the
-    /// compiler inlined from a module, a <c>nameof</c> of a module symbol — is added by
-    /// <see cref="CompileTimeOnlyModuleEdges"/>, so a module whose constant a type reads is still
-    /// that type's edge: a module edge selects the type when the module changes, and a changed
-    /// constant changes the type's emitted code.</para></summary>
+    /// over every method body. What metadata cannot show — a module symbol the compiler ERASED (an
+    /// inlined constant, a <c>[Conditional]</c> call, a <c>nameof</c>) — is added by
+    /// <see cref="CompileTimeOnlyModuleEdges"/>, so such a module is still that type's edge: a module
+    /// edge selects the type when the module changes, and that change changes or breaks the type's
+    /// compile.</para></summary>
     private static IEnumerable<DependencyEdge> EmittedModuleEdges(
         CSharpCompilation compilation, Func<Stream> emittedImage, IReadOnlySet<MetadataReference> moduleReferences,
         CancellationToken ct)
@@ -579,13 +579,17 @@ public static class DependencyEdgeExtraction
         return edges.Values;
     }
 
-    /// <summary>The MODULE edges the emitted image cannot show: a module whose CONSTANT (an enum
-    /// member included) the compiler inlined, or whose symbol a <c>nameof</c> names, leaves no
-    /// <c>AssemblyRef</c>, yet a change to it changes — or breaks — this type's compile. Candidates
-    /// are found by NAME first (the constant names each not-yet-edged module declares, and every
-    /// <c>nameof</c>), and only those nodes are bound, so the price is a syntax walk plus a handful
-    /// of local bindings — never the second full binding pass
-    /// <see cref="Compilation.GetUsedAssemblyReferences"/> pays.</summary>
+    /// <summary>The MODULE edges the emitted image cannot show. The compiler leaves no
+    /// <c>AssemblyRef</c> for a module symbol it ERASED: a constant (an enum member included) it
+    /// inlined, a call to a <c>[Conditional]</c> method (or a use of a <c>[Conditional]</c>
+    /// attribute) whose symbol is undefined, a module type that only appears in a constant
+    /// expression (<c>(int)default(Color)</c>), and any name inside a <c>nameof</c> — a generic
+    /// argument included. A change to that module still changes or breaks this type's compile.
+    /// Candidates are nominated by NAME — every identifier inside a <c>nameof</c>, and every
+    /// identifier spelling a type name (an attribute's with and without its suffix), a constant or
+    /// a <c>[Conditional]</c> method that a not-yet-edged module declares — and only those nodes
+    /// are bound: an edge when one binds a symbol of that module. That is a syntax walk plus local
+    /// bindings, never the second full binding pass <see cref="Compilation.GetUsedAssemblyReferences"/> pays.</summary>
     private static IEnumerable<DependencyEdge> CompileTimeOnlyModuleEdges(
         CSharpCompilation compilation, IReadOnlySet<MetadataReference> moduleReferences,
         IReadOnlySet<string> alreadyEdges, CancellationToken ct)
@@ -597,9 +601,9 @@ public static class DependencyEdgeExtraction
                 pending.TryAdd(assembly, reference);
         if (pending.Count == 0)
             return [];
-        var constantNames = new HashSet<string>(StringComparer.Ordinal);
+        var nominated = new HashSet<string>(StringComparer.Ordinal);
         foreach (var assembly in pending.Keys)
-            CollectConstantNames(assembly.GlobalNamespace, constantNames, ct);
+            CollectErasableNames(assembly.GlobalNamespace, nominated, ct);
 
         var found = new SortedDictionary<string, DependencyEdge>(StringComparer.Ordinal);
         foreach (var tree in compilation.SyntaxTrees)
@@ -607,30 +611,33 @@ public static class DependencyEdgeExtraction
             if (pending.Count == 0)
                 break;
             SemanticModel? model = null;
-            foreach (var node in tree.GetRoot(ct).DescendantNodes())
+            var root = tree.GetRoot(ct);
+            var insideNameof = root.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(i => i is { Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" }, ArgumentList.Arguments.Count: 1 })
+                .SelectMany(i => i.ArgumentList.Arguments[0].Expression.DescendantNodesAndSelf().OfType<SimpleNameSyntax>())
+                .ToHashSet();
+            foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>())
             {
                 if (pending.Count == 0)
                     break;
-                ExpressionSyntax? candidate = node switch
-                {
-                    IdentifierNameSyntax id when constantNames.Contains(id.Identifier.ValueText) => id,
-                    InvocationExpressionSyntax
-                    {
-                        Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" },
-                        ArgumentList.Arguments: [var argument],
-                    } => argument.Expression,
-                    _ => null,
-                };
-                if (candidate is null)
+                if (!insideNameof.Contains(name) && !nominated.Contains(name.Identifier.ValueText))
                     continue;
                 model ??= compilation.GetSemanticModel(tree);
-                var info = model.GetSymbolInfo(candidate, ct);
+                var info = model.GetSymbolInfo(name, ct);
                 ImmutableArray<ISymbol> symbols = info.Symbol is { } bound ? [bound] : info.CandidateSymbols;
+                if (symbols.IsEmpty && model.GetTypeInfo(name, ct).Type is { } type)
+                    symbols = [type];
                 foreach (var symbol in symbols)
                 {
-                    var isCompileTimeOnly = symbol is IFieldSymbol { IsConst: true } || candidate != node;
-                    if (!isCompileTimeOnly || symbol is INamespaceSymbol
-                        || symbol.ContainingAssembly is not { } owner
+                    var declared = symbol switch
+                    {
+                        IAliasSymbol alias => alias.Target,
+                        IMethodSymbol method => (method.ReducedFrom ?? method).OriginalDefinition,
+                        _ => symbol.OriginalDefinition,
+                    };
+                    if (declared is INamespaceSymbol
+                        || declared.ContainingAssembly is not { } owner
                         || !pending.TryGetValue(owner, out var reference))
                         continue;
                     found[owner.Identity.Name] = new DependencyEdge
@@ -646,31 +653,41 @@ public static class DependencyEdgeExtraction
         return found.Values;
     }
 
-    /// <summary>Every constant field name (enum members included) declared in <paramref name="ns"/>
-    /// and below, nested types included.</summary>
-    private static void CollectConstantNames(INamespaceSymbol ns, HashSet<string> names, CancellationToken ct)
+    /// <summary>The names under <paramref name="ns"/> whose use the compiler can ERASE from the
+    /// emitted image: every type name (an attribute type's also without its <c>Attribute</c>
+    /// suffix), every constant field (enum members included) and every <c>[Conditional]</c> method,
+    /// nested types included.</summary>
+    private static void CollectErasableNames(INamespaceSymbol ns, HashSet<string> names, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         foreach (var member in ns.GetMembers())
             switch (member)
             {
                 case INamespaceSymbol inner:
-                    CollectConstantNames(inner, names, ct);
+                    CollectErasableNames(inner, names, ct);
                     break;
                 case INamedTypeSymbol type:
-                    CollectConstantNames(type, names);
+                    CollectErasableNames(type, names);
                     break;
             }
     }
 
-    private static void CollectConstantNames(INamedTypeSymbol type, HashSet<string> names)
+    private static void CollectErasableNames(INamedTypeSymbol type, HashSet<string> names)
     {
+        names.Add(type.Name);
+        if (type.Name.Length > "Attribute".Length && type.Name.EndsWith("Attribute", StringComparison.Ordinal))
+            names.Add(type.Name[..^"Attribute".Length]);
         foreach (var member in type.GetMembers())
-            if (member is IFieldSymbol { IsConst: true } field)
-                names.Add(field.Name);
+            if (member is IFieldSymbol { IsConst: true }
+                || member is IMethodSymbol method && method.GetAttributes().Any(IsConditional))
+                names.Add(member.Name);
         foreach (var nested in type.GetTypeMembers())
-            CollectConstantNames(nested, names);
+            CollectErasableNames(nested, names);
     }
+
+    private static bool IsConditional(AttributeData attribute) =>
+        attribute.AttributeClass is { Name: "ConditionalAttribute" } attributeClass
+        && attributeClass.ContainingNamespace.ToDisplayString() == "System.Diagnostics";
 
     private static List<(AssemblyIdentity Identity, MetadataReference Reference)> ReferenceIdentities(
         CSharpCompilation compilation) =>

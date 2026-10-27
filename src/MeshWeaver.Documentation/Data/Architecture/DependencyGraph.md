@@ -177,11 +177,14 @@ edges changed only where `GetUsedAssemblyReferences()` over-counted: a module th
 looked into — its namespace imported, its extension methods considered — is no longer an edge of a
 type whose emitted code references nothing in it (measured: MeshWeaver.Markdown.Collaboration, which
 declares types in the `MeshWeaver.Graph` namespace, dropped out of 2 of 30 sets) — the same over-count the
-platform edges were moved off for. What metadata cannot show — a constant (an enum member included)
-inlined from a module, a `nameof` of a module symbol — IS still a module edge: a change to that
-module changes or breaks the type's compile, and CI selection reads the module edge to know it. The
-candidates are found by name (the constant names each not-yet-edged module declares, and every
-`nameof`) and only those nodes are bound, so it never costs a second binding pass.
+platform edges were moved off for. A module symbol the compiler ERASED from the image is still a
+module edge: an inlined constant (an enum member included), a call to a `[Conditional]` method or a
+`[Conditional]` attribute whose symbol is undefined, a module type that only appears in a constant
+expression (`(int)default(Color)`), and any name inside a `nameof`, a generic argument included. A
+change to that module changes or breaks the type's compile, and CI selection reads the module edge to
+know it. The candidates are nominated by name: every identifier inside a `nameof`, plus every
+identifier that spells a type name, a constant or a `[Conditional]` method of a module that is not
+yet an edge. Only those nodes are bound, so this never costs a second binding pass.
 
 🚨 **Why not "a symbol whose containing assembly is another NodeType's assembly".** A NodeType
 compile is never referenced against another NodeType's emitted assembly: its reference set is the

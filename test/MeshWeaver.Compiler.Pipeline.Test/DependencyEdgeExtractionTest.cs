@@ -315,7 +315,8 @@ public class DependencyEdgeExtractionTest
 
     /// <summary>
     /// What the emitted image cannot show is still a module edge: a constant (an enum member
-    /// included) the compiler INLINED, and a <c>nameof</c> of a module type, leave no
+    /// included) the compiler INLINED, an erased <c>[Conditional]</c> call, a <c>default(enum)</c>
+    /// constant, and a <c>nameof</c> of a module type or of a generic argument naming one, leave no
     /// <c>AssemblyRef</c> — asserted below as the precondition, so the case really exercises the
     /// inlining path — yet a change to the module changes or breaks the consumer, and CI selection
     /// reads the module edge to know that. Negative control: a third module declares a constant of
@@ -323,7 +324,7 @@ public class DependencyEdgeExtractionTest
     /// the binding decides.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public void AModuleOnlyReadAtCompileTime_ConstantOrNameof_IsStillAModuleEdge()
+    public void AModuleOnlyReadAtCompileTime_IsStillAModuleEdge()
     {
         var ct = TestContext.Current.CancellationToken;
         var constants = EmitModule("DepGraphProbeConstOnly", """
@@ -348,6 +349,30 @@ public class DependencyEdgeExtractionTest
             /// <summary>A type a consumer only names.</summary>
             public sealed class Widget { }
             """);
+        var conditional = EmitModule("DepGraphProbeConditionalOnly", """
+            namespace DepGraphProbe.Cond;
+            /// <summary>A call the compiler erases when NEVER is undefined.</summary>
+            public static class Log
+            {
+                /// <summary>Erased at the call site.</summary>
+                [System.Diagnostics.Conditional("NEVER")]
+                public static void Trace(string message) { }
+            }
+            """);
+        var shaded = EmitModule("DepGraphProbeDefaultOnly", """
+            namespace DepGraphProbe.Shades;
+            /// <summary>An enum only read as <c>(int)default(Shade)</c>.</summary>
+            public enum Shade
+            {
+                /// <summary>Dark.</summary>
+                Dark,
+            }
+            """);
+        var generic = EmitModule("DepGraphProbeNameofArgumentOnly", """
+            namespace DepGraphProbe.Args;
+            /// <summary>A type only named as a generic argument inside a nameof.</summary>
+            public sealed class Gadget { }
+            """);
         var shadowed = EmitModule("DepGraphProbeSameNameOnly", """
             namespace DepGraphProbe.Shadow;
             /// <summary>A constant whose NAME the consumer reuses for a local.</summary>
@@ -362,6 +387,9 @@ public class DependencyEdgeExtractionTest
             var references = CompileReferences.Default
                 .Append(MetadataReference.CreateFromFile(constants))
                 .Append(MetadataReference.CreateFromFile(named))
+                .Append(MetadataReference.CreateFromFile(conditional))
+                .Append(MetadataReference.CreateFromFile(shaded))
+                .Append(MetadataReference.CreateFromFile(generic))
                 .Append(MetadataReference.CreateFromFile(shadowed))
                 .ToList();
             var tree = CSharpSyntaxTree.ParseText("""
@@ -370,6 +398,9 @@ public class DependencyEdgeExtractionTest
                 {
                     public static int S() { var Total = Limits.Max + (int)Color.Blue; return Total; }
                     public static string N() => nameof(DepGraphProbe.Named.Widget);
+                    public static void T() => DepGraphProbe.Cond.Log.Trace("erased");
+                    public static int D() => (int)default(DepGraphProbe.Shades.Shade);
+                    public static string G() => nameof(System.Collections.Generic.List<DepGraphProbe.Args.Gadget>);
                 }
                 """, cancellationToken: ct);
             var compilation = CSharpCompilation.Create("ConstOnlyProbe", [tree], references,
@@ -381,22 +412,27 @@ public class DependencyEdgeExtractionTest
             {
                 var reader = pe.GetMetadataReader();
                 reader.AssemblyReferences.Select(h => reader.GetString(reader.GetAssemblyReference(h).Name))
-                    .Should().NotContain(["DepGraphProbeConstOnly", "DepGraphProbeNameofOnly"],
-                        "precondition: the uses are compile-time only, so the image carries no AssemblyRef to either");
+                    .Should().NotContain(["DepGraphProbeConstOnly", "DepGraphProbeNameofOnly", "DepGraphProbeConditionalOnly",
+                            "DepGraphProbeDefaultOnly", "DepGraphProbeNameofArgumentOnly"],
+                        "precondition: every use is erased at compile time, so the image carries no AssemblyRef to any of them");
             }
-            var classes = DependencyReferenceClasses.Of(references, [constants, named, shadowed], new Dictionary<string, string>());
+            var classes = DependencyReferenceClasses.Of(references, [constants, named, conditional, shaded, generic, shadowed],
+                new Dictionary<string, string>());
 
             var modules = DependencyEdgeExtraction.Extract(compilation, [tree], "App/P", [], null, classes,
                     () => new MemoryStream(image.ToArray(), writable: false), ct: ct)
                 .Edges.Where(e => e.Kind == DependencyEdgeKinds.Module).ToList();
 
-            modules.Select(e => e.Target).Should().Equal(["DepGraphProbeConstOnly", "DepGraphProbeNameofOnly"],
-                "an inlined constant and a nameof are uses the image cannot show; a same-named local is not a use");
+            modules.Select(e => e.Target).Should().Equal(
+                ["DepGraphProbeConditionalOnly", "DepGraphProbeConstOnly", "DepGraphProbeDefaultOnly",
+                 "DepGraphProbeNameofArgumentOnly", "DepGraphProbeNameofOnly"],
+                "an inlined constant, an erased [Conditional] call, a default(enum) constant and a nameof (its generic "
+                + "argument included) are uses the image cannot show; a same-named local is not a use");
             modules.Single(e => e.Target == "DepGraphProbeConstOnly").TargetBuildMvid.Should().Be(MvidOf(constants));
         }
         finally
         {
-            foreach (var path in new[] { constants, named, shadowed })
+            foreach (var path in new[] { constants, named, conditional, shaded, generic, shadowed })
             {
                 try { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
                 catch (IOException) { }
