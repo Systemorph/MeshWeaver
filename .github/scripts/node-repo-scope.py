@@ -86,7 +86,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # 🚨 scripts/affected-modules.py's NOOP_DIRS — the top-level dirs a change in which can reach no
@@ -364,69 +363,20 @@ _SHELF_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
 # location outside this repository (the platform's), whose bytes the platform digest already keys.
 
 
-# The MSBuild files a project inherits IMPLICITLY from its own directory and every ancestor up to
-# the repository root. MSBuild takes only the nearest Directory.Build.*; taking every ancestor
-# over-reads and never under-reads, and covers the usual GetPathOfFileAbove chain upward. The
-# `Directory.*` globs catch split pin files such as Directory.Packages.Plugins.props.
+# ── what a caller's build extension / shelf evaluates: MSBuild's OWN answer ──────────────────
+# The key (module-build-key.py) and this scope both consume ONE evaluation, written by
+# msbuild-evaluate.py, which runs the real `dotnet msbuild` (-pp for the imported files,
+# -getItem for the path items, ProjectReference followed) with the lane's publishing inputs. A
+# hand-written MSBuild reader here never converged: conditions, Choose, transforms and
+# conditional imports were each one more finding. MSBuild answers all of them exactly.
+#
+# The ONLY additions to MSBuild's answer are conservative extras for HASHING and REACH, never
+# evaluation: the implicit `Directory.*` candidates in every ancestor (a NEW one is a change), the
+# declared-but-absent import paths msbuild-evaluate.py records, and the directory of a linked item
+# outside the project (a new file beside it may join a glob).
 _IMPLICIT_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
 _IMPLICIT_GLOBS = ("Directory.*.props", "Directory.*.targets")
-# Item types whose Include is a NAME, not a path (a package, a namespace, an assembly name).
-_NAME_ITEMS = frozenset({"PackageReference", "PackageVersion", "GlobalPackageReference", "PackageDownload",
-                         "FrameworkReference", "Using", "InternalsVisibleTo", "ProjectCapability",
-                         "SupportedPlatform", "TrimmerRootAssembly", "AssemblyAttribute"})
 
-# ── the properties this reading resolves EXACTLY; every other one in a path is REFUSED ─────────
-_THIS_FILE_DIR = "MSBuildThisFileDirectory"   # the DEFINING file's directory, with a trailing '/'
-_PROJECT_DIR = "MSBuildProjectDirectory"      # the PROJECT's directory, no trailing '/'
-# The platform checkout (`-p:MeshWeaverRoot=` is the ONLY property the lane passes to a publish).
-# Its bytes are keyed through the platform ref and the platform image digest, never per file here.
-_PLATFORM_PROPS = frozenset({"MeshWeaverRoot"})
-# Set by the installed .NET SDK. A path under them is SDK bytes (the Razor extension stages its
-# source generator from there), so it is allowed ONLY where the publishing SDK is a key input.
-_SDK_PROPS = frozenset({"NetCoreRoot", "NETCoreSdkVersion", "NETCoreSdkRuntimeIdentifier", "NetCoreTargetingPackRoot"})
-# Build OUTPUT locations. An item under one is a product of this build (a generated manifest, an
-# intermediate file), not an input that could change it, so it is skipped rather than keyed.
-_OUTPUT_PROPS = frozenset({"BaseIntermediateOutputPath", "IntermediateOutputPath", "BaseOutputPath",
-                           "OutputPath", "OutDir", "PublishDir"})
-# 🚨 "Never set by the lane": an undefined property is EMPTY only when its name is in the
-# platform's own `MeshWeaver*` namespace — the lane passes exactly one of those (MeshWeaverRoot)
-# and the SDK defines none. Any OTHER undefined property may be set by the SDK or the CLI
-# (Configuration, TargetFramework, …), so it is UNKNOWN: a condition on it is undecided, and a
-# path through it is refused.
-_LANE_NAMESPACE = "MeshWeaver"
-
-_UNKNOWN, _PLATFORM, _SDK, _OUTPUT = "\x00UNKNOWN\x00", "\x00PLATFORM\x00", "\x00SDK\x00", "\x00OUTPUT\x00"
-_MAX_VALUES = 64
-_PROPERTY_REF = re.compile(r"\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)")
-
-
-class UnmodeledMSBuild(ValueError):
-    """A project's MSBuild graph uses a construct this reading does not model EXACTLY.
-
-    Raised, never skipped: a construct the reading guesses at is a build input that reaches the
-    compiler and neither the key nor the scope, which is a stale bundle reused under a green run.
-    Every MSBuild edge case review found on this parser had that shape: a silent skip."""
-
-
-class SdkNotKeyed(UnmodeledMSBuild):
-    """A path under an SDK property, read where the publishing SDK is not a key input."""
-
-
-# 🚨 THE ONE READING of what a caller-supplied project (a build extension, a module-libraries
-# shelf) evaluates. module-build-key.py LOADS these functions and never re-implements them, so
-# whatever reaches the build reaches the key AND the reach set together:
-#   implicit_import_candidates  where an implicit import is or COULD appear (a new one is an input)
-#   msbuild_files               the project plus every in-repo MSBuild file it evaluates
-#   declared_imports            every <Import> path DECLARED, present or not (an Exists()-guarded
-#                               optional import appearing or vanishing is a different build)
-#   project_reference_targets   the in-repo ProjectReferences declared anywhere in those files
-#   linked_item_patterns        every path-valued item declared anywhere in those files
-#   sdk_properties_used         whether any path reads the installed SDK (then the SDK is keyed)
-#   msbuild_glob_matches        the ONE matcher (MSBuild semantics) for those patterns
-# Properties defined in the graph are SUBSTITUTED, conditions over decidable values are
-# EVALUATED, and anything else in an Import or item path is REFUSED (UnmodeledMSBuild), naming
-# the file and the expression. This file stays importable on its own (node-repo-validate fetches
-# it as a single file), which is why the reading lives HERE.
 
 def implicit_import_candidates(root: Path, csproj: Path) -> list[str]:
     """Repository-relative implicit-import paths (literal, present or not) and per-directory globs."""
@@ -443,256 +393,64 @@ def implicit_import_candidates(root: Path, csproj: Path) -> list[str]:
     return out
 
 
-def _local(tag) -> str:
-    return tag.split("}", 1)[-1] if isinstance(tag, str) else ""
+def load_msbuild_evaluation(path: str | Path) -> dict:
+    """The JSON msbuild-evaluate.py wrote; ValueError when it is not one."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"--msbuild-evaluation {path} could not be read ({exc})") from None
+    if not isinstance(data, dict) or not isinstance(data.get("projects"), dict):
+        raise ValueError(f"--msbuild-evaluation {path} is not an msbuild-evaluate.py result (no `projects`)")
+    return data
 
 
-class _Evaluation:
-    """One project's MSBuild graph, evaluated as far as it can be decided."""
+def evaluated_closure(evaluation: dict | None, project: str) -> list[str]:
+    """The project and every in-repo project it references, transitively, as MSBuild evaluated them.
 
-    def __init__(self, root: Path, csproj: Path, sdk_keyed: bool):
-        self.root = root.resolve()
-        self.csproj = csproj.resolve()
-        self.project_dir = self.csproj.parent
-        self.sdk_keyed = sdk_keyed
-        self.uses_sdk = False
-        self.files: list[Path] = []
-        self.declared: list[str] = []
-        self.defs: list[tuple] = []          # (name, value, conditions, file, target_only)
-        self.target_defs: list[tuple] = []
-        self.items: list[tuple] = []         # (tag, include, conditions, file)
-        self._memo: dict = {}
-        implicit = [c for c in implicit_import_candidates(self.root, self.csproj)]
-        found: list[Path] = []
-        for cand in reversed(implicit):      # root-most first, as MSBuild's chain imports them
-            if is_msbuild_glob(cand):
-                parent = self.root / cand.rsplit("/", 1)[0] if "/" in cand else self.root
-                found += sorted(f for f in parent.glob(cand.rsplit("/", 1)[-1]) if f.is_file())
-            elif (self.root / cand).is_file():
-                found.append(self.root / cand)
-        for f in [f for f in found if f.suffix == ".props"]:
-            self._process(f.resolve())
-        self._process(self.csproj)
-        for f in [f for f in found if f.suffix != ".props"]:
-            self._process(f.resolve())
-        self.defs += self.target_defs        # target bodies run after evaluation: union-only
-        self.end = len(self.defs)
-
-    # ── reading ──────────────────────────────────────────────────────────────────────────────
-    def _rel(self, f: Path) -> str:
-        return f.relative_to(self.root).as_posix()
-
-    def _process(self, f: Path) -> None:
-        if f in self.files:
-            return
-        self.files.append(f)
-        try:
-            tree = ET.parse(f)
-        except ET.ParseError as exc:
-            raise UnmodeledMSBuild(f"{self._rel(f)}: not well-formed MSBuild XML ({exc})") from None
-        self._children(tree.getroot(), f, (), in_target=False)
-
-    def _children(self, node, f: Path, conds: tuple, in_target: bool) -> None:
-        for el in node:
-            tag = _local(el.tag)
-            c = conds + ((el.get("Condition"), f),) if el.get("Condition") else conds
-            if tag == "PropertyGroup":
-                for prop in el:
-                    name = _local(prop.tag)
-                    if not name:
-                        continue
-                    pc = c + ((prop.get("Condition"), f),) if prop.get("Condition") else c
-                    (self.target_defs if in_target else self.defs).append(
-                        (name, prop.text or "", pc, f, in_target))
-            elif tag == "ItemGroup":
-                for item in el:
-                    name = _local(item.tag)
-                    if name and item.get("Include") is not None and name not in _NAME_ITEMS:
-                        ic = c + ((item.get("Condition"), f),) if item.get("Condition") else c
-                        self.items.append((name, item.get("Include"), ic, f))
-            elif tag == "UsingTask" and el.get("AssemblyFile"):
-                self.items.append(("UsingTask AssemblyFile", el.get("AssemblyFile"), c, f))
-            elif tag == "Import":
-                self._import(el, f, c)
-            elif tag in ("ImportGroup", "Choose", "When", "Otherwise"):
-                # When/Otherwise conditions are evaluated like any other: undecidable ⇒ both apply.
-                self._children(el, f, c, in_target)
-            elif tag == "Target":
-                self._children(el, f, c, in_target=True)
-
-    def _import(self, el, f: Path, conds: tuple) -> None:
-        if el.get("Sdk") is not None:
-            return  # resolved from the SDK itself
-        value = el.get("Project")
-        if not value:
-            return
-        where = f"{self._rel(f)}: <Import Project=\"{value}\">"
-        if self._condition_chain(conds, len(self.defs)) is False:
-            return
-        for rel in self._paths(value, f, len(self.defs), where, plain_base=f.parent):
-            if is_msbuild_glob(rel):
-                raise UnmodeledMSBuild(f"{where} is a wildcard import; which files it imports is not modelled")
-            if rel not in self.declared:
-                self.declared.append(rel)
-            if (self.root / rel).is_file():
-                self._process((self.root / rel).resolve())
-
-    # ── evaluation ───────────────────────────────────────────────────────────────────────────
-    def _values(self, name: str, pos: int, f: Path) -> set[str]:
-        if name == _THIS_FILE_DIR:
-            return {f.parent.as_posix() + "/"}
-        if name == _PROJECT_DIR:
-            return {self.project_dir.as_posix()}
-        if name in _PLATFORM_PROPS:
-            return {_PLATFORM}
-        if name in _SDK_PROPS:
-            return {_SDK}
-        if name in _OUTPUT_PROPS:
-            return {_OUTPUT}
-        key = (name, pos)
-        if key in self._memo:
-            return self._memo[key]
-        self._memo[key] = {_UNKNOWN}  # a cycle stays unknown
-        current = {""} if name.startswith(_LANE_NAMESPACE) else {_UNKNOWN}
-        for i, (dname, value, conds, df, target_only) in enumerate(self.defs[:pos]):
-            if dname != name:
-                continue
-            verdict = self._condition_chain(conds, i)
-            if verdict is False:
-                continue
-            new = self._expand(value, i, df)
-            current = (current | new) if (verdict is None or target_only) else new
-            if len(current) > _MAX_VALUES:
-                current = {_UNKNOWN}
-        self._memo[key] = current
-        return current
-
-    def _expand(self, text: str, pos: int, f: Path) -> set[str]:
-        parts: list[set[str]] = []
-        last = 0
-        for m in _PROPERTY_REF.finditer(text):
-            parts.append({text[last:m.start()]})
-            inner = m.group(1).strip()
-            parts.append(self._values(inner, pos, f) if re.fullmatch(r"[A-Za-z_][\w.-]*", inner) else {_UNKNOWN})
-            last = m.end()
-        parts.append({text[last:]})
-        out = {""}
-        for p in parts:
-            out = {a + b for a in out for b in p}
-            if len(out) > _MAX_VALUES:
-                return {_UNKNOWN}
-        return {v if _UNKNOWN not in v else _UNKNOWN for v in out}
-
-    def _condition(self, cond: str, pos: int, f: Path):
-        """True / False when decidable over the values in scope; None otherwise."""
-        lowered = f" {cond.strip()} "
-        if " or " in lowered.lower():
-            verdicts = [self._condition(p, pos, f) for p in re.split(r"(?i)\s+or\s+", cond.strip())]
-            return True if True in verdicts else (False if all(v is False for v in verdicts) else None)
-        if " and " in lowered.lower():
-            verdicts = [self._condition(p, pos, f) for p in re.split(r"(?i)\s+and\s+", cond.strip())]
-            return False if False in verdicts else (True if all(v is True for v in verdicts) else None)
-        m = re.fullmatch(r"\s*'([^']*)'\s*(==|!=)\s*'([^']*)'\s*", cond)
-        if not m:
-            return None  # Exists(), HasTrailingSlash(), parentheses, …: undecided, so both apply
-        left, op, right = self._expand(m.group(1), pos, f), m.group(2), self._expand(m.group(3), pos, f)
-        if _UNKNOWN in left or _UNKNOWN in right:
-            return None
-        outcomes = {(a.lower() == b.lower()) == (op == "==") for a in left for b in right}
-        return outcomes.pop() if len(outcomes) == 1 else None
-
-    def _condition_chain(self, conds: tuple, pos: int):
-        verdicts = [self._condition(c, pos, f) for c, f in conds]
-        return False if False in verdicts else (True if all(v is True for v in verdicts) else None)
-
-    def _paths(self, value: str, f: Path, pos: int, where: str, plain_base: Path) -> list[str]:
-        out: list[str] = []
-        for expanded in self._expand(value, pos, f):
-            for piece in expanded.split(";"):
-                piece = piece.strip().replace("\\", "/")
-                if not piece:
-                    continue
-                if "@(" in piece or "%(" in piece:
-                    continue  # an item transform: derived from items this reading already reads
-                if _UNKNOWN in piece:
-                    raise UnmodeledMSBuild(
-                        f"{where} uses an MSBuild property this reading cannot resolve exactly (a property "
-                        "function, or a property neither defined in the project's MSBuild files nor one "
-                        f"of {_THIS_FILE_DIR}, {_PROJECT_DIR}, {', '.join(sorted(_PLATFORM_PROPS))}, the "
-                        "SDK or output properties)")
-                if _PLATFORM in piece or _OUTPUT in piece:
-                    continue  # the platform's bytes (keyed by ref + digest) / a build output
-                if _SDK in piece:
-                    if not self.sdk_keyed:
-                        raise SdkNotKeyed(f"{where} reads the installed .NET SDK, but the SDK this project is "
-                                          "published with is not a key input here (pass --build-extensions-sdk)")
-                    self.uses_sdk = True
-                    continue
-                full = Path(os.path.normpath(piece if piece.startswith("/") else (plain_base / piece).as_posix()))
-                try:
-                    rel = full.relative_to(self.root).as_posix()
-                except ValueError:
-                    raise UnmodeledMSBuild(f"{where} resolves outside this checkout ({full}), where nothing "
-                                           "keys its bytes") from None
-                out.append(rel)
-        return out
-
-    def resolved_items(self) -> list[tuple[str, str]]:
-        out: list[tuple[str, str]] = []
-        for tag, include, conds, f in self.items:
-            if self._condition_chain(conds, self.end) is False:
-                continue
-            where = f"{self._rel(f)}: <{tag} Include=\"{include}\">" if " " not in tag else f"{self._rel(f)}: <{tag}=\"{include}\">"
-            out += [(tag, rel) for rel in self._paths(include, f, self.end, where, plain_base=self.project_dir)]
-        return out
+    ValueError when the project was not evaluated: a named input keyed or scoped without MSBuild's
+    answer would be keyed on a guess."""
+    if evaluation is None:
+        raise ValueError(f"{project} is named, but no --msbuild-evaluation was given — its imports and "
+                         "items come from MSBuild itself (msbuild-evaluate.py), never from a guess")
+    projects = evaluation.get("projects") or {}
+    out: list[str] = []
+    queue = [Path(project).as_posix()]
+    while queue:
+        rel = queue.pop(0)
+        if rel in out:
+            continue
+        if rel not in projects:
+            raise ValueError(f"{rel} is not in the MSBuild evaluation (evaluated: {sorted(projects)}) — "
+                             "evaluate the project the lane names, with msbuild-evaluate.py")
+        out.append(rel)
+        queue += list(projects[rel].get("references") or [])
+    return out
 
 
-def _evaluate(root: Path, csproj: Path, sdk_keyed: bool) -> tuple[_Evaluation, list[tuple[str, str]]]:
-    ev = _Evaluation(root, csproj, sdk_keyed)
-    return ev, ev.resolved_items()
+def evaluated_files(evaluation: dict, rel: str) -> tuple[list[str], list[str], list[str]]:
+    """(imports, declaredImports, every path item) of one evaluated project."""
+    entry = (evaluation.get("projects") or {})[rel]
+    items = sorted({p for paths in (entry.get("items") or {}).values() for p in paths})
+    return list(entry.get("imports") or []), list(entry.get("declaredImports") or []), items
 
 
-# `sdk_keyed` defaults to True for the SCOPE: a path under the SDK lies outside the repository and
-# adds nothing to the reach set. The KEY passes its own answer, and refuses an unkeyed SDK read.
-def msbuild_files(root: Path, csproj: Path, sdk_keyed: bool = True) -> list[Path]:
-    """The project file and every in-repo MSBuild file it evaluates (implicit and explicit imports)."""
-    return _evaluate(root, csproj, sdk_keyed)[0].files
-
-
-def declared_imports(root: Path, csproj: Path, sdk_keyed: bool = True) -> list[str]:
-    """Every `<Import>` path declared anywhere in the graph, repository-relative, present or not."""
-    return _evaluate(root, csproj, sdk_keyed)[0].declared
-
-
-def project_reference_targets(root: Path, csproj: Path, sdk_keyed: bool = True) -> list[Path]:
-    """In-repo projects referenced from the project OR any file it imports."""
+def evaluated_reach(root: Path, evaluation: dict | None, project: str) -> set[str]:
+    """Everything a diff can touch to change what this project and its references evaluate:
+    their directories, MSBuild's imports and items, and the conservative extras above."""
     root = root.resolve()
-    return sorted({(root / rel).resolve() for tag, rel in _evaluate(root, csproj, sdk_keyed)[1]
-                   if tag == "ProjectReference" and not is_msbuild_glob(rel) and (root / rel).is_file()})
-
-
-def linked_item_patterns(root: Path, csproj: Path, sdk_keyed: bool = True) -> list[str]:
-    """Repository-relative paths / MSBuild globs of every path-valued item the project evaluates."""
-    return sorted({rel for tag, rel in _evaluate(root, csproj, sdk_keyed)[1] if tag != "ProjectReference"})
-
-
-def sdk_properties_used(root: Path, csproj: Path) -> bool:
-    """Whether any Import or item path the project evaluates reads the installed SDK."""
-    ev, _ = _evaluate(root, csproj, sdk_keyed=True)
-    return ev.uses_sdk
-
-
-def msbuild_reach(root: Path, csproj: Path) -> set[str]:
-    """Everything a diff can touch to change what this ONE project evaluates, beyond its own
-    directory: implicit-import candidates (present or not), every MSBuild file read, every DECLARED
-    import (present or not), every linked item. The scope's reach and the key's inputs are both
-    built from these functions."""
-    root = root.resolve()
-    ev, items = _evaluate(root, csproj, sdk_keyed=True)
-    return (set(implicit_import_candidates(root, csproj))
-            | {f.relative_to(root).as_posix() for f in ev.files}
-            | set(ev.declared)
-            | {rel for tag, rel in items if tag != "ProjectReference"})
+    reach: set[str] = set()
+    for rel in evaluated_closure(evaluation, project):
+        proj_dir = Path(rel).parent.as_posix()
+        reach.add(proj_dir)
+        imports, declared, items = evaluated_files(evaluation, rel)
+        reach |= set(imports) | set(declared)
+        reach |= set(implicit_import_candidates(root, root / rel))
+        for item in items:
+            reach.add(item)
+            parent = Path(item).parent.as_posix()
+            if parent not in (".", proj_dir) and not parent.startswith(proj_dir + "/"):
+                reach.add(parent)  # a new file beside a linked one may join its glob
+    return reach
 
 
 def is_msbuild_glob(pattern: str) -> bool:
@@ -718,33 +476,20 @@ def msbuild_glob_matches(path: str, pattern: str) -> bool:
     return re.fullmatch(rx, path) is not None
 
 
-def shelf_dirs(root: Path, project: str) -> frozenset[str] | None:
-    """The directories of the caller's shelf project and every in-repo project it reaches.
+def shelf_dirs(root: Path, project: str, evaluation: dict | None = None) -> frozenset[str] | None:
+    """Everything a diff can touch to change the caller's shelf / build extension: the project, every
+    in-repo project it references, MSBuild's imports and items for each, and the conservative extras
+    (`evaluated_reach`). The SAME evaluation feeds module-build-key.py, so key and scope cannot drift.
 
     None when the project is not in this checkout — the caller of this function reads that as
-    "cannot decide", which is a full run. The shelf is a compiler input of EVERY container-built
-    module, yet it is in no module's ProjectReference closure, so without this a shelf-only edit
-    reaches no entry and narrows to nothing.
+    "cannot decide", which is a full run. ValueError when it was not evaluated by MSBuild. The shelf
+    and the extension are compiler inputs of EVERY module, yet in no module's ProjectReference
+    closure, so without this an edit to them reaches no entry and narrows to nothing.
     """
     root = root.resolve()
-    start = (root / project).resolve()
-    if not start.is_file():
+    if not (root / project).is_file():
         return None
-    seen: set[Path] = set()
-    queue = [start]
-    while queue:
-        csproj = queue.pop()
-        if csproj in seen:
-            continue
-        seen.add(csproj)
-        queue.extend(project_reference_targets(root, csproj))
-    # Plus everything outside those directories that changes what they evaluate: implicit imports
-    # (present or a new one), explicit imports, and every linked path item (`../Shared/X.cs`) —
-    # the SAME functions module-build-key.py keys, so a diff that changes the key selects too.
-    reach: set[str] = set()
-    for csproj in seen:
-        reach |= msbuild_reach(root, csproj)
-    return frozenset({p.parent.relative_to(root).as_posix() for p in seen} | reach)
+    return frozenset(evaluated_reach(root, evaluation, project))
 
 
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
@@ -753,7 +498,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
            override: list[str] | None, say, publishing: bool = False,
            always: frozenset[str] = frozenset(), publication_base: str = "",
            publication_reach: bool = False, shelf_project: str = "",
-           extensions_project: str = "") -> dict:
+           extensions_project: str = "", msbuild_evaluation: dict | None = None) -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -844,12 +589,9 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         if not project:
             continue
         try:
-            dirs_ = shelf_dirs(root, project)
-        except UnmodeledMSBuild as exc:
-            return refuse(f"{input_name} {project}: {exc}. Neither the build key nor this scope can "
-                          "see what that construct brings into the build, so the run is refused "
-                          "rather than built from a guess. Spell the path with "
-                          "$(MSBuildThisFileDirectory) / $(MSBuildProjectDirectory) or a literal.")
+            dirs_ = shelf_dirs(root, project, msbuild_evaluation)
+        except ValueError as exc:
+            return refuse(f"{input_name} {project}: {exc}")
         if dirs_ is None:
             return full(f"{input_name} {project} is not in this checkout, so whether this diff "
                         f"changes the {label} cannot be decided — running the full set.")
@@ -1440,201 +1182,96 @@ def self_test() -> int:
         check("[modules] a root no-op file riding along never widens a real selection",
               got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
 
-        print("the caller's module-libraries shelf:")
-        # Acme.Other is a project the graph KNOWS and no entry reaches, exactly what a shelf is to
-        # the real project-closure.py — so an edit there narrows to nothing unless the shelf is named.
+        print("the caller's shelf / build extension, as MSBuild evaluated it (--msbuild-evaluation):")
+        # Acme.Other is a project the graph KNOWS and no entry reaches, exactly what a shelf is to the
+        # real project-closure.py — so an edit there narrows to nothing unless the evaluation reaches it.
+        shelf_rel = "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"
         shelf_dir = root / "src" / "Acme.ModuleLibraries"
         shelf_dir.mkdir(parents=True, exist_ok=True)
-        (shelf_dir / "Acme.ModuleLibraries.csproj").write_text(
-            _csproj(["../Acme.Other/Acme.Other.csproj"]), encoding="utf-8")
-        shelf_arg = ["--module-libraries-project", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"]
-        got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"])
-        check("[modules] negative control — WITHOUT the shelf named, an edit to a project it reaches selects nothing",
-              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
-        for label, path in (("the shelf csproj", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"),
-                            ("a project the shelf reaches", "src/Acme.Other/K.cs")):
-            got = _run(root, "modules", "pull_request", [path], extra=shelf_arg)
-            check(f"[modules] {label} changed, shelf named ⇒ ALL, every one tested, and SAYS it is the shelf",
-                  got["scope"] == "full" and got["count"] == 2 and len(got["tested"]) == 2
-                  and "module-libraries shelf" in got["reason"],
-                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
-        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], extra=shelf_arg)
-        check("[modules] a shelf named but untouched still narrows",
-              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
-        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
-                   extra=["--module-libraries-project", "src/Nope/Nope.csproj"])
-        check("[modules] a named shelf missing from the checkout ⇒ ALL (cannot decide)",
-              got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
-        print("the caller's build extension:")
-        ext_arg = ["--build-extensions-project", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"]
-        for label, path in (("the extension csproj", "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"),
-                            ("a project the extension reaches", "src/Acme.Other/K.cs")):
-            got = _run(root, "modules", "pull_request", [path], extra=ext_arg)
-            check(f"[modules] {label} changed, extension named ⇒ ALL, every one tested, and SAYS it is the extension",
-                  got["scope"] == "full" and got["count"] == 2 and len(got["tested"]) == 2
-                  and "build extension" in got["reason"],
-                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
-        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], extra=ext_arg)
-        check("[modules] an extension named but untouched still narrows",
-              got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
-        got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
-                   extra=["--build-extensions-project", "src/Nope/Nope.csproj"])
-        check("[modules] a named extension missing from the checkout ⇒ ALL (cannot decide), named by its input",
-              got["scope"] == "full" and got["count"] == 2 and "build-extensions-project" in got["reason"],
-              f"scope={got['scope']} — {got['reason'][:80]}")
-        # A linked source outside the extension's folder: `<Compile Include="../Shared/Emitter.cs" />`.
-        (shelf_dir / "Acme.ModuleLibraries.csproj").write_text(
-            # No ProjectReference this time: Acme.Other is a project the graph knows and NOTHING
-            # reaches, so only the Compile links below can make an edit there select anything.
-            '<Project><ItemGroup><Compile Include="../Acme.Other/Emitter.cs" />'
-            '<Compile Include="$(MSBuildThisFileDirectory)../Acme.Other/Gen/**/*.cs" /></ItemGroup></Project>\n',
-            encoding="utf-8")
-        for label, path in (("a linked <Compile Include> source", "src/Acme.Other/Emitter.cs"),
-                            ("a file a linked `**/` matches one level down", "src/Acme.Other/Gen/Deep/G.cs"),
-                            # `**/` matches ZERO directories — the case fnmatch missed
-                            ("a DIRECT child a linked `**/` matches", "src/Acme.Other/Gen/G.cs"),
-                            # a diff can name a file that no longer exists: matching is on the path
-                            ("a DELETED path a linked `**/` matches", "src/Acme.Other/Gen/Gone/Removed.cs")):
-            got = _run(root, "modules", "pull_request", [path], extra=ext_arg)
-            check(f"[modules] {label} changed, extension named ⇒ ALL",
-                  got["scope"] == "full" and got["count"] == 2 and "build extension" in got["reason"],
-                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
-        got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=ext_arg)
-        check("[modules] negative control — a file beside the linked one that no Compile item names narrows",
-              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
-        got = _run(root, "modules", "pull_request", ["src/Acme.Other/Gen/notes.txt"], extra=ext_arg)
-        check("[modules] negative control — a non-.cs file under the linked `**/` narrows",
-              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
-        # Compile items INHERITED from an import: the extension's own Directory.Build.props links a
-        # file with $(MSBuildThisFileDirectory), which is the DEFINING file's directory.
-        dbp = shelf_dir / "Directory.Build.props"
-        dbp.write_text('<Project><ItemGroup><Compile Include="$(MSBuildThisFileDirectory)../Acme.Other/FromProps.cs" />'
-                       '</ItemGroup></Project>\n', encoding="utf-8")
-        try:
-            got = _run(root, "modules", "pull_request", ["src/Acme.Other/FromProps.cs"], extra=ext_arg)
-            check("[modules] a source linked through the extension's Directory.Build.props changed ⇒ ALL",
-                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
-            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=ext_arg)
-            check("[modules] negative control — with the props link in place, an unlinked file there still narrows",
-                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
-        finally:
-            dbp.unlink()
-        got = _run(root, "modules", "pull_request", ["src/Acme.Other/FromProps.cs"], extra=ext_arg)
-        check("[modules] …and with the props file gone, that file no longer selects (the link was the cause)",
-              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
-        # The imported FILE itself is in reach: an edit to `../Acme.Other/Extension.props` alone (a
-        # DefineConstants, say) changes what the extension compiles, and the key keys its bytes.
-        ext_csproj = shelf_dir / "Acme.ModuleLibraries.csproj"
-        csproj_old = ext_csproj.read_text(encoding="utf-8")
-        ext_csproj.write_text('<Project><Import Project="../Acme.Other/Extension.props" /></Project>\n', encoding="utf-8")
-        (root / "src" / "Acme.Other" / "Extension.props").write_text("<Project />\n", encoding="utf-8")
-        try:
-            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Extension.props"], extra=ext_arg)
-            check("[modules] an edit ONLY to a file the extension imports ⇒ ALL",
-                  got["scope"] == "full" and got["count"] == 2 and "build extension" in got["reason"],
-                  f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
-            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Other.props"], extra=ext_arg)
-            check("[modules] negative control — a props file beside it that nothing imports narrows",
-                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
-            got = _run(root, "modules", "pull_request", ["src/Directory.Build.targets"], extra=ext_arg)
-            check("[modules] a NEW implicit import in an ancestor (src/Directory.Build.targets) ⇒ ALL",
-                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
-        finally:
-            ext_csproj.write_text(csproj_old, encoding="utf-8")
-            (root / "src" / "Acme.Other" / "Extension.props").unlink()
-        got = _run(root, "modules", "pull_request", ["src/Acme.Other/Extension.props"], extra=ext_arg)
-        check("[modules] …and once nothing imports it, the same edit narrows (the import was the cause)",
-              got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+        (shelf_dir / "Acme.ModuleLibraries.csproj").write_text(_csproj([]), encoding="utf-8")
+        other_rel = "src/Acme.Other/Acme.Other.csproj"
+        ev_file = root.parent / f"{root.name}-msbuild-evaluation.json"
 
-        print("the MSBuild reading: directories, optional imports, substitution, conditions, refusals:")
-        probe_dir = root / "src" / "Acme.Probe"
-        probe_dir.mkdir()
-        probe = probe_dir / "Acme.Probe.csproj"
-        probe_rel = "src/Acme.Probe/Acme.Probe.csproj"
-        probe_arg = ["--build-extensions-project", probe_rel]
-        other = root / "src" / "Acme.Other"
-
-        def write_probe(body: str, ext_props: str | None = None) -> None:
-            probe.write_text(f"<Project>{body}</Project>\n", encoding="utf-8")
-            if ext_props is None:
-                (other / "Ext.props").unlink(missing_ok=True)
-            else:
-                (other / "Ext.props").write_text(f"<Project>{ext_props}</Project>\n", encoding="utf-8")
+        def evaluation(shelf: dict, other: dict | None = None) -> list[str]:
+            projects = {shelf_rel: {"imports": [shelf_rel], "declaredImports": [], "items": {}, "references": [],
+                                    **shelf}}
+            if other is not None:
+                projects[other_rel] = {"imports": [other_rel], "declaredImports": [], "items": {}, "references": [],
+                                       **other}
+            ev_file.write_text(json.dumps({"sdk": "10.0.200", "projects": projects}), encoding="utf-8")
+            return ["--msbuild-evaluation", str(ev_file)]
 
         try:
-            # $(MSBuildProjectDirectory) is the PROJECT's directory and $(MSBuildThisFileDirectory)
-            # the DEFINING file's, even inside an imported file; a plain Import path is the importer's.
-            write_probe('<Import Project="../Acme.Other/Ext.props" />',
-                        '<Import Project="$(MSBuildProjectDirectory)/Local.props" />'
-                        '<Import Project="$(MSBuildThisFileDirectory)Beside.props" />'
-                        '<Import Project="Plain.props" />')
-            declared = set(declared_imports(root, probe))
-            check("$(MSBuildProjectDirectory) in an imported file resolves against the PROJECT",
-                  "src/Acme.Probe/Local.props" in declared and "src/Acme.Other/Local.props" not in declared,
-                  str(sorted(declared)))
-            check("$(MSBuildThisFileDirectory) and a plain Import path resolve against the DEFINING file",
-                  {"src/Acme.Other/Beside.props", "src/Acme.Other/Plain.props"} <= declared, str(sorted(declared)))
-            # An Exists()-guarded optional import that is ABSENT stays in reach: adding it is a change.
-            write_probe('<Import Project="../Acme.Other/Optional.props" '
-                        'Condition="Exists(\'../Acme.Other/Optional.props\')" />')
-            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Optional.props"], extra=probe_arg)
-            check("[modules] ADDING an absent, Exists()-guarded import ⇒ ALL",
-                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
-            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Unrelated.props"], extra=probe_arg)
-            check("[modules] negative control — an undeclared props file beside it narrows",
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"])
+            check("[modules] negative control — WITHOUT a shelf named, an edit to Acme.Other selects nothing",
                   got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
-            # Modelled exactly, so NOT refused: a property defined in the graph (substituted), the
-            # platform root, an Sdk import, an output path, an SDK path, and a guarded MeshWeaver*
-            # property the lane never sets (its condition is evaluated to false).
-            write_probe('<Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />'
-                        '<PropertyGroup><GenDir>$(MSBuildThisFileDirectory)gen</GenDir></PropertyGroup>'
-                        '<ItemGroup><Compile Include="$(GenDir)/*.cs" />'
-                        '<ProjectReference Include="$(MeshWeaverRoot)/src/X/X.csproj" />'
-                        '<Content Include="$(IntermediateOutputPath)gen.json" />'
-                        '<Content Include="$(NetCoreRoot)sdk/x.dll" /></ItemGroup>'
-                        '<ItemGroup Condition="\'$(MeshWeaverGenRoot)\' != \'\'">'
-                        '<Compile Include="$(MeshWeaverGenRoot)/*.cs" /></ItemGroup>')
-            reach = msbuild_reach(root, probe)
-            check("a property defined in the project is substituted ($(GenDir) → src/Acme.Probe/gen/*.cs)",
-                  "src/Acme.Probe/gen/*.cs" in reach, str(sorted(reach)))
-            proc = _raw(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], None, probe_arg)
-            check("[modules] negative control — platform root, Sdk import, output path, SDK path and a "
-                  "false-guarded MeshWeaver* item are all modelled: no refusal",
-                  proc.returncode == 0, proc.stderr[-300:])
-            # Everything else is REFUSED, red, naming the file and the expression.
-            for label, body, expr in (
-                    ("a wildcard <Import>", '<Import Project="../Acme.Other/*.props" />', "../Acme.Other/*.props"),
-                    ("an unknown property in an Import", '<Import Project="$(SomeSdkDir)/x.props" />', "$(SomeSdkDir)"),
-                    ("a property function in an item",
-                     "<ItemGroup><Compile Include=\"$([System.IO.Path]::Combine('a','b'))\" /></ItemGroup>",
-                     "$([System.IO.Path]"),
-                    ("an UNGUARDED MeshWeaver* property the lane never sets",
-                     '<ItemGroup><Compile Include="$(MeshWeaverGenRoot)/*.cs" /></ItemGroup>', "$(MeshWeaverGenRoot)"),
-                    ("a path escaping the checkout",
-                     '<ItemGroup><Compile Include="../../../outside.cs" /></ItemGroup>', "../../../outside.cs")):
-                write_probe(body)
-                proc = _raw(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], None, probe_arg)
-                check(f"[modules] {label} ⇒ REFUSED (exit 2), naming the file and the expression",
-                      proc.returncode == 2 and probe_rel in proc.stderr and expr in proc.stderr,
-                      f"exit={proc.returncode} {proc.stderr[-300:]}")
+            refs = evaluation({"references": [other_rel]}, {})
+            for flag, label in (("--module-libraries-project", "module-libraries shelf"),
+                                ("--build-extensions-project", "build extension")):
+                arg = [flag, shelf_rel] + refs
+                for what, path in (("the project itself", shelf_rel),
+                                   ("a project MSBuild says it references", "src/Acme.Other/K.cs")):
+                    got = _run(root, "modules", "pull_request", [path], extra=arg)
+                    check(f"[modules] {label}: {what} changed ⇒ ALL, and SAYS it is the {label}",
+                          got["scope"] == "full" and got["count"] == 2 and label in got["reason"],
+                          f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+                got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], extra=arg)
+                check(f"[modules] {label} named but untouched still narrows",
+                      got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+            # MSBuild's imports and items, plus the conservative extras, for an extension that does
+            # NOT reference Acme.Other but imports a file there, links a source there, and declares an
+            # optional import that does not exist yet.
+            arg = ["--build-extensions-project", shelf_rel] + evaluation({
+                "imports": [shelf_rel, "src/Acme.Other/Ext.props"],
+                "declaredImports": ["src/Acme.Other/Ext.props", "src/Acme.Other/Optional.props"],
+                "items": {"Compile": ["src/Acme.Other/Gen/Emitter.cs"],
+                          "EmbeddedResource": ["src/Acme.Other/Res/a.res"]}})
+            for what, path in (("an imported file (Ext.props)", "src/Acme.Other/Ext.props"),
+                               ("an absent DECLARED import appearing (Optional.props)", "src/Acme.Other/Optional.props"),
+                               ("a linked Compile item", "src/Acme.Other/Gen/Emitter.cs"),
+                               ("a transform-produced item path", "src/Acme.Other/Res/a.res"),
+                               ("a NEW file beside a linked one (it may join the glob)", "src/Acme.Other/Gen/New.cs"),
+                               ("a new ancestor implicit import", "src/Directory.Build.targets")):
+                got = _run(root, "modules", "pull_request", [path], extra=arg)
+                check(f"[modules] {what} changed ⇒ ALL", got["scope"] == "full" and got["count"] == 2,
+                      f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+            for what, path in (("a file in the same project MSBuild did not evaluate", "src/Acme.Other/K.cs"),
+                               ("an UNIMPORTED Directory.Unused.props outside the ancestry",
+                                "src/Acme.Other/Directory.Unused.props")):
+                got = _run(root, "modules", "pull_request", [path], extra=arg)
+                check(f"[modules] negative control — {what} narrows",
+                      got["scope"] == "narrowed" and got["count"] == 0,
+                      f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+            # Refusals: a named input is never scoped without MSBuild's evaluation of it.
+            for what, extra, needle in (
+                    ("named with NO --msbuild-evaluation", ["--build-extensions-project", shelf_rel], "--msbuild-evaluation"),
+                    ("named but absent from the evaluation", ["--module-libraries-project", other_rel] + evaluation({}),
+                     "not in the MSBuild evaluation"),
+                    ("with an unreadable evaluation", ["--build-extensions-project", shelf_rel,
+                                                       "--msbuild-evaluation", str(root / "nope.json")], "could not be read")):
+                proc = _raw(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], None, extra)
+                check(f"[modules] {what} ⇒ REFUSED (exit 2), saying why",
+                      proc.returncode == 2 and needle in proc.stderr, f"exit={proc.returncode} {proc.stderr[-200:]}")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
+                       extra=["--build-extensions-project", "src/Nope/Nope.csproj"])
+            check("[modules] a named extension missing from the checkout ⇒ ALL (cannot decide), named by its input",
+                  got["scope"] == "full" and got["count"] == 2 and "build-extensions-project" in got["reason"],
+                  f"scope={got['scope']} — {got['reason'][:80]}")
         finally:
-            (other / "Ext.props").unlink(missing_ok=True)
-            probe.unlink(missing_ok=True)
-            probe_dir.rmdir()
-        print("the MSBuild glob matcher (shared with module-build-key.py):")
+            ev_file.unlink(missing_ok=True)
+            (shelf_dir / "Acme.ModuleLibraries.csproj").unlink()
+            shelf_dir.rmdir()
+
+        print("the MSBuild glob matcher (the implicit Directory.* candidates):")
         for path, pattern, want in (
+                ("src/Directory.Packages.Plugins.props", "src/Directory.*.props", True),
+                ("src/x/Directory.Build.props", "src/Directory.*.props", False),
                 ("src/Shared/Emitter.cs", "src/Shared/**/*.cs", True),
                 ("src/Shared/a/b/Emitter.cs", "src/Shared/**/*.cs", True),
-                ("src/Shared/Emitter.cs", "src/Shared/*.cs", True),
-                ("src/Shared/a/Emitter.cs", "src/Shared/*.cs", False),
-                ("src/Shared/x/notes.txt", "src/Shared/**", True),
                 ("src/SharedX/Emitter.cs", "src/Shared/**/*.cs", False),
-                ("src/Shared/Emitter.cs", "src/Shared/Emitter.cs", True),
-                ("src/Shared/Emitter.csx", "src/Shared/Emitter.cs", False)):
+                ("src/Shared/Emitter.cs", "src/Shared/Emitter.cs", True)):
             check(f"msbuild_glob_matches({path!r}, {pattern!r}) is {want}",
                   msbuild_glob_matches(path, pattern) is want)
-        (shelf_dir / "Acme.ModuleLibraries.csproj").unlink()
-        shelf_dir.rmdir()
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "plugin-gate.allow"])
         check("[modules] one UNNAMED root file among no-op ones still runs the full set",
               got["scope"] == "full" and "plugin-gate.allow" in got["reason"],
@@ -1765,6 +1402,9 @@ def main() -> int:
     p.add_argument("--build-extensions-project", default="", dest="extensions_project",
                    help="the caller's build-extension csproj (relative to --root): a diff that "
                         "touches it or a project it reaches runs the full set")
+    p.add_argument("--msbuild-evaluation", default="", dest="msbuild_evaluation",
+                   help="the JSON msbuild-evaluate.py writes for the shelf / extension: MSBuild's own imports and "
+                        "items, required when either is named")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -1787,13 +1427,18 @@ def main() -> int:
 
     root = Path(args.root).resolve()
     say = lambda *a: print(*a, file=sys.stderr)  # noqa: E731
+    try:
+        evaluation = load_msbuild_evaluation(args.msbuild_evaluation) if args.msbuild_evaluation else None
+    except ValueError as exc:
+        print(f"::error title=Cannot decide the build scope::{exc}", file=sys.stderr)
+        return 2
     changed = None if args.changed_list is None else [c for c in args.changed_list.split(",") if c]
     always = frozenset(a.strip() for a in args.always.split(",") if a.strip())
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
                     publishing=args.publishing, always=always, publication_base=args.publication_base,
                     publication_reach=args.publication_reach, shelf_project=args.shelf_project,
-                    extensions_project=args.extensions_project)
+                    extensions_project=args.extensions_project, msbuild_evaluation=evaluation)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"

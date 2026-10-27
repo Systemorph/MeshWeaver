@@ -69,6 +69,26 @@ def structure_problems(doc: dict) -> list[str]:
         problems.append("select does not install the SDK the caller's repo/global.json names")
     if any("hashFiles('repo/global.json') == ''" not in str(s.get("if", "")) for s in floating):
         problems.append("select installs a floating SDK even when the caller pins one in repo/global.json")
+    # MSBuild's own evaluation: produced AFTER the SDK is resolved, BEFORE the scope, and read by the
+    # scope, the ledger's keys and the pack job's newer-commit check — one file, every consumer.
+    ev_names = [s.get("name") for s in sel]
+    if "Evaluate the shelf / build extension with MSBuild" not in ev_names:
+        problems.append("select does not evaluate the shelf / extension with MSBuild")
+    else:
+        e = ev_names.index("Evaluate the shelf / build extension with MSBuild")
+        if not (i < e < ev_names.index("Decide which module bundles this diff can reach")):
+            problems.append("the MSBuild evaluation does not run after the SDK resolve and before the scope")
+        if "msbuild-evaluate.py" not in sel[e].get("run", ""):
+            problems.append("the evaluation step does not run msbuild-evaluate.py")
+    for step_name in ("Decide which module bundles this diff can reach", "Consult the module build ledger"):
+        body = next((s.get("run", "") for s in sel if s.get("name") == step_name), "")
+        if "--msbuild-evaluation" not in body:
+            problems.append(f"select's {step_name!r} does not pass --msbuild-evaluation")
+    if "msbuild-eval" not in str((doc["jobs"]["select"].get("outputs") or {}).get("msbuild-evaluation", "")):
+        problems.append("select does not output its MSBuild evaluation")
+    newer = next((s for s in doc["jobs"]["pack"]["steps"] if s.get("id") == "newer"), {})
+    if "--msbuild-evaluation" not in newer.get("run", "") or "msbuild-evaluation" not in str(newer.get("env", {})):
+        problems.append("the pack job's newer-commit scope check does not read select's MSBuild evaluation")
     bw = doc["jobs"]["build-workspace"]["steps"]
     if not any(str(s.get("uses", "")).startswith("actions/setup-dotnet@")
                and "needs.select.outputs.build-extensions-sdk" in str((s.get("with") or {}).get("dotnet-version", ""))
@@ -93,6 +113,25 @@ def mutations(doc: dict) -> list[tuple[str, dict]]:
         if "dotnet-version" in (s.get("with") or {}) and "build-extensions-project" in str(s.get("if", "")):
             s["if"] = "inputs.build-extensions-project != ''"
     out.append(("the floating SDK is installed regardless of the caller's pin", m))
+    m = copy.deepcopy(doc)
+    m["jobs"]["select"]["steps"] = [s for s in m["jobs"]["select"]["steps"]
+                                    if s.get("name") != "Evaluate the shelf / build extension with MSBuild"]
+    out.append(("select no longer evaluates with MSBuild", m))
+    m = copy.deepcopy(doc)
+    for s in m["jobs"]["select"]["steps"]:
+        if s.get("name") == "Decide which module bundles this diff can reach":
+            s["run"] = s["run"].replace("--msbuild-evaluation", "--no-evaluation")
+    out.append(("the scope stops reading the evaluation", m))
+    m = copy.deepcopy(doc)
+    for s in m["jobs"]["select"]["steps"]:
+        if s.get("name") == "Consult the module build ledger":
+            s["run"] = s["run"].replace("--msbuild-evaluation", "--no-evaluation")
+    out.append(("the ledger's keys stop reading the evaluation", m))
+    m = copy.deepcopy(doc)
+    for s in m["jobs"]["pack"]["steps"]:
+        if s.get("id") == "newer":
+            s["run"] = s["run"].replace("--msbuild-evaluation", "--no-evaluation")
+    out.append(("the pack job's newer-commit check stops reading the evaluation", m))
     return out
 
 

@@ -1019,9 +1019,41 @@ def pid_namespace_leftovers(proc_root: str = "/proc") -> list[int]:
             ns = os.readlink(os.path.join(proc_root, name, "ns", "pid"))
         except OSError:
             continue
-        if ns != mine:
+        if ns != mine and not _is_zombie(proc_root, name):
             out.append(int(name))
     return sorted(out)
+
+
+def _is_zombie(proc_root: str, pid: str) -> bool:
+    """A zombie has already exited: it runs nothing and holds nothing but its process-table slot.
+    A stage's sandbox processes are reparented to the host when bwrap exits, and the host runs as
+    the container's PID 1 (`exec python3 build-run.py`), so they stay ZOMBIES until it reaps them
+    (measured on the user-namespace pool, 2026-10-27: `bwrap` State Z, PPid 1, after the startup
+    probe). Counting them as survivors made the host refuse to claim on every start."""
+    try:
+        # errors="replace": a task name may hold non-UTF-8 bytes, and the name is read before State
+        # — a decode error must never abort cleanup (review of #7287).
+        with open(os.path.join(proc_root, pid, "status"), encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("State:"):
+                    return line.split()[1:2] == ["Z"]
+    except OSError:
+        return False
+    return False
+
+
+def reap_children() -> int:
+    """Reap every exited child without blocking — what PID 1 must do for the processes reparented
+    to it. Returns how many were reaped."""
+    reaped = 0
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return reaped
+        if pid == 0:
+            return reaped
+        reaped += 1
 
 
 CONTENT_KEY = re.compile(r"^[0-9a-f]{16,128}$")
@@ -1322,7 +1354,7 @@ def _run_capture(argv: list[str]) -> tuple[int, str]:
 class Host:
     def __init__(self, env: dict, api: Api, *, log: Callable[[str], None] = None,
                  pull: Callable[[list[str]], int] = None, checkout: Callable = None,
-                 sandbox=None, leftovers: Callable[[], list[int]] = None,
+                 sandbox=None, leftovers: Callable[[], list[int]] = None, reap: Callable[[], int] = None,
                  registry_get: Callable[[str, str], tuple[int, object]] = None,
                  fetch_runner: Callable[[list[str], dict], int] = None,
                  store_runner: Callable[..., tuple[int, str]] = None,
@@ -1341,6 +1373,7 @@ class Host:
         self.sandbox = sandbox or Sandbox(env.get("BWRAP", "bwrap"), [
             p for p in (env.get("MW_BUILD_GATE_HOST"), env.get("MeshWeaverRefs"), "/portal", "/tester", "/tools") if p])
         self.leftovers = leftovers or pid_namespace_leftovers
+        self.reap = reap or reap_children
         self.registry_get = registry_get or _registry_get
         self.store_runner = store_runner or _run_capture_stdout
         self.git_runner = git_runner or _git_run
@@ -1395,6 +1428,7 @@ class Host:
 
     # -- the namespace must be empty before anything is claimed -----------------------------
     def assert_clean(self) -> None:
+        self.reap()
         left = self.leftovers()
         if not left:
             return
@@ -1404,6 +1438,7 @@ class Host:
             except (OSError, ProcessLookupError):
                 pass
         self.sleep(1.0)
+        self.reap()
         left = self.leftovers()
         if left:
             raise Fatal(f"processes of a finished stage survive in another pid namespace ({left[:10]}) — "
@@ -2330,6 +2365,49 @@ def self_test() -> int:
             os.makedirs(os.path.join(fake, pid, "ns"))
             os.symlink(ns, os.path.join(fake, pid, "ns", "pid"))
         check("leftovers/foreign namespace found", pid_namespace_leftovers(fake) == [11], pid_namespace_leftovers(fake))
+        # A ZOMBIE in a foreign namespace has exited: it is not a survivor (the user-namespace pool,
+        # 2026-10-27 — the startup probe's bwrap, State Z, PPid 1, made every start refuse to claim).
+        os.makedirs(os.path.join(fake, "12", "ns"))
+        os.symlink("pid:[3]", os.path.join(fake, "12", "ns", "pid"))
+        with open(os.path.join(fake, "12", "status"), "w") as fh:
+            fh.write("Name:\tbwrap\nState:\tZ (zombie)\nPPid:\t1\n")
+        with open(os.path.join(fake, "11", "status"), "w") as fh:
+            fh.write("Name:\tpython3\nState:\tS (sleeping)\nPPid:\t1\n")
+        check("leftovers/a zombie is not a survivor, a sleeping process is", pid_namespace_leftovers(fake) == [11],
+              pid_namespace_leftovers(fake))
+        with open(os.path.join(fake, "12", "status"), "wb") as fh:
+            fh.write(b"Name:\tbw\xff\xferap\nState:\tZ (zombie)\nPPid:\t1\n")
+        check("leftovers/a non-UTF-8 task name neither raises nor hides a zombie", pid_namespace_leftovers(fake) == [11],
+              pid_namespace_leftovers(fake))
+        # reap_children really reaps: a child that exited is collected without blocking.
+        child = subprocess.Popen(["true"])
+        # Wait for the child to EXIT without consuming its status (Popen waits only for exec), so the
+        # reaper is what collects it — never a fixed sleep that a loaded runner can outrun (review of #7287).
+        if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
+            os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+            reaped = reap_children()
+        else:  # no waitid (macOS): retry the reaper until the child has exited, bounded
+            reaped = 0
+            for _ in range(200):
+                reaped += reap_children()
+                if reaped:
+                    break
+                time.sleep(0.05)
+        child.returncode = 0  # reaped behind Popen's back; keep its finalizer quiet
+        gone = True
+        try:
+            os.kill(child.pid, 0)
+            gone = False
+        except OSError:
+            pass
+        check("leftovers/reap_children collects an exited child", reaped >= 1 and gone, f"reaped={reaped} gone={gone}")
+        # assert_clean reaps BEFORE it decides, and again after the kill.
+        calls: list[str] = []
+        hz = Host({"MW_BUILD_CHANNEL": "latest"}, _FakeApi({}), log=lambda s: None, sandbox=_EnvSandbox(),
+                  leftovers=lambda: (calls.append("look"), [])[1], reap=lambda: (calls.append("reap"), 0)[1],
+                  sleep=lambda s: None)
+        hz.assert_clean()
+        check("leftovers/assert_clean reaps before looking", calls[:2] == ["reap", "look"], calls)
         hl = Host({"MW_BUILD_CHANNEL": "latest"}, _FakeApi({}), log=lambda s: None, sandbox=_EnvSandbox(),
                   leftovers=lambda: [999999999], sleep=lambda s: None)
         try:

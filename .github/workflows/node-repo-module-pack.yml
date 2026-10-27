@@ -1009,6 +1009,9 @@ jobs:
       # The exact SDK the caller's build extension is published with — a ledger key input (empty
       # when the caller names no extension).
       build-extensions-sdk: ${{ steps.ext-sdk.outputs.version }}
+      # MSBuild's own evaluation of the shelf / extension (msbuild-evaluate.py), for the pack job's
+      # newer-commit scope check; empty when the caller names neither.
+      msbuild-evaluation: ${{ steps.msbuild-eval.outputs.json }}
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
       # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
       modules: ${{ steps.reuse.outputs.modules }}
@@ -1318,6 +1321,66 @@ jobs:
           store: ${{ inputs.artifact-store || 'gha' }}
           expected-store-id: ${{ inputs.artifact-store-id }}
           require-expected-store-id: 'true'
+      # 🚨 The build extension's publish takes its generator from the installed .NET SDK, so the SDK
+      # is a KEY input. Resolve the exact version ONCE, here: the ledger keys it, and the
+      # build-workspace job installs exactly that version to publish with.
+      # 🚨 Resolved from the CALLER's checkout (`repo/`), never the workspace root: build-workspace
+      # checks the caller out AT the root, so its `dotnet` honours the caller's `global.json`, and a
+      # version resolved here without it would be one the publish never runs (it refuses the
+      # mismatch) or, worse, a key naming an SDK the caller pinned away from.
+      - uses: actions/setup-dotnet@v6
+        if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') != ''
+        with:
+          global-json-file: repo/global.json
+      - uses: actions/setup-dotnet@v6
+        if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') == ''
+        with:
+          dotnet-version: "10.0.x"
+      - name: Resolve the SDK the build extension is published with
+        id: ext-sdk
+        if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          v="$(dotnet --version)"
+          [[ "$v" =~ ^10\.0\.[0-9]+$ ]] || { echo "::error::dotnet --version answered '$v', not an exact 10.0 SDK version — the extension's generator bytes come from this SDK, so it must be named exactly."; exit 1; }
+          echo "build extension SDK: $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      # 🔎 What the caller's shelf / build extension EVALUATES, asked of MSBuild itself (never a
+      # hand-written reader): msbuild-evaluate.py runs `dotnet msbuild -pp` (the exact imported files)
+      # and `-getItem` (the exact path items, ProjectReferences followed) with the lane's publishing
+      # inputs — Configuration=Release and MeshWeaverRoot at the platform ref, exactly as
+      # build-workspace publishes. The scope below, the ledger's keys and the pack job's newer-commit
+      # check all read this ONE file. An evaluation that fails is RED: nothing is keyed on a guess.
+      # Only the platform's MSBuild files are checked out: its other bytes are keyed by ref + digest.
+      - name: Check out the platform's MSBuild files for the evaluation
+        if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: .msbuild-eval-platform
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            **/*.props
+            **/*.targets
+            **/*.csproj
+      - name: Evaluate the shelf / build extension with MSBuild
+        id: msbuild-eval
+        if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
+        env:
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+        run: |
+          set -euo pipefail
+          projects=()
+          [ -z "${SHELF_PROJECT:-}" ] || projects+=(--project "$SHELF_PROJECT")
+          [ -z "${EXTENSIONS_PROJECT:-}" ] || projects+=(--project "$EXTENSIONS_PROJECT")
+          python3 build-logic/.github/scripts/msbuild-evaluate.py --root repo "${projects[@]}" \
+            --out "$RUNNER_TEMP/msbuild-evaluation.json" \
+            --property "MeshWeaverRoot=$GITHUB_WORKSPACE/.msbuild-eval-platform"
+          { echo "json<<MSBUILD_EVALUATION_EOF"; jq -c . "$RUNNER_TEMP/msbuild-evaluation.json"; echo "MSBUILD_EVALUATION_EOF"; } >> "$GITHUB_OUTPUT"
+          rm -rf "${GITHUB_WORKSPACE:?}/.msbuild-eval-platform"
       - name: Decide which module bundles this diff can reach
         id: scope
         env:
@@ -1352,6 +1415,7 @@ jobs:
           shelf_args=()
           [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
           [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_args+=(--build-extensions-project "$EXTENSIONS_PROJECT")
+          [ "${#shelf_args[@]}" -eq 0 ] || shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json")
           python3 build-logic/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \
@@ -1373,31 +1437,6 @@ jobs:
       # UNAVAILABLE degrades to "build everything, uncoordinated", in yellow — the ledger is a
       # coordination layer over a build that is correct without it, and its outage may cost a
       # duplicate build, never a green (core #3119).
-      # 🚨 The build extension's publish takes its generator from the installed .NET SDK, so the SDK
-      # is a KEY input. Resolve the exact version ONCE, here: the ledger keys it, and the
-      # build-workspace job installs exactly that version to publish with.
-      # 🚨 Resolved from the CALLER's checkout (`repo/`), never the workspace root: build-workspace
-      # checks the caller out AT the root, so its `dotnet` honours the caller's `global.json`, and a
-      # version resolved here without it would be one the publish never runs (it refuses the
-      # mismatch) or, worse, a key naming an SDK the caller pinned away from.
-      - uses: actions/setup-dotnet@v6
-        if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') != ''
-        with:
-          global-json-file: repo/global.json
-      - uses: actions/setup-dotnet@v6
-        if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') == ''
-        with:
-          dotnet-version: "10.0.x"
-      - name: Resolve the SDK the build extension is published with
-        id: ext-sdk
-        if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
-        working-directory: repo
-        run: |
-          set -euo pipefail
-          v="$(dotnet --version)"
-          [[ "$v" =~ ^10\.0\.[0-9]+$ ]] || { echo "::error::dotnet --version answered '$v', not an exact 10.0 SDK version — the extension's generator bytes come from this SDK, so it must be named exactly."; exit 1; }
-          echo "build extension SDK: $v"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Consult the module build ledger
         id: ledger
         env:
@@ -1461,6 +1500,7 @@ jobs:
               # The publishing SDK keys the extension always, and the shelf when a shelf path reads
               # the installed SDK — the key refuses either one without it.
               [ -z "${EXTENSIONS_SDK:-}" ] || shelf_arg+=(--build-extensions-sdk "$EXTENSIONS_SDK")
+              [ "${#shelf_arg[@]}" -eq 0 ] || shelf_arg+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json")
               python3 build-logic/.github/scripts/module-build-key.py --root repo \
                 --modules "@$RUNNER_TEMP/selection.json" \
                 --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
@@ -4239,12 +4279,18 @@ jobs:
           # A newer commit that edits only the shelf still reaches every module.
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          MSBUILD_EVALUATION: ${{ needs.select.outputs.msbuild-evaluation }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           shelf_args=()
           [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
           [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_args+=(--build-extensions-project "$EXTENSIONS_PROJECT")
+          if [ "${#shelf_args[@]}" -gt 0 ]; then
+            # select's MSBuild evaluation of this run's tree (the scope refuses a named input without one).
+            printf '%s' "$MSBUILD_EVALUATION" > "$RUNNER_TEMP/msbuild-evaluation.json"
+            shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json")
+          fi
           [ -z "$CONTENT_REPOSITORY" ] || { echo "::error::publish-newest-only reads THIS repository's trunk, but content-repository is '$CONTENT_REPOSITORY' — a lane packing another repository's content cannot say whether a newer commit of it exists. Turn one of the two off."; exit 1; }
           [ -n "$TRUNK" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
           git fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
