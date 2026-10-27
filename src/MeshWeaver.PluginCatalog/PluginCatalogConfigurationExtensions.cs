@@ -167,6 +167,23 @@ public static class PluginCatalogConfigurationExtensions
                 // Resolves the effective registry token: configured token, else the stored
                 // auto-registration credential (decrypted), else empty.
                 .AddSingleton<RegistryTokenResolver>()
+                // Instance telemetry (Doc/Architecture/InstanceTelemetry): what this instance says
+                // about itself on every token exchange — platform version, commit, home URL and a
+                // package summary memoised off the combo reader — stamped by the registry as the
+                // instance record's LastSeen* fields.
+                .AddSingleton<InstanceTelemetryReader>()
+                // …and its error digest: one more ILoggerProvider folds every Error/Critical record
+                // into a bounded ledger of SIGNATURES (template + exception type + frame, never a
+                // line), and the reporter delivers what is new or escalated to every registry this
+                // instance pulls from, where it becomes triage input. Opt-out:
+                // Telemetry:ErrorReports:Enabled=false. Same two-registration idiom: the
+                // IHostedService forward is what STARTS the reporter.
+                .AddSingleton<ErrorSignatureCollector>()
+                .AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(
+                    sp => new ErrorSignatureLoggerProvider(sp.GetRequiredService<ErrorSignatureCollector>()))
+                .AddSingleton<InstanceErrorReporter>()
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
+                    sp => sp.GetRequiredService<InstanceErrorReporter>())
                 // Re-runs the install hooks for ALREADY-installed packages once at startup. Packages
                 // installed before hooks existed never registered their agent/skill sources, so on a
                 // live instance every user's picker is missing them — and nothing else would fix it
