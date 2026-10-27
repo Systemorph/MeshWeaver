@@ -44,9 +44,9 @@ public sealed class DependencyClosure
     public static DependencyClosure Of(IEnumerable<(string Source, string Target)> edges)
     {
         ArgumentNullException.ThrowIfNull(edges);
-        var f = new Dictionary<string, ImmutableSortedSet<string>.Builder>(StringComparer.Ordinal);
-        var r = new Dictionary<string, ImmutableSortedSet<string>.Builder>(StringComparer.Ordinal);
-        static void Add(Dictionary<string, ImmutableSortedSet<string>.Builder> map, string key, string value)
+        var f = ImmutableDictionary.CreateBuilder<string, ImmutableSortedSet<string>.Builder>(StringComparer.Ordinal);
+        var r = ImmutableDictionary.CreateBuilder<string, ImmutableSortedSet<string>.Builder>(StringComparer.Ordinal);
+        static void Add(ImmutableDictionary<string, ImmutableSortedSet<string>.Builder>.Builder map, string key, string value)
         {
             if (!map.TryGetValue(key, out var set))
                 map[key] = set = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
