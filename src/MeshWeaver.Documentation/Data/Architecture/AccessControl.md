@@ -261,10 +261,11 @@ Access that reaches many people, or that the platform writes for someone else, i
 | `PublicSubject` | a non-denied grant to `Public` or `Anonymous` | an executing governed activity wrote it |
 | `SystemForOther` | a grant written as System whose subject is not `AccessContext.OnBehalfOf` | the user acquires it themselves (`OnBehalfOf` = subject: subscription, coupon, purchase), or a governed activity wrote it |
 | `AccessPolicy` | a `PartitionAccessPolicy` (`{scope}/_Policy`) | an executing governed activity wrote it |
+| `GrantRule` | a declared type-scoped grant (`Admin/_GrantRule/{id}`, see [Declared grant rules](#declared-grant-rules-grantrule)) | an executing governed activity (`access.grant-rule`) wrote it |
 
 A `Denied` assignment only removes access and always passes; a person sharing their own space with a colleague is not a broad grant.
 
-**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.provision-set`, `package.remove`, `store.enroll`, `pr.steward.admin-access`, the public-link standards `link.publish`, `link.revoke` and `group.org-create`, and `group.scoped-create` — a group holding one non-Admin role at one path, whose one grant and whose proposer's Admin on the group node are written as System after the executor re-checks proposer and signer (`Access:BroadGrantGuard:Standards` replaces it). A public link (MeshWeaver#4306) is the one shape that grants `Anonymous`/`Public`/an org group anything, and it grants `Viewer` on the LINK node only (`l/{publicId}`); the target is served as a delegated read re-checked at every render — design of record in MeshWeaver.Plugins `Essentials/PublicLinks`.
+**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.provision-set`, `package.remove`, `store.enroll`, `pr.steward.admin-access`, the public-link standards `link.publish`, `link.revoke` and `group.org-create`, `group.scoped-create` — a group holding one non-Admin role at one path, whose one grant and whose proposer's Admin on the group node are written as System after the executor re-checks proposer and signer — and `access.grant-rule`, which writes one declared grant rule (`Access:BroadGrantGuard:Standards` replaces the list). A public link (MeshWeaver#4306) is the one shape that grants `Anonymous`/`Public`/an org group anything, and it grants `Viewer` on the LINK node only (`l/{publicId}`); the target is served as a delegated read re-checked at every render — design of record in MeshWeaver.Plugins `Essentials/PublicLinks`.
 
 **Modes** (`Access:BroadGrantGuard:Mode`): `LogOnly` (the default for the first week after it ships), `Enforce`, `Off` (test harness only). In `LogOnly` every finding is one line, `[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject= writer= onBehalfOf= seat= governedBy=`. That grep is the inventory of legitimate writers that still have to stamp their context (the partition bootstrap's creator grant, invitation acceptance, the Store's root gating) before the mode flips to `Enforce`.
 
@@ -1190,6 +1191,103 @@ exact fold it ran before.
 > predicate, a declared public surface is readable by path but will not appear in an anonymous
 > `search`. The asymmetry is strictly in the safe direction — SQL is stricter, never looser, so it
 > cannot become a bypass — but it is a real gap, not a design choice.
+
+---
+
+# Declared grant rules (`GrantRule`)
+
+"Every partition whose ROOT is of node type T — optionally only where the root's content field F
+equals V — grants subject S the role R." A `GrantRule` declares exactly that, once, and both
+evaluators COMPUTE the grant from it on every evaluation. No `AccessAssignment` row is ever written
+for a rule, so there is nothing to sweep, reconcile, or drift: a partition created with a matching
+root is covered the moment it exists, a root retyped away from the match drops out the moment the
+retype lands, and deleting the rule removes the grant everywhere at once.
+
+```json
+{
+  "id": "sales-members-clients-editor",
+  "namespace": "Admin/_GrantRule",
+  "nodeType": "GrantRule",
+  "name": "Sales members edit every client",
+  "content": {
+    "$type": "GrantRule",
+    "nodeType": "Crm/Counterparty",
+    "contentField": "type",
+    "contentValue": "Crm/CounterpartyType/Client",
+    "accessObject": "Sales/Members",
+    "role": "Editor",
+    "description": "Sales members edit every client partition."
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `nodeType` | The node type the partition ROOT must carry. Ordinal match. |
+| `contentField` / `contentValue` | Optional. A TOP-LEVEL field of the root's content and the text it must hold. **Only a JSON string or boolean field can match** — a string as written, a boolean as `true`/`false` (the text Postgres' `content->>'field'` yields for those two kinds, so both evaluators agree). A number, array or object NEVER matches: `jsonb` re-renders those canonically, so their text need not equal what was stored, and a rule filtering on one grants nothing. A missing or null field never matches either. Omit both to match every root of the type. |
+| `accessObject` | A user id or a group path. `Public` and `Anonymous` are never honoured — a rule is for a NAMED subject. |
+| `role` | The role granted at each matching root — built-in or a custom `Role`. |
+
+## Why it is shaped like this
+
+**Instance data, not module code.** A `NodeTypeGate` is declared by the TYPE about itself and only
+ever opens Read. A grant rule names a subject that exists on ONE instance (a group of that
+deployment) over a type that ships to MANY (a package), so it cannot live in the package: it lives
+in the **Admin partition**, at `Admin/_GrantRule/{id}`, where only a global admin can write. A rule
+node placed anywhere else is inert — both evaluators read only that namespace.
+
+**A broad grant, so a governed write.** One rule grants on every matching partition, including
+ones that do not exist yet. `BroadGrantGuard` therefore treats any create or update of a
+`GrantRule` as the `GrantRule` shape (above), and the one way through is an activity executing the
+`access.grant-rule` standard. Deleting a rule only removes access and is an ordinary write by
+anyone with Delete in the Admin partition.
+
+**Not a sweep.** Materialising the rule as one `AccessAssignment` per matching partition is exactly
+the platform sweep `BroadGrantGuard` exists to refuse, and it fails the way per-instance gating
+failed (see [Why not materialise it per instance](#why-not-materialise-it-per-instance)): a sweep
+has to run to cover a new partition, has to run again to retract a retyped one, and is wrong in
+between.
+
+## A rule-derived role is a role like any other
+
+The fold adds a matching rule's role to the granted set at the partition ROOT's scope — exactly
+where an `AccessAssignment` at `{partition}/_Access` would sit — BEFORE anything else is applied:
+
+- **Group expansion** — the subject is matched against the viewer and every group they belong to,
+  transitively, through the same membership read as every other grant.
+- **Deny override** — an `AccessAssignment` that DENIES the role at the root or deeper subtracts it,
+  as it subtracts an assigned role.
+- **`_Policy`** — caps apply to it; an inheritance break BELOW the root discards it there (a break AT
+  the root keeps it, as it keeps a grant made at the root).
+- **System-owned partitions** — on a partition with a one-way `_GitSync` the repository-owned write
+  cap removes Create/Update/Delete from it like from any other role: a rule confers Read there,
+  never write.
+
+## Cost, and the evaluators
+
+**C# (`PermissionEvaluator`)** — one more fold leg, `ObserveRuleGrants`. It reads the rule set once
+per process (`$security-grant-rules`, anchored on `Admin/_GrantRule`, one schema, never a fan-out)
+and — only while at least one rule is declared — the target partition's root
+(`$security-root:{partition}`, a point read in the partition's own schema, partition-anchored so a
+teardown evicts it). A mesh that declares no rule never opens the second read. The leg is NOT
+seeded, for the reason every grant-carrying leg is not: an empty seed would be a spurious first
+denial for an entitled member.
+
+**Postgres (`rebuild_user_effective_permissions`, MeshWeaver.Plugins)** — the per-partition
+projection reads the rules from `admin.mesh_nodes` and the partition's root row, and inserts the
+rule's permissions for the subject (and every leaf member of a group subject) at the root's prefix,
+with the same deny-wins conflict rule as assignments, before the policy folds run. So a rule
+reaches `user_effective_permissions` and `partition_access` like an assignment does, and search
+lists the partition for the subject. A rule change re-projects every partition; a root whose type
+or content changes re-projects its own partition, but only when some rule names its type.
+
+> ⚠️ **One pre-existing difference between the evaluators applies here too.** The C# fold denies by
+> ROLE (a `Denied: Viewer` removes the Viewer role and nothing else), the SQL projection by
+> PERMISSION (a denied Viewer writes deny rows for Viewer's permissions, which also block an Editor's
+> Read at the same prefix). A deny of the SAME role the rule grants behaves identically in both.
+
+Pinned by `DeclaredGrantRuleTest` (MeshWeaver.Hosting.Test) on the C# side. To declare one, follow
+[Granting Access → Recipe 4](../GrantingAccess#recipe-4--a-declared-grant-rule-every-partition-of-a-type).
 
 ---
 
