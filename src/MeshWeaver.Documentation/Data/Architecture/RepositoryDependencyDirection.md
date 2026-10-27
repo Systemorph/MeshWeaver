@@ -146,14 +146,12 @@ one severity ([Issue Taxonomy](../IssueTaxonomy)). It runs on no pull request an
 a sibling's state can turn only that lane — and its one standing issue — red, never a core build.
 It is ledgered all the same, in `ApiReadLedger`, so the inventory stays complete.
 
-The FIFTH edge of this class is `build-host-stable.yml`: the DAILY scheduled roll of the standing
-build host `build-stable` ([Build Hosts](../BuildHosts)). Until core's `stable` promoter exists,
-`stable` IS the newest sealed set MeshWeaver.Plugins' own `main` has passed on, so the lane reads
-that repository's main runs and their annotations (`resolve-platform.py --passed-on-main`) with a
-fleet-reader App token (Actions + Checks: read) and hands the set to the host through the control
-plane's inbox. It checks nothing out, runs on no pull request and gates no merge and no platform
-roll — a sibling's state can only decide which set ONE build host runs. It is deliberately NOT a job
-of `main-cd.yml`, which reads no Plugins verdict (policy `platform-module-deploy-separate`).
+The FIFTH edge of this class, `build-host-stable.yml` (the daily roll of the standing build host
+`build-stable`, which reads MeshWeaver.Plugins' main runs to find the main-passed ceiling), LEFT
+core with the rest of the build-host deployment: it is MeshWeaver.Deploy's now
+([Build Hosts](../BuildHosts), [Carving Projects Out Of Core](../CarvingProjectsOutOfCore) →
+"Deployment material"). Core no longer reads a sibling's verdict to decide which set a build host
+runs.
 
 ## What is NOT an inverted edge
 

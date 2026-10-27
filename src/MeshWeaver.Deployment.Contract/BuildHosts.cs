@@ -212,8 +212,9 @@ public sealed record BuildHostChannel
     public string? CoreTestsDigest { get; init; }
 
     /// <summary>The set's build-host RUNNER image digest (<c>mw-build-host</c>, <c>sha256:…</c>) — bash,
-    /// python3, git, bubblewrap, the .NET SDK and <c>build-run.py</c>, built by core's CD in the same run
-    /// as the set, so the runner that drives a stage is the one that ships with its platform.</summary>
+    /// python3, git, bubblewrap, the .NET SDK and <c>build-run.py</c>, built by MeshWeaver.Deploy's <c>build-host.yml</c>
+    /// against the set's own commit and tagged with the set's version, so the runner that drives a stage is the one
+    /// that ships with its platform.</summary>
     [Description("The set's build-host runner image digest (sha256:…)")]
     public string? RunnerDigest { get; init; }
 

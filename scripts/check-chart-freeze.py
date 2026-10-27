@@ -13,9 +13,10 @@ renames INTO a frozen path is refused, naming the file and where the chart lives
 DIRECTORY matches its own path as well as everything below it, so replacing it with a symlink (its
 files deleted, the directory path added) is refused too.
 
-Deliberately NOT frozen, although they sit beside the chart: `.github/scripts/build-run.py` and
-`deploy/build-host/**`. main-cd builds the build-host runner image from them in this repository;
-the Deploy chart's own gate reads them from a declared checkout of this repository.
+The build-host deployment followed (MeshWeaver.Deploy#5): its runner `.github/scripts/build-run.py`,
+`deploy/build-host/**`, the announcement script, the declaration `.github/build-hosts.json` and the
+stable roll `build-host-stable.yml` live in MeshWeaver.Deploy and are frozen here the same way, so a
+second copy cannot grow back beside the one Deploy builds the `mw-build-host` image from.
 
 The listing is read NUL-delimited (`-z`): in its default output git C-quotes a path holding a
 non-ASCII byte, a quote or a control character, and a quoted path would match no frozen prefix.
@@ -50,12 +51,12 @@ FROZEN = (
     ".github/workflows/chart-gate.yml",
     "scripts/check-config-key-coverage.py",
     ".github/scripts/test-bundle-registry.py",
-)
-
-# Stays in this repository (main-cd builds the build-host image here). Wins over FROZEN.
-EXEMPT = (
-    ".github/scripts/build-run.py",
+    # The build-host deployment, which MeshWeaver.Deploy#5 took.
     "deploy/build-host/",
+    ".github/scripts/build-run.py",
+    ".github/scripts/build-host-announcement.py",
+    ".github/build-hosts.json",
+    ".github/workflows/build-host-stable.yml",
 )
 
 # The status letters `git diff --name-status` prints (C and R do not occur with --no-renames).
@@ -70,7 +71,7 @@ def _matches(path: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def is_frozen(path: str) -> bool:
-    return _matches(path, FROZEN) and not _matches(path, EXEMPT)
+    return _matches(path, FROZEN)
 
 
 def violations(listing: str) -> list[tuple[str, str]]:
@@ -143,8 +144,12 @@ def self_test() -> int:
             "D\tdeploy/aks/scripts/check-chart-invariants.sh\nD\tdeploy/homebrew/README.md\n"
             "D\t.github/workflows/homebrew.yml\nD\t.github/workflows/chart-gate.yml\n"
             "D\tscripts/check-config-key-coverage.py\nD\t.github/scripts/test-bundle-registry.py"), 0),
-        ("the build-host runner and Dockerfile stay editable",
-         _z("M\t.github/scripts/build-run.py\nM\tdeploy/build-host/Dockerfile"), 0),
+        ("the build-host material that left with Deploy#5 is frozen too (re-added or edited is refused)",
+         _z("A\t.github/scripts/build-run.py\nM\tdeploy/build-host/Dockerfile\nA\t.github/build-hosts.json"), 3),
+        ("deleting the build-host material is allowed (the Deploy#5 shape)",
+         _z("D\t.github/scripts/build-run.py\nD\tdeploy/build-host/Dockerfile\n"
+            "D\tdeploy/build-host/Dockerfile.dockerignore\nD\t.github/scripts/build-host-announcement.py\n"
+            "D\t.github/build-hosts.json\nD\t.github/workflows/build-host-stable.yml"), 0),
         ("unrelated paths are not this gate's business",
          _z("M\tsrc/MeshWeaver.Hosting/NodeTypeBakeGate.cs\nA\tdeploy/ocr/Dockerfile\n"
             "M\tdeploy/aks/INSTANCE-LIFECYCLE.md\nM\t.github/scripts/lock-pinned-digests.py"), 0),
