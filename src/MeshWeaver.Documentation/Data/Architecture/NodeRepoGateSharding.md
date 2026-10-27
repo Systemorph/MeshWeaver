@@ -226,6 +226,75 @@ missing `Training` failed Chess's install with `NodeType(s) not registered: Trai
 without the `MeshWeaver.AI` module failed with `NodeType(s) not registered: Skill` — the same
 content-shaped-error-with-an-infrastructure-cause the lane's own comments warn about.
 
+## 🍞 The prepared bake: compiled once, adopted by every shard
+
+**A shard does not install its mesh from source any more.** The mesh a shard stands up is seeded
+from the bake (`--seed`), so the bake IS the prepared state a gate needs. Until this section every
+shard built it from nothing: the same `mw-plugin-test compile` over the same mount, the same source
+sha and the same framework identity, four times per run, and then gated a quarter of it.
+
+**Measured** from MeshWeaver.Plugins `main`, read through the REST jobs API and each shard's own
+log lines (`bake: reference set` → `bake: framework=… packages=… assemblies=…` is the compile;
+from there to `ALL GREEN` is the gate):
+
+| run | per-shard compile | gating after it | compile share of the job |
+|---|---|---|---|
+| 40422667038 (10-26, 43 packages, 165 assemblies) | 538-548 s × 4 | 38-184 s | 75-83 % |
+| 40527810899 (10-27, 25 packages, 138 assemblies) | 1647-1694 s × 4 | 17-323 s | 80-95 % |
+| 40531711572 (10-27, 25 packages, 138 assemblies) | 1694-1954 s × 4 | 15-297 s | 82-95 % |
+
+The installs themselves are small next to that — 13-50 s of package installs per shard in run
+40531711572. (The compile was 72 s when the table above was measured; why it grew to 9 and then
+28-33 minutes is its own question, and this section does not answer it.)
+
+So a run with more than one shard now has a `bake` job between `plan` and the shards:
+
+```text
+plan ──▶ bake (once) ──▶ gate (matrix: shard 1..N) ──▶ verify
+           │                 │
+           │ compiles, keys,  │ fetches the hand-off, verifies it against ITS OWN key,
+           │ seals, uploads   │ copies it into its own bake directory, gates its slice
+```
+
+- **Same steps, not a copy.** `bake` runs the shards' steps through a YAML alias
+  (`steps: *gate-steps`) with `GATE_ROLE: bake` in its env, so the bake and the shards cannot
+  disagree about how a platform is resolved, composed or compiled against. It stops after the
+  compile and gates nothing.
+- **Keyed on everything the compile read.** `gate-bake-handoff.py key` hashes every file of the
+  composed gate host (the portal's `/app` and the tester), of the staged repository tree and of the
+  external-module directory, the names of the shared frameworks (volume mode), and the identity,
+  platform reference, source sha and compile arguments. Only `.git` and `__pycache__` are skipped,
+  by name: they differ between two checkouts of one commit and no compile reads them.
+- **Equal key ⇒ adopt an own copy.** The shard copies the hand-off into its own, empty bake
+  directory and re-verifies the copy; nothing a shard does to its bake reaches the hand-off or a
+  sibling.
+- **Different key ⇒ refreshed, loudly.** `adopt` exits 3 naming every input that differs (a value,
+  the first differing paths of a tree, a framework listing), and the shard compiles its own bake
+  under a `::warning::`. A stale bake is never used.
+- **Damaged hand-off ⇒ RED.** A missing, extra or changed file, a link, an identity file that
+  disagrees with the key, or a key document that does not hash to the key it claims is refused —
+  never "compile instead". The manifest catches damage; the run-scoped artifact store's own sha-256
+  verification carries the bytes between the jobs.
+- **One platform per attempt.** A shard of the same attempt takes the set `bake` compiled against
+  instead of re-resolving a newer one: a set sealed during the bake would otherwise make every
+  shard stale, and a refresh on top of the bake's compile would cross the 45-minute cap. A shard
+  of a LATER attempt ("Re-run failed jobs") re-resolves as before and refreshes when the set moved.
+- **One shard is unchanged.** With `shards: 1` no `bake` runs and the single shard compiles its
+  own bake exactly as before. A `bake` that fails or is cancelled runs no shard, and `verify` names
+  it as the reason.
+
+The self-test (`gate-bake-handoff.py --self-test`, run by `dotnet-test.yml`) carries the negative
+controls: another identity, an edited source file, a changed module assembly and another
+shared-framework set each refresh by name; a byte changed, a bundle missing, an extra bundle, no
+manifest, a re-labelled key, a rewritten identity file and a symbolic link are each refused; a
+sibling adopts the original bytes after another shard changed its copy; and every rule was
+mutation-checked (removing it turns at least one case red).
+
+**Not established yet:** the after-numbers in CI. What the design predicts is one compile per run
+instead of one per shard — for the runs above, 3 × 9 min and 3 × 28-33 min of runner time per run —
+with wall-clock roughly unchanged, because the shards now wait for the one compile instead of each
+running it; that prediction is not a measurement until a run on this lane reports it.
+
 ## The pin moves with the lane
 
 `--shard` is a flag on `mw-plugin-test`, which ships in the **tester image**. A caller that sets
