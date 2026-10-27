@@ -64,6 +64,13 @@ class ArtifactStoreError(RuntimeError):
     """A declared artifact store failed; this must not become a GitHub fallback or green build."""
 
 
+class ArtifactContentError(ArtifactStoreError):
+    """The store DELIVERED the artifact (listed, downloaded, integrity-checked), but the file inside
+    cannot be read as what it should be. Still a hard failure for an attestation; a withheld
+    MARKER alone may read it as "withheld, set unknown" — its contents are unusable, the store
+    is not."""
+
+
 def store_command(store, repo, run_id, command, *arguments, expected_store_id=None):
     """Use the named-artifact adapter without leaking its action outputs into this step's outputs.
 
@@ -278,12 +285,15 @@ def carries_marker(repo, run_id, name, artifact_store="", expected_store_id=None
 def withheld_packages(repo, run_id, name, artifact_store="", expected_store_id=None):
     """The packages a run's withheld marker names: False when the run carries no marker, the
     marker's `withheld` list when it names a non-empty one, True (withheld, set unknown) when the
-    marker exists but cannot be read as such — expired, unreadable, or naming nothing."""
+    marker exists but its CONTENTS cannot be read as such — expired, unparseable, or naming nothing.
+    🚨 A STORAGE failure (download, integrity check) is not "contents unknown": ArtifactStoreError
+    propagates to main()'s hard failure, exactly as for the attestations — it must never become an
+    older baseline or a full build that exits green."""
     if not carries_marker(repo, run_id, name, artifact_store, expected_store_id):
         return False
     try:
         body = artifact_json(repo, run_id, name, f"{name}.json", artifact_store, expected_store_id)
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile, ArtifactStoreError):
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, ArtifactContentError):
         return True
     listed = body.get("withheld") if isinstance(body, dict) else None
     if isinstance(listed, list) and listed and all(isinstance(x, str) and x for x in listed):
@@ -293,10 +303,12 @@ def withheld_packages(repo, run_id, name, artifact_store="", expected_store_id=N
 
 def never_started(repo, run_id):
     """True when a run has NO job in ANY attempt (`filter=all`): cancelled while queued, a startup
-    failure. Unreadable is False — the run stays in the walk, as before."""
+    failure. Unreadable is False — the run stays in the walk, as before, and the attestation
+    checks decide: an API failure (CalledProcessError) or a timeout (TimeoutExpired) included,
+    which must not escape to main() and force a full build the attestations would not."""
     try:
         return gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?filter=all&per_page=1").get("total_count") == 0
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, AttributeError, subprocess.SubprocessError):
         return False
 
 
@@ -316,7 +328,7 @@ def artifact_json(repo, run_id, name, filename, artifact_store="", expected_stor
                 with open(Path(folder) / filename, encoding="utf-8") as stream:
                     return json.load(stream)
             except (OSError, ValueError) as exc:
-                raise ArtifactStoreError(f"run {run_id}'s stored {name} artifact is invalid") from exc
+                raise ArtifactContentError(f"run {run_id}'s stored {name} artifact is invalid") from exc
     listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/artifacts?name={quote(name, safe='')}")
     live = [x for x in listing.get("artifacts", []) if not x.get("expired")]
     if not live:

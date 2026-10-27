@@ -59,9 +59,10 @@ class PublicationArtifactStoreTests(unittest.TestCase):
             doc = artifact.upload(name, {filename: source})
         return artifact, doc
 
-    def invoke_base(self, runs, extra=(), jobs=None, current=None):
+    def invoke_base(self, runs, extra=(), jobs=None, current=None, jobs_error=None):
         """`jobs`: {run id → job count} answered by the jobs endpoint (absent ⇒ the endpoint gives
-        no count, i.e. the run is treated as started)."""
+        no count, i.e. the run is treated as started). `jobs_error`: an exception the jobs
+        endpoint RAISES instead (an API failure, a timeout)."""
         inputs = self.root / "inputs.json"
         inputs.write_text(json.dumps(self.inputs if current is None else current))
         args = ["publication-base", "--workflow", "ci.yml", "--inputs", str(inputs),
@@ -69,6 +70,8 @@ class PublicationArtifactStoreTests(unittest.TestCase):
 
         def gh(endpoint):
             if "/jobs" in endpoint:
+                if jobs_error is not None:
+                    raise jobs_error
                 run_id = int(endpoint.split("/runs/")[1].split("/")[0])
                 return {} if jobs is None or run_id not in jobs else {"total_count": jobs[run_id], "jobs": []}
             return {"workflow_runs": runs}
@@ -147,6 +150,29 @@ class PublicationArtifactStoreTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("", result["sha"])
 
+    def test_an_unreadable_job_count_keeps_the_run_in_the_walk_and_attestation_decides(self):
+        # gh_json raises CalledProcessError on an API failure and TimeoutExpired on a timeout; either
+        # used to escape to main() and force a full build. The run must stay in the walk, and with
+        # its attestation on the same toolchain the baseline narrows.
+        for error in (subprocess.CalledProcessError(1, ["gh", "api"]),
+                      subprocess.TimeoutExpired(["gh", "api"], 60)):
+            with self.subTest(error=type(error).__name__):
+                self.publish()
+                self.publish(run="11")
+                later = {**self.run, "id": 11, "head_sha": "b" * 40, "conclusion": "cancelled"}
+                code, result = self.invoke_base([later, self.run], jobs_error=error)
+                self.assertEqual(0, code)
+                self.assertEqual(("a" * 40, [11]), (result["sha"], result["between"]))
+
+    def test_negative_control_an_unreadable_job_count_with_a_moved_toolchain_is_still_full(self):
+        self.publish()
+        self.publish(run="11", value={"platform": "p2", "logic": "l1"})
+        later = {**self.run, "id": 11, "head_sha": "b" * 40, "conclusion": "cancelled"}
+        code, result = self.invoke_base([later, self.run],
+                                        jobs_error=subprocess.CalledProcessError(1, ["gh", "api"]))
+        self.assertEqual(0, code)
+        self.assertEqual("", result["sha"])
+
     def test_an_in_flight_run_is_never_asked_and_still_forces_full_without_attestation(self):
         self.publish()
         flight = {**self.run, "id": 11, "head_sha": "b" * 40, "status": "in_progress", "conclusion": None}
@@ -186,6 +212,35 @@ class PublicationArtifactStoreTests(unittest.TestCase):
                     [run], extra=["--withheld-marker", "publication-withheld", "--carry-withheld"])
                 self.assertEqual(0, code)
                 self.assertEqual("", result["sha"])
+
+    def test_a_marker_the_store_cannot_deliver_is_a_hard_failure_not_a_fallback(self):
+        # The listing finds the marker, but its archive fails the store's integrity check: a STORAGE
+        # failure, which must reach main()'s hard failure (exit 1, no baseline printed) — never an
+        # older baseline or a green full build.
+        self.publish()
+        _, doc = self.publish(name="publication-withheld", value={"withheld": ["Mail"]},
+                              filename="publication-withheld.json")
+        key, _ = ARTIFACTS.STORE.split_locator(doc["locator"], self.store)
+        (self.shelf / key).write_bytes(b"not the attested archive")
+        older = {**self.run, "id": 9, "head_sha": "c" * 40}
+        self.publish(run="9")
+        code, result = self.invoke_base(
+            [self.run, older], extra=["--withheld-marker", "publication-withheld", "--carry-withheld"])
+        self.assertEqual((1, None), (code, result))
+
+    def test_negative_control_a_delivered_marker_with_unparseable_contents_is_walked_past(self):
+        # The store delivers the archive intact; only the file inside is not JSON — contents
+        # unknown, so the run is walked past (here to a full build), exit 0.
+        self.publish()
+        artifact = ARTIFACTS.Artifacts(self.store, self.repo, "10", 1)
+        source = self.root / "garbled-marker"
+        source.write_text("not json")
+        with contextlib.redirect_stdout(io.StringIO()):
+            artifact.upload("publication-withheld", {"publication-withheld.json": source})
+        code, result = self.invoke_base(
+            [self.run], extra=["--withheld-marker", "publication-withheld", "--carry-withheld"])
+        self.assertEqual(0, code)
+        self.assertEqual(("", []), (result["sha"], result["carry"]))
 
     def test_an_unmarked_run_is_a_complete_baseline_with_no_carry(self):
         self.publish()
