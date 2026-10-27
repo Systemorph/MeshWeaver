@@ -100,11 +100,11 @@ public static class ToolCatalogCache
 
         if (cached is not null)
             return new CatalogLoad(cached,
-                $"warning: could not read the tool catalog from {McpClient.EndpointFor(baseUrl)} ({reason}); "
+                $"warning: could not read the tool catalog from {baseUrl.TrimEnd('/')}/mcp ({reason}); "
                 + $"using the catalog cached at {cached.FetchedAt:u}.", null);
 
         return new CatalogLoad(null, null,
-            $"error: could not read the tool catalog from {McpClient.EndpointFor(baseUrl)} ({reason}), "
+            $"error: could not read the tool catalog from {baseUrl.TrimEnd('/')}/mcp ({reason}), "
             + "and no cached catalog exists for this instance. Check --base-url and the token "
             + "(`memex login`), then retry.");
     }
@@ -122,9 +122,9 @@ public static class ToolCatalogCache
                 return null;
             return new ToolCatalog(raw.Select(McpTool.From).OfType<McpTool>().ToArray(), fetchedAt, true);
         }
-        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException)
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
-            // An unreadable cache is no cache: the next successful fetch overwrites it.
+            // An unreadable cache (corrupt, or access denied) is no cache: the next successful fetch overwrites it.
             return null;
         }
     }

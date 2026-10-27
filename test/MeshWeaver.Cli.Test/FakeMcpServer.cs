@@ -35,6 +35,15 @@ internal sealed class FakeMcpServer : IAsyncDisposable
     /// <summary>Reply in <c>text/event-stream</c> framing instead of a JSON body.</summary>
     public volatile bool ReplyAsEventStream;
 
+    /// <summary>With <see cref="ReplyAsEventStream"/>: after the reply, keep the stream OPEN until the
+    /// client goes away — a server that answers and lingers.</summary>
+    public volatile bool HoldEventStreamOpen;
+
+    private int heldStreams;
+
+    /// <summary>How many replies were followed by a held-open stream.</summary>
+    public int HeldStreams => Volatile.Read(ref heldStreams);
+
     /// <summary>Every JSON-RPC method received, with its params, in arrival order.</summary>
     public ConcurrentQueue<(string Method, JsonNode? Params)> Received { get; } = new();
 
@@ -135,6 +144,20 @@ internal sealed class FakeMcpServer : IAsyncDisposable
         {
             context.Response.ContentType = "text/event-stream";
             await context.Response.WriteAsync($"event: message\ndata: {reply.ToJsonString()}\n\n").ConfigureAwait(false);
+            if (HoldEventStreamOpen)
+            {
+                await context.Response.Body.FlushAsync().ConfigureAwait(false);
+                Interlocked.Increment(ref heldStreams);
+                try
+                {
+                    // Not a wait for propagation: the hold IS the subject — the reply is out, the
+                    // stream stays open until the client disconnects (or the server stops).
+                    await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
         }
         else
         {
@@ -151,6 +174,8 @@ internal sealed class FakeMcpServer : IAsyncDisposable
     {
         "fails" => Text("the tool failed on purpose", isError: true),
         "sentinel" => Text("Error: Not permitted at Doc/X"),
+        // A content item whose `type` is a number, not a string: a malformed result.
+        "malformed" => new JsonObject { ["content"] = new JsonArray(new JsonObject { ["type"] = 5, ["text"] = "x" }) },
         _ => Text(new JsonObject { ["tool"] = name, ["arguments"] = arguments.DeepClone() }.ToJsonString()),
     };
 

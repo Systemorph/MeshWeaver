@@ -58,7 +58,8 @@ public sealed class DynamicMcpCommandsTest : IDisposable
           {"name":"sentinel","description":"Answers the Error: sentence.","inputSchema":{"type":"object","properties":{}}},
           {"name":"upload","description":"SERVER upload (base64).",
            "inputSchema":{"type":"object","properties":{"path":{"type":"string"},"base64Content":{"type":"string"}},"required":["path","base64Content"]}},
-          {"name":"login","description":"A server tool named like a built-in.","inputSchema":{"type":"object","properties":{}}}
+          {"name":"login","description":"A server tool named like a built-in.","inputSchema":{"type":"object","properties":{}}},
+          {"name":"malformed","description":"Answers a content item whose type is a number.","inputSchema":{"type":"object","properties":{}}}
         ]
         """)!;
 
@@ -302,5 +303,165 @@ public sealed class DynamicMcpCommandsTest : IDisposable
         Assert.NotEqual(0, exit);
         Assert.Contains("mixed-bag", stderr);
         Assert.Empty(server.Calls);
+    }
+
+    // --- review round: the defects found in #7301's first review --------------------------------
+
+    private static JsonArray Tools(string json) => (JsonArray)JsonNode.Parse(json)!;
+
+    [Fact]
+    public async Task Local_commands_never_touch_the_connection_settings()
+    {
+        // A --base-url that is not a URL must not break commands that never contact the instance.
+        var (build, buildOut, buildErr) = await Run(null, "not a url", "build", "--help");
+        Assert.True(build == 0, buildErr);
+        Assert.Contains("plugin", buildOut);
+        Assert.Equal(0, (await Run(null, "not a url", "--version")).Exit);
+
+        // Negative control: a catalog-backed command with the same settings fails, naming why.
+        var (get, _, getErr) = await Run(null, "not a url", "get", "Doc/X");
+        Assert.Equal(2, get);
+        Assert.Contains("is not a URL", getErr);
+    }
+
+    [Fact]
+    public async Task Tools_whose_kebab_names_collide_keep_their_exact_names_in_any_order()
+    {
+        const string a = """{"name":"foo_bar","description":"Underscore.","inputSchema":{"type":"object","properties":{}}}""";
+        const string b = """{"name":"foo-bar","description":"Hyphen.","inputSchema":{"type":"object","properties":{}}}""";
+        const string c = """{"name":"other_tool","description":"No clash.","inputSchema":{"type":"object","properties":{}}}""";
+        foreach (var order in new[] { $"[{a},{b},{c}]", $"[{b},{a},{c}]" })
+        {
+            var catalog = new ToolCatalog(Tools(order).Select(McpTool.From).OfType<McpTool>().ToArray(), T0, false);
+            var names = CliApp.CommandNames(catalog).ToDictionary(n => n.Tool.Name, n => n.Command);
+            Assert.Equal("foo_bar", names["foo_bar"]);
+            Assert.Equal("foo-bar", names["foo-bar"]);
+            Assert.Equal("other-tool", names["other_tool"]); // negative control: no clash, kebab as usual
+        }
+
+        await using var server = await FakeMcpServer.StartAsync(Tools($"[{b},{a},{c}]"));
+        Assert.Equal(0, (await Run(server, "", "foo_bar")).Exit);
+        Assert.Equal(0, (await Run(server, "", "foo-bar")).Exit);
+        Assert.Equal(["foo_bar", "foo-bar"], server.Calls.Select(x => x.Name));
+    }
+
+    [Fact]
+    public async Task A_transport_failure_is_exit_2_and_a_malformed_result_exit_3()
+    {
+        string baseUrl;
+        await using (var server = await FakeMcpServer.StartAsync(Catalog()))
+        {
+            baseUrl = server.BaseUrl;
+            var (malformed, _, malformedErr) = await Run(server, "", "malformed");
+            Assert.Equal(3, malformed);
+            Assert.StartsWith("error:", malformedErr);
+        }
+
+        // The catalog is cached; the instance is gone, so the CALL cannot connect.
+        var (exit, _, stderr) = await Run(null, baseUrl, "--refresh", "get", "Doc/X");
+        Assert.Equal(2, exit);
+        Assert.Contains("using the catalog cached at", stderr);
+    }
+
+    [Fact]
+    public async Task Compatibility_shapes_apply_only_to_string_parameters()
+    {
+        await using var server = await FakeMcpServer.StartAsync(Tools("""
+            [
+              {"name":"create","inputSchema":{"type":"object","properties":{"node":{"type":"object"}},"required":["node"]}},
+              {"name":"delete","inputSchema":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}}},"required":["paths"]}}
+            ]
+            """));
+        var node = Path.Combine(Directory.CreateDirectory(configDir).FullName, "node.json");
+        await File.WriteAllTextAsync(node, """{"id":"N"}""", TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, (await Run(server, "", "create", "--node", """{"id":"N"}""")).Exit);
+        Assert.Equal(0, (await Run(server, "", "delete", "--paths", "A/One", "--paths", "A/Two")).Exit);
+        // Negative control: the string-only shapes are OFF — `-f` is no option of an object-typed
+        // create, and a bare positional is no argument of an array-typed delete.
+        Assert.NotEqual(0, (await Run(server, "", "create", "-f", node)).Exit);
+        Assert.NotEqual(0, (await Run(server, "", "delete", "A/One")).Exit);
+
+        Assert.Collection(server.Calls,
+            x => Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""{"node":{"id":"N"}}"""), x.Arguments), x.Arguments.ToJsonString()),
+            x => Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""{"paths":["A/One","A/Two"]}"""), x.Arguments), x.Arguments.ToJsonString()));
+    }
+
+    [Fact]
+    public async Task Every_property_gets_its_own_option_name()
+    {
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        Assert.Equal("--arg-token", DynamicCommands.AllocateOptionName("arg-token", used));
+        Assert.Equal("--arg2-token", DynamicCommands.AllocateOptionName("token", used));
+        Assert.Equal("--limit", DynamicCommands.AllocateOptionName("limit", used));
+        Assert.Equal("--arg-limit", DynamicCommands.AllocateOptionName("limit", used));
+
+        await using var server = await FakeMcpServer.StartAsync(Tools("""
+            [{"name":"pair","inputSchema":{"type":"object","properties":{"argToken":{"type":"string"},"token":{"type":"string"}}}}]
+            """));
+        var (exit, _, stderr) = await Run(server, "", "pair", "--arg-token", "one", "--arg2-token", "two");
+        Assert.True(exit == 0, stderr);
+        var call = Assert.Single(server.Calls);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""{"argToken":"one","token":"two"}"""), call.Arguments), call.Arguments.ToJsonString());
+    }
+
+    [Fact]
+    public async Task A_required_property_given_as_explicit_null_is_present()
+    {
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        var (exit, _, stderr) = await Run(server, "", "mixed-bag", "--json", """{"path":null,"mode":"fast"}""");
+        Assert.True(exit == 0, stderr);
+        var call = Assert.Single(server.Calls);
+        Assert.True(call.Arguments.ContainsKey("path"));
+        Assert.Null(call.Arguments["path"]);
+
+        // Negative control: ABSENT is still refused.
+        Assert.NotEqual(0, (await Run(server, "", "mixed-bag", "--json", """{"mode":"fast"}""")).Exit);
+        Assert.Single(server.Calls);
+    }
+
+    [Fact]
+    public async Task An_event_stream_that_stays_open_after_the_reply_does_not_hold_the_command()
+    {
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        server.ReplyAsEventStream = true;
+        server.HoldEventStreamOpen = true;
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var (exit, stdout, stderr) = await Run(server, "", "get", "Doc/X");
+        clock.Stop();
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("\"tool\":\"get\"", stdout);
+        // Control: the server really did keep its streams open (initialize, tools/list, tools/call)…
+        Assert.True(server.HeldStreams >= 3, $"held {server.HeldStreams}");
+        // …and the command returned on the reply, not on the 10-minute HTTP timeout.
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"took {clock.Elapsed}");
+    }
+
+    // Unix file modes: CI and the developer hosts are Linux and macOS.
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task An_unreadable_cache_file_is_a_cache_miss()
+    {
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        Assert.Equal(0, (await Run(server, "", "get", "Doc/X")).Exit);
+        var cache = ToolCatalogCache.CachePath(configDir, server.BaseUrl);
+        var mode = File.GetUnixFileMode(cache);
+        File.SetUnixFileMode(cache, UnixFileMode.None);
+        try
+        {
+            // Precondition, asserted rather than assumed: the file really cannot be read here.
+            Assert.Throws<UnauthorizedAccessException>(() => File.ReadAllText(cache));
+            now = T0 + TimeSpan.FromMinutes(1); // inside the lifetime: only the unreadable file forces a fetch
+
+            var (exit, _, stderr) = await Run(server, "", "get", "Doc/X");
+            Assert.True(exit == 0, stderr);
+            Assert.Equal(2, server.ListRequests);
+        }
+        finally
+        {
+            if (File.Exists(cache)) File.SetUnixFileMode(cache, mode);
+        }
     }
 }

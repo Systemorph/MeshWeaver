@@ -78,14 +78,13 @@ public sealed class McpClient : IDisposable
         }, ct);
         protocolVersion = result?["protocolVersion"]?.GetValue<string>() ?? OfferedProtocolVersion;
         initialized = true;
-        await Send(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/initialized" }, ct);
+        await Send(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/initialized" }, null, ct);
     }
 
     private async Task<JsonNode?> Request(string method, JsonObject parameters, CancellationToken ct)
     {
         var id = ++nextId;
-        var body = await Send(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method, ["params"] = parameters }, ct);
-        var reply = FindReply(body, id)
+        var reply = await Send(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method, ["params"] = parameters }, id, ct)
                     ?? throw new McpRpcException(0, $"{method}: the server answered no JSON-RPC reply for id {id}.");
         if (reply["error"] is JsonObject error)
             throw new McpRpcException(
@@ -94,7 +93,14 @@ public sealed class McpClient : IDisposable
         return reply["result"];
     }
 
-    private async Task<string> Send(JsonObject message, CancellationToken ct)
+    /// <summary>
+    /// Posts one JSON-RPC message and answers the reply carrying <paramref name="id"/> (<c>null</c> for
+    /// a notification, whose body is never read). The response is read from its HEADERS on, and an
+    /// event stream is read event by event: the reply is returned — and the response disposed, which
+    /// closes the stream — the moment it arrives, so a server that keeps the stream open after
+    /// answering never holds the command until the HTTP timeout.
+    /// </summary>
+    private async Task<JsonObject?> Send(JsonObject message, int? id, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
@@ -105,14 +111,38 @@ public sealed class McpClient : IDisposable
         if (sessionId is not null) request.Headers.Add("Mcp-Session-Id", sessionId);
         if (protocolVersion is not null) request.Headers.Add("MCP-Protocol-Version", protocolVersion);
 
-        using var response = await http.SendAsync(request, ct);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (response.Headers.TryGetValues("Mcp-Session-Id", out var ids))
             sessionId = ids.FirstOrDefault() ?? sessionId;
-        var text = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
-            throw new MemexCliException(response.StatusCode, text);
-        return text;
+            throw new MemexCliException(response.StatusCode, await response.Content.ReadAsStringAsync(ct));
+        if (id is not { } wanted)
+            return null;
+
+        if (response.Content.Headers.ContentType?.MediaType != "text/event-stream")
+            return FindReply(await response.Content.ReadAsStringAsync(ct), wanted);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var data = new StringBuilder();
+        while (await reader.ReadLineAsync(ct) is { } line)
+        {
+            if (line.Length == 0)
+            {
+                if (data.Length > 0 && Match(Parse(data.ToString()), wanted) is { } reply) return reply;
+                data.Clear();
+            }
+            else if (line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                if (data.Length > 0) data.Append('\n');
+                data.Append(line.AsSpan(5).TrimStart());
+            }
+        }
+        return data.Length > 0 ? Match(Parse(data.ToString()), wanted) : null;
     }
+
+    private static JsonObject? Match(JsonNode? candidate, int id) =>
+        candidate is JsonObject obj && obj["id"] is JsonValue v && v.TryGetValue<int>(out var got) && got == id ? obj : null;
 
     /// <summary>
     /// The JSON-RPC reply carrying <paramref name="id"/>, from a plain JSON body or from the
@@ -121,7 +151,7 @@ public sealed class McpClient : IDisposable
     public static JsonObject? FindReply(string body, int id)
     {
         foreach (var candidate in Messages(body))
-            if (candidate is JsonObject obj && obj["id"] is JsonValue v && v.TryGetValue<int>(out var got) && got == id)
+            if (Match(candidate, id) is { } obj)
                 return obj;
         return null;
     }

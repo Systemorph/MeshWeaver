@@ -107,10 +107,14 @@ public static class DynamicCommands
             .OfType<string>()
             .ToImmutableHashSet();
 
+        // A compatibility shape sends a STRING (the file's text, a JSON-array string), so it applies
+        // only while the parameter IS a plain string; any other schema takes the generic mapping.
+        bool IsString(string? parameter) =>
+            parameter is not null && properties[parameter] is JsonObject p && KindOf(p) == SchemaKind.String;
         LegacyShapes.FileFillsParameter.TryGetValue(tool.Name, out var fileFills);
-        if (fileFills is not null && !properties.ContainsKey(fileFills)) fileFills = null;
+        if (!IsString(fileFills)) fileFills = null;
         LegacyShapes.VariadicJsonArray.TryGetValue(tool.Name, out var variadic);
-        if (variadic is not null && !properties.ContainsKey(variadic)) variadic = null;
+        if (!IsString(variadic)) variadic = null;
 
         var jsonOpt = new Option<string?>("--json") { Description = "All arguments as one JSON object; options given beside it win." };
         var argsFileOpt = fileFills is null
@@ -128,9 +132,7 @@ public static class DynamicCommands
             var isRequired = required.Contains(name);
             var kind = KindOf(schema);
             var kebab = Kebab(name);
-            var optionName = "--" + (ReservedOptionNames.Contains(kebab) ? "arg-" + kebab : kebab);
-            if (!usedOptionNames.Add(optionName)) optionName = "--arg-" + kebab;
-            usedOptionNames.Add(optionName);
+            var optionName = AllocateOptionName(kebab, usedOptionNames);
             var description = Describe(schema, isRequired);
 
             Argument? positional = null;
@@ -240,10 +242,26 @@ public static class DynamicCommands
         }
 
         foreach (var binding in bindings.Where(b => b.Required))
-            if (arguments[binding.Name] is null)
+            // JSON Schema `required` is about PRESENCE: an explicit null satisfies it.
+            if (!arguments.ContainsKey(binding.Name))
                 errors = errors.Add($"Missing required argument '{binding.Name}' ({binding.Display}).");
 
         return (arguments, errors);
+    }
+
+    /// <summary>
+    /// The option name for a property: <c>--kebab</c>, or — when that is reserved or already taken —
+    /// <c>--arg-kebab</c>, <c>--arg2-kebab</c>, … until one is free, so every property stays
+    /// addressable on its own. <paramref name="used"/> also holds the compatibility aliases.
+    /// </summary>
+    public static string AllocateOptionName(string kebab, ISet<string> used)
+    {
+        if (!ReservedOptionNames.Contains(kebab) && used.Add("--" + kebab)) return "--" + kebab;
+        for (var n = 1; ; n++)
+        {
+            var candidate = n == 1 ? "--arg-" + kebab : $"--arg{n}-{kebab}";
+            if (used.Add(candidate)) return candidate;
+        }
     }
 
     private enum SchemaKind { String, Enum, Integer, Number, Boolean, Array, Json }

@@ -160,7 +160,7 @@ old it is; with no cache the command fails with exit 2 and names why.
 
 | tool schema | command line |
 |---|---|
-| tool name | the command, kebab-case: `get_diagnostics` → `get-diagnostics` |
+| tool name | the command, kebab-case: `get_diagnostics` → `get-diagnostics`. When two tools share a kebab form (`foo_bar`, `foo-bar`), each keeps its exact MCP name instead — decided over the whole catalog, never by its order |
 | any property | an option `--kebab-name` (`basePath` → `--base-path`); its description is the help text |
 | `string` / `enum` | a value; an enum accepts only its listed values |
 | `integer` / `number` | a number, validated before the call |
@@ -169,19 +169,20 @@ old it is; with no cache the command fails with exit 2 and names why.
 | `object` / anything without a simple type | a JSON value: `--meta '{"k":1}'` |
 | a REQUIRED `string` | ALSO a positional argument, in schema order — `memex get Doc/X`, `memex search 'nodeType:Agent'`, `memex move A/X B/X` |
 | the whole argument object | `--json '{…}'` or `--file args.json`; options and positionals given beside it win |
-| a property named like a global option (`token`, `base-url`, `json`, `file`, …) | `--arg-<name>` |
+| a property whose option name is reserved (`token`, `base-url`, `json`, `file`, …) or already taken | `--arg-<name>`, then `--arg2-<name>`, … — every property stays addressable |
 
 A missing required argument is refused before anything is sent. Output is the tool's text content,
 verbatim, so JSON pipes cleanly into `jq`. Exit codes: `0` success; `1` the tool answered an error
 (`isError`, or the mesh's `Error: …` sentence, printed on stderr), a JSON-RPC refusal, or a usage
-error; `2` an HTTP failure or no catalog; `3` anything else.
+error; `2` an HTTP or connection failure, or no catalog; `3` anything else (a malformed result, a
+timeout). A required property is about PRESENCE: `--json '{"x":null}'` supplies it.
 
 **Compatibility with the verbs the CLI used to hand-code.** The rule above already keeps
 `get <path>`, `search <query> [--base-path]`, `move <src> <dst>`, `copy <src> <ns> [--force]`,
 `patch <path> --fields '…'`, `recycle <path> [--reason]`, `compile <path>`, `navigate-to <path>`,
 `execute-script <path>` and `mirror push|pull <remote> <source>` reading as before. A few shapes the
 generic rule cannot express are declared in `DynamicCommands.LegacyShapes`, and each applies only
-while the tool still has the named parameter:
+while the tool still has the named parameter AS A STRING (any other schema takes the generic rule):
 
 | old form | sent as |
 |---|---|

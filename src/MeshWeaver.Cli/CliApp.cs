@@ -64,38 +64,60 @@ public static class CliApp
         var isBuiltIn = scan.Command is not null && BuiltIns.Contains(scan.Command);
         var needCatalog = !isBuiltIn && !(scan.Command is null && scan.Version && !scan.Help);
 
-        MemexConfig? config = null;
-        string? noClientReason = null;
-        try { config = MemexConfig.Resolve(scan.BaseUrl, scan.Token); }
-        catch (InvalidOperationException ex) { noClientReason = ex.Message; }
-
-        using var client = config is null ? null : new McpClient(config);
         ToolCatalog? catalog = null;
         string? unavailable = null;
-        if (needCatalog)
+        McpClient? client = null;
+        try
         {
-            var baseUrl = config?.BaseUrl ?? MemexConfig.ResolveBaseUrl(scan.BaseUrl);
-            var load = await ToolCatalogCache.Load(
-                host.ConfigDirectory, baseUrl, scan.Refresh, host.Now(),
-                client is null ? null : client.ListTools, noClientReason, ct);
-            if (load.Warning is not null) await host.Err.WriteLineAsync(load.Warning);
-            catalog = load.Catalog;
-            if (catalog is null)
+            // 🚨 Only a catalog-backed command touches the connection settings: `build`, `login`,
+            // `--version` must work with no token and with a --base-url that is not a URL.
+            if (needCatalog)
             {
-                // A mesh command was named and there is nothing to generate it from: say WHY,
-                // instead of letting the parser report an "unrecognized command".
-                if (scan.Command is not null)
+                string? noClientReason = null;
+                string baseUrl;
+                try
                 {
-                    await host.Err.WriteLineAsync(load.Failure);
-                    return 2;
+                    var config = MemexConfig.Resolve(scan.BaseUrl, scan.Token);
+                    baseUrl = config.BaseUrl;
+                    client = new McpClient(config);
                 }
-                unavailable = load.Failure;
-            }
-        }
+                catch (InvalidOperationException ex)
+                {
+                    noClientReason = ex.Message;
+                    baseUrl = MemexConfig.ResolveBaseUrl(scan.BaseUrl);
+                }
+                catch (UriFormatException ex)
+                {
+                    baseUrl = MemexConfig.ResolveBaseUrl(scan.BaseUrl);
+                    noClientReason = $"--base-url '{baseUrl}' is not a URL: {ex.Message}";
+                }
 
-        var root = BuildRoot(host, catalog, unavailable, client);
-        var parse = root.Parse(args);
-        return await parse.InvokeAsync(new InvocationConfiguration { Output = host.Out, Error = host.Err }, ct);
+                var load = await ToolCatalogCache.Load(
+                    host.ConfigDirectory, baseUrl, scan.Refresh, host.Now(),
+                    client is null ? null : client.ListTools, noClientReason, ct);
+                if (load.Warning is not null) await host.Err.WriteLineAsync(load.Warning);
+                catalog = load.Catalog;
+                if (catalog is null)
+                {
+                    // A mesh command was named and there is nothing to generate it from: say WHY,
+                    // instead of letting the parser report an "unrecognized command".
+                    if (scan.Command is not null)
+                    {
+                        await host.Err.WriteLineAsync(load.Failure);
+                        return 2;
+                    }
+                    unavailable = load.Failure;
+                }
+            }
+
+            var root = BuildRoot(host, catalog, unavailable, client);
+            var parse = root.Parse(args);
+            return await parse.InvokeAsync(new InvocationConfiguration { Output = host.Out, Error = host.Err }, ct);
+        }
+        finally
+        {
+            client?.Dispose();
+        }
     }
 
     /// <summary>
@@ -108,10 +130,9 @@ public static class CliApp
         var tokenOpt = new Option<string?>("--token") { Description = "API token mw_… (default: $MEMEX_TOKEN or ~/.memex/config.json)", Recursive = true };
         var refreshOpt = new Option<bool>("--refresh") { Description = $"Re-read the instance's tool catalog instead of using the cached one (cached for {ToolCatalogCache.Lifetime.TotalMinutes:0} minutes).", Recursive = true };
 
-        var shadowed = catalog?.Tools
-            .Where(t => BuiltIns.Contains(DynamicCommands.Kebab(t.Name)))
-            .Select(t => t.Name)
-            .ToArray() ?? [];
+        var names = CommandNames(catalog);
+        var shadowed = names.Where(n => BuiltIns.Contains(n.Command)).Select(n => n.Tool.Name).ToArray();
+        var exact = names.Where(n => n.Command != DynamicCommands.Kebab(n.Tool.Name)).Select(n => n.Tool.Name).ToArray();
 
         var description = new StringBuilder(
             "memex — CLI for MeshWeaver / Memex. The mesh commands are loaded from the connected instance's "
@@ -120,6 +141,8 @@ public static class CliApp
             + " — a built-in wins over a server tool of the same name.");
         if (shadowed.Length > 0)
             description.Append(" Server tools shadowed by a built-in: ").Append(string.Join(", ", shadowed)).Append('.');
+        if (exact.Length > 0)
+            description.Append(" Server tools whose kebab-case names collide keep their exact names: ").Append(string.Join(", ", exact)).Append('.');
         if (unavailable is not null)
             description.Append(" Mesh commands are unavailable: ").Append(unavailable);
         else if (catalog is { FromCache: true })
@@ -136,9 +159,8 @@ public static class CliApp
         {
             var taken = new HashSet<string>(BuiltIns, StringComparer.Ordinal);
             var generated = new List<(McpTool Tool, Command Command)>();
-            foreach (var tool in catalog.Tools)
+            foreach (var (tool, name) in names)
             {
-                var name = DynamicCommands.Kebab(tool.Name);
                 if (name.Length == 0 || !taken.Add(name)) continue;
                 var cmd = DynamicCommands.Build(tool, name, host.Err,
                     (toolName, arguments, ct) => CallTool(host, client, toolName, arguments, ct));
@@ -158,9 +180,31 @@ public static class CliApp
     }
 
     /// <summary>
+    /// The command name of every catalog tool. A tool's name is its kebab-case form — unless two or
+    /// more tools share that form (<c>foo_bar</c> and <c>foo-bar</c>): then EACH of them keeps its
+    /// exact MCP name, which the protocol makes unique. The rule looks at the whole catalog, never
+    /// at its order, so which tool a command runs cannot depend on how the server listed them.
+    /// </summary>
+    public static ImmutableArray<(McpTool Tool, string Command)> CommandNames(ToolCatalog? catalog)
+    {
+        if (catalog is null) return [];
+        var clashing = catalog.Tools
+            .GroupBy(t => DynamicCommands.Kebab(t.Name), StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        return [.. catalog.Tools.Select(t =>
+        {
+            var kebab = DynamicCommands.Kebab(t.Name);
+            return (t, clashing.Contains(kebab) ? t.Name : kebab);
+        })];
+    }
+
+    /// <summary>
     /// Runs one tool and prints its result: every text content verbatim on stdout (so JSON pipes into
     /// <c>jq</c>); a tool error — <c>isError</c>, or the mesh's <c>Error:</c> sentence — on stderr
-    /// with exit 1. A JSON-RPC refusal is exit 1, an HTTP failure exit 2, anything else exit 3.
+    /// with exit 1. A JSON-RPC refusal is exit 1, an HTTP or connection failure exit 2, anything else
+    /// (a malformed result, a timeout) exit 3; only the caller's own cancellation propagates.
     /// </summary>
     public static async Task<int> CallTool(CliHost host, McpClient? client, string toolName, JsonObject arguments, CancellationToken ct)
     {
@@ -194,6 +238,14 @@ public static class CliApp
         }
         catch (HttpRequestException ex)
         {
+            // The instance could not be reached or the connection broke: a transport failure.
+            await host.Err.WriteLineAsync($"error: {ex.Message}");
+            return 2;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Anything else — a malformed result, an HTTP timeout — is reported, never thrown at the
+            // parser; only the caller's own cancellation propagates.
             await host.Err.WriteLineAsync($"error: {ex.Message}");
             return 3;
         }
