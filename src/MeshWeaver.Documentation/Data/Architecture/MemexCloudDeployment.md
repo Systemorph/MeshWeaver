@@ -11,7 +11,7 @@ This guide explains how to stand up the Memex portal on a **private** Azure Kube
 
 > **Conventions.** Examples use placeholder names — domain `portal.example.com`, registry `meshweaver`, resource group `<aks-resource-group>`. Substitute your own values. **Sensitive values** (IP addresses, tenant/app GUIDs, passwords, client secrets) appear as `<placeholders>`; never commit real ones — keep them in Key Vault.
 >
-> The exact, ordered command sequence lives in `deploy/aks/README.md` (in the repository) — the public, self-contained AKS deployment sample, which `DEPLOY-RUNBOOK.md` was folded into. This document is the architecture and operations layer around it.
+> The exact, ordered command sequence lives in [`deploy/aks/README.md`](https://github.com/Systemorph/MeshWeaver.Deploy/blob/main/deploy/aks/README.md) (in MeshWeaver.Deploy) — the public, self-contained AKS deployment sample, which `DEPLOY-RUNBOOK.md` was folded into. This document is the architecture and operations layer around it.
 
 > **Deployment model.** One Aspire AppHost (`src/Memex.Deploy.AppHost` (MeshWeaver.Plugins)) describes the workload from published images. The Aspire **Kubernetes publisher** generates the Helm chart (`deploy/helm`). The AKS *platform* — cluster, Postgres, VPN, TLS — is Bicep plus a thin overlay.
 

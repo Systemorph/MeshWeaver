@@ -329,7 +329,7 @@ order) and renders on every run node's `Plan` area. Status as of 2026-10-03.
 | F2 | Ask-and-await: question node routed to a person's inbox; park on the answer; resume from checkpoint; no timeout unless declared | Plugins · Hosting/Job + inbox | M | G1, G24 | not started · nobody | A2, A4, A5 |
 | F3 | Triage classifies the unblocking event, parks the job on it, resumes it | Plugins · Hosting triage | M | G1, G24 | bug-fix triage in PR · Plugins #2698; unblock classification: nobody | C1–C4 |
 | F4 | Correlation map as nodes; events over synced streams to the owner; dead owner adopted once | Plugins · Hosting/Queue + Job | L | G1, G3, G24 | not started · queue agent | D1, D2 |
-| G11 | Local model services (CPU pods, one mesh-reachable interface; NER, OCR/vision, embeddings) | core (deploy via CD) + Plugins (provider) | L | — | OCR service built · core `deploy/ocr` ([OCR Service](/Doc/Architecture/OcrService): Tesseract 5, packs baked in, image CD, chart disabled by default; per-instance enablement owner-gated). Local model service built · core `deploy/ollama` ([Local Model Service](/Doc/Architecture/LocalModelService): qwen3.6 vision/translation/summary + bge-m3 embeddings, baked, OpenAI-compatible, chart disabled by default; per-instance enablement owner-gated; embeddings switch = a planned re-index). NER: `s1-extract` exists, unwired | S3g |
+| G11 | Local model services (CPU pods, one mesh-reachable interface; NER, OCR/vision, embeddings) | MeshWeaver.Deploy (images + charts) + Plugins (provider) | L | — | OCR service built · MeshWeaver.Deploy `deploy/ocr` ([OCR Service](/Doc/Architecture/OcrService): Tesseract 5, packs baked in, image CD, chart disabled by default; per-instance enablement owner-gated). Local model service built · MeshWeaver.Deploy `deploy/ollama` ([Local Model Service](/Doc/Architecture/LocalModelService): qwen3.6 vision/translation/summary + bge-m3 embeddings, baked, OpenAI-compatible, chart disabled by default; per-instance enablement owner-gated; embeddings switch = a planned re-index). NER: `s1-extract` exists, unwired | S3g |
 | G13 | Taxonomy as typed nodes, default per package, editable per partition | Plugins · Indexing | M | — | not started · nobody | S3i, S3k |
 | G6 | Governed provision-content-table activity; candidate approvers; user-named approver; signal the parked job | Plugins · Governance + Indexing | M | G1, G3, G5 | not started · nobody | S2b, S2c, S3b |
 | G9 | Exactly once per content: node per SHA-256, atomic insert-if-absent claim on PostgreSQL | core + Plugins | M | G1 | not started · nobody | S3d, S3e, S3h |
@@ -357,7 +357,7 @@ type exists; core registers only `FileSystem`, `EmbeddedResource` and `Hub` stre
 GUI attaches a content collection; a missing right on a node create surfaces as `ValidationFailed`;
 durable consumers have no checkpoints (only re-query or `_Inbox`); indexing dedupes per
 `(collection, file)`, so identical bytes at two paths are indexed twice; no e-mail (`.eml`/`.msg`) or
-OCR extraction exists (since then: the OCR service, core `deploy/ocr`, and its client, Plugins #4204 — see G10, G11); the Parties labeller was removed from MeshWeaver.Plugins on 2026-09-30 to a
+OCR extraction exists (since then: the OCR service, MeshWeaver.Deploy `deploy/ocr`, and its client, Plugins #4204 — see G10, G11); the Parties labeller was removed from MeshWeaver.Plugins on 2026-09-30 to a
 personal home, so it is reusable only once re-homed (G12).
 
 ## Related

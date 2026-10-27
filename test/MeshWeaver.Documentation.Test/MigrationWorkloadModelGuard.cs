@@ -34,7 +34,7 @@ namespace MeshWeaver.Documentation.Test;
 /// template, several shell scripts and a markdown file, where no unit test can observe it.</para>
 ///
 /// <para>🚨 What this guard deliberately does NOT assert: that no file MENTIONS
-/// <c>memex-migration-deployment</c>. Several must — <c>deploy/aks/SELF-UPDATE.md</c> and
+/// <c>memex-migration-deployment</c>. Several must — MeshWeaver.Deploy's <c>deploy/aks/SELF-UPDATE.md</c> and
 /// <c>Doc/Architecture/DeploymentAKS.md</c> carry the warning that the self-updater still targets
 /// that name, and the chart's own RBAC still grants it (removing that grant before the updater
 /// stops patching it would turn a harmless call into a 403 mid-roll). Naming the problem is the
