@@ -58,7 +58,7 @@ serializes those inner builds.
 
 That flag sat on the portal job's ONE call site, so the control image — the same host, published
 the same multi-arch way — kept racing: in run 38964235557 its two inner publishes each ran the
-module-closure lane of `memex/MeshModulesPublish.targets` into a RID-specific `modules/` folder,
+module-closure lane of MeshWeaver.Plugins `src/MeshModulesPublish.targets` into a RID-specific `modules/` folder,
 which makes the two `Publish` requests on one closure module distinct build configurations that
 MSBuild runs concurrently, and both wrote that module's RID-agnostic
 `obj/Release/net10.0/<Name>.deps.json` (`MSB4018`, `IOException … being used by another process`,

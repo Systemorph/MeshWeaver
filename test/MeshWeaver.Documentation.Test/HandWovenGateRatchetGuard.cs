@@ -53,7 +53,7 @@ public class HandWovenGateRatchetGuard
     /// <see cref="SanctionedGates"/> entries, each re-checked against the tree on every run.
     /// </summary>
     private static readonly string[] ProductionRoots =
-        ["src", "tools", "samples", "clients", "memex", "test"];
+        ["src", "tools", "samples", "clients", "test"];
 
     /// <summary>
     /// The primitives that park a thread. <c>Monitor.Wait</c> is included because it is the same

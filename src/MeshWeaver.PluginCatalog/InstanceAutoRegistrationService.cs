@@ -118,9 +118,15 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
         registryUrl + "#" + Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawKey)))[..16].ToLowerInvariant();
 
-    /// <summary>The effective credential for <paramref name="registry"/> — a configured token as
-    /// configured, never exchanged; else the stored key EXCHANGED for a JWT when the registry issues
-    /// one, else that key itself. Cold; emits once.</summary>
+    /// <summary>
+    /// The effective credential for <paramref name="registry"/>: the configured <c>Token</c> when
+    /// there is one, else the stored auto-registration key — and in BOTH cases an instance key
+    /// (<c>mwi_</c>) is EXCHANGED for a short-lived JWT when the registry issues one (#7312: so an
+    /// installation that pulls on a configured key leaves its heartbeat too), falling back to the key
+    /// itself when the registry answers no token. A configured token of any other shape is presented
+    /// as configured. Cold; emits once. 🚨 Never for a caller whose counterpart IS the exchange
+    /// endpoint — that is <see cref="ResolveDurableKey"/>.
+    /// </summary>
     public IObservable<string> ResolveToken(PluginRegistryReference registry) =>
         ConfiguredToken(registry) is { } configured
             // A CONFIGURED instance key is exchanged like a stored one, so an installation that

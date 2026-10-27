@@ -98,8 +98,9 @@ public class ABatchBakeWritesItsDependencyEdgesTest(ITestOutputHelper output) : 
                     "the stamp names the build", cancellationToken: ct))
             .ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
 
-        edges.Edges.Select(e => (e.Target, e.Kind)).Should().Equal([(LibPath, DependencyEdgeKinds.NodeType)]);
-        edges.Edges[0].Evidence.Should().Equal([$"LibThing{suffix}"]);
+        var graph = edges.Edges.Where(e => e.Kind is DependencyEdgeKinds.NodeType or DependencyEdgeKinds.Module).ToList();
+        graph.Select(e => (e.Target, e.Kind)).Should().Equal([(LibPath, DependencyEdgeKinds.NodeType)]);
+        graph[0].Evidence.Should().Equal([$"LibThing{suffix}"]);
         edges.BuildMvid.Should().Be(definition.LatestAssemblyMvid, "the set names the build the record names");
     }
 

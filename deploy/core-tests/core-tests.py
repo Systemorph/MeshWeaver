@@ -36,8 +36,8 @@ the runner that reads a manifest is always the one that wrote it.
     core-tests.py doc-gate [--root /core-tests] [--work <dir>] [--repo .]
         The doc and samples gates (dotnet-test.yml's doc-gate job), against the checkout at the
         set's commit, with the plugin tester from this image: stage-doc-gate.sh /
-        stage-samples-gate.sh, then bake-then-gate.sh with each tree's allow file and warning
-        baseline, then check-tests-area-verdicts.py over each tree and its gate log (`--require-tests`
+        stage-samples-gate.sh, then bake-then-gate.sh with each tree's allow file, warning
+        baseline and dynamic-edge baseline, then check-tests-area-verdicts.py over each tree and its gate log (`--require-tests`
         for Doc), as dotnet-test.yml's doc-gate job does. RED when either gate or verifier is.
 
     core-tests.py --self-test
@@ -318,6 +318,28 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
     return 0
 
 
+# bake-then-gate.sh's positional signature: tester, stage, bake dir, allow file, source sha, log
+# prefix, warning baseline, dynamic baseline. Its own `${N:?…}` lines are the source of truth; the
+# self-test parses them (when the script is beside this file in a checkout) and holds this number to
+# them, and the self-test's stub refuses any other count — so a caller left one argument short is
+# RED here instead of aborting the real gate before either tree is baked.
+BAKE_THEN_GATE_ARITY = 8
+
+
+def bake_then_gate_args(tester: str, stage: str, work: str, tree: str, sha: str, gate_log: str) -> list[str]:
+    """The exact argument list doc_gate hands bake-then-gate.sh for one tree."""
+    return [tester, stage, os.path.join(work, "bake", tree), f".github/{tree}-gate.allow", sha,
+            gate_log, f".github/{tree}-gate-warnings.allow", f".github/{tree}-gate-dynamic.allow"]
+
+
+def script_arity(text: str) -> int:
+    """The highest positional parameter a script REQUIRES (`${N:?…}`)."""
+    required = [int(n) for n in re.findall(r"\$\{(\d+):\?", text)]
+    if not required:
+        raise Refusal("bake-then-gate.sh declares no required positional parameter — cannot read its signature")
+    return max(required)
+
+
 def doc_gate(root: str, repo: str, work: str) -> int:
     m = load_manifest(root)
     tester_dir = materialise(root, m, m["tester"], work)
@@ -331,9 +353,8 @@ def doc_gate(root: str, repo: str, work: str) -> int:
         stage = os.path.join(work, tree)
         subprocess.run(["bash", f".github/scripts/{stager}", src, stage], cwd=repo, check=True)
         gate_log = os.path.join(work, f"{tree}-gate")
-        rc = subprocess.run(["bash", ".github/scripts/bake-then-gate.sh", tester, stage,
-                             os.path.join(work, "bake", tree), f".github/{tree}-gate.allow", sha,
-                             gate_log, f".github/{tree}-gate-warnings.allow"],
+        rc = subprocess.run(["bash", ".github/scripts/bake-then-gate.sh",
+                             *bake_then_gate_args(tester, stage, work, tree, sha, gate_log)],
                             cwd=repo).returncode
         print(f"[CI] {tree}-gate exit={rc}", flush=True)
         # bake-then-gate.sh can be green over a `Test/` suite that reported `tests=skipped` or no
@@ -484,8 +505,27 @@ def _self_test() -> int:
         for stager in ("stage-doc-gate.sh", "stage-samples-gate.sh"):
             with open(os.path.join(scripts, stager), "w") as fh:
                 fh.write('mkdir -p "$2"\n')
-        with open(os.path.join(scripts, "bake-then-gate.sh"), "w") as fh:
-            fh.write('echo "GATE OK" > "$6.log"\nexit 0\n')
+        # The stub keeps the REAL script's signature: any other argument count is refused, exactly
+        # as the real `${N:?…}` lines refuse it. And the arity it enforces is held to the real
+        # script's own declaration whenever that script is present (a checkout — CI's self-test
+        # step); in the packed image the script is not shipped, and the stub's count still guards.
+        real_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                   ".github", "scripts", "bake-then-gate.sh")
+        if os.path.isfile(real_script):
+            arity = script_arity(open(real_script).read())
+            expect(arity == BAKE_THEN_GATE_ARITY,
+                   f"bake-then-gate.sh requires {arity} arguments and BAKE_THEN_GATE_ARITY says {BAKE_THEN_GATE_ARITY}")
+        expect(len(bake_then_gate_args("t", "s", "w", "doc", "sha", "log")) == BAKE_THEN_GATE_ARITY,
+               "doc_gate hands bake-then-gate.sh exactly the arguments its signature requires")
+        stub = os.path.join(scripts, "bake-then-gate.sh")
+        with open(stub, "w") as fh:
+            fh.write(f'[ "$#" -eq {BAKE_THEN_GATE_ARITY} ] || {{ echo "bake-then-gate.sh: expected '
+                     f'{BAKE_THEN_GATE_ARITY} arguments, got $#" >&2; exit 2; }}\n'
+                     'echo "GATE OK" > "$6.log"\nexit 0\n')
+        # Negative control: the stub really refuses a caller one argument short.
+        expect(subprocess.run(["bash", stub, *["x"] * (BAKE_THEN_GATE_ARITY - 1)],
+                              capture_output=True).returncode != 0,
+               "the stub refuses a short argument list, as the real script does")
         with open(os.path.join(scripts, "check-tests-area-verdicts.py"), "w") as fh:
             fh.write("import os, sys\n"
                      f"open({verifier_log!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
