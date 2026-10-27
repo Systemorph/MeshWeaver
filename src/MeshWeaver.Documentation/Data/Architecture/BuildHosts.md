@@ -245,9 +245,11 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    folder (`NUGET_PACKAGES`, in the run's workspace so the host can see it; the shared NuGet cache
    is the read-only fallback folder). A package a build still had to restore is reported as a
    warning (`MWPREP001`, naming it). On a succeeded TRUNK build stage it is verified and then
-   promoted into `/cache/nuget`, so the next run restores nothing. Verification checks the
-   `.nupkg` SHA-512 against both `.nupkg.sha512` and `.nupkg.metadata`'s `contentHash`, and
-   requires no symlinks. A pull request never writes the cache. There is no network namespace — a build
+   promoted into `/cache/nuget`, so the next run restores nothing. Verification makes two
+   separate checks and requires no symlinks: the ARCHIVE's SHA-512 against `.nupkg.sha512`, and
+   NuGet's CONTENT hash (which leaves the package signature out, so a signed package's differs
+   from its archive hash) against `.nupkg.metadata`'s `contentHash`. What is promoted is rebuilt
+   from that verified archive, never copied from the files the stage could write. A pull request never writes the cache. There is no network namespace — a build
    restores packages — and the NetworkPolicy bounds where it can go.
    - **The environment is an allow-list**, set with `--setenv` after `--clearenv`: `PATH`, locale,
      the .NET switches, `MeshWeaverRefs`, the composed gate host (`MW_BUILD_GATE_HOST`,
