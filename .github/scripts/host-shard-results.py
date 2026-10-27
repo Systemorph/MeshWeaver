@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -153,6 +154,23 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def receipts_get(url: str, token: str,
+                 opener: urllib.request.OpenerDirector | None = None) -> tuple[int, object]:
+    """GET the run's receipts with the bearer — through the SAME no-redirect opener as the objects, so
+    a redirected receipts endpoint never carries the OIDC token elsewhere. (status, parsed JSON);
+    status 0 is a transport failure, a 3xx is answered as its own status, never followed."""
+    op = opener or urllib.request.build_opener(_NoRedirect)
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
+                                               "Accept": "application/json"}, method="GET")
+    try:
+        with op.open(req, timeout=30) as r:
+            return r.status, json.loads(r.read().decode() or "null")
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return 0, str(e)
+
+
 def api_getter(base: str, token: str, channel: str,
                opener: urllib.request.OpenerDirector | None = None) -> Callable[[str, str, int], None]:
     """GET {base}/{sha256}?channel=… with the bearer, streamed to dest, reading at most bytes+1 so an
@@ -215,11 +233,10 @@ def main(argv: list[str]) -> int:
         except bf.Failure as f:
             raise Red(str(f))
         base = f"{a.api_url.rstrip('/')}/{urllib.parse.quote(repo, safe='')}/{sha}/artifacts"
-        status, body = http.get(f"{base}?" + urllib.parse.urlencode({"channel": a.channel}),
-                                {"Authorization": f"Bearer {token}", "Accept": "application/json"})
+        status, body = receipts_get(f"{base}?" + urllib.parse.urlencode({"channel": a.channel}), token)
         if status != 200:
             raise Red(f"the build API answered HTTP {status} for {repo}@{sha[:12]}'s receipts (403: the token's run "
-                      f"is not this run's; 404: no host-executed run)")
+                      f"is not this run's; 404: no host-executed run; 3xx: a redirect is refused)")
         try:
             receipts = fetch.receipts_of(body, f"test-shard-{shard}")
         except fetch.Red as e:
@@ -336,10 +353,18 @@ def self_test() -> int:
         def do_GET(self):  # noqa: N802
             seen.append(self.headers.get("Authorization", ""))
             key = self.path.split("?")[0].rsplit("/", 1)[-1]
-            if self.path.startswith("/redirect/"):
+            if self.path.startswith("/redirect"):
                 self.send_response(302)
-                self.send_header("Location", "http://127.0.0.1:1/elsewhere")
+                # Back to THIS server: a followed redirect would show up as a second request in `seen`.
+                self.send_header("Location", f"http://127.0.0.1:{self.server.server_address[1]}/elsewhere")
                 self.end_headers()
+                return
+            if self.path.startswith("/receipts"):
+                data = json.dumps({"ok": True}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
                 return
             data = blobs.get(key)
             if data is None:
@@ -363,6 +388,14 @@ def self_test() -> int:
         check("https getter: the run's bearer is sent", seen and all(s == "Bearer tok" for s in seen), seen)
         check("https getter: a body LONGER than the receipt is RED", red(good, api_getter(base + "/long", "tok", "latest")))
         check("https getter: a redirect is RED (the bearer never follows it)", red(good, api_getter(base + "/redirect", "tok", "latest")))
+        n = len(seen)
+        st, bd = receipts_get(base + "/receipts?channel=latest", "tok")
+        check("receipts getter: the receipts are read, with the run's bearer", st == 200 and bd == {"ok": True}
+              and seen[n:] == ["Bearer tok"], (st, bd, seen[n:]))
+        n = len(seen)
+        st, bd = receipts_get(base + "/redirect/receipts?channel=latest", "tok")
+        check("receipts getter: a redirect is answered as its 3xx, never followed (the bearer stays put)",
+              st == 302 and len(seen) == n + 1, (st, seen[n:]))
         check("https getter: an object the API does not serve is RED",
               red([dict(good[0], sha256="f" * 64)] + good[1:4], api_getter(base + "/ok", "tok", "latest")))
     finally:
@@ -384,7 +417,7 @@ def self_test() -> int:
         return 1
     print("host-shard-results self-test: every case behaved (accepts a complete tree with paths preserved; refuses "
           "none, another shard's or stage's, no log, no marker, foreign, escaping, conflicting, truncated, padded, "
-          "mis-hashed, refused, extra, occupied out, redirect)")
+          "mis-hashed, refused, extra, occupied out, redirect — objects AND receipts)")
     return 0
 
 

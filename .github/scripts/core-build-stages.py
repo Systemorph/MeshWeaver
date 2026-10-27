@@ -230,6 +230,16 @@ def container_problems(root: str, owes: list[str] | None = None) -> list[str]:
 
 FOLLOW_MATRIX = re.compile(r"^  host-follow:\n(?:    .*\n|\n)*?        stage: \[([^\]]*)\]", re.M)
 RESULTS_MATRIX = re.compile(r"^  host-results:\n(?:    .*\n|\n)*?        shard: \[([^\]]*)\]", re.M)
+FOLLOW_INPUT = re.compile(r"^  host-follow:\n(?:    .*\n|\n)*?      stage: ([^\n]*)\n", re.M)
+
+
+def _stage_of():
+    """build-follow.py's own `--stage` parser — the route is checked against what the follower accepts."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build-follow.py")
+    spec = importlib.util.spec_from_file_location("build_follow", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.stage_of, mod.Failure
 
 
 def route_problems(workflow_text: str, total: int) -> list[str]:
@@ -241,6 +251,22 @@ def route_problems(workflow_text: str, total: int) -> list[str]:
     got = [x.strip() for x in m.group(1).split(",")] if m else None
     if got != want:
         out.append(f"{WORKFLOW} job host-follow's stage matrix is {got} but {STAGES} declares {want} — follow every declared stage")
+    # Each matrix entry reaches build-follow.py as the `stage` input. A bare `build` is the AGGREGATE
+    # check's name there and is refused before polling, so every entry must reach it as the stage's
+    # qualified check name — held by running the follower's own parser over what the job passes.
+    m = FOLLOW_INPUT.search(workflow_text)
+    passed = m.group(1).strip().strip("'\"") if m else None
+    if passed is None or "${{ matrix.stage }}" not in passed:
+        out.append(f"{WORKFLOW} job host-follow passes no `stage: …${{{{ matrix.stage }}}}` input ({passed!r})")
+    else:
+        stage_of, failure = _stage_of()
+        for s in want:
+            value = passed.replace("${{ matrix.stage }}", s)
+            try:
+                if stage_of(value, "latest") != s:
+                    out.append(f"{WORKFLOW} job host-follow passes --stage {value!r}, which build-follow.py reads as another stage than {s!r}")
+            except failure as e:
+                out.append(f"{WORKFLOW} job host-follow passes --stage {value!r}, which build-follow.py refuses: {e}")
     m = RESULTS_MATRIX.search(workflow_text)
     got = [x.strip() for x in m.group(1).split(",")] if m else None
     if got != [str(i) for i in range(total)]:
@@ -306,11 +332,14 @@ def _self_test() -> int:
     print("the host route follows every declared stage and fetches every shard:")
     stages2 = ", ".join(x["name"] for x in generate(2)["stages"])
     route = ("jobs:\n  host-follow:\n    strategy:\n      matrix:\n        stage: [" + stages2 + "]\n"
+             "    with:\n      stage: build/${{ matrix.stage }}\n"
              "  host-results:\n    strategy:\n      matrix:\n        shard: [0, 1]\n")
     expect(route_problems(route, 2) == [], "both matrices name exactly the declaration")
     expect(any("host-follow" in p for p in route_problems(route.replace(", doc-gate", ""), 2)), "RED: a declared stage nobody follows")
     expect(any("host-results" in p for p in route_problems(route.replace("[0, 1]", "[0]"), 2)), "RED: a shard whose results are never fetched")
-    expect(len(route_problems("jobs:\n", 2)) == 2, "RED: no host route at all")
+    expect(any("refuses" in p for p in route_problems(route.replace("build/${{ matrix.stage }}", "${{ matrix.stage }}"), 2)),
+           "RED: the bare `build` entry reaches build-follow.py as the aggregate check, which it refuses")
+    expect(len(route_problems("jobs:\n", 2)) == 3, "RED: no host route at all")
     real_wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows", "dotnet-test.yml")
     if os.path.isfile(real_wf):
         wf_text = open(real_wf).read()

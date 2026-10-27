@@ -699,7 +699,8 @@ jobs:
     with:
       executor: host
       api-url: ${{ needs.admission.outputs.api-url }}
-      stage: ${{ matrix.stage }}
+      # The stage's CHECK name (build/<stage>): build-follow.py refuses a bare `build` as the aggregate check.
+      stage: build/${{ matrix.stage }}
       sha: ${{ github.event.pull_request.head.sha || github.sha }}
       scripts-ref: ${{ github.sha }}
 
