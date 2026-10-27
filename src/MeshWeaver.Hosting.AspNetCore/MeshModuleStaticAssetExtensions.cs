@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.AspNetCore;
 /// deliberately removes. Nothing served <c>modules/&lt;Name&gt;/wwwroot</c>, so a flipped view pack
 /// lost its CSS/JS: <c>UseStaticFiles</c> reads the host's manifests, and a standalone RCL publish
 /// lays the pack's own assets at <c>wwwroot/</c> ROOT rather than at <c>_content/&lt;Name&gt;/</c> —
-/// which is the URL its own components request. That mismatch is what kept Radzen, GoogleMaps and
+/// which is the URL its own components request. That mismatch is what kept the chart pack, GoogleMaps and
 /// Analysis referenced by the portal long after the rest of the modules flipped.</para>
 ///
 /// <para><b>The mapping.</b> A standalone module publish produces exactly two shapes under its
@@ -641,7 +641,7 @@ public sealed record ModuleStaticAssetMount(string RequestPath, string PhysicalP
 /// <para><b>Fingerprinting, and the one place it can reach.</b> The linked bundle is the ONLY
 /// module asset whose URL the platform authors, so it is the only one that can carry a content
 /// fingerprint: everything else under the mounts is addressed by a pack's own component source
-/// (<c>RadzenViewBase</c> self-loads <c>_content/Radzen.Blazor/…</c>; <c>GoogleMapView.razor.cs</c>
+/// (the chart pack's view base self-loads <c>_content/&lt;Package&gt;/…</c>; <c>GoogleMapView.razor.cs</c>
 /// imports <c>./_content/MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.js</c>), which is not in
 /// this build graph and cannot be rewritten from the host. Those URLs are therefore served
 /// <c>no-cache</c> — correct on upgrade, one conditional GET per render — and the fingerprinted

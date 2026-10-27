@@ -19,7 +19,7 @@ namespace MeshWeaver.Layout.Test;
 /// <summary>
 /// A <see cref="ChartControl"/>'s <see cref="ChartControl.Series"/> and <see cref="ChartControl.Labels"/>
 /// are BINDABLE already — both are <c>object?</c> slots, and both renderers resolve them through
-/// the generic binding (Blazor <c>RadzenChartView</c> via <c>BlazorView.DataBind</c>, React
+/// the generic binding (the Blazor chart view via <c>BlazorView.DataBind</c>, React
 /// <c>chart.tsx</c> via <c>useResolve</c>). So a chart area is a TEMPLATE: it declares a chart
 /// whose series point into <c>/data</c>, and the data that feeds them follows on its own
 /// (Doc/GUI/DataBinding → "Binding a rich control to a node field").
@@ -86,7 +86,7 @@ public class BoundChartSeriesTest(ITestOutputHelper output) : HubTestBase(output
             "the area declares WHERE the series live, never the numbers").Subject;
         chart.Labels.Should().BeOfType<JsonPointerReference>();
 
-        // Resolve the way RadzenChartView does: the bound JSON, deserialized with the hub's options.
+        // Resolve the way the Blazor chart view does: the bound JSON, deserialized with the hub's options.
         var options = client.JsonSerializerOptions;
         ImmutableList<ChartSeries>? ToSeries(object? raw, ImmutableList<ChartSeries>? _) =>
             raw is JsonElement je ? je.Deserialize<ImmutableList<ChartSeries>>(options) : raw as ImmutableList<ChartSeries>;
