@@ -239,7 +239,9 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    host's `MW_BUILD_RUN_DEADLINE_SECONDS` (`buildHosts.runDeadlineSeconds`, default 7200 s, refused
    outside [600, 43200]) and must COVER the declared stages: the default fits MeshWeaver.Plugins'
    40 + 45 minutes with room for checkout, merge and hand-over. The run's effective budget is the
-   smaller of that deadline and the selected stages' summed caps + 10 minutes, and the plan
+   smaller of that deadline and the selected stages' summed caps, plus each declared prepared input's
+   build cap (its `timeoutMinutes`, default 20) and a five-minute key-command allowance — a cache
+   miss builds the input inside the run — plus 10 minutes, and the plan
    DECLARES it as `"budgetMinutes": <10..720>` — the instance sets the attempt's deadline to claim
    time + budget + 15 min. Each stage runs for at most min(its cap, the budget left). When the sum
    of the caps exceeds the deadline the run still starts (stages usually finish well inside their
