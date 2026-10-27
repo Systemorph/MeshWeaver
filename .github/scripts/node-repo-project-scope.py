@@ -146,13 +146,19 @@ def select(root, policy, files):
                 # a hook would answer.
                 billed = None
                 if callable(msbuild_of) and path.count("/") > 1:
+                    # An OPTIONAL hook in the caller's code: ANY ordinary failure of it — a
+                    # RuntimeError, a caller-defined layout exception, an answer that is not a
+                    # collection of project dirs — leaves the file unclassified (full validation);
+                    # it must never escape and end the CLI without the promised fallback.
                     try:
-                        billed = msbuild_of(root, path)
-                    except (OSError, ValueError):
+                        got = msbuild_of(root, path)
+                        billed = ({str(d) for d in got}
+                                  if isinstance(got, (set, frozenset, list, tuple)) else None)
+                    except Exception:  # noqa: BLE001 — the fallback IS the handling
                         billed = None
                 if not billed:
                     return answer(policy, f"unclassified compiled input {path} — full validation")
-                msbuild_owner[path] = set(billed)
+                msbuild_owner[path] = billed
         elif path.split("/", 1)[0] not in packages:
             return answer(policy, f"shared or unknown input {path} — full validation")
         relevant.append(path)
@@ -270,8 +276,13 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
         (root / scope.PROJECTS).write_text(graph_src + "def msbuild_scope(root, path):\n    return {'src/Acme.Shared'}\n")
         assert select(root, policy, [top])["count"] == 2  # …even when the hook would narrow it
         assert select(root, policy, ["src/cluster/X.props"])["build"] == [a["project"]]
-        (root / scope.PROJECTS).write_text(graph_src + "def msbuild_scope(root, path):\n    raise ValueError('x')\n")
-        assert select(root, policy, [cluster])["count"] == 2  # a failing hook ⇒ full
+        for failing in ("raise ValueError('x')", "raise RuntimeError('x')",
+                        "class LayoutError(Exception): pass\n    raise LayoutError('x')",
+                        "return 'src/Acme.Shared'", "return 42"):
+            (root / scope.PROJECTS).write_text(
+                graph_src + f"def msbuild_scope(root, path):\n    {failing}\n")
+            got = select(root, policy, [cluster])  # must RETURN, never raise
+            assert got["count"] == 2, (failing, got)  # a failing / malformed hook ⇒ full
         (root / scope.PROJECTS).write_text(graph_src + "def msbuild_scope(root, path):\n    return set()\n")
         assert select(root, policy, [cluster])["count"] == 2  # an EMPTY answer is not a narrowing
         (root / scope.PROJECTS).write_text(graph_src)
@@ -293,7 +304,7 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
         assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
         (isolated / "node-repo-scope.py").write_text("this is invalid Python !")
         assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
-    print("compiled project scope: 38 assertions passed")
+    print("compiled project scope: 42 assertions passed")
 
 
 def main():

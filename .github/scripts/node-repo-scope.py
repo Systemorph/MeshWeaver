@@ -594,9 +594,13 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
 
     hits: dict[str, list[str]] = {e["project"]: [] for e in entries}
     if src_files:
-        # The ref the diff is FROM (`origin/<base>` of `origin/<base>...HEAD`, or a push's
-        # publication baseline) — so an inert MSBuild edit selects nothing here either.
-        diff_from = diff_range.split("..", 1)[0] if diff_range else None
+        # The ref the diff is FROM (`origin/<base>` of `origin/<base>...HEAD`) — so an inert MSBuild
+        # edit selects nothing here either. 🚨 NEVER on a publication diff: that list is the HISTORY
+        # union (it keeps a file a later commit reverted, so HEAD repairs a partial publication),
+        # and judging it against the baseline would rule the reverted file inert because HEAD
+        # matches the baseline — dropping exactly the module the repair owes.
+        diff_from = (diff_range.split("..", 1)[0]
+                     if diff_range and not publication_diff else None)
         answer = project_hits(root, sorted(hits), src_files, say, diff_from)
         if answer is None:
             return full(f"the caller repo's {PROJECTS} could not answer the compiled-half closure "
@@ -1224,6 +1228,35 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", inert, extra=["--base-ref", "main"])
         check("[modules] NEGATIVE CONTROL: a project graph that does NOT declare `--base` is never "
               "handed it — the edit narrows to Alpha, not ALL",
+              got["selected"] == ["Acme.Alpha"] and got["scope"] != "full",
+              f"scope={got['scope']} selected={got['selected']} — {got['reason'][:80]}")
+        # A PUBLICATION push is a history union: a props edit a later commit reverted is still owed
+        # (a failed run may have published a partial bundle). The base-aware graph would rule it
+        # inert against WHATEVER base it is handed (here: any `--base` at all), so the module is
+        # selected ONLY if no `--base` reaches the graph on this path; handing it one reproduces
+        # the defect — the repair silently selects nothing.
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n",
+            'a=sys.argv\nB="--base"\n'
+            "_inert=B in a\n").replace(
+            "hit={own(f) for f in paths if own(f)}\n",
+            "hit={own(f) for f in paths if own(f) and not (_inert and f.endswith('.props'))}\n"),
+            encoding="utf-8")
+        def _g(*a):
+            return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True,
+                                  check=True).stdout.strip()
+        pub_base = _g("rev-parse", "HEAD")
+        props = root / "src" / "Acme.Shared" / "Directory.Build.props"
+        props.parent.mkdir(parents=True, exist_ok=True)
+        props.write_text("<Project><!-- edit --></Project>\n", encoding="utf-8")
+        _g("add", "--", "src/Acme.Shared/Directory.Build.props")
+        _g("commit", "-qm", "an MSBuild edit a failed run partially published")
+        _g("rm", "-q", "--", "src/Acme.Shared/Directory.Build.props")
+        _g("commit", "-qm", "revert it")
+        got = _run(root, "modules", "push", None,
+                   extra=["--publication-base", pub_base, "--publishing"])
+        check("[modules] a publication push hands NO `--base` to the project graph — a reverted "
+              "MSBuild edit still selects its module (Alpha) for the repair",
               got["selected"] == ["Acme.Alpha"] and got["scope"] != "full",
               f"scope={got['scope']} selected={got['selected']} — {got['reason'][:80]}")
         projects.write_text(graph_src, encoding="utf-8")
