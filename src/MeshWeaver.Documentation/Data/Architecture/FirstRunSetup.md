@@ -288,6 +288,41 @@ directions. Those keys are now blank, so `memex-local up` lands on the wizard an
 Pinning an answer in the overlay still works and still wins — deployment configuration outranks the
 manifest — which is how an unattended install skips the wizard.
 
+## The first-run walk-through — what a person meets, in order (2026-10-27)
+
+The maintainer walked a fresh `memex-local` install through the wizard and recorded where it stopped
+being obvious. Each stop became a rule; the code for every one of them lives in the portal host
+(MeshWeaver.Plugins, `src/Memex.Portal.Shared/Setup/README.md` records the implementation), and the
+copy lives in this repository's string catalog (`setup.*`, `view.pending*`, `home.installing.*`).
+
+1. **The token is explained where it is asked for, with the command that fetches it.** A page
+   opened without `?token=` says so in a notice (`setup.token.missing`) — the token is in the
+   portal's log beside a link that already carries it — and, when the deployment states
+   `InstanceSetup:TokenCommand` (the Homebrew chart sets `memex-local setup`), names that command
+   (`setup.token.command`). "Printed once to this instance's log" on its own was read as a dead end.
+2. **Every text-like input is full width.** The stylesheet rule covers `type=email` and `type=url`
+   as well as `text`/`password`; a test parses the `<style>` block against every `type=` the pages
+   emit, so a new input type cannot fall out of the rule unnoticed.
+3. **The database this deployment already runs is a one-click, pre-selected option.** When the
+   host's configuration carries `ConnectionStrings:memex` and the image can open PostgreSQL, the
+   wizard offers "PostgreSQL — the database this deployment already runs" first, never shows the
+   value, and the manifest records `Storage.SecretName = "memex"` (the NAME of the connection, as
+   `InstanceStorageSelection` always allowed) instead of a connection string. The host's manifest
+   layer resolves the name against its own configuration at the next boot. SQLite and a pasted
+   connection string stay available.
+4. **The registration key is optional and says so.** `setup.identity.key.help`: empty means the
+   free plan; a key is a pre-minted coupon a registry administrator hands a customer; the
+   administrator can raise the plan later without one. A registry that refuses an OPEN registration
+   is told apart from one that refuses a key (`setup.registry.refusedOpen` / `refusedKey`), the
+   person's answers stay filled in, and each server-side refusal is shown beside its field.
+5. **A control whose view pack is not installed renders a calm placeholder, never its
+   `ToString()`** (`view.pending`), and onboarding navigates to the assistant's `GettingStarted`
+   area only when that area exists; otherwise Home shows "Setting up your packages"
+   (`home.installing.*`) until the default install completes and re-probes by itself.
+6. **The CLI hands the person straight into the wizard** — `memex-local up`/`update` open the URL
+   with the token, and a portal that is still installing its packages is reported as a state, not as
+   "NOT USABLE" (MeshWeaver.Deploy).
+
 ## Related
 
 - [Instance Identity and Setup](../InstanceIdentityAndSetup) — the four-slice design this completes
