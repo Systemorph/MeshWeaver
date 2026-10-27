@@ -93,7 +93,10 @@ public sealed class IoPoolRegistry : IDisposable
             // only tells the CPU lane from the IO lanes in a dump.
             n == IoPoolNames.CompileCpu
                 ? LimitedConcurrencyLevelTaskScheduler.DedicatedThreadName
-                : LimitedConcurrencyLevelTaskScheduler.BlockingThreadName));
+                : LimitedConcurrencyLevelTaskScheduler.BlockingThreadName)
+            {
+                CaptureLeafOpeners = _options.CaptureLeafOpeners,
+            });
         if (candidate is not null && !ReferenceEquals(pool, candidate))
             candidate.Dispose();
 
