@@ -86,11 +86,29 @@ FORBIDDEN_LABEL = "ci-failure"               # CD's label; the ledger never file
 # sev:B/sev:H bugs. A red main is a primary path broken — nothing the repository merges is published
 # while it is open — so a bug at sev:H. Triage's BugThreadRefusal still gives a ledger no second worker:
 # the red run's own item carries it. The look is core's own (scripts/check-issue-taxonomy.py CANONICAL).
-TAXONOMY = ("bug", "sev:H")
+#
+# The SEVERITY is the caller's (`severity` input, default sev:H so every existing caller is unchanged).
+# A scheduled lane's red (#7416 — lock-pinned-digests, pinned-digests) is a bug at sev:M: tracked and
+# visible, never a release gate by itself; a person raises it to sev:H when it threatens production.
+# A bug never takes anything but one of the four severities.
+DEFAULT_SEVERITY = "sev:H"
+SEVERITIES = ("sev:B", "sev:H", "sev:M", "sev:L")
+TAXONOMY = ("bug", DEFAULT_SEVERITY)
 TAXONOMY_LOOK = {
     "bug": ("d73a4a", "Something isn't working"),
+    "sev:B": ("B60205", "BLOCKING - the release cannot ship while this is open"),
     "sev:H": ("D93F0B", "BLOCKING: primary path broken, intermittent user-visible failure, or silently wrong results."),
+    "sev:M": ("FBCA04", "Medium - secondary path broken, or easy workaround"),
+    "sev:L": ("0E8A16", "Low - cosmetic, rare edge case, or developer-only"),
 }
+
+
+def taxonomy(severity: str) -> tuple[str, str]:
+    """("bug", severity) — or RED for anything that is not one of the four severities."""
+    if severity not in SEVERITIES:
+        raise Red(f"severity {severity!r} is not one of {', '.join(SEVERITIES)} — an unknown severity label "
+                  "is invisible to the release gate and the taxonomy lane alike")
+    return ("bug", severity)
 TYPE_LABELS = ("bug", "enhancement", "documentation", "chore")
 
 
@@ -509,18 +527,19 @@ class GitHub:
         # 422 = already exists, which is the idempotent path; 201 = created now.
         _ = status
 
-    def stamp_taxonomy(self, number: int, current: tuple[str, ...]) -> str:
-        """Give the ledger issue its TYPE and SEVERITY (`TAXONOMY`) when it carries neither yet; create a
-        missing taxonomy label with core's canonical look first. Returns what it did, in words."""
+    def stamp_taxonomy(self, number: int, current: tuple[str, ...], severity: str = DEFAULT_SEVERITY) -> str:
+        """Give the ledger issue its TYPE and SEVERITY (`taxonomy(severity)`) when it carries neither yet;
+        create a missing taxonomy label with core's canonical look first. Returns what it did, in words."""
         if not needs_taxonomy(current):
             return f"#{number} already classified — kept"
-        for name in TAXONOMY:
+        wanted = taxonomy(severity)
+        for name in wanted:
             status, _ = self.call("GET", f"labels/{urllib.parse.quote(name, safe='')}", ok=(200, 404))
             if status == 404:
                 color, description = TAXONOMY_LOOK[name]
                 self.call("POST", "labels", body={"name": name, "color": color, "description": description}, ok=(201, 422))
-        self.call("POST", f"issues/{number}/labels", body={"labels": list(TAXONOMY)}, ok=(200,))
-        return f"#{number} labelled {', '.join(TAXONOMY)}"
+        self.call("POST", f"issues/{number}/labels", body={"labels": list(wanted)}, ok=(200,))
+        return f"#{number} labelled {', '.join(wanted)}"
 
     def labelled_issues(self, label: str) -> list[Issue]:
         """Every issue (never a pull request) carrying `label`, any state — ownership is judged by `owns`."""
@@ -696,7 +715,7 @@ def fold_duplicates(gh, matching: list[Issue], title: str, label: str) -> tuple[
 
 
 def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
-          reopen_window_days: int) -> tuple[Issue | None, str | None]:
+          reopen_window_days: int, severity: str = DEFAULT_SEVERITY) -> tuple[Issue | None, str | None]:
     """Perform the verdict. Returns (the issue touched, the event body to POST or None)."""
     if verdict.action == "noop":
         return None, None
@@ -728,9 +747,9 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
     # core's daily issue-taxonomy lane, name an issue left untyped.
     labels_now = issue.labels if verdict.action == "create" else current.labels
     try:
-        print(f"taxonomy: {gh.stamp_taxonomy(issue.number, labels_now)}")
+        print(f"taxonomy: {gh.stamp_taxonomy(issue.number, labels_now, severity)}")
     except Red as e:
-        print(f"::warning title=ci-failure-ledger::could not stamp {', '.join(TAXONOMY)} on #{issue.number} ({e}) — the issue-taxonomy lane will name it")
+        print(f"::warning title=ci-failure-ledger::could not stamp {', '.join(taxonomy(severity))} on #{issue.number} ({e}) — the issue-taxonomy lane will name it")
     return issue, event_body("ci-failure", run, issue)
 
 
@@ -755,6 +774,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--platform-set", default=env("LEDGER_PLATFORM_SET", ""))
     ap.add_argument("--title", default=env("LEDGER_ISSUE_TITLE") or DEFAULT_TITLE)
     ap.add_argument("--label", default=env("LEDGER_LABEL") or DEFAULT_LABEL)
+    ap.add_argument("--severity", default=env("LEDGER_SEVERITY") or DEFAULT_SEVERITY,
+                    help=f"the ledger issue's severity label (default {DEFAULT_SEVERITY}); one of {', '.join(SEVERITIES)}")
     ap.add_argument("--reopen-window-days", type=int, default=int(env("LEDGER_REOPEN_WINDOW_DAYS") or DEFAULT_REOPEN_WINDOW_DAYS))
     ap.add_argument("--event-out", default=env("LEDGER_EVENT_OUT"), help="file the exact event body is written to")
     ap.add_argument("--self-test", action="store_true")
@@ -802,6 +823,7 @@ def main(argv: list[str]) -> int:
             if not value:
                 raise Red(f"--{name} is empty — the lane's inputs are incomplete")
         failed_jobs = parse_failed_jobs(a.failed_jobs)
+        taxonomy(a.severity)                 # refused BEFORE any write, like a malformed failed-jobs
         now = datetime.now(timezone.utc)
         gh = GitHub(a.repo, token)
 
@@ -829,7 +851,7 @@ def main(argv: list[str]) -> int:
         verdict = decide(a.outcome, matching, now, a.reopen_window_days)
         print(f"{verdict.action.upper():7} {verdict.reason} (label `{a.label}`, title {a.title!r}, "
               f"{len(matching)} owned issue(s), {len(foreign)} foreign)")
-        issue, body = apply(gh, run, verdict, a.title, a.label, now, a.reopen_window_days)
+        issue, body = apply(gh, run, verdict, a.title, a.label, now, a.reopen_window_days, a.severity)
         if issue is not None:
             print(f"issue #{issue.number} {issue.state}: {issue.html_url}")
         if body is not None and a.event_out:
@@ -887,12 +909,12 @@ class _Fake:
         self.writes += 1
         self.comments.append((number, body))
 
-    def stamp_taxonomy(self, number, current):
+    def stamp_taxonomy(self, number, current, severity=DEFAULT_SEVERITY):
         i = self.issues[number]
         if not needs_taxonomy(tuple(i.labels)):
             return "kept"
         self.writes += 1
-        i.labels = tuple(i.labels) + TAXONOMY
+        i.labels = tuple(i.labels) + taxonomy(severity)
         return "labelled"
 
     def failed_jobs_of_run(self, run_id):
@@ -1256,6 +1278,25 @@ def self_test() -> int:
         check("an unreadable annotation is RED", False, "returned a listing")
     except Red:
         check("an unreadable annotation is RED", True)
+
+    # 19. the severity is the caller's: default sev:H (every existing caller unchanged), a scheduled
+    #     lane passes sev:M (#7416 owner decision), anything else is refused before a write.
+    gh19 = _Fake()
+    v19 = decide("failure", [], now, 7)
+    i19, _ = apply(gh19, run("failure", [job]), v19, title, label, now, 7, "sev:M")
+    check("a lane passing sev:M gets bug + sev:M and NOT sev:H",
+          i19 is not None and "sev:M" in gh19.issues[i19.number].labels and "bug" in gh19.issues[i19.number].labels
+          and "sev:H" not in gh19.issues[i19.number].labels)
+    gh19b = _Fake()
+    i19b, _ = apply(gh19b, run("failure", [job]), decide("failure", [], now, 7), title, label, now, 7)
+    check("no severity given -> the old default sev:H", i19b is not None and "sev:H" in gh19b.issues[i19b.number].labels)
+    for bad in ("sev:X", "", "H", "sev:h"):
+        try:
+            taxonomy(bad)
+            check(f"severity {bad!r} is refused", False, "was accepted")
+        except Red:
+            check(f"severity {bad!r} is refused", True)
+    check("every severity has core's canonical label look", all(sv in TAXONOMY_LOOK for sv in SEVERITIES))
 
     if fails:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)

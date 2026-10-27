@@ -578,7 +578,9 @@ the purge) — correct on all ten failing days — never its **outcome**.
 Both lanes now end in the fleet's existing reporter, the ci-failure ledger
 (`node-repo-ci-failure.yml`), each under its **own** label — `ci-lock-pinned-digests-red` and
 `ci-pinned-digests-red`: one issue, a dated entry per red run, reopened rather than re-filed, closed by
-the next green, and a signed event to the control portal's triage inbox each way. For the lock lane
+the next green, and a signed event to the control portal's triage inbox each way. The issue is a `bug` at
+**sev:M** (the lanes pass `severity: sev:M`): tracked, not a release gate — a person raises it when a
+red threatens production. For the lock lane
 only an **applying** green (the schedule, or a manual run in `apply` mode) closes it — the green
 `pause.reEnableWhen` cites is one whose locks were written, and a `push` run is report-only.
 

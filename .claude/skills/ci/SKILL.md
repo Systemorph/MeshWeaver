@@ -437,7 +437,8 @@ Full reference:
       a gate that cannot fail. In core this is ENFORCED for `schedule:` by
       `check-scheduled-lane-reporters.py` (#7416 — the rule above was prose only, and
       `lock-pinned-digests.yml` sat red six days): the ci-failure ledger pair under the lane's own
-      label, the failure half `needs:` every job and runs `always()`, and a `cause` job hands it
+      label and `severity: sev:M` (tracked, not a release gate; the lane's default sev:H is a red main
+      build's), the failure half `needs:` every job and runs `always()`, and a `cause` job hands it
       `ci-failure-ledger.py --list-failed-jobs` so each entry says whether the cause CHANGED.
       Template: the end of `lock-pinned-digests.yml`; details: ReadingCiSignals → "A scheduled red is
       red in an empty room".

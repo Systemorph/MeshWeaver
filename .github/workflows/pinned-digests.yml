@@ -299,6 +299,8 @@ jobs:
       failed-jobs: ${{ needs.cause.outputs.failed-jobs || '[]' }}
       label: ci-pinned-digests-red
       issue-title: "pinned-digests: the pinned-digest sweep is red"
+      # A scheduled lane's red is a bug at sev:M — tracked, not a release gate (#7416 owner decision).
+      severity: sev:M
       control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
       scripts-ref: ${{ github.sha }}
     secrets:
@@ -323,6 +325,8 @@ jobs:
       platform-set: ""
       label: ci-pinned-digests-red
       issue-title: "pinned-digests: the pinned-digest sweep is red"
+      # A scheduled lane's red is a bug at sev:M — tracked, not a release gate (#7416 owner decision).
+      severity: sev:M
       control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
       scripts-ref: ${{ github.sha }}
     secrets:

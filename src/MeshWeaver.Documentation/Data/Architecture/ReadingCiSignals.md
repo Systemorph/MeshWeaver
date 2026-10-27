@@ -174,7 +174,10 @@ ledger pair: a job calling `node-repo-ci-failure.yml` with `outcome: failure` an
 a repository's main build, and never `ci-failure`, which is CD's — the ledger only ever touches an
 issue carrying its label, its title, its ownership mark and the Actions bot as author). One issue per
 lane, a dated entry per red, reopened within seven days rather than re-filed, closed by the next
-green, and a signed event to the control portal's triage inbox. The failure half `needs:` every
+green, and a signed event to the control portal's triage inbox. A scheduled lane passes `severity: sev:M`: its
+ledger issue is a `bug` at **sev:M** — tracked and visible, never a release gate by itself; a person
+raises it to sev:H when it threatens production. The lane's default stays sev:H, which is what a red
+**main build** is, so every caller that predates the input is unchanged. The failure half `needs:` every
 other job and runs `always()`: `!cancelled()` would miss a job cut at its `timeout-minutes`, and an
 implicit `success()` skips the reporter on exactly the runs it exists for. The template is the end of
 `lock-pinned-digests.yml` (`cause` / `lane-red` / `lane-green`). A lane whose state is better kept as
