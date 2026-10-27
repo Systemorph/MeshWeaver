@@ -142,6 +142,16 @@ public class EffectivePublicPreviewTest
     }
 
     [Fact]
+    public void AStoredTrue_OverADeclaredFalseAtTheSameScope_DoesNotBypassIt_OnAClosedInstance()
+    {
+        var declared = Stating("", true).Add("A", new PartitionAccessPolicy { PublicPreview = false });
+        // The effective map holds ONE policy per scope, so the stored `A` replaces the declared one there.
+        var effective = Stating("", true).Add("A", new PartitionAccessPolicy { PublicPreview = true });
+        PermissionEvaluator.EffectivePublicPreview(effective, declared, "A/B", declaredOnly: true)
+            .Should().BeFalse("the declared opt-out at A still decides when a stored true replaced it");
+    }
+
+    [Fact]
     public void ANearerFalse_OptsOutOfADeclaredTrue()
     {
         var policies = Stating("", true).Add("A", new PartitionAccessPolicy { PublicPreview = false });

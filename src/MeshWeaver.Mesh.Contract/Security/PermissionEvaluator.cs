@@ -627,6 +627,11 @@ internal static class PermissionEvaluator
                     || (staticPolicies.TryGetValue(s, out var declared) && declared.PublicPreview == true);
                 if (eligible)
                     return stated;
+                // The skipped stored `true` may have REPLACED a declared policy at this same scope (the effective
+                // map holds one policy per scope): the declaration there still decides, so a declared `false`
+                // cannot be bypassed by writing a `true` over it (PR #7293 review).
+                if (staticPolicies.TryGetValue(s, out var underneath) && underneath.PublicPreview is { } declaredHere)
+                    return declaredHere;
             }
             if (string.IsNullOrEmpty(s)) break;
         }
