@@ -38,7 +38,7 @@ public class InMeshImpersonationReferencesTest
     private static Compilation Compile(string body) =>
         CompileSource($"{Usings}\npublic static class Probe {{\n{body}\n}}");
 
-    private static CSharpCompilation CompileSource(string source)
+    private static CSharpCompilation CompileSource(string source, string? extraTree = null)
     {
         // Touch every assembly the snippets bind against so it is loaded and has a Location.
         _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
@@ -55,7 +55,9 @@ public class InMeshImpersonationReferencesTest
             .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && System.IO.File.Exists(a.Location))
             .Select(a => MetadataReference.CreateFromFile(a.Location));
         var compilation = CSharpCompilation.Create("InMeshProbe",
-            [CSharpSyntaxTree.ParseText(source, path: "Probe.cs")],
+            extraTree is null
+                ? [CSharpSyntaxTree.ParseText(source, path: "Probe.cs")]
+                : [CSharpSyntaxTree.ParseText(source, path: "Probe.cs"), CSharpSyntaxTree.ParseText(extraTree, path: "ModuleMailCopyStubs.cs")],
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
@@ -65,6 +67,75 @@ public class InMeshImpersonationReferencesTest
 
     private static string[] Found(string body) =>
         InMeshImpersonationReferences.Find(Compile(body)).Select(r => r.Symbol).ToArray();
+
+    /// <summary>
+    /// 🚨 STUBS of the mail copy's entry points under the namespace they carry in the Mail MODULE
+    /// (MeshWeaver.Plugins, <c>MeshWeaver.Mail.MailCopy</c>). That module is not referenceable from core, and the
+    /// table is keyed <c>Namespace.TypeName</c> with no assembly — so a same-named stub is an honest stand-in for
+    /// proving the table FIRES on those names. Signatures mirror the module's. That the table is COMPLETE against the
+    /// real moved types is checked where both are visible: MeshWeaver.Plugins' <c>MailCopySurfaceRegistrationTest</c>.
+    /// </summary>
+    private const string ModuleMailCopyStubs = """
+        using System;
+        using System.Reactive;
+        namespace MeshWeaver.Mail.MailCopy
+        {
+            public sealed class MailMessageCopy { }
+            public sealed class MailCopySource { }
+            public interface IMailCopyStore
+            {
+                IObservable<MailMessageCopy> Upsert(string owner, MailMessageCopy copy);
+                IObservable<MailMessageCopy> Read(string owner, string provider, string generation, string messageId);
+            }
+            public sealed class MeshMailCopyStore : IMailCopyStore
+            {
+                public IObservable<MailMessageCopy> Upsert(string owner, MailMessageCopy copy) => throw new NotImplementedException();
+                public IObservable<MailMessageCopy> Read(string owner, string provider, string generation, string messageId) => throw new NotImplementedException();
+            }
+            public interface IMailAttachmentStore
+            {
+                IObservable<Unit> DeleteAll(string owner, string copyPath);
+                IObservable<string> Save(string owner, string copyPath, string relativePath, byte[] bytes);
+            }
+            public sealed class MeshMailAttachmentStore : IMailAttachmentStore
+            {
+                public IObservable<Unit> DeleteAll(string owner, string copyPath) => throw new NotImplementedException();
+                public IObservable<string> Save(string owner, string copyPath, string relativePath, byte[] bytes) => throw new NotImplementedException();
+            }
+            public sealed class MailCopyEngine
+            {
+                public void Kick(string owner, bool force = false) => throw new NotImplementedException();
+                public IObservable<MailCopySource> Sync(string owner) => throw new NotImplementedException();
+                public IObservable<MailCopySource> Enable(string owner, int windowDays) => throw new NotImplementedException();
+            }
+            public interface IMailAccountCopy
+            {
+                void KickAll(string owner);
+                IObservable<bool> Enable(string owner, string accountId, int windowDays);
+            }
+            public sealed class MailFeedAccountCopy : IMailAccountCopy
+            {
+                public void KickAll(string owner) => throw new NotImplementedException();
+                public IObservable<bool> Enable(string owner, string accountId, int windowDays) => throw new NotImplementedException();
+            }
+            public interface IMailCopySwitch
+            {
+                IObservable<bool> Enable(string owner, string provider, string accountId);
+            }
+            public sealed class MailCopySwitch : IMailCopySwitch
+            {
+                public IObservable<bool> Enable(string owner, string provider, string accountId) => throw new NotImplementedException();
+            }
+        }
+        """;
+
+    // The probe with the module stubs as a second tree. The probe names the stubs FULLY QUALIFIED: the shared usings
+    // import core's own MeshWeaver.Graph.MailCopy, whose simple names are the same.
+    private static string[] FoundWithModuleStubs(string body)
+    {
+        var compilation = CompileSource($"{Usings}\npublic static class Probe {{\n{body}\n}}", ModuleMailCopyStubs);
+        return InMeshImpersonationReferences.Find(compilation).Select(r => r.Symbol).ToArray();
+    }
 
     [Theory]
     // Direct call, the shape the runtime guard also sees.
@@ -206,6 +277,75 @@ public class InMeshImpersonationReferencesTest
     public void AMailCopyStoreReference_IsFound(string body, string expected)
     {
         Assert.Contains(expected, Found(body));
+    }
+
+    /// <summary>
+    /// The SAME surfaces under the namespace they carry in the Mail module, registered before the module ships them, so
+    /// no window exists in which a method group handed to a platform callback reaches a moved System entry point
+    /// unreported. Bound against <see cref="ModuleMailCopyStubs"/>.
+    /// </summary>
+    [Theory]
+    [InlineData("public static IObservable<MeshWeaver.Mail.MailCopy.MailMessageCopy> M(MeshWeaver.Mail.MailCopy.IMailCopyStore s, MeshWeaver.Mail.MailCopy.MailMessageCopy c) => s.Upsert(\"owner\", c);",
+        "MeshWeaver.Mail.MailCopy.IMailCopyStore.Upsert")]
+    [InlineData("public static IObservable<MeshWeaver.Mail.MailCopy.MailMessageCopy> M(MeshWeaver.Mail.MailCopy.MeshMailCopyStore s, MeshWeaver.Mail.MailCopy.MailMessageCopy c) => s.Upsert(\"owner\", c);",
+        "MeshWeaver.Mail.MailCopy.MeshMailCopyStore.Upsert")]
+    // DEFERRED: a method group handed on, invoked later by whoever holds it — the shape only this check sees.
+    [InlineData("public static Func<string, MeshWeaver.Mail.MailCopy.MailMessageCopy, IObservable<MeshWeaver.Mail.MailCopy.MailMessageCopy>> M(MeshWeaver.Mail.MailCopy.IMailCopyStore s) => s.Upsert;",
+        "MeshWeaver.Mail.MailCopy.IMailCopyStore.Upsert")]
+    [InlineData("public static Func<string, IObservable<MeshWeaver.Mail.MailCopy.MailMessageCopy>> M(MeshWeaver.Mail.MailCopy.MeshMailCopyStore s) => o => s.Read(o, \"outlook\", \"g1\", \"m1\");",
+        "MeshWeaver.Mail.MailCopy.MeshMailCopyStore.Read")]
+    [InlineData("public static Func<string, string, IObservable<System.Reactive.Unit>> M(MeshWeaver.Mail.MailCopy.IMailAttachmentStore s) => s.DeleteAll;",
+        "MeshWeaver.Mail.MailCopy.IMailAttachmentStore.DeleteAll")]
+    [InlineData("public static IObservable<string> M(MeshWeaver.Mail.MailCopy.MeshMailAttachmentStore s, byte[] b) => s.Save(\"owner\", \"p\", \"r\", b);",
+        "MeshWeaver.Mail.MailCopy.MeshMailAttachmentStore.Save")]
+    [InlineData("public static Action<string, bool> M(MeshWeaver.Mail.MailCopy.MailCopyEngine e) => e.Kick;",
+        "MeshWeaver.Mail.MailCopy.MailCopyEngine.Kick")]
+    [InlineData("public static Func<string, IObservable<MeshWeaver.Mail.MailCopy.MailCopySource>> M(MeshWeaver.Mail.MailCopy.MailCopyEngine e) => e.Sync;",
+        "MeshWeaver.Mail.MailCopy.MailCopyEngine.Sync")]
+    [InlineData("public static IObservable<MeshWeaver.Mail.MailCopy.MailCopySource> M(MeshWeaver.Mail.MailCopy.MailCopyEngine e) => e.Enable(\"owner\", 30);",
+        "MeshWeaver.Mail.MailCopy.MailCopyEngine.Enable")]
+    [InlineData("public static Action<string> M(MeshWeaver.Mail.MailCopy.IMailAccountCopy a) => a.KickAll;",
+        "MeshWeaver.Mail.MailCopy.IMailAccountCopy.KickAll")]
+    [InlineData("public static void M(MeshWeaver.Mail.MailCopy.MailFeedAccountCopy a) => a.KickAll(\"owner\");",
+        "MeshWeaver.Mail.MailCopy.MailFeedAccountCopy.KickAll")]
+    [InlineData("public static IObservable<bool> M(MeshWeaver.Mail.MailCopy.MailFeedAccountCopy a) => a.Enable(\"owner\", \"acct\", 30);",
+        "MeshWeaver.Mail.MailCopy.MailFeedAccountCopy.Enable")]
+    [InlineData("public static Func<string, string, int, IObservable<bool>> M(MeshWeaver.Mail.MailCopy.IMailAccountCopy a) => a.Enable;",
+        "MeshWeaver.Mail.MailCopy.IMailAccountCopy.Enable")]
+    [InlineData("public static IObservable<bool> M(MeshWeaver.Mail.MailCopy.IMailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
+        "MeshWeaver.Mail.MailCopy.IMailCopySwitch.Enable")]
+    [InlineData("public static IObservable<bool> M(MeshWeaver.Mail.MailCopy.MailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
+        "MeshWeaver.Mail.MailCopy.MailCopySwitch.Enable")]
+    public void AModuleMailCopyReference_IsFound(string body, string expected)
+    {
+        Assert.Contains(expected, FoundWithModuleStubs(body));
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL for the module names: the stubs themselves and code that merely holds the types report
+    /// nothing, so a pass above is the references, not the tree they were bound against.
+    /// </summary>
+    [Fact]
+    public void ModuleMailCopyTypes_Untouched_AreNotReported()
+    {
+        Assert.Empty(FoundWithModuleStubs($"public static object M(MeshWeaver.Mail.MailCopy.IMailCopyStore s, MeshWeaver.Mail.MailCopy.MailCopyEngine e) => (s, e);"));
+    }
+
+    /// <summary>
+    /// Every surface the table names under core's own namespace is also named under the module's, with the same
+    /// members — the two lists must not drift while both exist.
+    /// </summary>
+    [Fact]
+    public void EveryCoreMailCopyKey_HasItsModuleTwin()
+    {
+        var core = InMeshImpersonationReferences.Members.Where(p => p.Key.StartsWith("MeshWeaver.Graph.MailCopy.", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(core);
+        foreach (var (key, members) in core)
+        {
+            var twin = "MeshWeaver.Mail.MailCopy." + key["MeshWeaver.Graph.MailCopy.".Length..];
+            Assert.True(InMeshImpersonationReferences.Members.TryGetValue(twin, out var moduleMembers), $"no module key {twin}");
+            Assert.True(members.SetEquals(moduleMembers!), $"{twin} names other members than {key}");
+        }
     }
 
     /// <summary>

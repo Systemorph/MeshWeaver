@@ -38,10 +38,11 @@
 # No check in this repository ever went red, at any point, because none had ever looked. See
 # Doc/Architecture/ImageTagContract.
 #
-# 🚨 THE PORTAL HAS NO `latest`, DELIBERATELY — do not "symmetrise" one in. The contract is
-# `main` (moving, rewritten by every CD run) plus `<version>` (immutable). A re-added floating tag on
-# the portal would have no producer this file could name, no protection from retention
-# (`lock-pinned-digests.py` refuses to lock a floating tag by design), and would age out again.
+# 🚨 THE PORTAL'S AND THE MIGRATION'S `latest` ARE NOT ASSERTED HERE, and must not be added to the
+# phase-B list below. They have a producer again — `arm`'s phase D, beside `<major>-latest`, on every
+# ARMED set, protected from retention by name (.github/release-channels.json) — but `arm` often runs
+# in a later CD run than the one that promoted the set, so asserting them here would fail on state a
+# later phase legitimately has not written, exactly like the portal's `<version>` (below).
 #
 # 🚨 `--pointers <version>` IS OPT-IN, AND THE OPT-IN IS AN ORDERING FACT, NOT A PREFERENCE.
 # `promote` writes tags in three phases: A = `<short-sha>` on all three plus the tester's and the
@@ -175,8 +176,9 @@ done
 #                   the three values are equal BY CONSTRUCTION and one argument covers the set.
 #   * `latest`    — REPO-SCOPED to `mw-plugin-test`, which phase B writes alongside `main`. It is
 #                   what the satellites resolve as `vars.MW_TEST_IMAGE`, so it is a real consumer
-#                   contract — but it is the TESTER's, not the set's. The portal deliberately has no
-#                   `latest`; see the header. Do not generalise this line into the loop.
+#                   contract — but it is the TESTER's, not the set's. The portal's and the
+#                   migration's `latest` move in `arm`, not `promote`; see the header. Do not
+#                   generalise this line into the loop.
 #
 # No `if:` on a variable and no tolerated failure anywhere in here: a pointer that cannot be checked
 # is reported RED naming the failed read, exactly like one that is missing. A gate that can decline

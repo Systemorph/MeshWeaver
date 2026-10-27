@@ -104,6 +104,23 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Graph.MailCopy.MailFeedAccountCopy"] = ["KickAll", "Enable"],
             ["MeshWeaver.Graph.MailCopy.IMailCopySwitch"] = ["Enable"],
             ["MeshWeaver.Graph.MailCopy.MailCopySwitch"] = ["Enable"],
+            // 🚨 The SAME surfaces under the namespace they carry in the Mail MODULE (MeshWeaver.Plugins,
+            // MeshWeaver.Mail.MicrosoftGraph, namespace MeshWeaver.Mail.MailCopy), which they move to. The table is
+            // keyed Namespace.TypeName with no assembly, so these names reach the module's types in any in-mesh
+            // compile that references the module, and name nothing where it is not installed. Registered BEFORE the
+            // module ships them, so there is no window in which a method group handed to a platform callback — the
+            // shape the runtime guard cannot see — reaches the moved System entry points unreported. The keys
+            // above go when core deletes its own copy; these stay, as a recorded core→plugins edge by name
+            // (Doc/Architecture/CarvingProjectsOutOfCore → MailCopy).
+            ["MeshWeaver.Mail.MailCopy.IMailCopyStore"] = MailCopyStoreMembers,
+            ["MeshWeaver.Mail.MailCopy.MeshMailCopyStore"] = MailCopyStoreMembers,
+            ["MeshWeaver.Mail.MailCopy.IMailAttachmentStore"] = MailAttachmentStoreMembers,
+            ["MeshWeaver.Mail.MailCopy.MeshMailAttachmentStore"] = MailAttachmentStoreMembers,
+            ["MeshWeaver.Mail.MailCopy.MailCopyEngine"] = ["Kick", "Sync", "Enable", "ServesFromCopy", "FollowMove"],
+            ["MeshWeaver.Mail.MailCopy.IMailAccountCopy"] = ["KickAll", "Enable"],
+            ["MeshWeaver.Mail.MailCopy.MailFeedAccountCopy"] = ["KickAll", "Enable"],
+            ["MeshWeaver.Mail.MailCopy.IMailCopySwitch"] = ["Enable"],
+            ["MeshWeaver.Mail.MailCopy.MailCopySwitch"] = ["Enable"],
         }.ToImmutableDictionary(p => p.Key, p => p.Value.ToImmutableHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
 
     /// <summary>Members reported only when WRITTEN (an assignment, an object or <c>with</c> initializer).</summary>
