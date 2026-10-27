@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -597,9 +598,14 @@ public static class InstanceGrantAdminSettingsTab
     /// <see cref="GrantRowsFeed"/>.
     /// </summary>
     private static UiControl GrantList(LayoutAreaHost host)
-        => Controls.Stack
+    {
+        // The viewer's zone is resolved ONCE, on the render turn: the feed below hops pools, where the
+        // ambient access context reads silently UTC (AGENTS.md — render a stored timestamp in the
+        // viewer's zone).
+        var zoneId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
+        return Controls.Stack
             .WithView(Controls.Title(host.Localize("instanceGrants.registered"), 3))
-            .WithView(GrantRowsFeed(host)
+            .WithView(GrantRowsFeed(host, zoneId)
                 .BindGrid(ListDataId, host.Localize("instanceGrants.noInstances"),
                     message => $"{host.Localize("instanceGrants.error.failed")} {message}")
                 .WithColumn(new PropertyColumnControl<string>
@@ -609,23 +615,84 @@ public static class InstanceGrantAdminSettingsTab
                 { Property = nameof(GrantRow.DisplayName).ToCamelCase() }
                     .WithTitle(host.Localize("instanceGrants.column.name")))
                 .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(GrantRow.Plan).ToCamelCase() }
+                    .WithTitle(host.Localize("instanceGrants.column.plan")))
+                .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(GrantRow.Version).ToCamelCase() }
+                    .WithTitle(host.Localize("instanceGrants.column.version")))
+                .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(GrantRow.LastOnline).ToCamelCase() }
+                    .WithTitle(host.Localize("instanceGrants.column.lastOnline")))
+                .WithColumn(new PropertyColumnControl<string>
                 { Property = nameof(GrantRow.Path).ToCamelCase() }
                     .WithTitle(host.Localize("instanceGrants.column.owner"))));
+    }
 
-    /// <summary>The feed half of the instance list: every registered instance as a row, live.
-    /// Builds no control.</summary>
-    internal static IObservable<IReadOnlyList<GrantRow>> GrantRowsFeed(LayoutAreaHost host)
-        => host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
-            .Query(new MeshQueryRequest
+    /// <summary>The feed half of the instance list: every registered instance as a row, live, most
+    /// recently seen first (Doc/Architecture/InstanceTelemetry). Builds no control.</summary>
+    /// <param name="host">The rendering host.</param>
+    /// <param name="zoneId">The viewer's IANA zone, resolved on the render turn; <c>null</c> renders UTC.</param>
+    internal static IObservable<IReadOnlyList<GrantRow>> GrantRowsFeed(LayoutAreaHost host, string? zoneId)
+    {
+        var options = host.Hub.JsonSerializerOptions;
+        var instances = host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(new MeshQueryRequest
             {
                 // Instances live under whichever user registered them (#3202 — see above).
                 Query = MeshWideQuery.OfType(MeshWeaverInstanceNodeType.NodeType),
             })
-            .Select(results => (IReadOnlyList<GrantRow>)results
-                .Select(r => new GrantRow(r.Id ?? r.Path.Split('/').Last(), r.Name ?? "", r.Path))
-                .OrderBy(r => r.InstanceId, StringComparer.Ordinal)
-                .ToList());
+            // The query emits DELTAS after its first frame, never whole snapshots; the grid is the
+            // accumulated set — the same Reset / Removed / upsert fold the coupon list uses.
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty, CouponAdminSettingsTab.Accumulate)
+            // Let the chunked first snapshot settle instead of re-emitting per chunk.
+            .Throttle(TimeSpan.FromMilliseconds(300));
+        // "12 min ago" and the one-day offline boundary are functions of the CLOCK as much as of the
+        // data: re-project every minute, so an instance that fell silent crosses the boundary on an
+        // open page without waiting for another query emission.
+        return instances
+            .CombineLatest(Observable.Timer(TimeSpan.Zero, TimeSpan.FromMinutes(1)), (map, _) => map)
+            .Select(map => Rows(map.Values, options, DateTimeOffset.UtcNow, zoneId, (key, args) => host.Localize(key, args)));
+    }
+
+    /// <summary>
+    /// The rows of the instance list from the instance nodes — the routing-index rows (which share
+    /// the node type and live under the top-level credential namespace) dropped, the record read in
+    /// whatever shape it arrives, sorted most recently seen first, then never-seen by id.
+    /// </summary>
+    internal static IReadOnlyList<GrantRow> Rows(
+        IEnumerable<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options, DateTimeOffset now, string? zoneId,
+        Func<string, object?[], string> localize)
+        => nodes
+            .Where(node => !node.Path.StartsWith(MeshWeaverInstanceNodeType.IndexNamespace + "/", StringComparison.Ordinal))
+            .Select(node =>
+            {
+                var instance = node.ContentAs<MeshWeaverInstance>(options);
+                var reading = LastSeenWording.Describe(instance?.LastSeenAt, now, zoneId);
+                var lastOnline = reading.Kind switch
+                {
+                    LastSeenWording.Online => localize("instanceGrants.lastSeen.online", [reading.When, reading.Age]),
+                    LastSeenWording.Offline => localize("instanceGrants.lastSeen.offline", [reading.When, reading.Age]),
+                    _ => localize("instanceGrants.lastSeen.never", []),
+                };
+                return (Row: new GrantRow(
+                    node.Id ?? node.Path.Split('/').Last(),
+                    node.Name ?? "",
+                    node.Path,
+                    instance?.Plan is { Length: > 0 } plan ? plan : PlanTierRanks.BaselinePlan,
+                    instance?.LastSeenVersion ?? "",
+                    lastOnline), LastSeen: instance?.LastSeenAt);
+            })
+            .OrderByDescending(entry => entry.LastSeen ?? DateTimeOffset.MinValue)
+            .ThenBy(entry => entry.Row.InstanceId, StringComparer.Ordinal)
+            .Select(entry => entry.Row)
+            .ToList();
 
     /// <summary>Plain row record bound into the instance <see cref="DataGridControl"/>.</summary>
-    internal record GrantRow(string InstanceId, string DisplayName, string Path);
+    /// <param name="InstanceId">The logical App ID.</param>
+    /// <param name="DisplayName">The registrant's name for it.</param>
+    /// <param name="Path">The record's node path — the owner's partition.</param>
+    /// <param name="Plan">The instance's plan; the baseline when the record carries none.</param>
+    /// <param name="Version">The platform version it last reported, empty when none.</param>
+    /// <param name="LastOnline">The localized last-seen sentence (<see cref="LastSeenWording"/>).</param>
+    internal record GrantRow(string InstanceId, string DisplayName, string Path, string Plan, string Version, string LastOnline);
 }

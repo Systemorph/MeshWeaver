@@ -112,7 +112,10 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
     /// one, else that key itself. Cold; emits once.</summary>
     public IObservable<string> ResolveToken(PluginRegistryReference registry) =>
         ConfiguredToken(registry) is { } configured
-            ? Observable.Return(configured)
+            // A CONFIGURED instance key is exchanged like a stored one, so an installation that
+            // pulls on PluginCatalog:Registries:N:Token still leaves its heartbeat
+            // (Doc/Architecture/InstanceTelemetry); Exchange hands any other token shape back as is.
+            ? Exchange(registry.Url, configured)
             : StoredCredential(registry)
                 .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
 
@@ -161,12 +164,21 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
         var http = hub.ServiceProvider.GetService<IHttpClientFactory>()
             ?.CreateClient(InstanceRegistrationClient.BundleHttpClientName) ?? SharedHttp;
 
-        return pool.Invoke<ExchangeOutcome>(async ct =>
+        // The exchange carries what this instance says about itself (Doc/Architecture/InstanceTelemetry):
+        // additive, optional, bounded — the registry stamps it beside LastSeenAt and reads nothing of
+        // it for authorization. The reader never errors and never waits longer than its budget, so
+        // the token is never held hostage by the inventory.
+        var telemetry = hub.ServiceProvider.GetService<InstanceTelemetryReader>();
+        var telemetryRead = telemetry is null
+            ? Observable.Return<InstanceTelemetry?>(null)
+            : telemetry.Read().Select(read => (InstanceTelemetry?)read);
+
+        return telemetryRead.Take(1).SelectMany(report => pool.Invoke<ExchangeOutcome>(async ct =>
             {
                 using var request = new HttpRequestMessage(HttpMethod.Post, url + SyncTokenPayloads.Route);
                 request.Headers.TryAddWithoutValidation("Authorization", $"{SyncAccessToken.Scheme} {rawKey}");
                 request.Content = new StringContent(
-                    JsonSerializer.Serialize(new SyncTokenPayloads.Request(), SyncTokenPayloads.Json),
+                    JsonSerializer.Serialize(new SyncTokenPayloads.Request { Telemetry = report }, SyncTokenPayloads.Json),
                     System.Text.Encoding.UTF8, "application/json");
                 using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
                 var status = (int)response.StatusCode;
@@ -175,7 +187,7 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
                 var body = JsonSerializer.Deserialize<SyncTokenPayloads.Response>(
                     await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false), SyncTokenPayloads.Json);
                 return new ExchangeOutcome(body?.AccessToken, status, body?.ExpiresIn ?? 0);
-            })
+            }))
             .Select(result =>
             {
                 if (string.IsNullOrWhiteSpace(result.Token) || result.ExpiresIn <= 0)
