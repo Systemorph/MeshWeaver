@@ -41,6 +41,10 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.9.0" />
+    <!-- Humanizer.Core: a TRANSITIVE of Roslyn (Workspaces → 2.14.1) that core lifts on purpose,
+         because the platform image's copy is the one every module binds. MeshWeaver.Compiler.Pipeline
+         carries the reference and says why; PlatformCarriedAssemblyFloorsGuard holds the floor. -->
+    <PackageVersion Include="Humanizer.Core" Version="3.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.14" />

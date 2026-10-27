@@ -465,6 +465,22 @@ The first pass found 67 pins with no direct core reference. 12 were transitive a
 to Plugins at the versions core carried, with their comments, including security overrides such as
 `MessagePack` and `SQLitePCLRaw.lib.e_sqlite3`.
 
+**🚨 "Nothing in core calls it" is not the test for a DIRECT reference either.** A third-party
+assembly that core's graph carries anyway is part of the platform image's `/app`, and the copy there
+is the one every module binds: a module's own bundled copy never loads while the platform carries the
+name, and .NET binds only to an equal or higher version. So the version core's closure resolves is a
+contract with every module, even when no core line calls the package. The incident: #7262 removed
+`MeshWeaver.Graph`'s `Humanizer.Core` 3.0.10 reference because nothing in that project called it. The
+image's `Humanizer.dll` fell back to the 2.14 that Roslyn's Workspaces brings, and every install of
+the Plugins module `MeshWeaver.Graph.Views` (built against Humanizer 3.x) was refused at boot with
+`requires 'Humanizer 3.0.0.0 (this platform carries 2.14.0.0)'`. Graph.Views contributed nothing, no
+course exercise page rendered, and MeshWeaver.Education's install gate went red on an unchanged
+commit. The Plugins fill-in pin could not help, because no project in the image's closure references
+the package. The lift now sits on `MeshWeaver.Compiler.Pipeline`, the project that brings Roslyn in,
+and `PlatformCarriedAssemblyFloorsGuard` holds the floor with the same link check the module landing
+uses. Before dropping a reference, also ask whether `/app` still carries the assembly and at which
+version. If the answer changes, the change is a platform downgrade for every module built against it.
+
 **Families stay whole.** A package whose family core still partly pins stays in core with the rest:
 the four Orleans clustering and persistence packages, `ModelContextProtocol` and
 `ModelContextProtocol.AspNetCore` (core restores `ModelContextProtocol.Core`), `Microsoft.Agents.AI`
