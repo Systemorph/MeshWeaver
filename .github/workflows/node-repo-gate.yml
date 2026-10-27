@@ -840,7 +840,10 @@ jobs:
             elif [ "$PUSH_BASE" = "$(git rev-parse HEAD)" ]; then
               why="push-base $PUSH_BASE IS HEAD — an empty range is a broken input, never 'nothing to gate'"
             else
-              ci_path="$(git diff --name-only "$PUSH_BASE" HEAD -- .github scripts | head -n1)"
+              # `sed -n '1p'`, never `head -n1`: head closes the pipe after one line, and a range
+              # with enough CI paths to fill it SIGPIPEs `git diff` — under pipefail that aborts the
+              # plan instead of taking the full run below.
+              ci_path="$(git diff --name-only "$PUSH_BASE" HEAD -- .github scripts | sed -n '1p')"
               [ -z "$ci_path" ] || why="the range touches the CI path $ci_path — a main push covers module legs for CI paths, so it runs them all"
             fi
             if [ -n "$why" ]; then

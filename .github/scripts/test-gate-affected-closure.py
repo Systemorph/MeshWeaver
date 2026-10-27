@@ -66,7 +66,18 @@ def fixture(root: Path) -> dict[str, str]:
     git(root, "add", "-A")
     git(root, "commit", "-qm", "a CI path")
     head = git(root, "rev-parse", "HEAD")
-    return {"base": base, "side": side, "content": content, "head": head}
+    # WIDE: enough CI paths that `git diff --name-only` writes far past a pipe buffer (~64 KiB), so a
+    # reader that stops after the first line SIGPIPEs the writer.
+    git(root, "checkout", "-qb", "wide", content)
+    many = root / ".github" / "many"
+    many.mkdir(parents=True)
+    for i in range(4000):
+        (many / f"generated-ci-input-{i:05d}-{'x' * 80}.yml").write_text("on: push\n", encoding="utf-8")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "many CI paths")
+    wide = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "main")
+    return {"base": base, "side": side, "content": content, "head": head, "wide": wide}
 
 
 def run(root: Path, body: str, head: str, **env: str) -> tuple[int, dict[str, str], str, str | None]:
@@ -140,6 +151,18 @@ def main() -> int:
         case("a range touching scripts/ ⇒ full (policy ci-paths-owe-no-module-leg)",
              run(root, body, c["head"], PUSH_BASE=c["base"]),
              run_all="true", stub=False, says="touches the CI path scripts/gate.py")
+        case("a range with MORE CI paths than a pipe holds ⇒ full, never a SIGPIPE abort under pipefail",
+             run(root, body, c["wide"], PUSH_BASE=c["base"]),
+             run_all="true", stub=False, says="touches the CI path .github/many/")
+        sigpipe = body.replace("| sed -n '1p')", "| head -n1)")
+        if sigpipe == body:
+            FAILURES.append("non-vacuity: the step no longer reads its CI path with `| sed -n '1p'`")
+            print("  FAIL non-vacuity — the step's CI-path reader moved; re-point this control")
+        else:
+            code = run(root, sigpipe, c["wide"], PUSH_BASE=c["base"])[0]
+            case("NON-VACUITY: the same fixture read with `head -n1` DOES abort the plan (exit "
+                 f"{code}) — the case above is not passing on a small pipe",
+                 (0 if code != 0 else 1, {}, "", None), run_all=None, stub=None)
         case("affected-narrowing false ⇒ full even with a push-base",
              run(root, body, c["content"], PUSH_BASE=c["base"], NARROWING="false"),
              run_all="true", stub=False)
