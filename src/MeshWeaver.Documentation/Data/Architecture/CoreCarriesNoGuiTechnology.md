@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Core Carries No GUI Technology
 category: Architecture
-description: The platform repository names no GUI technology — no Blazor, Razor components, FluentUI, Radzen, Monaco wrapper or browser automation. What that rule covers and what it does not, the measured inventory, what moved to MeshWeaver.Plugins (the GUI package pins, the Playwright suites), the order the two halves land in, and the proposal for the build tooling that still names a GUI convention.
+description: The platform repository names no GUI technology — no Blazor, Razor components, FluentUI, Radzen, Monaco wrapper or browser automation. What that rule covers and what it does not, the measured inventory, what moved to MeshWeaver.Plugins (the GUI package pins, the Playwright suites), the order the two halves land in, and how the build tooling that named a GUI convention moved there.
 icon: /static/NodeTypeIcons/code.svg
 ---
 
@@ -110,29 +110,25 @@ Education, Reinsurance, SocialMedia, Manufacturing and Crm). Memex has its own
 
 | Where | What | Status |
 |---|---|---|
-| `Directory.Packages.props` | `Radzen.Blazor` | **stays for now** — the module-library shelf stages it (below) |
-| `Directory.Packages.props` | `Microsoft.Identity.Web.Ui` (Razor sign-in UI) | **stays for now** — no core project references it since `memex/Memex.Portal.Shared` left (#7125), but it exact-pins `Microsoft.Identity.Web`, so the two move to Plugins **together**: Plugins pins both first (fill-in), then core drops both under `Satellite-pins:` |
-| `tools/MeshWeaver.ModuleLibraries` | references `Radzen.Blazor` for the Plugins module `MeshWeaver.Blazor.Radzen` | build tooling — proposal below |
+| `Directory.Packages.props` | `Radzen.Blazor` | **moved** — MeshWeaver.Plugins pins it beside its own module-library shelf (below) |
+| `Directory.Packages.props` | `Microsoft.Identity.Web.Ui` (Razor sign-in UI) | **moved** — with `Microsoft.Identity.Web`, together, as MeshWeaver.Plugins fill-in pins (Plugins#4297, then #7262) |
+| `tools/MeshWeaver.ModuleLibraries` | referenced `Radzen.Blazor` for the Plugins module `MeshWeaver.Blazor.Radzen` | **deleted** — MeshWeaver.Plugins owns its shelf (below) |
 | `tools/MeshWeaver.PluginTester` (the Razor build extension and its staging, `stage-razor-generators.py`, the Razor tests) | the tester image carried the SDK's Razor source generator so `build-project` compiled `.razor` modules | **moved** — MeshWeaver.Plugins carries the extension (`src/MeshWeaver.PluginTester.Razor`) and supplies it through `build-extensions-project` (below); core keeps only the generic extension seam |
 | `.github/scripts/check-bundle-static-assets.py`, `node-repo-module-pack.yml` | the shared module lane asserts a bundle declares every static web asset it owes | **generic** — the source tree's `wwwroot/**` plus every file the build emitted under its output's `wwwroot/`; no source kind's asset convention is encoded in core any more |
 | `memex/MeshModulesPublish.targets` | the `modules/<Name>/` publish layout; its comments describe the Blazor view packs | imported only by Plugins' hosts and `Memex.Hosts.Test` once `memex/Memex.Portal.Shared` is deleted — **move it to Plugins** as a follow-up source move (add half repoints the four `$(MeshWeaverRoot)/memex/…` imports, then core deletes) |
 | `deploy/helm`, `deploy/aks` | comments explaining sticky sessions and slow scale-down for Blazor circuits | prose about the deployed portal, not a reference — and the deployment material is leaving core separately |
 | `.github/workflows/dotnet-test.yml`, `stage-chromium-fonts.sh` | headless Chromium for the PDF export tests | not covered (a document renderer, see the table at the top) |
 
-## Build tooling that still names a GUI — the proposal
+## Build tooling that named a GUI — moved to the module repository
 
-Not changed in this pass. Both items are platform BUILD capabilities that exist only so that a GUI
-module can be compiled; the proposal makes the platform generic and lets the module repository
-supply the GUI-specific half.
+Both items were platform BUILD capabilities that existed only so that a GUI module could be
+compiled. The platform is now generic, and the module repository supplies the GUI-specific half.
 
 ### The module-library shelf (`tools/MeshWeaver.ModuleLibraries`)
 
-**Today.** A curated csproj of extra libraries a container-built module may bind (provider SDKs,
-import/export helpers, and `Radzen.Blazor` for `MeshWeaver.Blazor.Radzen`). Main-cd publishes it into
-the tester image as `module-libs/`; its `deps.json` is the closure, core's central pins its versions.
-
-**Proposal.** Keep the *mechanism* in core and move the *list* to the repository that owns the
-modules: the shelf becomes a declaration the module lane receives, not a hard-coded project.
+**Done.** The shelf of extra libraries a container-built module may bind (provider SDKs,
+import/export helpers, `Radzen.Blazor` for `MeshWeaver.Blazor.Radzen`) is no longer a core
+project. Core keeps the *mechanism* and the module repository owns the *list*:
 
 1. **Core (addition) — in place.** `mw-plugin-test build-project --module-libs <dir>` reads that
    directory as the shelf, and it REPLACES the search for the image's `module-libs/` the way
@@ -150,22 +146,23 @@ modules: the shelf becomes a declaration the module lane receives, not a hard-co
    shelf too: no module references it, so a diff touching it or a project it reaches runs and
    tests every module instead of narrowing to none. Omitted, the tester image's shelf is used, the key is
    byte-identical to before, and nothing changes for a caller that sets nothing.
-2. **Plugins** — adds its own shelf csproj under `src/` (only `src/` imports its package versions)
-   carrying every entry only Plugins modules use, pins those packages in
-   `src/Directory.Packages.Plugins.props`, and passes `module-libraries-project:` on every
-   module-pack call, once its tester pin includes the flag.
-3. **Core (deletion, last)** — deletes `tools/MeshWeaver.ModuleLibraries`, the main-cd step that
+2. **Plugins — in place.** `src/MeshWeaver.ModuleLibraries` carries every entry only Plugins
+   modules use (Plugins#4303), `src/Directory.Packages.Plugins.props` pins them — members of a
+   family core still pins part of take their version from that sibling — and the module-pack call
+   passes `module-libraries-project:` (Plugins#4322).
+3. **Core (deletion) — in place.** Core deleted `tools/MeshWeaver.ModuleLibraries`, the main-cd step that
    stages it into the tester image, and the pins only it used (`Radzen.Blazor`, the AI provider
    SDKs and their `Microsoft.Agents.AI` / `Microsoft.Extensions.AI` families, ClosedXML, CsvHelper,
-   MailKit, Microsoft.Graph, ExcelDataReader), declared under `Satellite-pins:`. The tester keeps
-   reading `module-libs/` when one is staged, so the mechanism outlives the list.
+   MailKit, Microsoft.Graph, ExcelDataReader, the Orleans clustering/persistence and
+   ModelContextProtocol members only Plugins restores), and `InstanceSetupDefaults.RequiredModules`,
+   the list of first-party modules a portal must load, which the Fleet Console now declares. The
+   tester keeps reading `module-libs/` when one is staged or named, so the mechanism outlives the list.
 
 **Risk.** The closure stops being one shared, image-baked fact and becomes per-run: a lane that
 publishes the shelf itself must derive the closure from that publish's `deps.json` exactly as the
 image job does today (the 2026-08-19/20 outage was a guessed closure), and the bundle must still
-refuse a reference the shelf did not supply. Each satellite that relies on a shelf entry
-(Import's ClosedXML/CsvHelper, the AI providers) keeps working on the image default until it opts
-in, so the change can be staged per repository.
+refuse a reference the shelf did not supply. The tester image no longer carries a default shelf,
+so a satellite whose container modules need one must pass `module-libraries-project:` itself.
 
 ### The Razor source generator — done: core carries no Razor build code
 

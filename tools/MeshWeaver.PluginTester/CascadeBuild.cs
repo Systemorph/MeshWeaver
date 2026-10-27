@@ -366,7 +366,7 @@ public static class CascadeBuild
                     var build = BuildPackage(
                         options, id, typesByPackage.TryGetValue(id, out var types) ? types : [],
                         deps, byId, nodeSet, baseReferences, idOf, toolchainId, attribution, workDirectory, nugetResolver,
-                        entriesByPackage, entriesLock);
+                        entriesByPackage, entriesLock, host.ModuleAssemblyPaths);
                     return (build, build.IsGreen);
                 },
                 options.MaxParallel)
@@ -477,7 +477,8 @@ public static class CascadeBuild
         string workDirectory,
         INuGetAssemblyResolver nugetResolver,
         Dictionary<string, List<BundleWriter.AssemblyEntry>> entriesByPackage,
-        object entriesLock)
+        object entriesLock,
+        IReadOnlyList<string> moduleAssemblyPaths)
     {
         var external = byId[id].Requires
             .Select(PackageDependencyGraph.DependencyId)
@@ -539,13 +540,14 @@ public static class CascadeBuild
             NodeSetCompiler.CompiledNode compiled;
             try
             {
-                compiled = NodeSetCompiler.Compile(
+                compiled = NodeSetCompiler.CompileWithModules(
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
                     Path.Combine(packageDir, CodeConventions.SanitizeNodeName(candidate.Node.Path)),
                     resolveNuGet: TreeBake.BlockingNuGetResolution(nugetResolver),
-                    logger: options.Logger);
+                    logger: options.Logger,
+                    moduleAssemblyPaths: moduleAssemblyPaths);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

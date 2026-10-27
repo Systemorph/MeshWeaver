@@ -335,6 +335,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Build coordination — the Build node protocol](BuildCoordination)
 - [Build Identity Admission](BuildIdentityAdmission)
 - [The Build Process — compile and test as a dependency cascade](BuildProcess)
+- [Dependency Graph](DependencyGraph) — the forward edges a NodeType compile actually USED, extracted by Roslyn and stored once per environment at `{NodeType}/_Dependency/Forward`, and the reverse closure ("who depends on X") answered through the query surface: a trigger-maintained closure table on Postgres, the same answer walked in memory elsewhere
 - [What a Pull Request Rebuilds](BuildScopeNarrowing)
 - [The Build Server](BuildServer)
 - [Build Hosts](BuildHosts) — one warm host per release channel (`build-latest`, `build-stable`): the follow lane that streams a stage's log into the Actions log, the host runner, the build-host chart, and how core's CD hands build-latest each set it arms
@@ -443,6 +444,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Dead-Circuit Fan-Out Storm](DeadCircuitFanOutStorm) — a closed tab's owner pushed to the corpse for 46 minutes because the only verdict the eviction acts on could not be said; the release tombstone that says it
 - [Bake Seal — NodeOps Saturation](BakeSealNodeOpsSaturation) — the mesh's ONE node-CRUD hub stops draining under a bulk burst, and every consumer then reports its own bound
 - [Live Query Re-query Cost](LiveQueryRequeryCost) — every write re-walked the security fold's permanent live queries, so one write cost more the larger the mesh; a live raw query now ignores a change whose old and new node types it can never return
+- [A Vanished Child Is Absent](AVanishedChildIsAbsent) — a child directory deleted while its parent was listed failed the whole file-system listing, and a live re-query then reported every row under the parent removed and never listed the write it was answering
 - [The /api/content 503](ContentRoute503) — three causes with different fixes, why the third wears the first's signature, and the black-box discriminator that needs no log line
 - [Refused Replies During Teardown](RefusedRepliesDuringTeardown) — every failure route answers the SENDER, which for a reply is the responder; the answer the caller is parked on is dropped with nobody told
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
@@ -472,6 +474,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Fault-Injection Harness](FaultInjectionHarness) — deterministic, releasable faults (silo kill / drain / linger, flush hold, NotFound window, change-feed and first-frame holds, webhook loss) and one isolated regression per production incident, each with its negative control
 - [Reactive Test Assertions](ReactiveTestAssertions)
 - [Test State Isolation](TestStateIsolation)
+- [Test Log Levels — Warning Only](TestLogLevels) — unit and CI test runs write Warning and above to the shared test sinks, with no Information allow-list; how a test captures a lower-level line, and `MW_TEST_LOG_LEVEL` for local reading
 - [Disposable-mesh e2e](DisposableMeshE2E)
 - [Debugging Message Flow](DebuggingMessageFlow)
 - [Debugging Disposal & Leaks](DebuggingDisposalAndLeaks)

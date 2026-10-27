@@ -291,7 +291,7 @@ def realistic_assets(module: str) -> dict[str, bytes]:
         "wwwroot/Components/collaborativeMarkdownView.js.gz": b"\x1f\x8b\x08gzip-bytes",
         f"wwwroot/{module}.styles.css": b"@import '_content/MeshWeaver.Blazor/x.bundle.scp.css';\n",
         "wwwroot/_content/MeshWeaver.Blazor/nested/deep/leaflet.css": b".leaflet{}\n",
-        "wwwroot/_content/Radzen.Blazor/fonts/material.woff2": b"\x77\x4f\x46\x32font",
+        "wwwroot/_content/Vendor.Components/fonts/material.woff2": b"\x77\x4f\x46\x32font",
     }
 
 

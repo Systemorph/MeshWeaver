@@ -21,14 +21,18 @@ namespace MeshWeaver.Graph;
 public static class MoveLayoutArea
 {
     /// <summary>
-    /// Returns the Move menu item if the user has Delete permission (move requires delete on source).
+    /// Returns the Move menu item if the user may delete the node from where it is — a move is a
+    /// delete at the source plus a create at the target.
     /// </summary>
     public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
     {
-        if (!perms.HasFlag(Permission.Delete))
+        // The same demand the server makes (DeletePermission.RequiredFor): Update for ordinary
+        // content, Delete for a partition root or a governance satellite.
+        var required = DeletePermission.RequiredFor(hubPath);
+        if (!perms.HasFlag(required))
             return null;
         return new("Move", MeshNodeLayoutAreas.MoveArea,
-            RequiredPermission: Permission.Delete, Order: 3,
+            RequiredPermission: required, Order: 3,
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.MoveArea))
             { LabelKey = "menu.move" };
     }

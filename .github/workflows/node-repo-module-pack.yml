@@ -413,10 +413,45 @@ name: node-repo module pack
 # are striped as above. Measured on MeshWeaver.Plugins#1736: MeshWeaver.AI was ~6 of the 8.6 min
 # of the leg it shared with five modules whose suites run in seconds. Same per-module semantics —
 # a solo leg IS the singleton shape a batch-size of 1 gives every module.
+#
+# ─────────────────── ON A STANDING BUILD HOST (H7; Doc/Architecture/BuildHosts §5) ───────────────────
+# `executor: host` — the run was queued on a build host (`build-executor.py` said so at admission),
+# the caller FOLLOWED the host's `modules` stage with `build-follow.yml`, and passes that follow job's
+# result as `host-verdict`. Then `select` still runs (it is light, and it is the INDEPENDENT selection
+# a host run's records are checked against), while `prepare` ("Warm the shared build environment
+# (once)"), `build-workspace`, the `pack` legs and the `tests` legs do NOT run, the build ledger is not
+# consulted (a claim no leg of this run would ever finish), and the required `All selected bundles
+# built` carries the HOST's verdict — green only for a followed `success`, and RED when a pack or
+# tests leg ran anyway (the two executors would disagree). A publishing host run must be
+# `publish-mode: staged`: a host holds no publication credential, so its bytes reach the registry
+# through `build-host-publication.yml` and the caller's `node-repo-module-publish.yml` job
+# (`module-publication.py check-callers` holds that graph). `bundles-built` is `false` on a host run —
+# nothing composable was uploaded into THIS run — and `executed-on` says which executor answered.
+# With the defaults (`actions`, no verdict) the lane behaves exactly as before.
 
 on:
   workflow_call:
     inputs:
+      executor:
+        description: >-
+          WHO RUNS THIS LANE'S WORK (MeshWeaver.Plugins Hosting/StandingBuildHosts §7 H7;
+          Doc/Architecture/BuildHosts): `actions` (the default — everything below runs here, exactly as
+          before) or `host` — the run was queued on a standing build host, the caller FOLLOWED the
+          host's `modules` stage with `build-follow.yml`, and passes that follow job's result as
+          `host-verdict`. With `host` the warm job, the workspace build, the pack legs and the tests legs
+          do not run; the required `All selected bundles built` carries the HOST's verdict, green only
+          when `host-verdict` is `success`. Any other value is RED, named.
+        required: false
+        type: string
+        default: actions
+      host-verdict:
+        description: >-
+          With `executor: host` only: the caller's follow job's `result` (`needs.<follow>.result`).
+          Only `success` is green; `failure`, `cancelled`, `skipped` and empty are RED — a follow job
+          that did not run is a stage nobody judged, never a pass.
+        required: false
+        type: string
+        default: ''
       merge-main-sha:
         description: >-
           Pull requests only (policy suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest): the
@@ -593,6 +628,26 @@ on:
         type: string
         required: false
         default: ''
+      build-extensions-project:
+        description: >
+          A csproj in the caller's repository (path relative to its root) whose PUBLISH is one
+          BUILD EXTENSION for this run: a directory carrying `build-extension.json` that the tester
+          loads to compile what the platform's builder does not know (the Razor extension compiles
+          `.razor`/`.cshtml`, stages its source generator and emits the collocated JS modules and
+          the scoped-CSS bundle). The build-workspace job publishes it against the platform checkout
+          at `platform-ref` and hands it to `build-project` as `--extensions`, which REPLACES the
+          extensions the tester image ships.
+
+
+          The repository that owns the GUI modules owns their compiler extension, so the platform
+          carries no GUI technology (core Doc/Architecture/CoreCarriesNoGuiTechnology, "The Razor
+          source generator in the tester image"). The publish fails closed: no `build-extension.json`
+          at its root, or no assemblies, is RED. Like the shelf it is a compiler input of every
+          module, so it is keyed into the build ledger and an edit to it selects every module.
+          Omitted, the tester image's own extensions are used and the lane behaves exactly as before.
+        type: string
+        required: false
+        default: ''
       platform-image:
         description: >
           The PORTAL image the modules will load into (e.g. meshweaver.azurecr.io/memex-portal-ai).
@@ -759,6 +814,17 @@ on:
         required: false
         type: string
         default: ''
+      publication-carry:
+        description: >
+          Packages (space or comma separated) the publication-base run WITHHELD — the
+          `publication-carry` output of node-repo-publication-base.py --carry-withheld. Used only
+          when publication-base narrows a push: every matrix entry of these packages is selected
+          (and tested) on top of the diff, so a package a partial publication withheld is rebuilt
+          until a run publishes it. 🚨 A caller that passes a publication-base from a
+          --carry-withheld walk MUST pass this too, or the withheld packages never ship. Empty: none.
+        required: false
+        type: string
+        default: ''
       ledger:
         description: >
           The CI MODULE BUILD LEDGER on the registry portal (Doc/Architecture/ModuleBuildArchitecture →
@@ -900,7 +966,14 @@ on:
           output exists to not have (Plugins#1077). The lane's own stable context (`All selected
           bundles built`) still asserts the receipts AND the pack job's result, so a failed suite
           keeps the lane red wherever the lane itself is required.
+          With `executor: host` it is "false": the bundles were built on the host and nothing
+          composable was uploaded into this run (read `executed-on`).
         value: ${{ jobs.verify.outputs.bundles-built }}
+      executed-on:
+        description: >
+          `actions` or `host` — who built this call's bundles (the `executor` input, once `verify` has
+          accepted it). A caller branching on a host run reads this, never `bundles-built`'s absence.
+        value: ${{ jobs.verify.outputs.executed-on }}
       lane:
         description: >
           THIS call's lane key — the artifact namespace every marker, receipt and staged
@@ -934,6 +1007,9 @@ jobs:
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ (vars.MW_RUNNER || 'ubuntu-latest') != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
       # The helper is lane orchestration, while the workflow below is the exact definition GitHub
       # loaded for this job. Keep both absolute so a later `cd` cannot silently change either.
       MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
@@ -944,6 +1020,12 @@ jobs:
       ARTIFACT_STORE_PY: ${{ github.workspace }}/build-logic/.github/scripts/ci-artifact-store.py
       EXECUTING_WORKFLOW: ${{ github.workspace }}/lane-definition/.github/workflows/node-repo-module-pack.yml
     outputs:
+      # The exact SDK the caller's build extension is published with — a ledger key input (empty
+      # when the caller names no extension).
+      build-extensions-sdk: ${{ steps.ext-sdk.outputs.version }}
+      # MSBuild's own evaluation of the shelf / extension (msbuild-evaluate.py), for the pack job's
+      # newer-commit scope check; empty when the caller names neither.
+      msbuild-evaluation: ${{ steps.msbuild-eval.outputs.json }}
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
       # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
       modules: ${{ steps.reuse.outputs.modules }}
@@ -1003,6 +1085,36 @@ jobs:
       # (MeshWeaver#3878) — and a value neither arm recognises must never fall through to either.
       # Falling through to `direct` would publish before the source verdict, which is the defect;
       # falling through to `staged` would publish nothing at all while every step ticked green.
+      # 🏗️ H7: who runs the heavy legs — read FIRST, and refused when unreadable. A publishing host run
+      # must stage: the host holds no publication credential and no pack leg runs here, so `direct`
+      # would hand the registry nothing while `verify` followed a green host.
+      - name: The executor is one this lane knows
+        env:
+          EXECUTOR: ${{ inputs.executor }}
+          MODE: ${{ inputs.publish-mode }}
+          PUBLISH: ${{ inputs.publish }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+        run: |
+          set -euo pipefail
+          case "$EXECUTOR" in
+            actions) echo "executor: actions — every job of this lane runs here." ;;
+            host)
+              # 🚨 The build extension is published and handed to `build-project --extensions` by
+              # THIS lane's build-workspace job, which a host run skips; the build host neither
+              # receives the input nor publishes it. A host run would compile with the tester image's
+              # own extensions and publish a different bundle under a green verdict, so refuse it.
+              if [ -n "${EXTENSIONS_PROJECT:-}" ]; then
+                echo "::error title=Build executor::executor is 'host' and build-extensions-project is '$EXTENSIONS_PROJECT'. The build host does not publish or load a caller's build extension, so it would compile WITHOUT it and publish a wrong bundle. Run this call with executor: actions until the build host carries build-extensions-project (Doc/Architecture/BuildHosts)."
+                exit 1
+              fi
+              if [ "$PUBLISH" = "true" ] && [ "$MODE" != "staged" ]; then
+                echo "::error title=Build executor::executor is 'host' and this run publishes with publish-mode '$MODE'. A build host holds no publication credential and no pack leg runs here, so an in-leg (direct) publication would hand the registry NOTHING. Publish a host run with publish-mode: staged through build-host-publication.yml and node-repo-module-publish.yml (Doc/Architecture/BuildHosts §5)."
+                exit 1
+              fi
+              echo "executor: host — select runs here; the warm job, the workspace build, the pack and tests legs run on the build host, and 'All selected bundles built' carries its followed verdict."
+              echo "- 🏗️ \`executor: host\` — the pack and tests legs run on a standing build host" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who ran this lane's work"; exit 1 ;;
+          esac
       - name: Read the publication mode
         env:
           MODE: ${{ inputs.publish-mode }}
@@ -1223,6 +1335,96 @@ jobs:
           store: ${{ inputs.artifact-store || 'gha' }}
           expected-store-id: ${{ inputs.artifact-store-id }}
           require-expected-store-id: 'true'
+      # 🚨 The build extension's publish takes its generator from the installed .NET SDK, so the SDK
+      # is a KEY input. Resolve the exact version ONCE, here: the ledger keys it, and the
+      # build-workspace job installs exactly that version to publish with.
+      # 🚨 Resolved from the CALLER's checkout (`repo/`), never the workspace root: build-workspace
+      # checks the caller out AT the root, so its `dotnet` honours the caller's `global.json`, and a
+      # version resolved here without it would be one the publish never runs (it refuses the
+      # mismatch) or, worse, a key naming an SDK the caller pinned away from.
+      - uses: actions/setup-dotnet@v6
+        if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') != ''
+        with:
+          global-json-file: repo/global.json
+      - uses: actions/setup-dotnet@v6
+        if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') == ''
+        with:
+          dotnet-version: "10.0.x"
+      - name: Resolve the SDK the build extension is published with
+        id: ext-sdk
+        if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          v="$(dotnet --version)"
+          [[ "$v" =~ ^10\.0\.[0-9]+$ ]] || { echo "::error::dotnet --version answered '$v', not an exact 10.0 SDK version — the extension's generator bytes come from this SDK, so it must be named exactly."; exit 1; }
+          echo "build extension SDK: $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      # 🔎 What the caller's shelf / build extension EVALUATES, asked of MSBuild itself (never a
+      # hand-written reader): msbuild-evaluate.py runs `dotnet msbuild -pp` (the exact imported files)
+      # and `-getItem` (the exact path items, ProjectReferences followed) with the lane's publishing
+      # inputs — Configuration=Release and MeshWeaverRoot at the platform ref, exactly as
+      # build-workspace publishes. The scope below, the ledger's keys and the pack job's newer-commit
+      # check all read this ONE file. An evaluation that fails is RED: nothing is keyed on a guess.
+      # Only the platform's MSBuild files are checked out: its other bytes are keyed by ref + digest.
+      - name: Check out the platform's MSBuild files for the evaluation
+        if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: .msbuild-eval-platform
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            **/*.props
+            **/*.targets
+            **/*.csproj
+      - name: Evaluate the shelf / build extension with MSBuild
+        id: msbuild-eval
+        if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
+        env:
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          # The scope's diff BASE, resolved exactly as the scope step resolves it.
+          BASE_REF: ${{ github.base_ref }}
+          QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          PUBLICATION_BASE: ${{ inputs.publication-base }}
+          PUBLICATION_RUN: ${{ inputs.publication-run }}
+          BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
+          # The SDK the HEAD resolved: the BASE tree is evaluated with exactly it (a temporary
+          # global.json, rollForward disable), so an SDK bump between the two needs no old SDK.
+          HEAD_SDK: ${{ steps.ext-sdk.outputs.version }}
+        run: |
+          set -euo pipefail
+          projects=()
+          [ -z "${SHELF_PROJECT:-}" ] || projects+=(--project "$SHELF_PROJECT")
+          [ -z "${EXTENSIONS_PROJECT:-}" ] || projects+=(--project "$EXTENSIONS_PROJECT")
+          platform=(--property "MeshWeaverRoot=$GITHUB_WORKSPACE/.msbuild-eval-platform")
+          python3 build-logic/.github/scripts/msbuild-evaluate.py --root repo "${projects[@]}" \
+            --out "$RUNNER_TEMP/msbuild-evaluation.json" "${platform[@]}"
+          { echo "json<<MSBUILD_EVALUATION_EOF"; jq -c . "$RUNNER_TEMP/msbuild-evaluation.json"; echo "MSBUILD_EVALUATION_EOF"; } >> "$GITHUB_OUTPUT"
+          # 🚨 The scope's reach is BASE ∪ HEAD: a file the head DELETED (the last match of a glob) is
+          # listed only by the tree that still had it. Evaluate the diff base in a worktree;
+          # --skip-missing for a base that predates the project. No diff base ⇒ nothing to union.
+          if [ -z "${BASE_REF:-}" ] && [ -n "${QUEUE_BASE_REF:-}" ]; then BASE_REF="${QUEUE_BASE_REF#refs/heads/}"; fi
+          base=""
+          if [ -n "${BASE_REF:-}" ]; then
+            git -C repo fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+            base="$(git -C repo merge-base HEAD "refs/remotes/origin/$BASE_REF")"
+          elif [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+            base="$PUBLICATION_BASE"
+          fi
+          if [ -n "$base" ]; then
+            git -C repo worktree add --detach "$RUNNER_TEMP/msbuild-base-tree" "$base"
+            python3 build-logic/.github/scripts/msbuild-evaluate.py --root "$RUNNER_TEMP/msbuild-base-tree" \
+              "${projects[@]}" --skip-missing --pin-sdk "$HEAD_SDK" \
+              --out "$RUNNER_TEMP/msbuild-evaluation-base.json" "${platform[@]}"
+            git -C repo worktree remove --force "$RUNNER_TEMP/msbuild-base-tree"
+            echo "evaluated the diff base $base too: the scope reaches BASE ∪ HEAD"
+          else
+            echo "no diff base for this event — the scope reaches HEAD's evaluation and its declared patterns"
+          fi
+          rm -rf "${GITHUB_WORKSPACE:?}/.msbuild-eval-platform"
       - name: Decide which module bundles this diff can reach
         id: scope
         env:
@@ -1230,6 +1432,7 @@ jobs:
           ALWAYS: ${{ inputs.always-modules }}
           PUBLICATION_BASE: ${{ inputs.publication-base }}
           PUBLICATION_RUN: ${{ inputs.publication-run }}
+          PUBLICATION_CARRY: ${{ inputs.publication-carry }}
           BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -1239,6 +1442,7 @@ jobs:
           QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
           # A shelf edit reaches every container-built module, though none references the shelf.
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
         run: |
           set -euo pipefail
           printf '%s' "$MODULES" > "$RUNNER_TEMP/matrix.json"
@@ -1252,9 +1456,17 @@ jobs:
           publication_args=()
           if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
             publication_args=(--publication-base "$PUBLICATION_BASE")
+            # The packages that baseline WITHHELD ride along until a run publishes them.
+            [ -z "$(printf '%s' "${PUBLICATION_CARRY:-}" | tr -d '[:space:],')" ] || publication_args+=(--carry "$PUBLICATION_CARRY")
           fi
           shelf_args=()
           [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
+          [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_args+=(--build-extensions-project "$EXTENSIONS_PROJECT")
+          if [ "${#shelf_args[@]}" -gt 0 ]; then
+            shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json")
+            # BASE ∪ HEAD (the base tree's evaluation exists when this event has a diff base).
+            [ ! -f "$RUNNER_TEMP/msbuild-evaluation-base.json" ] || shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation-base.json")
+          fi
           python3 build-logic/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \
@@ -1298,9 +1510,22 @@ jobs:
           PLATFORM_REF: ${{ inputs.platform-ref }}
           # The caller's own shelf is a compiler input, so it is part of every key when named.
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          EXTENSIONS_SDK: ${{ steps.ext-sdk.outputs.version }}
+          EXECUTOR: ${{ inputs.executor }}
         run: |
           set -euo pipefail
           printf '%s' "${SCOPE_MODULES:-[]}" > "$RUNNER_TEMP/selection.json"
+          # 🏗️ H7: on a build host no leg of THIS run builds anything, so a ledger claim taken here
+          # would never be finished — every other run would wait on it until it went stale. The
+          # selection passes through unchanged (it is what the host's records are checked against).
+          if [ "$EXECUTOR" = "host" ]; then
+            echo "module build ledger: NOT consulted — executor is 'host', the build host builds this selection (${COUNT:-0} module(s))"
+            modules="$(cat "$RUNNER_TEMP/selection.json")"
+            echo "modules=$modules" >> "$GITHUB_OUTPUT"
+            echo "build=$modules" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           case "$LEDGER" in
             off)
               echo "module build ledger: OFF — every selected module is built (set ledger: required on the caller to coordinate builds across runs)"
@@ -1322,6 +1547,11 @@ jobs:
               # exactly as before and keeps its recorded builds.
               shelf_arg=()
               [ -z "${SHELF_PROJECT:-}" ] || shelf_arg=(--module-libraries-project "$SHELF_PROJECT")
+              [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_arg+=(--build-extensions-project "$EXTENSIONS_PROJECT")
+              # The publishing SDK keys the extension always, and the shelf when a shelf path reads
+              # the installed SDK — the key refuses either one without it.
+              [ -z "${EXTENSIONS_SDK:-}" ] || shelf_arg+=(--build-extensions-sdk "$EXTENSIONS_SDK")
+              [ "${#shelf_arg[@]}" -eq 0 ] || shelf_arg+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json")
               python3 build-logic/.github/scripts/module-build-key.py --root repo \
                 --modules "@$RUNNER_TEMP/selection.json" \
                 --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
@@ -1464,7 +1694,9 @@ jobs:
   prepare:
     name: Warm the shared build environment (once)
     needs: select
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0'
+    # 🏗️ `executor != 'host'`: on a build host this warm-up is the host's (H7, header). `verify` refuses
+    # a run in which this job ran anyway, so the skip is asserted, never assumed.
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && inputs.executor != 'host'
     runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     timeout-minutes: 45
     # Deliberately inherit the caller's token permissions. `basic` callers grant only the reads
@@ -1484,6 +1716,10 @@ jobs:
       # (the same "the checkout IS the platform" reading its bundle-identity block takes), and is
       # RED only when neither can be established.
       platform-version: ${{ steps.platform-version.outputs.version }}
+    env:
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ (vars.MW_RUNNER_DOCKER || 'ubuntu-latest') != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -1775,7 +2011,7 @@ jobs:
   build-workspace:
     name: Build the workspace (one global build)
     needs: [select, prepare]
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && inputs.executor != 'host'
     # `workspace-runner` (inputs): a Docker-capable label — the compiler is the platform image.
     runs-on: ${{ inputs.workspace-runner }}
     timeout-minutes: 30
@@ -1787,6 +2023,9 @@ jobs:
     # this env covers every process the job launches, whatever pin it was built at.
     env:
       DOTNET_TieredPGO: "0"
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ inputs.workspace-runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
     # callers must remain able to grant `actions: read` without also granting an identity token.
     steps:
@@ -1902,25 +2141,30 @@ jobs:
       # REMOVED before the build below mounts this workspace at /repo — anything left beside the
       # content tree would become compiler input. The publish output goes to RUNNER_TEMP for the
       # same reason.
-      - name: Check out the platform for the shelf publish
-        if: inputs.module-libraries-project != ''
+      - name: Check out the platform for the shelf / extension publish
+        if: inputs.module-libraries-project != '' || inputs.build-extensions-project != ''
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: .module-libs-platform
       - uses: actions/setup-dotnet@v6
-        if: inputs.module-libraries-project != ''
+        if: inputs.module-libraries-project != '' || inputs.build-extensions-project != ''
         with:
-          dotnet-version: "10.0.x"
+          # EXACTLY the SDK select keyed the extension with; floating only when no extension is named.
+          dotnet-version: ${{ needs.select.outputs.build-extensions-sdk || '10.0.x' }}
       - name: Publish the caller's module-libraries shelf
         id: shelf
         if: inputs.module-libraries-project != ''
         env:
           PROJECT: ${{ inputs.module-libraries-project }}
+          KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
         run: |
           set -euo pipefail
           [ -f "$PROJECT" ] || { echo "::error::module-libraries-project '$PROJECT' does not exist in this checkout — the caller named a shelf this repository does not have."; exit 1; }
+          # select keyed the SDK it resolved (a shelf path under the installed SDK is keyed by it).
+          sdk="$(dotnet --version)"
+          [ -n "$KEYED_SDK" ] && [ "$sdk" = "$KEYED_SDK" ] || { echo "::error::the shelf would be published with SDK '$sdk', but select keyed '${KEYED_SDK:-<none>}' — refusing to build with an SDK the ledger key does not name."; exit 1; }
           root="$RUNNER_TEMP/module-libs"
           rm -rf "$root"
           dotnet publish "$PROJECT" -c Release -o "$root" \
@@ -1931,11 +2175,41 @@ jobs:
           [ "$deps" = "1" ] || { echo "::error::the shelf publish of $PROJECT produced $deps deps.json file(s) — exactly one is the closure record build-project reads."; exit 1; }
           count=$(find "$root" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
           [ "$count" -gt 0 ] || { echo "::error::the shelf publish of $PROJECT staged no assemblies — not a shelf."; exit 1; }
-          # Nothing of the publish may stay in the mounted source tree.
+          # Nothing of the publish may stay in the mounted source tree (the platform checkout goes
+          # in the step after the extension publish, which needs it too).
           projdir="$(dirname "$PROJECT")"
-          rm -rf "${GITHUB_WORKSPACE:?}/.module-libs-platform" "${projdir:?}/obj" "${projdir:?}/bin"
+          rm -rf "${projdir:?}/obj" "${projdir:?}/bin"
           echo "shelf: $count assemblies from $PROJECT"
           echo "root=$root" >> "$GITHUB_OUTPUT"
+      - name: Publish the caller's build extension
+        id: extension
+        if: inputs.build-extensions-project != ''
+        env:
+          PROJECT: ${{ inputs.build-extensions-project }}
+          KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
+        run: |
+          set -euo pipefail
+          [ -f "$PROJECT" ] || { echo "::error::build-extensions-project '$PROJECT' does not exist in this checkout — the caller named an extension this repository does not have."; exit 1; }
+          # The ledger keyed the SDK select resolved; publishing with any other one would put a
+          # compiler the key never saw behind a reused-or-recorded verdict.
+          sdk="$(dotnet --version)"
+          [ -n "$KEYED_SDK" ] && [ "$sdk" = "$KEYED_SDK" ] || { echo "::error::the extension would be published with SDK '$sdk', but select keyed '${KEYED_SDK:-<none>}' — refusing to build with a generator the ledger key does not name."; exit 1; }
+          root="$RUNNER_TEMP/build-extension"
+          rm -rf "$root"
+          dotnet publish "$PROJECT" -c Release -o "$root" \
+            -p:MeshWeaverRoot="$GITHUB_WORKSPACE/.module-libs-platform"
+          # 🚨 Fail closed: the tester loads an extension by its manifest, and refuses a named
+          # directory without one — say so HERE, naming the project, not later as a tester refusal.
+          [ -f "$root/build-extension.json" ] || { echo "::error::the publish of $PROJECT has no build-extension.json at its root — not a build extension the tester can load."; exit 1; }
+          count=$(find "$root" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
+          [ "$count" -gt 0 ] || { echo "::error::the publish of $PROJECT staged no assemblies — not a build extension."; exit 1; }
+          projdir="$(dirname "$PROJECT")"
+          rm -rf "${projdir:?}/obj" "${projdir:?}/bin"
+          echo "build extension: $count assemblies from $PROJECT ($(tr -d '\n' < "$root/build-extension.json"))"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+      - name: Keep the platform checkout out of the global compiler's source mount
+        if: inputs.module-libraries-project != '' || inputs.build-extensions-project != ''
+        run: rm -rf "${GITHUB_WORKSPACE:?}/.module-libs-platform"
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -1948,6 +2222,7 @@ jobs:
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
           SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
           SHELF: ${{ steps.shelf.outputs.root }}
+          EXTENSION: ${{ steps.extension.outputs.root }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           ACR_LOGIN: ${{ inputs.acr-login }}
@@ -2063,6 +2338,16 @@ jobs:
             shelf_mount=(-v "$SHELF:/module-libs:ro"); shelf_flag=(--module-libs /module-libs)
             echo "module-libraries shelf: the caller's own publish ($SHELF), replacing the tester image's"
           fi
+          # The caller's own build extension, the same way. Empty ⇒ byte-identical invocation.
+          ext_mount=(); ext_flag=()
+          if [ -n "${EXTENSION:-}" ]; then
+            if ! printf '%s\n' "$usage" | grep -q -- '--extensions'; then
+              echo "::error::build-extensions-project is set but the pinned tester (tester-image-digest $TESTER_DIGEST) has no 'build-project --extensions', so it would compile with the image's own extensions instead of the one this repository published. Move tester-image-digest and platform-image-digest TOGETHER to a set built from MeshWeaver main after the flag landed."
+              exit 1
+            fi
+            ext_mount=(-v "$EXTENSION:/build-extension:ro"); ext_flag=(--extensions /build-extension)
+            echo "build extension: the caller's own publish ($EXTENSION), replacing the tester image's"
+          fi
           echo "global build: ${#projects[@]} container entr(y|ies) in ONE workspace — ${projects[*]}"
           # AS THE RUNNER'S UID (a root-owned /out is unwritable to later steps); HOME=/tmp keeps
           # runtime probes off read-only image paths. No --extra-refs, ever, on this lane.
@@ -2075,8 +2360,9 @@ jobs:
             -v "$tester_app:/tester:ro" \
             -v "$out:/out" \
             ${shelf_mount[@]+"${shelf_mount[@]}"} \
+            ${ext_mount[@]+"${ext_mount[@]}"} \
             --entrypoint dotnet "$img" \
-            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out --bind-to-image ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} ${shelf_flag[@]+"${shelf_flag[@]}"} 2>&1 | tee "$out/workspace-build.log"
+            /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out --bind-to-image ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} ${shelf_flag[@]+"${shelf_flag[@]}"} ${ext_flag[@]+"${ext_flag[@]}"} 2>&1 | tee "$out/workspace-build.log"
           echo "built=true" >> "$GITHUB_OUTPUT"
       # 🚨 THE TOOLING CHECKOUT LANDS **AFTER** THE BUILD, ON PURPOSE. This job mounts
       # `$GITHUB_WORKSPACE` at `/repo:ro` for the container build, so anything checked out beside
@@ -2263,7 +2549,7 @@ jobs:
     # (An explicit `if:` replaces the implicit all-needs-succeeded check, so prepare's result
     # is asserted by name — a failed prepare must stop the matrix, not strand 30 jobs at their
     # artifact downloads.)
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && needs.build-workspace.result == 'success'
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && needs.build-workspace.result == 'success' && inputs.executor != 'host'
     strategy:
       # One leg's failure must not hide the rest — a sweep wants every verdict in one run. (Inside a
       # leg, the same rule holds per MODULE: see the batch state above.)
@@ -4044,6 +4330,11 @@ jobs:
       # 🚨 `--publication-reach`: this is a PUBLICATION question, not a pull request's build
       # selection, so a newer CI-only commit (`.github/`, `scripts/`) REACHES the module — policy
       # ci-paths-owe-no-module-leg narrows PR selection only, and a newer workflow is a newer packing.
+      # The supersession check below evaluates the newer trunk tip with the SDK select keyed.
+      - uses: actions/setup-dotnet@v6
+        if: ${{ inputs.publish && inputs.publish-newest-only && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' && (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') }}
+        with:
+          dotnet-version: ${{ needs.select.outputs.build-extensions-sdk }}
       - name: A newer trunk commit reaches this module? (publish-newest-only)
         id: newer
         if: ${{ inputs.publish && inputs.publish-newest-only && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' }}
@@ -4052,11 +4343,20 @@ jobs:
           TRUNK: ${{ github.event.repository.default_branch }}
           # A newer commit that edits only the shelf still reaches every module.
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          MSBUILD_EVALUATION: ${{ needs.select.outputs.msbuild-evaluation }}
+          KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           shelf_args=()
           [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
+          [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_args+=(--build-extensions-project "$EXTENSIONS_PROJECT")
+          if [ "${#shelf_args[@]}" -gt 0 ]; then
+            # select's MSBuild evaluation of this run's tree (the scope refuses a named input without one).
+            printf '%s' "$MSBUILD_EVALUATION" > "$RUNNER_TEMP/msbuild-evaluation.json"
+            shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json")
+          fi
           [ -z "$CONTENT_REPOSITORY" ] || { echo "::error::publish-newest-only reads THIS repository's trunk, but content-repository is '$CONTENT_REPOSITORY' — a lane packing another repository's content cannot say whether a newer commit of it exists. Turn one of the two off."; exit 1; }
           [ -n "$TRUNK" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
           git fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
@@ -4066,6 +4366,21 @@ jobs:
           if [ "$tip" != "$mine" ]; then
             # Two trees, no history needed: both commits are present in this shallow clone.
             changed=$(git diff --no-renames --name-only "$mine" "$tip" | paste -sd, -)
+          fi
+          # 🚨 THIS run's evaluation ∪ the newer TIP's, the same union the scope takes: a file the tip
+          # deleted is listed by this tree, one it added (or an import it now declares) only by the
+          # tip's. Evaluated once, under the SDK select keyed, with the platform at platform-ref.
+          if [ "${#shelf_args[@]}" -gt 0 ] && [ -n "$changed" ]; then
+            git worktree add --detach "$RUNNER_TEMP/msbuild-tip-tree" "$tip"
+            tip_projects=()
+            [ -z "${SHELF_PROJECT:-}" ] || tip_projects+=(--project "$SHELF_PROJECT")
+            [ -z "${EXTENSIONS_PROJECT:-}" ] || tip_projects+=(--project "$EXTENSIONS_PROJECT")
+            python3 build-logic/.github/scripts/msbuild-evaluate.py --root "$RUNNER_TEMP/msbuild-tip-tree" \
+              "${tip_projects[@]}" --skip-missing --pin-sdk "$KEYED_SDK" \
+              --property "MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver" \
+              --out "$RUNNER_TEMP/msbuild-evaluation-tip.json"
+            git worktree remove --force "$RUNNER_TEMP/msbuild-tip-tree"
+            shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation-tip.json")
           fi
           mapfile -t modules < <(bk list --ok --where need_publish=true)
           for MODULE in "${modules[@]}"; do
@@ -4597,6 +4912,7 @@ jobs:
       !inputs.publish
       && needs.select.result == 'success'
       && needs.select.outputs.test-count != '0'
+      && inputs.executor != 'host'
     # `runner` — the other job that honours it; see "Where the heavy legs run" in the header. This
     # job runs no `docker` at all: a checkout, setup-dotnet, `dotnet test`, `jq`, `python3`.
     runs-on: ${{ inputs.runner }}
@@ -5091,15 +5407,56 @@ jobs:
   # reading as "agrees" is this gate's own failure mode, not an edge case.
   verify:
     name: All selected bundles built
-    needs: [select, pack, tests]
+    # `prepare` and `build-workspace` are here for the host arm alone: on a build host it must SEE that
+    # they did not run (a skip asserted, never assumed). The Actions arm reads them through `pack`.
+    needs: [select, prepare, build-workspace, pack, tests]
     if: always()
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     outputs:
-      bundles-built: ${{ steps.verify.outputs.bundles_built }}
+      bundles-built: ${{ steps.host.outputs.bundles_built || steps.verify.outputs.bundles_built }}
+      executed-on: ${{ steps.host.outputs.executed_on || steps.on-actions.outputs.executed_on }}
     steps:
+      # 🏗️ ON A BUILD HOST (H7): the heavy legs ran on the host and the caller followed them. This
+      # REQUIRED context then carries the HOST's verdict — never a skipped job (a skipped required
+      # context reads as satisfied) and never a green no follow job produced. A leg that ran here
+      # anyway means the two executors disagree about who built this run, and that is RED too.
+      - name: "On a build host: the caller's follow job carries the stage's verdict"
+        id: host
+        if: ${{ always() && inputs.executor == 'host' }}
+        env:
+          HOST_VERDICT: ${{ inputs.host-verdict }}
+          SELECT_RESULT: ${{ needs.select.result }}
+          LANE: ${{ needs.select.outputs.lane }}
+          COUNT: ${{ needs.select.outputs.count }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          WORKSPACE_RESULT: ${{ needs.build-workspace.result }}
+          PACK_RESULT: ${{ needs.pack.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+        run: |
+          set -euo pipefail
+          echo "bundles_built=false" >> "$GITHUB_OUTPUT"
+          problems=0
+          if [ "$SELECT_RESULT" != "success" ] || [ -z "${LANE:-}" ]; then
+            echo "::error title=Module bundles incomplete::the selection job reported '${SELECT_RESULT:-<nothing>}' (lane '${LANE:-<none>}') — on a build host the selection is still made here and is what the host's records are checked against; without it nothing says what the host owed."
+            problems=1
+          fi
+          for pair in "prepare=$PREPARE_RESULT" "build-workspace=$WORKSPACE_RESULT" "pack=$PACK_RESULT" "tests=$TESTS_RESULT"; do
+            if [ "${pair#*=}" != "skipped" ]; then
+              echo "::error title=Build executor::executor is 'host' but this lane's ${pair%%=*} job reported '${pair#*=}' — the two executors disagree about who built this run; refusing to answer"
+              problems=1
+            fi
+          done
+          if [ "$HOST_VERDICT" != "success" ]; then
+            echo "::error title=Build host::this lane ran on a standing build host and its follow job reported '${HOST_VERDICT:-<nothing>}' — only a followed 'success' is green (a follow job that did not run judged nothing). Read the caller's follow job for the host's log."
+            problems=1
+          fi
+          [ "$problems" -eq 0 ] || exit 1
+          echo "executed_on=host" >> "$GITHUB_OUTPUT"
+          echo "the build host's modules stage succeeded for lane $LANE ($COUNT selected) — followed by the caller, carried here"
+          echo "- 🏗️ Ran on a standing build host; the followed verdict is \`success\` ($COUNT module(s) selected, lane \`$LANE\`)" >> "$GITHUB_STEP_SUMMARY"
       - name: Check out the verifier at the build-logic ref
-        if: needs.select.result == 'success'
+        if: needs.select.result == 'success' && inputs.executor != 'host'
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
@@ -5107,6 +5464,7 @@ jobs:
           path: build-logic
           sparse-checkout: .github/scripts
       - uses: actions/setup-python@v7
+        if: inputs.executor != 'host'
         with:
           python-version: "3.12"
       # Absent receipts are the finding, so a download that matches nothing must NOT fail here —
@@ -5125,6 +5483,7 @@ jobs:
       # A pattern that matches nothing still reaches the verifier as ZERO evidence, which is
       # `bundles-built=false` for any non-empty selection — never a silent true.
       - name: Collect the receipts
+        if: inputs.executor != 'host'
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5133,6 +5492,7 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/receipts
       - name: Collect the built markers
+        if: inputs.executor != 'host'
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5144,6 +5504,7 @@ jobs:
       # a pattern matching nothing must REACH the verifier as zero evidence, never fail here — a
       # delegated suite with no receipt is precisely the finding.
       - name: Collect the test receipts
+        if: inputs.executor != 'host'
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5153,6 +5514,7 @@ jobs:
           path: ${{ runner.temp }}/test-receipts
       - name: Exactly the selected bundles were built
         id: verify
+        if: inputs.executor != 'host'
         env:
           EXPECTED: ${{ needs.select.outputs.selected }}
           PACK_RESULT: ${{ needs.pack.result }}
@@ -5215,6 +5577,10 @@ jobs:
             --test-receipts "$RUNNER_TEMP/test-receipts" \
             --tests-result "$TESTS_RESULT" \
             --github-output "$GITHUB_OUTPUT"
+      - name: Executed on Actions
+        id: on-actions
+        if: inputs.executor == 'actions'
+        run: echo "executed_on=actions" >> "$GITHUB_OUTPUT"
 
       # ───── ONE BUILD PER ASSEMBLY NAME, over the PUBLICATION's whole module set (#3732) ─────
       # 🚨 THE DENOMINATOR THE EXISTING ASSERTION COULD NOT REACH. The gate and the bake already
@@ -5246,8 +5612,11 @@ jobs:
       # 15-copies/3-builds measurement this reading exists for spanned exactly those calls. Filtering
       # by lane would make each verifier drop the other call's receipts and print a confident zero.
       # The verdict names the lanes it folded so "publication-wide" is checkable, not assumed.
+      # 🏗️ Not on a build host: no pack leg of this run wrote a receipt, so the reading would be a
+      # confident zero over an empty population. The census of a host run is owed by the host's
+      # modules stage (Doc/Architecture/BuildHosts §5).
       - name: Collect every receipt in this run (the publication spans calls)
-        if: always()
+        if: ${{ always() && inputs.executor != 'host' }}
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5256,7 +5625,7 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/receipts-run
       - name: The publication's module set, read at one build per assembly name
-        if: always()
+        if: ${{ always() && inputs.executor != 'host' }}
         # 🚨 NO `continue-on-error`. This is a REPORT about divergence — the script exits 0 when it
         # FINDS divergence, because no lane passes `--enforce` yet — so the only way this step can
         # fail is that the reading did not happen: a malformed receipt, a helper the build-logic ref
@@ -5278,7 +5647,7 @@ jobs:
       # just accounted for, filtered to THIS call's declared matrix (artifacts are run-wide). It is
       # a report, never a gate: `if: always()` so a red verifier does not also hide the number.
       - name: Report the compiler split
-        if: always()
+        if: ${{ always() && inputs.executor != 'host' }}
         # A REPORT, not a gate: it must never be the reason this required context goes red, and it
         # must still print when the verifier above failed.
         continue-on-error: true

@@ -68,6 +68,7 @@ public class TestBase : ServiceSetup, IAsyncLifetime
             logging.ClearProviders(); // Remove default providers
             logging.Services.AddSingleton<ILoggerProvider>(serviceProvider =>
                 new XUnitFileLoggerProvider(() => fileOutput, serviceProvider));
+            TestLogLevel.ApplyOverride(logging); // MW_TEST_LOG_LEVEL past the factory's rules
         });
         
     }
