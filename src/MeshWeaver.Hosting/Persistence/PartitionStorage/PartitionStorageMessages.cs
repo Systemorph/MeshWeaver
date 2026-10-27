@@ -29,7 +29,8 @@ public record WriteBatchResponse(
 public record DeleteBatchRequest(
     ImmutableList<string> Paths) : IRequest<DeleteBatchResponse>;
 
-/// <summary>Result of a <see cref="DeleteBatchRequest"/>.</summary>
+/// <summary>Result of a <see cref="DeleteBatchRequest"/>. With an <c>Error</c>, <c>DeletedPaths</c>
+/// names the rows the batch removed before it failed (#7396), empty when it confirmed none.</summary>
 public record DeleteBatchResponse(
     ImmutableList<string> DeletedPaths,
     string? Error = null);

@@ -177,8 +177,10 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     /// From now on, a <c>DeleteMany</c> whose batch names <paramref name="path"/> deletes every OTHER
     /// path of the batch and then FAULTS, leaving <paramref name="path"/> stored — a batch delete that
     /// died part-way, as a sequential <c>DeleteMany</c> does when its store goes away mid-batch
-    /// (MeshWeaver#6951: a move whose delete leg fails after its copy landed). Each faulted batch is
-    /// an arrival on the switch.
+    /// (MeshWeaver#6951: a move whose delete leg fails after its copy landed). The fault is a
+    /// <see cref="BatchDeletePartiallyAppliedException"/> naming the rows that did leave storage, as
+    /// the <c>DeleteMany</c> contract requires (MeshWeaver#7396). Each faulted batch is an arrival on
+    /// the switch.
     /// </summary>
     /// <param name="path">The node path the batch stops at.</param>
     public FaultSwitch FailDeleteMany(string path)
@@ -509,11 +511,15 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
                 var stop = Norm(path);
                 fault.NoteArrival($"DeleteMany [{string.Join(", ", paths.Select(Norm))}] stops at {stop}");
                 var others = paths.Where(p => !string.Equals(Norm(p), stop, StringComparison.OrdinalIgnoreCase)).ToList();
+                // The store died part-way, and it says so the way the DeleteMany contract demands
+                // (#7396): the fault names the rows that did leave storage.
                 return (others.Count == 0
                         ? Observable.Return<IReadOnlyList<string>>(Array.Empty<string>())
                         : _inner.DeleteMany(others))
-                    .SelectMany(_ => Observable.Throw<IReadOnlyList<string>>(new InvalidOperationException(
-                        $"{Name}: injected fault — DeleteMany stopped at {stop} after deleting {others.Count} other path(s)")));
+                    .SelectMany(removed => Observable.Throw<IReadOnlyList<string>>(
+                        BatchDeletePartiallyAppliedException.Including(new InvalidOperationException(
+                            $"{Name}: injected fault — DeleteMany stopped at {stop} after deleting {removed.Count} other path(s)"),
+                            removed)));
             }
             return _inner.DeleteMany(paths);
         })));
