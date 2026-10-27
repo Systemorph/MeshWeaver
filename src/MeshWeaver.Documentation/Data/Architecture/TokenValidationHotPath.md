@@ -87,7 +87,7 @@ with the production wiring and fails without the fix.
 |---|---|
 | The shared verdict | `src/MeshWeaver.Mesh.Contract/Security/ApiTokenVerdict.cs` |
 | The hub handler | `src/MeshWeaver.Graph/Configuration/ApiTokenNodeType.cs` |
-| Middleware fast path + cache | `src/MeshWeaver.Hosting.AspNetCore/Portal/UserContextMiddleware.cs`, `ValidatedTokenCache.cs` |
+| Middleware fast path + cache | MeshWeaver.Plugins `src/MeshWeaver.Hosting.AspNetCore.Portal/UserContextMiddleware.cs`, `ValidatedTokenCache.cs` |
 | Challenge routing | `memex/Memex.Portal.Shared/Authentication/McpAuthenticationExtensions.cs` |
 | Readiness canary | MeshWeaver.Plugins `src/Memex.Portal.ServiceDefaults/TokenValidationReadiness.cs` |
 | Tests | `test/Memex.Portal.Shared.Test/{McpUnavailableValidationIsNotASignOut,TokenValidationHotPath,TokenValidationReadiness}Test.cs` |

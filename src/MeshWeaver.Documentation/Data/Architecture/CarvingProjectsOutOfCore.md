@@ -172,6 +172,8 @@ delivery event, not a refactor, and it is why these do not get done casually or 
 | `PluginCatalog` | 21 245 | **yes** | PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
 | `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
 | `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
+| `Hosting.AspNetCore` | 3 970 | no | a satellite's compiled module (the endpoint hook); seven Plugins modules' published bytes (`PortalApplication` and three more) | **split** — the host-only half of `Portal/` moved out (see below); the rest stays |
+| `Markdown.Export.Contract` | 355 | no | `PortalApplication`, which stays | **stays** |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
 and NuGet resolution, packaging.
@@ -192,6 +194,54 @@ meshes compile that sample.
 **So neither direction of the `.csproj` graph can be trusted here.** A reference may be dead weight,
 and a live consumer may have no reference at all. Check both: a warnings-as-errors build of the
 consumer settles the first; the content trees and the node JSON settle the second.
+
+## Splitting `Hosting.AspNetCore`: what published bytes bind decides what stays
+
+`MeshWeaver.Hosting.AspNetCore` is outside the content surface, but it is not free to move. The
+satellite MeshWeaver.SocialMedia compiles its module `MeshWeaver.Social` against it from core source,
+because that module declares its endpoints with `MeshEndpointProviderAttribute`. So the project was
+split instead of moved, and the split followed one test: **can every published plugin or satellite
+byte still link?**
+
+A `[TypeForwardedTo]` only points toward an assembly the forwarding assembly references, and core
+never references MeshWeaver.Plugins. So a type that leaves core for Plugins gets no forwarder, and it
+may leave only if no published binary binds it by assembly name. The answer was MEASURED, not
+grepped. Every registry module of MeshWeaver.Plugins (42 module DLLs) was built, and the `TypeRef`s it
+holds into `MeshWeaver.Hosting.AspNetCore` were read from the metadata:
+
+| Bound by published module bytes | Modules |
+|---|---|
+| `MeshEndpointProviderAttribute` | Courses, Mail.Gmail, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp (and the satellite's `MeshWeaver.Social`) |
+| `McpConfiguration`, `SessionHubResolver` | Mcp |
+| `Portal.PortalApplication` | AppleMessages, Blazor.Chat, Courses, Mail.Gmail, Mail.MicrosoftGraph, Teams, WhatsApp |
+| `Portal.PortalErrorSink` | Blazor.Chat |
+| `Portal.UserIdentityCache`, `Portal.UserIdentityLookup` | Mail.MicrosoftGraph |
+
+Those types stay, together with what their public signatures name (`ICircuitContextAccessor`,
+`UserDirectoryReading`, `PortalErrorReporting`) and the one package `PortalApplication` needs,
+`MeshWeaver.Markdown.Export.Contract`. The text search for the namespace finds more. Courses and Mcp
+mention `UserContextMiddleware` in comments, for instance. But a comment is not a `TypeRef`, so a text
+search over-counts.
+
+**What moved** to MeshWeaver.Plugins as `MeshWeaver.Hosting.AspNetCore.Portal` (namespace unchanged)
+is host code that no published binary binds: `UserContextMiddleware`, `ValidatedTokenCache`,
+`MeshUserProjection`, `VUserHelper`, `UserDirectoryReadiness`, `RequestNamingExceptionHandling` and
+`RequestName`, `NonfileRouteConstraint` and its extensions, `ArticleExtensions`, and
+`Authentication/AuthenticationOptions` with its two companions. Their consumers are the portal hosts
+and the Blazor host libraries, which are rebuilt with every image. `scripts/type-forwards.allow` names
+each one, and every entry is a statement this measurement backs.
+
+**The transition, in Plugins.** The moved files keep their namespace, so a graph holding both copies
+is CS0433. MeshWeaver.Plugins therefore switches on the pinned platform checkout: while it still
+carries `Portal/UserContextMiddleware.cs`, the moved project compiles nothing and nothing references
+it, and once the pin is past this delete half, the consumers reference it
+(`$(MeshWeaverAspNetCorePortalProject)` in Plugins' `src/Directory.Build.props`). Neither repository
+is ever red in between. The same switch-on-what-the-pin-carries shape moved the demo samples.
+
+**What it does not cover.** The measurement covers the registry modules MeshWeaver.Plugins builds
+today, plus a source search of every Systemorph repository for the namespace (only
+MeshWeaver.SocialMedia uses it, and only the endpoint hook). A module that some other estate built and
+published from a private fork would not be seen.
 
 ## Two defects this survey found
 

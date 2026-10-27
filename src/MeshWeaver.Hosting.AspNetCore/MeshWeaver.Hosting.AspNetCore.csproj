@@ -19,15 +19,17 @@
          below the transports so MCP, REST, gRPC and the headless sidecar cannot drift apart. The
          reference is what lets the resolver stay platform-side now that MCP is a module. -->
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
-    <!-- Portal/ holds the non-visual portal infrastructure lifted out of MeshWeaver.Blazor: the
-         middleware, caches and accessors the PLATFORM depends on, which merely happened to live in
-         the Blazor project. Not one of them imports MeshWeaver.Blazor or
-         Microsoft.AspNetCore.Components — they were already Blazor-free, which is what made the
-         lift a pure move. Three references are the only ones the move adds, one per consumer:
-           ContentCollections      — ArticleExtensions
-           Layout                  — PortalErrorSink
+    <!-- Portal/ keeps only what published module bytes bind, and what those types need:
+         PortalApplication (seven Plugins modules resolve the portal hub through it), PortalErrorSink,
+         UserIdentityCache + UserIdentityLookup, and the types their public signatures name
+         (ICircuitContextAccessor, UserDirectoryReading). Measured from the TypeRefs of every
+         registry module's DLL — a type a shipped module binds by assembly name cannot leave, because
+         a [TypeForwardedTo] cannot point from here into MeshWeaver.Plugins. The rest of the portal
+         host's infrastructure (the user-context middleware, token cache, readiness gate, request
+         naming, route constraint, authentication options) is host code and lives in
+         MeshWeaver.Plugins as MeshWeaver.Hosting.AspNetCore.Portal. Two references serve what stayed:
+           Layout                   — PortalErrorSink
            Markdown.Export.Contract — PortalApplication -->
-    <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\MeshWeaver.Markdown.Export.Contract\MeshWeaver.Markdown.Export.Contract.csproj" />
   </ItemGroup>

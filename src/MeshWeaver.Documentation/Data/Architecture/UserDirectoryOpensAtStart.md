@@ -31,7 +31,7 @@ instance and a different cause: per-node hub activation failing on a module-cont
 
 ## What it does now
 
-`UserDirectoryReadiness` (`src/MeshWeaver.Hosting.AspNetCore/Portal`) is both a hosted service and
+`UserDirectoryReadiness` (MeshWeaver.Plugins `src/MeshWeaver.Hosting.AspNetCore.Portal`) is both a hosted service and
 a health check. The portal's service defaults register it (`AddDefaultHealthChecks`).
 
 - **It opens the directory when the application has started.** On
