@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text.Json;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Application.Styles;
@@ -719,27 +721,77 @@ public static class InboxLayoutArea
         var options = hub.JsonSerializerOptions;
         // The write is the person's own, under their identity — this runs on whatever turn the rows landed on.
         using (access?.SwitchAccessContext(viewer))
-            hub.GetMeshNodeStream(path)
+        {
+            var write = hub.GetMeshNodeStream(path)
                 .Update(node => node.ContentAs<InboxPreferences>(options) is { } current
                                 && InboxPreferencesNodeType.Completed(current, expected) is { } merged
                     ? node with { Content = merged }
-                    : node)
+                    : node);
+            // The read of what the owner holds, built under the same identity as the write.
+            var held = hub.GetMeshNodeStream(path);
+            CommittedMissing(write, held, expected, options, CommittedReadWait)
                 .Subscribe(
-                    committed =>
+                    still =>
                     {
-                        // The owner committed: what the committed node holds is the verdict, not the page's (possibly older) view.
-                        if (committed.ContentAs<InboxPreferences>(options) is { } held
-                            && InboxPreferencesNodeType.Completed(held, expected) is { } still)
-                            logger?.LogError("Inbox: the preference keys {Keys} were written and committed, and {Path} still lacks them; not writing again",
-                                string.Join(", ", MissingKeys(held, still)), path);
                         seeded.Confirm(fingerprint);
+                        if (still.Length > 0)
+                            logger?.LogError("Inbox: the preference keys {Keys} were written and committed, and {Path} still lacks them; not writing again",
+                                string.Join(", ", still), path);
                     },
                     ex =>
                     {
                         seeded.Release(fingerprint);
                         logger?.LogWarning(ex, "Inbox: could not add the missing keys {Keys} to {Path}; a later pass writes them again", fingerprint, path);
-                    },
-                    () => seeded.Confirm(fingerprint));
+                    });
+        }
+    }
+
+    /// <summary>How long the owner's view of the node may take to show a committed seed write before what it holds is the verdict.</summary>
+    internal static readonly TimeSpan CommittedReadWait = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The keys the OWNER's node still lacks once <paramref name="write"/> committed — empty when it holds them all.
+    /// 🚨 The write's own terminal is NOT the verdict: it carries the owner's committed VERSION but the WRITER's
+    /// content (<c>UpdateRemote.EmitTerminal</c>), which already passed through
+    /// <see cref="InboxPreferencesNodeType.Completed"/> and so always holds the keys. The verdict is read from
+    /// <paramref name="ownerView"/> (the node's own stream), at or beyond the committed version: the first state there
+    /// that holds every key answers empty; if none does within <paramref name="within"/>, the latest such state names
+    /// what it lacks. A failed write, or an owner view that says nothing within the bound, faults.
+    /// </summary>
+    /// <param name="write">The cold seed write; subscribed here.</param>
+    /// <param name="ownerView">The node's own stream — what the owner holds.</param>
+    /// <param name="expected">What the page seeds (<see cref="InboxPreferencesNodeType.SeedForExisting"/>).</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <param name="within">How long the owner's view may take to show the commit.</param>
+    /// <param name="scheduler">Timer seam for tests.</param>
+    internal static IObservable<string[]> CommittedMissing(IObservable<MeshNode> write, IObservable<MeshNode> ownerView,
+        InboxPreferences expected, JsonSerializerOptions options, TimeSpan within, IScheduler? scheduler = null)
+        => write.LastAsync().SelectMany(committed => Observable.Defer(() =>
+        {
+            string[]? latest = null;
+            return ownerView
+                .Where(node => node.Version >= committed.Version)
+                .Select(node => StillMissing(node, expected, options))
+                .Do(still => latest = still)
+                .Where(still => still.Length == 0)
+                .Take(1)
+                .Timeout(within, scheduler ?? DefaultScheduler.Instance)
+                .Catch((TimeoutException ex) => Latest(ex))
+                // An owner view that ENDS without holding every key: what it last showed is the verdict.
+                .Concat(Observable.Defer(() => Latest(null)))
+                .Take(1);
+
+            IObservable<string[]> Latest(Exception? cause) => latest is { } seen
+                ? Observable.Return(seen)
+                : Observable.Throw<string[]>(new TimeoutException(
+                    $"The owner's view of the node showed nothing at or beyond the committed version {committed.Version} within {within}.", cause));
+        }));
+
+    /// <summary>The keys <paramref name="node"/> lacks against <paramref name="expected"/>; every key when its content is unreadable. Pure.</summary>
+    private static string[] StillMissing(MeshNode node, InboxPreferences expected, JsonSerializerOptions options)
+    {
+        var held = node.ContentAs<InboxPreferences>(options) ?? new InboxPreferences();
+        return InboxPreferencesNodeType.Completed(held, expected) is { } still ? MissingKeys(held, still) : [];
     }
 
     /// <summary>The keys <paramref name="completed"/> adds to <paramref name="stored"/>, as <c>k:</c>/<c>s:</c>/<c>st:</c> entries in ordinal order. Pure.</summary>

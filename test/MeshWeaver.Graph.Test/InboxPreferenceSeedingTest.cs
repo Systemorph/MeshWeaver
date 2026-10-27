@@ -144,6 +144,85 @@ public class InboxPreferenceSeedingTest : MonolithMeshTestBase
         guard.TryBegin(keys).Should().BeFalse("a confirmed write is never repeated");
     }
 
+    // ── The verdict on a seed write is what the OWNER holds, never the writer's own content ──
+
+    private static readonly InboxPreferences Lacking = new();
+    private static readonly InboxPreferences Holding = InboxPreferencesNodeType.Completed(new InboxPreferences(), new InboxPreferences())!;
+    private static readonly TimeSpan Within = TimeSpan.FromSeconds(10);
+
+    private static MeshNode Prefs(InboxPreferences content, long version)
+        => new(InboxPreferencePaths.NodeId, "alice/_Settings") { NodeType = InboxPreferencePaths.NodeType, Content = content, Version = version };
+
+    /// <summary>
+    /// Runs <see cref="InboxLayoutArea.CommittedMissing"/> over a write whose terminal carries the WRITER's completed
+    /// content at <paramref name="committedVersion"/> (as <c>UpdateRemote.EmitTerminal</c> does), with the owner's view
+    /// fed by <paramref name="feed"/>, and returns what it answered.
+    /// </summary>
+    private static (string[]? Answer, Exception? Error) Verdict(long committedVersion, Action<System.Reactive.Subjects.Subject<MeshNode>, Microsoft.Reactive.Testing.TestScheduler> feed)
+    {
+        var scheduler = new Microsoft.Reactive.Testing.TestScheduler();
+        var owner = new System.Reactive.Subjects.Subject<MeshNode>();
+        string[]? answer = null;
+        Exception? error = null;
+        using var _ = InboxLayoutArea.CommittedMissing(Observable.Return(Prefs(Holding, committedVersion)), owner,
+                new InboxPreferences(), new JsonSerializerOptions(JsonSerializerDefaults.Web), Within, scheduler)
+            .Subscribe(a => answer = a, e => error = e);
+        feed(owner, scheduler);
+        return (answer, error);
+    }
+
+    /// <summary>
+    /// The writer's terminal says every key is there; the owner's node at the committed version lacks them. The verdict
+    /// names the three keys — a confirmation taken from the writer's content would answer "nothing missing" here.
+    /// </summary>
+    [Fact]
+    public void TheVerdict_IsWhatTheOwnerHolds_NotTheWritersContent()
+    {
+        var (answer, error) = Verdict(7, (owner, clock) =>
+        {
+            owner.OnNext(Prefs(Lacking, 7));
+            clock.AdvanceBy(Within.Ticks + 1);
+        });
+        error.Should().BeNull();
+        answer.Should().Equal(["st:activity", "st:chat", "st:mail"]);
+    }
+
+    /// <summary>Negative control: the owner's node at the committed version holds every key — nothing is missing, at once.</summary>
+    [Fact]
+    public void AnOwnerHoldingTheKeys_AnswersNothingMissing()
+    {
+        var (answer, error) = Verdict(7, (owner, _) => owner.OnNext(Prefs(Holding, 7)));
+        error.Should().BeNull();
+        answer.Should().BeEmpty();
+    }
+
+    /// <summary>A snapshot OLDER than the commit is not the verdict: the stale v6 lacking the keys is skipped, and v7 holding them answers.</summary>
+    [Fact]
+    public void AStaleSnapshot_BeforeTheCommit_IsNotTheVerdict()
+    {
+        var (answer, error) = Verdict(7, (owner, clock) =>
+        {
+            owner.OnNext(Prefs(Lacking, 6));
+            clock.AdvanceBy(Within.Ticks / 2);
+            owner.OnNext(Prefs(Holding, 7));
+        });
+        error.Should().BeNull();
+        answer.Should().BeEmpty();
+    }
+
+    /// <summary>An owner view that shows nothing at the committed version within the bound FAULTS — the guard releases, never confirms.</summary>
+    [Fact]
+    public void ASilentOwnerView_Faults()
+    {
+        var (answer, error) = Verdict(7, (owner, clock) =>
+        {
+            owner.OnNext(Prefs(Lacking, 6));
+            clock.AdvanceBy(Within.Ticks + 1);
+        });
+        answer.Should().BeNull();
+        error.Should().BeOfType<TimeoutException>();
+    }
+
     /// <summary>A state filter as ordered "group=ticked" lines, for an order-free comparison.</summary>
     private static string[] Flat(IDictionary<string, bool> states)
         => [.. states.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={kv.Value}")];
