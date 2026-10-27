@@ -43,6 +43,25 @@ The whole CI contract for a plugin repo, in three lines:
 The tool pulls both images, **pins them by digest**, and runs the platform's own builder and tester
 inside them. Nothing in the job needs to know about docker, mounts, seeds or allow-files.
 
+### Which images, when the flags are omitted
+
+The image version comes from **configuration**, never from the CLI's own version. Without
+`--image` / `--platform-image` the verb runs `<registry>/mw-plugin-test:<tag>` and
+`<registry>/memex-portal-ai:<tag>`, ONE registry and ONE tag for both, resolved in this order:
+
+1. `$MEMEX_IMAGE_REGISTRY` / `$MEMEX_IMAGE_TAG`
+2. `imageRegistry` / `imageTag` in `~/.memex/config.json`
+3. `cr.meshweaver.cloud` and `latest`
+
+```json
+{ "baseUrl": "https://memex.meshweaver.cloud", "token": "mw_…",
+  "imageRegistry": "cr.meshweaver.cloud", "imageTag": "3.1.11786" }
+```
+
+A flag always wins, and a digest pin from the same CD wave (above) is still what CI should pass.
+The tag is used verbatim, so it must be a tag the registry really carries; the verb refuses a
+tester/portal pair that does not resolve one framework identity.
+
 ### Two images, two roles
 
 **`--image` EXECUTES; `--platform-image` supplies the reference set.** The tester image's `/app` is a
