@@ -71,6 +71,75 @@ public class TheEdgeSetWriterKeepsTheNewestGenerationTest(ITestOutputHelper outp
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task TheSameBuildAtANewerGeneration_IsStillWritten_SoADelayedMiddleBuildCannotReplaceIt()
+    {
+        // Build A stored at generation 1; build B's generation-2 edge write is delayed; A is published
+        // again at generation 3 (same bytes, same edges). The idempotency shortcut must not keep
+        // generation 1 — otherwise B's delayed generation-2 write would replace A's edges.
+        var ct = TestContext.Current.CancellationToken;
+        const string a = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+        await Write(Mesh, Set(1, a, "Lib/A"), ct);
+        await Write(Mesh, Set(3, a, "Lib/A"), ct);
+        (await Stored(ct))!.StampVersion.Should().Be(3L, "the same build at a newer generation advances the generation");
+
+        await Write(Mesh, Set(2, "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", "Lib/B"), ct);
+        var stored = await Stored(ct);
+        stored!.BuildMvid.Should().Be(a, "the delayed middle generation is older than the stored one");
+        stored.Edges.Select(e => e.Target).Should().Equal(["Lib/A"]);
+    }
+
+    [Fact]
+    public void DescribesSameBuild_SkipsOnlyWhenTheStoredGenerationIsNotOlder()
+    {
+        DependencyEdgeSet At(long? generation) => new()
+        {
+            Source = "x",
+            BuildMvid = "a",
+            StampVersion = generation,
+            Edges = [new DependencyEdge { Target = "Lib/A", Kind = DependencyEdgeKinds.NodeType }],
+        };
+
+        DependencyEdgeSetWriter.DescribesSameBuild(At(3), At(3)).Should().BeTrue("same build, same generation");
+        DependencyEdgeSetWriter.DescribesSameBuild(At(4), At(3)).Should().BeTrue("an older incoming generation writes nothing anyway");
+        DependencyEdgeSetWriter.DescribesSameBuild(At(1), At(3)).Should().BeFalse("a newer generation must be persisted");
+        DependencyEdgeSetWriter.DescribesSameBuild(At(null), At(3)).Should().BeFalse("a generation where none is stored must be persisted");
+        DependencyEdgeSetWriter.DescribesSameBuild(At(3), At(null)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void DescribesSameBuild_DoesNotSkipCorrectedEdgeMetadataAtTheSameGeneration()
+    {
+        // A later bundle pass for the same served build at the same generation may correct the
+        // metadata of an edge without changing its kind or target. That pass must be written.
+        var baseEdge = new DependencyEdge
+        {
+            Target = "Some.Module",
+            Kind = DependencyEdgeKinds.Module,
+            TargetBuildMvid = "1111",
+            EvidenceClass = DependencyEvidenceClasses.Static,
+            Evidence = ["Some.Module.TypeA"],
+        };
+        DependencyEdgeSet With(DependencyEdge edge) => new()
+        {
+            Source = "x",
+            BuildMvid = "a",
+            StampVersion = 3,
+            Edges = [edge],
+        };
+
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { Evidence = ["Some.Module.TypeA"] }))
+            .Should().BeTrue("equal evidence in a different list instance is the same value");
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { TargetBuildMvid = "2222" }))
+            .Should().BeFalse("a corrected target build must be written");
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { TargetKind = DependencyEdgeKinds.Platform }))
+            .Should().BeFalse("a corrected resolved kind must be written");
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { EvidenceClass = DependencyEvidenceClasses.Dynamic }))
+            .Should().BeFalse("a corrected evidence class must be written");
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { Evidence = ["Some.Module.TypeB"] }))
+            .Should().BeFalse("enriched evidence must be written");
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task TwoBuildsAtTheSameGeneration_TheOneTheRecordNames_WinsInEitherOrder()
     {
         // Both stamp writers can mint one version for two builds (the activation's unflushed v+1,

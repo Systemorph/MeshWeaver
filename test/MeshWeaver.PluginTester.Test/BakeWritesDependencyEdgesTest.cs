@@ -126,6 +126,19 @@ public class BakeWritesDependencyEdgesTest(ITestOutputHelper output)
                 Assert.Equal("0123456789abcdef0123456789abcdef01234567", s.Commit);
             });
 
+            // The BUNDLE carries each assembly's set too, so an adopting mesh (which compiles nothing)
+            // can write it — read back through the consumer's own reader.
+            {
+                var (_, payloads) = MeshWeaver.Plugin.Packaging.BundleReader.Read(File.ReadAllBytes(Path.Combine(bake, "Pkg.zip")));
+                var carried = payloads.Single(p => p.NodePath == "Pkg/User").DependencyEdges;
+                Assert.NotNull(carried);
+                var set = System.Text.Json.JsonSerializer.Deserialize<DependencyEdgeSet>(
+                    carried!.Value.GetRawText(), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                Assert.NotNull(set);
+                Assert.Equal(user.BuildMvid, set!.BuildMvid);
+                Assert.Contains(set.Edges, e => e.Kind == DependencyEdgeKinds.NodeType && e.Target == "Pkg/Lib");
+            }
+
             // Negative controls: the edge does not run backwards, and a type that uses no module
             // records no module edge.
             Assert.DoesNotContain(lib.Edges, e => e.Target == "Pkg/User");
