@@ -98,6 +98,52 @@ verification. Regression test: `AWriteAdmittedBeforeADeleteNeverRecreatesItTest`
 write at the store of record, starts the delete, releases the write only once the delete's scope is
 provably open, and asserts the delete waited and the store holds nothing afterwards).
 
+### A write admitted at its owner's COMMIT is waited for too
+
+The guard registers a write only when the write reaches it, and a per-node hub reaches it late: a
+cross-hub patch is checked against the scopes in the owner's merge turn (`IActiveDeletionScopes`,
+#6953), committed to the owner's in-memory node, and only then flushed on the commit echo
+(`IPostCommitFlush`). A delete opening its scope in that gap found nothing registered, ran, and the
+flush was then refused — by the open scope, or by the tombstone once the delete had answered — after
+the owner had committed and served the write (#7346). The writer heard "not applied" for a write that
+had happened, the #6953 disagreement in its narrower form.
+
+So the owner's check is an admission too: `IActiveDeletionScopes.AdmitCommit` registers the write
+with the admitted writes FIRST and tests the scope SECOND (the same order as the guard's), and the
+handle travels from the merge turn to the flush, which releases it on its own storage write's
+terminal — never on the acknowledgement, which the flush bound may post while the write is still in
+flight. Every path that commits nothing (refused, unchanged, faulted, an echo that never arrives)
+releases it at once. While the handle is held:
+
+- a deletion opening its scope waits for it in `AdmittedWritesSettled`, exactly as for a write the
+  guard admitted;
+- the guard lets a write to that PATH through the open scope (`IsAdmittedAtCommit`) — the deletion is
+  waiting for it, so it lands BEFORE the deletion, which then removes it. By path, because the commit
+  and the storage write are different objects on different threads; a second write to the same path
+  passing in that window is registered by the guard and waited for as well, and no new admission is
+  granted under an open scope, so the set still only shrinks.
+
+Two orderings keep the admission honest. The guard's bypass for a path is published only once the
+scope check has ACCEPTED the commit — published before it, a refused commit briefly let another write
+to that path through a scope whose deletion had already finished waiting
+(`ARefusedCommitNeverOpensTheGuardTest`). And the commit decision is one compare-and-swap against the
+end of the patch's echo watcher (`CommitAdmissionHandoff`): the watcher is the only route to the
+flush, so a turn whose watcher has ended (its bound expired while the merge was queued, or the owner
+went away) commits NOTHING and answers "not applied", and the watcher never releases the admission of
+a turn that is still deciding (`ACommitAdmissionNeverOutlivesItsWatcherTest`). A turn that committed
+and whose echo then never arrives is released at the watcher's end; the sampler stores it, as for the
+owner's own write below.
+
+A patch that reaches the owner AFTER the scope opened is still refused at commit. Regression test:
+`AWriteAdmittedAtCommitIsWaitedForByTheDeleteTest` (parks the owner's flush above the guard after the
+commit, starts the delete, releases the flush only once the delete has provably begun, and asserts the
+write is acknowledged, the delete waited for it, a late patch is refused, and the store holds nothing
+afterwards). Not covered by this: the owner's OWN write (`UpdateOwn`) is acknowledged at its commit and
+stored by the persistence sampler, which has no per-write answer to end such an admission on. It is
+deferred under an open scope (`MovingNodes`); one committed just BEFORE a scope opened and not yet
+sampled is not waited for. For a delete that is harmless (the delete removes the node after the write
+was acknowledged); whether a move's copy can miss such a write has not been established.
+
 ## 2. Completion is TWO reads, because one cannot see the whole subtree
 
 `IStorageAdapter.ListDescendantPaths` is **strict descendants — the root is excluded by contract**.
