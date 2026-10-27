@@ -135,14 +135,15 @@ public class MoveIsValidatedAsADeleteTest(ITestOutputHelper output) : MonolithMe
 }
 
 /// <summary>
-/// 🚨 The permission half: an identity that holds Delete on the source's NAMESPACE — all that
-/// <c>MoveNodePermissionAttribute</c> checks — but not on the source NODE. Before the move ran the
-/// source's delete pre-flight, that namespace check was the only Delete check a move made, so this
+/// 🚨 The permission half: an identity that may delete on the source's NAMESPACE — all that
+/// <c>MoveNodePermissionAttribute</c> checks — but not the source NODE. Before the move ran the
+/// source's delete pre-flight, that namespace check was the only delete check a move made, so this
 /// identity could move away a node it could not delete.
 ///
-/// <para>Grants: <see cref="SubjectId"/> is an Editor on <c>TestData</c> (no Delete anywhere) and an
-/// Admin on <c>TestData/{area}</c> (Delete on the namespace); the held node additionally DENIES the
-/// Admin role at its own scope, leaving the Editor role — read and write, no Delete. All three grants
+/// <para>Deleting ordinary content demands Update (<see cref="DeletePermission.RequiredFor"/>), so
+/// "may not delete the node" means holding no Update on it. Grants: <see cref="SubjectId"/> is an
+/// Editor on <c>TestData</c> and an Admin on <c>TestData/{area}</c>; the held node DENIES both roles at
+/// its own scope, leaving the subject nothing there. All four grants
 /// are seeded statically: the permission fold reads static assignments directly, so the setup does not
 /// depend on a runtime grant reaching the security query (a dynamically written deny did not, within
 /// 36 s, in this fixture — measured while writing this test, not investigated here). Built from
@@ -169,7 +170,8 @@ public class MoveRequiresDeleteOnTheNodeTest(ITestOutputHelper output) : Monolit
             .AddMeshNodes(
                 Grant($"{SubjectId}_Editor", TestPartition, "Editor", denied: false),
                 Grant($"{SubjectId}_Admin", AreaPath, "Admin", denied: false),
-                Grant($"{SubjectId}_NoAdmin", HeldPath, "Admin", denied: true));
+                Grant($"{SubjectId}_NoAdmin", HeldPath, "Admin", denied: true),
+                Grant($"{SubjectId}_NoEditor", HeldPath, "Editor", denied: true));
 
     private static MeshNode Grant(string id, string scope, string role, bool denied) =>
         new(id, $"{scope}/_Access")
@@ -196,12 +198,14 @@ public class MoveRequiresDeleteOnTheNodeTest(ITestOutputHelper output) : Monolit
 
         Access.SetCircuitContext(SubjectContext);
 
-        // The setup measures what the test claims: Delete on the namespace, none on the held node.
-        var onNamespace = await Mesh.CheckPermission(AreaPath, SubjectId, Permission.Delete)
+        // The setup measures what the test claims: the delete demand is met on the namespace and not
+        // on the held node.
+        var demand = DeletePermission.RequiredFor(held);
+        var onNamespace = await Mesh.CheckPermission(AreaPath, SubjectId, demand)
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
-        var onHeld = await Mesh.CheckPermission(held, SubjectId, Permission.Delete)
+        var onHeld = await Mesh.CheckPermission(held, SubjectId, demand)
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
-        Output.WriteLine($"Delete on {AreaPath}: {onNamespace}; on {held}: {onHeld}");
+        Output.WriteLine($"{demand} on {AreaPath}: {onNamespace}; on {held}: {onHeld}");
         onNamespace.Should().BeTrue("the subject passes the move's namespace check");
         onHeld.Should().BeFalse("but may not delete the held node itself");
 
