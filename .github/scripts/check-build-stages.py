@@ -247,6 +247,7 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
         cmd = str(st.get("command") or "")
         if want == "compile-check":
             out += _markers(want, cmd, NODE_COMPILE_CHECK_PARITY)
+            out += compile_refs_problems(want, cmd)
         else:
             # Omitted ⇒ the lane's default; passed EMPTY ⇒ no allowlist at all, and then a stage
             # that passes one would tolerate failures the Actions leg fails on.
@@ -267,6 +268,28 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
             out += _markers(want, cmd, needles)
         if HARD_CODED_HOST.search(cmd):
             out.append(f"stage `{want}` hard-codes a `/host/…` path — the runner binds only $MW_BUILD_GATE_HOST / $MeshWeaverRefs into the sandbox")
+    return out
+
+
+REFS_ARG = re.compile(r"--refs[ =]+[\"']?\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+COMPILE_REFS_VAR = "MW_BUILD_COMPILE_REFS"
+
+
+def compile_refs_problems(name: str, cmd: str) -> list[str]:
+    """The marker alone is not enough: the variable must be what `--refs` actually receives — directly, or through a
+    shell variable assigned from it (`refs="${MW_BUILD_COMPILE_REFS:?…}"; … --refs "$refs"`). Every `--refs` must."""
+    args = REFS_ARG.findall(cmd)
+    if not args:
+        return [f"stage `{name}` passes no `--refs \"$VAR\"` — compile-check's reference set must be the host's prepared "
+                f"`${COMPILE_REFS_VAR}`"]
+    out = []
+    for var in args:
+        if var == COMPILE_REFS_VAR:
+            continue
+        if re.search(rf"(^|[;\s]){re.escape(var)}=[\"']?\$\{{{COMPILE_REFS_VAR}[:}}]", cmd):
+            continue
+        out.append(f"stage `{name}` passes `--refs ${var}`, which is not `${COMPILE_REFS_VAR}` (nor assigned from it) — "
+                   "naming the prepared set elsewhere in the command does not make compile-check read it")
     return out
 
 
@@ -403,6 +426,16 @@ def _self_test() -> int:
     for needle, _ in NODE_GATE_PARITY + [("--allow plugin-gate.allow", "")]:
         red(mutate(node, lambda d, n=needle: d["stages"][1].update(command=d["stages"][1]["command"].replace(n, "X"))), "node-repo",
             f"`{needle}`", f"gate drops `{needle}`")
+    red(mutate(node, lambda d: d["stages"][0].update(command='test -n "${MW_BUILD_COMPILE_REFS:?}"; python3 "${MW_PLATFORM_SCRIPTS:?}/compile-check.py" '
+                                                               '--refs "${MeshWeaverRefs:?}" # MW_ALLOW_FILE=scripts/compile-check.allow')),
+        "node-repo", "which is not `$MW_BUILD_COMPILE_REFS`", "the prepared set is named but --refs receives the app alone")
+    red(mutate(node, lambda d: d["stages"][0].update(command='r="${MeshWeaverRefs:?}"; x="${MW_BUILD_COMPILE_REFS:?}"; python3 "${MW_PLATFORM_SCRIPTS:?}/compile-check.py" '
+                                                               '--refs "$r" # MW_ALLOW_FILE=scripts/compile-check.allow')),
+        "node-repo", "`--refs $r`", "--refs receives a variable assigned from the app alone")
+    expect(problems(json.dumps(mutate(node, lambda d: d["stages"][0].update(
+        command='set -e; refs="${MW_BUILD_COMPILE_REFS:?no set}"; python3 "${MW_PLATFORM_SCRIPTS:?}/compile-check.py" --refs "$refs" '
+                '# MW_ALLOW_FILE=scripts/compile-check.allow'))), "node-repo", NODE_CI)[0] == [],
+           "--refs through a variable assigned from $MW_BUILD_COMPILE_REFS is green (the satellites' shape)")
     red(mutate(node, lambda d: d["stages"][1].update(command=d["stages"][1]["command"] + "; dotnet /host/mw-plugin-test.dll .")), "node-repo",
         "hard-codes", "a hard-coded /host/ tester")
     red(mutate(node, lambda d: d["stages"].pop(1)), "node-repo", "no `gate` stage", "ci.yml calls the gate lane, no gate stage")

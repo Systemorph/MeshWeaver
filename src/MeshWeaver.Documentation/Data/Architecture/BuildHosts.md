@@ -649,9 +649,14 @@ would replace, and the claim is refused until that list is empty.
 - **The host comes prepared.** No stage restores, stages or prepares anything per run: a stage reads
   the host's installed platform (`$MeshWeaverRefs`, the floor — the portal's `/app` as shipped, a
   gate's `--app`; and `$MW_BUILD_COMPILE_REFS`, the same app plus its shared frameworks in CI's
-  `refs/` shape, prepared once per roll by the host's init container: a compile-check's `--refs`,
-  required by the node-repo profile, because the app alone carries no `System.Private.CoreLib` and
-  `compile-check.py` refuses it), its tester and dotnet
+  `refs/` shape, prepared once per roll by the host's init container: what a compile-check's
+  `--refs` must RECEIVE (directly or through a variable assigned from it — the node-repo profile
+  checks the argument, not a mention), because the app alone carries no `System.Private.CoreLib` and
+  `compile-check.py` refuses it). That set is the PLATFORM half only: `compile-check.py` also
+  requires the module assemblies the image no longer ships (`MeshWeaver.AI`,
+  `MeshWeaver.Markdown.Collaboration`, `MeshWeaver.Maps`), which the Actions lane composes from the
+  sealed publication — on a host that is the separately declared "composed modules and the upstream
+  seed" debt, and a satellite's compile-check stays red until it is paid. Its tester and dotnet
   (`$MW_BUILD_GATE_HOST`, `$MW_BUILD_PORTAL_DOTNET`) and, with `needs: ["nuget"]`, the host's prepared
   package cache (`NUGET_FALLBACK_PACKAGES`). Core's build names that cache as its ONLY `--source`, so a
   package the host was not prepared with is a red restore, never a download.
