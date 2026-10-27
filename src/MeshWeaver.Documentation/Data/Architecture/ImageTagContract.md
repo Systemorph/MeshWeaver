@@ -27,6 +27,7 @@ assemblies, joined them as the set's fifth digest — the deploy-test-switch des
 | `<version>` | `memex-portal-ai` | **phase C — in `arm`, not `promote`** | immutable pointer — *the arming write*, made only once MeshWeaver.Plugins' dependent suites passed against this set's pair (policy `one-promotion-gate`, [One Promotion Gate](/Doc/Architecture/OnePromotionGate)) |
 | `<major>-latest`, `<major.minor>-latest`, `<major.minor.patch>-latest` | `memex-portal-ai`, `memex-migration` | **phase D — in `arm`** | moving line pointers; never moved backwards |
 | `latest` | `memex-portal-ai`, `memex-migration` | **phase D — in `arm`**, in the same write as `<major>-latest` | moving pointer to the newest ARMED set; never moved backwards |
+| `<major>-latest`, `<major.minor>-latest` | `mw-plugin-test` | **phase D — in `arm`**, before the portal's | the tester of the SAME armed set — the matched channel `mw build plugin` needs; the tester's `latest` stays phase B's |
 
 Phase D writes every one of its pointers to ACR, to GHCR and — through the digest-verified
 `mirror-image-to-registry.sh` — to the fleet registry `cr.meshweaver.cloud`.
@@ -70,6 +71,13 @@ section below shows it lacked: a producer, and protection from retention.
 * **The self-updater never selects it.** `latest` has no numeric core, so `PlatformReleaseOrder`
   cannot place it and no update pattern can make it a candidate; it is only ever a first-start
   address, like the line pointers.
+* **The tester's `latest` is NOT its pair.** `mw-plugin-test:latest` follows PROMOTED sets (phase B,
+  MeshWeaver.Plugins' `MW_TEST_IMAGE`), the portal's `latest` follows ARMED ones, so after a promotion
+  ahead of arming the two name different builds and `mw build plugin` refuses the pair at its
+  framework-identity check. The matched pair is `mw-plugin-test:<major>-latest` with
+  `memex-portal-ai:<major>-latest` (or `latest`): phase D writes the tester's line pointers first, from
+  the armed set's own version tag, and refuses a set whose tester and portal disagree on the version.
+  A consumer that pairs the two images names the tester by that pointer, or by the portal's version.
 * **It moves only when the line pointers move.** A release of a retired-notation set moves it with
   them (as before); a release of a `<major>.<minor>.<run>` set moves neither.
 

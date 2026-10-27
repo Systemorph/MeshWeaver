@@ -3212,17 +3212,26 @@ jobs:
           # its line pointers silently missing (a failure inside `$( )` in a `for` list is not errexit).
           line_tags() { local p; p=$(python3 .github/scripts/platform-version.py line-pointers "$1") && [ -n "$p" ] || return 1; printf '%s latest' "$p"; }
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          for pair in "memex-migration:$V_MIGRATION:$V_MIGRATION" "memex-portal-ai:$V_PORTAL:$SRC_PORTAL_TAG"; do
+          # 🚨 THE TESTER GETS THE ARMED SET'S LINE POINTERS TOO, AND FIRST — a MATCHED channel. The
+          # bake (`mw build plugin`) runs the tester against the portal and refuses a pair whose
+          # framework identities differ; `mw-plugin-test:latest` follows PROMOTED sets (phase B,
+          # MeshWeaver.Plugins' MW_TEST_IMAGE) while the portal's pointers follow ARMED ones, so a
+          # promotion ahead of arming makes `latest`+`latest` a mismatched pair. `mw-plugin-test:
+          # <major>-latest` names the SAME armed set as `memex-portal-ai:<major>-latest`/`latest`,
+          # from the set's own version tag. The tester's `latest` is never moved here.
+          [ "$V_PLUGIN" = "$V_PORTAL" ] || { echo "::error::the armed set disagrees on its version (tester '$V_PLUGIN', portal '$V_PORTAL') — refusing to move a matched channel onto two sets"; exit 1; }
+          for pair in "mw-plugin-test:$V_PLUGIN:$V_PLUGIN" "memex-migration:$V_MIGRATION:$V_MIGRATION" "memex-portal-ai:$V_PORTAL:$SRC_PORTAL_TAG"; do
             repo="${pair%%:*}"; rest="${pair#*:}"; ver="${rest%%:*}"; src="${rest#*:}"
             args=(); gargs=(); margs=()
             tags=$(line_tags "$ver") || { echo "::error::cannot derive the line pointers of $repo:$ver — refusing to move any pointer, \`latest\` included"; exit 1; }
+            [ "$repo" != mw-plugin-test ] || tags=${tags% latest}
             for t in $tags; do args+=(--tag "${{ env.ACR }}/$repo:$t"); gargs+=(--tag "ghcr.io/$NS/$repo:$t"); margs+=("${{ env.REGISTRY }}/$repo:$t"); done
             echo "→ $repo: $tags  (ACR, then GHCR — the adapter's default registry — then ${{ env.REGISTRY }})"
             docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/$repo:$src"
             docker buildx imagetools create "${gargs[@]}" --tag "ghcr.io/$NS/$repo:$ver" "${{ env.ACR }}/$repo:$src"
             .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$src" "${margs[@]}"
           done
-          echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL") (ACR + GHCR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL"); mw-plugin-test → the same line pointers, never \`latest\` (ACR + GHCR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
       # 🚨 THE STALL SIGNAL (MeshWeaver#6042, policy `one-promotion-gate`). Waiting and refusing are
       # both right and both SILENT: a standing red ladder or a platform-side outage froze fleet updates
       # while every run said `nothing to arm`. This files ONE `fleet-unarmed` issue when the OLDEST

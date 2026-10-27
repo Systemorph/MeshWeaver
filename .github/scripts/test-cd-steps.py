@@ -1329,7 +1329,8 @@ def line_pointer_step(root: Path) -> str:
 
 
 def run_line_pointer_step(root: Path, body: str, portal_tags: list[str],
-                          platform_version: str | None = None) -> tuple[int, str, list[str], list[str]]:
+                          platform_version: str | None = None,
+                          v_plugin: str = LP_VERSION) -> tuple[int, str, list[str], list[str]]:
     """Run Phase D in a scratch tree: the real platform-version.py (or a replacement), a recording
     `docker` and mirror script, and the stub `az` answering memex-portal-ai's tag listing."""
     with tempfile.TemporaryDirectory() as td:
@@ -1356,7 +1357,7 @@ def run_line_pointer_step(root: Path, body: str, portal_tags: list[str],
         e.update({
             "PATH": f"{binp}:{e['PATH']}", "DOCKER_CALLS": str(docker_calls), "MIRROR_CALLS": str(mirror_calls),
             "GITHUB_STEP_SUMMARY": str(summary), "AZ_TAGS": "memex-portal-ai=" + ",".join(portal_tags),
-            "V_PORTAL": LP_VERSION, "V_MIGRATION": LP_VERSION, "SRC_PORTAL_TAG": LP_STAGING,
+            "V_PORTAL": LP_VERSION, "V_MIGRATION": LP_VERSION, "V_PLUGIN": v_plugin, "SRC_PORTAL_TAG": LP_STAGING,
         })
         p = subprocess.run(["bash", "-c", body], env=e, cwd=tmp / "tree", capture_output=True, text=True)
         return (p.returncode, p.stdout + p.stderr + summary.read_text(),
@@ -1412,6 +1413,41 @@ def run_line_pointer_cases(root, case) -> None:
     case("...and the fleet-registry copy goes through the digest-verified mirror",
          any(f"{LP_REGISTRY}/memex-portal-ai:latest" in m and f"{LP_REGISTRY}/memex-portal-ai:3-latest" in m for m in mirror)
          and any(f"{LP_REGISTRY}/memex-migration:latest" in m for m in mirror), f"mirror={mirror}")
+
+    # 1b ── THE MATCHED CHANNEL (#7303 review). `mw build plugin` refuses a tester/portal pair whose
+    #       framework identities differ, and the tester's `latest` follows PROMOTED sets (phase B)
+    #       while the portal's pointers follow ARMED ones. So when a newer set is promoted ahead of
+    #       arming, the tester's `<major>-latest` must name the ARMED set: written here, from the
+    #       armed version tag (never `latest`/`main`), BEFORE the portal's pointers, and never
+    #       touching the tester's own `latest`.
+    tester_calls = [c for c in docker if "/mw-plugin-test:" in c]
+    tester_mirror = [m for m in mirror if "/mw-plugin-test:" in m]
+    tester_refs = {r for c in tester_calls + tester_mirror for r in re.findall(r"(\S+/mw-plugin-test:\S+)", c)}
+    want_tester = {f"{reg}/mw-plugin-test:{t}" for reg in (LP_ACR, "ghcr.io/systemorph", LP_REGISTRY)
+                   for t in ("3-latest", "3.1-latest")}
+    case("promotion ahead of arming: the tester's `3-latest`/`3.1-latest` move to the ARMED set on ACR, GHCR and cr",
+         want_tester <= tester_refs, f"tester refs={sorted(tester_refs)}")
+    case("...from the armed set's own version tag — the same set the portal's `latest` names",
+         bool(tester_calls) and all(c.endswith(f"mw-plugin-test:{LP_VERSION}") for c in tester_calls)
+         and bool(tester_mirror) and all(f"{LP_ACR}/mw-plugin-test:{LP_VERSION}" in m.split()[0] for m in tester_mirror),
+         f"calls={tester_calls} mirror={tester_mirror}")
+    case("...and Phase D NEVER moves the tester's `latest` (that is phase B's, following promoted sets)",
+         not any(r.endswith("/mw-plugin-test:latest") for r in tester_refs), f"tester refs={sorted(tester_refs)}")
+    first_portal = next((i for i, c in enumerate(docker) if "/memex-portal-ai:" in c), len(docker))
+    case("...and the tester's pointers land BEFORE the portal's `latest` (a puller never sees the portal ahead)",
+         bool(tester_calls) and docker.index(tester_calls[-1]) < first_portal, f"docker={docker}")
+
+    # 1c ── NEGATIVE CONTROL: a set whose tester and portal disagree on the version moves NOTHING.
+    rc, log, docker_m, mirror_m = run_line_pointer_step(root, body, newest, v_plugin="3.1.10401")
+    case("an armed set whose tester and portal disagree on the version moves no pointer at all",
+         rc != 0 and not docker_m and not mirror_m, f"rc={rc} docker={docker_m}")
+
+    # 1d ── MUTATION CONTROL: Phase D without the tester leg must fail the matched-channel detector.
+    no_tester = body.replace('for pair in "mw-plugin-test:$V_PLUGIN:$V_PLUGIN" ', 'for pair in ', 1)
+    rc, log, docker_m, mirror_m = run_line_pointer_step(root, no_tester, newest)
+    case("control: a Phase D that leaves the tester's line pointers behind is caught",
+         no_tester != body and rc == 0 and not any("/mw-plugin-test:3-latest" in c for c in docker_m + mirror_m),
+         "the mutation could not apply, or the tester still received its pointers")
 
     # 2 ── NEGATIVE CONTROL: a newer set was armed meanwhile — no pointer moves, `latest` included.
     rc, log, docker, mirror = run_line_pointer_step(root, body, ["3.1.10401"] + newest)

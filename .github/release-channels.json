@@ -48,6 +48,7 @@
           "workflow": "main-cd.yml",
           "job": "arm",
           "repositories": [
+            "mw-plugin-test",
             "memex-portal-ai",
             "memex-migration"
           ],
@@ -56,7 +57,7 @@
             "ghcr.io/systemorph",
             "cr.meshweaver.cloud"
           ],
-          "state": "Phase D, after the arming PUT, forward only"
+          "state": "Phase D, after the arming PUT, forward only; the tester first, so a tester/portal pair named by one line pointer is always ONE armed set (`mw build plugin` refuses a mismatched pair)"
         },
         {
           "workflow": "main-cd.yml",
@@ -102,6 +103,7 @@
           "workflow": "main-cd.yml",
           "job": "arm",
           "repositories": [
+            "mw-plugin-test",
             "memex-portal-ai",
             "memex-migration"
           ],
@@ -110,7 +112,7 @@
             "ghcr.io/systemorph",
             "cr.meshweaver.cloud"
           ],
-          "state": "Phase D, after the arming PUT, forward only"
+          "state": "Phase D, after the arming PUT, forward only; the tester first, so a tester/portal pair named by one line pointer is always ONE armed set (`mw build plugin` refuses a mismatched pair)"
         },
         {
           "workflow": "main-cd.yml",
@@ -156,6 +158,7 @@
           "workflow": "main-cd.yml",
           "job": "arm",
           "repositories": [
+            "mw-plugin-test",
             "memex-portal-ai",
             "memex-migration"
           ],
@@ -164,7 +167,7 @@
             "ghcr.io/systemorph",
             "cr.meshweaver.cloud"
           ],
-          "state": "Phase D, after the arming PUT, forward only"
+          "state": "Phase D, after the arming PUT, forward only; the tester first, so a tester/portal pair named by one line pointer is always ONE armed set (`mw build plugin` refuses a mismatched pair)"
         },
         {
           "workflow": "main-cd.yml",

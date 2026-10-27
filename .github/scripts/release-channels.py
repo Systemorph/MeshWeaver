@@ -381,8 +381,13 @@ def self_test() -> int:
     expect("control-first moves the line pointers on memex-control only",
            sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="control-first")) == ["3-latest", "3.1-latest"]
            and tags_for(real, "3.1.10050", "main-cd.yml", job="control-first", repository="memex-portal-ai") == [])
+    # The tester carries the armed set's LINE pointers (a matched channel with the portal) but never
+    # `latest` from arm — its `latest` is promote's, following promoted sets (MW_TEST_IMAGE).
+    expect("--repository narrows: arm moves the tester's line pointers and NOT its `latest`",
+           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="arm", repository="mw-plugin-test"))
+           == ["3-latest", "3.1-latest"])
     expect("--repository narrows to the declared repositories",
-           tags_for(real, "3.1.10050", "main-cd.yml", job="arm", repository="mw-plugin-test") == [])
+           tags_for(real, "3.1.10050", "main-cd.yml", job="arm", repository="memex-control") == [])
     try:
         tags_for(real, "main", "main-cd.yml")
         expect("a non-version is refused, never guessed", False)
