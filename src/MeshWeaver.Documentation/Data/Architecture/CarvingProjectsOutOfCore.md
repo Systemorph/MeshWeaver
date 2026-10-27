@@ -168,7 +168,7 @@ delivery event, not a refactor, and it is why these do not get done casually or 
 | `Maps` | 116 | **yes** | in-mesh sample content (`Cornerstone/Pricing`), 5 test meshes, PluginTester | module + identity flip |
 | `ContentCollections.Indexing` | 1 851 | **yes** | one `using` in `Mesh.Operations`; in-mesh content | module + identity flip |
 | `ContentCollections.Indexing.Graph` | 2 253 | **yes** | PluginTester; in-mesh content | with the above |
-| `GitSync` | 9 649 | **yes** | `PluginCatalog` (Portal.Shared's GitHub sign-in now calls it from plugins) | module + identity flip; auth ⇒ `Modules:Required` |
+| `GitSync` | 21 917 | **yes** | `PluginCatalog` (13 files), `Mesh.Operations`, PluginTester/ComboAssembler/ComboVerifier, the portal hosts in plugins, and in-mesh content in five plugin packages — see the next section | **stays** until `PluginCatalog` reaches it through a seam; then module + identity flip; auth ⇒ `Modules:Required` |
 | `PluginCatalog` | 21 245 | **yes** | PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
 | `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
 | `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
@@ -192,6 +192,81 @@ meshes compile that sample.
 **So neither direction of the `.csproj` graph can be trusted here.** A reference may be dead weight,
 and a live consumer may have no reference at all. Check both: a warnings-as-errors build of the
 consumer settles the first; the content trees and the node JSON settle the second.
+
+## Feature folders inside content-surface projects
+
+The table above is per project. A second survey looked one level down, at feature subsystems that
+sit as folders inside a content-surface assembly and whose names match something MeshWeaver.Plugins
+already ships. Removing any one of them changes that assembly's reference-assembly hash, so **every
+removal is an identity flip**, and the clean ones should be batched into one flip.
+
+Measured against `Systemorph/MeshWeaver@4cc5c17fbf` and `Systemorph/MeshWeaver.Plugins@f1752c83b`.
+
+| Folder | Lines | What Plugins has | Who reaches it | Verdict |
+|---|---|---|---|---|
+| `Mesh.Contract/Threading` | 4 993 | `MeshWeaver.Threading.Test`, a test project only | everything: it is `IIoPool`, `PromiseCache`, `AlcLeaseRegistry` and the teardown signal (namespace `MeshWeaver.Mesh.Threading`) | **stays** — kernel. The name only looked like a feature |
+| `Mesh.Contract/Payments` | 2 222 | `MeshWeaver.Payments.Stripe`, the implementer (a **second half**, not a duplicate) | the Store package's in-mesh sources (`Store/Order`, `CouponClaim`, `Catalog`, `Maintenance`), `Hosting/Deployment`, the Stripe module | **stays** — it *is* the seam. It was put in core so commerce content compiles on a portal that mounts no payment module ([The Payment Provider Contract](../PaymentProviderContract)). As a module it would bring back the `CS0234` it was created to remove |
+| `Hosting/SelfUpdate` | 790 | `MeshWeaver.SelfUpdate.Aks`, the implementer (**second half**) | `PluginCatalog.RegistryUpdateReconciler` (`SelfUpdateOptions.HostOf`, the one registry-host rule), `Deployment.Contract`, core's `Memex.Portal.ServiceDefaults` health check, `Memex.Portal.Shared` | **stays** — interfaces plus options that core code calls; the provider half has already left |
+| `Graph/Apps` | 1 401 | nothing of that name | the kernel home page (`UserActivityLayoutAreas` → `HomeAppSource`), `GraphConfigurationExtensions.AddAppDirectory`, in-mesh content in `AppleMaps`/`AppleWeather`/`Edu`/`Store/Core` | **stays** — the kernel calls into it, and `AppleMaps/Maps/Source/AmapsConnect.cs` reflects on `"MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph"` by **assembly-qualified name**, which a move would break silently |
+| `Graph/ControlLane` | 2 940 | nothing of that name; consumers only | image assemblies `Memex.Portal.Shared` (endpoints, settings tab, self-update hand-over) and `MeshWeaver.Hosting.Instance`; in-mesh sources in `Hosting/InstanceAction`, `Hosting/Deployment`, `Hosting/PlatformBuildInbox`, `Approvals/Elsewhere` | **stays** — see below |
+| `Graph/OpenGraph` | 668 | `MeshWeaver.OgCard`, a consumer (**second half**) | `GraphConfigurationExtensions` registers it on every mesh; `Memex.Portal.Shared` (`SeoEndpoints`, `OgCardRenderer`) and the OgCard module call it | **stays for now** — see below |
+| `Graph/MailCopy` | 3 379 | consumers only: the `Mail.MicrosoftGraph` and `Mail.Gmail` modules | those two modules; core's compile-time impersonation table names its types; no core `src/` caller, no in-mesh binder in either repo's content trees | **move, once its home is decided** — see below |
+
+### Why ControlLane and OpenGraph stay
+
+Both have **an image assembly and a module or in-mesh source** among their consumers, and those
+two kinds of consumer cannot share a module:
+
+- An image project cannot reference a module. An image copy and a registry module of the same name
+  is a 409.
+- In-mesh sources compile against the content surface plus the installed modules
+  (`CompileReferences.ComposeWithModules`). They never see an image-only plugins assembly; no in-mesh
+  source in Plugins binds `MeshWeaver.Hosting.Instance` today.
+
+For ControlLane the only home that both `Memex.Portal.Shared` / `MeshWeaver.Hosting.Instance` and
+the Hosting / Approvals sources reach is the content surface, which is where it already is.
+
+OpenGraph is smaller and has no in-mesh binder. A SOURCE move into a plugins image project (beside
+`Memex.Portal.Shared/Seo/OgCardRenderer`) would work, because a module may reference an image-shipped
+plugins project (`Mail.MicrosoftGraph` references `MeshWeaver.Blazor`). But the OgCard module
+would then bind the portal host assembly. The module's own declaration also says the fetcher "stays
+a core singleton": it is the SSRF-guarded outbound fetch (`http(s)` only, loopback and private
+addresses refused). At 668 lines that is not worth an identity flip on its own. Reconsider it if
+another carve flips `MeshWeaver.Graph` anyway.
+
+### MailCopy: movable, but it has no home yet
+
+MailCopy is the one subsystem with **no caller in core and no in-mesh binder**. Its consumers are
+two plugin modules, and the core-side ties are both data, not code:
+
+- **The runtime caller check survives a module move.** `MailCopyAuthority` judges the immediate
+  calling assembly through `InMeshImpersonationGuard`, and modules load into `ModuleLoadContext`,
+  which is an authentic `IPlatformLoadContext`. So a module is platform code to the guard, exactly
+  as `MeshWeaver.Graph` is today.
+- **The compile-time table names its types by string.** `InMeshImpersonationReferences.Members` is
+  keyed `Namespace.TypeName`, with no assembly. Keeping the namespace `MeshWeaver.Graph.MailCopy` in
+  the new home keeps every entry live. The table then names plugin types from core, which is a
+  core→plugins edge in the sense of [Repository Dependency Direction](../RepositoryDependencyDirection).
+  Close it with a seam modules contribute to, or record it.
+- **One core test spans the boundary.** `InMeshImpersonationReferencesTest` compiles snippets against
+  `typeof(MeshMailCopyStore)`. The table is core's subject, so the test stays in core and its
+  snippets declare stub types with the same full names. The eight `MeshWeaver.Graph.Test/MailCopy*`
+  suites (2 284 lines) follow the code.
+- **Persisted content is safe.** `MailCopySource` and `MailMessageCopy` are registered under
+  `nameof(...)`, so the stored discriminator does not carry the assembly.
+
+What blocks the move is **where it goes**. Every plugin package declares exactly one module, and
+both consumers need this code:
+
+1. **A new provider-neutral package** whose module carries MailCopy, required by `Mail` and `Google`.
+   This is the clean shape, but a new package in MeshWeaver.Plugins needs the owner's explicit go,
+   because merging it publishes it.
+2. **Fold it into the `Mail` module** (`MeshWeaver.Mail.MicrosoftGraph`). `Mail.Gmail` then
+   references that project, and `Google` requires `Mail`. `Mail` is pre-installed, so no portal
+   installs anything new. The cost is that the Gmail module binds the Outlook module.
+
+Until that choice is made the folder stays. Once it is made, MailCopy is the only member of this
+survey that can join a batched flip.
 
 ## Two defects this survey found
 
