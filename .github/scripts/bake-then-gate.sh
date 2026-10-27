@@ -12,7 +12,7 @@
 # actually produced, which are the assemblies a portal adopts.
 #
 #   usage: bake-then-gate.sh <tester-dll> <stage-dir> <bake-dir> <allow-file> <source-sha> \
-#                            <log-prefix> <warning-baseline>
+#                            <log-prefix> <warning-baseline> <dynamic-baseline>
 #
 # Writes <log-prefix>-bake.log (the compile) and <log-prefix>.log (the gate); the caller greps the
 # latter for the tester's own `GATE FAILED` verdict line, exactly as it did when the run was fused.
@@ -23,15 +23,20 @@
 # its enforcement is asserted below: the tester's default is observe-only, so a dropped argument
 # would leave in-mesh C# with no warning standard at all while every run stayed green, which is the
 # exact shape "a gate that cannot fail is not a gate" forbids.
+#
+# <dynamic-baseline> arms the shrink-only DYNAMIC-EDGE ratchet over the bake's reflection bindings
+# into core (Doc/Architecture/DependencyGraph → "The ratchet"). REQUIRED and asserted for the same
+# reason: the tester's default is observe-only.
 set -euo pipefail
 
-TESTER="${1:?usage: bake-then-gate.sh <tester-dll> <stage-dir> <bake-dir> <allow-file> <source-sha> <log-prefix> <warning-baseline>}"
+TESTER="${1:?usage: bake-then-gate.sh <tester-dll> <stage-dir> <bake-dir> <allow-file> <source-sha> <log-prefix> <warning-baseline> <dynamic-baseline>}"
 STAGE="${2:?stage-dir}"
 BAKE="${3:?bake-dir}"
 ALLOW="${4:?allow-file}"
 SOURCE_SHA="${5:?source-sha}"
 LOG_PREFIX="${6:?log-prefix}"
 WARNING_BASELINE="${7:?warning-baseline}"
+DYNAMIC_BASELINE="${8:?dynamic-baseline}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bake_log="${LOG_PREFIX}-bake.log"
@@ -43,7 +48,8 @@ echo "── baking $STAGE → $BAKE (compiler-driven, no mesh)"
 bake_status=0
 if ! time dotnet "$TESTER" compile "$STAGE" \
     --output "$BAKE" --allow "$ALLOW" --source-sha "$SOURCE_SHA" \
-    --warning-baseline "$WARNING_BASELINE" 2>&1 | tee "$bake_log"; then
+    --warning-baseline "$WARNING_BASELINE" --dynamic-baseline "$DYNAMIC_BASELINE" \
+    --repo-name "${GITHUB_REPOSITORY:-Systemorph/MeshWeaver}" 2>&1 | tee "$bake_log"; then
   bake_status="${PIPESTATUS[0]}"
   # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
   if [ "$bake_status" = "0" ]; then bake_status=1; fi
@@ -66,6 +72,10 @@ for ratchet in warnings doc-comments; do
     exit 1
   fi
 done
+if ! grep -q "^dependencies: dynamic-edge ratchet — ENFORCED" "$bake_log"; then
+  echo "::error::the bake of $STAGE did not ENFORCE its dynamic-edge ratchet (expected a 'dependencies: dynamic-edge ratchet — ENFORCED' line in $bake_log). --dynamic-baseline '$DYNAMIC_BASELINE' was passed but the tester reports it did not arm — reflection bindings into core would be held to no standard while this step stayed green."
+  exit 1
+fi
 
 # ── 2. THE GATE — a mesh, CONSUMING the bake above ──────────────────────────────────────────────
 echo "── gating $STAGE against the bake in $BAKE"

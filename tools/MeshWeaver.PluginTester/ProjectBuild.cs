@@ -332,6 +332,14 @@ public static class ProjectBuild
         /// graph's design asked for before the call is turned on in a lane.</summary>
         public TimeSpan UsedReferencesElapsed { get; init; }
 
+        /// <summary>
+        /// The project's PLATFORM, PACKAGE and DYNAMIC edges (everything but the in-tree Module
+        /// edges <see cref="WriteDependencyEdges"/> derives from <see cref="UsedReferences"/>),
+        /// when <see cref="Options.DependencyEdges"/> asked for them. An <c>init</c> PROPERTY,
+        /// for the arity reason <see cref="ExtensionGeneratedSources"/> records.
+        /// </summary>
+        public ImmutableArray<MeshWeaver.Mesh.DependencyEdge> OtherEdges { get; init; } = [];
+
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
     }
@@ -654,7 +662,10 @@ public static class ProjectBuild
                 BuildMvid = EmitPipelineMvid(r.AssemblyPath!),
                 Edges = [.. r.UsedReferences
                     .Where(n => inTree.Contains(n) && !string.Equals(n, r.AssemblyName, StringComparison.OrdinalIgnoreCase))
-                    .Select(n => new MeshWeaver.Mesh.DependencyEdge { Target = n, Kind = MeshWeaver.Mesh.DependencyEdgeKinds.Module })],
+                    .Select(n => new MeshWeaver.Mesh.DependencyEdge { Target = n, Kind = MeshWeaver.Mesh.DependencyEdgeKinds.Module }),
+                    // A platform-named assembly this run built from source is in-tree (a Module
+                    // edge above), never also a Platform one.
+                    .. r.OtherEdges.Where(e => !(e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Platform && inTree.Contains(e.Target)))],
             })
             .OrderBy(e => e.Source, StringComparer.Ordinal)
             .ToImmutableArray();
@@ -1501,6 +1512,7 @@ public static class ProjectBuild
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
             var used = ImmutableArray<string>.Empty;
             var usedElapsed = TimeSpan.Zero;
+            ImmutableArray<MeshWeaver.Mesh.DependencyEdge> otherEdges = [];
             if (options.DependencyEdges)
             {
                 phase.Restart();
@@ -1514,6 +1526,25 @@ public static class ProjectBuild
                 usedElapsed = phase.Elapsed;
                 sink.Info($"[{name}] phase: used assembly references {phase.ElapsedMilliseconds} ms "
                           + $"({used.Length} used of {compilation.References.Count()})");
+
+                // The PLATFORM, PACKAGE and DYNAMIC edges (Doc/Architecture/DependencyGraph). The
+                // in-tree projects and prebuilt siblings are the modules — WriteDependencyEdges owns
+                // those Module edges — and the shelf's files are the packages. Platform and package
+                // edges are read off the EMITTED assembly's AssemblyRef/TypeRef tables (no second
+                // binding pass); the dynamic scan binds only the candidate invocations its
+                // syntactic prefilter keeps.
+                phase.Restart();
+                var classes = DependencyReferenceClasses.Of(
+                    compilation.References,
+                    [.. dependencies.Select(d => d.AssemblyPath), .. graph.PrebuiltReferences.Values],
+                    shelfReferencePaths);
+                var referenceEdges = DependencyEdgeExtraction.EmittedReferenceEdges(compilation, artifact.DllPath, classes);
+                var dynamicEdges = DynamicBindingExtraction.Extract(compilation, compilation.SyntaxTrees, classes);
+                otherEdges = [.. referenceEdges, .. dynamicEdges];
+                sink.Info($"[{name}] phase: platform/package/dynamic edges {phase.ElapsedMilliseconds} ms "
+                          + $"({otherEdges.Count(e => e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Platform)} platform, "
+                          + $"{otherEdges.Count(e => e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Package)} package, "
+                          + $"{dynamicEdges.Count} dynamic)");
             }
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null)
@@ -1524,6 +1555,7 @@ public static class ProjectBuild
                 NativeRides = privateClosure.Natives,
                 UsedReferences = used,
                 UsedReferencesElapsed = usedElapsed,
+                OtherEdges = otherEdges,
             };
         }
         catch (CompilationException ex)
