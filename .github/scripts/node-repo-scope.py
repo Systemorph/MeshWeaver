@@ -241,12 +241,27 @@ def affected_packages(root: Path, changed: list[str], say) -> set[str] | None:
     return set(affected) if isinstance(affected, list) else None
 
 
-def project_hits(root: Path, entries: list[str], changed: list[str], say) -> dict | None:
-    """{entry → the changed project dirs its build+test closure contains} + `unclassified`."""
+def _accepts_base(root: Path) -> bool:
+    """Whether the caller's project-closure.py declares `--hits --base` (MeshWeaver.Plugins#4314:
+    a comment/whitespace-only MSBuild edit owes nothing against that ref). An older script would
+    REFUSE the flag (argparse exit 2 ⇒ "cannot narrow" ⇒ full), so it is passed only when declared."""
+    try:
+        return '"--base"' in (root / PROJECTS).read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def project_hits(root: Path, entries: list[str], changed: list[str], say,
+                 base: str | None = None) -> dict | None:
+    """{entry → the changed project dirs its build+test closure contains} + `unclassified`.
+    `base` is the ref the changed paths were diffed from (the PR base, or a push's publication
+    baseline); handed on as `--base` only to a project-closure.py that declares it."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
         fh.write("\n".join(changed) + "\n")
         listing = Path(fh.name)
     argv = ["--hits", "--changed", str(listing), "--json"]
+    if base and _accepts_base(root):
+        argv += ["--base", base]
     for e in entries:
         argv += ["--entry", e]
     try:
@@ -580,7 +595,14 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
 
     hits: dict[str, list[str]] = {e["project"]: [] for e in entries}
     if src_files:
-        answer = project_hits(root, sorted(hits), src_files, say)
+        # The ref the diff is FROM (`origin/<base>` of `origin/<base>...HEAD`) — so an inert MSBuild
+        # edit selects nothing here either. 🚨 NEVER on a publication diff: that list is the HISTORY
+        # union (it keeps a file a later commit reverted, so HEAD repairs a partial publication),
+        # and judging it against the baseline would rule the reverted file inert because HEAD
+        # matches the baseline — dropping exactly the module the repair owes.
+        diff_from = (diff_range.split("..", 1)[0]
+                     if diff_range and not publication_diff else None)
+        answer = project_hits(root, sorted(hits), src_files, say, diff_from)
         if answer is None:
             return full(f"the caller repo's {PROJECTS} could not answer the compiled-half closure "
                         f"for {len(src_files)} src/ file(s) — packing every module.")
@@ -1208,6 +1230,64 @@ def self_test() -> int:
             got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
             check(f"[modules] {label} ⇒ ALL", got["scope"] == "full" and got["count"] == 2,
                   f"scope={got['scope']} — {got['reason'][:80]}")
+        projects.write_text(graph_src, encoding="utf-8")
+
+        # `--base` reaches a project graph that DECLARES it (MeshWeaver.Plugins#4314: an inert,
+        # comment-only MSBuild edit owes nothing) — and never one that does not, which would
+        # refuse the unknown flag and turn every src/ diff into ALL.
+        inert = ["src/Acme.Shared/Directory.Build.props"]
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n",
+            'a=sys.argv\nB="--base"\n'
+            "assert B not in a or a[a.index(B)+1]=='origin/main', a\n"
+            "_inert=B in a\n").replace(
+            "hit={own(f) for f in paths if own(f)}\n",
+            "hit={own(f) for f in paths if own(f) and not (_inert and f.endswith('.props'))}\n"),
+            encoding="utf-8")
+        got = _run(root, "modules", "pull_request", inert, extra=["--base-ref", "main"])
+        check("[modules] a base-aware project graph gets `--base origin/main` and its inert MSBuild "
+              "edit selects nothing", got["count"] == 0 and got["scope"] != "full",
+              f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", inert)
+        check("[modules] …with no base ref there is no `--base`: the edit still counts (Alpha)",
+              got["selected"] == ["Acme.Alpha"], f"selected={got['selected']}")
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n", "a=sys.argv\nimport sys as _s\n'--base' in a and _s.exit(2)\n"),
+            encoding="utf-8")
+        got = _run(root, "modules", "pull_request", inert, extra=["--base-ref", "main"])
+        check("[modules] NEGATIVE CONTROL: a project graph that does NOT declare `--base` is never "
+              "handed it — the edit narrows to Alpha, not ALL",
+              got["selected"] == ["Acme.Alpha"] and got["scope"] != "full",
+              f"scope={got['scope']} selected={got['selected']} — {got['reason'][:80]}")
+        # A PUBLICATION push is a history union: a props edit a later commit reverted is still owed
+        # (a failed run may have published a partial bundle). The base-aware graph would rule it
+        # inert against WHATEVER base it is handed (here: any `--base` at all), so the module is
+        # selected ONLY if no `--base` reaches the graph on this path; handing it one reproduces
+        # the defect — the repair silently selects nothing.
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n",
+            'a=sys.argv\nB="--base"\n'
+            "_inert=B in a\n").replace(
+            "hit={own(f) for f in paths if own(f)}\n",
+            "hit={own(f) for f in paths if own(f) and not (_inert and f.endswith('.props'))}\n"),
+            encoding="utf-8")
+        def _g(*a):
+            return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True,
+                                  check=True).stdout.strip()
+        pub_base = _g("rev-parse", "HEAD")
+        props = root / "src" / "Acme.Shared" / "Directory.Build.props"
+        props.parent.mkdir(parents=True, exist_ok=True)
+        props.write_text("<Project><!-- edit --></Project>\n", encoding="utf-8")
+        _g("add", "--", "src/Acme.Shared/Directory.Build.props")
+        _g("commit", "-qm", "an MSBuild edit a failed run partially published")
+        _g("rm", "-q", "--", "src/Acme.Shared/Directory.Build.props")
+        _g("commit", "-qm", "revert it")
+        got = _run(root, "modules", "push", None,
+                   extra=["--publication-base", pub_base, "--publishing"])
+        check("[modules] a publication push hands NO `--base` to the project graph — a reverted "
+              "MSBuild edit still selects its module (Alpha) for the repair",
+              got["selected"] == ["Acme.Alpha"] and got["scope"] != "full",
+              f"scope={got['scope']} selected={got['selected']} — {got['reason'][:80]}")
         projects.write_text(graph_src, encoding="utf-8")
         projects.unlink()
         got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
