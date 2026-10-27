@@ -129,6 +129,18 @@ public static class BroadGrantGuard
     /// <param name="assignment">Its content through the typed accessor, when it is an AccessAssignment.</param>
     /// <param name="writer">The context the write is made under.</param>
     public static BroadGrantFinding? Evaluate(MeshNode? node, AccessAssignment? assignment, AccessContext? writer)
+        => EvaluateWrite(node, assignment, writer, options: null);
+
+    /// <summary>
+    /// <see cref="Evaluate"/>, reading a grant rule's
+    /// subject for the finding through the boundary's serializer options (every content shape).
+    /// </summary>
+    /// <param name="node">The node being written, already normalised.</param>
+    /// <param name="assignment">Its content through the typed accessor, when it is an AccessAssignment.</param>
+    /// <param name="writer">The context the write is made under.</param>
+    /// <param name="options">The boundary's serializer options; null reads a typed rule only.</param>
+    public static BroadGrantFinding? EvaluateWrite(MeshNode? node, AccessAssignment? assignment, AccessContext? writer,
+        System.Text.Json.JsonSerializerOptions? options)
     {
         if (node is null)
             return null;
@@ -139,7 +151,9 @@ public static class BroadGrantGuard
         // A declared type-scoped grant reaches every partition whose root matches — present and
         // future — so it is broad by construction, whatever subject or role it names.
         if (string.Equals(node.NodeType, GrantRule.NodeTypeName, StringComparison.OrdinalIgnoreCase))
-            return new BroadGrantFinding(BroadGrantKind.GrantRule, node.Path, GrantRuleSubject(node), Writer(writer));
+            return new BroadGrantFinding(BroadGrantKind.GrantRule, node.Path,
+                options is null ? (node.Content as GrantRule)?.AccessObject : node.ContentAs<GrantRule>(options)?.AccessObject,
+                Writer(writer));
 
         if (!string.Equals(node.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType, StringComparison.OrdinalIgnoreCase)
             || AccessAssignmentGuard.ScopeFromPath(node.Path) is null
@@ -156,24 +170,6 @@ public static class BroadGrantGuard
             return new BroadGrantFinding(BroadGrantKind.SystemForOther, node.Path, subject, Writer(writer));
 
         return null;
-    }
-
-    private static string? GrantRuleSubject(MeshNode node)
-    {
-        if (node.Content is GrantRule typed)
-            return typed.AccessObject;
-        try
-        {
-            return node.Content is System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.Object } je
-                   && je.TryGetProperty("accessObject", out var subject)
-                   && subject.ValueKind == System.Text.Json.JsonValueKind.String
-                ? subject.GetString()
-                : null;
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
     }
 
     /// <summary><c>Public</c> or <c>Anonymous</c> — a subject that is everybody. Pure.</summary>

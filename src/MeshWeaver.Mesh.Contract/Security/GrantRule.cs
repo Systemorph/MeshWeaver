@@ -194,21 +194,8 @@ public static class GrantRuleEvaluator
         }
     }
 
+    // The framework's one shape-tolerant reader: typed, both JSON shapes, and a same-named type
+    // from another assembly (a recoverable rule must never read as absent).
     private static GrantRule? Deserialize(object? content, JsonSerializerOptions options)
-    {
-        try
-        {
-            return content switch
-            {
-                GrantRule typed => typed,
-                JsonElement je => je.Deserialize<GrantRule>(options),
-                JsonNode jn => jn.Deserialize<GrantRule>(options),
-                _ => null,
-            };
-        }
-        catch (Exception e) when (e is JsonException or NotSupportedException)
-        {
-            return null;
-        }
-    }
+        => content.As<GrantRule>(options, what: GrantRule.Namespace);
 }

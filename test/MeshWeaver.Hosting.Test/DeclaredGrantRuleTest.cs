@@ -341,6 +341,21 @@ public class GrantRuleEvaluatorTest
     }
 
     [Fact]
+    public void ARuleWrittenAsJsonObject_IsReadAndNamesItsSubject()
+    {
+        // The governance executor writes a rule's content as a JsonObject — the shape must read.
+        var content = new System.Text.Json.Nodes.JsonObject
+        {
+            ["$type"] = "GrantRule", ["nodeType"] = "Crm/Counterparty", ["contentField"] = "type",
+            ["contentValue"] = "Crm/CounterpartyType/Client", ["accessObject"] = "Sales/Members", ["role"] = "Editor",
+        };
+        var node = new MeshNode("r", GrantRule.Namespace) { NodeType = GrantRule.NodeTypeName, Content = content };
+        GrantRuleEvaluator.ReadRules([node], Options).Should().ContainSingle();
+        BroadGrantGuard.EvaluateWrite(node, assignment: null, new AccessContext { ObjectId = "a-global-admin" }, Options)!
+            .Subject.Should().Be("Sales/Members", "the refusal and the audit line name who the rule grants");
+    }
+
+    [Fact]
     public void AGrantRuleWrite_IsABroadGrant_AndItsStandardIsAllowlisted()
     {
         var node = new MeshNode("r", GrantRule.Namespace) { NodeType = GrantRule.NodeTypeName, Content = ClientEditor };
