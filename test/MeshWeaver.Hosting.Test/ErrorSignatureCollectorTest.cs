@@ -100,6 +100,30 @@ public class ErrorSignatureCollectorTest
     }
 
     [Fact]
+    public void AQuotedCredentialAcrossTheClipBoundary_IsMaskedBeforeItIsClipped()
+    {
+        var collector = new ErrorSignatureCollector();
+        var filler = new string('x', ErrorDigestPayloads.MaxTemplateLength - 20);
+        var secret = "SuperSecretValueThatCrossesTheBoundary";
+
+        collector.Record("A", 0, LogLevel.Error, $"{filler} Password=\"{secret}\" refused", null, null, T0);
+
+        var wire = JsonSerializer.Serialize(collector.Pending().Single(), ErrorDigestPayloads.Json);
+        wire.Should().NotContain("SuperSecret").And.NotContain(secret[..10], "masked whole BEFORE the clip, not clipped mid-quote");
+    }
+
+    [Theory]
+    [InlineData("Import of alice/Private/Invoices failed", "alice")]
+    [InlineData(@"Cannot open C:\Users\alice\Private\Invoices.xlsx", "alice")]
+    [InlineData("Node acme/Crm/Contacts/4711 refused", "acme")]
+    public void Normalize_ReplacesRelativeMeshAndWindowsPaths(string text, string mustNotSurvive)
+    {
+        var normalized = TelemetryRedaction.Normalize(text);
+
+        normalized.Should().NotContain(mustNotSurvive).And.Contain("{path}");
+    }
+
+    [Fact]
     public void TheBound_HoldsUnderConcurrentRecords()
     {
         var collector = new ErrorSignatureCollector(capacity: 8);
@@ -252,6 +276,11 @@ public class ErrorSignatureCollectorTest
     [InlineData("GET https://store.example/files?sig=\"SuperSecret1\"&x=1", "SuperSecret1")]
     [InlineData("""body {"password":"SuperSecret1","user":"max"}""", "SuperSecret1")]
     [InlineData("""{"apiKey": "SuperSecret1"}""", "SuperSecret1")]
+    [InlineData("""{"client_secret":"SuperSecretValue"}""", "SuperSecretValue")]
+    [InlineData("access_token=SuperSecretValue&scope=x", "SuperSecretValue")]
+    [InlineData("refresh_token: SuperSecretValue", "SuperSecretValue")]
+    [InlineData("""{"id_token":"SuperSecretValue","AccountKey":"SuperSecretValue2"}""", "SuperSecretValue")]
+    [InlineData("""Password="SuperSecretValueCutOff""", "SuperSecretValueCutOff")]
     public void Mask_RemovesCredentialsAndPeople(string text, string mustNotSurvive)
     {
         var masked = TelemetryRedaction.Mask(text);

@@ -120,7 +120,11 @@ public sealed class InstanceErrorReporter(
     /// Compose and deliver ONE digest now. Cold; emits one outcome; errors only on a fault composing
     /// the digest (a delivery refusal is an outcome, not an error).
     /// </summary>
-    public IObservable<ErrorDigestOutcome> Report()
+    public IObservable<ErrorDigestOutcome> Report() => Observable.Defer(ReportNow);
+
+    /// <summary>The body of <see cref="Report"/>, evaluated at SUBSCRIPTION — so a tick queued behind
+    /// a slow delivery reads the ledger after that delivery marked its signatures, not before.</summary>
+    private IObservable<ErrorDigestOutcome> ReportNow()
     {
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
         if (!IsEnabled(configuration))

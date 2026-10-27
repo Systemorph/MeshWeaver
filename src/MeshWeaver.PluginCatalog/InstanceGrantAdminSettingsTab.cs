@@ -603,9 +603,16 @@ public static class InstanceGrantAdminSettingsTab
         // ambient access context reads silently UTC (AGENTS.md — render a stored timestamp in the
         // viewer's zone).
         var zoneId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
+        // The viewer's WORDING is resolved once here too: the feed below re-projects on a timer, where
+        // no viewer context is ambient, so the three sentences are captured as formats on the render
+        // turn and only formatted later.
+        var wording = new LastSeenStrings(
+            host.Localize("instanceGrants.lastSeen.never"),
+            host.Localize("instanceGrants.lastSeen.online", "{0}", "{1}"),
+            host.Localize("instanceGrants.lastSeen.offline", "{0}", "{1}"));
         return Controls.Stack
             .WithView(Controls.Title(host.Localize("instanceGrants.registered"), 3))
-            .WithView(GrantRowsFeed(host, zoneId)
+            .WithView(GrantRowsFeed(host, zoneId, wording)
                 .BindGrid(ListDataId, host.Localize("instanceGrants.noInstances"),
                     message => $"{host.Localize("instanceGrants.error.failed")} {message}")
                 .WithColumn(new PropertyColumnControl<string>
@@ -632,7 +639,8 @@ public static class InstanceGrantAdminSettingsTab
     /// recently seen first (Doc/Architecture/InstanceTelemetry). Builds no control.</summary>
     /// <param name="host">The rendering host.</param>
     /// <param name="zoneId">The viewer's IANA zone, resolved on the render turn; <c>null</c> renders UTC.</param>
-    internal static IObservable<IReadOnlyList<GrantRow>> GrantRowsFeed(LayoutAreaHost host, string? zoneId)
+    /// <param name="wording">The viewer's three last-seen sentences, resolved on the render turn.</param>
+    internal static IObservable<IReadOnlyList<GrantRow>> GrantRowsFeed(LayoutAreaHost host, string? zoneId, LastSeenStrings wording)
     {
         var options = host.Hub.JsonSerializerOptions;
         var instances = host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
@@ -651,7 +659,7 @@ public static class InstanceGrantAdminSettingsTab
         // open page without waiting for another query emission.
         return instances
             .CombineLatest(Observable.Timer(TimeSpan.Zero, TimeSpan.FromMinutes(1)), (map, _) => map)
-            .Select(map => Rows(map.Values, options, DateTimeOffset.UtcNow, zoneId, (key, args) => host.Localize(key, args)));
+            .Select(map => Rows(map.Values, options, DateTimeOffset.UtcNow, zoneId, wording));
     }
 
     /// <summary>
@@ -661,7 +669,7 @@ public static class InstanceGrantAdminSettingsTab
     /// </summary>
     internal static IReadOnlyList<GrantRow> Rows(
         IEnumerable<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options, DateTimeOffset now, string? zoneId,
-        Func<string, object?[], string> localize)
+        LastSeenStrings wording)
         => nodes
             .Where(node => !node.Path.StartsWith(MeshWeaverInstanceNodeType.IndexNamespace + "/", StringComparison.Ordinal))
             .Select(node =>
@@ -670,9 +678,9 @@ public static class InstanceGrantAdminSettingsTab
                 var reading = LastSeenWording.Describe(instance?.LastSeenAt, now, zoneId);
                 var lastOnline = reading.Kind switch
                 {
-                    LastSeenWording.Online => localize("instanceGrants.lastSeen.online", [reading.When, reading.Age]),
-                    LastSeenWording.Offline => localize("instanceGrants.lastSeen.offline", [reading.When, reading.Age]),
-                    _ => localize("instanceGrants.lastSeen.never", []),
+                    LastSeenWording.Online => string.Format(System.Globalization.CultureInfo.InvariantCulture, wording.OnlineFormat, reading.When, reading.Age),
+                    LastSeenWording.Offline => string.Format(System.Globalization.CultureInfo.InvariantCulture, wording.OfflineFormat, reading.When, reading.Age),
+                    _ => wording.Never,
                 };
                 return (Row: new GrantRow(
                     node.Id ?? node.Path.Split('/').Last(),
@@ -686,6 +694,10 @@ public static class InstanceGrantAdminSettingsTab
             .ThenBy(entry => entry.Row.InstanceId, StringComparer.Ordinal)
             .Select(entry => entry.Row)
             .ToList();
+
+    /// <summary>The viewer's last-seen sentences, resolved once on the render turn — a localized
+    /// <c>never</c>, and two <c>string.Format</c> templates taking the instant and the age.</summary>
+    internal sealed record LastSeenStrings(string Never, string OnlineFormat, string OfflineFormat);
 
     /// <summary>Plain row record bound into the instance <see cref="DataGridControl"/>.</summary>
     /// <param name="InstanceId">The logical App ID.</param>

@@ -35,12 +35,14 @@ public static partial class TelemetryRedaction
     [GeneratedRegex(@"\b(mwi_|mwa_|mwr_|ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abp]-)[A-Za-z0-9_\-]{6,}", RegexOptions.CultureInvariant)]
     private static partial Regex KnownToken();
 
-    [GeneratedRegex(@"(?i)([?&;](?:sig|signature|token|key|secret|password|pwd|access_token|refresh_token|client_secret|sas|code|api[_-]?key)=)(?:""[^""&\s]*""|'[^'&\s]*'|[^&\s""']+)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?i)([?&;](?:sig|signature|token|key|secret|password|pwd|access_token|refresh_token|id_token|client_secret|sas|code|api[_-]?key)=)(?:""[^""&\s]*""?|'[^'&\s]*'?|[^&\s""']+)", RegexOptions.CultureInvariant)]
     private static partial Regex QuerySecret();
 
-    // The key may be bare or quoted (a JSON field), the separator = or :, the value bare or quoted;
-    // the whole value — quotes included — is replaced, so a quoted secret cannot survive by its quotes.
-    [GeneratedRegex(@"(?i)(""?\b(?:password|passwd|pwd|secret|token|api[_-]?key|accountkey|sharedaccesskey|sharedaccesssignature|authorization|connectionstring)\b""?\s*[=:]\s*)(?:""(?:\\.|[^""\\])*""|'[^']*'|[^;\s,""'}]+)", RegexOptions.CultureInvariant)]
+    // The key is any word CONTAINING a credential noun (password, secret, token, key, …) — so
+    // client_secret, access_token, refresh_token, apiKey and AccountKey all match — bare or quoted (a
+    // JSON field); the separator = or :; the value bare or quoted. The whole value, quotes included,
+    // is replaced, and a quoted value whose closing quote was cut off is still consumed to the end.
+    [GeneratedRegex(@"(?i)(""?\b[\w\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|accountkey|sharedaccesskey|sharedaccesssignature|authorization|connectionstring|credential)[\w\-]*""?\s*[=:]\s*)(?:""(?:\\.|[^""\\])*""?|'[^']*'?|[^;\s,""'}]+)", RegexOptions.CultureInvariant)]
     private static partial Regex KeyValueSecret();
 
     [GeneratedRegex(@"(?i)(https?://)[^/\s@]+@", RegexOptions.CultureInvariant)]
@@ -58,7 +60,10 @@ public static partial class TelemetryRedaction
     [GeneratedRegex(@"""[^""\r\n]*""|'[^'\r\n]*'", RegexOptions.CultureInvariant)]
     private static partial Regex Quoted();
 
-    [GeneratedRegex(@"(?<![\w{<])(?:/[\w.\-]+){2,}/?", RegexOptions.CultureInvariant)]
+    // Absolute POSIX (/a/b), relative mesh (alice/Private/Invoices — two or more segments) and Windows
+    // (C:\Users\alice) paths: a path names a partition, a person or a machine, none of which a
+    // signature may carry.
+    [GeneratedRegex(@"(?<![\w{<])(?:/[\w.\-]+){2,}/?|(?<![\w{<./\\])[\w.\-]+(?:/[\w.\-]+)+/?|\b[A-Za-z]:\\(?:[^\s\\""']+\\?)+", RegexOptions.CultureInvariant)]
     private static partial Regex PathLike();
 
     [GeneratedRegex(@"(?<![\w{<.-])\d+(?:[.,]\d+)*(?![\w}>])", RegexOptions.CultureInvariant)]

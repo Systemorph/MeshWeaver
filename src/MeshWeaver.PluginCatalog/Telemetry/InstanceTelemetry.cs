@@ -91,7 +91,11 @@ public sealed class InstanceTelemetryReader(IMessageHub hub, ILogger<InstanceTel
         var combo = hub.ServiceProvider.GetService<InstanceComboReader>();
         if (combo is null)
             return Observable.Return(Snapshot());
-        return Observable.Defer(() => combo.Read().Take(1).Timeout(SummaryBudget))
+        // Sealed System boundary around the inventory read: this sits on the token-resolution path,
+        // where the caller may hold no impersonation at all, and the combo reader's own scope opens
+        // on the subscribing thread — RunAsSystem is the boundary that restores the caller.
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Defer(() => access.RunAsSystem(() => combo.Read().Take(1)).Timeout(SummaryBudget))
             .Do(read =>
             {
                 // A combo whose source queries partly failed answers with IsComplete == false and a

@@ -91,10 +91,12 @@ public sealed class ErrorSignatureCollector
     /// <summary>Folds one error record into the ledger. Never throws, never blocks.</summary>
     public void Record(string category, int eventId, LogLevel level, string template, string? exceptionType, string? topFrame, DateTimeOffset at)
     {
-        var boundedTemplate = Clip(template, ErrorDigestPayloads.MaxTemplateLength);
-        var boundedCategory = Clip(category, ErrorDigestPayloads.MaxFieldLength);
-        var boundedException = exceptionType is null ? null : Clip(exceptionType, ErrorDigestPayloads.MaxFieldLength);
-        var boundedFrame = topFrame is null ? null : Clip(topFrame, ErrorDigestPayloads.MaxFieldLength);
+        // MASK, then clip: clipping first could cut a quoted credential in half and leave the half
+        // that no quote-aware pattern matches any more. Masked text is clipped safely.
+        var boundedTemplate = Clip(TelemetryRedaction.Mask(template), ErrorDigestPayloads.MaxTemplateLength);
+        var boundedCategory = Clip(TelemetryRedaction.Mask(category), ErrorDigestPayloads.MaxFieldLength);
+        var boundedException = exceptionType is null ? null : Clip(TelemetryRedaction.Mask(exceptionType), ErrorDigestPayloads.MaxFieldLength);
+        var boundedFrame = topFrame is null ? null : Clip(TelemetryRedaction.Mask(topFrame), ErrorDigestPayloads.MaxFieldLength);
         var signature = ComputeSignature(boundedCategory, eventId, boundedTemplate, boundedException, boundedFrame);
 
         while (true)
