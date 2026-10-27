@@ -58,7 +58,6 @@ public static class DependencyEdgeExtraction
         ArgumentNullException.ThrowIfNull(compilation);
         ArgumentException.ThrowIfNullOrEmpty(selfPath);
 
-        var owners = DeclaredTypeOwners(selfPath, roots, includes, ct);
         // The foreign owners whose code this compile CONSUMED — read off the files (roots and
         // includes), not off the declared types, so a foreign file that declares no type (only
         // directives or assembly attributes) is still counted as an inclusion.
@@ -69,9 +68,10 @@ public static class DependencyEdgeExtraction
             .Where(o => !IsSelf(o, selfPath))
             .ToImmutableSortedSet(StringComparer.OrdinalIgnoreCase);
 
+        // A self-contained compile (no foreign file) pays for neither the per-file parse nor the walk.
         var nodeTypeEvidence = foreignOwners.IsEmpty
             ? ImmutableDictionary<string, ImmutableSortedSet<string>>.Empty
-            : WalkReferences(compilation, authoredTrees, selfPath, owners, ct);
+            : WalkReferences(compilation, authoredTrees, selfPath, DeclaredTypeOwners(selfPath, roots, includes, ct), ct);
 
         var edges = ImmutableList.CreateBuilder<DependencyEdge>();
         foreach (var (target, evidence) in nodeTypeEvidence.OrderBy(kv => kv.Key, StringComparer.Ordinal))
@@ -138,9 +138,11 @@ public static class DependencyEdgeExtraction
             // under the names they carry IN THE ROOT, to the included node's owner.
             foreach (var unit in roots)
             {
+                // EVERY occurrence: one snippet may be spliced in more than once (into two namespaces).
                 var spans = includes
-                    .Select(kv => (Owner: CodeConventions.OwnerOfCodePath(kv.Key), Start: unit.Code.IndexOf(kv.Value, StringComparison.Ordinal), kv.Value.Length))
-                    .Where(x => x.Owner is not null && x.Start >= 0 && x.Length > 0)
+                    .Select(kv => (Owner: CodeConventions.OwnerOfCodePath(kv.Key), Text: kv.Value))
+                    .Where(x => x.Owner is not null && x.Text.Length > 0)
+                    .SelectMany(x => Occurrences(unit.Code, x.Text).Select(start => (x.Owner, Start: start, x.Text.Length)))
                     .ToArray();
                 if (spans.Length == 0)
                     continue;
@@ -157,6 +159,13 @@ public static class DependencyEdgeExtraction
             }
         }
         return byName.ToImmutableDictionary(StringComparer.Ordinal);
+    }
+
+    private static IEnumerable<int> Occurrences(string text, string value)
+    {
+        for (var at = text.IndexOf(value, StringComparison.Ordinal); at >= 0;
+             at = text.IndexOf(value, at + value.Length, StringComparison.Ordinal))
+            yield return at;
     }
 
     /// <summary>The metadata names (<c>Ns.Outer+Inner`1</c>) of every type declared in a tree —
@@ -234,10 +243,8 @@ public static class DependencyEdgeExtraction
                     continue;
                 foreach (var symbol in bound)
                 {
-                    if (OutermostSourceType(symbol, compilation) is not { } type)
-                        continue;
-                    var typeName = MetadataNameOf(type);
-                    if (!owners.TryGetValue(typeName, out var owner) || IsSelf(owner, selfPath))
+                    if (OwnedSourceType(symbol, compilation, owners) is not var (typeName, owner)
+                        || IsSelf(owner, selfPath))
                         continue;
                     if (!found.TryGetValue(owner, out var set))
                         found[owner] = set = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
@@ -289,6 +296,13 @@ public static class DependencyEdgeExtraction
             case SelectOrGroupClauseSyntax or OrderingSyntax:
                 yield return model.GetSymbolInfo(node, ct).Symbol;
                 break;
+            case BinaryExpressionSyntax or PrefixUnaryExpressionSyntax or PostfixUnaryExpressionSyntax:
+                // A user-defined operator (A's factory returns C's struct; B adds two of them).
+                yield return model.GetSymbolInfo(node, ct).Symbol;
+                break;
+            case AssignmentExpressionSyntax compound when !compound.IsKind(SyntaxKind.SimpleAssignmentExpression):
+                yield return model.GetSymbolInfo(compound, ct).Symbol;
+                break;
             case ImplicitObjectCreationExpressionSyntax created:
                 yield return model.GetSymbolInfo(created, ct).Symbol;
                 break;
@@ -310,25 +324,28 @@ public static class DependencyEdgeExtraction
                 yield return method;
     }
 
-    /// <summary>The owner of the code a reference sits in: the owner of its OUTERMOST enclosing type
-    /// declaration, or null when it sits outside every attributed type (the generated skeleton, the
+    /// <summary>The owner of the code a reference sits in: the owner of its INNERMOST enclosing type
+    /// declaration the ownership map names, or null when it sits outside every attributed type (the generated skeleton, the
     /// <c>configuration</c> lambda, an assembly attribute) — which the caller reads as the compiling
     /// type's own code.</summary>
     private static string? OwnerOfLocation(SyntaxNode node, ImmutableDictionary<string, string> owners)
     {
-        SyntaxNode? outermost = null;
+        // Innermost enclosing declaration the map names: a foreign record spliced into the compiling
+        // type's class is the foreign owner's code, not the class's.
         for (var parent = node.Parent; parent is not null; parent = parent.Parent)
-            if (parent is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax)
-                outermost = parent;
-        return outermost is not null && TypeDeclarationName(outermost) is { } name
-            && owners.TryGetValue(name, out var owner)
-            ? owner
-            : null;
+            if (parent is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax
+                && TypeDeclarationName(parent) is { } name
+                && owners.TryGetValue(name, out var owner))
+                return owner;
+        return null;
     }
 
-    /// <summary>The outermost named type a symbol belongs to, when that type is declared in THIS
-    /// compilation's source; null for a namespace, a local, or anything from a referenced assembly.</summary>
-    private static INamedTypeSymbol? OutermostSourceType(ISymbol? symbol, CSharpCompilation compilation)
+    /// <summary>The OWNED type a symbol belongs to — its own type (or containing type for a member),
+    /// then each enclosing type outwards, the first one the ownership map names — when declared in
+    /// THIS compilation's source; null for a namespace, a local, or anything from a referenced
+    /// assembly. Innermost first, so A's record spliced into B's class (<c>Host+AThing</c>) is A's.</summary>
+    private static (string Name, string Owner)? OwnedSourceType(
+        ISymbol? symbol, CSharpCompilation compilation, ImmutableDictionary<string, string> owners)
     {
         var type = symbol switch
         {
@@ -337,11 +354,15 @@ public static class DependencyEdgeExtraction
             INamedTypeSymbol named => named.OriginalDefinition,
             _ => symbol.ContainingType?.OriginalDefinition,
         };
-        if (type is null)
+        if (type is null || !SymbolEqualityComparer.Default.Equals(type.ContainingAssembly, compilation.Assembly))
             return null;
-        while (type.ContainingType is { } outer)
-            type = outer.OriginalDefinition;
-        return SymbolEqualityComparer.Default.Equals(type.ContainingAssembly, compilation.Assembly) ? type : null;
+        for (var t = type; t is not null; t = t.ContainingType?.OriginalDefinition)
+        {
+            var name = MetadataNameOf(t);
+            if (owners.TryGetValue(name, out var owner))
+                return (name, owner);
+        }
+        return null;
     }
 
     /// <summary>The module edges: every reference the compilation USED that is an installed module,

@@ -388,6 +388,92 @@ public class DependencyEdgeExtractionTest
         edges.IncludedWithoutUse.Should().Equal([A]);
     }
 
+    [Fact(Timeout = 120_000)]
+    public void AUserDefinedOperatorOfAThirdOwner_IsAnEdge_ThoughNoNameOfItAppears()
+    {
+        var edges = CompileB(
+            [
+                Code(C, "Money", """
+                    /// <summary>Lib/C's value with an addition operator.</summary>
+                    public readonly record struct Money(int Cents)
+                    {
+                        /// <summary>The sum, in cents.</summary>
+                        public static int operator +(Money a, Money b) => a.Cents + b.Cents;
+                    }
+                    """),
+                Code(A, "Factory", """
+                    /// <summary>Lib/A's factory, returning Lib/C's type.</summary>
+                    public static class MoneyFactory
+                    {
+                        /// <summary>One cent.</summary>
+                        public static Money Cent() => new(1);
+                    }
+                    """),
+                Code(B, "Adds", """
+                    /// <summary>B names only A's factory; the addition binds C's operator.</summary>
+                    public static class Adds
+                    {
+                        /// <summary>Two cents.</summary>
+                        public static int Two() => MoneyFactory.Cent() + MoneyFactory.Cent();
+                    }
+                    """),
+            ],
+            ["namespace:Source scope:subtree", $"shared=@{A}/Source", $"shared=@{C}/Source"],
+            TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Select(e => e.Target).Should().Equal([A, C]);
+        edges.Edges.Single(e => e.Target == C).Evidence.Should().Equal(["Money"]);
+        edges.IncludedWithoutUse.Should().BeEmpty();
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AForeignTypeSplicedIntoTheCompilingTypesClass_IsStillTheForeignOwners()
+    {
+        var edges = CompileB(
+            [AThing(), Code(B, "Host", """
+                /// <summary>B's class, hosting A's record.</summary>
+                public static class Host
+                {
+                    @@Lib/A/Source/AThing
+
+                    /// <summary>One.</summary>
+                    public static AThing One() => new(1);
+                }
+                """)],
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A);
+        edges.Edges[0].Evidence.Should().Equal(["Host+AThing"], "the nested identity is looked up innermost first");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AnIncludeSplicedTwice_EveryCopyIsTheIncludedOwners()
+    {
+        var edges = CompileB(
+            [AThing(), Code(B, "Twice", """
+                namespace First
+                {
+                    @@Lib/A/Source/AThing
+                }
+
+                namespace Second
+                {
+                    @@Lib/A/Source/AThing
+                }
+
+                /// <summary>B binds only the SECOND copy.</summary>
+                public static class UsesSecond
+                {
+                    /// <summary>One.</summary>
+                    public static Second.AThing One() => new(1);
+                }
+                """)],
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A);
+        edges.Edges[0].Evidence.Should().Equal(["Second.AThing"]);
+    }
+
     [Fact]
     public void DeclaredTypeNames_SpellNestedGenericAndNamespacedTypesAsTheBoundSymbolDoes()
     {

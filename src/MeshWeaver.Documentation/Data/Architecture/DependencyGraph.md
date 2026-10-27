@@ -82,8 +82,10 @@ used — after the source generators, before the emitted bytes are loaded — an
 
 What "binds" covers: every simple name, plus the bindings no name spells — a `foreach` enumerator
 pattern (an extension `GetEnumerator`), an `await` awaiter, a deconstruction's `Deconstruct`, query
-clause operators, a collection initializer's `Add`, a target-typed `new()`, and a user-defined
-implicit conversion. A `using` directive is an import, not a use, and is skipped (hoisted directives
+clause operators, a collection initializer's `Add`, a target-typed `new()`, user-defined unary,
+binary and compound-assignment operators, and a user-defined implicit conversion. A referenced type
+is looked up from its innermost declaration outwards, so a foreign record spliced into the compiling
+type's class (`Host+AThing`) stays the foreign owner's. A `using` directive is an import, not a use, and is skipped (hoisted directives
 sit in the skeleton, outside every attributed type). An `@@` include spliced inside a namespace of
 the including file is attributed under the name it carries there, by its span in that file.
 
@@ -92,6 +94,9 @@ Known limits, each failing towards an extra edge rather than a missing one:
   type. A reference inside the foreign part then reads as the compiling type's own.
 - **Code outside any `Source/` or `Test/` segment** has no owner. A reference in it reads as the
   compiling type's own.
+- **An include nested inside another include** is attributed by a separate parse of its own text, so
+  when the outer snippet is spliced into a namespace, its inner snippet's types lose that namespace.
+  A reference to them then reads as the compiling type's own.
 
 Telling these apart exactly needs each reference's file origin carried through source shaping. That
 is a change to the emitted input, and it moves every content key.
@@ -112,7 +117,7 @@ which is what step 1 does.
 | compile | extraction | written by |
 |---|---|---|
 | runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane | the compile settle, beside the terminal stamp, as the edge-set node |
-| cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate |
+| cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate — and only when the stamp LANDED (a refused compare-and-set writes no edges over a newer build's) |
 | build-process bake (`NodeSetCompiler.Compile`) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges` for the bundle — writing it into a mesh at adoption is a follow-up |
 | module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | not yet | follow-up: it runs in CI with no mesh, so its edges need a transport (the bundle, then the registry) that belongs with step (4); and its one-body-pass discipline means `GetUsedAssemblyReferences`' extra binding cost is measured there before it is added |
 
@@ -124,10 +129,13 @@ transitively) and `dependencies:<path>` (everything `<path>` depends on). Each a
 
 ### Postgres (MeshWeaver.Plugins, `PostgreSqlSchemaInitializer`)
 
-- **`public.dependency_edge(source, target, build_identity)`**, PK `(source, target)`. Kept by a
-  trigger on each partition's `mesh_nodes` that projects a `DependencyEdgeSet` row's edges: delete
-  the source's rows and insert the new set in the same statement, so one compile is one
-  transaction.
+- **`public.dependency_edge(source, target, kind, build_identity)`**, PK `(source, target)`.
+  A row trigger on each partition's `mesh_nodes` projects every CANONICAL `DependencyEdgeSet`
+  row: the row must be `{source}/_Dependency/Forward`, and a row claiming another source projects
+  nothing. The source's rows become exactly the set's edges, in the node write's own transaction.
+  `mw_note_node_types_for` installs the trigger per partition (a new partition by its table
+  script, an existing one by the boot sweep, with a one-time backfill). A dropped partition calls
+  `mw_dependency_forget_partition` first, because `DROP SCHEMA … CASCADE` fires no row triggers.
 - **`public.dependency_closure(ancestor, descendant, depth, next_hop, build_identity)`**, PK
   `(ancestor, descendant)`, indexes on `(descendant)` and `(ancestor, depth)`. The ANCESTOR is the
   dependency (the parent), the DESCENDANT depends on it (the child), so "all children of X" — every
@@ -137,17 +145,21 @@ transitively) and `dependencies:<path>` (everything `<path>` depends on). Each a
   the chosen shortest chain), so `dependency_path(a, d)` walks `d → next_hop(a, d) → … → a`. Among
   chains of equal length the smallest `next_hop` (ordinal) is chosen, so the incremental and the
   full computation agree row for row.
-- **AFTER INSERT** on `dependency_edge` (statement level, transition table, processed one edge at a
-  time so each sees the ones before it): for a new edge `s → t`, every `A ∈ {t} ∪ (what t depends
-  on)` and every `D ∈ {s} ∪ (what depends on s)` gets the row `(A, D)` with
-  `depth = depth(A, t) + 1 + depth(s, D)` and `next_hop = t` when `D = s`, else `next_hop(s, D)`;
-  `ON CONFLICT (ancestor, descendant) DO UPDATE` keeps the smaller `(depth, next_hop)`. A self-pair
-  from a cycle (`A = D`) is not stored: a node is never its own dependent, and the cycle stays
-  visible as the rows `(a, b)` and `(b, a)`.
-- **AFTER DELETE / UPDATE**: insert-only maintenance cannot shrink a closure, so the affected rows
-  are rebuilt — `rebuild_dependency_closure()` over the whole table, which at this size (hundreds of
-  packages, about a thousand NodeTypes, at most ~10⁵ closure rows) is measured before anything
-  narrower is written.
+- **One row trigger on `dependency_edge`, DEFERRED to commit** (`DEFERRABLE INITIALLY DEFERRED`).
+  Every closure change happens under one advisory lock, so two compiles committing at once cannot
+  each extend the closure without the other's edge. That lock is taken at commit, when the
+  transaction already holds every row lock it will take. A lock taken mid-write let a batch and a
+  concurrent writer each hold a row the other waited for. What the trigger does per event:
+  - **An inserted edge `s → t`** gives every `A ∈ {t} ∪ (what t depends on)` and every
+    `D ∈ {s} ∪ (what depends on s)` the row `(A, D)`. Its depth is
+    `depth(A, t) + 1 + depth(s, D)`; its next hop is `t` when `D = s`, else `next_hop(s, D)`.
+    `ON CONFLICT` keeps the smaller `(depth, next_hop)`.
+  - **A dropped or re-pointed edge** triggers `rebuild_dependency_closure()`, once per transaction
+    and from its final edges. Insert-only maintenance cannot shrink a closure, and a whole-table
+    rebuild costs about 100 ms at the design size.
+  - **A restamp** (same edges, new build) moves only `build_identity`.
+  - **Self-pairs** are never stored: a node is not its own dependent, and a cycle shows as the rows
+    `(a, b)` and `(b, a)`.
 - **Readers**: `dependents(target, max_depth)`, `dependencies(source, max_depth)` and
   `dependency_path(from, to)` — STABLE SQL functions over the closure table, called only by the
   query provider through `IIoPool`.

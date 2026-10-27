@@ -102,4 +102,56 @@ public class ABatchBakeWritesItsDependencyEdgesTest(ITestOutputHelper output) : 
         edges.Edges[0].Evidence.Should().Equal([$"LibThing{suffix}"]);
         edges.BuildMvid.Should().Be(definition.LatestAssemblyMvid, "the set names the build the record names");
     }
+
+    [Fact(Timeout = 120_000)]
+    public async Task AStampThatDidNotLand_WritesNoEdges_AndOneThatDidWritesThem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var refusedPath = $"{TestPartition}/NotAType{suffix}";
+        var landedPath = $"{TestPartition}/IsAType{suffix}";
+        // A row whose content is not a NodeTypeDefinition: the stamp is SKIPPED (not landed).
+        await storage.Write(new MeshNode($"NotAType{suffix}", TestPartition)
+            {
+                NodeType = "Code", Version = 3, Content = new CodeConfiguration { Code = "not a type" },
+            }, Mesh.JsonSerializerOptions).Await(ct);
+        await storage.Write(new MeshNode($"IsAType{suffix}", TestPartition)
+            {
+                NodeType = MeshNode.NodeTypePath, Version = 3, Content = new NodeTypeDefinition(),
+            }, Mesh.JsonSerializerOptions).Await(ct);
+
+        foreach (var path in new[] { refusedPath, landedPath })
+        {
+            var emissions = await NodeTypeBatchBake.WriteStamp(
+                    Mesh,
+                    MeshNode.FromPath(path) with { NodeType = MeshNode.NodeTypePath },
+                    ok: true,
+                    new NodeCompilationResult($"/nonexistent/{suffix}.dll", [])
+                    {
+                        DependencyEdges = new DependencyEdgeSet
+                        {
+                            Source = path,
+                            BuildMvid = "0000aaaa0000aaaa0000aaaa0000aaaa",
+                            Edges = [new DependencyEdge { Target = LibPath, Kind = DependencyEdgeKinds.NodeType }],
+                        },
+                    },
+                    error: null, releasePath: null, startedAt: DateTimeOffset.UtcNow, logger: null)
+                .ToList()
+                .Should().Within(TestTimeouts.Convergence).Emit("the stamp completes", ct);
+            emissions.Should().HaveCount(1, "one stamp is one outcome, edge write included");
+        }
+
+        var landed = DependencyEdgeSetPaths.PathFor(landedPath);
+        var listing = await MeshService.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{DependencyEdgeSetPaths.NamespaceFor(landedPath)} scope:children").AsSystem())
+            .Where(change => change.Items.Any(n => n.Path == landed))
+            .Should().Within(TestTimeouts.CrossSilo).Emit("the landed stamp wrote its edges", ct);
+        listing.Items.Should().Contain(n => n.Path == landed);
+
+        var refused = await MeshService.Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{DependencyEdgeSetPaths.NamespaceFor(refusedPath)} scope:children").AsSystem())
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit("the listing answers", ct);
+        refused.Items.Should().BeEmpty("a stamp that did not land must not write edges over a newer build's");
+    }
 }
