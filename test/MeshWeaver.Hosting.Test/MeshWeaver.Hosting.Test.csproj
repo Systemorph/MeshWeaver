@@ -26,6 +26,11 @@
          reasoning as GitSync above: the PluginCatalog suite lives in MeshWeaver.Plugins against a
          PINNED core, so a test of a core change belongs where the code is. -->
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
+    <!-- AnArbitraryUrlFetcherGivingUpIsAWarningTest (#7085) builds the host's real outbound-HTTP
+         resilience (ServiceDefaults.AddHttpClientResilienceDefaults) and reads the Polly line's level.
+         The resilience suite lives in MeshWeaver.Plugins (Memex.Portal.Shared.Test) against a PINNED
+         core, so a test of a core change belongs where the code is. -->
+    <ProjectReference Include="..\..\memex\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Concrete HostBuilder for MeshHostBuilderTeardownOrderingTest (the legacy

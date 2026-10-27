@@ -563,9 +563,22 @@ keeps the supersede model in the next section.
    the in-mesh `requires`/dependents walk plus the `ProjectReference` compile tree — over the history
    union since the newest SUCCESSFUL trunk run (`node-repo-publication-base.py`). Failed, cancelled
    and in-flight runs after it are walked past, because the union carries every change they held.
+   A run that never started (completed with zero jobs in any attempt: cancelled while queued, a
+   startup failure) published nothing and is not in the walk at all.
    Only a toolchain change resets to the full set: a run in between that attested a different
-   platform, image or build-logic set may have published with it, which git history cannot show.
+   platform set, image or build recipe may have published with it, which git history cannot show.
+   The build-logic ref (core `main`'s HEAD, which moves with every core merge) is compared only
+   when an attestation lacks `recipe` — the lane's `module-build-key.py` RECIPE_VERSION, which is
+   bumped on every byte-changing lane edit (`node-repo-publication-base.py --print-recipe`).
    Unrelated modules are not rebuilt, not retested, not republished.
+   **A partial publication is a baseline that CARRIES what it withheld** (`--carry-withheld`). A
+   successful run whose withheld marker names the packages it held back (rule 4) is the baseline,
+   and those packages come back as `publication-carry`; the caller passes them to the lane, which
+   selects them (built and tested) on top of the diff, so a withheld package is rebuilt until a run
+   publishes it and is never mistaken for published. A marker that names no package list is walked
+   past as before. Measured before this rule (MeshWeaver.Plugins, 2026-10-26): nearly every green
+   main run withheld 2 of 78 packages, the walk passed all of them, reached zero-job cancelled runs
+   with no attestation, and five green runs in a row built the full set.
 3. **A module publishes on its OWN verdict.** The module lane needs only the platform resolution and
    the scope — no repo-wide validate gate, no portal-host suite, no sibling module's test. Each leg
    builds, runs the module's own suite, and POSTs one bundle, whole or not at all
@@ -659,8 +672,9 @@ keeps the supersede model in the next section.
 * **Overlap.** A push landing while an earlier run still builds waits as the one pending trunk run
   (rule 1) and starts once that run ends. If the earlier run SUCCEEDED and withheld nothing, it is
   the newest successful baseline (rule 2), so the waiting run builds only what landed after it. If
-  it FAILED, or withheld its publication, it is walked past and its changes stay in the waiting
-  run's union. A run that overlaps in time (a re-run, or the release lane) can still rebuild a
+  it FAILED, or withheld its publication without naming the packages, it is walked past and its
+  changes stay in the waiting run's union; if it withheld named packages, it is the baseline and
+  carries them (rule 2). A run that overlaps in time (a re-run, or the release lane) can still rebuild a
   network that another run is building; rule 4 makes that harmless.
 * **A red newest leg.** When the newest run's leg for a module fails, rule 4 has already stood the
   older leg down, so the module stays at its previously published version until the fix lands. The
@@ -683,6 +697,12 @@ keeps the supersede model in the next section.
   unit actually changed. (Raised by the DeepSign session, 2026-09-11.)
 * **An in-flight platform run is not cancelled** by a newer one (rule 6 replaces only a queued one):
   cancelling it mid-seal is the torn publication of Plugins#826.
+* **The Tests-area gate narrows a push the same way** (`node-repo-gate.yml` `push-base`). A caller
+  that knows the newest green main run its push descends from (MeshWeaver.Plugins: the change set's
+  `push-base`) passes it, and the gate runs the caller's `affected-modules.py` closure of
+  `<push-base>..HEAD`. A base that is not a full sha, is missing from the checkout, is off HEAD's
+  line or equals HEAD, and a range that touches `.github/` or `scripts/`, all run the full set and
+  print why. Without the input, a push gates everything, as before.
 
 ## 🚨 Superseded runs on `main` — cancelled by construction, selected by the compile tree
 

@@ -1477,9 +1477,28 @@ internal static class NodeTypeBatchBake
         string? unreleasedBuildFailureClass = null)
     {
         var gate = mesh.ServiceProvider.GetService<MeshPublicationGate>();
+        // The forward dependency edges this compile read (Doc/Architecture/DependencyGraph) ride
+        // the SAME gated publication as the stamp, as on the activation path: a cold-start batch
+        // compile is still a compile that ran Roslyn here, and its edges must not be the only ones
+        // missing. A held stamp holds them too; a discarded one writes neither.
+        //
+        // Only when THIS stamp LANDED: a refused compare-and-set (a live owner published a newer
+        // build meanwhile), a skipped stamp or a storage failure writes no edges, or they would
+        // overwrite the newer build's set with this one's. And ONE emission at the end, after the
+        // edge write, so the caller reports one outcome and nothing unsubscribes mid-write.
+        var dependencyEdges = ok ? result?.DependencyEdges : null;
         IObservable<Unit> Stamp() =>
             BuildStamp(mesh, typeNode, ok, result, error, releasePath, startedAt, logger,
-                unreleasedBuildPath, unreleasedBuildReason, unreleasedBuildFailureClass);
+                    unreleasedBuildPath, unreleasedBuildReason, unreleasedBuildFailureClass)
+                .Take(1)
+                // The landed record version is the set's GENERATION: an older compile's edges that
+                // arrive after a newer build's never replace them (DependencyEdgeSetWriter.Write).
+                .SelectMany(landedAt => landedAt is { } generation && dependencyEdges is not null
+                    ? MeshWeaver.Graph.Configuration.DependencyEdgeSetWriter.Write(
+                            mesh, dependencyEdges with { StampVersion = generation }, logger)
+                        .IgnoreElements()
+                        .Concat(Observable.Return(Unit.Default))
+                    : Observable.Return(Unit.Default));
         return gate is null
             ? Observable.Defer(Stamp)
             : gate.Publish($"NodeType compile stamp for {typeNode.Path}", Stamp);
@@ -1489,7 +1508,7 @@ internal static class NodeTypeBatchBake
     /// The stamp itself, as a COLD observable — built by <see cref="WriteStamp"/> only when this
     /// process is admitted to the mesh (or held for release when it becomes so).
     /// </summary>
-    private static IObservable<Unit> BuildStamp(
+    private static IObservable<long?> BuildStamp(
         IMessageHub mesh,
         MeshNode typeNode,
         bool ok,
@@ -1508,7 +1527,7 @@ internal static class NodeTypeBatchBake
             logger?.LogWarning(
                 "BatchBake: no IStorageAdapter on the mesh hub — compile-state stamps for "
                 + "{TypePath} were NOT written (lazy activation will recompile)", typeNode.Path);
-            return Observable.Return(Unit.Default);
+            return Observable.Return<long?>(null);
         }
         var changeFeed = mesh.ServiceProvider.GetService<IMeshChangeFeed>();
         var options = mesh.JsonSerializerOptions;
@@ -1530,7 +1549,7 @@ internal static class NodeTypeBatchBake
             .Take(1)
             .SelectMany(refusals => BuildStampAt(refusals));
 
-        IObservable<Unit> BuildStampAt(ImmutableList<ImportRefusal>? refusals) => storage
+        IObservable<long?> BuildStampAt(ImmutableList<ImportRefusal>? refusals) => storage
             .Read(typeNode.Path, options)
             .Take(1)
             // The durable version the stamp is computed FROM — 0 when there is no row at all, which
@@ -1581,7 +1600,7 @@ internal static class NodeTypeBatchBake
                 }));
             })
             .SelectMany(stamp => stamp.Stamped is not { } stampedNode
-                ? Observable.Return(Unit.Default)
+                ? Observable.Return<long?>(null)
                 : storage
                     // 🚨 COMPARE-AND-SET, not a plain write (#1424). The other writer here is the
                     // type's OWN per-node hub — not a baker at all: it stamps compile state from the
@@ -1639,14 +1658,16 @@ internal static class NodeTypeBatchBake
                                 ? MeshChangeEvent.Created(stampedNode)
                                 : MeshChangeEvent.Updated(stampedNode));
                     })
-                    .Select(_ => Unit.Default))
-            .Catch<Unit, Exception>(ex =>
+                    // The record version THIS stamp landed at (null when it did not land) — what the
+                    // edge write after it is conditioned on, and the generation it carries.
+                    .Select(applied => applied is true ? stampedNode.Version : (long?)null))
+            .Catch<long?, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
                     "BatchBake: failed to write compile-state stamps for {TypePath} — the "
                     + "assembly is on the share; the next probe or lazy activation self-heals "
                     + "the record", typeNode.Path);
-                return Observable.Return(Unit.Default);
+                return Observable.Return<long?>(null);
             });
     }
 }

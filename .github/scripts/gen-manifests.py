@@ -179,6 +179,18 @@ LOCK_OWNER_MAIN = "main"
 LOCK_OWNERS = {LOCK_OWNER_BRANCH, LOCK_OWNER_MAIN}
 SETTLEMENT_PR_BRANCH = "ci/settle-manifest-locks"
 SETTLEMENT_PR_AUTHOR = "meshweaver-cloud[bot]"
+# 🚨 THE FLOOR STAMP RIDES THE SETTLE (policy `floor-stamp-rides-the-settle`). A node repo that
+# stamps package floors (`content.minMeshVersion` + a `<Package>/mesh-floor.lock` witness, written by
+# main's run once it has compiled and tested the sources) used to land that stamp as a SECOND bot
+# pull request, and the stamp's own index.json change then unsettled the lock it sat beside — a
+# source change took four merges to publish (source, stamp, settle, publishing run). The settlement
+# pull request may therefore also carry, for an enumerated package, its `mesh-floor.lock` and an
+# `index.json` whose ONLY change is `content.minMeshVersion`. Nothing else widens: any other
+# index.json change, an added or deleted index.json, or any other path is still refused, and the
+# locks must still be exactly what `--settle` derives for the PR's tree (which includes the stamp).
+# A lock-only settlement is accepted exactly as before.
+FLOOR_FIELD = "minMeshVersion"
+FLOOR_WITNESS = "mesh-floor.lock"
 # The caller's allow-file. Named by MW_MANIFEST_CONFIG when the lane places it elsewhere; otherwise
 # it sits beside the caller's other policy files.
 CONFIG_NAME = "gen-manifests.config.json"
@@ -371,12 +383,36 @@ def _module_source_dirs(plugin: Path, root: Path) -> list[Path]:
     module = declared_module(plugin)
     if not module:
         return []
-    proj = root / "src" / module
+    # 🚨 A declared module whose project cannot be found FAILS, never hashes nothing: an empty
+    # list here silently drops the module's sources from its package's moduleVersion, so a source
+    # change would publish under the old version. The caller's `module_project_dir`
+    # (MeshWeaver.Plugins#4314) resolves the project at ANY depth under src/ (`src/<cluster>/<name>`)
+    # and itself refuses a missing or ambiguous name; an older project-closure.py keeps the flat
+    # `src/<module>` path, held to the same refusal.
+    closure = _project_closure(root)
+    resolver = getattr(closure, "module_project_dir", None)
+    if callable(resolver):
+        try:
+            rel = resolver(root, module, required=True)
+        except Exception as exc:  # the caller's own layout error, whatever its class is called
+            raise SystemExit(f"✗ gen-manifests: {plugin.name} declares content.module {module!r}, "
+                             f"which {exc}") from exc
+        if not rel:
+            raise SystemExit(f"✗ gen-manifests: {plugin.name} declares content.module {module!r}, but "
+                             "project-closure.py's module_project_dir found no project for it — a mixed "
+                             "package whose module sources cannot be hashed must not be versioned without them.")
+        rel = Path(rel).as_posix()
+    else:
+        rel = f"src/{module}"
+    proj = root / rel
     if not proj.is_dir():
-        return []
+        raise SystemExit(f"✗ gen-manifests: {plugin.name} declares content.module {module!r}, but {rel}/ "
+                         "does not exist — a mixed package whose module sources cannot be hashed must not "
+                         "be versioned without them (hashModuleSources=true). Restore the project, fix the "
+                         "declared module name, or drop content.module.")
     dirs = [proj]
     graph, owned = _closure_inputs(root)
-    for sibling in _project_closure(root).riding_siblings(root, f"src/{module}", graph, owned):
+    for sibling in closure.riding_siblings(root, rel, graph, owned):
         directory = root / sibling
         if directory.is_dir():
             dirs.append(directory)
@@ -1017,18 +1053,55 @@ def is_manifest_lock_settlement_pr() -> bool:
     )
 
 
+def _sans_floor(text: str | None) -> object:
+    """An index.json with `content.minMeshVersion` removed, or None when it is absent or not JSON."""
+    if text is None:
+        return None
+    try:
+        node = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(node, dict):
+        return None
+    content = node.get("content")
+    if isinstance(content, dict):
+        node = {**node, "content": {k: v for k, v in content.items() if k != FLOOR_FIELD}}
+    return node
+
+
+def floor_only_change(root: Path, base: str, path: str) -> bool:
+    """True when `path` (an index.json) exists at both `base` and HEAD and differs ONLY in
+    `content.minMeshVersion` — the one value a floor stamp writes. An added or deleted index.json,
+    an unreadable one, or any other change is not a stamp."""
+    before = _sans_floor(git(root, ["show", f"{base}:{path}"], preserve_output=True))
+    after = _sans_floor(git(root, ["show", f"HEAD:{path}"], preserve_output=True))
+    # TYPE-PRESERVING comparison: Python's `==` says `False == 0` and `1 == 1.0`, inside nested
+    # dicts and lists too, so a stamp beside a `false`→`0` edit would read as floor-only. Canonical
+    # JSON text keeps every type distinct.
+    return (before is not None and after is not None
+            and json.dumps(before, sort_keys=True) == json.dumps(after, sort_keys=True))
+
+
 def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
     """Verify the CI-owned lock PR is only the exact settlement the current main tree requires."""
-    changed = git(root, ["diff", "-z", "--name-only", base, "HEAD"])
+    # `--no-renames`: with rename detection a move (`Mod/README.md` → `Mod/mesh-floor.lock`) lists
+    # only its allowed DESTINATION and hides the deleted source; both ends must be checked.
+    changed = git(root, ["diff", "-z", "--no-renames", "--name-only", base, "HEAD"])
     if changed is None:
         return [f"cannot read the settlement PR diff against {base[:12]} — refusing to accept it"]
     paths = sorted(p for p in changed.split("\0") if p)
-    expected = {f"{plugin.name}/manifest.lock" for plugin in plugin_dirs(root)}
-    unexpected = [path for path in paths if path not in expected]
-    if not paths or unexpected:
+    plugins = plugin_dirs(root)
+    expected = {f"{plugin.name}/manifest.lock" for plugin in plugins}
+    witnesses = {f"{plugin.name}/{FLOOR_WITNESS}" for plugin in plugins}
+    indexes = {f"{plugin.name}/index.json" for plugin in plugins}
+    unexpected = [path for path in paths
+                  if path not in expected and path not in witnesses
+                  and not (path in indexes and floor_only_change(root, base, path))]
+    if not any(path in expected for path in paths) or unexpected:
         details = ", ".join(unexpected[:12]) if unexpected else "the PR changes no manifest.lock files"
-        return [f"the generated settlement PR must change only existing package manifest.lock files; "
-                f"found {details}"]
+        return [f"the generated settlement PR must change only existing package manifest.lock files "
+                f"(plus, for a floor stamp riding the settle, a package's {FLOOR_WITNESS} and its "
+                f"index.json content.{FLOOR_FIELD} alone); found {details}"]
 
     # The lock claim is valid only for the exact main tree its version baseline came from. If main
     # advanced after this PR was opened, the main push's own run will refresh the one settlement
@@ -2103,6 +2176,55 @@ def self_test() -> int:
         if on == off:
             failures.append("hashModuleSources must CHANGE a mixed package's content hash — the "
                             "fixture does not reproduce the flip, so the default proves nothing")
+        # 5c. A declared module that cannot be found FAILS (it used to hash nothing, silently), and a
+        #     caller's `module_project_dir` resolves it at any depth (MeshWeaver.Plugins#4314).
+        (repo5 / "Pkg" / "index.json").write_text('{"content": {"version": "1.0", "module": "Mod.Gone"}}\n')
+        try:
+            hash_files(repo5 / "Pkg", repo5)
+            failures.append("a declared module with no src/<module>/ must FAIL, not hash nothing")
+        except SystemExit as ex:
+            if "Mod.Gone" not in str(ex):
+                failures.append(f"the missing-module error must name the module, said: {ex}")
+        (repo5 / "Pkg" / "index.json").write_text('{"content": {"version": "1.0", "module": "Mod.Asm"}}\n')
+        nested = repo5 / "src" / "cluster" / "Mod.Asm"
+        (repo5 / "src" / "Mod.Asm").rename(repo5 / "src" / "cluster")
+        (repo5 / "src" / "cluster").rename(repo5 / "src" / "_c")
+        nested.parent.mkdir(parents=True)
+        (repo5 / "src" / "_c").rename(nested)
+        resolver_closure = (
+            "def graph_of(root):\n    return {}\n"
+            "def module_owned(root):\n    return set()\n"
+            "def riding_siblings(root, proj, graph, owned):\n    return []\n"
+            "class ProjectLayoutError(Exception): pass\n"
+            "def module_project_dir(root, name, required=True):\n"
+            "    hits = sorted(str(p.parent.relative_to(root)) for p in root.glob('src/**/' + name + '/a.cs'))\n"
+            "    if hits: return hits[0]\n"
+            "    if required: raise ProjectLayoutError(f'has no project under src/ ({name})')\n"
+            "    return None\n")
+        # NEGATIVE CONTROL: without the resolver the flat src/Mod.Asm is gone — that is a failure now.
+        _CLOSURE_CACHE.pop(repo5.resolve(), None)
+        try:
+            hash_files(repo5 / "Pkg", repo5)
+            failures.append("a nested module with no resolver must FAIL on the flat path, not hash nothing")
+        except SystemExit:
+            pass
+        (repo5 / "scripts" / "project-closure.py").write_text(resolver_closure)
+        _CLOSURE_CACHE.pop(repo5.resolve(), None)
+        try:
+            if module_version(hash_files(repo5 / "Pkg", repo5)) == off:
+                failures.append("a nested module resolved by module_project_dir must be hashed into the version")
+        except SystemExit as ex:
+            failures.append(f"a nested module resolved by module_project_dir must hash, said: {ex}")
+        (repo5 / "Pkg" / "index.json").write_text('{"content": {"version": "1.0", "module": "Mod.Gone"}}\n')
+        try:
+            hash_files(repo5 / "Pkg", repo5)
+            failures.append("the resolver's refusal of a missing module must FAIL the hash")
+        except SystemExit as ex:
+            if "Mod.Gone" not in str(ex):
+                failures.append(f"the resolver's refusal must name the module, said: {ex}")
+        (repo5 / "Pkg" / "index.json").write_text('{"content": {"version": "1.0", "module": "Mod.Asm"}}\n')
+        _CLOSURE_CACHE.pop(repo5.resolve(), None)
+
         # …and the default really is the pre-centralization behaviour: with the flag off, the
         # src/ tree is not in the hash even though project-closure.py is now right there.
         declare(repo5, skip=("scripts", ".git", "src", "notapackage"))
@@ -2498,6 +2620,7 @@ def _self_test_main_owned(repo: Path) -> list[str]:
     quiet(settle, settlement_repo, False)
     sg("add", "-A")
     sg("commit", "-qm", "settle: main-owned locks")
+    settled_good = sg("rev-parse", "HEAD").stdout.strip()   # the exact, uncorrupted settlement
     settlement_event_path = settlement_repo.parent / "event.json"
     settlement_event = {
         "repository": {"full_name": "Systemorph/MeshWeaver.Plugins"},
@@ -2552,6 +2675,67 @@ def _self_test_main_owned(repo: Path) -> list[str]:
         if not any("differ from the locks generated" in error
                    for error in check_untouched(settlement_repo, settlement_base)):
             failures.append("main-owned: the settlement PR must refuse a deleted lock recreated as untracked")
+
+        # A FLOOR STAMP RIDING THE SETTLE (policy floor-stamp-rides-the-settle): the witness and an
+        # index.json whose only change is content.minMeshVersion are accepted beside the locks…
+        sg("checkout", "-qb", "settlement-with-floor-stamp", settlement_base)
+        (settlement_repo / "Mod" / "index.json").write_text(
+            '{"content": {"minMeshVersion": "3.0.0-ci.42", "version": "1.2"}}\n')
+        (settlement_repo / "Mod" / FLOOR_WITNESS).write_text('{"verifiedOn": "3.0.0-ci.42"}\n')
+        quiet(settle, settlement_repo, False)
+        sg("add", "-A")
+        sg("commit", "-qm", "settle: locks and the floor stamp")
+        stamped = check_untouched(settlement_repo, settlement_base)
+        if stamped:
+            failures.append(f"main-owned: a settlement carrying a floor stamp must pass, got {stamped}")
+        # …and the NEGATIVE CONTROLS: any other index.json change is refused, even beside the floor…
+        (settlement_repo / "Mod" / "index.json").write_text(
+            '{"content": {"minMeshVersion": "3.0.0-ci.42", "version": "1.3"}}\n')
+        quiet(settle, settlement_repo, False)
+        sg("commit", "-qam", "settle: a version bump smuggled beside the floor")
+        if not any("must change only existing package manifest.lock" in error
+                   for error in check_untouched(settlement_repo, settlement_base)):
+            failures.append("main-owned: the settlement PR must refuse an index.json change beyond the floor")
+        # …a `false`→`0` edit beside the floor is refused (Python's `False == 0` must not decide it)…
+        sg("checkout", "-qb", "settlement-floor-and-bool-to-number", settlement_base)
+        (settlement_repo / "Mod" / "index.json").write_text(
+            '{"content": {"flag": false, "version": "1.2"}}\n')
+        sg("commit", "-qam", "main-side: a boolean field")
+        bool_base = sg("rev-parse", "HEAD").stdout.strip()
+        (settlement_repo / "Mod" / "index.json").write_text(
+            '{"content": {"flag": 0, "minMeshVersion": "3.0.0-ci.42", "version": "1.2"}}\n')
+        sg("commit", "-qam", "settle: floor plus false→0")
+        if floor_only_change(settlement_repo, bool_base, "Mod/index.json"):
+            failures.append("main-owned: a false→0 edit beside the floor must not read as floor-only")
+        # …a rename of another file ONTO an allowed path is refused at its deleted source…
+        sg("checkout", "-qb", "settlement-rename-onto-witness", settled_good)
+        (settlement_repo / "Mod" / "README.md").write_text("a page that must not vanish\n" * 20)
+        sg("add", "-A")
+        sg("commit", "-qm", "main-side: a page")
+        rename_base = sg("rev-parse", "HEAD").stdout.strip()
+        sg("mv", "Mod/README.md", f"Mod/{FLOOR_WITNESS}")
+        sg("commit", "-qm", "settle: the page renamed onto the witness")
+        renamed = check_generated_lock_settlement(settlement_repo, rename_base)
+        if not any("Mod/README.md" in error for error in renamed):
+            failures.append(f"main-owned: a rename onto an allowed path must be refused at its source, got {renamed}")
+        # …and a stamp WITHOUT the settled locks it implies is refused by the generated comparison.
+        # The lock copied is the EXACT settlement of the unstamped tree (`settled_good`, never the
+        # branch tip the earlier case corrupted), so this fails only because the floor moved it.
+        sg("checkout", "-qb", "settlement-good-lock-control", settlement_base)
+        sg("checkout", "-q", settled_good, "--", "Mod/manifest.lock")
+        sg("commit", "-qam", "settle: the exact lock, no floor")
+        if check_untouched(settlement_repo, settlement_base):
+            failures.append("main-owned: CONTROL — the exact settlement lock without a stamp must pass")
+        sg("checkout", "-qb", "settlement-floor-without-locks", settlement_base)
+        sg("checkout", "-q", settled_good, "--", "Mod/manifest.lock")
+        (settlement_repo / "Mod" / "index.json").write_text(
+            '{"content": {"minMeshVersion": "3.0.0-ci.42", "version": "1.2"}}\n')
+        sg("add", "-A")
+        sg("commit", "-qm", "settle: floor stamp beside a lock that does not describe it")
+        if not any("differ from the locks generated" in error
+                   for error in check_untouched(settlement_repo, settlement_base)):
+            failures.append("main-owned: a floor stamp must not pass beside a lock --settle would change")
+        sg("checkout", "-q", SETTLEMENT_PR_BRANCH)
 
         sg("checkout", "-q", "main")
         (settlement_repo / "Other.txt").write_text("advance main\n")

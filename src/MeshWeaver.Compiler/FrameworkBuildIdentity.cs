@@ -87,8 +87,8 @@ public static class FrameworkBuildIdentity
     /// 🚨 The CANONICAL content-surface assembly set — the ONE list both the CI bake host and
     /// every portal hash over, ordinal-sorted. It is the transitive MeshWeaver.* closure of
     /// <c>tools/MeshWeaver.PluginTester</c> (the content gate — the process that PROVES shipped
-    /// content compiles) minus the tester's two host assemblies (<c>MeshWeaver.PluginTester</c>,
-    /// <c>MeshWeaver.Hosting.Monolith</c>). Content that references anything outside this set
+    /// content compiles) minus the tester's own host assemblies (every <c>MeshWeaver.PluginTester*</c>
+    /// — the tester and its build-extension contract — and <c>MeshWeaver.Hosting.Monolith</c>). Content that references anything outside this set
     /// cannot pass the gate, so nothing outside it can be part of shipped content's compile
     /// surface. <c>FrameworkBuildIdentityTest.CanonicalList_MatchesTheTesterClosure</c> recomputes
     /// the closure from the csproj graph and fails naming the drift when the tester's references

@@ -241,12 +241,27 @@ def affected_packages(root: Path, changed: list[str], say) -> set[str] | None:
     return set(affected) if isinstance(affected, list) else None
 
 
-def project_hits(root: Path, entries: list[str], changed: list[str], say) -> dict | None:
-    """{entry → the changed project dirs its build+test closure contains} + `unclassified`."""
+def _accepts_base(root: Path) -> bool:
+    """Whether the caller's project-closure.py declares `--hits --base` (MeshWeaver.Plugins#4314:
+    a comment/whitespace-only MSBuild edit owes nothing against that ref). An older script would
+    REFUSE the flag (argparse exit 2 ⇒ "cannot narrow" ⇒ full), so it is passed only when declared."""
+    try:
+        return '"--base"' in (root / PROJECTS).read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def project_hits(root: Path, entries: list[str], changed: list[str], say,
+                 base: str | None = None) -> dict | None:
+    """{entry → the changed project dirs its build+test closure contains} + `unclassified`.
+    `base` is the ref the changed paths were diffed from (the PR base, or a push's publication
+    baseline); handed on as `--base` only to a project-closure.py that declares it."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
         fh.write("\n".join(changed) + "\n")
         listing = Path(fh.name)
     argv = ["--hits", "--changed", str(listing), "--json"]
+    if base and _accepts_base(root):
+        argv += ["--base", base]
     for e in entries:
         argv += ["--entry", e]
     try:
@@ -355,12 +370,196 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
     return [p for p in proc.stdout.split("\0") if p]
 
 
+# ── the caller's module-libraries shelf ──────────────────────────────────────────────────────
+
+_SHELF_INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+_SHELF_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+# The project-relative MSBuild properties a linked item may start with; any other $(…) names a
+# location outside this repository (the platform's), whose bytes the platform digest already keys.
+
+
+# ── what a caller's build extension / shelf evaluates: MSBuild's OWN answer ──────────────────
+# The key (module-build-key.py) and this scope both consume ONE evaluation, written by
+# msbuild-evaluate.py, which runs the real `dotnet msbuild` (-pp for the imported files,
+# -getItem for the path items, ProjectReference followed) with the lane's publishing inputs. A
+# hand-written MSBuild reader here never converged: conditions, Choose, transforms and
+# conditional imports were each one more finding. MSBuild answers all of them exactly.
+#
+# The ONLY additions to MSBuild's answer are conservative extras for HASHING and REACH, never
+# evaluation: the implicit `Directory.*` candidates in every ancestor (a NEW one is a change), the
+# declared-but-absent import paths and the declared in-repo glob patterns msbuild-evaluate.py
+# records. The scope unions HEAD's evaluation with its diff BASE's (a deletion is seen from the
+# tree that still had the file).
+_IMPLICIT_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
+_IMPLICIT_GLOBS = ("Directory.*.props", "Directory.*.targets")
+
+
+def implicit_import_candidates(root: Path, csproj: Path) -> list[str]:
+    """Repository-relative implicit-import paths (literal, present or not) and per-directory globs."""
+    root = root.resolve()
+    out: list[str] = []
+    d = csproj.resolve().parent
+    while True:
+        rel = d.relative_to(root).as_posix()
+        prefix = "" if rel == "." else rel + "/"
+        out += [prefix + n for n in _IMPLICIT_IMPORTS] + [prefix + g for g in _IMPLICIT_GLOBS]
+        if d == root or root not in d.parents:
+            break
+        d = d.parent
+    return out
+
+
+def load_msbuild_evaluation(path: str | Path) -> dict:
+    """The JSON msbuild-evaluate.py wrote; ValueError when it is not one."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"--msbuild-evaluation {path} could not be read ({exc})") from None
+    if not isinstance(data, dict) or not isinstance(data.get("projects"), dict):
+        raise ValueError(f"--msbuild-evaluation {path} is not an msbuild-evaluate.py result (no `projects`)")
+    return data
+
+
+def normalize_project(project: str) -> str:
+    """ONE spelling of a repository-relative project path for every consumer (`./a/../b.csproj` and
+    `b.csproj` are the same project). msbuild-evaluate.py normalizes the projects it writes with the
+    same rule, and module-build-key.py loads this one, so a lookup can never miss on spelling."""
+    return Path(os.path.normpath(project.strip().replace("\\", "/"))).as_posix()
+
+
+def evaluated_closure(evaluation: dict | None, project: str) -> list[str]:
+    """The project and every in-repo project it references, transitively, as MSBuild evaluated them.
+
+    ValueError when the project was not evaluated: a named input keyed or scoped without MSBuild's
+    answer would be keyed on a guess, and an EMPTY reach for a configured project is always a bug."""
+    if evaluation is None:
+        raise ValueError(f"{project} is named, but no --msbuild-evaluation was given — its imports and "
+                         "items come from MSBuild itself (msbuild-evaluate.py), never from a guess")
+    projects = evaluation.get("projects") or {}
+    out: list[str] = []
+    queue = [normalize_project(project)]
+    while queue:
+        rel = normalize_project(queue.pop(0))
+        if rel in out:
+            continue
+        if rel not in projects:
+            raise ValueError(f"{rel} is not in the MSBuild evaluation (evaluated: {sorted(projects)}) — "
+                             "evaluate the project the lane names, with msbuild-evaluate.py")
+        out.append(rel)
+        queue += list(projects[rel].get("references") or [])
+    return out
+
+
+def evaluated_files(evaluation: dict, rel: str) -> tuple[list[str], list[str], list[str]]:
+    """(imports, declaredImports, every path item) of one evaluated project. "Items" includes the
+    CONSERVATIVE SWEEP (`swept`): every existing in-repo file the preprocessed project names
+    anywhere (a HintPath, a Copy task's SourceFiles, an Exists()), so the key hashes it and the
+    scope reaches it exactly like an evaluated item."""
+    entry = (evaluation.get("projects") or {})[normalize_project(rel)]
+    items = sorted({p for paths in (entry.get("items") or {}).values() for p in paths}
+                   | set(entry.get("swept") or []))
+    return list(entry.get("imports") or []), list(entry.get("declaredImports") or []), items
+
+
+# A pattern MSBuild's evaluation could not resolve (a property function, a property only a target
+# sets) is recorded as UNKNOWN, and a project carrying one is reached by ANY change: "**" matches
+# every path. Fail safe — an unknown input selects too much, never too little.
+_EVERYTHING = "**"
+
+
+def evaluated_reach(root: Path, evaluation: dict | None, project: str) -> set[str]:
+    """Everything a diff can touch to change what this project and its references evaluate in ONE
+    evaluation: their directories, MSBuild's imports and items, and the conservative extras."""
+    root = root.resolve()
+    reach: set[str] = set()
+    projects = (evaluation or {}).get("projects") or {}
+    for rel in evaluated_closure(evaluation, project):
+        reach.add(Path(rel).parent.as_posix())
+        imports, declared, items = evaluated_files(evaluation, rel)
+        reach |= set(imports) | set(declared) | set(items)
+        # Declared in-repo GLOBS, properties substituted by MSBuild: a deletion of the last match, or
+        # a first match added to a glob that matches nothing yet, is a change no list of today's
+        # files can show.
+        reach |= set(projects[rel].get("declaredPatterns") or [])
+        if projects[rel].get("unknownPatterns"):
+            reach.add(_EVERYTHING)
+        reach |= set(implicit_import_candidates(root, root / rel))
+    return reach
+
+
+def union_reach(root: Path, evaluations, project: str) -> set[str]:
+    """The reach over EVERY evaluation given: the scope passes HEAD's and its diff BASE's (and the
+    supersession check this run's and the newer trunk tip's), so a file one tree no longer has is
+    seen from the tree that still had it.
+
+    An evaluation that lacks the project RAISES, unless it lists it under `missing` (a tree that
+    predates the project, evaluated with --skip-missing). At least one evaluation must hold it."""
+    project = normalize_project(project)
+    if evaluations is None or isinstance(evaluations, dict):
+        evaluations = [evaluations]
+    holding = []
+    for e in evaluations:
+        if e is not None and project in [normalize_project(m) for m in (e.get("missing") or [])]:
+            continue  # explicitly absent from that tree
+        evaluated_closure(e, project)  # raises on a miss, saying why
+        holding.append(e)
+    if not holding:
+        raise ValueError(f"{project} is absent from every MSBuild evaluation given — a configured project "
+                         "with an empty reach would select nothing on a guess")
+    reach: set[str] = set()
+    for e in holding:
+        reach |= evaluated_reach(root, e, project)
+    return reach
+
+
+def is_msbuild_glob(pattern: str) -> bool:
+    return "*" in pattern or "?" in pattern
+
+
+def msbuild_glob_matches(path: str, pattern: str) -> bool:
+    """MSBuild item-glob semantics over '/'-separated relative paths.
+
+    `**` as a whole segment matches ZERO or more directories (`a/**/*.cs` matches `a/x.cs`);
+    `*` and `?` never cross a '/'. A pattern without wildcards matches only itself."""
+    if not is_msbuild_glob(pattern):
+        return path == pattern
+    segs = pattern.split("/")
+    rx = ""
+    for i, seg in enumerate(segs):
+        last = i == len(segs) - 1
+        if seg == "**":
+            rx += ".*" if last else "(?:[^/]+/)*"
+            continue
+        rx += "".join("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c) for c in seg)
+        rx += "" if last else "/"
+    return re.fullmatch(rx, path) is not None
+
+
+def shelf_dirs(root: Path, project: str, evaluation=None) -> frozenset[str] | None:
+    """Everything a diff can touch to change the caller's shelf / build extension: the project, every
+    in-repo project it references, MSBuild's imports and items for each, and the conservative extras
+    (`evaluated_reach`). The SAME evaluation feeds module-build-key.py, so key and scope cannot drift.
+
+    None when the project is not in this checkout — the caller of this function reads that as
+    "cannot decide", which is a full run. ValueError when it was not evaluated by MSBuild. The shelf
+    and the extension are compiler inputs of EVERY module, yet in no module's ProjectReference
+    closure, so without this an edit to them reaches no entry and narrows to nothing.
+    """
+    root = root.resolve()
+    project = normalize_project(project)
+    if not (root / project).is_file():
+        return None
+    return frozenset(union_reach(root, evaluation, project))
+
+
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
 
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
            override: list[str] | None, say, publishing: bool = False,
            always: frozenset[str] = frozenset(), publication_base: str = "",
-           publication_reach: bool = False) -> dict:
+           publication_reach: bool = False, shelf_project: str = "",
+           extensions_project: str = "", msbuild_evaluation=None,
+           carry: frozenset[str] = frozenset()) -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -438,6 +637,31 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         return full(f"the diff for '{diff_range or '--changed'}' came back EMPTY — a CI diff is "
                     "never empty, so this is a broken range (is the base ref fetched?), not "
                     "'nothing to do'. Running the full set.")
+
+    # 🚨 The caller's own module-libraries shelf decides what EVERY container-built module binds,
+    # but no module references it, so the project closure below would rule a shelf edit inert.
+    # A build extension (`build-extensions-project`, e.g. the Razor one) is the same shape: it decides
+    # what the compiler GENERATES for every module, and no module references it.
+    for input_name, label, project, consequence in (
+            ("module-libraries-project", "module-libraries shelf", shelf_project,
+             "the shelf is what every module binds"),
+            ("build-extensions-project", "build extension", extensions_project,
+             "the extension decides what every module's compile generates")):
+        if not project:
+            continue
+        try:
+            dirs_ = shelf_dirs(root, project, msbuild_evaluation)
+        except ValueError as exc:
+            return refuse(f"{input_name} {project}: {exc}")
+        if dirs_ is None:
+            return full(f"{input_name} {project} is not in this checkout, so whether this diff "
+                        f"changes the {label} cannot be decided — running the full set.")
+        touched = [f for f in files
+                   if any(f.startswith(d + "/") or msbuild_glob_matches(f, d) for d in dirs_)]
+        if touched:
+            return full(f"{len(touched)} changed file(s) are in the caller's {label} "
+                        f"({project} and the projects it reaches) — first: {touched[0]}. "
+                        f"{consequence[0].upper() + consequence[1:]}, so every module is rebuilt and tested.")
 
     packages = node_packages(root)
     node_files: list[str] = []
@@ -527,7 +751,14 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
 
     hits: dict[str, list[str]] = {e["project"]: [] for e in entries}
     if src_files:
-        answer = project_hits(root, sorted(hits), src_files, say)
+        # The ref the diff is FROM (`origin/<base>` of `origin/<base>...HEAD`) — so an inert MSBuild
+        # edit selects nothing here either. 🚨 NEVER on a publication diff: that list is the HISTORY
+        # union (it keeps a file a later commit reverted, so HEAD repairs a partial publication),
+        # and judging it against the baseline would rule the reverted file inert because HEAD
+        # matches the baseline — dropping exactly the module the repair owes.
+        diff_from = (diff_range.split("..", 1)[0]
+                     if diff_range and not publication_diff else None)
+        answer = project_hits(root, sorted(hits), src_files, say, diff_from)
         if answer is None:
             return full(f"the caller repo's {PROJECTS} could not answer the compiled-half closure "
                         f"for {len(src_files)} src/ file(s) — packing every module.")
@@ -557,10 +788,19 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
                     "the module matrix does not carry — the floor and the matrix have drifted. "
                     "Packing every module.")
 
+    # 🚨 THE CARRY IS NOT OPTIONAL ONCE GIVEN. A push narrowed by a PARTIAL publication
+    # (node-repo-publication-base.py --carry-withheld) names the packages that baseline run
+    # WITHHELD: built, tested, never handed over. Their sources may not change again for days, so
+    # the diff alone would never select them and they would never ship. They are selected here on
+    # top of the diff until a run publishes them (that run's marker no longer names them).
+    carried = carry if publication_diff else frozenset()
     selected: list[dict] = []
     why: dict[str, str] = {}
     for e in entries:
         reasons = []
+        if e["package"] in carried:
+            reasons.append(f"package `{e['package']}` was WITHHELD by the publication baseline run — "
+                           "carried until a run publishes it")
         if e["package"] in affected:
             reasons.append(f"node package `{e['package']}` is in the affected closure")
         if hits.get(e["project"]):
@@ -738,6 +978,25 @@ def self_test() -> int:
         result = _run(root, "modules", "push", None,
                       extra=["--publication-base", base, "--publishing"])
         check("a reverted partial publication is repaired", result["selected"] == ["Acme.Alpha"])
+        # THE CARRY (node-repo-publication-base.py --carry-withheld): the packages a PARTIAL
+        # baseline withheld are selected on top of the diff — Beta did not change since `base`.
+        result = _run(root, "modules", "push", None,
+                      extra=["--publication-base", base, "--publishing", "--carry", "Beta Gamma"])
+        beta = next((m for m in result["modules"] if m["module"] == "Acme.Beta"), {})
+        check("a package the baseline WITHHELD is carried into a push narrowed by it, and tested",
+              result["selected"] == ["Acme.Alpha", "Acme.Beta"] and beta.get("test") is True
+              and "WITHHELD" in result["why"].get("Acme.Beta", ""),
+              f"selected={result['selected']} why={result['why']}")
+        check("NEGATIVE CONTROL: the same push without a carry selects only the diff",
+              _run(root, "modules", "push", None,
+                   extra=["--publication-base", base, "--publishing"])["selected"] == ["Acme.Alpha"])
+        got = _run(root, "modules", "pull_request", ["Alpha/index.json"], extra=["--carry", "Beta"])
+        check("a carry on a pull request (no publication baseline) selects nothing extra",
+              got["selected"] == ["Acme.Alpha"], f"selected={got['selected']}")
+        bad = _raw(root, "modules", "push", None,
+                   extra=["--publication-base", base, "--publishing", "--carry", "Be;ta"])
+        check("a carry that is not a package id is refused (non-zero), never ignored",
+              bad.returncode != 0, f"exit {bad.returncode}")
         # 🚨 policy ci-paths-owe-no-module-leg lets a PULL REQUEST skip module legs for a CI path
         # because main's push run covers them — so that push run must never take the same shortcut.
         # The history also carries the Alpha change above, so deferring the CI path to the selector
@@ -1018,6 +1277,162 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "src/Acme.Beta/T.cs"])
         check("[modules] a root no-op file riding along never widens a real selection",
               got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+
+        print("the caller's shelf / build extension, as MSBuild evaluated it (--msbuild-evaluation):")
+        # Acme.Other is a project the graph KNOWS and no entry reaches, exactly what a shelf is to the
+        # real project-closure.py — so an edit there narrows to nothing unless the evaluation reaches it.
+        shelf_rel = "src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"
+        shelf_dir = root / "src" / "Acme.ModuleLibraries"
+        shelf_dir.mkdir(parents=True, exist_ok=True)
+        (shelf_dir / "Acme.ModuleLibraries.csproj").write_text(_csproj([]), encoding="utf-8")
+        other_rel = "src/Acme.Other/Acme.Other.csproj"
+        ev_file = root.parent / f"{root.name}-msbuild-evaluation.json"
+
+        def evaluation(shelf: dict, other: dict | None = None) -> list[str]:
+            projects = {shelf_rel: {"imports": [shelf_rel], "declaredImports": [], "items": {}, "references": [],
+                                    **shelf}}
+            if other is not None:
+                projects[other_rel] = {"imports": [other_rel], "declaredImports": [], "items": {}, "references": [],
+                                       **other}
+            ev_file.write_text(json.dumps({"sdk": "10.0.200", "projects": projects}), encoding="utf-8")
+            return ["--msbuild-evaluation", str(ev_file)]
+
+        try:
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"])
+            check("[modules] negative control — WITHOUT a shelf named, an edit to Acme.Other selects nothing",
+                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+            refs = evaluation({"references": [other_rel]}, {})
+            for flag, label in (("--module-libraries-project", "module-libraries shelf"),
+                                ("--build-extensions-project", "build extension")):
+                arg = [flag, shelf_rel] + refs
+                for what, path in (("the project itself", shelf_rel),
+                                   ("a project MSBuild says it references", "src/Acme.Other/K.cs")):
+                    got = _run(root, "modules", "pull_request", [path], extra=arg)
+                    check(f"[modules] {label}: {what} changed ⇒ ALL, and SAYS it is the {label}",
+                          got["scope"] == "full" and got["count"] == 2 and label in got["reason"],
+                          f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+                got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], extra=arg)
+                check(f"[modules] {label} named but untouched still narrows",
+                      got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+            # MSBuild's imports and items, plus the conservative extras, for an extension that does
+            # NOT reference Acme.Other but imports a file there, links a source there, and declares an
+            # optional import that does not exist yet.
+            arg = ["--build-extensions-project", shelf_rel] + evaluation({
+                "imports": [shelf_rel, "src/Acme.Other/Ext.props"],
+                "declaredImports": ["src/Acme.Other/Ext.props", "src/Acme.Other/Optional.props"],
+                "declaredPatterns": ["src/Acme.Other/Gen/*.cs", "src/Acme.Other/Imp/*.props"],
+                "swept": ["src/Acme.Other/Libs/Foo.dll"],
+                "items": {"Compile": ["src/Acme.Other/Gen/Emitter.cs"],
+                          "EmbeddedResource": ["src/Acme.Other/Res/a.res"]}})
+            for what, path in (("an imported file (Ext.props)", "src/Acme.Other/Ext.props"),
+                               ("an absent DECLARED import appearing (Optional.props)", "src/Acme.Other/Optional.props"),
+                               ("a linked Compile item", "src/Acme.Other/Gen/Emitter.cs"),
+                               ("a transform-produced item path", "src/Acme.Other/Res/a.res"),
+                               ("a NEW file the declared Compile glob covers", "src/Acme.Other/Gen/New.cs"),
+                               ("a file the conservative sweep found (a HintPath)", "src/Acme.Other/Libs/Foo.dll"),
+                               ("a first match of a declared IMPORT glob that matches nothing yet",
+                                "src/Acme.Other/Imp/First.props"),
+                               ("a new ancestor implicit import", "src/Directory.Build.targets")):
+                got = _run(root, "modules", "pull_request", [path], extra=arg)
+                check(f"[modules] {what} changed ⇒ ALL", got["scope"] == "full" and got["count"] == 2,
+                      f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+            for what, path in (("a file in the same project MSBuild did not evaluate", "src/Acme.Other/K.cs"),
+                               ("a file in the glob's directory the pattern does NOT cover", "src/Acme.Other/Gen/notes.txt"),
+                               ("an UNIMPORTED Directory.Unused.props outside the ancestry",
+                                "src/Acme.Other/Directory.Unused.props")):
+                got = _run(root, "modules", "pull_request", [path], extra=arg)
+                check(f"[modules] negative control — {what} narrows",
+                      got["scope"] == "narrowed" and got["count"] == 0,
+                      f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+            # DELETION: the head no longer has the file, so only the BASE evaluation lists it. The scope
+            # unions both (--msbuild-evaluation given twice).
+            base_file = root.parent / f"{root.name}-msbuild-evaluation-base.json"
+            head_only = ["--build-extensions-project", shelf_rel] + evaluation({"imports": [shelf_rel]})
+            head_file = root.parent / f"{root.name}-msbuild-evaluation-head.json"
+            head_file.write_text(ev_file.read_text(encoding="utf-8"), encoding="utf-8")
+            evaluation({"imports": [shelf_rel, "src/Acme.Other/Imp/Last.props"],
+                        "items": {"Compile": ["src/Acme.Other/Lib/Last.cs"]}})
+            base_file.write_text(ev_file.read_text(encoding="utf-8"), encoding="utf-8")
+            union = ["--build-extensions-project", shelf_rel, "--msbuild-evaluation", str(head_file),
+                     "--msbuild-evaluation", str(base_file)]
+            try:
+                for what, path in (("the LAST match of an import glob deleted", "src/Acme.Other/Imp/Last.props"),
+                                   ("the LAST match of a Compile glob deleted", "src/Acme.Other/Lib/Last.cs")):
+                    got = _run(root, "modules", "pull_request", [path],
+                               extra=["--build-extensions-project", shelf_rel, "--msbuild-evaluation", str(head_file)])
+                    check(f"[modules] negative control — {what}: HEAD's evaluation alone no longer sees it",
+                          got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+                    got = _run(root, "modules", "pull_request", [path], extra=union)
+                    check(f"[modules] {what}: the BASE ∪ HEAD union selects ALL",
+                          got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+                got = _run(root, "modules", "pull_request", ["src/Acme.Other/Lib/notes.txt"], extra=union)
+                check("[modules] negative control — an unrelated file beside the deleted one narrows under the union",
+                      got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+                # A tree that predates the project (a new extension) contributes nothing; head still decides.
+                evaluation({}, None)
+                ev_file.write_text(json.dumps({"sdk": "10.0.200", "missing": [shelf_rel], "projects": {}}), encoding="utf-8")
+                got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
+                           extra=["--build-extensions-project", shelf_rel, "--msbuild-evaluation", str(head_file),
+                                  "--msbuild-evaluation", str(ev_file)])
+                check("[modules] a BASE tree that predates the project is skipped, not refused",
+                      got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+                # A second evaluation that LACKS the project without listing it as `missing` is a miss,
+                # never an empty contribution.
+                ev_file.write_text(json.dumps({"sdk": "10.0.200", "projects": {}}), encoding="utf-8")
+                proc = _raw(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], None,
+                            ["--build-extensions-project", shelf_rel, "--msbuild-evaluation", str(head_file),
+                             "--msbuild-evaluation", str(ev_file)])
+                check("[modules] an evaluation that silently lacks the project ⇒ REFUSED (exit 2), not an empty reach",
+                      proc.returncode == 2 and "not in the MSBuild evaluation" in proc.stderr,
+                      f"exit={proc.returncode} {proc.stderr[-200:]}")
+            finally:
+                base_file.unlink(missing_ok=True)
+                head_file.unlink(missing_ok=True)
+            # The project as the lane may SPELL it: `./a/../a/x.csproj` is the same project.
+            spelled = ["--build-extensions-project", "./src/Acme.ModuleLibraries/../Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"] \
+                + evaluation({"imports": [shelf_rel, "src/Acme.Other/Ext.props"]})
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Ext.props"], extra=spelled)
+            check("[modules] a `./…/../…`-spelled project is normalized before the lookup: its import selects ALL",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']} {got['reason'][:80]}")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=spelled)
+            check("[modules] negative control — the same spelling, an unrelated file, narrows",
+                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+            # A pattern MSBuild could not resolve: fail SAFE, any change reaches the project.
+            unknown = ["--build-extensions-project", shelf_rel] + evaluation(
+                {"unknownPatterns": ["src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj: <Compile Include=\"$([System.IO.Path]::Combine('a','b'))/*.cs\">"]})
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=unknown)
+            check("[modules] an UNKNOWN (unevaluable) pattern ⇒ an unrelated change still selects ALL (fail safe)",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+            # Refusals: a named input is never scoped without MSBuild's evaluation of it.
+            for what, extra, needle in (
+                    ("named with NO --msbuild-evaluation", ["--build-extensions-project", shelf_rel], "--msbuild-evaluation"),
+                    ("named but absent from the evaluation", ["--module-libraries-project", other_rel] + evaluation({}),
+                     "not in the MSBuild evaluation"),
+                    ("with an unreadable evaluation", ["--build-extensions-project", shelf_rel,
+                                                       "--msbuild-evaluation", str(root / "nope.json")], "could not be read")):
+                proc = _raw(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], None, extra)
+                check(f"[modules] {what} ⇒ REFUSED (exit 2), saying why",
+                      proc.returncode == 2 and needle in proc.stderr, f"exit={proc.returncode} {proc.stderr[-200:]}")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
+                       extra=["--build-extensions-project", "src/Nope/Nope.csproj"])
+            check("[modules] a named extension missing from the checkout ⇒ ALL (cannot decide), named by its input",
+                  got["scope"] == "full" and got["count"] == 2 and "build-extensions-project" in got["reason"],
+                  f"scope={got['scope']} — {got['reason'][:80]}")
+        finally:
+            ev_file.unlink(missing_ok=True)
+            (shelf_dir / "Acme.ModuleLibraries.csproj").unlink()
+            shelf_dir.rmdir()
+
+        print("the MSBuild glob matcher (the implicit Directory.* candidates):")
+        for path, pattern, want in (
+                ("src/Directory.Packages.Plugins.props", "src/Directory.*.props", True),
+                ("src/x/Directory.Build.props", "src/Directory.*.props", False),
+                ("src/Shared/Emitter.cs", "src/Shared/**/*.cs", True),
+                ("src/Shared/a/b/Emitter.cs", "src/Shared/**/*.cs", True),
+                ("src/SharedX/Emitter.cs", "src/Shared/**/*.cs", False),
+                ("src/Shared/Emitter.cs", "src/Shared/Emitter.cs", True)):
+            check(f"msbuild_glob_matches({path!r}, {pattern!r}) is {want}",
+                  msbuild_glob_matches(path, pattern) is want)
         got = _run(root, "modules", "pull_request", ["AGENTS.md", "plugin-gate.allow"])
         check("[modules] one UNNAMED root file among no-op ones still runs the full set",
               got["scope"] == "full" and "plugin-gate.allow" in got["reason"],
@@ -1100,6 +1515,64 @@ def self_test() -> int:
             check(f"[modules] {label} ⇒ ALL", got["scope"] == "full" and got["count"] == 2,
                   f"scope={got['scope']} — {got['reason'][:80]}")
         projects.write_text(graph_src, encoding="utf-8")
+
+        # `--base` reaches a project graph that DECLARES it (MeshWeaver.Plugins#4314: an inert,
+        # comment-only MSBuild edit owes nothing) — and never one that does not, which would
+        # refuse the unknown flag and turn every src/ diff into ALL.
+        inert = ["src/Acme.Shared/Directory.Build.props"]
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n",
+            'a=sys.argv\nB="--base"\n'
+            "assert B not in a or a[a.index(B)+1]=='origin/main', a\n"
+            "_inert=B in a\n").replace(
+            "hit={own(f) for f in paths if own(f)}\n",
+            "hit={own(f) for f in paths if own(f) and not (_inert and f.endswith('.props'))}\n"),
+            encoding="utf-8")
+        got = _run(root, "modules", "pull_request", inert, extra=["--base-ref", "main"])
+        check("[modules] a base-aware project graph gets `--base origin/main` and its inert MSBuild "
+              "edit selects nothing", got["count"] == 0 and got["scope"] != "full",
+              f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+        got = _run(root, "modules", "pull_request", inert)
+        check("[modules] …with no base ref there is no `--base`: the edit still counts (Alpha)",
+              got["selected"] == ["Acme.Alpha"], f"selected={got['selected']}")
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n", "a=sys.argv\nimport sys as _s\n'--base' in a and _s.exit(2)\n"),
+            encoding="utf-8")
+        got = _run(root, "modules", "pull_request", inert, extra=["--base-ref", "main"])
+        check("[modules] NEGATIVE CONTROL: a project graph that does NOT declare `--base` is never "
+              "handed it — the edit narrows to Alpha, not ALL",
+              got["selected"] == ["Acme.Alpha"] and got["scope"] != "full",
+              f"scope={got['scope']} selected={got['selected']} — {got['reason'][:80]}")
+        # A PUBLICATION push is a history union: a props edit a later commit reverted is still owed
+        # (a failed run may have published a partial bundle). The base-aware graph would rule it
+        # inert against WHATEVER base it is handed (here: any `--base` at all), so the module is
+        # selected ONLY if no `--base` reaches the graph on this path; handing it one reproduces
+        # the defect — the repair silently selects nothing.
+        projects.write_text(graph_src.replace(
+            "a=sys.argv\n",
+            'a=sys.argv\nB="--base"\n'
+            "_inert=B in a\n").replace(
+            "hit={own(f) for f in paths if own(f)}\n",
+            "hit={own(f) for f in paths if own(f) and not (_inert and f.endswith('.props'))}\n"),
+            encoding="utf-8")
+        def _g(*a):
+            return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True,
+                                  check=True).stdout.strip()
+        pub_base = _g("rev-parse", "HEAD")
+        props = root / "src" / "Acme.Shared" / "Directory.Build.props"
+        props.parent.mkdir(parents=True, exist_ok=True)
+        props.write_text("<Project><!-- edit --></Project>\n", encoding="utf-8")
+        _g("add", "--", "src/Acme.Shared/Directory.Build.props")
+        _g("commit", "-qm", "an MSBuild edit a failed run partially published")
+        _g("rm", "-q", "--", "src/Acme.Shared/Directory.Build.props")
+        _g("commit", "-qm", "revert it")
+        got = _run(root, "modules", "push", None,
+                   extra=["--publication-base", pub_base, "--publishing"])
+        check("[modules] a publication push hands NO `--base` to the project graph — a reverted "
+              "MSBuild edit still selects its module (Alpha) for the repair",
+              got["selected"] == ["Acme.Alpha"] and got["scope"] != "full",
+              f"scope={got['scope']} selected={got['selected']} — {got['reason'][:80]}")
+        projects.write_text(graph_src, encoding="utf-8")
         projects.unlink()
         got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"])
         check("[modules] no project-closure.py in the caller repo ⇒ ALL",
@@ -1142,6 +1615,19 @@ def main() -> int:
     p.add_argument("--always", default="",
                    help="comma-separated module names the caller's gates compose on EVERY run — "
                         "a floor the narrowing always keeps (--for modules)")
+    p.add_argument("--carry", default="",
+                   help="packages (comma/space separated) the --publication-base run WITHHELD; on a push "
+                        "narrowed by that baseline every matrix entry of these packages is selected "
+                        "(--for modules; node-repo-publication-base.py's publication-carry)")
+    p.add_argument("--module-libraries-project", default="", dest="shelf_project",
+                   help="the caller's module-libraries shelf csproj (relative to --root): a diff "
+                        "that touches it or a project it reaches runs the full set")
+    p.add_argument("--build-extensions-project", default="", dest="extensions_project",
+                   help="the caller's build-extension csproj (relative to --root): a diff that "
+                        "touches it or a project it reaches runs the full set")
+    p.add_argument("--msbuild-evaluation", action="append", default=[], dest="msbuild_evaluation",
+                   help="the JSON msbuild-evaluate.py writes for the shelf / extension: MSBuild's own imports and "
+                        "items, required when either is named. Repeatable: HEAD's and the diff BASE's are unioned")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -1164,12 +1650,23 @@ def main() -> int:
 
     root = Path(args.root).resolve()
     say = lambda *a: print(*a, file=sys.stderr)  # noqa: E731
+    try:
+        evaluation = [load_msbuild_evaluation(f) for f in args.msbuild_evaluation] or None
+    except ValueError as exc:
+        print(f"::error title=Cannot decide the build scope::{exc}", file=sys.stderr)
+        return 2
     changed = None if args.changed_list is None else [c for c in args.changed_list.split(",") if c]
     always = frozenset(a.strip() for a in args.always.split(",") if a.strip())
+    carry = frozenset(re.split(r"[\s,]+", args.carry.strip())) - {""}
+    bad_carry = sorted(c for c in carry if not re.fullmatch(r"[\w.-]+", c))
+    if bad_carry:
+        sys.exit(f"✗ --carry names something that is not a package id: {bad_carry[0]!r}")
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
                     publishing=args.publishing, always=always, publication_base=args.publication_base,
-                    publication_reach=args.publication_reach)
+                    publication_reach=args.publication_reach, shelf_project=args.shelf_project,
+                    extensions_project=args.extensions_project, msbuild_evaluation=evaluation,
+                    carry=carry)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"

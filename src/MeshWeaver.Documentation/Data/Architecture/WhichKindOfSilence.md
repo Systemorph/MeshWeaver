@@ -201,12 +201,29 @@ representation directly reduces the `JsonElement` case to **512,504** and the `J
 fails; registry recovery and the degradation warning's exception still run as before.
 
 Truncating after `GetRawText()` or `ToJsonString()` also allocated the whole failed payload.
-`BoundedJsonDiagnostic` reads a bounded UTF-8 span from a `JsonElement`, or visits a `JsonNode`
-until its character budget is reached. String escaping receives only the remaining prefix, and
-custom value converters are not invoked for diagnostics. The same formatter supplies stream and
+`BoundedJsonDiagnostic` (since removed — see below) read a bounded UTF-8 span from a `JsonElement`, or visited a `JsonNode`
+until its character budget was reached. String escaping received only the remaining prefix, and
+custom value converters were not invoked for diagnostics. The same formatter supplied stream and
 query warnings. A 256,000-character escaped leaf used **1,026,168 allocated bytes** with the old
 serialize-then-truncate path; the three JSON shapes now stay below the 64,000-byte test bound.
 Small JSON, UTF-8 cuts, and disposed-document diagnostics have separate controls.
+
+That formatter has since been replaced, for a reason that has nothing to do with memory: the
+degradation warnings are Warning-level and ship to the central log store, which row-level security
+does not reach, so a bounded *prefix of the stored value* still copied a node's content to every
+reader of the logs. The warnings now carry the content's **shape** — the `$type` (or `no $type`),
+the JSON kind, the top-level property names (at most 32, each cut and JSON-escaped) and the byte
+length — and no value. `ContentShapes.Describe` (`MeshWeaver.Data.Contract`) is the one
+implementation every site uses, and it keeps the allocation property above: a `JsonElement` is
+measured from its raw UTF-8 span; a `JsonNode` is sized over its top level only, never serialized
+and never descended into (descending would materialise a parsed tree's lazy containers), so no
+converter runs and no payload is materialised — the size is printed `~` when complete and `≥` when
+a nested container or the entry budget left it a lower bound. Only the displayed names are decoded,
+each cut before decoding; the discriminator is matched on raw bytes. The marker's `MeshNodeContentDegradedException.Shape` carries the same
+text; its old `RawJson` property survives only as an `[Obsolete]` forwarder that the platform's
+own sites leave `null`. `DegradedContentLogsShapeNotValuesTest` drives the production seams with a
+value-bearing payload and asserts the value is absent from the formatted line, the marker's
+`Message` and its `ToString()`, while the `$type` and keys are present.
 
 This establishes and removes a per-query whole-JSON string copy. It does not establish its share
 of the production allocation windows or explain retained memory. After the supported roll, exercise

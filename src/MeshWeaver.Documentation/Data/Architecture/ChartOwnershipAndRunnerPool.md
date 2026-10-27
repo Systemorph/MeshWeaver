@@ -28,10 +28,12 @@ request that adds, modifies, retypes or renames into these paths:
 - `.github/workflows/chart-gate.yml`, `.github/workflows/homebrew.yml`,
   `scripts/check-config-key-coverage.py`, `.github/scripts/test-bundle-registry.py`.
 
-A **deletion** is allowed, because that is how the copy leaves (#7127). Two neighbours stay
-editable here: `.github/scripts/build-run.py` and `deploy/build-host/`. main-cd builds the
-build-host runner image from them, and the Deploy chart gate reads them from a declared checkout of
-this repository. A chart change belongs in MeshWeaver.Deploy. The gate's message says so, and its
+A **deletion** is allowed, because that is how the copy leaves (#7127). The build-host deployment
+followed it (MeshWeaver.Deploy#5) and is frozen the same way: `deploy/build-host/`,
+`.github/scripts/build-run.py`, `.github/scripts/build-host-announcement.py`,
+`.github/build-hosts.json` and `.github/workflows/build-host-stable.yml`. Deploy builds the
+`mw-build-host` runner image from its own tree, fetching the platform's helpers by the set's commit.
+A chart change belongs in MeshWeaver.Deploy. The gate's message says so, and its
 self-test proves it refuses a modification and an addition and lets a pure deletion through.
 
 ## The chart lives here; the application it deploys does not

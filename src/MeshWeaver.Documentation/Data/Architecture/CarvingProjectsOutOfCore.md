@@ -485,15 +485,72 @@ into the control instance's inbox, and memex's fan-out.
 | `deploy/aks/envs`, `deploy/aks/infra`, `deploy/aspire`, `memex/aspire/Memex.Aspire.Hosting` | deploy | delete half in flight (draft) |
 | `deploy/aca`, `deploy/compose`, `deploy/compose-ha`, `deploy/marketplace`, `memex-local.yml`, `control-always-latest.yml`, `prod-synthetic-probe.yml`, `combo-verify.yml` | deploy / operations | **owed**: no move opened yet |
 | `deploy/base-images`, `deploy/{node,python,pandas}-gate`, `deploy/{ocr,whisper,s1-extract}` and their image workflows, `edge-images.yml`, `dockerhub-mirror.yml`, `base-image-acr.yml` | build (images the product or its CI runs) | stays |
-| `build-follow.yml`, `build-host-publication.yml`, `build-follow.py`, `build-executor.py`, `build-artifacts-fetch.py`, `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `ci-artifact-store.py` | build (the CI side of a host run; helpers the runner image READS at the set's commit) | stays |
+| `build-follow.yml`, `build-host-publication.yml`, `build-follow.py`, `build-executor.py`, `build-artifacts-fetch.py`, `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `node-repo-scope.py`, `ci-artifact-store.py` | build (the CI side of a host run; helpers the runner image READS at the set's commit) | stays |
 | `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | stays: the receivers in MeshWeaver.Plugins and the records compile against it |
 
 🚨 **The runner image is two repositories' bytes, like the operator's.** The runner is
-MeshWeaver.Deploy's; its helpers and `meshweaver-plugin-build` are core's, read at the SET'S own
-commit by Deploy's `stage-context.sh`, never vendored. The Dockerfile's `COPY` lines did not change.
-So a core change to a helper reaches the next set's runner, and a Deploy change to the runner reaches
+MeshWeaver.Deploy's; its helpers and `meshweaver-plugin-build` are core's, fetched BY COMMIT inside
+the image build (`PLATFORM_COMMIT` = the set's own commit), never vendored, so the build context is
+empty. So a core change to a helper reaches the next set's runner, and a Deploy change to the runner reaches
 the next set too: `mw-build-host:<version>` is written ONCE per version, because the hosts are
 handed it by digest.
+
+## Package versions follow the projects: core pins only what core restores
+
+Moving a project out of core leaves its package pins behind in `Directory.Packages.props`, because
+MeshWeaver.Plugins imports that list as its version source. Left alone, core's list keeps growing
+with packages nothing in core restores. Such a pin is not harmless: Dependabot and every security
+review read it as a core dependency, and a version decision about a Plugins host gets made in the
+wrong repository.
+
+**The rule.** A `PackageVersion` lives in core only when some core project restores the package, at
+any depth. Anything else lives in MeshWeaver.Plugins' `src/Directory.Packages.Plugins.props` as a
+FILL-IN entry, which applies only when no other list declares the id. So the Plugins half can land
+first with no duplicate-pin error, and core's delete lands second.
+
+**How to measure it.** A text search for `PackageReference` is not enough, because a pin can be
+needed only transitively. Restore the whole solution and read every `obj/project.assets.json`:
+
+- a pin with no `PackageReference` that still appears among the restored libraries is a transitive
+  pin, such as `Azure.Core`, `System.ClientModel` or `OpenTelemetry.Api`, and it stays;
+- a pin that appears in no core project's graph belongs to whichever repository restores it.
+
+The first pass found 67 pins with no direct core reference. 12 were transitive and stayed. 48 moved
+to Plugins at the versions core carried, with their comments, including security overrides such as
+`MessagePack` and `SQLitePCLRaw.lib.e_sqlite3`.
+
+**🚨 "Nothing in core calls it" is not the test for a DIRECT reference either.** A third-party
+assembly that core's graph carries anyway is part of the platform image's `/app`, and the copy there
+is the one every module binds: a module's own bundled copy never loads while the platform carries the
+name, and .NET binds only to an equal or higher version. So the version core's closure resolves is a
+contract with every module, even when no core line calls the package. The incident: #7262 removed
+`MeshWeaver.Graph`'s `Humanizer.Core` 3.0.10 reference because nothing in that project called it. The
+image's `Humanizer.dll` fell back to the 2.14 that Roslyn's Workspaces brings, and every install of
+the Plugins module `MeshWeaver.Graph.Views` (built against Humanizer 3.x) was refused at boot with
+`requires 'Humanizer 3.0.0.0 (this platform carries 2.14.0.0)'`. Graph.Views contributed nothing, no
+course exercise page rendered, and MeshWeaver.Education's install gate went red on an unchanged
+commit. The Plugins fill-in pin could not help, because no project in the image's closure references
+the package. The lift now sits on `MeshWeaver.Compiler.Pipeline`, the project that brings Roslyn in,
+and `PlatformCarriedAssemblyFloorsGuard` holds the floor with the same link check the module landing
+uses. Before dropping a reference, also ask whether `/app` still carries the assembly and at which
+version. If the answer changes, the change is a platform downgrade for every module built against it.
+
+**Families stay whole.** A package whose family core still partly pins stays in core with the rest:
+the four Orleans clustering and persistence packages, `ModelContextProtocol` and
+`ModelContextProtocol.AspNetCore` (core restores `ModelContextProtocol.Core`), `Microsoft.Agents.AI`
+and `Microsoft.Extensions.AI`. A family split across two files drifts on the first grouped version
+bump, and Orleans has already shipped mismatched versions once that way.
+
+**The shelf and the split families followed.** The module-library shelf (`tools/MeshWeaver.ModuleLibraries`)
+was a core csproj listing libraries only Plugins modules bind. It moved to Plugins with its pins, and
+so did the members of the Orleans, ModelContextProtocol and Microsoft.Extensions.AI families that only
+Plugins restores: each takes its version from the sibling core still pins, so the family keeps one
+version source ([Core Carries No GUI Technology](../CoreCarriesNoGuiTechnology), "The module-library
+shelf"). `Octokit` left once its two conditions in [GitHub Sync](../GitHubSync) held.
+
+**Before deleting a pin, check every satellite.** A satellite may consume a pin versionless. For
+the 48, the only versionless consumers outside Plugins were two Reinsurance `legacy/` projects.
+That repository's CI skips them, and they import no central list.
 
 ## Related
 

@@ -165,6 +165,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // file-lock contention this prevents.
             .ConfigureServices(s => s.Configure<CompilationCacheOptions>(o =>
                 o.CacheDirectory = _compilationCacheDir))
+            // A disposed test mesh must be collectable: IHttpClientFactory's handler-expiry timer
+            // otherwise keeps the whole mesh reachable for two minutes after the test. See
+            // MeshScopedHttpHandlers.
+            .ConfigureServices(s => s.WithHandlersScopedToTheMesh())
             // Match the 60s RequestTimeout we apply to client hubs in
             // ConfigureClient — without this the mesh hub still defaults to 30s,
             // so any test that does Mesh.Observe(req, target=...) and waits for

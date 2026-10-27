@@ -392,7 +392,13 @@ so an uncapped package builds on the same set the main `set` output names.
 
 Both questions are read from ONE answer, `GET <build API>/hosts` on the control instance:
 `{aliases:{latest, candidate, previous}, versions:[{version, deploymentName, complete, maxReplicas, aliases,
-pinned, pinnedBy}]}` (MeshWeaver.Plugins `Hosting/StandingBuildHosts` §7b). `latest` must name a version
+pinned, caps, cappedBy?}]}` (MeshWeaver.Plugins `Hosting/StandingBuildHosts` §7b). `pinned` counts the
+queued or running attempts pinned to a version and `caps` the package caps that need it. `cappedBy`, the
+capped packages' names, is served only to the build API's worker token, so it is read only when
+`MW_BUILD_WORKER_TOKEN` is the bearer (and is then required); without it only `caps` is read. **A 503 is
+an outage, never an empty list**: the endpoint refuses a listing it could not read completely (fail closed),
+so the reader retries inside a bounded window and then goes RED naming the outage. Read as "nothing
+deployed", it would request a deployment that exists and drop a package's retention. `latest` must name a version
 that is retained and `complete`. **`complete` is the only readiness the answer carries, and it is not "a
 pod is running"**: it says the record holds that version's full set, so the chart renders its Deployment.
 The control instance cannot observe pods truthfully, and KEDA scales an idle version to zero, so the
@@ -401,7 +407,7 @@ target: a run pinned to it scales it up, and a host claims only after staging th
 `complete: false` is skipped.
 
 **The cap keeps its deployment, and is debt.** `node-repo-cap-debt.yml` is a reusable lane a repository
-calls daily. It does two things:
+calls daily. It does three things:
 
 1. It publishes the repository's whole cap set as one signed `build-caps` event to the control inbox. The
    control plane keeps one `Hosting/BuildCaps/<package>` node per cap. The build hosts' retention reads
@@ -414,6 +420,16 @@ calls daily. It does two things:
    refreshes it and never files a duplicate. Removing the cap resolves the item. The cleanup matches a
    repository prefix that no other repository's can start with (`O/R` never resolves an item of
    `O/R-Tools`).
+3. It REQUESTS the deployment a cap needs when no complete version in `[floor, cap]` is deployed: one
+   signed `build-host-deploy-requested` per needed version, in the receiver's shape (`deployment`,
+   `version`, `testerDigest`, `portalDigest`, `runnerDigest`, `coreTestsDigest` when the set has an
+   `mw-core-tests` image, `reason: cap:<package>`). The digests are the set's own, read from the
+   registry by its version tag, so only then does the lane need the registry credential
+   (`registry-username` / `registry-password`), and its absence is RED naming it. A set with no runner
+   image is RED naming it. The request is sent after the caps are published and the debt is filed,
+   so a refused request leaves both in place. The inbox's 202 is acceptance, not a deployment: the
+   cap is admitted only once `/hosts` lists the version complete, and the next run reads that. A
+   refusal (a 409 included) is RED carrying the receiver's answer.
 
 A daily lane's red is otherwise red in an empty room, so the caller contract also wires the ci-failure
 ledger lane under its own `cap-debt-red` label, on both outcomes: a red opens or appends to one issue and
@@ -421,8 +437,10 @@ tells the control inbox, and the next green closes it.
 
 🚨 **What is NOT wired yet:**
 
-- `GET <build API>/hosts` is not served by the control instance yet. Until it is, admitting a binding cap,
-  resolving from the build hosts and the daily lane are all RED, naming that endpoint.
+- The control endpoints exist (MeshWeaver.Plugins #4221), but no satellite calls the lane until its
+  inputs are provisioned (the service-user token, the inbox secret and, to request a deployment, the
+  registry credential). Until the control instance serves `GET /api/builds/hosts`, admitting a binding
+  cap, resolving from the build hosts and the daily lane are all RED, naming that endpoint.
 - Main's floor stamp (MeshWeaver.Plugins `Hosting/PackageFloors`) still verifies every package on the one
   set the run resolved. Until consumers adopt the per-package partitions, a capped package's floor can be
   stamped above its own cap, and the validator then reds it.
@@ -633,6 +651,17 @@ tree and publishes, seals, and tags nothing. After the bot PR passes the reposit
 required checks and merges, the resulting `main` run sees the settled locks and publishes exactly
 what `--settle` derives. MeshWeaver.Plugins' `settle-locks` job and its `own` output are the reference
 shape.
+
+**The floor stamp rides the settle** (policy [`floor-stamp-rides-the-settle`](../PolicyNotProse)). A
+repo that stamps package floors — `content.minMeshVersion` plus a `<Package>/mesh-floor.lock` witness,
+written by `main`'s run once it has compiled and tested the sources — lands that stamp IN the same bot
+settlement PR rather than in a second one. The validator therefore also accepts, for an enumerated
+package, its `mesh-floor.lock` and an `index.json` whose only change is `content.minMeshVersion` (an
+added, deleted or otherwise edited `index.json` is still refused), and the locks must still be exactly
+what `--settle` derives for the PR's tree, stamp included. Landing the stamp separately cost a whole
+extra merge and main run per source change, because the stamp's own `index.json` edit unsettled the
+lock beside it. A lock-only settlement is accepted exactly as before. MeshWeaver.Plugins'
+`Hosting/PackageFloors.md` is the caller's manual.
 
 🚨 **A run that withholds its publication must say so, or it becomes the next run's baseline.**
 `node-repo-publication-base.py` narrows a push's selection to `git log <baseline>..HEAD`, where the

@@ -1282,12 +1282,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     private static MeshNodeError BuildDeserializationError(
         MeshNode node, JsonElement je, System.Exception ex)
     {
-        // Truncate the raw JSON snippet to keep diagnostics readable while
-        // still preserving the discriminator + first few fields — usually
-        // enough to identify which TypeRegistry entry is missing.
-        const int maxJsonChars = 400;
-        var raw = je.GetRawText();
-        var snippet = raw.Length <= maxJsonChars ? raw : raw[..maxJsonChars] + "…";
+        // 🚨 The diagnostic is the content's SHAPE ($type, keys, kind, length), never a snippet of
+        // it: MeshNodeError travels on the wire, the synthesized MeshNodeStreamException is logged
+        // by whoever observes the fault, and a record's ToString prints Diagnostic — so a value put
+        // here reaches Warning+ logs outside row-level security. The discriminator and the keys are
+        // what identify the missing TypeRegistry entry or the missing required property.
+        var snippet = ContentShapes.Describe(je);
         var discriminator = je.ValueKind == JsonValueKind.Object && je.TryGetProperty("$type", out var t)
             ? t.GetString() ?? "<null>"
             : "<no $type>";
@@ -1422,24 +1422,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 ? $"untyped JSON ({content.GetType().Name})"
                 : $"a {content.GetType().FullName} ({content.GetType().Assembly.GetName().Name})";
 
-    private const int TypedWriteExcerptLimit = 400;
-
-    private static string? ContentExcerpt(object? content)
-    {
-        if (content is null)
-            return null;
-        var raw = content switch
-        {
-            JsonElement je => je.GetRawText(),
-            System.Text.Json.Nodes.JsonNode jn => jn.ToJsonString(),
-            _ => null,
-        };
-        return raw is null
-            ? null
-            : raw.Length <= TypedWriteExcerptLimit
-                ? raw
-                : raw[..TypedWriteExcerptLimit] + "…";
-    }
+    /// <summary>
+    /// The refused write's diagnostic: the content's SHAPE, never its values — see
+    /// <see cref="ContentShapes"/> and <c>BuildDeserializationError</c> for why. <c>null</c> when
+    /// there is no content, as before.
+    /// </summary>
+    internal static string? ContentExcerpt(object? content)
+        => content is null ? null : ContentShapes.Describe(content);
 
     /// <summary>
     /// Applies <paramref name="update"/> to the targeted MeshNode and returns an
@@ -3522,7 +3511,9 @@ public static class MeshNodeStreamExtensions
     /// <param name="hub">The hub the caller holds. When it is the ROOT MESH HUB (the router), the
     /// read is issued on <see cref="MeshExtensions.ReadIssuingHub"/> instead — the router must be
     /// neither end of a delivery (ROUTER_TRAFFIC), and a bounded read must not queue behind the
-    /// mesh's node CRUD.</param>
+    /// mesh's node CRUD. While the mesh tears down that hub cannot be had, and the read is then
+    /// NOT issued: it settles <see cref="NodeReadStatus.Unavailable"/> rather than leave the router
+    /// (#7136).</param>
     /// <param name="path">The mesh path to read.</param>
     /// <param name="timeout">Wall-clock budget for the read; defaults to 10 seconds.</param>
     /// <param name="onTimeout">
@@ -3595,7 +3586,39 @@ public static class MeshNodeStreamExtensions
             // "the owning per-node hub never answered" about a hub that answered promptly (#2901,
             // Cause B in Doc/Architecture/ContentRoute503). portal/reads-{meshId} registers no
             // handlers, so its block only ever dispatches replies to reads issued on it.
-            var issuingHub = hub.ReadIssuingHub();
+            //
+            // 🚨 TryReadIssuingHub, never ReadIssuingHub: the latter falls back to the ROUTER when
+            // the read hub cannot be had — the mesh is disposing (Dispose() closes hosted-hub
+            // creation at its first instant, and MeshReadHub refuses outright past
+            // DisposeHostedHubs) or the read hub's construction faulted — and a mesh-singleton reacting to the hosted-hub teardown then
+            // posted this GetDataRequest with Sender = mesh/{id}, the very ROUTER_TRAFFIC ORIGIN
+            // line of #7136. There is no off-router hub left to issue on, so the read is not
+            // issued at all: it settles Unavailable, the status that means "could not be read",
+            // which is the truth. Pinned by NodeReadDuringMeshTeardownLeavesTheRouterOffTest.
+            var issuingHub = hub.TryReadIssuingHub();
+            if (issuingHub is null)
+            {
+                var mesh = hub.GetMeshHub();
+                // IsDisposing, not a run level: Dispose() sets it and closes hosted-hub CREATION
+                // (HostedHubsCollection.CloseCreation) while the run level still reads Started, so a
+                // read hub not yet created is refused from that first instant — well before
+                // DisposeHostedHubs. That window is teardown too and must be named as such.
+                var unissued = mesh.IsDisposing || mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
+                    ? (Exception)new ObjectDisposedException(mesh.Address.ToString(),
+                        $"GetMeshNode('{path}') was not issued: the caller holds the root mesh hub "
+                        + $"(the router), the mesh is tearing down (IsDisposing={mesh.IsDisposing}, "
+                        + $"RunLevel={mesh.RunLevel}), so the "
+                        + "off-router read hub cannot be materialised — and the router must never be "
+                        + "an end of a delivery (#7136).")
+                    : new InvalidOperationException(
+                        $"GetMeshNode('{path}') was not issued: the caller holds the root mesh hub "
+                        + "(the router) and the off-router read hub could not be materialised (see the "
+                        + "hosted-hub creation error logged for it); the router must never be an end "
+                        + "of a delivery (#7136).");
+                observer.OnNext(NodeReadOutcome.Unavailable(unissued));
+                observer.OnCompleted();
+                return Disposable.Empty;
+            }
 
             // 🪪 THE READ'S IDENTITY IS CAPTURED ONCE, HERE, AND PINNED ON EVERY PROBE.
             // The first probe is posted from this Subscribe, where the caller's identity is ambient —

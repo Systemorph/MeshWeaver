@@ -53,12 +53,22 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         // → logging.AddConfiguration("Logging")). Flip the shared
         // test/appsettings.json's "Logging:LogLevel:MeshWeaver" to "Debug"
         // for hang-hunt runs.
-        Services.AddSingleton(FileOutput);
+        //
+        // 🚨 The provider closes over a LOCAL, never over `this`. Every logger the mesh hands out
+        // holds this closure, and a logger is held by whatever outlives the mesh for a while: a
+        // pending timer's captured ExecutionContext, IHttpClientFactory's handler-expiry timer.
+        // A closure over `this` made each of those reach the test instance, and through its
+        // Services and MeshBuilder the whole disposed mesh, until the timer fired. Measured in a
+        // Memex.Portal.Shared.Test heap dump: 84 meshes' type registries live with about 20
+        // running (TestLoggerDoesNotRootTheTestTest).
+        var fileOutput = FileOutput;
+        Services.AddSingleton(fileOutput);
         Services.AddLogging(logging =>
         {
             logging.ClearProviders(); // Remove default providers
             logging.Services.AddSingleton<ILoggerProvider>(serviceProvider =>
-                new XUnitFileLoggerProvider(() => FileOutput, serviceProvider));
+                new XUnitFileLoggerProvider(() => fileOutput, serviceProvider));
+            TestLogLevel.ApplyOverride(logging); // MW_TEST_LOG_LEVEL past the factory's rules
         });
         
     }

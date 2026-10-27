@@ -2426,8 +2426,16 @@ def write_outputs(chosen: Chosen, tester: str, portal: str, migration: str | Non
 # NO fallback to the newest-sealed path, so adopting it before the control instance serves a
 # `latest` deployment reds that consumer by name, on purpose.
 #
-#   ONE read, `GET <api>/hosts` on the control instance (phase P3 serves it):
-#     {aliases:{latest:"<v>", previous:"<v>"}, versions:[{version, deploymentName, complete, maxReplicas, aliases, pinned, pinnedBy?}]}
+#   ONE read, `GET <api>/hosts` on the control instance (MeshWeaver.Plugins `Hosting/StandingBuildHosts` §7b):
+#     {aliases:{latest:"<v>", previous:"<v>"}, versions:[{version, deploymentName, complete, maxReplicas, aliases, pinned, caps, cappedBy?}]}
+#   * `pinned` counts the queued or running attempts pinned to a version; `caps` the package caps
+#     that need it (anonymous). `cappedBy` (the capped packages' NAMES) is served only to the worker
+#     token, so it is read only when `MW_BUILD_WORKER_TOKEN` is the bearer — and then it is REQUIRED,
+#     because a worker answer without it means the token was not honoured. Anonymous, only `caps`.
+#   * A 503 is the endpoint failing CLOSED on a listing it could not read completely: an OUTAGE,
+#     retried inside a bounded window (`BUILD_API_OUTAGE_WINDOW_S`) and NEVER read as an empty
+#     list — "nothing deployed" would send a deploy request for a version that is deployed, or drop
+#     a package's retention.
 #   * `latest` is `aliases.latest`, and it must name a retained version whose `complete` is true. The
 #     set it names is then resolved EXACTLY like a freeze: that one CD run, sealed, its images
 #     present — never a substitute.
@@ -2446,6 +2454,11 @@ def write_outputs(chosen: Chosen, tester: str, portal: str, migration: str | Non
 # the switch exists to prevent.
 
 BUILD_API_TOKEN_ENV = "MW_BUILD_API_TOKEN"
+BUILD_WORKER_TOKEN_ENV = "MW_BUILD_WORKER_TOKEN"
+# A 503 from `GET /hosts` is a partial listing refused fail-closed (an outage): retried every
+# BUILD_API_OUTAGE_POLL_S for at most BUILD_API_OUTAGE_WINDOW_S, then RED naming the outage.
+BUILD_API_OUTAGE_WINDOW_S = 120.0
+BUILD_API_OUTAGE_POLL_S = 10.0
 LATEST_ALIAS = "latest"
 BUILD_API_TIMEOUT_S = 30
 CAP_FIELD = "maxMeshVersion"
@@ -2457,10 +2470,14 @@ NO_FALLBACK = ("It is never answered from the newest sealed set instead: that se
 
 
 class Deployed(NamedTuple):
-    """One retained build-server deployment as `GET <api>/hosts` reports it."""
+    """One retained build-server deployment as `GET <api>/hosts` reports it. `caps` is the anonymous
+    count of package caps that need it; `capped_by` the packages' names, read ONLY with the worker
+    token (None otherwise — never inferred from `caps`)."""
     version: str
     run: int
     complete: bool
+    caps: int = 0
+    capped_by: tuple[str, ...] | None = None
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -2491,15 +2508,38 @@ class HttpBuildHosts:
     """The control instance's build API, read over HTTP. The INTERFACE the resolver codes against is
     the two methods; the self-test drives this same class against a fake server."""
 
-    def __init__(self, api: str, token: str = "", timeout: float = BUILD_API_TIMEOUT_S):
+    def __init__(self, api: str, token: str = "", timeout: float = BUILD_API_TIMEOUT_S, worker_token: str = "",
+                 outage_window: float = BUILD_API_OUTAGE_WINDOW_S, outage_poll: float = BUILD_API_OUTAGE_POLL_S,
+                 sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic):
         self.base = build_api_base(api)
-        self.token = token
+        # The worker token, when given, IS the bearer: it is what makes `cappedBy` part of the answer.
+        self.worker = bool(worker_token)
+        self.token = worker_token or token
         self.timeout = timeout
+        self.outage_window, self.outage_poll = outage_window, outage_poll
+        self._sleep, self._clock = sleep, clock
         self._opener = urllib.request.build_opener(_NoRedirect)
         self.requests: list[str] = []
+        self.outages = 0
         self._doc: dict | None = None
 
     def _get(self, route: str, what: str, provision: str) -> dict:
+        """One read. A 503 is an OUTAGE (the endpoint refused a partial listing, fail closed):
+        retried inside the outage window, never an empty answer; every other failure is RED at once."""
+        deadline = self._clock() + self.outage_window
+        while True:
+            try:
+                return self._get_once(route, what, provision)
+            except _Outage as outage:
+                if self._clock() >= deadline:
+                    raise ResolutionError(
+                        f"{what}: {outage.url} answered HTTP 503 for {int(self.outage_window)}s ({self.outages} "
+                        "time(s)) — an OUTAGE: the control instance could not read the sets completely and "
+                        "refused a partial listing (fail closed). It is never read as an empty list. "
+                        f"Re-run once the control instance reads its records again. {NO_FALLBACK}") from None
+                self._sleep(self.outage_poll)
+
+    def _get_once(self, route: str, what: str, provision: str) -> dict:
         url = f"{self.base}/{route}"
         self.requests.append(route)
         headers = {"Accept": "application/json", "User-Agent": "resolve-platform"}
@@ -2509,6 +2549,9 @@ class HttpBuildHosts:
             with self._opener.open(urllib.request.Request(url, headers=headers), timeout=self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as error:
+            if error.code == 503:
+                self.outages += 1
+                raise _Outage(url) from None
             if error.code in (401, 403):
                 raise ResolutionError(
                     f"{what}: {url} answered HTTP {error.code}. Provision {BUILD_API_TOKEN_ENV} (a "
@@ -2569,8 +2612,74 @@ class HttpBuildHosts:
             if not name:
                 raise ResolutionError(f"the build hosts: {self.base}/hosts lists {version!r}, which is "
                                       f"not a platform set. {NO_FALLBACK}")
-            out.append(Deployed(name, int(match_set_name(name).group(2)), row.get("complete") is True))
+            caps = row.get("caps", 0)
+            if caps is None:
+                caps = 0
+            if type(caps) is not int or caps < 0:
+                raise ResolutionError(f"the build hosts: {self.base}/hosts gives {name} `caps` {caps!r}, which is "
+                                      f"not a count. {NO_FALLBACK}")
+            capped_by = None
+            if self.worker:  # `cappedBy` is the worker's view only; anonymous, it is never read
+                names = row.get("cappedBy")
+                if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+                    raise ResolutionError(
+                        f"the build hosts: {self.base}/hosts answered the worker token with no `cappedBy` list for "
+                        f"{name} (got {names!r}) — the token was not honoured as the worker's, or the answer's "
+                        f"shape changed; check {BUILD_WORKER_TOKEN_ENV}. {NO_FALLBACK}")
+                capped_by = tuple(sorted(names))
+            out.append(Deployed(name, int(match_set_name(name).group(2)), row.get("complete") is True, caps, capped_by))
         return out
+
+
+class _Outage(Exception):
+    """A 503 from the build API: retried by `HttpBuildHosts._get`, never seen by a caller."""
+
+    def __init__(self, url: str):
+        super().__init__(url)
+        self.url = url
+
+
+# ── a cap with no complete deployment: what `build-host-deploy-requested` needs ──
+# The receiver (MeshWeaver.Plugins `BuildHostDeploy`, `Hosting/StandingBuildHosts` §7b) deploys
+# `v/<version>` from the set's tester, portal and runner digests, plus `coreTestsDigest` exactly when
+# the set names one. They are read from the registry the set was promoted into, by the version tag.
+DEFAULT_RUNNER_IMAGE = "meshweaver.azurecr.io/mw-build-host"
+DEFAULT_CORE_TESTS_IMAGE = "meshweaver.azurecr.io/mw-core-tests"
+DEPLOY_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def deployable_version(cap: str) -> str:
+    """The version a cap's deployment is requested as: the cap's own set, `x.y.z` (a 3.1 set). A
+    retired `3.0.0-ci.<run>` set has no build-server deployment shape — RED, naming it. Pure."""
+    name = canonical_set_name(cap) or ""
+    if not DEPLOY_VERSION.fullmatch(name):
+        raise ResolutionError(f"the cap {cap!r} names no deployable set (a build-server deployment is "
+                              "`v/<x.y.z>`; a retired 3.0.0-ci set has none) — raise the cap to a 3.1 set")
+    return name
+
+
+def set_digests(resolve: Resolve, version: str, tester: str = DEFAULT_TESTER_IMAGE,
+                portal: str = DEFAULT_PORTAL_IMAGE, runner: str = DEFAULT_RUNNER_IMAGE,
+                core_tests: str = DEFAULT_CORE_TESTS_IMAGE) -> dict[str, str]:
+    """`{testerDigest, portalDigest, runnerDigest[, coreTestsDigest]}` of the set `version` names,
+    each by its version tag. A missing required image is RED naming it (a runner not built yet is
+    the Deploy repository's build-host.yml's to build); the core-tests image is named only when the
+    set has one."""
+    out: dict[str, str] = {}
+    for key, image, required in (("testerDigest", tester, True), ("portalDigest", portal, True),
+                                 ("runnerDigest", runner, True), ("coreTestsDigest", core_tests, False)):
+        digest = resolve(image, version)
+        if digest is None:
+            if required:
+                raise ResolutionError(f"{image}:{version} does not exist — the set cannot be deployed without its "
+                                      f"{key[:-6]} image" + (" (the runner is built by the Deploy repository's "
+                                                             "build-host.yml for every armed or promoted set)"
+                                                             if image == runner else ""))
+            continue
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise ResolutionError(f"{image}:{version} answered the digest {digest!r}, which is not sha256:<64 hex>")
+        out[key] = digest
+    return out
 
 
 def set_run(text: str | None) -> int | None:
@@ -2758,8 +2867,9 @@ def check_caps(bounds: list[PackageBounds], hosts: "HttpBuildHosts | None") -> l
                 f"[{b.floor or 'no floor'}, {b.cap}] (retained: "
                 f"{retained_text(deployed)}). "
                 "The cap is not admitted: its deployment must be requested and tested first "
-                "(the daily cap-debt lane publishes the cap as Hosting/BuildCaps/<package> and asks for "
-                "BuildHostDeploy of that sealed set, §5; the deployment then appears here).")
+                "(the daily cap-debt lane publishes the cap as Hosting/BuildCaps/<package> and SENDS "
+                "`build-host-deploy-requested` with reason `cap:<package>` for that sealed set, §5; the "
+                "deployment then appears here).")
     return errors
 
 
@@ -3022,6 +3132,93 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
         dead = api.url
     text = red(lambda: HttpBuildHosts(dead).latest())
     check("an unreachable endpoint is RED", "unreachable" in text, text)
+
+    # ── a 503 is an OUTAGE (a partial listing refused fail closed): retried, never an empty list ──
+    class _Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.now += seconds
+
+    class _Flaky(_FakeBuildApi):
+        """Answers 503 for the first `outages` reads of /hosts, then the listing."""
+        def __init__(self, outages: int, then):
+            super().__init__({route: then})
+            self.left = outages
+            fake, original = self, self.routes
+
+            class Routes(dict):
+                def get(self, key, default=None):
+                    if key == route and fake.left > 0:
+                        fake.left -= 1
+                        return 503, '{"error":"a set could not be read"}', {}
+                    return original.get(key, default)
+            self.routes = Routes(original)
+
+    clock = _Clock()
+    with _Flaky(2, hosts("3.1.10412", ("3.1.10412", True))) as api:
+        built = HttpBuildHosts(api.url, sleep=clock.sleep, clock=clock)
+        got = red(lambda: built.latest()) or built.latest()
+        check("a 503 from /hosts is an OUTAGE: retried inside the window, then the listing is read",
+              got == "3.1.10412" and built.outages == 2 and len(api.seen) == 3, (got, built.outages, api.seen))
+    clock = _Clock()
+    with _Flaky(10_000, hosts("3.1.10412", ("3.1.10412", True))) as api:
+        built = HttpBuildHosts(api.url, sleep=clock.sleep, clock=clock)
+        text = red(lambda: built.deployed())
+        check("NEGATIVE CONTROL: a 503 that outlasts the window is RED naming the OUTAGE — never an empty `versions`",
+              "OUTAGE" in text and "never read as an empty list" in text
+              and built.outages == int(BUILD_API_OUTAGE_WINDOW_S / BUILD_API_OUTAGE_POLL_S) + 1, (text, built.outages))
+    clock = _Clock()
+    with _FakeBuildApi({route: (500, "{}", {})}) as api:
+        built = HttpBuildHosts(api.url, sleep=clock.sleep, clock=clock)
+        text = red(lambda: built.latest())
+        check("NEGATIVE: any OTHER 5xx is RED at once, never retried as an outage",
+              "HTTP 500" in text and len(api.seen) == 1, (text, api.seen))
+
+    # ── `caps` (anonymous) and `cappedBy` (the worker token only) ──
+    def with_caps(*rows):
+        return 200, json.dumps({"aliases": {"latest": "3.1.10412"}, "versions": [
+            {"version": v, "deploymentName": "b", "complete": True, **extra} for v, extra in rows]}), {}
+    with _FakeBuildApi({route: with_caps(("3.1.10412", {"caps": 0, "cappedBy": ["Leak"]}),
+                                         ("3.1.10398", {"caps": 2}))}) as api:
+        got = HttpBuildHosts(api.url).deployed()
+        check("anonymously the CAPS COUNT is read and `cappedBy` never (even when served)",
+              [(d.caps, d.capped_by) for d in got] == [(0, None), (2, None)], got)
+    with _FakeBuildApi({route: with_caps(("3.1.10412", {"caps": 0, "cappedBy": []}),
+                                         ("3.1.10398", {"caps": 2, "cappedBy": ["Zed", "Acme.Pkg"]}))}) as api:
+        got = HttpBuildHosts(api.url, "api-tok", worker_token="worker-tok").deployed()
+        check("with the worker token, `cappedBy` is read (the names), and the WORKER token is the bearer",
+              [d.capped_by for d in got] == [(), ("Acme.Pkg", "Zed")] and api.seen == [(route, "Bearer worker-tok")],
+              (got, api.seen))
+    with _FakeBuildApi({route: with_caps(("3.1.10412", {"caps": 1}))}) as api:
+        text = red(lambda: HttpBuildHosts(api.url, worker_token="worker-tok").deployed())
+        check("NEGATIVE: a worker answer with no `cappedBy` is RED (the token was not honoured) — never 'no packages'",
+              "no `cappedBy`" in text and BUILD_WORKER_TOKEN_ENV in text, text)
+    with _FakeBuildApi({route: with_caps(("3.1.10412", {"caps": "2"}))}) as api:
+        text = red(lambda: HttpBuildHosts(api.url).deployed())
+        check("a `caps` that is not a count is RED", "not a count" in text, text)
+
+    # ── what a cap's deploy request needs: the deployable version and the set's digests ──
+    check("a 3.1 cap is deployed as its own version", deployable_version("3.1.10400") == "3.1.10400")
+    check("NEGATIVE: a retired 3.0.0-ci cap has no deployment shape — RED",
+          "no deployable set" in red(lambda: deployable_version("3.0.0-ci.9000")))
+    dg = {k: "sha256:" + c * 64 for k, c in (("mw-plugin-test", "1"), ("memex-portal-ai", "2"),
+                                              ("mw-build-host", "3"), ("mw-core-tests", "4"))}
+    reg = _registry({(image, "3.1.10400"): d for image, d in dg.items()})
+    check("the set's digests by its version tag, core tests included when the set has them",
+          set_digests(reg, "3.1.10400") == {"testerDigest": dg["mw-plugin-test"], "portalDigest": dg["memex-portal-ai"],
+                                            "runnerDigest": dg["mw-build-host"], "coreTestsDigest": dg["mw-core-tests"]})
+    reg = _registry({(image, "3.1.10400"): d for image, d in dg.items() if image != "mw-core-tests"})
+    check("a set with no core-tests image is deployed without coreTestsDigest (it names none)",
+          "coreTestsDigest" not in set_digests(reg, "3.1.10400"))
+    reg = _registry({(image, "3.1.10400"): d for image, d in dg.items() if image != "mw-build-host"})
+    text = red(lambda: set_digests(reg, "3.1.10400"))
+    check("NEGATIVE: a set with no RUNNER image cannot be deployed — RED naming it, nothing guessed",
+          "mw-build-host:3.1.10400 does not exist" in text and "build-host.yml" in text, text)
     check("plain http off loopback is refused",
           "not an https URL" in red(lambda: build_api_base("http://control.example.com/api/builds")))
     check("credentials in the URL are refused",

@@ -55,6 +55,19 @@ public record NavMenuSkin : Skin<NavMenuSkin>
     public NavMenuSkin WithSortOptions(IReadOnlyList<NavSortOption> options) => this with { SortOptions = options };
 
     /// <summary>
+    /// Whether the menu's FIRST entry is its title: a renderer that has a header row shows that entry
+    /// there, beside the collapse control and above the search box, instead of as the first line of
+    /// the list (the index rail's heading link — <c>SuppliedNavigationRail</c>). False (the default)
+    /// leaves every entry in the list; a renderer without a header row ignores it.
+    /// </summary>
+    public bool FirstEntryIsTitle { get; init; }
+
+    /// <summary>Shows the menu's first entry as its title (<see cref="FirstEntryIsTitle"/>).</summary>
+    /// <param name="value">Whether the first entry is the title.</param>
+    /// <returns>A new <see cref="NavMenuSkin"/> with the flag set.</returns>
+    public NavMenuSkin WithFirstEntryIsTitle(bool value = true) => this with { FirstEntryIsTitle = value };
+
+    /// <summary>
     /// Sets whether the menu is expanded.
     /// </summary>
     public object? Expanded { get; init; } = true;

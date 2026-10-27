@@ -31,14 +31,17 @@ public static class DeleteLayoutArea
     public const string QueriesParam = "q";
 
     /// <summary>
-    /// Returns the Delete menu item if the user has Delete permission.
+    /// Returns the Delete menu item if the user may delete the node (<see cref="DeletePermission.RequiredFor"/>).
     /// </summary>
     public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
     {
-        if (!perms.HasFlag(Permission.Delete))
+        // The same demand the server makes (DeletePermission.RequiredFor): Update for ordinary
+        // content, Delete for a partition root or a governance satellite.
+        var required = DeletePermission.RequiredFor(hubPath);
+        if (!perms.HasFlag(required))
             return null;
         return new("Delete", MeshNodeLayoutAreas.DeleteArea,
-            RequiredPermission: Permission.Delete, Order: 100,
+            RequiredPermission: required, Order: 100,
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.DeleteArea))
             { LabelKey = "menu.delete" };
     }

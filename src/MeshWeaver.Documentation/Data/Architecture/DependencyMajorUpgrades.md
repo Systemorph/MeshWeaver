@@ -32,6 +32,40 @@ For a major bump it is close to worthless, for five independent reasons:
 The satellite reads a bump only when somebody moves its pin, on another day, in another pull
 request.
 
+### A MINOR sweep can break the satellites too — a pin below core's own resolved graph
+
+The satellite blind spot is not limited to majors. `CentralPackageTransitivePinningEnabled` is
+unset, so a `PackageVersion` governs only the projects that reference the package **directly**;
+everywhere else the highest floor in the graph wins. Measured after the minor/patch sweep #7206:
+it moved `ModelContextProtocol.Core` to 2.3.0 (referenced by `MeshWeaver.Hosting`), whose nuspec
+requires `Microsoft.Extensions.AI.Abstractions >= 10.11.0` — while the pin stayed at 10.8.3 and the
+`ModelContextProtocol` / `.AspNetCore` pins stayed at 2.2.0 (which pin `.Core` **exactly**). Core
+built green: nothing in core references the lifted package directly. MeshWeaver.Plugins, built with
+`-p:MeshWeaverRoot=<core main>`, failed restore — `NU1605` in `MeshWeaver.AI` and
+`NU1107` in `MeshWeaver.Mcp`.
+
+Why the sweep left the rest behind: a pin consumed **only** by satellites is invisible to core's
+Dependabot, which updates what core's own projects reference. So the family split exactly along the
+repository boundary. Two guards in `PackageFamiliesMoveTogetherGuard` now hold it:
+
+- **Named families** `ModelContextProtocol` and `Microsoft.Extensions.AI` must agree on one base
+  version, like Roslyn, NuGet, Aspire and Rx before them.
+- **`NoPinSitsBelowWhatThePlatformGraphResolves`** reads the test assembly's own `.deps.json` (a
+  closure that contains `MeshWeaver.Hosting`) and fails on any pin below the version that graph
+  resolves. It is family-agnostic, so it also caught four `Microsoft.Extensions.*` pins left at
+  10.0.12 while their siblings moved to 10.0.13. It compares the FULL NuGet version
+  (`NuGetVersionComparer`), so a pin at `1.0.0-preview.1` under a resolved `1.0.0` or
+  `1.0.0-preview.2` is a downgrade too; only family alignment works on base versions. Its
+  denominator is the incident edge itself (both `ModelContextProtocol.Core` and
+  `Microsoft.Extensions.AI.Abstractions` must be in the graph), never a count of pins found: the
+  SDK drops a package from `.deps.json` when the shared framework carries it at an equal or higher
+  version, so the same commit showed 47 pins on a developer host and 28 on CI's newer SDK.
+
+The fix moves the whole chain together: the MCP SDK to 2.3.0, `Microsoft.Extensions.AI*` to
+10.11.0, `OpenAI` to 2.14.0 (the floor of `Microsoft.Extensions.AI.OpenAI` 10.11.0) and
+`System.ClientModel` to 1.15.0 (the floor of `OpenAI` 2.14.0), since the satellites reference each
+of those directly.
+
 ## The method
 
 Six steps, in order. Each produces a positive artefact; none of them can pass by returning nothing.
@@ -375,6 +409,11 @@ matter) and `src/MeshWeaver.Publish` (slide front matter) carry versionless `Yam
 resolved from core's list, so both move to 18.1.0 when the satellite's `MW_PLATFORM_REF` next moves.
 Both were included in the 1,817-file corpus run above, and neither implements an extension point
 that 18.0.0 broke.
+
+**Since then YamlDotNet has left the fleet.** Core reads and writes YAML with its own
+[`MeshWeaver.Yaml`](../TolerantYaml) (#7180); MeshWeaver.Plugins ported both modules above to it
+(MeshWeaver.Plugins#4227), and the `PackageVersion` entry and the platform's last reference were then
+removed. This entry stays as the record of that bump.
 
 ### xunit.v3 3.2.2 → 4.0.1 — the major where the ANALYZERS were the whole cost
 

@@ -646,6 +646,30 @@ that cannot be leased is left out, and the fan-out skips a provider whose module
 answers. On the base, the test mesh did not start. Its published twin is the negative control: there the
 module's provider answers in the fan-out.
 
+🚨 **Building the fan-out constructs no module provider (MeshWeaver#7218).** `MeshQuery` first read each
+module provider's name under a lease taken while the fan-out was BUILT, and every `IMeshService` builds a
+fan-out. A module provider whose own construction builds an `IMeshService` was therefore leased again by
+that service, on the thread already building it. On the portal the mail module's Teams chats provider does
+exactly that: its chat rooms take the member directory, which takes the user directory
+(`UserIdentityCache`), a root singleton over `IMeshService`. The container refused the re-entry as
+*"A circular dependency was detected for the service of type 'IMeshQueryProvider': building it asked for
+itself again"*, and every pod logged registration #36 as not constructible. The fan-out now holds a module's
+provider under its forwarder's label and reads the provider's real name from the instance each
+subscription leases (`QueryMembers`), which also de-duplicates by that name. A duplicate registration is
+leased once, by the first subscription, to learn its name; later subscriptions leave it out without
+constructing it. A learned name is trusted only while the generation that answered it is current
+(`ModuleServiceProxy.CurrentGenerationId`): a same-shape swap may reorder a module's providers, and a
+position must never be skipped under the name its neighbour now answers by. The cache holds the
+generation's identity (its load context's name), never the generation: a `ModuleGeneration` holds its
+collectible context, and the fan-out lives as long as the mesh, so holding one kept every retired
+generation loaded. `AModuleProviderReorderedByASwapTest` also proves the retired generation is collected
+while the fan-out that learned from it stays alive, with no query after the swap.
+`AModuleProviderReorderedByASwapTest` swaps `[A, B]` for `[B, A]` and both still answer; with the name
+trusted across generations, A is absent after the swap.
+`AModuleProviderNeedingTheMeshServiceTest` pins it with a module provider built over a root singleton that
+takes `IMeshService`. Once the provider is built, no fault is reported against its registration, and the
+`IMeshService` built during its construction serves it. On the base, the circular dependency was reported.
+
 🚨 **The lease spans the SUBSCRIPTION, not the call.** A provider returns a COLD observable, and the fan-out
 subscribes to it later, through its query pool. A lease taken around the call and released when the call
 returned left the query running with no lease. A retirement landing in between then disposed the
@@ -760,6 +784,44 @@ N+1, the hosted service is stopped and restarted in order, and N is really colle
 control: an N+1 that changes the forwarded shape is refused with N serving; a class-typed root service
 the module implements is a blocker the guard names. `ModuleLiveUpdateGuardTest` (+1): a declared
 non-boot-time category fails.
+
+### A stale root stand-in is refused, never recursed (MeshWeaver#5388)
+
+A portal process died of a `StackOverflowException` (image 3.1.11464, still on Autofac). Its dump shows
+one thread in about 395 repeats of the same cycle: `ModuleServiceProvider.ResolveAt` → the module
+container's `ModuleFallbackSource` stand-in for a ROOT registration → that root registration, a stand-in
+that calls `ResolveAt` on the same module container → and round again.
+
+**The shape.** The root holds a stand-in that resolves position `i` of type `T` in a module container,
+which is what `ModuleOwnedRootSource` hands the root for a module-declared type. The module container does
+NOT register `T` itself. After a live swap, for example, the new generation's container holds the new
+generation's `T` and never the old one. Neither `isModuleType` nor `registrationsElsewhere` claims the
+old `T`, and the root reports `T` as a service because the stand-in IS a root registration. So the
+module's fallback answers `T` with a stand-in back to the root. `ResolveAt` then counted positions over
+EVERY registration a lookup reached, sources included, so position `i` was that fallback stand-in, and
+the cycle closed. Each hop started a fresh resolve operation, so no per-operation cycle detection saw it.
+Autofac also cached a source's answers in the root, which kept the stale stand-in, and `IsService(T)`,
+alive after the swap.
+
+**Closed by construction.** `ModuleServiceProvider.RegistrationAt` counts positions among the module
+container's OWN registrations only (`OwnRegistrationsOf`), never what its fallback adds. That has been
+true since the Autofac replacement, MeshServiceProvider (#7145). A position the module does not register
+is refused by name: *"T has no registration at position i in this module container."* The root also
+caches nothing a source answers, so after a swap `ModuleOwnedRootSource` finds no owner for the old `T`
+and the root reports it as not registered.
+
+**Tests:** `AStaleRootStandInIsRefusedNotRecursedTest` (3) drives the exact shape: a root source standing
+in for position 0 of a module container that does not register the type. It is refused by name, with and
+without a caller. The control checks that the precondition is armed: the module can reach exactly one
+registration of the type, its fallback's stand-in for the root's. The negative control is the same road
+into a module that registers the type, which answers the module's instance. Mutating `RegistrationAt` back
+to `RegistrationsOf` kills the test host with `Stack overflow.` (exit 134), and the frames repeat the
+dump's cycle.
+
+**Not covered by this:** a cycle made ONLY of transient factory registrations (every stand-in is one)
+is still not refused by the container. `ResolveContext` restarts inside a factory, and only a shared
+instance's slot (`InstanceSlot.BuildingThread`) catches re-entry. The mutated run above recursed through
+1,804 transient builds with no refusal.
 
 ## What is shipped (slice 5 — the builder hook, decomposed; the mesh hub's type registry re-applied)
 
@@ -935,7 +997,7 @@ generation cannot PRODUCE is ABSENT, never a fault in a consumer that leases it:
 |---|---|
 | `ModuleContexts.TryLeaseModuleService` | A resolve that faults answers null, which every leasing consumer already reads as "this module's feature is absent" (the shape a module withdrawn at boot has had since #6542) — except the caller's own scope ending, which propagates: a disposal in the causes (also when the container wrapped it in a resolution exception) AND a caller scope that has actually ended. A constructor that ran into a disposed dependency of its OWN under a live caller is a construction fault like any other. Only a **generation-wide** fault is a durable verdict: a registration the generation does not lay out the way the root forwards it — nothing registered under the forwarded key, or an instance that is not what the forwarder forwards — is recorded in `ModuleServices.Unservable` for THAT generation and reported once (stderr and an error log `[MeshWeaver.Mesh.UnservableModuleService]` naming the module, the registration, the generation and why). A later generation starts clean. Any other construction fault — one caller's scope, one attempt at a singleton — is that lease's alone: nothing is recorded, the next lease resolves afresh, and it is logged once per registration and exception type. |
 | `ModuleServiceProxy.Serves` | False for a recorded unservable registration, so a set built over the root's `IEnumerable<T>` leaves it out. |
-| `MeshQuery.WithMembers` | A module's provider is leased ONCE when a fan-out is SUBSCRIBED; that lease is its membership and the instance its leg runs on, and it is released when THAT LEG terminates or is unsubscribed — a module leg that answered and completed holds nothing while the merged query stays live on its storage legs, so it never keeps a retirement waiting. A resubscribed leg (the transient-connect retry) takes a lease of its own; a lease no leg took is released with the subscription. A provider that cannot be leased is not in the set whose Initial frames the merge awaits, so not even the first query after the break faults — and a generation change between building a query and subscribing it, or a transient provider whose next construction fails, can no longer err the merged query through a second resolve. A module provider whose lease failed when the fan-out was BUILT is retained (its name read when a subscription leases it) instead of dropped for the mesh's life; `NodeTypeAccessRuleSet` retains such a rule the same way, reading its node type at lookup. |
+| `MeshQuery.WithMembers` | A module's provider is leased ONCE when a fan-out is SUBSCRIBED; that lease is its membership and the instance its leg runs on, and it is released when THAT LEG terminates or is unsubscribed — a module leg that answered and completed holds nothing while the merged query stays live on its storage legs, so it never keeps a retirement waiting. A resubscribed leg (the transient-connect retry) takes a lease of its own; a lease no leg took is released with the subscription. A provider that cannot be leased is not in the set whose Initial frames the merge awaits, so not even the first query after the break faults — and a generation change between building a query and subscribing it, or a transient provider whose next construction fails, can no longer err the merged query through a second resolve. Building the fan-out leases no module provider at all (MeshWeaver#7218): each is held under its forwarder's label, its name read when a subscription leases it, so nothing is dropped for the mesh's life; `NodeTypeAccessRuleSet` retains such a rule the same way, reading its node type at lookup. |
 | `ModuleConfigureOptionsForwarder` | Leased instead of resolved. The options factory runs every setup of an options type for EVERY name, so a module's `AddHttpClient(name)` forwarder runs when the sign-in's OIDC handler builds its own `HttpClientFactoryOptions`; a forwarder that threw there made one module's broken registration a fault in every named build of that type. A module that is not held, or cannot produce the setup, now configures nothing. A TEMPORARY construction fault also configures nothing for that build — no name's build fails — but the monitor-cache entry that build fills is removed (the cache inserts it before building), so the incomplete options are never cached and the next build of the name carries the module's setup again. Throwing instead would be worse: the monitor cache keeps a build that threw and rethrows it for that name until invalidated. |
 
 A DIRECT call through a forwarder still throws the real error: that call IS the feature, and failing it is

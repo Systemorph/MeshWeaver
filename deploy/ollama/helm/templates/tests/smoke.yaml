@@ -1,0 +1,51 @@
+{{- if .Values.enabled }}
+# `helm test <release>` — the in-cluster proof. Runs the image's own smoke.sh WITH --vision against the
+# Service: the real qwen3.6 on the real node pool reads the German+Indonesian fixture page (six words, the
+# umlaut included; the English page as its negative control), translates Indonesian to English, summarises,
+# and bge-m3 embeds de/en/id with a swapped-pair control. A hosted CI runner cannot hold the vision model's
+# ~26 GiB, so this is where that half is proven. Exit status = failed assertions; the pod log names each.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "ollama.fullname" . }}-smoke
+  # NOT the Deployment's selector labels: with them the Service would route callers to this pod, and the
+  # NetworkPolicy (which denies all egress) would select it and cut it off from the Service.
+  labels:
+    {{- include "ollama.smokeLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: smoke
+      # The same image: it carries smoke.sh and the fixtures. Its entrypoint is replaced, so no model loads here.
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command: ["/app/smoke.sh", "http://{{ include "ollama.fullname" . }}:{{ .Values.service.port }}", "--vision"]
+      env:
+        - { name: MW_VISION_MODEL, value: {{ .Values.models.vision | quote }} }
+        - { name: MW_EMBED_MODEL, value: {{ .Values.models.embedding | quote }} }
+        - { name: MW_EMBED_DIMENSIONS, value: {{ .Values.models.embeddingDimensions | int64 | quote }} }
+        - { name: MW_CHAT_TIMEOUT, value: {{ .Values.test.chatTimeoutSeconds | int64 | quote }} }
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: ["ALL"] }
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: 500m, memory: 256Mi }
+      volumeMounts:
+        - { name: tmp, mountPath: /tmp }
+  volumes:
+    - { name: tmp, emptyDir: {} }
+{{- end }}

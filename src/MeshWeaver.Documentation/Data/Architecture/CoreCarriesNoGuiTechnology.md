@@ -110,9 +110,9 @@ Education, Reinsurance, SocialMedia, Manufacturing and Crm). Memex has its own
 
 | Where | What | Status |
 |---|---|---|
-| `Directory.Packages.props` | `Radzen.Blazor` | **stays for now** — the module-library shelf stages it (below) |
-| `Directory.Packages.props` | `Microsoft.Identity.Web.Ui` (Razor sign-in UI) | **stays for now** — no core project references it since `memex/Memex.Portal.Shared` left (#7125), but it exact-pins `Microsoft.Identity.Web`, so the two move to Plugins **together**: Plugins pins both first (fill-in), then core drops both under `Satellite-pins:` |
-| `tools/MeshWeaver.ModuleLibraries` | references `Radzen.Blazor` for the Plugins module `MeshWeaver.Blazor.Radzen` | build tooling — proposal below |
+| `Directory.Packages.props` | `Radzen.Blazor` | **moved** — MeshWeaver.Plugins pins it beside its own module-library shelf (below) |
+| `Directory.Packages.props` | `Microsoft.Identity.Web.Ui` (Razor sign-in UI) | **moved** — with `Microsoft.Identity.Web`, together, as MeshWeaver.Plugins fill-in pins (Plugins#4297, then #7262) |
+| `tools/MeshWeaver.ModuleLibraries` | referenced `Radzen.Blazor` for the Plugins module `MeshWeaver.Blazor.Radzen` | **deleted** — MeshWeaver.Plugins owns its shelf (below) |
 | `tools/MeshWeaver.PluginTester`, `.github/scripts/stage-razor-generators.py`, `main-cd.yml` (tester leg), `test/MeshWeaver.PluginTester.Test` (`RazorBuildTest`) | the tester image carries the SDK's Razor source generator so `build-project` compiles `.razor` modules | build tooling — proposal below |
 | `.github/scripts/check-bundle-static-assets.py`, `test-module-asset-landing.py`, `node-repo-module-pack.yml` | the shared module lane asserts a bundle carries its Razor static web assets (`*.razor.js`, scoped `*.razor.css`, `_content/<pack>/`) | build tooling — moves with the Razor staging (below) |
 | `memex/MeshModulesPublish.targets` | the `modules/<Name>/` publish layout; its comments describe the Blazor view packs | imported only by Plugins' hosts and `Memex.Hosts.Test` once `memex/Memex.Portal.Shared` is deleted — **move it to Plugins** as a follow-up source move (add half repoints the four `$(MeshWeaverRoot)/memex/…` imports, then core deletes) |
@@ -127,60 +127,102 @@ supply the GUI-specific half.
 
 ### The module-library shelf (`tools/MeshWeaver.ModuleLibraries`)
 
-**Today.** A curated csproj of extra libraries a container-built module may bind (provider SDKs,
-import/export helpers, and `Radzen.Blazor` for `MeshWeaver.Blazor.Radzen`). Main-cd publishes it into
-the tester image as `module-libs/`; its `deps.json` is the closure, core's central pins its versions.
+**Done.** The shelf of extra libraries a container-built module may bind (provider SDKs,
+import/export helpers, `Radzen.Blazor` for `MeshWeaver.Blazor.Radzen`) is no longer a core
+project. Core keeps the *mechanism* and the module repository owns the *list*:
 
-**Proposal.** Keep the *mechanism* in core and move the *list* to the repository that owns the
-modules: the shelf becomes a declaration the module lane receives, not a hard-coded project.
-
-1. **Core (addition)** — `mw-plugin-test build-project` accepts `--module-libs <dir>` in addition
-   to the staged `module-libs/`, and the shared `node-repo-module-pack.yml` lane gains an optional
-   `module-libraries-project:` input: when set, the lane publishes THAT csproj (against the platform's
-   pins plus the caller's own pin file) and hands its output to `build-project`. The tester-image
-   shelf stays as the default, so nothing changes for a caller that sets nothing.
-2. **Plugins** — adds its own `tools/ModuleLibraries` csproj carrying the entries only Plugins
-   modules use (`Radzen.Blazor`, and over time the provider SDKs), pins `Radzen.Blazor` in
-   `src/Directory.Packages.Plugins.props`, and passes `module-libraries-project:`.
-3. **Core (deletion, last)** — drops `Radzen.Blazor` from its shelf and from `Directory.Packages.props`,
-   declared under `Satellite-pins: Radzen.Blazor`.
+1. **Core (addition) — in place.** `mw-plugin-test build-project --module-libs <dir>` reads that
+   directory as the shelf, and it REPLACES the search for the image's `module-libs/` the way
+   `--razor-generators` replaces the Razor search. A named directory that is missing or holds no
+   single `deps.json` fails the build by name; it never falls back to the image's shelf
+   (`ModuleLibrariesShelfTest`). The shared `node-repo-module-pack.yml` lane takes
+   `module-libraries-project:`, a csproj in the caller's repository. The workspace-build job
+   publishes it against the platform checkout at `platform-ref`, fails closed on a publish with
+   no single `deps.json` or no assemblies, removes the checkout and the project's `obj`/`bin` before
+   the source mount, and passes the result as `--module-libs`. It refuses a pinned tester that does
+   not advertise the flag, naming the pin to move. The named shelf is also part of every module's
+   build-ledger key (`module-build-key.py --module-libraries-project`): its project, every in-repo
+   project it reaches and the `Directory.*.props|targets` it inherits, so a shelf edit is a new
+   build and never a reused bundle. Diff-scope selection (`node-repo-scope.py`) is told the
+   shelf too: no module references it, so a diff touching it or a project it reaches runs and
+   tests every module instead of narrowing to none. Omitted, the tester image's shelf is used, the key is
+   byte-identical to before, and nothing changes for a caller that sets nothing.
+2. **Plugins — in place.** `src/MeshWeaver.ModuleLibraries` carries every entry only Plugins
+   modules use (Plugins#4303), `src/Directory.Packages.Plugins.props` pins them — members of a
+   family core still pins part of take their version from that sibling — and the module-pack call
+   passes `module-libraries-project:` (Plugins#4322).
+3. **Core (deletion) — in place.** Core deleted `tools/MeshWeaver.ModuleLibraries`, the main-cd step that
+   stages it into the tester image, and the pins only it used (`Radzen.Blazor`, the AI provider
+   SDKs and their `Microsoft.Agents.AI` / `Microsoft.Extensions.AI` families, ClosedXML, CsvHelper,
+   MailKit, Microsoft.Graph, ExcelDataReader, the Orleans clustering/persistence and
+   ModelContextProtocol members only Plugins restores), and `InstanceSetupDefaults.RequiredModules`,
+   the list of first-party modules a portal must load, which the Fleet Console now declares. The
+   tester keeps reading `module-libs/` when one is staged or named, so the mechanism outlives the list.
 
 **Risk.** The closure stops being one shared, image-baked fact and becomes per-run: a lane that
 publishes the shelf itself must derive the closure from that publish's `deps.json` exactly as the
 image job does today (the 2026-08-19/20 outage was a guessed closure), and the bundle must still
-refuse a reference the shelf did not supply. Each satellite that relies on a shelf entry
-(Import's ClosedXML/CsvHelper, the AI providers) keeps working on the image default until it opts
-in, so the change can be staged per repository.
+refuse a reference the shelf did not supply. The tester image no longer carries a default shelf,
+so a satellite whose container modules need one must pass `module-libraries-project:` itself.
 
 ### The Razor source generator in the tester image
 
-**Today.** `tools/MeshWeaver.PluginTester` stages the .NET SDK's Razor source generator per RID
-(`razor-generators/`, from `stage-razor-generators.py`, main-cd's tester leg) so `build-project` can
-compile `.razor`/`.cshtml`; `RazorBuildTest` pins it against core's Roslyn; the shared lane's static
-asset assertions know the Razor asset conventions.
+**Today.** Razor is a BUILD EXTENSION of `mw-plugin-test build-project`, not part of the builder.
+`tools/MeshWeaver.PluginTester.Extensibility` is the contract: an extension claims item types (their
+`Include`/`Remove` operations reach it in declaration order) and source suffixes, contributes a
+source-generator run — its additional texts, global and per-file analyzer-config options — which the
+builder executes BEFORE the generic `--generators` ones, writes the static assets its inputs imply
+after the builder's verbatim `wwwroot/` copy (a refusal is RED), names the cause of compile errors
+that point at it, and indexes the type names its files declare for the superseded-entry staleness
+check. The builder loads extensions from `build-extensions/<name>/` beside itself (or from
+`--extensions <dir>`, which replaces that search) into a host-first load context, so Roslyn and the
+contract are one type on both sides. A project carrying `.razor`/`.cshtml` that no loaded extension
+claims is refused by name.
 
-**Proposal.** Make the tester's generator loading generic, and let the GUI repository supply the
-Razor one.
+`tools/MeshWeaver.PluginTester.Razor` is the Razor extension: the Razor SDK's item rules, the CSS
+scope (`ScopedCss`), the generator lookup (`razor-generators/<rid>/` beside the extension, or its
+option `--razor-generators <dir>`), collocated JS modules and the `.styles.css` aggregate. The tester
+builds it without referencing it and stages its output — with the per-RID generator
+`stage-razor-generators.py` and main-cd provide, as before — under `build-extensions/razor/`, so the
+image behaves exactly as it did. `RazorBuildTest`, `ScopedCssTest` and `CollocatedJsModuleTest` run
+against it; `BuildExtensionSeamTest` holds the seam itself with a fake extension.
 
-1. **Core (addition)** — generalise `razor-generators/` to `generators/<name>/<rid>/`: the tester
-   loads every staged Roslyn source generator through the same load context, with the same
-   per-RID, PE-machine and provenance checks `stage-razor-generators.py` performs today. The Razor
-   generator keeps being staged by default, so the image does not change.
-2. **Plugins** — a small `tester-gui` image (`FROM` the platform tester at the pinned digest) adds
-   the Razor generator layer, plus `RazorBuildTest` and the static-asset assertions
-   (`check-bundle-static-assets.py`, `test-module-asset-landing.py`) as Plugins-side gates, and the
-   module lane runs Razor modules on it.
-3. **Core (deletion, last)** — stops staging the Razor generator, deletes
-   `stage-razor-generators.py`, `RazorBuildTest` and the static-asset scripts, and removes the
-   Razor-specific branches from `ProjectFile` (the `.razor`/`.cshtml` item resolution and CSS-scope
-   computation move with the generator as a plugin to the builder, or stay as a generic
-   "additional files for a generator" hook).
+**What is left in core.** The extension's source still lives here, and so do the static-asset
+assertions (`check-bundle-static-assets.py`, `test-module-asset-landing.py`) and the staging script.
+`check-bundle-static-assets.py` still encodes the Razor asset conventions (kinds 2 and 3) directly;
+it moves with the extension rather than being parameterised, because its only producer of those
+assets is the extension.
 
-**Risk.** This is the larger change: Razor compilation is wired into `ProjectFile` (`RazorItem`,
-`ScopedCss`), not only into staging, so step 3 needs that seam first; and a Razor-compiler
-regression against a new platform Roslyn would surface on Plugins' side at its next run against a
-sealed platform set rather than in core's own CI — the documented compatibility lag
-(policy `dependents-verify-on-their-side`). Step 1 is safe on its own and worth doing first.
+**Next.**
+
+1. ~~**Core (addition)** — a generic extension seam.~~ In place, as above.
+2. **Plugins** — takes `tools/MeshWeaver.PluginTester.Razor` (and its tests and the static-asset
+   checks) and passes it to the module lane. **No separate tester image is needed:** the shared
+   `node-repo-module-pack.yml` lane takes `build-extensions-project:`, a csproj in the caller's
+   repository whose publish is one extension directory (it carries `build-extension.json`). The
+   workspace-build job publishes it against the platform checkout at `platform-ref`, fails closed on
+   a publish without the manifest or without assemblies, removes the checkout and the project's
+   `obj`/`bin` before the source mount, and passes it to `build-project` as `--extensions`, which
+   replaces the extensions the tester image ships. A pinned tester without the flag is refused by
+   name. Like the module-libraries shelf, the extension is a compiler input of every module: it is
+   keyed into the build ledger (`module-build-key.py --build-extensions-project`) and an edit to it
+   selects every module. What it evaluates is asked of MSBuild itself, never read by hand:
+   `msbuild-evaluate.py` runs `dotnet msbuild -pp` (the exact imported files) and `-getItem` (the
+   exact path items, ProjectReferences followed) with the lane's publishing inputs, and the key and
+   the scope both read that one file. The key hashes its reference closure, the imported files and
+   the items outside its folder, and the SDK it is published with. Ancestor `Directory.*` files and
+   declared-but-absent imports are kept as conservative extras for hashing and reach, never evaluated
+   (`node-repo-scope.py --build-extensions-project --msbuild-evaluation`). Omitted, nothing changes.
+3. **Core (deletion, last)** — stops staging the Razor extension, deletes
+   `tools/MeshWeaver.PluginTester.Razor`, `stage-razor-generators.py` and the Razor tests. The
+   unclaimed-source refusal stays: it is what turns "no Razor extension loaded" into a named failure
+   instead of a smaller assembly.
+
+**Risk.** Once step 3 lands, a Razor-compiler regression against a new platform Roslyn surfaces
+on Plugins' side at its next run against a sealed platform set rather than in core's own CI — the
+documented compatibility lag (policy `dependents-verify-on-their-side`). The extension binds the
+contract by identity through the host-first context, so a contract change in core is a pair change
+with Plugins like any other public surface.
 
 ## See also
 

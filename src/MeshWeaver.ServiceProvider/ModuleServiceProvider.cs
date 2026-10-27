@@ -151,7 +151,7 @@ public static class ModuleServiceProvider
     ///
     /// <para>🚨 <b>Why</b> (MeshWeaver#6584). A module's SCOPED registration resolved from the module
     /// container's own root is ONE instance per generation, shared by every circuit, and its root
-    /// dependencies come from a root scope no circuit initialised: Radzen's <c>ThemeService</c> was
+    /// dependencies come from a root scope no circuit initialised: a component library's <c>ThemeService</c> was
     /// one instance for every user, and <c>DialogService</c> subscribed to a <c>NavigationManager</c> that
     /// throws <c>'RemoteNavigationManager' has not been initialized</c>. In the caller's own module scope
     /// it is that caller's instance, built against that caller's <c>NavigationManager</c> and
@@ -180,7 +180,7 @@ public static class ModuleServiceProvider
     ///
     /// <para><b>What it does NOT build, and why (MeshWeaver#6556).</b> A SCOPED registration: its
     /// instance belongs to a scope — a Blazor circuit, a request — so the one a boot or a swap would
-    /// build is an instance no scope asked for, made against scoped state nobody initialised. Radzen's
+    /// build is an instance no scope asked for, made against scoped state nobody initialised. A component library's
     /// <c>DialogService</c> subscribes to a <c>NavigationManager</c> in its constructor; the boot-built
     /// one threw <c>'RemoteNavigationManager' has not been initialized</c> and withdrew the whole
     /// module. Nor a singleton whose constructor graph — read STRUCTURALLY off the registrations
@@ -328,6 +328,14 @@ public static class ModuleServiceProvider
         return scope.ResolveRegistration(RegistrationAt(scope, serviceType, position), serviceType);
     }
 
+    // 🚨 The module container's OWN registrations only — never what its ModuleFallbackSource adds. A root
+    // stand-in that resolves position i of a type the module does NOT register (a cached stand-in for a
+    // module-declared type after its module swapped to a new generation, whose container holds the new
+    // generation's type) would otherwise land on the module's own fallback stand-in for the ROOT's
+    // registration — which is that same root stand-in. Each hop is a fresh resolve, so no cycle check sees
+    // it: on the Autofac container this counted positions over every registration a lookup reached, and a
+    // portal process died of a StackOverflowException in exactly that cycle (MeshWeaver#5388). Counted over
+    // the module's own, such a position is refused by name. Pinned by AStaleRootStandInIsRefusedNotRecursedTest.
     private static ServiceRegistration RegistrationAt(MeshServiceProvider scope, Type serviceType, int position) =>
         scope.ContainerRoot.OwnRegistrationsOf(serviceType).ElementAtOrDefault(position)
         ?? throw new InvalidOperationException(

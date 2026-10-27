@@ -3120,6 +3120,32 @@ jobs:
     - name: "Execute the module publication lane against a stub registry"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-publication.py
+    # The module-pack lane's HOST arm (H7, Doc/Architecture/BuildHosts §5) and the host graph's
+    # source, build-host-publication.yml: both are `workflow_call` lanes no core run executes, and the
+    # build hosts do not run stages yet — so their new steps' bash is EXTRACTED and RUN here, every
+    # structural rule against a mutated copy too.
+    - name: "The module-pack lane's host arm carries only a followed success"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-module-pack-host.py
+    # `select` keys a build extension's publishing SDK; `build-workspace` publishes with exactly it.
+    # They check the caller out at different places, so the key must come from the caller's
+    # `repo/global.json`, not the workspace root. The resolve step's bash is RUN from the declared
+    # working directory, with a negative control from the root.
+    - name: "The module-pack lane keys the extension SDK the caller's checkout resolves"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-module-pack-extension-sdk.py
+    # The MSBuild reading behind the extension/shelf key and scope REFUSES what it cannot model, and a
+    # rule written against fixtures alone once refused the one real extension. This positive control
+    # runs both scripts over the real tools/MeshWeaver.PluginTester.Razor, with a negative control.
+    # The conservative sweep's ONE path parser (paths_in), held by a table of every spelling class:
+    # spaces, separators after a property, `\`, `..`, quotes, `;`-lists, globs, trailing separators,
+    # and the negatives (nonexistent, outside, root, output, .git, unresolved).
+    - name: "The MSBuild sweep's path parser resolves every spelling in its table"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/msbuild-evaluate.py --self-test
+    - name: "The real Razor build extension parses and keys cleanly"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-build-extension-reading.py
 
     # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
@@ -3194,6 +3220,14 @@ jobs:
     - name: "Execute the node-repo gate's shard plan (the fan-out never exceeds the work)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-gate-shard-plan.py
+
+    # The gate's affected-closure step narrowed `pull_request` only; a main push the caller hands a
+    # `push-base` (its newest green main run) now gates the closure of `<push-base>..HEAD`. The
+    # step is extracted by `id:` and executed: the narrowing, every malformed/unreachable/empty/CI
+    # base that must stay FULL with its reason, and the unchanged pull-request path.
+    - name: "Execute the node-repo gate's affected-closure step (a push narrows only by a valid push-base)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-gate-affected-closure.py
 
     # carry-forward-bundles.sh is the other half of that publication and had NO CI execution at
     # all: it runs only inside a node repo's publish lane, so the first execution of an edit was a
@@ -3610,6 +3644,18 @@ jobs:
     - name: "Prove the pin gate is not vacuous (self-test)"
       run: python3 scripts/check-package-pin-removal.py --self-test
 
+    # 🚨 THE SECOND SATELLITE-PIN HOLE (#7227). A pin no core project references is consumed by the
+    # satellites versionless, and Dependabot — which updates only what it discovers in a project —
+    # never moves it. #7219 moved 18 Microsoft.Extensions.* pins to 10.0.14 and left four at
+    # 10.0.13; core stayed green, and the first satellite restore (main-cd's control image) failed
+    # with NU1605. The servicing train is one version or it is a downgrade, so the split itself is
+    # the red, on the pull request that makes it. No input, no credential: it runs on every PR.
+    - name: "Prove the servicing-train check is not vacuous (self-test)"
+      run: python3 scripts/check-package-train-lockstep.py --self-test
+
+    - name: "The Microsoft.Extensions.* servicing train is in step"
+      run: python3 scripts/check-package-train-lockstep.py
+
     # The event body is frozen at run creation, even on reruns. Read the current declaration
     # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
@@ -3953,8 +3999,9 @@ jobs:
     # this repository's chart material (Deploy#1). Both copies stayed editable, both moved, and two
     # pipelines baked `hosting-operator:main` from the two copies, so the moving tag flapped between
     # them. The paths Deploy#1 copied are frozen here: a pull request may DELETE them (that is how
-    # they leave, #7127) and may do nothing else to them. `build-run.py` and `deploy/build-host/`
-    # stay editable: main-cd builds the build-host runner image from them here.
+    # they leave, #7127) and may do nothing else to them. The build-host deployment that
+    # MeshWeaver.Deploy#5 took (`build-run.py`, `deploy/build-host/`, the announcement, the
+    # declaration and the stable roll) is frozen the same way.
     #
     # 🚨 NO SKIP-TRAPDOOR: self-test first; no path filter (an unrelated pull request would
     # otherwise "pass" by not running); no credential; no `continue-on-error`. The one exemption is

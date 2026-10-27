@@ -14,13 +14,19 @@ name: Node repo cap debt (reusable)
 #      plane's intake keeps one `Hosting/BuildCaps/<package>` node per cap, written as System; the
 #      build hosts' retention reads them, fail-closed, so a capped package's deployment is never torn
 #      down under it. `version` is the highest COMPLETE deployed version in [floor, cap] (from
-#      `GET <build API>/hosts`); when none is deployed it is the version that must be, and the intake
-#      asks for that deployment. A package absent from the set is a REMOVED cap: its node is deleted,
-#      so its version can be torn down. That is why the set is sent even when it is empty.
+#      `GET <build API>/hosts`; a 503 there is an outage, retried, never an empty list); when none is
+#      deployed it is the version that must be. A package absent from the set is a REMOVED cap: its
+#      node is deleted, so its version can be torn down. That is why the set is sent even when it is
+#      empty.
 #   2. FILES ONE triage item per capped package — a submitted `Feedback/Feedback` node, "migrate
 #      <package> to latest" — over the control instance's MCP endpoint, as the lane's service user, in
 #      that user's own `<user>/Feedback`. The id is (repository, package, cap), so the next day refreshes
 #      it and never duplicates it; a removed cap's item is resolved.
+#   3. REQUESTS every deployment a cap needs and no complete version provides: ONE signed
+#      `build-host-deploy-requested` per needed version, reason `cap:<package>`, carrying the set's
+#      tester, portal and runner digests (plus `coreTestsDigest` when the set has one), read from the
+#      registry by the version tag — so ONLY then the registry credential is needed, and its absence
+#      is RED naming it. The inbox's 202 is acceptance, not a deployment: the next run reads `/hosts`.
 #
 # 🛡️ THIS LANE MAY NOT SKIP (AGENTS.md → "A gate NEVER tests its own inputs"). The first step
 # asserts every input and fails RED naming it; no step carries an input-shaped `if:` and none has
@@ -46,6 +52,9 @@ name: Node repo cap debt (reusable)
 #         triage-token: ${{ secrets.MW_TRIAGE_TOKEN }}
 #         control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
 #         build-api-token: ${{ secrets.MW_BUILD_API_TOKEN }}
+#         build-worker-token: ${{ secrets.MW_BUILD_WORKER_TOKEN }}   # optional: reads `cappedBy` names
+#         registry-username: ${{ secrets.ACR_USERNAME }}             # needed only to request a deployment
+#         registry-password: ${{ secrets.ACR_PASSWORD }}
 #     # 🚨 A DAILY lane's red is red in an EMPTY ROOM: a failed preflight, `/hosts`, publication or
 #     # MCP call leaves only a failed scheduled run while the retention and debt records silently
 #     # stop being refreshed. So the caller ALSO wires the fleet's result-aware reporter — the
@@ -125,6 +134,15 @@ on:
       build-api-token:
         description: An optional bearer for `GET <build API>/hosts`; a refusal is RED naming it.
         required: false
+      build-worker-token:
+        description: Optional — the build API's worker token (Hosting:Builds:WorkerToken); with it `/hosts` names the capped packages (`cappedBy`), without it only their count (`caps`) is read.
+        required: false
+      registry-username:
+        description: The platform registry's pull credential (secrets.ACR_USERNAME) — read only when a capped package needs a deployment requested (the set's digests), RED naming it then.
+        required: false
+      registry-password:
+        description: secrets.ACR_PASSWORD, beside registry-username.
+        required: false
 
 permissions:
   contents: read
@@ -178,6 +196,11 @@ jobs:
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/cap-debt-triage.py" > "$RUNNER_TEMP/cap-debt-triage.py" \
             || { echo "::error::could not fetch .github/scripts/cap-debt-triage.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 400 "$RUNNER_TEMP/cap-debt-triage.py" | grep -q "cap-debt-triage" || { echo "::error::the fetched cap-debt-triage.py does not look like the script"; exit 1; }
+          # The control instance's Hosting/Deployment record — the one a deploy request names.
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/control-instance.json" > "$RUNNER_TEMP/control-instance.json" \
+            || { echo "::error::could not fetch .github/control-instance.json at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          jq -er '.deployment | select(type == "string" and length > 0)' "$RUNNER_TEMP/control-instance.json" > /dev/null \
+            || { echo "::error::.github/control-instance.json at ${SCRIPTS_REF} names no deployment"; exit 1; }
       - name: "The publication and the filing can fail (self-test)"
         env:
           MW_RESOLVER: ${{ runner.temp }}/resolve-platform.py
@@ -192,9 +215,14 @@ jobs:
           MW_TRIAGE_TOKEN: ${{ secrets.triage-token }}
           CONTROL_WEBHOOK_SECRET: ${{ secrets.control-webhook-secret }}
           MW_BUILD_API_TOKEN: ${{ secrets.build-api-token }}
+          MW_BUILD_WORKER_TOKEN: ${{ secrets.build-worker-token }}
+          ACR_USERNAME: ${{ secrets.registry-username }}
+          ACR_PASSWORD: ${{ secrets.registry-password }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
+          deployment=$(jq -r .deployment "$RUNNER_TEMP/control-instance.json")
           python3 "$RUNNER_TEMP/cap-debt-triage.py" --root . --resolver "$RUNNER_TEMP/resolve-platform.py" \
             --repo "$REPO" --sha "$SHA" --build-api "$BUILD_API" --mesh-url "$MESH_URL" --namespace "$NAMESPACE" \
-            --control-webhook-url "$WEBHOOK_URL" --control-webhook-host "$WEBHOOK_HOST"
+            --control-webhook-url "$WEBHOOK_URL" --control-webhook-host "$WEBHOOK_HOST" --deployment "$deployment"

@@ -212,6 +212,20 @@ does not bind still produces an Error, discriminator-less bytes that bind are st
 plugin record (live or stored with its own `$type`) proposed over as `MarkdownContent` produces no
 Error.
 
+`UpdatingUndiscriminatedMarkdownIsNotAFaultTest` (MeshWeaver.Hosting.Test) measures the same split
+along the path production took, on a real monolith mesh: a `Markdown` node is created with the legacy
+`{"markdown": …}` key or a bare string as its stored content, then updated through
+`IMeshService.UpdateNode`. It requires that the stored shape reaches the validators as stored, never
+re-typed into a `MarkdownContent` (otherwise the test proves nothing). It also requires that the
+update lands, and that the pipeline logs a Warning and no Error. Through the mesh the two shapes take
+different branches. The legacy key arrives as an untyped `JsonElement` and reaches the
+admitted-not-claimed split. The bare string is read back as a CLR `string` and is refused earlier
+by `Admits`. So only the legacy-key case would fail if the split were reverted. Its negative
+control stores `{"$type":"MarkdownContent","body":…}` and requires the Error line through the same
+mesh and the same log recorder. A recorder that never sees that category therefore cannot pass the
+positive cases. A numeric `content` cannot serve as the control because the content-schema
+validator refuses to create it.
+
 ## What this does not change
 
 - A validator should still read payloads through `.As<T>()` / `.ContentAs<T>()` rather than a cast

@@ -193,38 +193,57 @@ enough for a course (module → lesson pages) and not for a document tree of any
 on the reader's path are open, at every level. `RailGroup.Links` remains as a filter — the group's
 direct links — never the render order.
 
-## The rail's chrome — resize and collapse
+### 6 · A level that mixes kinds reads as sections
+
+Core's default index groups any level that holds more than one kind of node into one
+**section per node type** — a CRM client's root reads *Opportunities · Contacts · Documents*, and
+a deal one level down reads *Emails · Documents* — while a level of one kind (a docs tree) stays
+flat (policy [`index-sections-by-kind`](/Doc/Architecture/PolicyNotProse)). A section is a
+`NodeNavigationEntry` with `IsSection`: the rail draws it as a group that is always open and has
+**no link of its own**, since there is no page behind the heading. It takes the place of its first
+member in the level's sort, so the sort dropdown re-orders sections and members alike.
+
+The heading is the catalog's `nav.section.{nodeType}` when there is one (`Markdown` →
+*Documents*), else the type's last segment in words and in the plural (`Crm/Opportunity` →
+*Opportunities*, `Edu/CourseInvite` → *Course Invites*), so a module's types are named without core
+knowing them. A folder opened on demand is sectioned the same way. Pinned by `IndexSectionsTest`.
+
+## The rail's chrome — header, resize and collapse
 
 The rail is one pane of a horizontal `SplitterControl` beside the content, so the divider is a real
 drag handle (180–480px). Core stamps the pane with `MarkdownOverviewLayoutArea.NavigationPaneClass`
-(`nav-rail-pane`), and a portal shell that knows the class hosts the pane's **collapse toggle in its
-top bar** — beside the logo, where a browser keeps its sidebar button — and keeps the collapsed state
-across pages and reloads; the button shows only on pages that have a rail, and while the rail is
-hidden it turns into the expand button. A shell that does not know the class leaves the splitter
-bar's own collapse chevron in charge. (The Blazor portal's half lives in MeshWeaver.Plugins:
-`NavRailStateService`, `NavRailPanePresentation`, and the toggle in `PortalLayoutBase`.)
+(`nav-rail-pane`); a portal shell that knows the class owns the pane's collapsed state and keeps it
+across pages and reloads. A shell that does not know the class leaves the splitter bar's own collapse
+chevron in charge. (The Blazor portal's half lives in MeshWeaver.Plugins: `NavRailStateService`,
+`NavRailPanePresentation`, `SidePaneHeader`, and the toggle in `PortalLayoutBase`.)
 
-**One sidebar, one button.** The index rail is not the only left-hand sidebar a page can have: the
-Threads app (`/{user}/Chat`) and every full-page thread show their thread list in the same place. It
-joins the same toggle and the same state (2026-09-16, the maintainer: *"when side menu (on left) is
-collapsed … the expand button is still to the left consuming real estate … integrate the open button
-… in the top menu bar, similar to how safari is doing it"*). The rule for any left sidebar is
-therefore:
+**Every left sidebar reads top-down the same way** (policy
+[`sidebar-reads-header-search-index`](/Doc/Architecture/PolicyNotProse)), as a code host's file pane does:
 
-- **Collapsed takes zero width.** Nothing stays behind on the left edge — no strip, no reveal
-  button, no splitter bar. The header button is the only way back, which is why it is always there
-  while the page has a sidebar.
-- **The button never moves.** It sits at the left end of the top bar in both states and only swaps
-  its icon (`PanelLeftContract` ↔ `PanelLeftExpand`) and its localized name (`menu.hideSidebar` ↔
-  `menu.showSidebar`). A sidebar carries no collapse control of its own while a shell hosts this one
-  — two controls for one state is how the residual strip came about.
-- **The state is the reader's, not the page's.** Hiding the thread list also hides a document's index,
-  the way Safari's sidebar button hides whichever sidebar the window shows; the choice follows the
-  reader across pages and reloads.
+1. **The header row** — the collapse button, then the title. For the index rail the title is the
+   heading link: `Render` sets `NavMenuSkin.FirstEntryIsTitle`, and a renderer with a header row shows
+   the menu's first entry there instead of as the first line of the list. A sidebar's own acts (the
+   thread list's *New*) sit at the right end of the same row.
+2. **Search and order** — the search box (`NavMenuSkin.SearchNamespace`) with the top level's sort
+   beside it (`NavMenuSkin.SortOptions`); the thread list's search and its Open / Closed / All filter.
+3. **The index** itself, scrolling on its own.
+
+The Threads app (`/{user}/Chat`) and every full-page thread show their thread list in the same place
+and follow the same rule, and they share ONE state with the index rail. The collapse rules:
+
+- **Open, the collapse button is in the sidebar's header** — left of the title, where the reader's eye
+  already is. The top bar shows no sidebar button while a sidebar is open: one control per state.
+- **Collapsed takes zero width, and the top bar holds the way back.** Nothing stays behind on the left
+  edge — no strip, no reveal button, no splitter bar; the expand button sits at the left end of the
+  top bar, beside the logo, where a browser keeps its sidebar button. An earlier rule kept ONE button
+  in the top bar in both states; the open half has moved into the header, the collapsed half is
+  unchanged.
+- **The state is the reader's, not the page's.** Hiding the thread list also hides a document's index;
+  the choice follows the reader across pages and reloads.
 - **A sidebar reports its presence** (`NavRailStateService.Attach`/`Detach`, reconciled after every
-  render) so the button shows only while there is something to toggle, and it resolves the service
-  OPTIONALLY: in a host with no shell toggle it keeps its own collapse and reveal controls rather than
-  becoming impossible to reopen. The thread list's fold is `ThreadNavPresentation` in
+  render) so the top bar shows its button only while there is a sidebar to bring back, and it resolves
+  the service OPTIONALLY: in a host with no shell toggle it keeps its own collapse and reveal controls
+  rather than becoming impossible to reopen. The thread list's fold is `ThreadNavPresentation` in
   `MeshWeaver.Blazor.Chat`.
 
 ## Why the plan is a pure record

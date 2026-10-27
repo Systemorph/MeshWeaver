@@ -3139,17 +3139,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 if (!deferred)
                 {
                     var cause = ContentDegradationCauses.For(unbound);
+                    // Shape, never values: this line ships to the central log store (see ContentShapes).
+                    var shape = ContentShapes.Describe(je);
                     logger.LogWarning(
                         new MeshNodeContentDegradedException(
-                            "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je))
+                            "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, rawJson: null)
                         {
                             Cause = cause,
+                            Shape = shape,
                         },
-                        "MeshNodeStreamCache.GetStream: Content for {Path} stayed an untyped JsonElement after "
-                        + "deserialization ({Cause}) — downstream "
+                        "MeshNodeStreamCache.GetStream: Content for {Path} (nodeType {NodeType}) "
+                        + "stayed an untyped JsonElement after deserialization ({Cause}) — downstream "
                         + "'Content is X'/'as X' consumers will fail (renders empty, reactive waits time out). "
-                        + "Raw: {RawJson}",
-                        node.Path, cause, TruncateRaw(je));
+                        + "Shape: {ContentShape}",
+                        node.Path, node.NodeType, cause, shape);
                 }
             }
             return node with { Content = deserialized };
@@ -3208,9 +3211,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     // Truncated raw JSON for diagnostics — bad-data warnings include the offending
     // content so the corrupt row is identifiable in Loki without flooding the log.
-    private const int RawJsonLogMax = 512;
-    private static string TruncateRaw(JsonElement je)
-        => BoundedJsonDiagnostic.Format(je, RawJsonLogMax);
 
     private static MeshNode ConvertContentTypedToJsonElement(MeshNode node, JsonSerializerOptions options)
     {
@@ -3999,18 +3999,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 if (degradations?.RecordClassifiedDeferringWarning(
                         node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", discriminator, unbound) == true)
                     return node;
-                var rawText = QueryDiagnosticRaw(node.Content);
+                var shape = ContentShapes.Describe(node.Content);
                 var cause = ContentDegradationCauses.For(unbound);
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
-                        "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawText)
+                        "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawJson: null)
                     {
                         Cause = cause,
+                        Shape = shape,
                     },
-                    "MeshNodeStreamCache.GetQuery: Content for {Path} stayed an untyped JsonElement after "
-                    + "deserialization ({Cause}) — downstream "
-                    + "'Content is X'/'as X' consumers will fail (renders empty). Raw: {RawJson}",
-                    node.Path, cause, rawText);
+                    "MeshNodeStreamCache.GetQuery: Content for {Path} (nodeType {NodeType}) "
+                    + "stayed an untyped JsonElement after deserialization ({Cause}) — downstream "
+                    + "'Content is X'/'as X' consumers will fail (renders empty). Shape: {ContentShape}",
+                    node.Path, node.NodeType, cause, shape);
                 return node;
             }
             return node with { Content = deserialized };
@@ -4030,19 +4031,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // No parsed element here — the parse is what failed — so the NodeType is the only key
             // Unresolved() can re-ask under, which is the exact route it prefers anyway.
             degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
-            var rawText = QueryDiagnosticRaw(node.Content);
+            var shape = ContentShapes.Describe(node.Content);
             logger.LogWarning(
                 new MeshNodeContentDegradedException(
-                    "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawText, ex),
-                "MeshNodeStreamCache.GetQuery: FAILED to deserialize Content for {Path} — content stays an "
-                + "untyped JsonElement; downstream 'Content is X' will fail (renders empty). Raw: {RawJson}",
-                node.Path, rawText);
+                    "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawJson: null, ex)
+                {
+                    Shape = shape,
+                },
+                "MeshNodeStreamCache.GetQuery: FAILED to deserialize Content for {Path} (nodeType {NodeType}) "
+                + "— content stays an untyped JsonElement; downstream 'Content is X' will fail (renders "
+                + "empty). Shape: {ContentShape}",
+                node.Path, node.NodeType, shape);
             return node;
         }
     }
-
-    private static string QueryDiagnosticRaw(object? content)
-        => BoundedJsonDiagnostic.Format(content, RawJsonLogMax);
 
     /// <summary>
     /// Removes the cached entry for <paramref name="path"/> so the next

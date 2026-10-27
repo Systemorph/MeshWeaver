@@ -617,7 +617,13 @@ public sealed class PluginBundleClient
                         };
                         if (verdict.Action != ModuleUpdateAction.Land)
                         {
-                            _logger?.LogInformation(
+                            // SkipUpToDate is the steady state — one line per module per bundle
+                            // pass, every pass (measured 2026-10-26: ~180 lines/h on the build
+                            // instance, 7-10 per module per hour on every namespace). It is Debug;
+                            // every OTHER non-landing verdict (a floor hold, a framework decline)
+                            // is a decision an operator reads and stays Information.
+                            _logger?.Log(
+                                verdict.Action == ModuleUpdateAction.SkipUpToDate ? LogLevel.Debug : LogLevel.Information,
                                 "Module '{Module}' of {Plugin}: {Action} — {Reason}",
                                 moduleName, pluginId, verdict.Action, verdict.Reason);
                             return Observable.Return(decided);
@@ -1294,7 +1300,6 @@ public sealed class PluginBundleClient
                 // A DECLARED-BUT-NOT-SERVED module (`module '<name>': not served — …`) names no NodeType: it
                 // explains an empty bundle (below) but is not NodeType coverage, so it must
                 // neither warn as one nor fail a require-prebuilt adoption of types that DID arrive.
-                var moduleMisses = (manifest?.Misses ?? []).Where(BundleReader.IsModuleNotServedMiss).ToArray();
                 if (manifest?.Misses?.Where(m => !BundleReader.IsModuleNotServedMiss(m)).ToArray()
                     is { Length: > 0 } misses)
                 {
@@ -1347,9 +1352,8 @@ public sealed class PluginBundleClient
                         return Nothing(pluginId, $"the package ships {offering}, no NodeTypes");
                     }
 
-                    var why = moduleMisses.Length == 0
-                        ? string.Empty
-                        : " — the registry says: " + string.Join(" | ", moduleMisses);
+                    // 🚨 #7181 — EVERY reason the producer stated, NodeType misses included.
+                    var why = BundleOffering.StatedReasons(manifest);
                     _logger?.LogInformation(
                         "Bundle for {Plugin} carried no assemblies{Why} — {Consequence}", pluginId,
                         why, MissConsequence("compiling instead"));

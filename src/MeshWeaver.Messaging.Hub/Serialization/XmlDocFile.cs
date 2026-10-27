@@ -24,11 +24,26 @@ internal sealed record XmlMemberDoc(
 /// One assembly's XML documentation file, parsed ONCE into an immutable map from documentation
 /// comment ID to <see cref="XmlMemberDoc"/>. The <see cref="XDocument"/> is discarded after the
 /// parse; nothing that is later read concurrently is ever a live XLinq tree.
+///
+/// <para><b>Kept small, because every mesh holds its own.</b> The reader is mesh-owned, so a
+/// process running many meshes (a test host, above all) parses the same files once per mesh. The
+/// map therefore keeps only what a lookup can read: a member with no summary, no
+/// <c>&lt;inheritdoc/&gt;</c> and no <c>&lt;param&gt;</c> is left out (a lookup treats it exactly
+/// as absent), and <c>&lt;param&gt;</c> texts are kept on TYPE entries only — the positional-record
+/// fallback is the one place they are read. The texts and IDs of an assembly that can never unload
+/// are interned (<see cref="string.Intern"/>), so every mesh's map points at ONE copy of each
+/// string; a collectible assembly's are not, because the runtime's intern pool would keep them
+/// alive after its load context unloads. Measured on a test host before this: about 10 MB of
+/// rendered text per mesh, ~835 MB across the meshes alive at once.</para>
 /// </summary>
 internal sealed class XmlDocFile
 {
     /// <summary>A file that does not exist, could not be read, or belongs to a dynamic assembly.</summary>
     public static readonly XmlDocFile Empty = new(ImmutableDictionary<string, XmlMemberDoc>.Empty, null);
+
+    // The params of the (vast majority of) entries that carry none: one shared immutable instance
+    // instead of an empty dictionary per member.
+    private static readonly ImmutableDictionary<string, string> NoParams = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
 
     private XmlDocFile(ImmutableDictionary<string, XmlMemberDoc> members, string? path)
     {
@@ -46,7 +61,7 @@ internal sealed class XmlDocFile
     /// <param name="assembly">The assembly.</param>
     /// <returns>The parsed file, or <see cref="Empty"/>.</returns>
     public static XmlDocFile Load(Assembly assembly)
-        => Locate(assembly) is { } path ? Parse(path) : Empty;
+        => Locate(assembly) is { } path ? Parse(path, intern: !assembly.IsCollectible) : Empty;
 
     /// <summary>
     /// The documentation file of <paramref name="assembly"/>: <c>{AssemblyName}.xml</c> beside
@@ -88,8 +103,9 @@ internal sealed class XmlDocFile
 
     /// <summary>Parses a documentation file. An unreadable or malformed file yields <see cref="Empty"/>.</summary>
     /// <param name="path">The file.</param>
+    /// <param name="intern">Whether to intern the texts and IDs — only for an assembly that can never unload.</param>
     /// <returns>The parsed file.</returns>
-    public static XmlDocFile Parse(string path)
+    public static XmlDocFile Parse(string path, bool intern)
     {
         XDocument document;
         try
@@ -112,26 +128,33 @@ internal sealed class XmlDocFile
                 // First wins, as a sequential search of the file would find it.
                 if (member.Attribute("name")?.Value is not { Length: > 0 } id || members.ContainsKey(id))
                     continue;
-                members.Add(id, Describe(member));
+                if (Describe(member, isType: id.StartsWith("T:", StringComparison.Ordinal), intern) is { } doc)
+                    members.Add(intern ? string.Intern(id) : id, doc);
             }
         }
         return new XmlDocFile(members.ToImmutable(), path);
     }
 
-    private static XmlMemberDoc Describe(XElement member)
+    /// <summary>What <paramref name="member"/> contributes to a lookup, or <c>null</c> when it contributes nothing.</summary>
+    private static XmlMemberDoc? Describe(XElement member, bool isType, bool intern)
     {
         var summary = member.Element("summary");
         var inheritDoc = member.Elements().FirstOrDefault(e => e.Name.LocalName.Equals("inheritdoc", StringComparison.OrdinalIgnoreCase));
-        var parameters = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
-        foreach (var param in member.Elements("param"))
-            if (param.Attribute("name")?.Value is { } name && !parameters.ContainsKey(name))
-                parameters.Add(name, Render(param));
+        var parameters = NoParams;
+        if (isType)
+            foreach (var param in member.Elements("param"))
+                if (param.Attribute("name")?.Value is { } name && !parameters.ContainsKey(name))
+                    parameters = parameters.Add(Text(name, intern), Text(Render(param), intern));
+        if (summary is null && inheritDoc is null && parameters.IsEmpty)
+            return null;
         return new XmlMemberDoc(
-            summary is null ? null : Render(summary),
+            summary is null ? null : Text(Render(summary), intern),
             inheritDoc is not null,
-            inheritDoc?.Attribute("cref")?.Value,
-            parameters.ToImmutable());
+            inheritDoc?.Attribute("cref")?.Value is { } cref ? Text(cref, intern) : null,
+            parameters);
     }
+
+    private static string Text(string value, bool intern) => intern ? string.Intern(value) : value;
 
     /// <summary>
     /// Renders a documentation element to plain text, byte-compatible with the formatting-free

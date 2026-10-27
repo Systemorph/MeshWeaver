@@ -81,6 +81,22 @@ public class BuildHostsRecordTest
     }
 
     [Fact]
+    public void ThePullIdentity_RoundTrips_AndIsAbsentUnlessDeclared()
+    {
+        const string ClientId = "00000000-0000-0000-0000-000000000001";
+        var record = DeploymentRecordJson.Read($$"""{ "$type": "DeploymentContent", "buildHosts": { "enabled": true, "pullIdentityClientId": "{{ClientId}}" } }""")!;
+        Assert.Equal(ClientId, record.BuildHosts!.PullIdentityClientId);
+        var json = DeploymentRecordJson.Write(record);
+        Assert.Equal(ClientId, (string?)JsonNode.Parse(json)!["buildHosts"]!["pullIdentityClientId"]);
+        Assert.Equal(ClientId, DeploymentRecordJson.Read(json)!.BuildHosts!.PullIdentityClientId);
+
+        // Undeclared → no credential, and nothing written for it.
+        var none = DeploymentRecordJson.Read("""{ "$type": "DeploymentContent", "buildHosts": { "enabled": true } }""")!;
+        Assert.Null(none.BuildHosts!.PullIdentityClientId);
+        Assert.DoesNotContain("pullIdentityClientId", DeploymentRecordJson.Write(none));
+    }
+
+    [Fact]
     public void AChannelChangedWithWith_KeepsTheOtherChannelAndTheSwitch()
     {
         // The receiver's shape: write ONE channel's set, keep everything else.

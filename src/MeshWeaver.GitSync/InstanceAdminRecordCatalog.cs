@@ -33,7 +33,16 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
     private readonly string name;
     private readonly BehaviorSubject<ImmutableDictionary<string, TContent>> state =
         new(ImmutableDictionary<string, TContent>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase));
-    private readonly BehaviorSubject<bool> loaded = new(false);
+    // 🚨 "Has the first listing arrived?" is TWO fields, never a BehaviorSubject<bool>
+    // (Doc/Architecture/CatalogLoadedSignal). A BehaviorSubject replays its value to a new subscriber
+    // WHILE HOLDING ITS GATE, and `.Value` takes the same gate — so a WhenLoaded subscriber's code ran
+    // under the lock every IsLoaded reader needs. InstanceGitHubApp.WhenReadable zips this signal with
+    // the secret catalog's, and its consumer reads IsLoaded under the zip's gate: one thread held this
+    // gate wanting the zip's, the other held the zip's wanting this one, and the GitHub identity
+    // decision behind every first import never returned (MeshWeaver.Plugins ModuleAutoDiscoveryTest).
+    // The flag is read lock-free; the AsyncSubject replays with no lock held.
+    private readonly AsyncSubject<Unit> loaded = new();
+    private int isLoaded;
     private readonly object gate = new();
     private IDisposable? subscription;
     // Down from a fault until the re-opened query lists the store completely again. Readers that
@@ -89,7 +98,7 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
         get
         {
             EnsureSubscribed();
-            return loaded.Where(l => l).Take(1).Select(_ => Unit.Default);
+            return loaded.AsObservable();
         }
     }
 
@@ -113,7 +122,7 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
         get
         {
             EnsureSubscribed();
-            return loaded.Value;
+            return Volatile.Read(ref isLoaded) == 1;
         }
     }
 
@@ -133,7 +142,7 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
             if (meshService is null || accessService is null)
             {
                 subscription = System.Reactive.Disposables.Disposable.Empty;
-                loaded.OnNext(true);
+                MarkLoaded();
                 return;
             }
             subscription = ActivityControlPlaneExtensions.SubscribeHubWatcher(
@@ -198,8 +207,18 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
         var full = change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset;
         Volatile.Write(ref snapshot, new Snapshot(current, full ? false : prior.Faulted));
         state.OnNext(current);
-        if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset && !loaded.Value)
-            loaded.OnNext(true);
+        if (full)
+            MarkLoaded();
+    }
+
+    /// <summary>Publishes "listed" once: the flag first, so a WhenLoaded subscriber that reads
+    /// IsLoaded sees it true, then the signal.</summary>
+    private void MarkLoaded()
+    {
+        if (Interlocked.Exchange(ref isLoaded, 1) != 0)
+            return;
+        loaded.OnNext(Unit.Default);
+        loaded.OnCompleted();
     }
 
     private void OnFault()

@@ -55,6 +55,16 @@ public sealed record BuildHostsBlock
     /// <summary>Which versioned deployments are kept (Doc/Architecture/DeployTestSwitchLatest §6).</summary>
     [Description("Which versioned build servers are kept")]
     public BuildHostRetention Retention { get; init; } = new();
+
+    /// <summary>
+    /// The client id of the hosts' ONE cloud credential: a user-assigned identity granted AcrPull only, with which
+    /// the host pulls the sealed plugins publication (MeshWeaver.Plugins Hosting/BuildQueue §6). Rendered as the
+    /// chart's <c>buildHosts.workloadIdentity.clientId</c>, which annotates the hosts' ServiceAccount. Null → the
+    /// hosts carry no cloud credential, and a host offered a publication cannot pull it. Never the portal's identity:
+    /// a host runs untrusted pull-request code.
+    /// </summary>
+    [Description("Client id of the hosts' pull-only workload identity (AcrPull on the registry, nothing else)")]
+    public string? PullIdentityClientId { get; init; }
 }
 
 /// <summary>
@@ -202,8 +212,9 @@ public sealed record BuildHostChannel
     public string? CoreTestsDigest { get; init; }
 
     /// <summary>The set's build-host RUNNER image digest (<c>mw-build-host</c>, <c>sha256:…</c>) — bash,
-    /// python3, git, bubblewrap, the .NET SDK and <c>build-run.py</c>, built by core's CD in the same run
-    /// as the set, so the runner that drives a stage is the one that ships with its platform.</summary>
+    /// python3, git, bubblewrap, the .NET SDK and <c>build-run.py</c>, built by MeshWeaver.Deploy's <c>build-host.yml</c>
+    /// against the set's own commit and tagged with the set's version, so the runner that drives a stage is the one
+    /// that ships with its platform.</summary>
     [Description("The set's build-host runner image digest (sha256:…)")]
     public string? RunnerDigest { get; init; }
 

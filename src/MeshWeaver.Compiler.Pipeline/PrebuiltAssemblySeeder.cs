@@ -1279,7 +1279,13 @@ public static class PrebuiltAssemblySeeder
                     liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
                 if (kept is null)
                     return Write(SeedOutcome.Adopted);
-                logger?.LogInformation(
+                // Debug, not Information: this is the no-op outcome — nothing uploaded, nothing
+                // written — and it repeats for every adopted type on every bundle pass. Measured
+                // 2026-10-26 over one hour of Loki: 147 lines/h on the build instance and 57 on
+                // the public one, every one saying "the record already serves these exact bytes".
+                // The outcome is still returned (SeedOutcome.AlreadyServed) and counted by the
+                // caller's summary; the WRITE paths keep their Information line.
+                logger?.LogDebug(
                     "Prebuilt assembly for {NodeTypePath} NOT re-stamped (#6038): {Reason}. Nothing "
                     + "uploaded, nothing written — the record stays at version {Version}",
                     nodeTypePath, kept, node.Version);
