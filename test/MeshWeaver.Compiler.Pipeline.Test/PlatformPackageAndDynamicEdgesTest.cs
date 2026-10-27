@@ -135,7 +135,7 @@ public class PlatformPackageAndDynamicEdgesTest
         set.Edges.Where(e => e.Kind == DependencyEdgeKinds.DynamicUnresolved).Select(e => e.Target)
             .Should().Equal("?System.Reflection.Assembly.Load", "?System.Type.GetType");
         var getType = set.Edges.Single(e => e.Target == "?System.Type.GetType");
-        getType.Evidence.Should().Equal(["Type.GetType(name) in ByName"]);
+        getType.Evidence.Should().Equal(["Type.GetType(name) in ByName — 'typeName' is not a compile-time constant"]);
         getType.EvidenceClass.Should().Be(DependencyEvidenceClasses.Dynamic);
         getType.TargetKind.Should().BeNull("unknown is unknown");
         set.Edges.Should().NotContain(e => e.Kind == DependencyEdgeKinds.Dynamic);
@@ -266,9 +266,9 @@ public class PlatformPackageAndDynamicEdgesTest
             var edges = DependencyEdgeExtraction.EmittedReferenceEdges(compilation, image, classes);
 
             var package = edges.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Package).Which;
-            package.Target.Should().Be("acme.widgets", "the package id, read off the global-packages layout");
+            package.Target.Should().Be("package:acme.widgets", "the package id, read off the global-packages layout, in the package namespace");
             package.Evidence.Should().Equal(["Acme.Widgets"]);
-            edges.Should().NotContain(e => e.Target == "acme.gadgets", "referenced, never bound");
+            edges.Should().NotContain(e => e.Target == "package:acme.gadgets", "referenced, never bound");
             // Negative control: the same file NOT classified as a package is not a package edge (and,
             // not being a MeshWeaver name, not a platform edge either).
             image.Position = 0;
@@ -341,12 +341,12 @@ public class PlatformPackageAndDynamicEdgesTest
             image.Position = 0;
             var owned = DependencyEdgeExtraction.EmittedReferenceEdges(compilation, image,
                 DependencyReferenceClasses.Of(references, [], new Dictionary<string, string> { [widget] = "Acme.Bundle" }));
-            owned.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Package).Which.Target.Should().Be("Acme.Bundle");
+            owned.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Package).Which.Target.Should().Be("package:Acme.Bundle");
 
             image.Position = 0;
             var byPath = DependencyEdgeExtraction.EmittedReferenceEdges(compilation, image,
                 DependencyReferenceClasses.Of(references, [], [widget]));
-            byPath.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Package).Which.Target.Should().Be("Acme.Widget",
+            byPath.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Package).Which.Target.Should().Be("package:Acme.Widget",
                 "negative control: a flat path names only the file");
         }
         finally
@@ -421,6 +421,120 @@ public class PlatformPackageAndDynamicEdgesTest
         var emitted = compilation.Emit(path, cancellationToken: TestContext.Current.CancellationToken);
         emitted.Success.Should().BeTrue(string.Join("; ", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
         return path;
+    }
+
+    /// <summary>
+    /// THE RULE, case 1 — an OVERRIDE of a reflection lookup: a subclass overriding
+    /// <c>Assembly.GetType(string, bool, bool)</c> is still that lookup (matched through the override
+    /// chain) but its behaviour is not the API's own, so the call is UNRESOLVED whatever its
+    /// arguments. Negative control: the API's own method with proven inputs resolves.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AnOverrideOfAReflectionLookup_IsUnresolved_ByTheRule()
+    {
+        var set = CompileB(TestContext.Current.CancellationToken, [Code(B, "Overrides", """
+            /// <summary>An assembly whose lookup is the author's.</summary>
+            public sealed class Custom : System.Reflection.Assembly
+            {
+                /// <summary>Any answer at all.</summary>
+                public override System.Type? GetType(string typeName, bool throwOnError, bool ignoreCase) => null;
+            }
+            /// <summary>Both lookups.</summary>
+            public static class Overrides
+            {
+                /// <summary>Through the override.</summary>
+                public static System.Type? ViaOverride() => new Custom().GetType("MeshWeaver.Graph.Apps.HomeAppSource", false, false);
+                /// <summary>The API's own, every input proven.</summary>
+                public static System.Type? Own() => typeof(string).Assembly.GetType("System.Text.StringBuilder", false, false);
+            }
+            """)]);
+
+        var unresolved = set.Edges.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.DynamicUnresolved).Which;
+        unresolved.Target.Should().Be("?System.Reflection.Assembly.GetType", "matched through the override chain");
+        unresolved.Evidence.Should().ContainSingle().Which.Should().EndWith("whose behaviour is not the API's own");
+        set.Edges.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Dynamic
+                                              && e.Target.StartsWith("System.Text.StringBuilder, ", StringComparison.Ordinal),
+            "negative control: the API's own method with proven inputs resolves");
+    }
+
+    /// <summary>
+    /// THE RULE, case 2 — a RESOLVER: <c>Type.GetType(name, assemblyResolver, typeResolver)</c> can
+    /// return any type for any name, so the constant name proves nothing unless every resolver is
+    /// provably null. Negative control: the same call with both resolvers <c>null</c> resolves.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AResolverThatIsNotProvablyNull_IsUnresolved_ByTheRule()
+    {
+        var set = CompileB(TestContext.Current.CancellationToken, [Code(B, "Resolvers", """
+            /// <summary>Lookups through resolvers.</summary>
+            public static class Resolvers
+            {
+                private static System.Type? Anything(System.Reflection.Assembly? a, string n, bool i) => typeof(MeshWeaver.Mesh.MeshNode);
+                /// <summary>A resolver that can return a platform type for a framework name.</summary>
+                public static System.Type? Resolved() => System.Type.GetType("System.String", null, Anything);
+                /// <summary>Both resolvers provably null.</summary>
+                public static System.Type? Plain() => System.Type.GetType("System.String", null, null);
+            }
+            """)]);
+
+        var unresolved = set.Edges.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.DynamicUnresolved).Which;
+        unresolved.Target.Should().Be("?System.Type.GetType");
+        unresolved.Evidence.Should().ContainSingle().Which.Should().EndWith("the resolver 'typeResolver' is not provably null");
+        set.Edges.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Dynamic
+                                              && e.Target.StartsWith("System.String, ", StringComparison.Ordinal)
+                                              && e.TargetKind == DependencyEdgeKinds.Framework,
+            "negative control: with both resolvers null the constant name decides, and it is the framework's");
+    }
+
+    /// <summary>
+    /// Target identity across KINDS: a module ASSEMBLY named <c>Acme.Bundle</c> and a PACKAGE
+    /// <c>Acme.Bundle</c> (shipping <c>Acme.Widget.dll</c>) are two dependencies, and the set keeps
+    /// both — the package lives in its own target namespace, so target-keyed readers (the Postgres
+    /// projection's <c>(source, target)</c> key) never have to choose. Negative control: the package
+    /// id really is the module's name, so without the namespace the two targets would collide.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AModuleAndAPackageSharingAName_AreTwoEdges_WithDistinctTargets()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-depedges-collide-" + Guid.NewGuid().ToString("N"));
+        var module = Emit(Path.Combine(root, "modules"), "Acme.Bundle", "namespace Acme.Bundle; public sealed class M { public int V => 1; }");
+        var widget = Emit(Path.Combine(root, "shelf"), "Acme.Widget", "namespace Acme.Widget; public sealed class W { public int V => 2; }");
+        try
+        {
+            var references = CompileReferences.Default
+                .Append(MetadataReference.CreateFromFile(module))
+                .Append(MetadataReference.CreateFromFile(widget))
+                .ToList();
+            var tree = CSharpSyntaxTree.ParseText(
+                "public static class P { public static int S() => new Acme.Bundle.M().V + new Acme.Widget.W().V; }");
+            var compilation = CSharpCompilation.Create("CollideProbe", [tree], references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var image = new MemoryStream();
+            compilation.Emit(image, cancellationToken: TestContext.Current.CancellationToken).Success.Should().BeTrue();
+            var classes = DependencyReferenceClasses.Of(references, [module],
+                new Dictionary<string, string> { [widget] = "Acme.Bundle" });
+
+            var set = DependencyEdgeExtraction.Extract(compilation, [tree], "App/P", [], null, classes,
+                () => new MemoryStream(image.ToArray(), writable: false), TestContext.Current.CancellationToken);
+
+            var described = set.Edges.Select(e => $"{e.Kind} {e.Target}").ToList();
+            described.Should().Contain("Module Acme.Bundle");
+            described.Should().Contain("Package package:Acme.Bundle");
+            set.Edges.Select(e => e.Target).Should().OnlyHaveUniqueItems();
+            DependencyEdgeTargets.PackageIdOf("package:Acme.Bundle").Should().Be("Acme.Bundle",
+                "negative control: the package id IS the module's name — only the namespace keeps them apart");
+            System.Action collide = () => DependencyEdgeExtraction.UniqueTargets("App/P", [
+                    new DependencyEdge { Target = "Acme.Bundle", Kind = DependencyEdgeKinds.Module },
+                    new DependencyEdge { Target = "Acme.Bundle", Kind = DependencyEdgeKinds.Package }]);
+            collide
+                .Should().Throw<InvalidOperationException>("a collision is an extractor defect, reported loudly");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     /// <summary>The strict grammar: what it accepts it fully describes; what it does not
@@ -500,10 +614,12 @@ public class PlatformPackageAndDynamicEdgesTest
             }
             """)]);
 
+        // Both unknown receivers fall to the ONE rule: an input that decides the result is unproven ⇒ unresolved.
+        var unresolved = set.Edges.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.DynamicUnresolved).Which;
+        unresolved.Target.Should().Be("?System.Reflection.Assembly.GetType");
+        unresolved.Evidence.Should().HaveCount(2).And.OnlyContain(e => e.EndsWith("the receiver it searches is not statically known"),
+            "T's runtime argument, and an arbitrary Assembly, decide where the name is looked up");
         var kinds = set.Edges.Where(e => e.Kind == DependencyEdgeKinds.Dynamic).ToDictionary(e => e.Target, e => e.TargetKind);
-        kinds["MeshWeaver.Graph.Apps.HomeAppSource, ?"].Should().BeNull("T's runtime argument decides the assembly");
-        kinds["Receivers, ?"].Should().BeNull(
-            "an arbitrary Assembly is unknown — never resolved against the compiling type's own types");
         // string's assembly is whichever the reference set carries (a reference or an implementation
         // assembly) — the point is that it is KNOWN, and the framework's.
         kinds.Single(k => k.Key.StartsWith("System.Text.StringBuilder, ", StringComparison.Ordinal)).Value
@@ -542,8 +658,9 @@ public class PlatformPackageAndDynamicEdgesTest
             """)]);
 
         var registry = set.Edges.Should().ContainSingle(e => e.EvidenceClass == DependencyEvidenceClasses.Dynamic).Which;
-        registry.Target.Should().Be("Story, ?");
-        registry.TargetKind.Should().BeNull("a registry name resolves to whatever some hub registered");
+        registry.Kind.Should().Be(DependencyEdgeKinds.DynamicUnresolved,
+            "a registry resolves to whatever some hub registered — never proven at compile time");
+        registry.Target.Should().Be("?MeshWeaver.Domain.ITypeRegistry.GetType");
     }
 
     [Theory]

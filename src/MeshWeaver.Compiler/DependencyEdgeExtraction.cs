@@ -126,11 +126,16 @@ public static class DependencyEdgeExtraction
                 Kind = DependencyEdgeKinds.NodeType,
                 Evidence = [.. evidence.Take(MaxEvidence)],
             });
-        edges.AddRange(UsedModules(compilation, references.Modules, ct));
+        var modules = UsedModules(compilation, references.Modules, ct).ToList();
+        edges.AddRange(modules);
         if (emittedImage is not null)
         {
             using var image = emittedImage();
-            edges.AddRange(EmittedReferenceEdges(compilation, image, references));
+            // One assembly name is one runtime identity: when a module and a host assembly share a
+            // name, the installed module (classified by FILE) is the edge, never a second one.
+            var moduleNames = modules.Select(m => m.Target).ToHashSet(StringComparer.Ordinal);
+            edges.AddRange(EmittedReferenceEdges(compilation, image, references)
+                .Where(e => !(e.Kind == DependencyEdgeKinds.Platform && moduleNames.Contains(e.Target))));
         }
         // Dynamic bindings count only in code the compiling type OWNS — a reflection call inside a
         // foreign owner's code is that owner's edge, recorded by its own compile.
@@ -142,7 +147,7 @@ public static class DependencyEdgeExtraction
         return new DependencyEdgeSet
         {
             Source = selfPath,
-            Edges = edges.ToImmutable(),
+            Edges = UniqueTargets(selfPath, edges.ToImmutable()),
             IncludedWithoutUse = [.. foreignOwners
                 .Where(o => !nodeTypeEvidence.ContainsKey(o))
                 .OrderBy(o => o, StringComparer.Ordinal)],
@@ -614,7 +619,7 @@ public static class DependencyEdgeExtraction
             .. platform.Values,
             .. packages.Select(p => new DependencyEdge
             {
-                Target = p.Key,
+                Target = DependencyEdgeTargets.ForPackage(p.Key),
                 Kind = DependencyEdgeKinds.Package,
                 Evidence = [.. p.Value.Take(MaxEvidence)],
             }),
@@ -632,6 +637,26 @@ public static class DependencyEdgeExtraction
         ArgumentException.ThrowIfNullOrEmpty(assemblyPath);
         using var stream = File.OpenRead(assemblyPath);
         return EmittedReferenceEdges(compilation, stream, references);
+    }
+
+    /// <summary>
+    /// The set's edges, PROVEN to have unique targets — the invariant every target-keyed reader (and
+    /// the Postgres projection's <c>(source, target)</c> key) relies on. Disjoint by construction
+    /// (<see cref="DependencyEdgeTargets"/>); a collision here is an extractor defect and fails LOUDLY
+    /// (the runtime compile logs it at Error and the build carries no edge set — "not extracted",
+    /// never a set that silently lost a dependency).
+    /// </summary>
+    /// <param name="source">The source, for the message.</param>
+    /// <param name="edges">The edges.</param>
+    public static ImmutableList<DependencyEdge> UniqueTargets(string source, ImmutableList<DependencyEdge> edges)
+    {
+        ArgumentNullException.ThrowIfNull(edges);
+        var collision = edges.GroupBy(e => e.Target, StringComparer.Ordinal).FirstOrDefault(g => g.Count() > 1);
+        if (collision is not null)
+            throw new InvalidOperationException(
+                $"dependency edges of '{source}': target '{collision.Key}' is claimed by "
+                + string.Join(" and ", collision.Select(e => e.Kind)) + " — targets must be unique per set");
+        return edges;
     }
 
     internal static string? MvidOf(MetadataReference reference)

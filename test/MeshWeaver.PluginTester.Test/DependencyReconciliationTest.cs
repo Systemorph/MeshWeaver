@@ -160,7 +160,7 @@ public sealed class DependencyReconciliationTest : IDisposable
                 Edge(DependencyEdgeKinds.Module, "Lib.Module"),
                 Edge(DependencyEdgeKinds.Module, "Other.Module"),
                 Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Graph"),
-                Edge(DependencyEdgeKinds.Package, "acme.undeclared"),
+                Edge(DependencyEdgeKinds.Package, "package:acme.undeclared"),
                 Edge(DependencyEdgeKinds.Dynamic, HomeAppSource, DependencyEdgeKinds.Platform)),
             Set("Lib/Thing"));
 
@@ -169,7 +169,7 @@ public sealed class DependencyReconciliationTest : IDisposable
         var app = report.Units.Single(u => u.Unit == "App");
         Assert.Equal("package", app.Shape);
         // Used but undeclared: a module no required package declares, and a package no directive names.
-        Assert.Equal(["Module Other.Module", "Package acme.undeclared"],
+        Assert.Equal(["Module Other.Module", "Package package:acme.undeclared"],
             app.UsedButUndeclared.Select(f => $"{f.Kind} {f.Target}").ToArray());
         // Declared but unused: the #r directive nothing binds. Lib IS used (NodeType + module edge).
         Assert.Equal(["nuget Acme.Declared"], app.DeclaredButUnused.Select(f => $"{f.Kind} {f.Target}").ToArray());
@@ -298,7 +298,7 @@ public sealed class DependencyReconciliationTest : IDisposable
              "content":{"$type":"CodeConfiguration","language":"csharp","code":"#r \"nuget:Acme.Json, 1.0.0\"\npublic static class Connect { }"}}
             """;
         Write("App/Maps/Source/Connect.json", json);
-        var document = Document([], Set("App/Maps", Edge(DependencyEdgeKinds.Package, "acme.json")));
+        var document = Document([], Set("App/Maps", Edge(DependencyEdgeKinds.Package, "package:acme.json")));
 
         var app = Assert.Single(DependencyReconciliation.Reconcile(document, _root).Units);
         Assert.DoesNotContain(app.UsedButUndeclared, f => f.Kind == DependencyEdgeKinds.Package);

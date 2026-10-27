@@ -50,6 +50,57 @@ public class NarrowedBakeCarriesItsInputFilesGuard
         Assert.Empty(UncopiedRepoFiles(text));
     }
 
+    private const string Gate = ".github/workflows/node-repo-gate.yml";
+
+    /// <summary>
+    /// The gate lane's narrowed inputs that are NOT staged at their repository-relative path: every
+    /// <c>$P_REPO/$X_FILE</c> argument must be staged by <c>stage_input "$X_FILE"</c>, the stager
+    /// must copy to <c>$REPO_MOUNT/$1</c> (the same relative path), and no input may be staged or
+    /// named by <c>basename</c> — two inputs sharing a file name in different directories would
+    /// land on one path and the second copy would overwrite the first.
+    /// </summary>
+    internal static IReadOnlyList<string> GateInputsNotStagedByPath(string text)
+    {
+        var problems = new List<string>();
+        var passed = Regex.Matches(text, @"""\$P_REPO/\$(?<var>[A-Z_]+_FILE)""")
+            .Select(m => m.Groups["var"].Value).Distinct().ToList();
+        problems.AddRange(passed
+            .Where(v => !Regex.IsMatch(text, $@"stage_input\s+""\${v}"""))
+            .Select(v => $"{v}: not staged by stage_input"));
+        if (passed.Count > 0 && !text.Contains(@"cp ""$GITHUB_WORKSPACE/$1"" ""$REPO_MOUNT/$1""", System.StringComparison.Ordinal))
+            problems.Add("stage_input does not copy to the repository-relative path");
+        problems.AddRange(Regex.Matches(text, @"basename\s+""\$(?<var>[A-Z_]+_FILE)""")
+            .Select(m => $"{m.Groups["var"].Value}: staged or named by basename"));
+        return problems.Distinct().OrderBy(p => p).ToList();
+    }
+
+    [Fact]
+    public void EveryGateInput_IsStagedAtItsRepositoryRelativePath()
+    {
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Gate));
+        var passed = Regex.Matches(text, @"""\$P_REPO/\$(?<var>[A-Z_]+_FILE)""").Select(m => m.Groups["var"].Value).ToHashSet();
+        Assert.Contains("ALLOW_FILE", passed);
+        Assert.Contains("WARNING_BASELINE_FILE", passed);
+        Assert.Contains("DYNAMIC_BASELINE_FILE", passed);
+        Assert.Empty(GateInputsNotStagedByPath(text));
+    }
+
+    /// <summary>Negative control: the pre-fix gate shape — copies by basename, so
+    /// <c>warnings/debt.allow</c> and <c>dynamic/debt.allow</c> collide — is caught.</summary>
+    [Fact]
+    public void NegativeControl_GateInputsStagedByBasename_AreCaught()
+    {
+        const string lane = """
+            cp "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" "$REPO_MOUNT/"
+            WARN_ARGS=(--warning-baseline "$P_REPO/$(basename "$WARNING_BASELINE_FILE")")
+            cp "$GITHUB_WORKSPACE/$DYNAMIC_BASELINE_FILE" "$REPO_MOUNT/"
+            DYN_ARGS=(--dynamic-baseline "$P_REPO/$(basename "$DYNAMIC_BASELINE_FILE")")
+            """;
+        Assert.Equal(
+            ["DYNAMIC_BASELINE_FILE: staged or named by basename", "WARNING_BASELINE_FILE: staged or named by basename"],
+            GateInputsNotStagedByPath(lane));
+    }
+
     [Fact]
     public void NegativeControl_ALaneMissingOneCopy_IsCaught()
     {

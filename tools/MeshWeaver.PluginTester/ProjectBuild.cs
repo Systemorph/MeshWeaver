@@ -661,12 +661,12 @@ public static class ProjectBuild
             {
                 Source = r.AssemblyName,
                 BuildMvid = EmitPipelineMvid(r.AssemblyPath!),
-                Edges = [.. r.UsedReferences
+                Edges = DependencyEdgeExtraction.UniqueTargets(r.AssemblyName, [.. r.UsedReferences
                     .Where(n => inTree.Contains(n) && !string.Equals(n, r.AssemblyName, StringComparison.OrdinalIgnoreCase))
                     .Select(n => new MeshWeaver.Mesh.DependencyEdge { Target = n, Kind = MeshWeaver.Mesh.DependencyEdgeKinds.Module }),
                     // A platform-named assembly this run built from source is in-tree (a Module
                     // edge above), never also a Platform one.
-                    .. r.OtherEdges.Where(e => !(e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Platform && inTree.Contains(e.Target)))],
+                    .. r.OtherEdges.Where(e => !(e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Platform && inTree.Contains(e.Target)))]),
             })
             .OrderBy(e => e.Source, StringComparer.Ordinal)
             .ToImmutableArray();

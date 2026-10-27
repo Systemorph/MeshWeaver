@@ -149,8 +149,9 @@ public static class DynamicBindingExtraction
                     || ApiOf(method) is not { } api)
                     continue;
                 // Only the overloads that bind BY NAME: CreateInstance(Type) and Load(byte[]) name
-                // their target statically (or not at all) and are not this edge.
-                if (!IsByNameOverload(api.Shape, method))
+                // their target statically (or not at all) and are not this edge. Judged on the
+                // TABLE's declaration (an override may rename its parameters).
+                if (!IsByNameOverload(api.Shape, api.Declared))
                     continue;
                 var site = SiteOf(name);
                 if (invocation is null)
@@ -162,6 +163,21 @@ public static class DynamicBindingExtraction
                 }
                 if (model.GetOperation(invocation, ct) is not IInvocationOperation operation)
                     continue;
+                // 🚨 THE RULE (conservative by construction): a reflection lookup is RESOLVED only
+                // when its behaviour is the table API's own — not an override, not an implementation
+                // — and EVERY input that decides its result is proven: the receiver it searches and
+                // each argument (names constant, flags constant, resolver delegates provably null).
+                // Anything short of that is unresolved, whatever shape it takes; a new shape costs a
+                // baseline line, never a silent pass.
+                var why = api.Exact
+                    ? Unproven(operation, api)
+                    : $"bound to {method.ContainingType.Name}.{method.Name}, whose behaviour is not the API's own";
+                if (why is not null)
+                {
+                    Add(unresolved, "?" + api.Key,
+                        $"{api.Display}({Shorten(invocation.ArgumentList.Arguments.ToString())}) in {site} — {why}");
+                    continue;
+                }
                 assemblies ??= new AssemblyLookup(compilation, references);
                 var target = Resolve(api.Shape, operation, compilation, assemblies);
                 if (target is { } t)
@@ -216,14 +232,27 @@ public static class DynamicBindingExtraction
             : null;
     }
 
-    private sealed record Api(string Key, string Display, Shape Shape);
+    /// <summary>A matched reflection API.</summary>
+    /// <param name="Key">The table key.</param>
+    /// <param name="Display">The short name for evidence.</param>
+    /// <param name="Shape">How its arguments name the target.</param>
+    /// <param name="Declared">The TABLE's own declaration of the method (the base an override overrides).</param>
+    /// <param name="Exact">Whether the call binds that declaration itself — false for an override or
+    /// an implementation, whose behaviour the compile cannot establish.</param>
+    private sealed record Api(string Key, string Display, Shape Shape, IMethodSymbol Declared, bool Exact);
 
     private static Api? ApiOf(IMethodSymbol method)
     {
         var original = method.ReducedFrom ?? method.OriginalDefinition;
-        var key = $"{FullName(original.ContainingType)}.{original.Name}";
-        if (Apis.TryGetValue(key, out var shape))
-            return new Api(key, $"{original.ContainingType.Name}.{original.Name}", shape);
+        // Follow the OVERRIDE chain: a subclass overriding Assembly.GetType(string, bool, bool) is
+        // still that lookup — but not the BCL's behaviour, so it is matched as NOT exact.
+        var exact = true;
+        for (var declared = original; declared is not null; declared = declared.OverriddenMethod?.OriginalDefinition, exact = false)
+        {
+            var key = $"{FullName(declared.ContainingType)}.{declared.Name}";
+            if (Apis.TryGetValue(key, out var shape))
+                return new Api(key, $"{declared.ContainingType.Name}.{declared.Name}", shape, declared, exact);
+        }
         // An ITypeRegistry implementation (or a derived interface) is the registry surface. Matched
         // by NAME and POSITION, never by parameter name: an implementation may legally rename the
         // parameter (`GetType(string typeName)`), and a rename must not take a call off the ratchet.
@@ -233,9 +262,56 @@ public static class DynamicBindingExtraction
             && original.ContainingType.AllInterfaces.Append(original.ContainingType)
                 .Any(i => FullName(i) == RegistryInterface)
             && Apis.TryGetValue(RegistryInterface + "." + original.Name, out var registryShape))
-            return new Api(RegistryInterface + "." + original.Name, $"ITypeRegistry.{original.Name}", registryShape);
+            return new Api(RegistryInterface + "." + original.Name, $"ITypeRegistry.{original.Name}", registryShape,
+                original, Exact: FullName(original.ContainingType) == RegistryInterface);
         return null;
     }
+
+    /// <summary>
+    /// Why the inputs that decide a lookup's result are NOT all proven, or null when they are:
+    /// <list type="bullet">
+    ///   <item>the RECEIVER of an instance lookup must be statically known —
+    ///   <c>typeof(X).Assembly</c>/<c>.Module</c> of a named type, <c>AssemblyLoadContext.Default</c>,
+    ///   <c>AppDomain.CurrentDomain</c>; a registry instance's contents are never known;</item>
+    ///   <item>every DELEGATE argument (a type or assembly resolver) must be provably null — a
+    ///   resolver can return any type for any name;</item>
+    ///   <item>every other argument (the names, <c>throwOnError</c>, <c>ignoreCase</c>, …) must be a
+    ///   compile-time constant (or <c>new AssemblyName(constant)</c>), or the parameter's default.</item>
+    /// </list>
+    /// </summary>
+    private static string? Unproven(IInvocationOperation operation, Api api)
+    {
+        if (operation.Instance is { } instance)
+        {
+            if (api.Shape == Shape.RegistryName)
+                return "a registry instance's registrations are not knowable at compile time";
+            if (!ReceiverOf(instance).Known && !IsWellKnownReceiver(instance))
+                return "the receiver it searches is not statically known";
+        }
+        foreach (var argument in operation.Arguments)
+        {
+            if (argument.ArgumentKind == ArgumentKind.DefaultValue)
+                continue;
+            var value = Unwrap(argument.Value);
+            if (argument.Parameter?.Type.TypeKind == TypeKind.Delegate)
+            {
+                if (value is not { ConstantValue: { HasValue: true, Value: null } })
+                    return $"the resolver '{argument.Parameter.Name}' is not provably null";
+                continue;
+            }
+            if (ConstantString(argument.Value) is null && value is not { ConstantValue.HasValue: true })
+                return $"'{argument.Parameter?.Name}' is not a compile-time constant";
+        }
+        return null;
+    }
+
+    /// <summary>The static receivers whose lookup behaviour is the runtime's own:
+    /// <c>AssemblyLoadContext.Default</c> and <c>AppDomain.CurrentDomain</c>.</summary>
+    private static bool IsWellKnownReceiver(IOperation instance) =>
+        Unwrap(instance) is IPropertyReferenceOperation { Instance: null } property
+        && (property.Property.Name, FullName(property.Property.ContainingType)) is
+            ("Default", "System.Runtime.Loader.AssemblyLoadContext")
+            or ("CurrentDomain", "System.AppDomain");
 
     private static string FullName(INamedTypeSymbol type) =>
         type.ContainingNamespace is { IsGlobalNamespace: false } ns
@@ -567,7 +643,7 @@ public static class DynamicBindingExtraction
     /// does not recognise are UNKNOWN — never a fall-back to the compilation's own lookup.</summary>
     private static Receiver ReceiverOf(IOperation? instance)
     {
-        if (Unwrap(instance) is not IPropertyReferenceOperation { Property.Name: "Assembly" } property
+        if (Unwrap(instance) is not IPropertyReferenceOperation { Property.Name: "Assembly" or "Module" } property
             || Unwrap(property.Instance) is not ITypeOfOperation typeOf)
             return Receiver.Unknown;
         var operand = typeOf.TypeOperand;

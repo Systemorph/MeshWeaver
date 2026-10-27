@@ -379,7 +379,7 @@ public static class DependencyReconciliation
                 {
                     DependencyEdgeKinds.NodeType => target.Contains('/') && closure.Contains(PackageOf(target)),
                     DependencyEdgeKinds.Module => declaredModules.Contains(target),
-                    DependencyEdgeKinds.Package => declared?.NuGet.Contains(target) == true,
+                    DependencyEdgeKinds.Package => declared?.NuGet.Contains(DependencyEdgeTargets.PackageIdOf(target)) == true,
                     // The platform is on every host; a Platform edge needs no declaration.
                     _ => true,
                 };
@@ -423,7 +423,7 @@ public static class DependencyReconciliation
                     Unused("module", module, measured: true);
                 foreach (var nuget in declared.NuGet.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
                     if (!edges.Any(x => x.Edge.Kind == DependencyEdgeKinds.Package
-                                        && string.Equals(x.Edge.Target, nuget, StringComparison.OrdinalIgnoreCase)))
+                                        && string.Equals(DependencyEdgeTargets.PackageIdOf(x.Edge.Target), nuget, StringComparison.OrdinalIgnoreCase)))
                         Unused("nuget", nuget, referencesMeasured);
             }
             else if (treeRoot is not null)
@@ -530,7 +530,7 @@ public static class DependencyReconciliation
                     {
                         DependencyEdgeKinds.Module => projectRefs.Contains(edge.Target),
                         DependencyEdgeKinds.Platform => packageRefs.Contains(edge.Target) || projectRefs.Contains(edge.Target),
-                        DependencyEdgeKinds.Package => packageRefs.Contains(edge.Target),
+                        DependencyEdgeKinds.Package => packageRefs.Contains(DependencyEdgeTargets.PackageIdOf(edge.Target)),
                         _ => true,
                     };
                     if (!covered)

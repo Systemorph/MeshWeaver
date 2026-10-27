@@ -52,6 +52,32 @@ public static class DependencyEdgeKinds
 }
 
 /// <summary>
+/// The identity of a <see cref="DependencyEdge.Target"/> across KINDS. A set's targets are unique,
+/// and readers key on them (the Postgres projection's primary key is <c>(source, target)</c>), so a
+/// target must never mean two things: a package id and an assembly name can be the same string
+/// (<c>Acme.Bundle</c> the package shipping <c>Acme.Widget.dll</c>, beside a module ASSEMBLY named
+/// <c>Acme.Bundle</c>). Package targets therefore live in their own namespace,
+/// <see cref="PackagePrefix"/>; a NodeType target is a path (contains <c>/</c>), a module or platform
+/// target an assembly simple name (one runtime identity per name), a dynamic target
+/// <c>{type}, {assembly}</c> or <c>?{api}</c>.
+/// </summary>
+public static class DependencyEdgeTargets
+{
+    /// <summary>The namespace of a <see cref="DependencyEdgeKinds.Package"/> target.</summary>
+    public const string PackagePrefix = "package:";
+
+    /// <summary>The target of a package edge.</summary>
+    /// <param name="packageId">The package id.</param>
+    public static string ForPackage(string packageId) => PackagePrefix + packageId;
+
+    /// <summary>The package id a package target names (the target itself when it carries no prefix —
+    /// a set written before the namespace existed).</summary>
+    /// <param name="target">A package edge's target.</param>
+    public static string PackageIdOf(string target) =>
+        target.StartsWith(PackagePrefix, StringComparison.Ordinal) ? target[PackagePrefix.Length..] : target;
+}
+
+/// <summary>
 /// The three EVIDENCE CLASSES a dependency is known by (<c>Doc/Architecture/DependencyGraph</c>).
 /// An open vocabulary, like <see cref="DependencyEdgeKinds"/>.
 /// </summary>

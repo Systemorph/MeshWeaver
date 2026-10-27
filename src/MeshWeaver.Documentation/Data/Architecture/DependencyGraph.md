@@ -38,12 +38,18 @@ One node per compiled source, holding that source's whole forward edge set:
 | `NodeType` | the owning NodeType's path | Static | the `SemanticModel` walk (below) |
 | `Module` | the module assembly's simple name | Static | `GetUsedAssemblyReferences()` ∩ the installed module files |
 | `Platform` | a `MeshWeaver.*` host assembly's simple name | Static | the EMITTED assembly's `AssemblyRef`/`TypeRef` tables |
-| `Package` | the package id (`#r "nuget:"`, or a shelf package for a module build) | Static | the emitted `AssemblyRef`s ∩ the package files |
+| `Package` | `package:{id}` — the package id (`#r "nuget:"`, or a shelf package for a module build) in its own namespace | Static | the emitted `AssemblyRef`s ∩ the package files |
 | `Dynamic` | `{type}, {assembly}` — `*` for a whole-assembly load, `?` for an unknown part | Dynamic | a reflection call with a CONSTANT argument |
 | `DynamicUnresolved` | `?{api}`, e.g. `?System.Type.GetType` | Dynamic | a reflection call whose argument is not constant |
 
-Targets are unique within one set by construction (a dynamic target always contains `, ` or starts
-with `?`; a path never does; a platform assembly and a module are told apart by FILE). `TargetKind`
+Targets are unique within one set by construction (`DependencyEdgeTargets`): a NodeType target is
+a path (contains `/`), a module or platform target an assembly simple name (one runtime identity per
+name — when a module and a host assembly share one, the installed module is the edge), a package
+target `package:{id}` (a package id can equal an assembly name: `Acme.Bundle` shipping
+`Acme.Widget.dll` beside a module ASSEMBLY `Acme.Bundle`), a dynamic target `{type}, {assembly}` or
+`?{api}`. `DependencyEdgeExtraction.UniqueTargets` proves it on every set written and fails LOUDLY
+on a collision, so a target-keyed reader — the Postgres projection's `(source, target)` key — never
+has to choose between two kinds. `TargetKind`
 says what a dynamic target IS — `Platform`, `Module`, `Package`, `NodeType` (a type in the source's
 own compilation), `Framework` (the BCL), or null when the compile cannot tell, which a reader must
 read as "may be the platform".
@@ -251,9 +257,18 @@ group handed along (`names.Select(Type.GetType)`) is unresolved.
   `List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib` is
   `Platform`, not `Framework`; an argument whose assembly the compile cannot classify makes the target
   unknown.
-- **Conservative by construction.** Reflection's type-name grammar and the shapes a lookup can take
-  are open-ended, so classifying every one exactly would never converge. The scanner is complete in
-  the other direction: a lookup leaves the ratchet ONLY when it is fully resolved. The name is
+- **Conservative by construction — THE RULE.** Reflection's type-name grammar and the shapes a
+  lookup can take are open-ended, so classifying every one exactly would never converge. The scanner
+  is complete in the other direction: a call whose bound method is a reflection lookup — the API
+  itself, an OVERRIDE of it (matched through the override chain), or an implementation of the
+  registry surface — is RESOLVED only when its behaviour is the API's own (not an override, not an
+  implementation) AND every input that decides its result is proven: the receiver it searches
+  (`typeof(X).Assembly`/`.Module` of a named type, `AssemblyLoadContext.Default`,
+  `AppDomain.CurrentDomain`), every resolver delegate provably `null`, and every other argument a
+  compile-time constant. Anything short of that is `DynamicUnresolved`, naming the unproven input. A
+  subclass overriding `Assembly.GetType(string, bool, bool)` and `Type.GetType(name, null, resolver)`
+  are two instances of that one rule, not two special cases. A resolved lookup is then classified
+  just as conservatively: The name is
   parsed with a strict grammar (`DynamicBindingExtraction.TryParseTypeName` — mixed qualified and
   bare generic arguments, array/by-ref/pointer suffixes); a name it refuses, any part whose assembly
   the compile does not reference (only `mscorlib`, `netstandard`, `System.Private.CoreLib` and
@@ -263,7 +278,8 @@ group handed along (`names.Select(Type.GetType)`) is unresolved.
   does not understand therefore costs a baseline line, never a silent pass.
 - **Matched by position where names can vary.** `ITypeRegistry.GetType`/`TryGetType` are matched by
   name and their leading `string` parameter, never by the parameter's name, so an implementation
-  that renames it stays on the ratchet.
+  that renames it stays on the ratchet — as `DynamicUnresolved`, since a registry's contents are
+  never knowable at compile time.
 - **What is scanned** is the source's own code AND the trees a NODE-SUPPLIED source generator (one
   the node `#r`'d) emitted — the author's code, as the impersonation scan already treats it; the
   platform's built-in generators' output is left out.
