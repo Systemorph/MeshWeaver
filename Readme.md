@@ -77,15 +77,22 @@ record of what runs where live in the private
 
 ### CLI
 
-The `memex` CLI operates any portal's mesh over the REST API — read, search, mutate, compile, and mirror nodes from the shell. It is not published as a dotnet tool; run it from a checkout:
+The `memex` CLI operates any portal's mesh from the shell — its mesh commands are generated at run
+time from the connected instance's MCP tool catalog — and builds plugins inside the platform image.
+It is a dotnet tool, `MeshWeaver.Cli`, with its own version. Its first stable release, `3.1.0`, is
+**not on nuget.org yet** — see
+[NuGet Package Retirement §1a](src/MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md);
+once it is:
 
 ```bash
-dotnet run --project src/MeshWeaver.Cli -- login mw_yourtoken --base-url https://portal.example.com
-dotnet run --project src/MeshWeaver.Cli -- search "nodeType:Agent"
+dotnet tool install -g MeshWeaver.Cli
+memex login mw_yourtoken --base-url https://portal.example.com
+memex search "nodeType:Agent"
 ```
 
-See [`src/MeshWeaver.Cli`](src/MeshWeaver.Cli) for the full command reference. In CI the same verbs
-come from the `mw-plugin-test` container image, which is what every pipeline here actually runs.
+Its source and its publish lane live in `Systemorph/MeshWeaver.Plugins` (`src/MeshWeaver.Cli`,
+published together with the Aspire integration). In CI the same verbs come from the
+`mw-plugin-test` container image, which is what every pipeline here actually runs.
 
 ### NuGet packages
 

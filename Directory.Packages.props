@@ -36,7 +36,6 @@
     <PackageVersion Include="Net.Codecrete.QrCodeGenerator" Version="3.2.1" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.4.0" />
-    <PackageVersion Include="System.CommandLine" Version="2.0.14" />
     <PackageVersion Include="System.Composition.AttributedModel" Version="10.0.10" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.9.0" />

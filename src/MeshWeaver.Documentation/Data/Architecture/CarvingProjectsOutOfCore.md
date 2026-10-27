@@ -541,9 +541,11 @@ package, which is the safe direction.
 
 🚨 **Moving a packed project moves its publishing credential.** nuget.org Trusted Publishing
 policies name a repository **and a workflow file**. The policy for core's `publish-packages.yml` does
-not cover MeshWeaver.Plugins' `publish-aspire-package.yml`. The package owner has to add the new
-policy, and set `vars.NUGET_TRUSTED_USER` there, before the next Aspire package release. Until then
-that lane's `preflight` is red by name.
+not cover a lane in MeshWeaver.Plugins. The `memex` CLI followed the Aspire integration there before
+its first nuget.org publish, and both now publish from ONE lane, MeshWeaver.Plugins'
+`publish-packages.yml` (which replaced its `publish-aspire-package.yml`); core has no publish lane
+left. The package owner points the nuget.org policy at that file, with `vars.NUGET_TRUSTED_USER` set
+there; until then that lane's `preflight` is red by name.
 
 ## The `clients/` tree
 
