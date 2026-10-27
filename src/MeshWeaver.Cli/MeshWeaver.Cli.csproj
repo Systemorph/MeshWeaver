@@ -10,9 +10,10 @@
 
     <!-- 🚨 A NuGet TOOL with its OWN VERSION (policy `cli-thin-wrapper-own-version`,
          Doc/Architecture/PolicyNotProse; Doc/Architecture/NuGetPackageRetirement §1a). Like `gh`, the
-         CLI is a thin client — REST for the mesh verbs, the platform IMAGE for build and test — so
-         it is re-published ONLY when its MCP / tool surface changes (the verbs and tools it makes
-         available), NEVER per platform build: bump <CliVersion> below IN the pull request that changes
+         CLI is a thin client — the mesh commands are generated at run time from the instance's MCP
+         tool catalog, the platform IMAGE runs build and test — so it is re-published ONLY when its own
+         surface changes (its MCP transport, its auth, its built-in commands), NEVER per platform build
+         and never for a server tool: bump <CliVersion> below IN the pull request that changes
          that surface, then dispatch publish-packages.yml with packages=cli after it merges. 3.1.0 is
          the first publish under this rule. A customer's dedicated build server installs it with
          `dotnet tool install -g MeshWeaver.Cli` and needs no checkout. -->
