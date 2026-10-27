@@ -70,6 +70,34 @@ public sealed record DependencyReferenceClasses(
     }
 
     /// <summary>
+    /// Classifies <paramref name="references"/> with the package of each package file GIVEN by the
+    /// caller — for a source whose files carry no package in their path (a flat module-libraries
+    /// shelf, where only its deps.json knows which package owns which assembly).
+    /// </summary>
+    /// <param name="references">The compile's metadata references.</param>
+    /// <param name="moduleLocations">The installed module assemblies' file paths.</param>
+    /// <param name="packageIdByFile">Package file path → the package that owns it.</param>
+    public static DependencyReferenceClasses Of(
+        IEnumerable<MetadataReference> references,
+        IEnumerable<string?> moduleLocations,
+        IReadOnlyDictionary<string, string> packageIdByFile)
+    {
+        ArgumentNullException.ThrowIfNull(references);
+        ArgumentNullException.ThrowIfNull(packageIdByFile);
+        var all = references.ToList();
+        var modules = DependencyEdgeExtraction.ModuleReferences(all, moduleLocations ?? []);
+        var byFile = packageIdByFile.ToImmutableDictionary(
+            kv => Path.GetFullPath(kv.Key), kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+        var packages = all
+            .Where(r => !modules.Contains(r)
+                        && r is PortableExecutableReference { FilePath: { Length: > 0 } file }
+                        && byFile.ContainsKey(Path.GetFullPath(file)))
+            .Distinct()
+            .ToImmutableDictionary(r => r, r => byFile[Path.GetFullPath(((PortableExecutableReference)r).FilePath!)]);
+        return new DependencyReferenceClasses(modules, packages);
+    }
+
+    /// <summary>
     /// The package id a resolved package file belongs to, read off the NuGet global-packages layout
     /// <c>{root}/{id}/{version}/(lib|ref|runtimes)/…/{file}.dll</c>; the file's simple name when the
     /// path does not have that shape (a flat shelf), so the edge still names something real.

@@ -238,6 +238,9 @@ public class ProjectBuildTest : IDisposable
         document.Failed.Should().BeEmpty();
         report.Projects.Single(p => p.Result!.AssemblyName == "App").Result!.UsedReferences
             .Should().Contain("Used").And.NotContain("Unused");
+        // The build records its own EVALUATED declarations, so a reconciliation never re-reads raw XML.
+        document.Has(DependencyEdgesFile.Measures.Declarations).Should().BeTrue();
+        document.Declarations["App"].ProjectReferences.Should().Equal("Unused", "Used");
 
         // Negative control: off by default — no file, no second binding pass.
         Directory.Delete(Path.Combine(_root, "out"), recursive: true);

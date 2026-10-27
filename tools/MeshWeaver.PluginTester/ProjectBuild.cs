@@ -626,7 +626,7 @@ public static class ProjectBuild
                 if (options.DependencyEdges)
                 {
                     var edgesFile = WriteDependencyEdges(
-                        workRoot, edgesIdentity!, results, graph.PrebuiltReferences.Keys);
+                        workRoot, edgesIdentity!, results, graph.PrebuiltReferences.Keys, graph.Models);
                     options.Output.WriteLine($"build-project: dependency edges → {edgesFile}");
                 }
                 Print(options.Output, report);
@@ -648,7 +648,8 @@ public static class ProjectBuild
     /// </summary>
     internal static string WriteDependencyEdges(
         string outputDirectory, string identity, IEnumerable<Cascade.NodeResult<ProjectResult>> results,
-        IEnumerable<string> prebuiltSiblings)
+        IEnumerable<string> prebuiltSiblings,
+        IReadOnlyDictionary<string, ProjectFile.Model>? models = null)
     {
         var built = results.Where(r => r.Result is not null).Select(r => r.Result!).ToList();
         var inTree = built.Select(r => r.AssemblyName)
@@ -672,7 +673,28 @@ public static class ProjectBuild
         var failed = built.Where(r => !r.IsGreen).Select(r => r.AssemblyName)
             .OrderBy(n => n, StringComparer.Ordinal).ToImmutableArray();
         return DependencyEdgesFile.WriteDocument(outputDirectory,
-            new DependencyEdgesFile.Document(DependencyEdgesFile.Schema, identity, null, sets, failed));
+            new DependencyEdgesFile.Document(DependencyEdgesFile.Schema, identity, null, sets, failed)
+            {
+                // The EVALUATED declarations this build compiled from — imports, conditions and
+                // property expansion applied — so the reconciliation never re-reads raw XML.
+                Measured = models is null
+                    ? [DependencyEdgesFile.Measures.ReferencedAssemblies, DependencyEdgesFile.Measures.DynamicBindings]
+                    : DependencyEdgesFile.Measures.ModuleBuild,
+                Declarations = models is null
+                    ? ImmutableSortedDictionary<string, DependencyEdgesFile.DeclaredDependencies>.Empty
+                    : built.Where(r => r.IsGreen && models.ContainsKey(r.ProjectPath))
+                        .ToImmutableSortedDictionary(
+                            r => r.AssemblyName,
+                            r => new DependencyEdgesFile.DeclaredDependencies(
+                                [.. models[r.ProjectPath].ProjectReferences
+                                    .Select(p => models.TryGetValue(p, out var m) ? m.AssemblyName : Path.GetFileNameWithoutExtension(p))
+                                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                                    .OrderBy(n => n, StringComparer.Ordinal)],
+                                [.. models[r.ProjectPath].PackageReferences.Select(p => p.Id)
+                                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                                    .OrderBy(n => n, StringComparer.Ordinal)]),
+                            StringComparer.Ordinal),
+            });
     }
 
     private static string? EmitPipelineMvid(string assemblyPath)
@@ -1534,10 +1556,20 @@ public static class ProjectBuild
                 // binding pass); the dynamic scan binds only the candidate invocations its
                 // syntactic prefilter keeps.
                 phase.Restart();
+                // The shelf is FLAT: a file's path carries no package, so the owner comes from the
+                // shelf's deps.json (the package whose own assemblies name it), falling back to the
+                // declared package that brought the file in when no package claims it.
+                var packageIdByFile = shelfResolutions
+                    .SelectMany(r => r.ReferenceFiles.Select(file => (File: file, Declared: r.PackageId)))
+                    .GroupBy(x => x.File, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => shelf?.OwnerOf(Path.GetFileNameWithoutExtension(g.Key)) ?? g.First().Declared,
+                        StringComparer.OrdinalIgnoreCase);
                 var classes = DependencyReferenceClasses.Of(
                     compilation.References,
                     [.. dependencies.Select(d => d.AssemblyPath), .. graph.PrebuiltReferences.Values],
-                    shelfReferencePaths);
+                    packageIdByFile);
                 var referenceEdges = DependencyEdgeExtraction.EmittedReferenceEdges(compilation, artifact.DllPath, classes);
                 var dynamicEdges = DynamicBindingExtraction.Extract(compilation, compilation.SyntaxTrees, classes);
                 otherEdges = [.. referenceEdges, .. dynamicEdges];

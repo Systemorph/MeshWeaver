@@ -49,7 +49,21 @@ public sealed class DependencyReconciliationTest : IDisposable
     };
 
     private static DependencyEdgesFile.Document Document(ImmutableArray<string> failed, params DependencyEdgeSet[] sets) =>
-        new(DependencyEdgesFile.Schema, "c003e001", "abc", [.. sets], failed);
+        new(DependencyEdgesFile.Schema, "c003e001", "abc", [.. sets], failed) { Measured = DependencyEdgesFile.Measures.Bake };
+
+    /// <summary>The same document as a producer that predates the measurement capabilities wrote it.</summary>
+    private static DependencyEdgesFile.Document Unmeasured(DependencyEdgesFile.Document document) =>
+        document with { Measured = [] };
+
+    private const string LibIndex = """
+        {"$type":"MeshNode","id":"Lib","namespace":"","path":"Lib","mainNode":"Lib","name":"Lib","nodeType":"Store/Plugin","state":"Active",
+         "content":{"$type":"PluginContent","description":"Lib.","module":"Lib.Module","requires":[]}}
+        """;
+
+    private const string AppIndex = """
+        {"$type":"MeshNode","id":"App","namespace":"","path":"App","mainNode":"App","name":"App","nodeType":"Store/Plugin","state":"Active",
+         "content":{"$type":"PluginContent","description":"App.","requires":["Lib@^1.0.0"]}}
+        """;
 
     private static DependencyEdgeSet Set(string source, params DependencyEdge[] edges) =>
         new() { Source = source, Edges = [.. edges] };
@@ -170,33 +184,129 @@ public sealed class DependencyReconciliationTest : IDisposable
         Assert.Empty(lib.UsedButUndeclared);
     }
 
+    /// <summary>
+    /// A module's declarations come from the PRODUCING build's evaluated model, carried in the edges
+    /// file — never raw csproj XML re-read here (which would miss imports and conditions). A used
+    /// ProjectReference outside the source root resolves from the host and shows up as a PLATFORM
+    /// edge; it is a use, not "unused" (negative control: a ProjectReference with no edge at all).
+    /// </summary>
     [Fact]
-    public void AModuleWorkspace_IsReconciledAgainstItsProjectFiles()
+    public void AModuleWorkspace_IsReconciledAgainstTheProducersEvaluatedDeclarations()
     {
-        Write("Used/Used.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
-        Write("Unused/Unused.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
-        Write("App/App.csproj", """
-            <Project Sdk="Microsoft.NET.Sdk">
-              <ItemGroup>
-                <ProjectReference Include="../Used/Used.csproj" />
-                <ProjectReference Include="../Unused/Unused.csproj" />
-                <PackageReference Include="MeshWeaver.Graph" />
-                <PackageReference Include="MeshWeaver.Layout" />
-              </ItemGroup>
-            </Project>
-            """);
         var document = Document([],
             Set("App",
                 Edge(DependencyEdgeKinds.Module, "Used"),
                 Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Graph"),
-                Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Mesh.Contract")));
+                Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Hosted"),
+                Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Mesh.Contract"))) with
+        {
+            Measured = DependencyEdgesFile.Measures.ModuleBuild,
+            Declarations = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal, [
+                new KeyValuePair<string, DependencyEdgesFile.DeclaredDependencies>("App",
+                    new(["MeshWeaver.Hosted", "Unused", "Used"], ["MeshWeaver.Graph", "MeshWeaver.Layout"])),
+            ]),
+        };
 
-        var app = Assert.Single(DependencyReconciliation.Reconcile(document, _root).Units);
+        var app = Assert.Single(DependencyReconciliation.Reconcile(document, treeRoot: null).Units);
         Assert.Equal("module", app.Shape);
         Assert.Equal(["Platform MeshWeaver.Mesh.Contract"],
             app.UsedButUndeclared.Select(f => $"{f.Kind} {f.Target}").ToArray());
         Assert.Equal(["PackageReference MeshWeaver.Layout", "ProjectReference Unused"],
             app.DeclaredButUnused.Select(f => $"{f.Kind} {f.Target}").ToArray());
+        Assert.Empty(app.Unverifiable);
+    }
+
+    /// <summary>A file that carries no evaluated declarations leaves every declaration-level flag
+    /// UNVERIFIABLE — never a clean "nothing undeclared, nothing unused".</summary>
+    [Fact]
+    public void AModuleWithoutRecordedDeclarations_IsUnverifiable_NotClean()
+    {
+        var document = Document([], Set("App", Edge(DependencyEdgeKinds.Platform, "MeshWeaver.Mesh.Contract")));
+        var app = Assert.Single(DependencyReconciliation.Reconcile(document, treeRoot: null).Units);
+        Assert.Empty(app.UsedButUndeclared);
+        Assert.Empty(app.DeclaredButUnused);
+        Assert.Contains(app.Unverifiable, u => u.StartsWith("declarations not recorded", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A schema-1 file written before dynamic bindings were measured has no dynamic edges because
+    /// nobody looked: an EMPTY baseline must not pass as ENFORCED, and an entry must not go STALE.
+    /// Negative control: the same sets, measured, are judged normally.
+    /// </summary>
+    [Fact]
+    public void AnInputThatNeverMeasuredDynamicBindings_IsUnverifiable_AndEnforcementIsRefused()
+    {
+        var bare = Unmeasured(Document([], Set("App/Maps")));
+        var baseline = DynamicEdgeBaseline.Parse([$"App/Maps Dynamic {HomeAppSource}"]);
+
+        var ratchet = DynamicEdgeRatchet.Evaluate(bare, baseline);
+        Assert.False(ratchet.Measured);
+        Assert.False(ratchet.Success, "an enforced ratchet over an unmeasured input judged nothing");
+        Assert.Empty(ratchet.Stale);
+        Assert.Equal($"App/Maps Dynamic {HomeAppSource}", Assert.Single(ratchet.Unverifiable).ToString());
+        var empty = DynamicEdgeRatchet.Evaluate(bare, DynamicEdgeBaseline.Parse([]));
+        Assert.False(empty.Success, "an EMPTY baseline over an unmeasured input is not a clean pass");
+        var log = new StringWriter();
+        empty.Write(log, DynamicEdgeBaseline.Parse([]), null);
+        Assert.Contains("dynamic-edge ratchet — UNVERIFIABLE", log.ToString());
+        Assert.DoesNotContain("ENFORCED", log.ToString());
+
+        // Negative control: measured, the listed edge is gone ⇒ STALE.
+        var measured = DynamicEdgeRatchet.Evaluate(Document([], Set("App/Maps")), baseline);
+        Assert.True(measured.Measured);
+        Assert.Single(measured.Stale);
+
+        // The report says the same thing per unit.
+        var report = DependencyReconciliation.Reconcile(bare, treeRoot: null);
+        Assert.Contains(Assert.Single(report.Units).Unverifiable, u => u.StartsWith("dynamic bindings were not measured", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// "Declared but unused" is a claim about EVERY source of a package. When the only user of a
+    /// requirement failed extraction, the requirement is UNVERIFIABLE, not unused. Negative control:
+    /// with no failed source the same tree reports it unused.
+    /// </summary>
+    [Fact]
+    public void AFailedSource_MakesItsPackagesUnmatchedDeclarationsUnverifiable()
+    {
+        Write("Lib/index.json", LibIndex);
+        Write("App/index.json", AppIndex);
+        var withFailure = Document(["App/Broken"], Set("App/Other"), Set("Lib/Thing"));
+
+        var app = DependencyReconciliation.Reconcile(withFailure, _root).Units.Single(u => u.Unit == "App");
+        Assert.DoesNotContain(app.DeclaredButUnused, f => f.Kind == "requires");
+        Assert.Contains(app.Unverifiable, u => u.StartsWith("requires Lib — not judged: 1 source(s)", StringComparison.Ordinal));
+        Assert.Equal(["App/Broken"], app.NotExtracted.ToArray());
+
+        var complete = DependencyReconciliation.Reconcile(Document([], Set("App/Other"), Set("Lib/Thing")), _root)
+            .Units.Single(u => u.Unit == "App");
+        Assert.Equal(["requires Lib"], complete.DeclaredButUnused.Select(f => $"{f.Kind} {f.Target}").ToArray());
+    }
+
+    /// <summary>
+    /// A JSON Code node stores its code as an ESCAPED string; the directive is read off the decoded
+    /// code (<c>NuGetDirectiveParser</c>), so a package it declares and the compile used is not
+    /// "used but undeclared". Negative control: the raw JSON text alone holds no directive a parser
+    /// would find.
+    /// </summary>
+    [Fact]
+    public void AJsonCodeNodesNuGetDirective_IsReadFromItsDecodedCode()
+    {
+        Write("App/index.json", AppIndex.Replace("\"Lib@^1.0.0\"", ""));
+        const string json = """
+            {"$type":"MeshNode","id":"Connect","namespace":"App/Maps/Source","nodeType":"Code",
+             "content":{"$type":"CodeConfiguration","language":"csharp","code":"#r \"nuget:Acme.Json, 1.0.0\"\npublic static class Connect { }"}}
+            """;
+        Write("App/Maps/Source/Connect.json", json);
+        var document = Document([], Set("App/Maps", Edge(DependencyEdgeKinds.Package, "acme.json")));
+
+        var app = Assert.Single(DependencyReconciliation.Reconcile(document, _root).Units);
+        Assert.DoesNotContain(app.UsedButUndeclared, f => f.Kind == DependencyEdgeKinds.Package);
+        Assert.Empty(app.DeclaredButUnused);
+
+        Assert.Empty(MeshWeaver.NuGet.NuGetDirectiveParser.Extract(json).References);
+        Assert.Equal("Acme.Json", Assert.Single(MeshWeaver.NuGet.NuGetDirectiveParser.Extract(
+            DependencyReconciliation.CodeOf("App/Maps/Source/Connect.json", json)).References).Id);
     }
 
     [Fact]
@@ -214,6 +324,11 @@ public sealed class DependencyReconciliationTest : IDisposable
 
         Assert.Equal(1, DependencyReconciliation.Run([edges, "--dynamic-baseline", baselinePath], stdout, stderr));
         Assert.Equal(2, DependencyReconciliation.Run([edges, "--dynamic-baseline", Path.Combine(_root, "absent")], stdout, stderr));
+
+        // An unmeasured (pre-capability) file under an armed baseline is RED, never a pass.
+        var old = Path.Combine(_root, "old");
+        DependencyEdgesFile.WriteDocument(old, Unmeasured(Document([], Set("App/Maps"))));
+        Assert.Equal(1, DependencyReconciliation.Run([old, "--dynamic-baseline", baselinePath], stdout, stderr));
         Assert.Contains("does not exist", stderr.ToString());
     }
 }

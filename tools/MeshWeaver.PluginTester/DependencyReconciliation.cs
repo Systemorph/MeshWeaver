@@ -1,11 +1,10 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
-using System.Xml.Linq;
 using MeshWeaver.Compiler;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh;
+using MeshWeaver.NuGet;
 using MeshWeaver.PluginCatalog;
 
 namespace MeshWeaver.PluginTester;
@@ -97,18 +96,23 @@ public sealed record DynamicEdgeBaseline(IReadOnlyList<DynamicEdgeBaselineEntry>
 /// <param name="Unverifiable">Baseline entries whose source this run did not compile — kept, warned.</param>
 /// <param name="Known">Observed edges the baseline carries — the debt, reported.</param>
 /// <param name="Enforced">Whether a baseline was named.</param>
+/// <param name="Measured">Whether the edges file MEASURED dynamic bindings at all
+/// (<see cref="DependencyEdgesFile.Measures.DynamicBindings"/>). A file whose producer predates the
+/// scan has no dynamic edges because nobody looked — unverifiable, never a pass.</param>
 public sealed record DynamicEdgeRatchet(
     ImmutableArray<(string Source, string Kind, string Target)> New,
     ImmutableArray<DynamicEdgeBaselineEntry> Stale,
     ImmutableArray<DynamicEdgeBaselineEntry> Unverifiable,
     ImmutableArray<(string Source, string Kind, string Target)> Known,
-    bool Enforced)
+    bool Enforced,
+    bool Measured)
 {
     /// <summary>The log prefix every ratchet and report line carries.</summary>
     public const string Prefix = "dependencies:";
 
-    /// <summary>Green iff nothing new and nothing stale; OBSERVE-ONLY is always green and says so.</summary>
-    public bool Success => !Enforced || (New.IsEmpty && Stale.IsEmpty);
+    /// <summary>Green iff the input was MEASURED and nothing is new or stale. OBSERVE-ONLY is green
+    /// and says so; an enforced ratchet over an unmeasured input is RED — it judged nothing.</summary>
+    public bool Success => !Enforced || (Measured && New.IsEmpty && Stale.IsEmpty);
 
     /// <summary>
     /// Whether an edge is a dynamic edge INTO CORE: every <see cref="DependencyEdgeKinds.DynamicUnresolved"/>
@@ -128,6 +132,10 @@ public sealed record DynamicEdgeRatchet(
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(baseline);
+        // An input that never measured dynamic bindings proves nothing either way: every entry is
+        // unverifiable (kept, never stale) and nothing is NEW — and an enforced ratchet is refused.
+        if (!document.Has(DependencyEdgesFile.Measures.DynamicBindings))
+            return new DynamicEdgeRatchet([], [], [.. baseline.Entries], [], baseline.Enforced, Measured: false);
         var observed = document.Sets
             .SelectMany(s => s.Edges.Where(IsIntoCore).Select(e => (s.Source, e.Kind, e.Target)))
             .ToList();
@@ -147,7 +155,7 @@ public sealed record DynamicEdgeRatchet(
             (compiled.Contains(entry.Source) ? stale : unverifiable).Add(entry);
         }
         return new DynamicEdgeRatchet(fresh.ToImmutable(), stale.ToImmutable(), unverifiable.ToImmutable(),
-            known.ToImmutable(), baseline.Enforced);
+            known.ToImmutable(), baseline.Enforced, Measured: true);
     }
 
     /// <summary>Prints the verdict — ENFORCED with its counts, or OBSERVE-ONLY naming who has not adopted it.</summary>
@@ -156,6 +164,17 @@ public sealed record DynamicEdgeRatchet(
     /// <param name="adopter">The repository the run is for, named in the observe-only line.</param>
     public void Write(TextWriter output, DynamicEdgeBaseline baseline, string? adopter)
     {
+        if (!Measured)
+        {
+            output.WriteLine(
+                $"{Prefix} dynamic-edge ratchet — UNVERIFIABLE: the edges file does not record that its "
+                + "producer scanned for dynamic bindings (written before the scan existed), so its silence "
+                + "is unknown, not clean. "
+                + (Enforced
+                    ? $"Enforcement REFUSED — RED; {baseline.Entries.Count} baseline entr(ies) kept as unverifiable."
+                    : "OBSERVE-ONLY, and nothing was measured either."));
+            return;
+        }
         if (!Enforced)
         {
             var who = string.IsNullOrWhiteSpace(adopter) ? "this repository" : adopter;
@@ -234,7 +253,12 @@ public static class DependencyReconciliation
         ImmutableArray<DynamicFinding> DynamicIntoCore,
         ImmutableArray<DynamicFinding> DynamicElsewhere,
         ImmutableSortedDictionary<string, int> Platform,
-        ImmutableArray<string> Unverifiable);
+        ImmutableArray<string> Unverifiable)
+    {
+        /// <summary>The unit's sources the producer attempted and could not extract — whatever
+        /// depends on them is unknown.</summary>
+        public ImmutableArray<string> NotExtracted { get; init; } = [];
+    }
 
     /// <summary>The whole report.</summary>
     /// <param name="FrameworkIdentity">The edges file's host identity.</param>
@@ -254,30 +278,41 @@ public static class DependencyReconciliation
         WriteIndented = true,
     };
 
-    private static readonly Regex NuGetDirective = new(
-        @"#r\s+""nuget:\s*(?<id>[A-Za-z0-9_.\-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Reconciles <paramref name="document"/> with the declarations under <paramref name="treeRoot"/>.
     /// A source with a <c>/</c> is a NodeType of a node-repo package (declarations: the package
     /// manifest's <c>requires</c> and <c>module</c>, its source queries and node types, its
     /// <c>#r "nuget:"</c> directives); any other source is a module's assembly name (declarations:
-    /// its <c>.csproj</c>'s <c>ProjectReference</c>s and <c>PackageReference</c>s).
+    /// the producing build's EVALUATED <c>ProjectReference</c>s and <c>PackageReference</c>s, carried in the file).
     /// </summary>
     /// <param name="document">The edges.</param>
     /// <param name="treeRoot">The checkout the edges were read from, or null for edges-only flags.</param>
     public static Report Reconcile(DependencyEdgesFile.Document document, string? treeRoot)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var nodeTypeSets = document.Sets.Where(s => s.Source.Contains('/')).ToList();
-        var moduleSets = document.Sets.Where(s => !s.Source.Contains('/')).ToList();
+        static bool IsNodeType(string source) => source.Contains('/');
         var units = ImmutableArray.CreateBuilder<UnitReport>();
-        if (nodeTypeSets.Count > 0)
-            units.AddRange(ReconcilePackages(nodeTypeSets, treeRoot));
-        if (moduleSets.Count > 0)
-            units.AddRange(ReconcileModules(moduleSets, treeRoot));
+        var nodeTypeSets = document.Sets.Where(s => IsNodeType(s.Source)).ToList();
+        var nodeTypeFailed = document.Failed.Where(IsNodeType).ToList();
+        if (nodeTypeSets.Count > 0 || nodeTypeFailed.Count > 0)
+            units.AddRange(ReconcilePackages(nodeTypeSets, nodeTypeFailed, document, treeRoot));
+        var moduleSets = document.Sets.Where(s => !IsNodeType(s.Source)).ToList();
+        var moduleFailed = document.Failed.Where(f => !IsNodeType(f)).ToList();
+        if (moduleSets.Count > 0 || moduleFailed.Count > 0)
+            units.AddRange(ReconcileModules(moduleSets, moduleFailed, document));
         return new Report(document.FrameworkIdentity, document.Commit,
             [.. units.OrderBy(u => u.Unit, StringComparer.Ordinal)], document.Failed);
+    }
+
+    /// <summary>The unverifiable notes every unit carries for what the PRODUCER did not measure —
+    /// an unmeasured kind is unknown, never clean.</summary>
+    private static IEnumerable<string> Unmeasured(DependencyEdgesFile.Document document)
+    {
+        if (!document.Has(DependencyEdgesFile.Measures.DynamicBindings))
+            yield return "dynamic bindings were not measured by the producer — dynamic edges unknown";
+        if (!document.Has(DependencyEdgesFile.Measures.ReferencedAssemblies))
+            yield return "platform and package references were not measured by the producer — those edges unknown";
     }
 
     // ── node-repo packages ──────────────────────────────────────────────────────────────────────
@@ -289,23 +324,19 @@ public static class DependencyReconciliation
         ImmutableArray<string> RawRequires,
         ImmutableHashSet<string> NuGet);
 
-    private static IEnumerable<UnitReport> ReconcilePackages(List<DependencyEdgeSet> sets, string? treeRoot)
+    private static IEnumerable<UnitReport> ReconcilePackages(
+        List<DependencyEdgeSet> sets, List<string> failed, DependencyEdgesFile.Document document, string? treeRoot)
     {
         var declarations = ImmutableDictionary<string, PackageDeclarations>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
-        var problems = ImmutableArray<string>.Empty;
         if (treeRoot is not null)
-            (declarations, problems) = ReadPackageDeclarations(treeRoot);
+            declarations = ReadPackageDeclarations(treeRoot);
+        var referencesMeasured = document.Has(DependencyEdgesFile.Measures.ReferencedAssemblies);
 
         string PackageOf(string source)
         {
             var first = source[..source.IndexOf('/')];
             return declarations.Keys.FirstOrDefault(k => string.Equals(k, first, StringComparison.OrdinalIgnoreCase)) ?? first;
         }
-
-        var moduleOwner = declarations.Values
-            .Where(d => d.Module is not null)
-            .GroupBy(d => d.Module!, StringComparer.Ordinal)
-            .ToImmutableDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
 
         ImmutableHashSet<string> Closure(string id)
         {
@@ -322,9 +353,15 @@ public static class DependencyReconciliation
             return seen.ToImmutable();
         }
 
-        foreach (var group in sets.GroupBy(s => PackageOf(s.Source), StringComparer.OrdinalIgnoreCase))
+        var setsByPackage = sets.ToLookup(s => PackageOf(s.Source), StringComparer.OrdinalIgnoreCase);
+        var failedByPackage = failed.ToLookup(PackageOf, StringComparer.OrdinalIgnoreCase);
+        var ids = setsByPackage.Select(g => g.Key).Concat(failedByPackage.Select(g => g.Key))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(id => id, StringComparer.Ordinal);
+        foreach (var id in ids)
         {
-            var id = group.Key;
+            var group = setsByPackage[id].ToList();
+            var notExtracted = failedByPackage[id].ToList();
             declarations.TryGetValue(id, out var declared);
             var closure = Closure(id);
             var declaredModules = closure
@@ -350,8 +387,20 @@ public static class DependencyReconciliation
                     undeclared.Add(new Finding(kind, target, Sources(byTarget.Select(x => x.Source))));
             }
 
+            // "Declared but unused" is a claim about EVERY source of the package: one that was not
+            // extracted could be the user, so the package's unmatched declarations are UNVERIFIABLE
+            // until all of its sources were measured — never reported unused on partial evidence.
             var unused = new List<Finding>();
-            var unverifiable = new List<string>();
+            var unverifiable = new List<string>(Unmeasured(document));
+            void Unused(string kind, string target, bool measured)
+            {
+                if (!measured)
+                    unverifiable.Add($"{kind} {target} — not judged: the producer did not measure the edges that would use it");
+                else if (notExtracted.Count > 0)
+                    unverifiable.Add($"{kind} {target} — not judged: {notExtracted.Count} source(s) of this package were not extracted ({string.Join(", ", notExtracted)})");
+                else
+                    unused.Add(new Finding(kind, target, []));
+            }
             if (declared is not null)
             {
                 foreach (var requirement in declared.RawRequires)
@@ -367,24 +416,24 @@ public static class DependencyReconciliation
                         || (x.Edge.Kind == DependencyEdgeKinds.Module && required.Module is not null
                             && string.Equals(x.Edge.Target, required.Module, StringComparison.Ordinal)));
                     if (!used)
-                        unused.Add(new Finding("requires", requirement, []));
+                        Unused("requires", requirement, measured: true);
                 }
                 if (declared.Module is { } module
                     && !edges.Any(x => x.Edge.Kind == DependencyEdgeKinds.Module && x.Edge.Target == module))
-                    unused.Add(new Finding("module", module, []));
+                    Unused("module", module, measured: true);
                 foreach (var nuget in declared.NuGet.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
                     if (!edges.Any(x => x.Edge.Kind == DependencyEdgeKinds.Package
                                         && string.Equals(x.Edge.Target, nuget, StringComparison.OrdinalIgnoreCase)))
-                        unused.Add(new Finding("nuget", nuget, []));
+                        Unused("nuget", nuget, referencesMeasured);
             }
             else if (treeRoot is not null)
                 unverifiable.Add($"no package manifest for '{id}' under the tree");
 
-            yield return Unit(id, "package", group, undeclared, unused, edges, [.. unverifiable, .. problems]);
+            yield return Unit(id, "package", group, undeclared, unused, edges, unverifiable, notExtracted);
         }
     }
 
-    private static (ImmutableDictionary<string, PackageDeclarations>, ImmutableArray<string>) ReadPackageDeclarations(string treeRoot)
+    private static ImmutableDictionary<string, PackageDeclarations> ReadPackageDeclarations(string treeRoot)
     {
         var snapshot = LocalNodeRepo.LoadSync(treeRoot);
         // DiscoverPackages composes over an in-memory snapshot and emits synchronously on Subscribe;
@@ -406,10 +455,8 @@ public static class DependencyReconciliation
         {
             var prefix = (package.SourceFolder ?? package.Id) + "/";
             var nuget = snapshot.Files
-                .Where(f => f.Path.StartsWith(prefix, StringComparison.Ordinal)
-                            && (f.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                                || f.Path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)))
-                .SelectMany(f => NuGetDirective.Matches(f.Content).Select(m => m.Groups["id"].Value))
+                .Where(f => f.Path.StartsWith(prefix, StringComparison.Ordinal))
+                .SelectMany(f => NuGetDirectiveParser.Extract(CodeOf(f.Path, f.Content)).References.Select(r => r.Id))
                 .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
             builder[package.Id] = new PackageDeclarations(
                 package.Id,
@@ -418,105 +465,106 @@ public static class DependencyReconciliation
                 [.. package.Requires.Select(PackageDependencyGraph.DependencyId).Where(r => r.Length > 0 && r != package.Id).Distinct()],
                 nuget);
         }
-        return (builder.ToImmutable(), []);
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// The C# a file contributes to a compile, DECODED: a <c>.cs</c> Code node is its own text; a
+    /// <c>.json</c> node carries its code as the string <c>content.code</c>, which must be read as
+    /// JSON — scanned raw, its escaped quotes (<c>#r \"nuget:…\"</c>) match no directive. Anything
+    /// else contributes no code.
+    /// </summary>
+    /// <param name="path">The file's tree path.</param>
+    /// <param name="content">The file's text.</param>
+    internal static string CodeOf(string path, string content)
+    {
+        if (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            return content;
+        if (!path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(content);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("content", out var body)
+                   && body.ValueKind == JsonValueKind.Object
+                   && body.TryGetProperty("code", out var code)
+                   && code.ValueKind == JsonValueKind.String
+                ? code.GetString() ?? string.Empty
+                : string.Empty;
+        }
+        catch (JsonException)
+        {
+            return string.Empty;
+        }
     }
 
     // ── module projects ─────────────────────────────────────────────────────────────────────────
 
-    private sealed record ProjectDeclarations(
-        string AssemblyName, ImmutableHashSet<string> ProjectReferences, ImmutableHashSet<string> PackageReferences);
-
-    private static IEnumerable<UnitReport> ReconcileModules(List<DependencyEdgeSet> sets, string? treeRoot)
+    /// <summary>
+    /// A module's declarations are the PRODUCING build's evaluated ones
+    /// (<see cref="DependencyEdgesFile.Document.Declarations"/> — imports, conditions and property
+    /// expansion already applied by <c>ProjectFile.Load</c>), never raw project XML re-read here. A
+    /// file that does not carry them leaves every declaration-level flag UNVERIFIABLE.
+    /// </summary>
+    private static IEnumerable<UnitReport> ReconcileModules(
+        List<DependencyEdgeSet> sets, List<string> failed, DependencyEdgesFile.Document document)
     {
-        var projects = treeRoot is null
-            ? ImmutableDictionary<string, ProjectDeclarations>.Empty
-            : ReadProjects(treeRoot);
+        var declarationsMeasured = document.Has(DependencyEdgesFile.Measures.Declarations);
+        var referencesMeasured = document.Has(DependencyEdgesFile.Measures.ReferencedAssemblies);
         foreach (var set in sets.OrderBy(s => s.Source, StringComparer.Ordinal))
         {
             var edges = set.Edges.Select(e => (set.Source, Edge: e)).ToList();
             var undeclared = new List<Finding>();
             var unused = new List<Finding>();
-            var unverifiable = new List<string>();
-            if (!projects.TryGetValue(set.Source, out var declared))
-            {
-                if (treeRoot is not null)
-                    unverifiable.Add($"no project file with assembly name '{set.Source}' under the tree");
-            }
+            var unverifiable = new List<string>(Unmeasured(document));
+            if (!declarationsMeasured || !document.Declarations.TryGetValue(set.Source, out var declared))
+                unverifiable.Add("declarations not recorded by the producing build — used-but-undeclared and declared-but-unused not judged");
             else
             {
+                var projectRefs = declared.ProjectReferences.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                var packageRefs = declared.PackageReferences.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
                 foreach (var edge in set.Edges.Where(e => e.EvidenceClass == DependencyEvidenceClasses.Static))
                 {
                     var covered = edge.Kind switch
                     {
-                        DependencyEdgeKinds.Module => declared.ProjectReferences.Contains(edge.Target),
-                        DependencyEdgeKinds.Platform => declared.PackageReferences.Contains(edge.Target)
-                                                        || declared.ProjectReferences.Contains(edge.Target),
-                        DependencyEdgeKinds.Package => declared.PackageReferences.Contains(edge.Target),
+                        DependencyEdgeKinds.Module => projectRefs.Contains(edge.Target),
+                        DependencyEdgeKinds.Platform => packageRefs.Contains(edge.Target) || projectRefs.Contains(edge.Target),
+                        DependencyEdgeKinds.Package => packageRefs.Contains(edge.Target),
                         _ => true,
                     };
                     if (!covered)
                         undeclared.Add(new Finding(edge.Kind, edge.Target, [set.Source]));
                 }
-                foreach (var reference in declared.ProjectReferences.OrderBy(r => r, StringComparer.Ordinal))
-                    if (!set.Edges.Any(e => e.Kind == DependencyEdgeKinds.Module
+                // A ProjectReference OUTSIDE the source root resolves from the host and shows up as a
+                // Platform edge, not a Module edge — either one is a use.
+                foreach (var reference in projectRefs.OrderBy(r => r, StringComparer.Ordinal))
+                    if (!set.Edges.Any(e => e.Kind is DependencyEdgeKinds.Module or DependencyEdgeKinds.Platform
                                             && string.Equals(e.Target, reference, StringComparison.OrdinalIgnoreCase)))
-                        unused.Add(new Finding("ProjectReference", reference, []));
+                    {
+                        if (referencesMeasured)
+                            unused.Add(new Finding("ProjectReference", reference, []));
+                        else
+                            unverifiable.Add($"ProjectReference {reference} — not judged: platform references were not measured");
+                    }
                 // Only the CORE package references are judged: a third-party package the image also
                 // carries resolves to the host's copy and is no Package edge, so "unused" would lie.
-                foreach (var package in declared.PackageReferences
+                foreach (var package in packageRefs
                              .Where(DependencyReferenceClasses.IsPlatformName).OrderBy(r => r, StringComparer.Ordinal))
                     if (!set.Edges.Any(e => e.Kind == DependencyEdgeKinds.Platform
                                             && string.Equals(e.Target, package, StringComparison.OrdinalIgnoreCase)))
-                        unused.Add(new Finding("PackageReference", package, []));
-            }
-            yield return Unit(set.Source, "module", [set], undeclared, unused, edges, unverifiable);
-        }
-    }
-
-    private static ImmutableDictionary<string, ProjectDeclarations> ReadProjects(string treeRoot)
-    {
-        var builder = ImmutableDictionary.CreateBuilder<string, ProjectDeclarations>(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in Directory.EnumerateFiles(treeRoot, "*.csproj", SearchOption.AllDirectories))
-        {
-            var relative = Path.GetRelativePath(treeRoot, file).Replace('\\', '/');
-            if (relative.Split('/').Any(s => s is "bin" or "obj" or ".git" or "node_modules"))
-                continue;
-            XDocument xml;
-            try
-            {
-                xml = XDocument.Load(file);
-            }
-            catch (System.Xml.XmlException)
-            {
-                continue;
-            }
-            string AssemblyNameOf(XDocument doc, string path) =>
-                doc.Descendants("AssemblyName").Select(e => e.Value.Trim()).FirstOrDefault(v => v.Length > 0 && !v.Contains('$'))
-                ?? Path.GetFileNameWithoutExtension(path);
-            var name = AssemblyNameOf(xml, file);
-            var projectRefs = xml.Descendants("ProjectReference")
-                .Select(e => (string?)e.Attribute("Include"))
-                .OfType<string>()
-                .Select(include =>
-                {
-                    var target = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(file)!, include.Replace('\\', '/')));
-                    try
                     {
-                        return File.Exists(target) ? AssemblyNameOf(XDocument.Load(target), target) : Path.GetFileNameWithoutExtension(target);
+                        if (referencesMeasured)
+                            unused.Add(new Finding("PackageReference", package, []));
+                        else
+                            unverifiable.Add($"PackageReference {package} — not judged: platform references were not measured");
                     }
-                    catch (System.Xml.XmlException)
-                    {
-                        return Path.GetFileNameWithoutExtension(target);
-                    }
-                })
-                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-            var packageRefs = xml.Descendants("PackageReference")
-                .Select(e => (string?)e.Attribute("Include"))
-                .OfType<string>()
-                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-            builder[name] = new ProjectDeclarations(name, projectRefs, packageRefs);
+            }
+            yield return Unit(set.Source, "module", [set], undeclared, unused, edges, unverifiable, []);
         }
-        return builder.ToImmutable();
+        foreach (var source in failed.OrderBy(f => f, StringComparer.Ordinal))
+            yield return Unit(source, "module", [], [], [], [],
+                ["not extracted (the build of this module failed) — nothing about it was measured"], [source]);
     }
 
     // ── shared ──────────────────────────────────────────────────────────────────────────────────
@@ -524,7 +572,8 @@ public static class DependencyReconciliation
     private static UnitReport Unit(
         string unit, string shape, IEnumerable<DependencyEdgeSet> sets,
         List<Finding> undeclared, List<Finding> unused,
-        List<(string Source, DependencyEdge Edge)> edges, IEnumerable<string> unverifiable)
+        List<(string Source, DependencyEdge Edge)> edges, IEnumerable<string> unverifiable,
+        IEnumerable<string> notExtracted)
     {
         DynamicFinding Dyn((string Source, DependencyEdge Edge) x) =>
             new(x.Source, x.Edge.Kind, x.Edge.Target, x.Edge.TargetKind, x.Edge.Evidence);
@@ -539,7 +588,10 @@ public static class DependencyReconciliation
             edges.Where(x => x.Edge.Kind == DependencyEdgeKinds.Platform)
                 .GroupBy(x => x.Edge.Target, StringComparer.Ordinal)
                 .ToImmutableSortedDictionary(g => g.Key, g => g.Select(x => x.Source).Distinct(StringComparer.Ordinal).Count(), StringComparer.Ordinal),
-            [.. unverifiable.Distinct(StringComparer.Ordinal).OrderBy(u => u, StringComparer.Ordinal)]);
+            [.. unverifiable.Distinct(StringComparer.Ordinal).OrderBy(u => u, StringComparer.Ordinal)])
+        {
+            NotExtracted = Sources(notExtracted),
+        };
     }
 
     private static ImmutableArray<string> Sources(IEnumerable<string> sources) =>
@@ -572,7 +624,8 @@ public static class DependencyReconciliation
             + $"{report.Units.Sum(u => u.DeclaredButUnused.Length)} declared-but-unused, "
             + $"{report.Units.Sum(u => u.DynamicIntoCore.Length)} dynamic into core, "
             + $"{report.Units.Sum(u => u.DynamicElsewhere.Length)} dynamic elsewhere, "
-            + $"{report.NotExtracted.Length} not extracted (unknown)");
+            + $"{report.NotExtracted.Length} not extracted (unknown), "
+            + $"{report.Units.Sum(u => u.Unverifiable.Length)} unverifiable");
         foreach (var unit in report.Units)
         {
             foreach (var f in unit.UsedButUndeclared)
@@ -581,6 +634,8 @@ public static class DependencyReconciliation
                 output.WriteLine($"{p} {unit.Unit} declared-but-unused {f.Kind} {f.Target}");
             foreach (var d in unit.DynamicIntoCore)
                 output.WriteLine($"{p} {unit.Unit} dynamic-into-core {d.Source} {d.Kind} {d.Target} [{string.Join("; ", d.Evidence)}]");
+            foreach (var u in unit.Unverifiable)
+                output.WriteLine($"{p} {unit.Unit} UNVERIFIABLE {u}");
         }
     }
 
@@ -700,7 +755,7 @@ public static class DependencyReconciliation
         "usage: mw-plugin-test dependency-report <dependency-edges.json | dir> [--tree <checkout>] "
         + "[--output <dir>] [--dynamic-baseline <file>] [--repo-name <owner/repo>]\n"
         + "  Reconciles the edges a bake or a module workspace build wrote with what the tree DECLARES "
-        + "(package manifests' requires/module, #r \"nuget:\" directives; .csproj ProjectReference/"
+        + "(package manifests' requires/module, #r \"nuget:\" directives; the producing build's evaluated ProjectReference/"
         + "PackageReference) and writes dependency-report.json: per package or module, used-but-undeclared, "
         + "declared-but-unused, and every dynamic edge into core.\n"
         + "  --dynamic-baseline arms the shrink-only dynamic-edge ratchet: lines are "

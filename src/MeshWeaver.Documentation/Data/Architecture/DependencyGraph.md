@@ -246,7 +246,11 @@ group handed along (`names.Select(Type.GetType)`) is unresolved.
   `Type.GetType("MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph")` and becomes the edge
   `MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph` with `TargetKind: Platform` and the call
   site as evidence (`Type.GetType("…") in Connect`). An unqualified type name is resolved against the
-  compilation (`GetTypeByMetadataName`); `typeof(T).Assembly.GetType("…")` takes `T`'s assembly.
+  compilation (`GetTypeByMetadataName`); `typeof(T).Assembly.GetType("…")` takes `T`'s assembly. A
+  closed generic needs EVERY argument's assembly, so its arguments decide too:
+  `List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib` is
+  `Platform`, not `Framework`; an argument whose assembly the compile cannot classify makes the target
+  unknown.
 - **Anything else** is `DynamicUnresolved`, one edge per API (`?System.Type.GetType`), the call sites
   as evidence. Unknown is recorded as unknown — never dropped.
 - **Cost**: a syntactic prefilter on the invoked name means only candidate invocations are ever
@@ -268,6 +272,11 @@ new constants, new init-only members with defaults (`EvidenceClass` defaults to 
 overloads — every published signature of `Extract`, `ModuleReferences` and the edge records stays,
 so it is binary-compatible under the platform compatibility ladder and moves no compatibility key.
 
+**The file says what it measured.** `dependency-edges.json` carries `measured` — `referenced-assemblies`,
+`dynamic-bindings`, and for a module build `declarations` (`DependencyEdgesFile.Measures`). A reader
+judges a kind only when its measurement is listed; a schema-1 file without the field measured none of
+them. The rule everywhere: **an unmeasured input reads as UNVERIFIABLE, never as a pass.**
+
 ## The reconciliation report
 
 `mw-plugin-test dependency-report <dependency-edges.json> --tree <checkout>` — and, with no extra
@@ -282,8 +291,21 @@ module (a project, for a module workspace build's sources):
 | **dynamic into core** | every `Dynamic` edge whose `TargetKind` is `Platform` or unknown, and every `DynamicUnresolved` edge | the same |
 
 Plus, per unit, the platform assemblies its sources bind and how many sources bind each — the
-carve-out question's direct answer — and the declarations it could NOT judge (a `requires` outside
-the tree). It is a report, never a gate: a `requires` can be legitimately runtime-only. Measured on
+carve-out question's direct answer — and everything it could NOT judge, each named:
+
+- a `requires` outside the tree;
+- every unmatched declaration of a package with a source that was NOT extracted (that source could
+  be the user — `notExtracted` lists it); "declared but unused" is a claim about every source;
+- a kind the producer did not measure (`measured` lacks it);
+- a module whose producer recorded no declarations. Module declarations are the PRODUCING build's
+  evaluated ones (`ProjectFile.Load`: imports, conditions, property expansion), carried in the file
+  as `declarations` — the report never re-reads raw `.csproj` XML. A used `ProjectReference` outside
+  the source root resolves from the host and appears as a `Platform` edge, which counts as a use.
+
+`#r "nuget:"` directives are read with `NuGetDirectiveParser` from the DECODED code — a `.json` Code
+node's `content.code` string, not its escaped JSON text. A module-libraries shelf is a flat
+directory, so a shelf `Package` edge is named by the shelf's deps.json ownership
+(`ModuleLibrariesShelf.OwnerOf`), never by the DLL's file name. It is a report, never a gate: a `requires` can be legitimately runtime-only. Measured on
 core's trees when it landed: 0 used-but-undeclared, 0 declared-but-unused, 0 dynamic edges.
 
 ## The ratchet
@@ -300,6 +322,9 @@ The one gate: a shrink-only allow-file of the dynamic edges INTO CORE, in the sh
 - No `--dynamic-baseline` is **OBSERVE-ONLY**, printed by name in every run
   (`dependencies: dynamic-edge ratchet — OBSERVE-ONLY: <repo> has not adopted it …`) with the lines
   to paste; a path that was given and is missing is a refusal; an EMPTY file tolerates nothing.
+- An edges file that does not record `dynamic-bindings` was never scanned: the ratchet prints
+  `UNVERIFIABLE`, keeps every entry as unverifiable (never stale), and an armed baseline is RED —
+  an empty baseline over an unscanned file is not a clean pass.
 
 **Core** baselines its own two trees — `.github/doc-gate-dynamic.allow` and
 `.github/samples-gate-dynamic.allow`, both empty (0 dynamic edges measured) — and

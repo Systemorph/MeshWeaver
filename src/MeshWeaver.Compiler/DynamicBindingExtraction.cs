@@ -291,14 +291,16 @@ public static class DynamicBindingExtraction
                 if (Arg("assemblyName") is not { } assembly || Arg("typeName") is not { } type)
                     return null;
                 var name = SimpleAssemblyName(assembly);
-                return new Resolution($"{TypePart(type)}, {name}", assemblies.KindOf(name), $"{assembly}\", \"{type}");
+                return new Resolution($"{TypePart(type)}, {name}",
+                    WithArguments(assemblies.KindOf(name), TypePart(type), compilation, assemblies), $"{assembly}\", \"{type}");
             }
             case Shape.FileAndType:
             {
                 if (Arg("assemblyFile") is not { } file || Arg("typeName") is not { } type)
                     return null;
                 var name = Path.GetFileNameWithoutExtension(file.Replace('\\', '/'));
-                return new Resolution($"{TypePart(type)}, {name}", assemblies.KindOf(name), $"{file}\", \"{type}");
+                return new Resolution($"{TypePart(type)}, {name}",
+                    WithArguments(assemblies.KindOf(name), TypePart(type), compilation, assemblies), $"{file}\", \"{type}");
             }
             case Shape.AssemblyName:
             {
@@ -334,18 +336,83 @@ public static class DynamicBindingExtraction
         string typeName, string? receiverAssembly, CSharpCompilation compilation, AssemblyLookup assemblies)
     {
         var (type, assembly) = SplitAssemblyQualifiedName(typeName);
-        if (assembly is not null)
-            return new Resolution($"{type}, {assembly}", assemblies.KindOf(assembly), typeName);
-        if (receiverAssembly is not null)
-            return new Resolution($"{type}, {receiverAssembly}", assemblies.KindOf(receiverAssembly), typeName);
-        if (compilation.GetTypeByMetadataName(type) is { } symbol)
+        var (target, kind) = assembly is not null ? ($"{type}, {assembly}", assemblies.KindOf(assembly))
+            : receiverAssembly is not null ? ($"{type}, {receiverAssembly}", assemblies.KindOf(receiverAssembly))
+            : OuterOf(type, compilation, assemblies) is { } outer ? ($"{type}, {outer.Assembly}", outer.Kind)
+            : ($"{type}, ?", (string?)null);
+        return new Resolution(target, WithArguments(kind, type, compilation, assemblies), typeName);
+    }
+
+    /// <summary>The assembly and kind the compilation resolves an UNQUALIFIED metadata name to, or
+    /// null when it resolves none.</summary>
+    private static (string Assembly, string? Kind)? OuterOf(string type, CSharpCompilation compilation, AssemblyLookup assemblies)
+    {
+        // A closed generic's metadata name is its definition's (`List`1`), the arguments ride in brackets.
+        var definition = type.IndexOf('[') is var bracket and > 0 ? type[..bracket] : type;
+        if (compilation.GetTypeByMetadataName(definition) is not { } symbol)
+            return null;
+        if (SymbolEqualityComparer.Default.Equals(symbol.ContainingAssembly, compilation.Assembly))
+            return (compilation.AssemblyName ?? "?", DependencyEdgeKinds.NodeType);
+        var name = symbol.ContainingAssembly.Identity.Name;
+        return (name, assemblies.KindOf(name));
+    }
+
+    /// <summary>
+    /// The target kind of a type name INCLUDING its generic arguments: a closed generic needs every
+    /// argument's assembly to resolve, so <c>List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]],
+    /// System.Private.CoreLib</c> reaches into the platform although its outer type is the
+    /// framework's. Unknown anywhere ⇒ unknown (null — "may be the platform"); otherwise the
+    /// platform anywhere ⇒ <see cref="DependencyEdgeKinds.Platform"/>; otherwise the outer kind.
+    /// </summary>
+    private static string? WithArguments(
+        string? outerKind, string type, CSharpCompilation compilation, AssemblyLookup assemblies)
+    {
+        var kinds = new List<string?> { outerKind };
+        foreach (var argument in GenericArguments(type))
         {
-            if (SymbolEqualityComparer.Default.Equals(symbol.ContainingAssembly, compilation.Assembly))
-                return new Resolution($"{type}, {compilation.AssemblyName}", DependencyEdgeKinds.NodeType, typeName);
-            var name = symbol.ContainingAssembly.Identity.Name;
-            return new Resolution($"{type}, {name}", assemblies.KindOf(name), typeName);
+            var (argumentType, argumentAssembly) = SplitAssemblyQualifiedName(argument);
+            var argumentKind = argumentAssembly is not null
+                ? assemblies.KindOf(argumentAssembly)
+                : OuterOf(argumentType, compilation, assemblies)?.Kind;
+            kinds.Add(WithArguments(argumentKind, argumentType, compilation, assemblies));
         }
-        return new Resolution($"{type}, ?", null, typeName);
+        return kinds.Any(k => k is null) ? null
+            : kinds.Contains(DependencyEdgeKinds.Platform) ? DependencyEdgeKinds.Platform
+            : outerKind;
+    }
+
+    /// <summary>The bracketed generic arguments of a type name (<c>G`2[[A, X],[B, Y]]</c> ⇒
+    /// <c>A, X</c> and <c>B, Y</c>), each as written — possibly assembly-qualified, possibly generic.</summary>
+    /// <param name="type">The type part of a type name.</param>
+    public static IEnumerable<string> GenericArguments(string type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        var open = type.IndexOf("[[", StringComparison.Ordinal);
+        if (open < 0)
+            yield break;
+        var depth = 0;
+        var start = -1;
+        for (var i = open + 1; i < type.Length; i++)
+        {
+            switch (type[i])
+            {
+                case '[':
+                    if (depth == 0)
+                        start = i + 1;
+                    depth++;
+                    break;
+                case ']':
+                    depth--;
+                    if (depth < 0)
+                        yield break;
+                    if (depth == 0 && start >= 0)
+                    {
+                        yield return type[start..i];
+                        start = -1;
+                    }
+                    break;
+            }
+        }
     }
 
     /// <summary>The receiver of <c>typeof(T).Assembly.GetType(…)</c>: <c>T</c>'s assembly; null otherwise.</summary>

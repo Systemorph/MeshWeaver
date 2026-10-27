@@ -280,6 +280,87 @@ public class PlatformPackageAndDynamicEdgesTest
         }
     }
 
+    /// <summary>
+    /// A closed generic needs EVERY argument's assembly: a framework <c>List`1</c> over a platform
+    /// type reaches into core and must not hide behind its outer type's kind. Negative control: the
+    /// same outer type over a framework argument stays Framework. An argument whose assembly the
+    /// compile cannot classify makes the whole target unknown.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AClosedGenericsArguments_DecideItsTargetKind_NotOnlyItsOuterType()
+    {
+        var set = CompileB(TestContext.Current.CancellationToken, [Code(B, "Generic", """
+            /// <summary>Closed generics by name.</summary>
+            public static class Generic
+            {
+                /// <summary>Over a platform type.</summary>
+                public static System.Type? Nodes() => System.Type.GetType(
+                    "System.Collections.Generic.List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib");
+                /// <summary>Over a framework type.</summary>
+                public static System.Type? Strings() => System.Type.GetType(
+                    "System.Collections.Generic.List`1[[System.String, System.Private.CoreLib]], System.Private.CoreLib");
+                /// <summary>Over an assembly nobody references.</summary>
+                public static System.Type? Unknown() => System.Type.GetType(
+                    "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[Acme.Thing, Acme.Nowhere]], System.Private.CoreLib");
+            }
+            """)]);
+
+        var kinds = set.Edges.Where(e => e.Kind == DependencyEdgeKinds.Dynamic)
+            .ToDictionary(e => e.Target, e => e.TargetKind);
+        kinds["System.Collections.Generic.List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib"]
+            .Should().Be(DependencyEdgeKinds.Platform, "resolving it requires the platform type");
+        kinds["System.Collections.Generic.List`1[[System.String, System.Private.CoreLib]], System.Private.CoreLib"]
+            .Should().Be(DependencyEdgeKinds.Framework, "negative control: nothing in it is the platform");
+        kinds["System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[Acme.Thing, Acme.Nowhere]], System.Private.CoreLib"]
+            .Should().BeNull("an argument the compile cannot classify makes the target unknown, which counts as into core");
+    }
+
+    /// <summary>
+    /// A FLAT package directory (the module-libraries shelf) carries no package in a file's path, so
+    /// the caller hands the ownership over and the Package edge is named by it. Negative control:
+    /// the path-only classification falls back to the file's simple name, which a declared
+    /// <c>PackageReference Include="Acme.Bundle"</c> could never match.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AFlatShelfFile_IsNamedByTheOwnershipTheCallerHandsOver()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-depedges-shelf-" + Guid.NewGuid().ToString("N"));
+        var widget = Emit(root, "Acme.Widget", "namespace Acme.Widget; public sealed class W { public int Size => 1; }");
+        try
+        {
+            var references = CompileReferences.Default.Append(MetadataReference.CreateFromFile(widget)).ToList();
+            var compilation = CSharpCompilation.Create("ShelfProbe",
+                [CSharpSyntaxTree.ParseText("public static class P { public static int S() => new Acme.Widget.W().Size; }")],
+                references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var image = new MemoryStream();
+            compilation.Emit(image, cancellationToken: TestContext.Current.CancellationToken).Success.Should().BeTrue();
+
+            image.Position = 0;
+            var owned = DependencyEdgeExtraction.EmittedReferenceEdges(compilation, image,
+                DependencyReferenceClasses.Of(references, [], new Dictionary<string, string> { [widget] = "Acme.Bundle" }));
+            owned.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Package).Which.Target.Should().Be("Acme.Bundle");
+
+            image.Position = 0;
+            var byPath = DependencyEdgeExtraction.EmittedReferenceEdges(compilation, image,
+                DependencyReferenceClasses.Of(references, [], [widget]));
+            byPath.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Package).Which.Target.Should().Be("Acme.Widget",
+                "negative control: a flat path names only the file");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    [Theory]
+    [InlineData("G`2[[A, X],[B`1[[C, Y]], Z]]", "A, X|B`1[[C, Y]], Z")]
+    [InlineData("Ns.Plain", "")]
+    [InlineData("Ns.Array[]", "")]
+    public void GenericArguments_AreTheTopLevelBracketGroups(string type, string expected) =>
+        string.Join("|", DynamicBindingExtraction.GenericArguments(type)).Should().Be(expected);
+
     [Theory]
     [InlineData("MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph", "MeshWeaver.Graph.Apps.HomeAppSource", "MeshWeaver.Graph")]
     [InlineData("Ns.T, Asm, Version=1.0.0.0, Culture=neutral", "Ns.T", "Asm")]
