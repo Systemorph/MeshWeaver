@@ -190,4 +190,84 @@ public class StandingReadPendingTest
         standing.OnNext(PermissionCheckOutcome.Denied);
         Assert.Equal(new[] { false }, verdicts);
     }
+
+    [Fact]
+    public void Denied_pending_cycles_faster_than_the_budget_cannot_hold_an_admitted_subscription_open()
+    {
+        // Granted (admitted), then the standing Read cycles Denied → pending → Denied faster than the
+        // budget while the declaration lookup stalls. Each pending marker cancels the declaration
+        // check, each settled denial ends the pending period — bounded per selection, neither deadline
+        // ever expired. The unresolved transition shares ONE deadline (review of #7329, thread 4392164760).
+        var scheduler = new TestScheduler();
+        var standing = new Subject<PermissionCheckOutcome?>();
+        var declaration = new Subject<bool>();
+        var verdicts = ImmutableList<bool>.Empty;
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => declaration, Budget, scheduler)
+            .Subscribe(v => verdicts = verdicts.Add(v));
+
+        standing.OnNext(PermissionCheckOutcome.Granted);
+        for (var i = 0; i < 3; i++)
+        {
+            standing.OnNext(PermissionCheckOutcome.Denied);
+            scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
+            standing.OnNext(null);
+            scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
+        }
+        // 12 s into the transition, no single selection lasted longer than 2 s.
+        Assert.Equal(new[] { true, false }, verdicts);
+    }
+
+    [Fact]
+    public void Denied_pending_cycles_whose_declaration_answers_in_time_stay_admitted_past_the_budget()
+    {
+        // Control: the shared deadline ends at the declaration's first answer — a caller the
+        // declaration admits on every cycle is never cut, however long the cycling lasts.
+        var scheduler = new TestScheduler();
+        var standing = new Subject<PermissionCheckOutcome?>();
+        var verdicts = ImmutableList<bool>.Empty;
+        using var _ = DeclaredReadSubscriptionFollow.VerdictOf(standing, () => Observable.Return(true), Budget, scheduler)
+            .Subscribe(v => verdicts = verdicts.Add(v));
+
+        standing.OnNext(PermissionCheckOutcome.Granted);
+        for (var i = 0; i < 6; i++)
+        {
+            standing.OnNext(PermissionCheckOutcome.Denied);
+            scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
+            standing.OnNext(null);
+            scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
+        }
+        Assert.DoesNotContain(false, verdicts);
+    }
+
+    [Fact]
+    public void Negative_control_per_selection_deadlines_never_expire_under_fast_denied_pending_cycles()
+    {
+        // The composition this replaces: each declaration check bounded alone, the pending marker
+        // holding with Never. If this ever refuses, the regression above no longer exercises the trap.
+        var scheduler = new TestScheduler();
+        var standing = new Subject<PermissionCheckOutcome?>();
+        var declaration = new Subject<bool>();
+        var verdicts = ImmutableList<bool>.Empty;
+        using var _ = standing
+            .Select(outcome => outcome is null
+                ? Observable.Never<bool>()
+                : outcome.IsGranted
+                    ? Observable.Return(true)
+                    : outcome.IsUndetermined
+                        ? Observable.Return(false)
+                        : declaration.Timeout(Observable.Timer(Budget, scheduler), _ => Observable.Never<long>())
+                            .Catch((Exception _) => Observable.Return(false)))
+            .Switch()
+            .Subscribe(v => verdicts = verdicts.Add(v));
+
+        standing.OnNext(PermissionCheckOutcome.Granted);
+        for (var i = 0; i < 3; i++)
+        {
+            standing.OnNext(PermissionCheckOutcome.Denied);
+            scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
+            standing.OnNext(null);
+            scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
+        }
+        Assert.Equal(new[] { true }, verdicts);
+    }
 }

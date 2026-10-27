@@ -144,12 +144,12 @@ public static class DeclaredReadSubscriptionFollow
     /// One revision's live verdict from the standing Read: a grant admits, an undetermined outcome
     /// refuses, a definitive denial hands the decision to <paramref name="declaredRead"/>.
     ///
-    /// <para>🚨 A re-check IN FLIGHT (<c>null</c>) maps to <see cref="Observable.Never{TResult}()"/>
+    /// <para>🚨 A re-check IN FLIGHT (<c>null</c>) maps to a HOLD — no answer until the deadline below —
     /// INSIDE the switch — never filtered out ahead of it (review of #7329, thread 4391236736).
     /// Filtered, the pending marker never reached <c>Switch</c>, so a declaration check started under
     /// the withdrawn denial stayed subscribed and could still answer <c>true</c> — forwarding a
     /// revision on a verdict that was already being re-decided, even when the re-check then settled
-    /// undetermined. As <c>Never</c> it cancels that check and holds: a pending revision waits for
+    /// undetermined. As a hold it cancels that check: a pending revision waits for
     /// the settled answer (bounded by the first-verdict budget), and an admitted one stays admitted.
     /// A pending period itself is bounded upstream (<see cref="DeclaredPointRead.ObserveStandingRead"/>).</para>
     ///
@@ -160,25 +160,97 @@ public static class DeclaredReadSubscriptionFollow
     /// stalled storage or owner lookup there kept the subscription open past the budget on a grant
     /// that no longer stood. Past the budget, on a fault, or on an empty answer the check is a
     /// refusal; after its first answer it is followed live, unbounded.</para>
+    ///
+    /// <para>🚨 And the WHOLE unresolved transition shares ONE deadline (review of #7329, thread
+    /// 4392164760). From the moment the standing Read stops granting — a pending marker or a
+    /// definitive denial — until a verdict settles it (a grant, an undetermined outcome, or the
+    /// declaration's first answer), every pending marker and every declaration check selected in
+    /// between counts against the same <paramref name="budget"/>. Bounded per selection, a stalled
+    /// declaration lookup under access commits cycling Denied → pending → Denied faster than the
+    /// budget kept an admitted subscription open forever: each pending marker cancelled the
+    /// declaration's deadline, and each settled denial ended the pending period's. Past the shared
+    /// deadline the verdict is a refusal.</para>
     /// </summary>
     /// <param name="standing">The followed standing Read, <c>null</c> while a re-check is in flight.</param>
     /// <param name="declaredRead">The declaration's live verdict for the revision, subscribed only under a definitive denial.</param>
-    /// <param name="budget">How long a newly selected declaration check may take to give its first answer.</param>
+    /// <param name="budget">How long an unresolved transition — pending markers and declaration checks together — may last before it is a refusal.</param>
     /// <param name="scheduler">Where that deadline runs.</param>
     internal static IObservable<bool> VerdictOf(
         IObservable<PermissionCheckOutcome?> standing, Func<IObservable<bool>> declaredRead, TimeSpan budget, IScheduler scheduler) =>
-        standing
-            .Select(outcome => outcome is null
-                ? Observable.Never<bool>()
-                : outcome.IsGranted
-                    ? Observable.Return(true)
-                    : outcome.IsUndetermined
-                        ? Observable.Return(false)
-                        : Observable.Defer(declaredRead)
-                            .Timeout(Observable.Timer(budget, scheduler), _ => Observable.Never<long>())
-                            .Catch((Exception _) => Observable.Return(false))
-                            .DefaultIfEmpty(false))
-            .Switch();
+        Observable.Defer(() =>
+        {
+            // Per subscription: the deadline of the unresolved transition in progress, if any.
+            var period = new UnresolvedPeriod();
+            return standing
+                .Select(outcome =>
+                {
+                    if (outcome is null)
+                    {
+                        // Holds the verdict already given, until the shared deadline.
+                        var (_, pendingDue) = period.Continue(scheduler.Now + budget);
+                        return Observable.Timer(pendingDue, scheduler).Select(_ => false);
+                    }
+                    if (outcome.IsGranted || outcome.IsUndetermined)
+                    {
+                        period.Settle();
+                        return Observable.Return(outcome.IsGranted);
+                    }
+                    var (generation, due) = period.Continue(scheduler.Now + budget);
+                    return Observable.Defer(declaredRead)
+                        .Timeout(Observable.Timer(due, scheduler), _ => Observable.Never<long>())
+                        .Catch((Exception _) => Observable.Return(false))
+                        .DefaultIfEmpty(false)
+                        // The declaration's first answer settles the transition; a later selection
+                        // (a newer generation) is not settled by this, now cancelled, check.
+                        .Do(_ => period.SettleIf(generation));
+                })
+                .Switch();
+        });
+
+    /// <summary>
+    /// The deadline of one unresolved transition of <see cref="VerdictOf"/>, per subscription. The
+    /// selector advances it serially; a declaration check settles it from wherever it answers, and
+    /// only while no later selection has replaced that check — so the state is one immutable value
+    /// swapped atomically.
+    /// </summary>
+    private sealed class UnresolvedPeriod
+    {
+        private sealed record State(long Generation, DateTimeOffset? Deadline);
+
+        private State state = new(0, null);
+
+        /// <summary>A new selection inside the transition: keeps its deadline, or starts one at <paramref name="startDeadline"/>.</summary>
+        /// <returns>The selection's generation and the transition's deadline.</returns>
+        public (long Generation, DateTimeOffset Deadline) Continue(DateTimeOffset startDeadline)
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref state);
+                var next = new State(current.Generation + 1, current.Deadline ?? startDeadline);
+                if (ReferenceEquals(Interlocked.CompareExchange(ref state, next, current), current))
+                    return (next.Generation, next.Deadline!.Value);
+            }
+        }
+
+        /// <summary>A settled verdict ends the transition.</summary>
+        public void Settle()
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref state);
+                if (ReferenceEquals(Interlocked.CompareExchange(ref state, new State(current.Generation + 1, null), current), current))
+                    return;
+            }
+        }
+
+        /// <summary>Ends the transition only if the selection of <paramref name="generation"/> is still the current one.</summary>
+        public void SettleIf(long generation)
+        {
+            var current = Volatile.Read(ref state);
+            if (current.Generation == generation && current.Deadline is not null)
+                Interlocked.CompareExchange(ref state, current with { Deadline = null }, current);
+        }
+    }
 
     /// <summary>
     /// The declaration's live verdict for one served revision: decided on the node revision itself
