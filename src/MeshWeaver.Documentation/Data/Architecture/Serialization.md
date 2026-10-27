@@ -151,10 +151,13 @@ with these settings:
 > PROVEN to be the CLR default whatever the constructor was given; otherwise it is always written,
 > so an explicitly stored `false` / `0` / `null` is never re-materialised as the declared value.
 > Proof is: the constructor parameter's default (for a parameter-bound member); one probe instance
-> (for a parameterless constructor); or two probes with DIFFERENT arguments that agree (for a
-> parameterized constructor — this catches initializers computed from an argument, like
-> `MeshNode.MainNode`). A probe or getter that throws, or a constructor argument that cannot be
-> varied, means "not proven" and the member is written. The conservative branch costs bytes, never
+> (for a parameterless constructor); or, for a parameterized constructor, a PER-INSTANCE check at
+> write time — the instance's own constructor arguments rebuild a fresh instance exactly as the
+> reader will, and a CLR-default value is omitted only when the rebuilt instance reads it too. No
+> fixed set of probes can prove an initializer ignores its arguments (`Flag = Left != Right` agrees
+> on `(false,false)` and `(true,true)`), so none is used. This covers initializers computed from an
+> argument, like `MeshNode.MainNode`. A probe, rebuild or getter that throws, or a constructor
+> parameter with no serialized member, means "not proven" and the member is written. The conservative branch costs bytes, never
 > a value: an explicit CLR default reads back identically. A member carrying its own
 > `[JsonIgnore(...)]` keeps its author's condition, so the per-property
 > `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]` annotations that predate the rule are

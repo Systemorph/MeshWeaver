@@ -19,18 +19,23 @@ namespace MeshWeaver.Messaging.Serialization;
 /// Measured on a live portal: an <c>ActionHandlerRule</c> committed with <c>"enabled": false</c> read
 /// <c>enabled: true</c> after its sync import, re-arming a rule that ships disabled.</para>
 ///
-/// <para><b>The rule: omit only what is PROVEN safe to omit.</b> A settable scalar member (primitive,
-/// enum, <see cref="decimal"/>, their <see cref="Nullable{T}"/>, or <see cref="string"/>) keeps the
-/// hub's <c>WhenWritingDefault</c> only when its declared default is shown to be the CLR default
-/// whatever the constructor was given: for a constructor-parameter member, the parameter's default; for
-/// a type built by a parameterless constructor, one probe instance; for a type built by a parameterized
-/// constructor, two probes with DIFFERENT arguments that both report the CLR default. Anything that
-/// cannot be shown — a probe that throws, a getter that throws, a constructor argument that cannot be
-/// varied, two probes that disagree — is always written. Writing an explicit CLR default is
-/// always read back identically, so the conservative branch can only cost bytes, never a value.</para>
-///
-/// <para>A member that carries its own <see cref="JsonIgnoreAttribute"/> keeps its author's
-/// condition. Never throws: probing runs inside the resolver, on the path of every serialization.</para>
+/// <para><b>The rule: omit a CLR-default value only when the reader would rebuild that same value.</b>
+/// For a settable scalar member (primitive, enum, <see cref="decimal"/>, their
+/// <see cref="Nullable{T}"/>, or <see cref="string"/>):</para>
+/// <list type="bullet">
+/// <item>bound to a constructor parameter — the reader passes the parameter's default, so the member
+/// is omittable exactly when that default is the CLR default;</item>
+/// <item>on a type built by a parameterless constructor — one probe instance is what the reader
+/// starts from;</item>
+/// <item>on a type built by a parameterized constructor — no probe can prove the initializer ignores
+/// the arguments, so the check is made PER INSTANCE at write time: the instance's own constructor
+/// arguments (read from its parameter-bound members, which is what the reader will pass) rebuild a
+/// fresh instance, and the CLR-default value is omitted only when the fresh instance reads it too.</item>
+/// </list>
+/// <para>Anything that cannot be established — a probe, rebuild or getter that throws, a constructor
+/// parameter with no serialized member — means the member is written. An explicit CLR default reads
+/// back identically, so that branch costs bytes, never a value. A member carrying its own
+/// <see cref="JsonIgnoreAttribute"/> keeps its author's condition. Never throws from the resolver.</para>
 /// </summary>
 internal static class DeclaredDefaultsSurviveTheWire
 {
@@ -56,29 +61,49 @@ internal static class DeclaredDefaultsSurviveTheWire
         if (candidates is null)
             return;
 
-        // Built lazily: a type whose candidates are all constructor-bound never runs a constructor.
-        IReadOnlyList<object>? probes = null;
+        object? probe = null;
         var probed = false;
+        Rebuilder? rebuilder = null;
+        var rebuilderBuilt = false;
         foreach (var property in candidates)
         {
-            bool provenClrDefault;
+            var clrDefault = ClrDefault(property.PropertyType);
             if (property.AssociatedParameter is { } parameter)
             {
-                provenClrDefault = Equals(
-                    parameter.HasDefaultValue ? Coerce(parameter.DefaultValue, property.PropertyType) : ClrDefault(property.PropertyType),
-                    ClrDefault(property.PropertyType));
+                var declared = parameter.HasDefaultValue
+                    ? Coerce(parameter.DefaultValue, property.PropertyType)
+                    : clrDefault;
+                if (!Equals(declared, clrDefault))
+                    property.ShouldSerialize = static (_, _) => true;
+                continue;
             }
-            else
+
+            if (typeInfo.CreateObject is not null)
             {
                 if (!probed)
                 {
-                    probes = Probes(typeInfo, logger);
+                    probe = Probe(typeInfo, logger);
                     probed = true;
                 }
-                provenClrDefault = probes is not null && ReadsClrDefaultInEvery(property, probes, typeInfo.Type, logger);
+                if (probe is null || !TryRead(property, probe, typeInfo.Type, logger, out var value) || !Equals(value, clrDefault))
+                    property.ShouldSerialize = static (_, _) => true;
+                continue;
             }
-            if (!provenClrDefault)
+
+            if (!rebuilderBuilt)
+            {
+                rebuilder = Rebuilder.For(typeInfo, logger);
+                rebuilderBuilt = true;
+            }
+            if (rebuilder is null)
+            {
                 property.ShouldSerialize = static (_, _) => true;
+                continue;
+            }
+            var get = property.Get!;
+            var captured = rebuilder;
+            property.ShouldSerialize = (instance, value) =>
+                !Equals(value, clrDefault) || !captured.RebuildsTo(instance, get, value);
         }
     }
 
@@ -91,115 +116,39 @@ internal static class DeclaredDefaultsSurviveTheWire
     private static object? ClrDefault(Type type) =>
         type.IsValueType && Nullable.GetUnderlyingType(type) is null ? Activator.CreateInstance(type) : null;
 
-    /// <summary>Whether <paramref name="property"/> reads its CLR default on every probe; a throwing getter is "not shown".</summary>
-    private static bool ReadsClrDefaultInEvery(JsonPropertyInfo property, IReadOnlyList<object> probes, Type type, ILogger? logger)
-    {
-        var clrDefault = ClrDefault(property.PropertyType);
-        foreach (var probe in probes)
-        {
-            object? value;
-            try
-            {
-                value = property.Get!(probe);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogDebug(ex,
-                    "Reading {Type}.{Member} on a probe instance threw; the member is always written",
-                    type.FullName, property.Name);
-                return false;
-            }
-            if (!Equals(value, clrDefault))
-                return false;
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// Instances built the way the deserializer builds one when no member is present: the
-    /// parameterless factory once, or the deserialization constructor twice — with each parameter's
-    /// default and with a different value per parameter — so an initializer that reads an argument
-    /// shows up as a disagreement. Null when that cannot be done (every probed member is then written).
-    /// </summary>
-    private static IReadOnlyList<object>? Probes(JsonTypeInfo typeInfo, ILogger? logger)
+    private static bool TryRead(JsonPropertyInfo property, object instance, Type type, ILogger? logger, out object? value)
     {
         try
         {
-            if (typeInfo.CreateObject is { } create)
-                return [create()];
-            if (typeInfo.ConstructorAttributeProvider is not ConstructorInfo constructor)
-                return null;
-            var parameters = constructor.GetParameters();
-            var alternatives = new object?[parameters.Length];
-            for (var i = 0; i < parameters.Length; i++)
-            {
-                if (!TryAlternative(parameters[i].ParameterType, out alternatives[i]))
-                {
-                    logger?.LogDebug(
-                        "Constructor parameter {Parameter} of {Type} cannot be varied; its initialized members are always written",
-                        parameters[i].Name, typeInfo.Type.FullName);
-                    return null;
-                }
-            }
-            var defaults = parameters
-                .Select(p => p.HasDefaultValue ? Coerce(p.DefaultValue, p.ParameterType) : ClrDefault(p.ParameterType))
-                .ToArray();
-            return [constructor.Invoke(defaults), constructor.Invoke(alternatives)];
+            value = property.Get!(instance);
+            return true;
         }
         catch (Exception ex)
         {
-            // Not swallowed: a failed probe means "not shown", and every probed member of the type is
-            // then always written — the conservative answer. Logged so the type can be found.
+            logger?.LogDebug(ex,
+                "Reading {Type}.{Member} on a probe instance threw; the member is always written",
+                type.FullName, property.Name);
+            value = null;
+            return false;
+        }
+    }
+
+    /// <summary>The instance a parameterless deserialization starts from, or null when building it threw.</summary>
+    private static object? Probe(JsonTypeInfo typeInfo, ILogger? logger)
+    {
+        try
+        {
+            return typeInfo.CreateObject!();
+        }
+        catch (Exception ex)
+        {
+            // Not swallowed: a failed probe means "not shown", and every probed member is then
+            // always written — the conservative answer. Logged so the type can be found.
             logger?.LogDebug(ex,
                 "Could not probe the declared defaults of {Type}; its initialized scalar members are always written",
                 typeInfo.Type.FullName);
             return null;
         }
-    }
-
-    /// <summary>
-    /// A value of <paramref name="type"/> that differs from its CLR default — so the second probe's
-    /// argument really is different. False when none can be built; the caller then proves nothing.
-    /// </summary>
-    private static bool TryAlternative(Type type, out object? value)
-    {
-        var underlying = Nullable.GetUnderlyingType(type) ?? type;
-        value = null;
-        if (underlying == typeof(object))
-            value = new object();
-        else if (underlying.IsArray)
-            value = Array.CreateInstance(underlying.GetElementType()!, 0);
-        else if (underlying == typeof(Guid))
-            value = Guid.NewGuid();
-        else if (underlying == typeof(DateTime))
-            value = DateTime.UnixEpoch;
-        else if (underlying == typeof(DateTimeOffset))
-            value = DateTimeOffset.UnixEpoch;
-        else if (underlying == typeof(TimeSpan))
-            value = TimeSpan.FromSeconds(1);
-        else if (underlying.IsGenericType && underlying.GetGenericTypeDefinition() == typeof(System.Collections.Immutable.ImmutableArray<>))
-            value = typeof(System.Collections.Immutable.ImmutableArray).GetMethods()
-                .Single(m => m.Name == nameof(System.Collections.Immutable.ImmutableArray.Create)
-                             && m.IsGenericMethodDefinition && m.GetParameters().Length == 0)
-                .MakeGenericMethod(underlying.GetGenericArguments()[0])
-                .Invoke(null, null);
-        else if (!underlying.IsValueType && !underlying.IsAbstract && !underlying.IsInterface
-                 && underlying.GetConstructor(Type.EmptyTypes) is not null)
-            value = Activator.CreateInstance(underlying);
-        else if (underlying == typeof(string))
-            value = "declared-default-probe";
-        else if (underlying == typeof(bool))
-            value = true;
-        else if (underlying == typeof(char))
-            value = 'p';
-        else if (underlying.IsEnum)
-        {
-            var values = Enum.GetValuesAsUnderlyingType(underlying).Cast<object>().ToArray();
-            value = Enum.ToObject(underlying, values.FirstOrDefault(v => Convert.ToInt64(v) != 0) ?? 1);
-        }
-        else if (underlying.IsPrimitive || underlying == typeof(decimal))
-            value = Convert.ChangeType(1, underlying);
-        return value is not null;
     }
 
     /// <summary>A parameter's default as the member's own type: an enum from its underlying
@@ -210,5 +159,80 @@ internal static class DeclaredDefaultsSurviveTheWire
             return ClrDefault(type);
         var underlying = Nullable.GetUnderlyingType(type) ?? type;
         return underlying.IsEnum ? Enum.ToObject(underlying, value) : value;
+    }
+
+    /// <summary>
+    /// Rebuilds an instance the way the reader will: the deserialization constructor called with the
+    /// instance's own parameter-bound member values. Holds only the most recent (instance, rebuilt)
+    /// pair, so the members of one object share one rebuild and nothing is retained beyond it.
+    /// </summary>
+    private sealed class Rebuilder(ConstructorInfo constructor, Func<object, object?>[] arguments, Type type, ILogger? logger)
+    {
+        private sealed record Last(object Instance, object? Rebuilt);
+
+        private volatile Last? last;
+
+        public static Rebuilder? For(JsonTypeInfo typeInfo, ILogger? logger)
+        {
+            if (typeInfo.ConstructorAttributeProvider is not ConstructorInfo constructor)
+                return null;
+            var parameters = constructor.GetParameters();
+            var arguments = new Func<object, object?>[parameters.Length];
+            foreach (var property in typeInfo.Properties)
+                if (property.AssociatedParameter is { } parameter && property.Get is { } get
+                    && parameter.Position >= 0 && parameter.Position < arguments.Length)
+                    arguments[parameter.Position] = get;
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                if (arguments[i] is not null)
+                    continue;
+                logger?.LogDebug(
+                    "Constructor parameter {Parameter} of {Type} has no serialized member; its initialized scalar members are always written",
+                    parameters[i].Name, typeInfo.Type.FullName);
+                return null;
+            }
+            return new Rebuilder(constructor, arguments, typeInfo.Type, logger);
+        }
+
+        /// <summary>Whether the reader, given <paramref name="instance"/>'s constructor arguments, rebuilds <paramref name="value"/>.</summary>
+        public bool RebuildsTo(object instance, Func<object, object?> get, object? value)
+        {
+            var cached = last;
+            object? rebuilt;
+            if (cached is not null && ReferenceEquals(cached.Instance, instance))
+                rebuilt = cached.Rebuilt;
+            else
+            {
+                rebuilt = Rebuild(instance);
+                last = new Last(instance, rebuilt);
+            }
+            if (rebuilt is null)
+                return false;
+            try
+            {
+                return Equals(get(rebuilt), value);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "Reading a member of a rebuilt {Type} threw; the member is written", type.FullName);
+                return false;
+            }
+        }
+
+        private object? Rebuild(object instance)
+        {
+            try
+            {
+                var args = new object?[arguments.Length];
+                for (var i = 0; i < args.Length; i++)
+                    args[i] = arguments[i](instance);
+                return constructor.Invoke(args);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "Rebuilding {Type} from its constructor arguments threw; its initialized scalar members are written", type.FullName);
+                return null;
+            }
+        }
     }
 }

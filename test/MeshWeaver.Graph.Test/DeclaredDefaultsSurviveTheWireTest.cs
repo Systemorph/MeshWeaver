@@ -83,6 +83,12 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         public int Length { get => Text.Length; init { } }
     }
 
+    /// <summary>An initializer over SEVERAL arguments, which any fixed set of probes can miss.</summary>
+    public sealed record MixedArguments(bool Left, bool Right)
+    {
+        public bool Flag { get; init; } = Left != Right;
+    }
+
     /// <summary>Proven CLR default on a constructor-built type — must still be omitted.</summary>
     public sealed record ProvenDefault(string Id)
     {
@@ -187,6 +193,22 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         var node = JsonSerializer.Deserialize<MeshNode>("{\"id\":\"n\",\"mainNode\":null}", options)!;
         node.MainNode.Should().BeNull();
         RoundTrip(node, options).MainNode.Should().BeNull("the stored null is not the argument-derived default");
+    }
+
+    [Fact]
+    public void An_initializer_over_mixed_arguments_keeps_an_explicit_false()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        RoundTrip(new MixedArguments(true, false) { Flag = false }, options).Flag.Should().BeFalse();
+        // Compact where the reader rebuilds the same value: (true, true) yields Flag == false.
+        JsonSerializer.Serialize(new MixedArguments(true, true), options).Should().NotContain("flag");
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_mixed_arguments_lose_the_false()
+    {
+        RoundTrip(new MixedArguments(true, false) { Flag = false }, WithoutTheFix()).Flag.Should().BeTrue(
+            "if this ever fails, the mixed-argument case no longer exercises the trap");
     }
 
     [Fact]
