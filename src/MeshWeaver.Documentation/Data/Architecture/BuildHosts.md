@@ -689,11 +689,19 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   reds any drift. The runner also refuses a `--total` the image was not packed for.
 - **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
   generator's `OWES` list is the debt — the route (`dotnet-test.yml` calls no admission and no follow
-  job), `Consolidate test results` (a host shard hands back no trx), the fan-out (one run's stages run
-  serially, past the deadline, and pinned per-stage runs do not share a pack), the prepared package
-  closure, the browser and font set, Testcontainers (no Docker daemon in the sandbox), the shards'
-  untyped-content gate, the legs that read the build's artifacts (platform-compat, licence-gate), the
-  prepared-mesh rule, and a green probe that agrees with Actions.
+  job), `Consolidate test results` (collect-results does not yet fetch a host run's handed-back
+  results), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
+  do not share a pack), the prepared package closure, the browser and font set, Testcontainers (no
+  Docker daemon in the sandbox), the legs that read the build's artifacts (platform-compat,
+  licence-gate), the prepared-mesh rule, and a green probe that agrees with Actions.
+- **A shard checks what the `test` job checks, and hands its evidence back.** `core-tests.py run`
+  writes CI's `[CI] <name> exit=N` markers to `test/test-results.log` (TIMEOUT, SIGNAL, TESTFAIL and
+  MASKED classified as the shard loop does), writes every crash INTO the trx with
+  `record-host-crash.py` (#2495), collects each bin's `test-logs/` and the hosts' temp-dir traces into
+  `collected-logs/`, and on a host leaves that tree — the `test` job's artifact shape — under
+  `$MW_BUILD_ARTIFACTS/testResults-shard<i>/`, which the host hands over as H9 receipts. Only THEN does
+  it run `check-untyped-content.sh` over `collected-logs/`, so the logs a red is decided on survive
+  the red. The scripts are the checkout's own (`--repo .`, a parity marker).
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's

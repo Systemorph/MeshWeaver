@@ -149,6 +149,13 @@ repos:
         lane: build-follow.yml
         grants: {contents: read, id-token: write}
         pending: lands with this repository's module-pack host adoption (draft), after core's node-repo-module-pack.yml executor/host-verdict inputs are on main
+      # ── The portal-host lane on the build host (H7) — ARRIVING. The follow job whose verdict
+      # `Build + test the portal hosts` carries when the build host ran the `portal-hosts` stage.
+      - workflow: ci.yml
+        job: portal-hosts-follow
+        lane: build-follow.yml
+        grants: {contents: read, id-token: write}
+        pending: lands with Systemorph/MeshWeaver.Plugins#4489 (the portal-hosts stage on the build host)
 
   # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
   # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core

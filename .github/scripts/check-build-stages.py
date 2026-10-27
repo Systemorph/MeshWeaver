@@ -73,7 +73,10 @@ CORE_RUN_PARITY = [
     ("--require-sha \"${MW_BUILD_SHA", "the tests that run are the run's own commit's — never another set's image"),
     ("--root \"${MW_BUILD_OUTPUTS", "this run's own pack is a candidate root"),
 ]
-CORE_SHARD_PARITY = [("core-tests.py run --shard", "one shard of the suite, the `test` matrix's shard loop")] + CORE_RUN_PARITY
+CORE_SHARD_PARITY = [("core-tests.py run --shard", "one shard of the suite, the `test` matrix's shard loop — its markers, "
+                      "the crash written into the trx, the results tree handed back, the untyped-content gate"),
+                     ("--repo .", "the shard records and gates with the run's own checkout's scripts "
+                      "(record-host-crash.py, check-untyped-content.sh), as the `test` job does")] + CORE_RUN_PARITY
 CORE_DOC_GATE_PARITY = [("core-tests.py doc-gate", "the doc and samples gates, the `doc-gate` job")] + CORE_RUN_PARITY
 
 # node-repo — the lane a satellite's ci.yml calls ⇒ the stage that must mirror it.
@@ -364,7 +367,7 @@ def _core_doc(total: int = 2) -> dict:
              "python3 deploy/core-tests/core-tests.py pack --repo . --out \"${MW_BUILD_OUTPUTS:?}/core-tests\" --sha \"${MW_BUILD_SHA:?}\"")
     roots = "--root \"${MW_BUILD_OUTPUTS:?}/core-tests\" --root /core-tests --require-sha \"${MW_BUILD_SHA:?}\""
     stages = [{"name": "build", "kind": "build", "command": build, "timeoutMinutes": 25, "needs": ["nuget"]}]
-    stages += [{"name": f"test-shard-{i}", "kind": "test", "command": f"python3 deploy/core-tests/core-tests.py run --shard {i} --total {total} {roots}",
+    stages += [{"name": f"test-shard-{i}", "kind": "test", "command": f"python3 deploy/core-tests/core-tests.py run --shard {i} --total {total} {roots} --repo .",
                 "timeoutMinutes": 20} for i in range(total)]
     stages.append({"name": "doc-gate", "kind": "test", "command": f"python3 deploy/core-tests/core-tests.py doc-gate {roots} --repo .", "timeoutMinutes": 25})
     return {"owes": ["one thing"], "stages": stages}
