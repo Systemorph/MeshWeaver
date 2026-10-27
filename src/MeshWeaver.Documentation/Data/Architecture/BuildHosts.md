@@ -682,8 +682,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   generator's `OWES` list is the debt — the route (`dotnet-test.yml` calls no admission and no follow
   job), `Consolidate test results` (collect-results does not yet fetch a host run's handed-back
   results), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
-  do not share a pack), the prepared package closure, the browser and font set, Testcontainers (no
-  Docker daemon in the sandbox), the legs that read the build's artifacts (platform-compat,
+  do not share a pack), the prepared package closure, the browser and font set, the legs that read
+  the build's artifacts (platform-compat,
   licence-gate), the prepared-mesh rule, and a green probe that agrees with Actions.
 - **A shard checks what the `test` job checks, and hands its evidence back.** `core-tests.py run`
   writes CI's `[CI] <name> exit=N` markers to `test/test-results.log` (TIMEOUT, SIGNAL, TESTFAIL and
@@ -693,11 +693,16 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `$MW_BUILD_ARTIFACTS/testResults-shard<i>/`, which the host hands over as H9 receipts. Only THEN does
   it run `check-untyped-content.sh` over `collected-logs/`, so the logs a red is decided on survive
   the red. The scripts are the checkout's own (`--repo .`, a parity marker).
+- **No suite needs a Docker daemon, and that is checked.** A host's sandbox has none (its database is
+  the prepared server). Core's Postgres suites left core, and nothing in the tree references
+  `Testcontainers*` or `Docker.DotNet` or builds a container in `test/`. `core-build-stages.py --check`
+  reds the day one does: such a suite either runs against the host's prepared service or re-opens
+  the `containers:` debt in the same change.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
-  suites run inside a host's sandbox — the shards' Testcontainers projects need a Docker daemon a
-  host does not have, and the shards' browser tests need the font set CI stages.
+  suites run inside a host's sandbox — the shards' browser tests need the headless browser and font
+  set the build-host image carries from MeshWeaver.Deploy#50 on.
 
 **The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
 credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`
