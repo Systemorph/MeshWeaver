@@ -316,6 +316,13 @@ above still holds:
 It is a **declaration**, not a hand-written node: the root scope is System's, and a global admin holds
 no data rights there, so a `create` of `_Policy` is refused.
 
+**It works on a private instance too.** An instance closed to anonymous callers
+(`Access:DenyAnonymous`) still unfurls under this declaration: there, only a STATIC policy may switch
+previews on, so the operator's root declaration counts and a `publicPreview: true` written into the
+mesh by a partition owner does not. Any policy can still opt a scope out. Until this rule, the switch
+refused every preview, and every link shared from a private instance unfurled as the generic
+*"A page on … Sign in to open it."* card although the instance had opted in.
+
 🚨 **A root flag reaches every scope, so the preview path refuses two shapes outright, whatever a
 policy states** (`SeoResolver.NeverPreviews`):
 - the platform's own partitions (`WellKnownPartitions.Platform`: Admin, Auth, User, ApiToken, Groups,
