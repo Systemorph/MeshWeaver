@@ -107,8 +107,8 @@ fi
 grep 'Database migration completed' "$MIGLOG" | tail -n 1
 
 # boot_and_wait <leg> <image>: start the image, wait for /health then /ready inside the budget,
-# then stop it. The environment is the chart's self-host minimum (MeshWeaver.Testcontainers'
-# MemexBuilder): Postgres for nodes, the filesystem backend, single-node Localhost clustering, no
+# then stop it. The environment is the chart's self-host minimum (MeshWeaver.Plugins'
+# src/MeshWeaver.Testcontainers MemexBuilder): Postgres for nodes, the filesystem backend, single-node Localhost clustering, no
 # dev login. Nothing control-specific is passed: the closed type set, the seeded module and the
 # disabled sweep are properties of the IMAGE, which is exactly what is under test.
 boot_and_wait() {
