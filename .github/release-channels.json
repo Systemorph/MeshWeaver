@@ -337,7 +337,7 @@
       "id": "latest",
       "tag": "latest",
       "edition": "continuous",
-      "meaning": "The tester's moving tag (MeshWeaver.Plugins pins MW_TEST_IMAGE to it) and the GHCR mirror's latest release.",
+      "meaning": "The newest ARMED set on memex-portal-ai and memex-migration — moved with `{major}-latest` in main-cd's Phase D, the default tag the Aspire integration and the CLI pull from the fleet registry; and the tester's moving tag (MeshWeaver.Plugins pins MW_TEST_IMAGE to it). Never a self-update candidate: it has no numeric core.",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
@@ -359,17 +359,43 @@
           "state": "phase B — MeshWeaver.Plugins pins MW_TEST_IMAGE to it"
         },
         {
+          "workflow": "main-cd.yml",
+          "job": "arm",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "Phase D, after the arming PUT, beside `{major}-latest`, forward only"
+        },
+        {
           "workflow": "release.yml",
           "job": "release",
           "repositories": [
-            "memex-migration",
-            "mw-plugin-test",
-            "memex-portal-ai"
+            "mw-plugin-test"
           ],
           "registries": [
             "ghcr.io/systemorph"
           ],
           "state": "the GHCR mirror of every official release"
+        },
+        {
+          "workflow": "release.yml",
+          "job": "release",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph"
+          ],
+          "state": "with the line pointers: only when the released set is in the legacy notation (CD's arm already moved it otherwise)",
+          "notation": "legacy"
         },
         {
           "workflow": "base-image-acr.yml",

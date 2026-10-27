@@ -347,10 +347,14 @@ def self_test() -> int:
     expect("the committed declaration validates", validate(real) == [])
 
     # tags_for — notation and status
-    expect("SemVer set: arm moves N-latest and N.M-latest only",
-           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="arm")) == ["3-latest", "3.1-latest"])
+    # `latest` on the portal and the migration moves WITH the line pointers, in `arm` (ImageTagContract).
+    expect("SemVer set: arm moves N-latest, N.M-latest and latest only",
+           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="arm")) == ["3-latest", "3.1-latest", "latest"])
     expect("legacy set: arm also moves the patch pointer",
-           sorted(tags_for(real, "3.0.0-ci.8080", "main-cd.yml", job="arm")) == ["3-latest", "3.0-latest", "3.0.0-latest"])
+           sorted(tags_for(real, "3.0.0-ci.8080", "main-cd.yml", job="arm")) == ["3-latest", "3.0-latest", "3.0.0-latest", "latest"])
+    expect("arm moves `latest` on the portal AND the migration",
+           all("latest" in tags_for(real, "3.1.10050", "main-cd.yml", job="arm", repository=r)
+               for r in ("memex-portal-ai", "memex-migration")))
     expect("a `declared` label is never handed to a writer",
            "3-enterprise" not in tags_for(real, "3.1.0", "release.yml"))
     flipped = json.loads(json.dumps(real))
@@ -358,7 +362,7 @@ def self_test() -> int:
         if e["id"] == "enterprise":
             e["status"] = "written"
     expect("flipping enterprise to `written` hands release.yml N-enterprise",
-           sorted(tags_for(flipped, "3.1.0", "release.yml", repository="memex-portal-ai")) == ["3-enterprise", "latest"])
+           sorted(tags_for(flipped, "3.1.0", "release.yml", repository="memex-portal-ai")) == ["3-enterprise"])
     expect("literal labels are returned to their writer (promote moves main and latest on the tester)",
            sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test")) == ["latest", "main"])
     expect("bindings hold together: promote does NOT write `latest` to the portal",
@@ -366,8 +370,11 @@ def self_test() -> int:
     expect("bindings hold together: promote writes no `main` to memex-control (control-promote does)",
            tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="memex-control") == []
            and tags_for(real, "3.1.10050", "main-cd.yml", job="control-promote", repository="memex-control") == ["main"])
-    expect("release.yml writes `latest` (GHCR) for every released repository",
-           tags_for(real, "3.1.0", "release.yml", repository="memex-portal-ai") == ["latest"])
+    expect("release.yml mirrors the tester's `latest` on every release",
+           tags_for(real, "3.1.0", "release.yml", repository="mw-plugin-test") == ["latest"])
+    expect("release.yml moves NO portal/migration `latest` for a SemVer set (CD's arm already did; it could only go backwards)",
+           tags_for(real, "3.1.0", "release.yml", repository="memex-portal-ai") == []
+           and tags_for(real, "3.1.0", "release.yml", repository="memex-migration") == [])
     expect("release.yml moves the line pointers only for a legacy-notation set",
            sorted(tags_for(real, "3.0.0-ci.8080", "release.yml", repository="memex-portal-ai"))
            == ["3-latest", "3.0-latest", "3.0.0-latest", "latest"])
