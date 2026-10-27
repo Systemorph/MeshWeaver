@@ -32,6 +32,12 @@ and in both shapes the reporter job (the failure half, for the pair) must
     `!cancelled()`). Without one GitHub applies the implicit `success()` and the reporter is SKIPPED
     on exactly the runs it exists for.
 
+The SUCCESS half of the pair closes the alert, so a wrong one is a false green. It must `needs:` the
+same closure, and its `if:` must run on a scheduled green and never on a red: every top-level `&&`
+conjunct is `success()`, `always()`/`!cancelled()` (then `needs.<n>.result == 'success'` for EVERY
+direct need), `needs.<n>.result == 'success'`, a `needs.<n>.outputs.<o>` comparison, or an event/ref
+guard that is TRUE for a scheduled run on main. Anything else is refused as unsupported.
+
 — OR it is listed in `.github/scheduled-lane-reporters.allow` as `<workflow file>  — <reason>`. That
 file is the known debt and only SHRINKS: an entry for a workflow that no longer exists, no longer has
 a schedule, or now HAS a reporter is stale and reds, and an entry without a reason reds.
@@ -110,6 +116,163 @@ def survives_failure(job: dict) -> bool:
     return cond.startswith(SURVIVES) and not any(d in cond for d in DEFEATS)
 
 
+_TOKEN = re.compile(r"\s*(?:(?P<str>'(?:[^']|'')*')|(?P<op>==|!=|&&|\|\||!|\(|\))|(?P<id>[A-Za-z_][\w.\-]*))")
+# A guard conjunct may read only these: what a scheduled run's context fixes (Copilot on #7422).
+_GUARD_IDENT = re.compile(r"^(?:github\.event_name|github\.ref|github\.event\.inputs\.[\w\-]+|true|false|null)$")
+
+
+def _tokens(cond: str) -> list[str] | None:
+    out: list[str] = []
+    i = 0
+    while i < len(cond):
+        if cond[i:].strip() == "":
+            break
+        m = _TOKEN.match(cond, i)
+        if not m:
+            return None
+        out.append(m.group(m.lastgroup))
+        i = m.end()
+    return out
+
+
+def _conjuncts(tokens: list[str]) -> list[list[str]]:
+    """Split on top-level `&&`, after dropping parentheses that enclose the whole expression."""
+    def wrapped(t: list[str]) -> bool:
+        if len(t) < 2 or t[0] != "(" or t[-1] != ")":
+            return False
+        depth = 0
+        for k, tok in enumerate(t):
+            depth += tok == "("
+            depth -= tok == ")"
+            if depth == 0 and k < len(t) - 1:
+                return False
+        return True
+    while wrapped(tokens):
+        tokens = tokens[1:-1]
+    parts: list[list[str]] = [[]]
+    depth = 0
+    for tok in tokens:
+        depth += tok == "("
+        depth -= tok == ")"
+        if tok == "&&" and depth == 0:
+            parts.append([])
+        else:
+            parts[-1].append(tok)
+    return [p for p in parts]
+
+
+def _eval_guard(tokens: list[str], ctx: dict):
+    """Evaluate a guard conjunct (==, !=, !, &&, ||, parentheses over _GUARD_IDENT and string literals)
+    against a scheduled run's context. Raises ValueError on anything outside that subset."""
+    pos = 0
+
+    def peek():
+        return tokens[pos] if pos < len(tokens) else None
+
+    def take():
+        nonlocal pos
+        pos += 1
+        return tokens[pos - 1]
+
+    def atom():
+        tok = take() if peek() is not None else None
+        if tok == "(":
+            v = orx()
+            if take() != ")":
+                raise ValueError("unbalanced")
+            return v
+        if tok == "!":
+            return not atom()
+        if tok and tok.startswith("'"):
+            return tok[1:-1].replace("''", "'")
+        if tok and _GUARD_IDENT.match(tok):
+            return {"true": True, "false": False, "null": None}.get(tok, ctx.get(tok))
+        raise ValueError(f"unsupported token {tok!r}")
+
+    def cmp():
+        left = atom()
+        while peek() in ("==", "!="):
+            op = take()
+            right = atom()
+            norm = lambda v: v.lower() if isinstance(v, str) else v
+            left = (norm(left) == norm(right)) if op == "==" else (norm(left) != norm(right))
+        return left
+
+    def andx():
+        v = cmp()
+        while peek() == "&&":
+            take()
+            r = cmp()
+            v = bool(v) and bool(r)
+        return v
+
+    def orx():
+        v = andx()
+        while peek() == "||":
+            take()
+            r = andx()
+            v = bool(v) or bool(r)
+        return v
+
+    v = orx()
+    if pos != len(tokens):
+        raise ValueError("trailing tokens")
+    return bool(v)
+
+
+SCHEDULED = {"github.event_name": "schedule", "github.ref": "refs/heads/main"}
+
+
+def success_condition_problem(job: dict) -> str | None:
+    """The close-the-ledger half must run on a scheduled GREEN and never on a RED (Copilot on #7422).
+    Deliberately a restriction, not a general evaluator. Every top-level `&&` conjunct is one of:
+    `success()`; `always()` / `!cancelled()` (then EVERY direct need carries `needs.<n>.result == 'success'`);
+    `needs.<n>.result == 'success'` for a direct need; `needs.<n>.outputs.<o> == '…'` for a direct need;
+    or an event/ref guard that evaluates TRUE for a scheduled run on main."""
+    raw = str(job.get("if") or "").strip()
+    if raw.startswith("${{") and raw.endswith("}}"):
+        raw = raw[3:-2]
+    if not raw.strip():
+        return None  # implicit success(): runs only when every need succeeded
+    tokens = _tokens(raw)
+    if tokens is None:
+        return f"`if: {raw.strip()}` is not an expression this guard can read"
+    direct = set(needs_of(job))
+    overrides = False
+    has_success = False
+    confirmed: set[str] = set()
+    for conj in _conjuncts(tokens):
+        text = "".join(conj)
+        if text == "success()":
+            has_success = True
+            continue
+        if text in ("always()", "!cancelled()"):
+            overrides = True
+            continue
+        m = re.fullmatch(r"needs\.([\w\-]+)\.result=='success'", text)
+        if m and m.group(1) in direct:
+            confirmed.add(m.group(1))
+            continue
+        m = re.fullmatch(r"needs\.([\w\-]+)\.outputs\.[\w\-]+(?:==|!=)'[^']*'", text)
+        if m and m.group(1) in direct:
+            continue  # a narrowing conjunct: it can only make the job run LESS, never on a red
+        try:
+            ok = _eval_guard(conj, SCHEDULED)
+        except ValueError:
+            return (f"conjunct `{' '.join(conj)}` of its `if:` is not a supported form (success(), always()/!cancelled() "
+                    "with needs.<n>.result == 'success' per direct need, or an event/ref guard) — a status function "
+                    "like failure() or an `||` over needs lets it close the ledger on a red")
+        if not ok:
+            return (f"conjunct `{' '.join(conj)}` of its `if:` is false for a scheduled run on main — it never runs on "
+                    "the green that should clear the alert")
+    if overrides and not has_success:
+        missing = sorted(direct - confirmed)
+        if missing:
+            return (f"its `if:` overrides the implicit success() but does not require needs.<n>.result == 'success' for "
+                    f"{', '.join(missing)} — it runs, and closes the ledger, on a red there")
+    return None
+
+
 def reporter_problems(jobs: dict) -> tuple[bool, list[str]]:
     """(has a reporter shape at all, the problems with it). Pure."""
     ledger: dict[str, list[tuple[str, tuple[str, str]]]] = {}     # outcome -> [(job id, (label, title))]
@@ -143,6 +306,17 @@ def reporter_problems(jobs: dict) -> tuple[bool, list[str]]:
             problems.append(f"files reds under label `{label}` / title {title!r} but no `outcome: success` job with that "
                             "SAME label and title closes that ledger — the ledger matches on both, so the alert never clears")
         failing.extend(j for j, _ in ledger.get("failure", []))
+        # The success half closes the alert, so a wrong one is a false green (Copilot on #7422): it must
+        # see every job too, and its `if:` must run on a scheduled green and never on a red.
+        for jid, _ in ledger.get("success", []):
+            closing = {j for j in jobs if j not in reporters}
+            missing = sorted(closing - closure(jobs, jid))
+            if missing:
+                problems.append(f"success job '{jid}' does not `needs:` {', '.join(missing)} — it closes the ledger on a "
+                                "run where that job is red")
+            why = success_condition_problem(jobs[jid])
+            if why:
+                problems.append(f"success job '{jid}': {why}")
     for jid in sentinels:
         runs = "\n".join(str(st.get("run") or "") for st in jobs[jid].get("steps") or [] if isinstance(st, dict))
         if not SENTINEL_OPENS.search(runs) or not SENTINEL_CLOSES.search(runs):
@@ -289,6 +463,28 @@ jobs:
         ("pair with matching label AND title", pair.replace(
             "{outcome: failure, label: lane-x}", "{outcome: failure, label: lane-x, issue-title: 'lane-x: red'}").replace(
             "{outcome: success, label: lane-x}", "{outcome: success, label: lane-x, issue-title: 'lane-x: red'}"), "", False),
+        # Copilot on #7422 (second round) — the success half is a false green when wrong:
+        ("success job misses a job in needs (closes on b's red)", pair.replace(
+            "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
+            "  green:\n    needs: [a]\n    if: always() && needs.a.result == 'success'"), "", True),
+        ("success job `if: ${{ false }}` never clears", pair.replace(
+            "if: always() && needs.b.result == 'success'", "if: ${{ false }}"), "", True),
+        ("success job `always()` with no needs-result check", pair.replace(
+            "if: always() && needs.b.result == 'success'", "if: always()"), "", True),
+        ("success job on failure()", pair.replace(
+            "if: always() && needs.b.result == 'success'", "if: failure()"), "", True),
+        ("success job with an `||` over needs", pair.replace(
+            "if: always() && needs.b.result == 'success'", "if: always() && (needs.b.result == 'success' || needs.a.result == 'success')"), "", True),
+        ("success job guarded to push only (never on schedule)", pair.replace(
+            "if: always() && needs.b.result == 'success'", "if: github.event_name == 'push' && success()"), "", True),
+        ("success job with implicit success() (no if)", pair.replace(
+            "    if: always() && needs.b.result == 'success'\n", ""), "", False),
+        ("success job: event guard + !cancelled() + result (the dotnet-test shape)", pair.replace(
+            "if: always() && needs.b.result == 'success'",
+            "if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !cancelled() && needs.b.result == 'success'"), "", False),
+        ("success job: parenthesised `||` event guard (the lock-pinned-digests shape)", pair.replace(
+            "if: always() && needs.b.result == 'success'",
+            "if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'report-only')) && needs.b.result == 'success'"), "", False),
         ("`on:` as a list with schedule, no reporter", "on: [schedule, push]\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n", "", True),
     ]
     failures = 0

@@ -200,7 +200,11 @@ sentinel report job (a sentinel job counts only when it also OPENS and CLOSES th
 alone reports nothing), a pair whose two halves differ in label or `issue-title` (the ledger matches on
 both, defaults filled in), a failure-only or success-only reporter, a reporter that does not `needs:`
 every job, and one whose `if:` does not LEAD with `always()`, `failure()` or `!cancelled()` or that
-re-adds the skip (`&& success()`, `!failure()`). And a cause is compared only when every failed job
+re-adds the skip (`&& success()`, `!failure()`). The SUCCESS half is held too, because closing the
+alert on a red is a false green: it must `needs:` every job as well, and each top-level `&&` conjunct of
+its `if:` is `success()`, `always()`/`!cancelled()` paired with `needs.<n>.result == 'success'` for every
+direct need, a `needs.<n>.outputs.<o>` comparison, or an event/ref guard that is true for a scheduled run
+on main — so `failure()`, an `||` over needs, and `${{ false }}` are refused. And a cause is compared only when every failed job
 carries an error signature: a caller that passes none, or a job that printed no error, reads `n/a`,
 never "same". Known
 debt sits in `.github/scheduled-lane-reporters.allow` with a reason per line; that list only shrinks —
