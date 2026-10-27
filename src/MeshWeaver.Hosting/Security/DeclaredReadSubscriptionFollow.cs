@@ -26,11 +26,11 @@ namespace MeshWeaver.Hosting.Security;
 /// <para><b>What is followed, and what is not.</b> Only a subscription the gate can have admitted
 /// through the declaration: a point-read shape (<see cref="DeclaredPointRead.RequestShape"/>), a
 /// trusted caller context, and a caller that holds no standing Read through the permission fold or
-/// the type's rule. That standing Read is decided ONCE, as the caller, by the same two questions the
-/// gate asked, through the standard-read path (<see cref="DeclaredPointRead.ObserveStandardRead"/>,
-/// its first outcome); while it held, the declaration was
-/// never consulted, so there is nothing of the declaration's to follow. Following a standing GRANT
-/// live is the platform's live permission path, not this declaration-specific signal.</para>
+/// the type's rule. That standing Read is decided as the caller, by the same two questions the
+/// gate asked, through the standard-read path — and FOLLOWED LIVE
+/// (<see cref="DeclaredPointRead.ObserveStandingRead"/>, MeshWeaver#7298): a standing grant removed
+/// after the subscription was admitted ends it, unless the declaration admits the caller in its
+/// place. A re-check in flight holds rather than ends.</para>
 ///
 /// <para><b>Per revision, fail closed.</b> A followed subscription forwards a revision of the node
 /// only once the declaration admits THAT revision (<see cref="DeclaredPointRead.AdmitsRevision"/>)
@@ -97,9 +97,18 @@ public static class DeclaredReadSubscriptionFollow
         var budget = (owner.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
 
-        // The standing Read — the type's rule, else the fold, AS the caller — decided ONCE through the
-        // platform's standard-read path (DeclaredPointRead.ObserveStandardRead, its first outcome),
-        // shared by every revision of this subscription.
+        // The standing Read — the type's rule, else the fold, AS the caller — FOLLOWED LIVE through the
+        // platform's standard-read path (DeclaredPointRead.ObserveStandingRead), shared by every
+        // revision of this subscription.
+        //
+        // 🚨 LIVE, not decided once (MeshWeaver#7298, the residual of #7016). It was the first outcome
+        // only, so a standing grant removed after the SubscribeRequest was admitted never ended the
+        // subscription: the owner kept forwarding every revision to a caller who could no longer read
+        // the node. Now a grant that turns into a DEFINITIVE denial hands the decision to the
+        // declaration (which, for a node no declaration opens to this caller, refuses — and the
+        // subscription ends); a re-check IN FLIGHT (null) holds — it admits no new revision and ends
+        // nothing, so an unrelated access commit that merely re-decides the verdict cannot end a
+        // subscription whose grant still stands.
         //
         // 🚨 TRI-STATE, as every point-read seam decides it (review of #7016, thread 4336475542): a
         // GRANT admits; only a DEFINITIVE denial may consult the declaration; an UNDETERMINED outcome
@@ -107,12 +116,12 @@ public static class DeclaredReadSubscriptionFollow
         // standing Read" handed the decision to the declaration, which could then admit a caller
         // whose check had failed: the one re-decision no seam may make.
         var lifetime = new System.Reactive.Disposables.CompositeDisposable();
-        var standing = DeclaredPointRead.ObserveStandardRead(owner, hubPath, caller)
-            .Take(1)
+        var standing = DeclaredPointRead.ObserveStandingRead(owner, hubPath, caller)
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "The standing Read of {Path} for {User} could not be decided — undetermined, refused", hubPath, caller.ObjectId);
-                return Observable.Return(PermissionCheckOutcome.Undetermined($"the standing Read on '{hubPath}' failed ({ex.GetType().Name})"));
+                return Observable.Return<PermissionCheckOutcome?>(
+                    PermissionCheckOutcome.Undetermined($"the standing Read on '{hubPath}' failed ({ex.GetType().Name})"));
             })
             .DefaultIfEmpty(PermissionCheckOutcome.Undetermined($"the standing Read on '{hubPath}' answered nothing"))
             .Replay(1)
@@ -126,7 +135,10 @@ public static class DeclaredReadSubscriptionFollow
 
         return new ClientReadFollow(
             revision => standing
-                .Select(outcome => outcome.IsGranted
+                // A re-check in flight holds: the revision's verdict waits for the settled answer
+                // (bounded by the first-verdict budget), and an admitted revision stays admitted.
+                .Where(outcome => outcome is not null)
+                .Select(outcome => outcome!.IsGranted
                     ? Observable.Return(true)
                     : outcome.IsUndetermined
                         ? Observable.Return(false)
