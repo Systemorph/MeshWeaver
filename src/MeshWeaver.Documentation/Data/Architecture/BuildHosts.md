@@ -31,6 +31,7 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
 | the publish-side fetch (H9) | `.github/workflows/build-host-publication.yml` + `.github/scripts/build-artifacts-fetch.py` | a host-executed run's modules, fetched by receipt and verified, checked with the publisher's own check, staged for the unchanged module publish lane; the publisher's lane and selection source on a host run (§5) |
+| the ratchet-side fetch (H9) | `.github/actions/host-gate-log` + `.github/scripts/host-gate-log.py` | a node repo's host-run gate log, fetched by receipt and verified, for the repository's own Tests-area ratchet (§2 step 7) |
 | the host runner | MeshWeaver.Deploy `.github/scripts/build-run.py`, shipped in the `mw-build-host` image (MeshWeaver.Deploy `deploy/build-host/Dockerfile`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
 | the chart | `deploy/helm/templates/build-host/` (`buildHosts.*`, gate `memex.buildHosts`) | per channel a Deployment + KEDA `ScaledObject`; one ServiceAccount, one NetworkPolicy |
 | the hand-over | MeshWeaver.Deploy `build-host.yml` (a 15-minute `schedule` that reads the sets `main-cd.yml` sealed from the registry; jobs `image`, `handover`, `report`), `build-host-stable.yml`, `build-host-announcement.py`, declared by its `.github/build-hosts.json` | the runner image per set; on every hand-over, a signed event that moves `build-latest` to the newest armed set; daily, `build-stable` to the main-passed ceiling |
@@ -268,6 +269,16 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    deadline passed during the hand-over") — a stage finishing near the limit never holds its claim
    past the pod's grace. The run's workspace is removed only after every receipt was
    acknowledged; a workspace whose receipts were not is kept and swept after two run deadlines.
+   On the RATCHET side, a node repository whose `gate` stage ran on a host reads that stage's
+   `gate-log/gate.log` through the composite action `.github/actions/host-gate-log` (`api-url` = the
+   build-executor lane's output, `store` = `vars.MW_ARTIFACT_STORE`, the job holding
+   `id-token: write`). It fetches the `gate` stage's receipts with the same `build-artifacts-fetch.py`,
+   and `host-gate-log.py` then refuses anything but ONE non-empty `gate.log` carrying the tester's
+   `=== mw-plugin-test summary ===` block — nothing handed over (a red host gate hands nothing over),
+   an empty, truncated or foreign log, or a second file are each RED. The repository then runs the
+   SAME `check-test-suites.py --gate-log` it runs over an Actions gate's log, so the ratchet reads the
+   tester's own console on both executors — never the host's verdict, never the declared command's
+   text. One copy for every satellite; MeshWeaver.Plugins#4482 built the same read for Plugins.
    On the publishing side, `build-host-publication.yml` (OIDC, the same gate as the log) reads
    `GET /api/builds/{repo}/{sha}/artifacts?channel=`, fetches every object by its receipt
    (`build-artifacts-fetch.py`), verifies hash AND size against the receipt, and uploads them as
