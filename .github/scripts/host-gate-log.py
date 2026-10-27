@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUMMARY = "=== mw-plugin-test summary ==="
 LOG = "gate.log"
+UNIT_DIR = "gate-log"
+# The tester's terminal verdict line — the same set gate-shard-merge.py's `_summary_blocks` requires.
+VERDICT_RE = re.compile(r"^(ALL GREEN\.|GREEN — |GATE FAILED)", re.MULTILINE)
 
 
 class Red(Exception):
@@ -60,8 +64,14 @@ def check_staged(staged: str) -> str:
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
         raise Red("the handed-back gate.log is empty — the ratchet would read absent evidence")
     with open(path, encoding="utf-8", errors="replace") as fh:
-        if SUMMARY not in fh.read():
-            raise Red(f"the handed-back gate.log carries no '{SUMMARY}' block — a truncated or foreign log")
+        text = fh.read()
+    if SUMMARY not in text:
+        raise Red(f"the handed-back gate.log carries no '{SUMMARY}' block — a truncated or foreign log")
+    # The LAST summary must end in its terminal verdict: a log cut right after the header, or an
+    # earlier complete summary followed by a truncated final one, would hand the ratchet a partial set.
+    if not VERDICT_RE.search(text.rsplit(SUMMARY, 1)[1]):
+        raise Red("the handed-back gate.log's last summary block ends without its terminal verdict "
+                  "(ALL GREEN. / GREEN — … / GATE FAILED …) — a truncated log")
     return path
 
 
@@ -86,7 +96,7 @@ def main(argv: list[str]) -> int:
     try:
         cmd = [sys.executable, os.path.join(HERE, "build-artifacts-fetch.py"), "--api-url", a.api_url,
                "--store", a.store, "--expect-store-id", a.expect_store_id, "--sha", a.sha,
-               "--channel", a.channel, "--stage", "gate", "--out", staged]
+               "--channel", a.channel, "--stage", "gate", "--unit-dir", UNIT_DIR, "--out", staged]
         if a.audience:
             cmd += ["--audience", a.audience]
         rc = subprocess.call(cmd)
@@ -128,12 +138,15 @@ def self_test() -> int:
         except Red:
             return True
 
-    good = f"ok  A/B: compile=Ok render=ok tests=ok\n{SUMMARY}\n1 type(s)\nGATE PASSED\n"
+    good = f"ok  A/B: compile=Ok render=ok tests=ok\n{SUMMARY}\n[PASS] A (1 node(s), 1 type(s))\nALL GREEN.\n"
     # The positive control first: a check that refuses everything would pass every negative below.
     check("a complete gate.log is accepted", not red({LOG: good}))
     check("nothing staged is RED (a red host gate handed nothing over)", red({}))
     check("an empty gate.log is RED", red({LOG: ""}))
     check("a gate.log with no summary block is RED (truncated or foreign)", red({LOG: "ok  A/B: compile=Ok\n"}))
+    check("a log cut right after the summary header is RED (truncated)", red({LOG: f"ok  A/B\n{SUMMARY}\n[PASS] A (1 node(s), 1 type(s))\n"}))
+    check("a complete summary followed by a truncated final one is RED", red({LOG: good + f"{SUMMARY}\n[PASS] A (1 node(s), 1 type(s))\n"}))
+    check("a GREEN — … verdict is accepted", not red({LOG: f"{SUMMARY}\n[PASS] A (1 node(s), 1 type(s))\nGREEN — 1 debt item(s)\n"}))
     check("another file beside gate.log is RED (not the gate stage's one hand-back)", red({LOG: good, "x.zip": "z"}))
     check("a differently named log is RED", red({"gate.txt": good}))
     check("a missing staged directory is RED", _raises(lambda: check_staged("/nonexistent/hgl")))
@@ -141,7 +154,7 @@ def self_test() -> int:
     if fails:
         print(f"host-gate-log self-test: {len(fails)} FAILED: {fails}")
         return 1
-    print("host-gate-log self-test: every case behaved (accepts a complete log; refuses none, empty, truncated, foreign, extra)")
+    print("host-gate-log self-test: every case behaved (accepts a complete log; refuses none, empty, truncated, verdict-less, foreign, extra)")
     return 0
 
 

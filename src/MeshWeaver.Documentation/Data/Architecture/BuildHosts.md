@@ -272,10 +272,13 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    On the RATCHET side, a node repository whose `gate` stage ran on a host reads that stage's
    `gate-log/gate.log` through the composite action `.github/actions/host-gate-log` (`api-url` = the
    build-executor lane's output, `store` = `vars.MW_ARTIFACT_STORE`, the job holding
-   `id-token: write`). It fetches the `gate` stage's receipts with the same `build-artifacts-fetch.py`,
-   and `host-gate-log.py` then refuses anything but ONE non-empty `gate.log` carrying the tester's
-   `=== mw-plugin-test summary ===` block — nothing handed over (a red host gate hands nothing over),
-   an empty, truncated or foreign log, or a second file are each RED. The repository then runs the
+   `id-token: write`). It fetches the `gate` stage's receipts under the `gate-log/` unit with the same
+   `build-artifacts-fetch.py` (`--unit-dir gate-log`: the host hands over every file under
+   `$MW_BUILD_ARTIFACTS` after each successful stage, so the gate stage's receipts repeat an earlier
+   modules stage's bundles), and `host-gate-log.py` then refuses anything but ONE non-empty `gate.log`
+   whose LAST `=== mw-plugin-test summary ===` block ends in the tester's terminal verdict
+   (`ALL GREEN.` / `GREEN — …` / `GATE FAILED …`) — nothing handed over (a red host gate hands nothing
+   over), an empty, truncated or foreign log, or a second file in the unit are each RED. The repository then runs the
    SAME `check-test-suites.py --gate-log` it runs over an Actions gate's log, so the ratchet reads the
    tester's own console on both executors — never the host's verdict, never the declared command's
    text. One copy for every satellite; MeshWeaver.Plugins#4482 built the same read for Plugins.
