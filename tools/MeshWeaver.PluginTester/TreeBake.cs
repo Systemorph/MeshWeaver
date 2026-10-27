@@ -388,14 +388,15 @@ public static class TreeBake
     /// <see cref="Exit">exits</see> when it returns; <see cref="Terminate"/> (the pipeline ended)
     /// cancels the running compiles and refuses new ones. The cleanup runs ONCE, when the pipeline
     /// has terminated and no compile is inside — whichever of the two happens last runs it.
-    /// Entering increments BEFORE it reads the termination flag, and terminating sets the flag
-    /// BEFORE it reads the count (both interlocked, full fences), so a compile either is counted
-    /// by the terminator or sees the termination and never starts.
+    /// The count and the termination flag live in ONE word, so "nobody inside and terminated" is
+    /// read by a single atomic operation — the result of the decrement itself. Reading the flag
+    /// after a separate decrement would let a stale zero clean up under a compile that entered
+    /// in between, or under a <c>Cancel()</c> still running.
     /// </summary>
-    internal sealed class BakeLifetime(CancellationTokenSource cancellation, Action cleanup)
+    internal sealed class BakeLifetime(CancellationTokenSource cancellation, Action cleanup, Action? afterExitDecrement = null)
     {
-        private int inside;
-        private int terminated;
+        private const int TerminatedBit = 1 << 30;
+        private int state; // TerminatedBit | number of users inside
         private int cleaned;
 
         /// <summary>Cancelled when the pipeline terminates.</summary>
@@ -404,8 +405,7 @@ public static class TreeBake
         /// <summary>Enters a compile; false once the pipeline has terminated (nothing was entered).</summary>
         public bool TryEnter()
         {
-            Interlocked.Increment(ref inside);
-            if (Interlocked.CompareExchange(ref terminated, 0, 0) == 0)
+            if ((Interlocked.Increment(ref state) & TerminatedBit) == 0)
                 return true;
             Exit();
             return false;
@@ -414,7 +414,9 @@ public static class TreeBake
         /// <summary>Leaves a compile entered by <see cref="TryEnter"/>.</summary>
         public void Exit()
         {
-            if (Interlocked.Decrement(ref inside) == 0 && Interlocked.CompareExchange(ref terminated, 0, 0) == 1)
+            var after = Interlocked.Decrement(ref state);
+            afterExitDecrement?.Invoke();
+            if (after == TerminatedBit)
                 Clean();
         }
 
@@ -444,10 +446,10 @@ public static class TreeBake
         /// </summary>
         public void Terminate()
         {
-            Interlocked.Increment(ref inside);
-            if (Interlocked.Exchange(ref terminated, 1) == 1)
+            Interlocked.Increment(ref state);
+            if ((Interlocked.Or(ref state, TerminatedBit) & TerminatedBit) != 0)
             {
-                Interlocked.Decrement(ref inside);
+                Exit();
                 return;
             }
             try

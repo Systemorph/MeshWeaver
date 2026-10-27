@@ -207,6 +207,39 @@ public partial class ParallelBakeTest(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// An exit paused between its decrement and its termination check must not clean up from a
+    /// stale zero: while it is paused, another compile enters and the pipeline terminates. The
+    /// cleanup must wait for that compile to leave. Negative control: the same sequence with the
+    /// second compile leaving does clean, exactly once.
+    /// </summary>
+    [Fact]
+    public void BakeLifetime_ExitPausedAfterItsDecrement_DoesNotCleanUnderACompileThatEnteredMeanwhile()
+    {
+        var cleaned = 0;
+        var paused = false;
+        var secondEntered = false;
+        TreeBake.BakeLifetime? lifetime = null;
+        lifetime = new TreeBake.BakeLifetime(new CancellationTokenSource(), () => cleaned++, () =>
+        {
+            if (paused)
+                return;
+            paused = true; // the first exit has decremented to zero and is paused here
+            secondEntered = lifetime!.TryEnter();
+            lifetime.Terminate();
+        });
+        Assert.True(lifetime.TryEnter());
+
+        lifetime.Exit(); // resumes after the second compile entered and termination ran
+
+        Assert.True(secondEntered, "the second compile entered while the first exit was paused");
+        Assert.True(lifetime.Token.IsCancellationRequested);
+        Assert.Equal(0, cleaned); // the second compile is inside — its resolver and directory must survive
+
+        lifetime.Exit();
+        Assert.Equal(1, cleaned);
+    }
+
+    /// <summary>
     /// Work run through the lifetime (the fold that writes bundles from the work directory) keeps
     /// the resources alive across a termination that happens while it runs, and is refused once
     /// the pipeline has terminated.
