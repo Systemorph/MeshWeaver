@@ -442,6 +442,24 @@ public static class ProjectBuild
 
         sink.Info(UncarriedRefusalEnforcedLine);
 
+        // The edges file is keyed by the SAME framework identity a bake writes — the host's
+        // compatibility key, read off its MeshWeaver.Compiler.dll — never the binding version
+        // (PlatformAssemblyVersion), which neither matches the bake's key nor distinguishes epochs.
+        // Asked for and unresolvable is a refusal BEFORE anything is built: an edges file under a
+        // made-up identity is one no reader could match.
+        string? edgesIdentity = null;
+        if (options.DependencyEdges)
+        {
+            var (identity, identityProblem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(container.AppDirectory);
+            if (identity is null)
+                return Observable.Return(Fatal(options, sink, wall, container.PlatformAssemblyVersion,
+                    $"--dependency-edges: the host at '{container.AppDirectory}' resolves no framework "
+                    + $"compatibility key — {identityProblem}. The edges are keyed by the identity a bake "
+                    + "writes; pass the platform image's /app (the directory holding "
+                    + $"{FrameworkBuildIdentity.AnchorAssemblyName}.dll)."));
+            edgesIdentity = identity;
+        }
+
         ImmutableArray<LoadedBuildExtension> extensions;
         try
         {
@@ -599,7 +617,8 @@ public static class ProjectBuild
                 }
                 if (options.DependencyEdges)
                 {
-                    var edgesFile = WriteDependencyEdges(workRoot, container.PlatformAssemblyVersion, results);
+                    var edgesFile = WriteDependencyEdges(
+                        workRoot, edgesIdentity!, results, graph.PrebuiltReferences.Keys);
                     options.Output.WriteLine($"build-project: dependency edges → {edgesFile}");
                 }
                 Print(options.Output, report);
@@ -615,13 +634,18 @@ public static class ProjectBuild
     /// The workspace's forward edges: for every project that built, an edge to each IN-TREE project
     /// assembly its compilation used (<c>Kind = Module</c>); a project whose build did not produce an
     /// assembly is listed as failed. Platform and package assemblies are not edges — the same rule the
-    /// NodeType extraction applies.
+    /// NodeType extraction applies. A PREBUILT sibling (<c>--prebuilt</c>) is in-tree too: it is
+    /// an eligible edge TARGET although this run did not compile it — so it gets no edge set of its
+    /// own — because dropping it would hand the reader an incomplete edge set presented as complete.
     /// </summary>
     internal static string WriteDependencyEdges(
-        string outputDirectory, string identity, IEnumerable<Cascade.NodeResult<ProjectResult>> results)
+        string outputDirectory, string identity, IEnumerable<Cascade.NodeResult<ProjectResult>> results,
+        IEnumerable<string> prebuiltSiblings)
     {
         var built = results.Where(r => r.Result is not null).Select(r => r.Result!).ToList();
-        var inTree = built.Select(r => r.AssemblyName).ToHashSet(StringComparer.Ordinal);
+        var inTree = built.Select(r => r.AssemblyName)
+            .Concat(prebuiltSiblings)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var sets = built
             .Where(r => r.IsGreen)
             .Select(r => new MeshWeaver.Mesh.DependencyEdgeSet
@@ -629,7 +653,7 @@ public static class ProjectBuild
                 Source = r.AssemblyName,
                 BuildMvid = EmitPipelineMvid(r.AssemblyPath!),
                 Edges = [.. r.UsedReferences
-                    .Where(n => inTree.Contains(n) && n != r.AssemblyName)
+                    .Where(n => inTree.Contains(n) && !string.Equals(n, r.AssemblyName, StringComparison.OrdinalIgnoreCase))
                     .Select(n => new MeshWeaver.Mesh.DependencyEdge { Target = n, Kind = MeshWeaver.Mesh.DependencyEdgeKinds.Module })],
             })
             .OrderBy(e => e.Source, StringComparer.Ordinal)

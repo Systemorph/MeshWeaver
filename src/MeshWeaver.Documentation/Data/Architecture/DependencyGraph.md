@@ -147,7 +147,7 @@ which is what step 1 does.
 | runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane; modules are the files of the SAME reference snapshot Roslyn compiled against, so a live module swap mid-compile cannot drop a used module | the compile settle, beside the terminal stamp, as the edge-set node |
 | cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate — and only when the stamp LANDED (a refused compare-and-set writes no edges over a newer build's) |
 | build-process bake (`NodeSetCompiler.CompileWithModules`; the published `Compile` forwards with none) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges`; `TreeBake` writes every attempted type's set to `dependency-edges.json` beside the bundles (`DependencyEdgesFile`), and `node-repo-publish-bake.yml` uploads it as the run artifact `dependency-edges-<identity>` for CI selection. Writing it into a mesh at adoption is a follow-up |
-| module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | opt-in, `build-project --dependency-edges`: after each green emit, `GetUsedAssemblyReferences()`, timed and printed as the phase `used assembly references` | `dependency-edges.json` in the output directory: one set per project, a `Module` edge to each IN-TREE project assembly the compilation used (a declared-but-unused `ProjectReference` is not an edge). Off by default until the lane's phase timing shows the second binding pass is affordable on the largest module |
+| module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | opt-in, `build-project --dependency-edges`: after each green emit, `GetUsedAssemblyReferences()`, timed and printed as the phase `used assembly references` | `dependency-edges.json` in the output directory: one set per project, a `Module` edge to each IN-TREE project assembly the compilation used (a declared-but-unused `ProjectReference` is not an edge). A `--prebuilt` sibling is an eligible target but gets no set of its own. The file is keyed by the host's compatibility key — the identity a bake writes — and a host that resolves none is refused before anything builds. Off by default until the lane's phase timing shows the second binding pass is affordable on the largest module |
 
 ### The bake's edge file — the transport to CI (2026-10-27)
 
@@ -160,7 +160,9 @@ nothing to compile — is absent and must be read as UNKNOWN. An empty `edges` l
 depends on nothing". A reader refuses a schema it does not know.
 
 The publish-bake lane uploads the file as the run artifact `dependency-edges-<framework identity>`
-(30 days, never part of the publication, never a gate). A narrowed bake writes only what it
+(30 days, never part of the publication). A missing file only warns; a failed upload is RED, like
+every artifact transfer (a transfer failure is never swallowed), and the step runs before the
+publication lock, so a red there has published nothing. A narrowed bake writes only what it
 compiled, so a reader merges runs by source, newest first. The reader and its rules (currency
 against the tree, unknown widens) are MeshWeaver.Plugins `scripts/dependency-graph.py` and
 `Hosting/DependencyGraphSelection.md`.

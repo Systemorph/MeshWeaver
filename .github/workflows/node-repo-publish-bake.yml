@@ -2144,10 +2144,10 @@ jobs:
       # one run (the current and the previous epoch), and an artifact name is unique within a run.
       - name: "Hand the bake's dependency edges to CI selection"
         if: steps.scope.outputs.scope != 'none'
-        # ADVISORY output: a failed upload costs CI selection one run's edges (the reader then falls
-        # back to today's selection for the units it cannot read) and must never block the floor
-        # check or the publication below.
-        continue-on-error: true
+        # Advisory CONTENT, never a swallowed TRANSFER (check-ci-artifact-bindings.py: "a transfer
+        # failure cannot be swallowed"): a missing file only warns, but a failed upload means this
+        # job's own artifact store is failing, and that is RED. It sits BEFORE the lock and every
+        # publishing step, so a red here publishes nothing half-way — a re-run starts clean.
         uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}

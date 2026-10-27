@@ -1,5 +1,6 @@
 using System.Reactive;
 using System.Reflection;
+using MeshWeaver.Compiler;
 using MeshWeaver.Data;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -215,6 +216,7 @@ public class ProjectBuildTest : IDisposable
             }
             """);
 
+        var container = WithCompatibilityAnchor(AppDirectory());
         var report = await Build(OptionsFor(app) with { DependencyEdges = true });
         report.ExitCode.Should().Be(0, report.FatalError ?? "");
 
@@ -222,6 +224,12 @@ public class ProjectBuildTest : IDisposable
         File.Exists(path).Should().BeTrue("the workspace build was asked for its edges");
         var document = DependencyEdgesFile.Deserialize(File.ReadAllText(path));
         document.Should().NotBeNull();
+        // Keyed like a bake: the host's COMPATIBILITY KEY, never the binding version.
+        var (expectedIdentity, _) = FrameworkBuildIdentity.ResolveIdentityForDirectory(container);
+        expectedIdentity.Should().NotBeNullOrEmpty();
+        document!.FrameworkIdentity.Should().Be(expectedIdentity);
+        document.FrameworkIdentity.Should().NotBe(report.PlatformAssemblyVersion,
+            "the binding version is not the identity a bake keys its edges by");
         var appSet = document!.Sets.Single(s => s.Source == "App");
         appSet.Edges.Select(e => e.Target).Should().Equal("Used");
         appSet.Edges.Should().OnlyContain(e => e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Module);
@@ -236,6 +244,39 @@ public class ProjectBuildTest : IDisposable
         var plain = await Build(OptionsFor(app));
         plain.ExitCode.Should().Be(0, plain.FatalError ?? "");
         File.Exists(path).Should().BeFalse("the option is off by default");
+    }
+
+    /// <summary>
+    /// Negative control for the identity: <c>--dependency-edges</c> against a host that resolves no
+    /// compatibility key is REFUSED before anything is built — never an edges file keyed by the
+    /// binding version or a guess, which no reader could match to a bake.
+    /// </summary>
+    [Fact]
+    public async Task DependencyEdges_AgainstAHostWithNoCompatibilityKey_AreRefused()
+    {
+        Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
+        var lib = Write("Lib/Lib.csproj", LibraryProject);
+        Write("Lib/Thing.cs", """
+            namespace Lib;
+            /// <summary>A thing.</summary>
+            public sealed class Thing { }
+            """);
+
+        var report = await Build(OptionsFor(lib) with { DependencyEdges = true });
+
+        report.ExitCode.Should().NotBe(0);
+        report.FatalError.Should().Contain("--dependency-edges").And.Contain("compatibility key");
+        File.Exists(Path.Combine(_root, "out", DependencyEdgesFile.FileName)).Should().BeFalse();
+    }
+
+    /// <summary>Adds the anchor a host's compatibility key is read off to a test container.</summary>
+    internal static string WithCompatibilityAnchor(string container)
+    {
+        var anchor = FrameworkBuildIdentity.AnchorAssemblyName + ".dll";
+        var target = Path.Combine(container, anchor);
+        if (!File.Exists(target))
+            File.Copy(Path.Combine(AppContext.BaseDirectory, anchor), target);
+        return container;
     }
 
     // ── the ProjectReference graph ─────────────────────────────────────────────────────────────
