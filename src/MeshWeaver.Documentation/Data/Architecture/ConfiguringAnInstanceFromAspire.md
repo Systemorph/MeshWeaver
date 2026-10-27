@@ -76,8 +76,7 @@ transform above, then re-syncs what Aspire derives (images, volumes, replicas); 
 ```csharp
 var builder = DistributedApplication.CreateBuilder(args);
 
-builder.AddMemex("memex")                       // the default record: default images, one replica, the fleet's three volumes
-    .WithImage("ghcr.io/systemorph/memex-portal-ai", tag: "3.1.0")
+builder.AddMemex("memex")                       // the default record: one replica, the fleet's three volumes; image from Memex:Image
     .WithOrleansClustering("AdoNet")
     .WithPluginRepo("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", gitRef: "main")
     .PreInstall("MeshWeaver.Plugins/Hosting")
@@ -91,8 +90,27 @@ builder.Build().Run();
 `AddMemex(name, record)` starts from a record you already have; `AddMemexFromFile(name, path)`
 reads one (a bare record, or a full mesh node with a `content` object — what `get
 Deployments/<name>` returns). `MemexOptions` is what is left of the old options type: the default
-image registry, the default portal repository, the derived default tag (`<major>-latest`) and
-`DefaultRecord(name)`.
+image registry (`cr.meshweaver.cloud`), the default portal repository, the neutral default tag
+(`latest`) and `DefaultRecord(name)`.
+
+**The image is configuration, never the package version.** The adapter reads the AppHost's
+`Memex:Image` section — `Repository`, `Tag` (one tag for the portal AND the migration, verbatim as
+the registry carries it), `MigrationRepository`, `PullSecret` — and applies each key only where the
+record leaves the field blank. Precedence, per field: code (`.WithImage(…)`,
+`.WithPinnedImageTag(…)`, the `AddMemex` callback, a record file) → `Memex:Image` → the defaults
+above. The configured tag is resolved when the containers are composed and is never pinned onto the
+record. The package README carries the `appsettings.json` example. `memex build plugin` follows the
+same rule for its two images (`$MEMEX_IMAGE_REGISTRY` / `$MEMEX_IMAGE_TAG`, or `imageRegistry` /
+`imageTag` in `~/.memex/config.json`, else `cr.meshweaver.cloud` and `latest`), with one twist:
+the two images must come from ONE set, and CD moves `mw-plugin-test:latest` at promotion but
+`memex-portal-ai:latest` on the armed set, so a portal tag of `latest` pairs with the tester's
+`<major>-latest` (`imageMajor` / `$MEMEX_IMAGE_MAJOR`, default `3`), the tester tag moved on the
+same armed set.
+
+🚨 Measured 2026-10-27: CD moves `latest` on `mw-plugin-test` only ([Image Tag Contract](../ImageTagContract));
+`memex-portal-ai` and `memex-migration` carry `main` and the line pointers (`3-latest`,
+`3.1-latest`) but no `latest`. Until CD writes that label, configure `Memex:Image:Tag` (for
+example `3-latest` or an exact version) rather than relying on the default.
 
 **Secrets are never on the record** — it syncs to git. On Kubernetes a secret is a Key Vault
 *name* on the record (`keyVaultSecrets`, `vaultValuesKeys`) and a value the CSI driver mounts;

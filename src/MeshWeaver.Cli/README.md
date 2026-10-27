@@ -43,6 +43,31 @@ The whole CI contract for a plugin repo, in three lines:
 The tool pulls both images, **pins them by digest**, and runs the platform's own builder and tester
 inside them. Nothing in the job needs to know about docker, mounts, seeds or allow-files.
 
+### Which images, when the flags are omitted
+
+The image version comes from **configuration**, never from the CLI's own version. Without
+`--image` / `--platform-image` the verb runs `<registry>/memex-portal-ai:<tag>` and the tester
+from the SAME set, resolved in this order:
+
+1. `$MEMEX_IMAGE_REGISTRY` / `$MEMEX_IMAGE_TAG` / `$MEMEX_IMAGE_MAJOR`
+2. `imageRegistry` / `imageTag` / `imageMajor` in `~/.memex/config.json`
+3. `cr.meshweaver.cloud`, `latest` and `3`
+
+🚨 **One set, not one string.** A set version (`3.1.11786`) or a line pointer (`3-latest`) names
+both repositories as written. The moving `latest` does NOT: CD moves `memex-portal-ai:latest` on the
+ARMED set but `mw-plugin-test:latest` at PROMOTION, which can run ahead of arming. So a portal tag
+of `latest` pairs with `mw-plugin-test:<major>-latest`, the tester tag CD moves on the same armed
+set. The default pair is therefore `memex-portal-ai:latest` + `mw-plugin-test:3-latest`.
+
+```json
+{ "baseUrl": "https://memex.meshweaver.cloud", "token": "mw_…",
+  "imageRegistry": "cr.meshweaver.cloud", "imageTag": "3.1.11786", "imageMajor": "3" }
+```
+
+A flag always wins, and a digest pin from the same CD wave (above) is still what CI should pass.
+The tag is used verbatim, so it must be a tag the registry really carries; the verb refuses a
+tester/portal pair that does not resolve one framework identity.
+
 ### Two images, two roles
 
 **`--image` EXECUTES; `--platform-image` supplies the reference set.** The tester image's `/app` is a
@@ -57,8 +82,11 @@ laid beside it, started by the portal image's own `dotnet` — composed by
 `.github/scripts/compose-gate-host.sh`, the same file the reusable node-repo lanes fetch. The CLI
 embeds that script and runs it; it does not carry a second copy of the rules.
 
-🚨 **There is no fallback to the tester's `/app`.** Omit `--platform-image` and the build is REFUSED
-before anything is pulled, and passing the tester image as the platform is refused by name. Pin the
+🚨 **There is no fallback to the tester's `/app`.** Omit `--platform-image` on the command line and
+the CLI uses the CONFIGURED portal image (above) — always a `memex-portal-ai` image, never the
+tester's subset. A caller that drives `BuildPluginCommand` from code with no platform image at all
+is REFUSED before anything is pulled, and passing the tester image as the platform is refused by
+name. Pin the
 two digests from ONE CD wave: the run asserts, with the tester's own `framework-identity` verb, that
 the two images resolve ONE framework identity, and that the bake it produces is keyed to the identity
 the platform host resolves.
@@ -73,8 +101,8 @@ It runs the two stages the plugin build contract defines, in order:
 
 | option | meaning |
 |---|---|
-| `--image` *(required)* | the TESTER image (`mw-plugin-test`); pulled and pinned by digest. It executes the build |
-| `--platform-image` *(required)* | the PORTAL image (`memex-portal-ai`); pulled and pinned by digest. It supplies the reference set, the framework identity and the runtime. No default, no fallback |
+| `--image` | the TESTER image (`mw-plugin-test`); pulled and pinned by digest. It executes the build. Default: the configured `<registry>/mw-plugin-test:<tag>` (see *Which images, when the flags are omitted*) |
+| `--platform-image` | the PORTAL image (`memex-portal-ai`); pulled and pinned by digest. It supplies the reference set, the framework identity and the runtime. Default: the configured `<registry>/memex-portal-ai:<tag>`; never a fallback to the tester's `/app` |
 | `--bake-output <dir>` | where the bundles land (default: a temp dir) |
 | `--external-modules <dir>` | module DLLs to mount at `/ext` |
 | `--source-sha <sha>` | commit stamped into the bake |
