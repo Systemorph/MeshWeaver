@@ -320,7 +320,8 @@ public class ModuleBuildLedgerLaneGuard
         var transfers = text.Split("\n      -", StringSplitOptions.None)
             .Where(step => Regex.IsMatch(step, @"uses: Systemorph/MeshWeaver/\.github/actions/(?:upload|download)-artifact@main"))
             .ToArray();
-        Assert.Equal(26, transfers.Length);
+        // 28: + the module suites' one-graph build handed from `tests-build` to the `tests` legs.
+        Assert.Equal(28, transfers.Length);
         foreach (var transfer in transfers)
         {
             Assert.Contains("store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}", transfer, StringComparison.Ordinal);
