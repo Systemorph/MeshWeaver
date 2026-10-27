@@ -106,6 +106,39 @@ public class TheEdgeSetWriterKeepsTheNewestGenerationTest(ITestOutputHelper outp
         DependencyEdgeSetWriter.DescribesSameBuild(At(3), At(null)).Should().BeTrue();
     }
 
+    [Fact]
+    public void DescribesSameBuild_DoesNotSkipCorrectedEdgeMetadataAtTheSameGeneration()
+    {
+        // A later bundle pass for the same served build at the same generation may correct the
+        // metadata of an edge without changing its kind or target. That pass must be written.
+        var baseEdge = new DependencyEdge
+        {
+            Target = "Some.Module",
+            Kind = DependencyEdgeKinds.Module,
+            TargetBuildMvid = "1111",
+            EvidenceClass = DependencyEvidenceClasses.Static,
+            Evidence = ["Some.Module.TypeA"],
+        };
+        DependencyEdgeSet With(DependencyEdge edge) => new()
+        {
+            Source = "x",
+            BuildMvid = "a",
+            StampVersion = 3,
+            Edges = [edge],
+        };
+
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { Evidence = ["Some.Module.TypeA"] }))
+            .Should().BeTrue("equal evidence in a different list instance is the same value");
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { TargetBuildMvid = "2222" }))
+            .Should().BeFalse("a corrected target build must be written");
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { TargetKind = DependencyEdgeKinds.Platform }))
+            .Should().BeFalse("a corrected resolved kind must be written");
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { EvidenceClass = DependencyEvidenceClasses.Dynamic }))
+            .Should().BeFalse("a corrected evidence class must be written");
+        DependencyEdgeSetWriter.DescribesSameBuild(With(baseEdge), With(baseEdge with { Evidence = ["Some.Module.TypeB"] }))
+            .Should().BeFalse("enriched evidence must be written");
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task TwoBuildsAtTheSameGeneration_TheOneTheRecordNames_WinsInEitherOrder()
     {

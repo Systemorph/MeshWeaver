@@ -90,7 +90,7 @@ internal static class DependencyEdgeSetWriter
 
     /// <summary>
     /// Whether <paramref name="stored"/> already describes <paramref name="incoming"/>'s build with
-    /// the same edges AT A GENERATION NO OLDER than <paramref name="incoming"/>'s — a rewrite would
+    /// the same edges — every field of every edge, not only kind and target — AT A GENERATION NO OLDER than <paramref name="incoming"/>'s — a rewrite would
     /// change nothing but the row's version. Makes every writer idempotent, which the adoption
     /// writer needs: it runs on every bundle pass of every boot.
     ///
@@ -107,8 +107,24 @@ internal static class DependencyEdgeSetWriter
         && incoming.BuildMvid is { Length: > 0 }
         && string.Equals(stored.BuildMvid, incoming.BuildMvid, StringComparison.OrdinalIgnoreCase)
         && !IsNewerGeneration(incoming, stored)
-        && stored.Edges.Select(e => (e.Kind, e.Target)).SequenceEqual(incoming.Edges.Select(e => (e.Kind, e.Target)))
+        && stored.Edges.Count == incoming.Edges.Count
+        && stored.Edges.Zip(incoming.Edges).All(pair => SameEdge(pair.First, pair.Second))
         && stored.IncludedWithoutUse.SequenceEqual(incoming.IncludedWithoutUse);
+
+    /// <summary>
+    /// Whether two edges carry the same VALUE — every field, the evidence sequence included. The
+    /// record's own equality cannot answer this: <see cref="DependencyEdge.Evidence"/> is an
+    /// immutable list and compares by reference. Comparing only kind and target would make a later
+    /// pass that corrects a target build, a dynamic edge's resolved kind, its evidence class or its
+    /// evidence a permanent no-op at the same generation.
+    /// </summary>
+    private static bool SameEdge(DependencyEdge stored, DependencyEdge incoming) =>
+        string.Equals(stored.Kind, incoming.Kind, StringComparison.Ordinal)
+        && string.Equals(stored.Target, incoming.Target, StringComparison.Ordinal)
+        && string.Equals(stored.TargetBuildMvid, incoming.TargetBuildMvid, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(stored.TargetKind, incoming.TargetKind, StringComparison.Ordinal)
+        && string.Equals(stored.EvidenceClass, incoming.EvidenceClass, StringComparison.Ordinal)
+        && stored.Evidence.SequenceEqual(incoming.Evidence, StringComparer.Ordinal);
 
     /// <summary>Whether <paramref name="incoming"/> carries a generation the stored set does not
     /// reach: a generation where the stored set has none, or a higher one.</summary>
