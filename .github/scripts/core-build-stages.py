@@ -274,29 +274,32 @@ def _self_test() -> int:
         expect(True, "a workflow with no CI_SHARD_TOTAL is refused")
     print("no container — core's suites need no Docker daemon:")
     import tempfile
+    # The scan's controls run against an explicit DEBT-FREE list, never the live OWES: re-opening
+    # `containers:` in OWES (the documented route) must not turn the self-test red.
+    debt_free = [o for o in OWES if not str(o).startswith("containers:")]
     with tempfile.TemporaryDirectory() as t:
         os.makedirs(os.path.join(t, "test", "A"))
         open(os.path.join(t, "test", "A", "A.csproj"), "w").write('<Project><ItemGroup><PackageReference Include="xunit.v3" /></ItemGroup></Project>')
         open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n// mentions Testcontainers in a comment only\n")
-        expect(container_problems(t) == [], "a tree with no container package and no container code is green")
+        expect(container_problems(t, debt_free) == [], "a tree with no container package and no container code is green")
         open(os.path.join(t, "Directory.Packages.props"), "w").write('<PackageVersion Include="Testcontainers.PostgreSql" Version="4.0.0" />')
-        expect(any("container package" in p for p in container_problems(t)), "RED: Testcontainers.PostgreSql pinned centrally")
+        expect(any("container package" in p for p in container_problems(t, debt_free)), "RED: Testcontainers.PostgreSql pinned centrally")
         open(os.path.join(t, "Directory.Packages.props"), "w").write("<PackageVersion Include = 'Testcontainers.PostgreSql' Version='4.0.0' />")
-        expect(any("container package" in p for p in container_problems(t)), "RED: the same pin single-quoted with spaces around =")
-        expect(container_problems(t, OWES + ["containers: a suite starts a database in Docker"]) == [],
+        expect(any("container package" in p for p in container_problems(t, debt_free)), "RED: the same pin single-quoted with spaces around =")
+        expect(container_problems(t, debt_free + ["containers: a suite starts a database in Docker"]) == [],
                "a re-opened `containers:` debt declares it unmet — the scan does not contradict the declaration")
-        expect(any("container package" in p for p in container_problems(t, OWES)),
+        expect(any("container package" in p for p in container_problems(t, debt_free)),
                "…and without that debt the same tree is RED again")
         os.remove(os.path.join(t, "Directory.Packages.props"))
         open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<PackageReference Include='Docker.DotNet' />")
-        expect(any("container package" in p for p in container_problems(t)), "RED: a test project referencing Docker.DotNet")
+        expect(any("container package" in p for p in container_problems(t, debt_free)), "RED: a test project referencing Docker.DotNet")
         open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project/>")
         open(os.path.join(t, "test", "A", "T.cs"), "w").write("using DotNet.Testcontainers.Builders;\n")
-        expect(any("starts a container" in p for p in container_problems(t)), "RED: a test that builds a container")
+        expect(any("starts a container" in p for p in container_problems(t, debt_free)), "RED: a test that builds a container")
         os.makedirs(os.path.join(t, "test", "A", "bin"))
         open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n")
         open(os.path.join(t, "test", "A", "bin", "X.props"), "w").write('<PackageReference Include="Testcontainers" />')
-        expect(container_problems(t) == [], "build output (bin/) is not the tree")
+        expect(container_problems(t, debt_free) == [], "build output (bin/) is not the tree")
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every drift is red, the generated file is green'}")
     return 1 if fails else 0
 
