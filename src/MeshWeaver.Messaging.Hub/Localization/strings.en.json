@@ -1597,7 +1597,7 @@
   "setup.packages.selected.other": "{0} packages selected",
   "setup.packages.changeLater": "You can change this later in the Store.",
   "setup.packages.includedBy": "Included by {0}: {1}",
-  "setup.packages.other": "Other",
+  "setup.packages.ungrouped": "Other",
   "setup.packages.group.one": "{0} package",
   "setup.packages.group.other": "{0} packages",
   "setup.packages.needsPlan": "needs plan {0} — this instance is on {1}; ask the registry's administrator to raise the plan",

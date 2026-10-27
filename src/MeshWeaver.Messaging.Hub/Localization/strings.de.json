@@ -1597,7 +1597,7 @@
   "setup.packages.selected.other": "{0} Pakete ausgewählt",
   "setup.packages.changeLater": "Das lässt sich später im Store ändern.",
   "setup.packages.includedBy": "In {0} enthalten: {1}",
-  "setup.packages.other": "Sonstige",
+  "setup.packages.ungrouped": "Sonstige",
   "setup.packages.group.one": "{0} Paket",
   "setup.packages.group.other": "{0} Pakete",
   "setup.packages.needsPlan": "benötigt Plan {0} – diese Instanz ist auf {1}; bitten Sie den Administrator der Registry, den Plan anzuheben",
