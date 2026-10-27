@@ -33,6 +33,16 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Features" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
+    <!-- 🚨 Humanizer is a PLATFORM-CARRIED assembly whether or not core calls it: Roslyn's
+         Workspaces (under CSharp.Features above) depends on Humanizer.Core 2.14.1, so the portal
+         image's /app always ships a Humanizer.dll, and that copy is the one every module binds —
+         a module's own bundled copy never loads while the platform carries the name, and .NET
+         binds only to an EQUAL or HIGHER version. MeshWeaver.Plugins modules compile against
+         Humanizer.Core 3.x (MeshWeaver.Graph.Views calls DateTime.Humanize), so this lift sets
+         the version the platform offers. Removing it (as #7262 did with MeshWeaver.Graph's
+         reference) silently downgrades /app to 2.14 and every module built against 3.x is
+         refused at load (PlatformCarriedAssemblyFloorsGuard). -->
+    <PackageReference Include="Humanizer.Core" />
     <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
