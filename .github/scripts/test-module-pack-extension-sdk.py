@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -108,6 +109,17 @@ def structure_problems(doc: dict) -> list[str]:
                and "needs.select.outputs.build-extensions-sdk" in str((s.get("with") or {}).get("dotnet-version", ""))
                for s in pack_steps[:n]):
         problems.append("the pack job does not install the keyed SDK before the supersession check")
+    # EVERY setup-dotnet in the lane needs a writable install dir on the non-root fleet runner:
+    # DOTNET_INSTALL_DIR (job or step env) under /home/runner, keyed on THAT job's own runner.
+    for job_id, job in doc["jobs"].items():
+        runs_on = re.sub(r"^\$\{\{\s*|\s*\}\}$", "", str(job.get("runs-on", ""))).strip()
+        for st in job.get("steps") or []:
+            if not str(st.get("uses", "")).startswith("actions/setup-dotnet@"):
+                continue
+            install_dir = str((st.get("env") or {}).get("DOTNET_INSTALL_DIR") or (job.get("env") or {}).get("DOTNET_INSTALL_DIR") or "")
+            if "/home/runner/.dotnet" not in install_dir or runs_on not in install_dir:
+                problems.append(f"job {job_id!r}: a setup-dotnet step has no writable DOTNET_INSTALL_DIR keyed on its "
+                                f"runner ({runs_on!r}) — it fails on the non-root fleet runner")
     bw = doc["jobs"]["build-workspace"]["steps"]
     if not any(str(s.get("uses", "")).startswith("actions/setup-dotnet@")
                and "needs.select.outputs.build-extensions-sdk" in str((s.get("with") or {}).get("dotnet-version", ""))
@@ -151,6 +163,13 @@ def mutations(doc: dict) -> list[tuple[str, dict]]:
         if s.get("name") == "Evaluate the shelf / build extension with MSBuild":
             s["run"] = s["run"].replace("worktree add", "worktree skip")
     out.append(("the BASE tree is no longer evaluated", m))
+    for job_id in ("select", "build-workspace"):
+        m = copy.deepcopy(doc)
+        m["jobs"][job_id].get("env", {}).pop("DOTNET_INSTALL_DIR", None)
+        out.append((f"{job_id}'s setup-dotnet loses its writable install dir", m))
+    m = copy.deepcopy(doc)
+    m["jobs"]["select"]["env"]["DOTNET_INSTALL_DIR"] = "${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}"
+    out.append(("select's install dir keyed on ANOTHER job's runner", m))
     m = copy.deepcopy(doc)
     for s in m["jobs"]["select"]["steps"]:
         if s.get("name") == "Evaluate the shelf / build extension with MSBuild":

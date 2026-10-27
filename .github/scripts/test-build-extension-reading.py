@@ -151,11 +151,10 @@ def main() -> int:
 
         check("Choose: the Release branch's file is an input", "Rel/Release.cs" in linked and reaches(reach, "Rel/Release.cs"),
               str(sorted(linked)))
-        check("Choose: the Otherwise branch's file is NOT (not keyed, not in reach)",
-              "Dbg/Debug.cs" not in linked and not reaches(reach, "Dbg/Debug.cs"), str(sorted(linked)))
-        (repo / "Dbg/Debug.cs").write_text("// debug v2\n")
-        check("…and editing it leaves the key unchanged",
-              key.shelf_inputs(repo, proj, "build-extensions-project", sdk=sdk, evaluation=ev) == k0)
+        check("Choose: MSBuild's evaluation does NOT list the Otherwise branch's file as an item",
+              "Dbg/Debug.cs" not in str(ev["projects"][proj]["items"]), str(ev["projects"][proj]["items"]))
+        check("…but the conservative sweep keeps it, because the project text names it (over-inclusion costs a "
+              "rebuild, omission a stale bundle)", "Dbg/Debug.cs" in ev["projects"][proj]["swept"] and reaches(reach, "Dbg/Debug.cs"))
 
         check("a transform-produced item path is an input and in reach",
               "Gen/a.res" in linked and reaches(reach, "Gen/a.res"), str(sorted(linked)))
@@ -234,18 +233,28 @@ def main() -> int:
                 f'</PropertyGroup>{body}</Project>\n', encoding="utf-8")
             return run_evaluate(repo, "Tgt/Tgt.csproj", tmp / "tgt.json")
 
+        # A statically resolvable in-repo path a target adds is now a SWEPT input (keyed, in reach), so
+        # it is accepted; only what cannot be resolved statically is refused.
+        for label, body in (
+                ("an in-repo Compile item a BeforeTargets=CoreCompile target adds",
+                 '<Target Name="AddGen" BeforeTargets="CoreCompile"><ItemGroup><Compile Include="../Gen2/Extra.cs" /></ItemGroup></Target>'),
+                ("a plain @(X) whose X names an in-repo file",
+                 '<ItemGroup><_Mine Include="../Gen2/Extra.cs" /></ItemGroup><Target Name="Use" BeforeTargets="CoreCompile">'
+                 '<ItemGroup><Compile Include="@(_Mine)" /></ItemGroup></Target>')):
+            r = tgt_eval(body)
+            swept_now = json.loads((tmp / "tgt.json").read_text())["projects"]["Tgt/Tgt.csproj"]["swept"] if r.returncode == 0 else []
+            check(f"{label} ⇒ accepted, because the sweep KEYS Gen2/Extra.cs", r.returncode == 0 and "Gen2/Extra.cs" in swept_now,
+                  f"exit={r.returncode} swept={swept_now} {r.stderr[-200:]}")
         for label, body, needle in (
-                ("an untracked in-repo Compile item a BeforeTargets=CoreCompile target adds",
-                 '<Target Name="AddGen" BeforeTargets="CoreCompile"><ItemGroup><Compile Include="../Gen2/Extra.cs" /></ItemGroup></Target>',
-                 "Gen2/Extra.cs"),
                 ("an item TRANSFORM inside a target",
                  '<ItemGroup><_Src Include="Local.cs" /></ItemGroup><Target Name="Map" BeforeTargets="CoreCompile">'
                  "<ItemGroup><Compile Include=\"@(_Src->'../Gen2/%(Filename).cs')\" /></ItemGroup></Target>",
                  "item transform"),
-                ("a plain @(X) whose X names an untracked in-repo file",
-                 '<ItemGroup><_Mine Include="../Gen2/Extra.cs" /></ItemGroup><Target Name="Use" BeforeTargets="CoreCompile">'
-                 '<ItemGroup><Compile Include="@(_Mine)" /></ItemGroup></Target>',
-                 "Gen2/Extra.cs")):
+                ("a property FUNCTION path inside a target (not statically resolvable)",
+                 '<Target Name="Fn" BeforeTargets="CoreCompile"><ItemGroup>'
+                 "<Compile Include=\"$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)','..','Gen2','Extra.cs'))\" />"
+                 '</ItemGroup></Target>',
+                 "cannot resolve")):
             r = tgt_eval(body)
             check(f"{label} ⇒ REFUSED red, naming the target and the file",
                   r.returncode != 0 and "Tgt/Tgt.csproj" in r.stderr and "<Target Name=" in r.stderr and needle in r.stderr,
@@ -259,6 +268,43 @@ def main() -> int:
                  '<Target Name="Refs" AfterTargets="ResolveAssemblyReferences"><ItemGroup><_R Include="@(ReferencePath)" /></ItemGroup></Target>')):
             r = tgt_eval(body)
             check(f"negative control — {label} is accepted", r.returncode == 0, r.stderr[-300:])
+
+        print("== THE CONSERVATIVE PATH SWEEP: a HintPath, any import suffix, a task's inputs — not the whole repo")
+        sw = repo / "Sw"
+        sw.mkdir()
+        for rel_, text_ in (("Lib/Extra.msbuild", "<Project />\n"), ("Libs/Foo.dll", "dll v1\n"),
+                            ("Assets/logo.png", "png v1\n"), ("Other/Unmentioned.txt", "nobody names me\n")):
+            (repo / rel_).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel_).write_text(text_)
+        (sw / "Sw.csproj").write_text("""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><RepoTop>$(MSBuildProjectDirectory)/..</RepoTop></PropertyGroup>
+  <Import Project="../Lib/Extra.msbuild" />
+  <ItemGroup><Reference Include="Foo"><HintPath>../Libs/Foo.dll</HintPath></Reference></ItemGroup>
+  <ItemGroup Condition="Exists('$(RepoTop)')"><None Include="Sw.csproj" /></ItemGroup>
+  <Target Name="CopyIt" AfterTargets="Build"><Copy SourceFiles="../Assets/logo.png" DestinationFolder="$(OutDir)" /></Target>
+</Project>
+""")
+        swp = "Sw/Sw.csproj"
+        sev = evaluate(repo, swp, tmp / "sw.json")
+        entry = sev["projects"][swp]
+        check("an import with a NON-.props/.targets suffix (Lib/Extra.msbuild) is an import",
+              "Lib/Extra.msbuild" in entry["imports"], str(entry["imports"]))
+        check("a <Reference>'s HintPath (Libs/Foo.dll) is swept in", "Libs/Foo.dll" in entry["swept"], str(entry["swept"]))
+        check("a Copy task's SourceFiles inside a target (Assets/logo.png) is swept in",
+              "Assets/logo.png" in entry["swept"], str(entry["swept"]))
+        sk0 = key.shelf_inputs(repo, swp, "build-extensions-project", sdk=sdk, evaluation=sev)
+        sreach = scope.shelf_dirs(repo, swp, sev)
+        for rel_ in ("Lib/Extra.msbuild", "Libs/Foo.dll", "Assets/logo.png"):
+            old = (repo / rel_).read_text()
+            (repo / rel_).write_text(old + "changed\n")
+            changed_key = key.shelf_inputs(repo, swp, "build-extensions-project", sdk=sdk, evaluation=sev) != sk0
+            (repo / rel_).write_text(old)
+            check(f"{rel_}: editing it re-keys, and the scope reaches it", changed_key and reaches(sreach, rel_))
+        check("NEGATIVE: an in-repo file nothing mentions (Other/Unmentioned.txt) is neither keyed nor reached",
+              "Other/Unmentioned.txt" not in str(sk0) and not reaches(sreach, "Other/Unmentioned.txt"))
+        check("a $(MSBuildProjectDirectory)/.. root pulls in NO directory and never the repository root",
+              all((repo / s_).is_file() for s_ in entry["swept"]) and not ({"", "."} & set(sreach))
+              and "**" not in sreach, f"swept={entry['swept']}")
 
         print("== THE HEAD's SDK, pinned for another tree")
         pinned = evaluate(repo, "./Ext/../Ext/Ext.csproj", tmp / "pinned.json", "--pin-sdk", sdk)

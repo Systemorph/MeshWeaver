@@ -451,9 +451,13 @@ def evaluated_closure(evaluation: dict | None, project: str) -> list[str]:
 
 
 def evaluated_files(evaluation: dict, rel: str) -> tuple[list[str], list[str], list[str]]:
-    """(imports, declaredImports, every path item) of one evaluated project."""
+    """(imports, declaredImports, every path item) of one evaluated project. "Items" includes the
+    CONSERVATIVE SWEEP (`swept`): every existing in-repo file the preprocessed project names
+    anywhere (a HintPath, a Copy task's SourceFiles, an Exists()), so the key hashes it and the
+    scope reaches it exactly like an evaluated item."""
     entry = (evaluation.get("projects") or {})[normalize_project(rel)]
-    items = sorted({p for paths in (entry.get("items") or {}).values() for p in paths})
+    items = sorted({p for paths in (entry.get("items") or {}).values() for p in paths}
+                   | set(entry.get("swept") or []))
     return list(entry.get("imports") or []), list(entry.get("declaredImports") or []), items
 
 
@@ -1317,6 +1321,7 @@ def self_test() -> int:
                 "imports": [shelf_rel, "src/Acme.Other/Ext.props"],
                 "declaredImports": ["src/Acme.Other/Ext.props", "src/Acme.Other/Optional.props"],
                 "declaredPatterns": ["src/Acme.Other/Gen/*.cs", "src/Acme.Other/Imp/*.props"],
+                "swept": ["src/Acme.Other/Libs/Foo.dll"],
                 "items": {"Compile": ["src/Acme.Other/Gen/Emitter.cs"],
                           "EmbeddedResource": ["src/Acme.Other/Res/a.res"]}})
             for what, path in (("an imported file (Ext.props)", "src/Acme.Other/Ext.props"),
@@ -1324,6 +1329,7 @@ def self_test() -> int:
                                ("a linked Compile item", "src/Acme.Other/Gen/Emitter.cs"),
                                ("a transform-produced item path", "src/Acme.Other/Res/a.res"),
                                ("a NEW file the declared Compile glob covers", "src/Acme.Other/Gen/New.cs"),
+                               ("a file the conservative sweep found (a HintPath)", "src/Acme.Other/Libs/Foo.dll"),
                                ("a first match of a declared IMPORT glob that matches nothing yet",
                                 "src/Acme.Other/Imp/First.props"),
                                ("a new ancestor implicit import", "src/Directory.Build.targets")):

@@ -45,9 +45,6 @@ from pathlib import Path
 # The path-valued item types read. ProjectReference is followed as an edge, not hashed as a file.
 ITEM_TYPES = ("Compile", "EmbeddedResource", "AdditionalFiles", "Content", "None", "Analyzer",
               "ProjectReference")
-# In a preprocessed project, every imported file appears ALONE on a line inside the
-# `<!-- ===== <Import Project="…"> … ===== -->` banner MSBuild writes around it.
-_PP_FILE = re.compile(r"^(/[^\n<>\"]+\.(?:props|targets|csproj|proj|projitems|xml))$", re.M)
 _IMPORT = re.compile(r"<Import\b[^>]*?\bProject=(?:\"([^\"]*)\"|'([^']*)')")
 _ITEM = re.compile(r"<([A-Za-z_][\w.-]*)\s[^>]*?\bInclude=(?:\"([^\"]*)\"|'([^']*)')")
 # Item types whose Include is a NAME, not a path.
@@ -194,14 +191,20 @@ def _absolute(value: str, plain_base: Path, this_dir: Path, project_dir: Path,
     return os.path.normpath(v if v.startswith("/") else str(base / v))
 
 
-def target_item_violations(root: Path, files: list[str], project_rel: str, properties: dict[str, str],
-                           tracked: set[str]) -> list[str]:
-    project_dir = (root / project_rel).parent
-    outputs = []
+def _output_dirs(project: Path, properties: dict[str, str]) -> list[str]:
+    """The project's build OUTPUT directories, absolute: products of the build, never inputs."""
+    out = []
     for name in _OUTPUT_PROPERTIES:
         value = (properties.get(name) or "").strip().replace("\\", "/")
         if value:
-            outputs.append(os.path.normpath(value if value.startswith("/") else str(project_dir / value)))
+            out.append(os.path.normpath(value if value.startswith("/") else str(project.parent / value)))
+    return out
+
+
+def target_item_violations(root: Path, files: list[str], project_rel: str, properties: dict[str, str],
+                           tracked: set[str]) -> list[str]:
+    project_dir = (root / project_rel).parent
+    outputs = _output_dirs(root / project_rel, properties)
     declarations: dict[str, list[tuple[str, Path]]] = {}
     in_targets: list[tuple[str, str, str, Path, str]] = []   # (target, tag, include, file, rel)
     for rel in files:
@@ -269,6 +272,116 @@ def target_item_violations(root: Path, files: list[str], project_rel: str, prope
     return out
 
 
+# ── the CONSERVATIVE PATH SWEEP over the preprocessed project ─────────────────────────────────
+# MSBuild's evaluation lists imports and evaluation-time items, but a build also reads paths it
+# never turns into items: a <Reference>'s <HintPath>, a Copy task's SourceFiles, an Exists() in a
+# condition, an import with any suffix. Rather than model each shape, every attribute value and
+# every text node of the `-pp` output (and every quoted piece inside them) that, after expansion,
+# names an EXISTING in-repo FILE outside the build outputs is an input: hashed by the key and in
+# the scope's reach. Over-inclusion costs a rebuild; omission costs a stale bundle, so this errs
+# wide. It never takes a DIRECTORY (`$(MSBuildProjectDirectory)` alone must not pull in a tree),
+# never the repository root, never `.git`. A glob is kept as a pattern when its static root is an
+# in-repo directory other than the root. Paths that cannot be resolved statically are not swept;
+# the target-item refusal above still covers those that a target turns into items.
+# Each banner opens or closes an imported file; `</Import>` names the file the text returns to.
+_PP_BANNER = re.compile(r"^={20,}\n  (?:<Import\b[^\n]*>|</Import>)\n(?:[^\n]*\n)*?\n(/[^\n]+)\n={20,}$", re.M)
+_COMMENT = re.compile(r"<!--.*?-->", re.S)
+_ATTRIBUTE = re.compile(r"""[\w:.-]+\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+_TEXT = re.compile(r">([^<>]+)<")
+_QUOTED = re.compile(r"'([^']*)'")
+
+
+def pp_segments(text: str, project: Path) -> list[tuple[Path, str]]:
+    """(the file a stretch of preprocessed text was written in, that stretch)."""
+    out: list[tuple[Path, str]] = []
+    current, last = project, 0
+    for m in _PP_BANNER.finditer(text):
+        out.append((current, text[last:m.start()]))
+        current, last = Path(m.group(1)), m.end()
+    out.append((current, text[last:]))
+    return out
+
+
+def pp_imports(root: Path, text: str) -> set[str]:
+    """Every in-repo file the preprocessed project imported, whatever its suffix."""
+    return {r for m in _PP_BANNER.finditer(text) if (r := _in_repo(root, m.group(1))) is not None}
+
+
+def _candidates(segment: str):
+    for m in _ATTRIBUTE.finditer(segment):
+        yield m.group(1) if m.group(1) is not None else m.group(2)
+    for m in _TEXT.finditer(segment):
+        yield m.group(1)
+
+
+def pp_properties(root: Path, text: str, project: Path) -> list[str]:
+    """Property names the IN-REPO stretches of the preprocessed text reference (resolved by MSBuild)."""
+    names: set[str] = set()
+    for f, seg in pp_segments(text, project):
+        if _in_repo(root, str(f)) is not None:
+            names.update(n for n in _PROPERTY.findall(_COMMENT.sub("", seg)) if n not in _DIRECTORY_PROPERTIES)
+    return sorted(names)
+
+
+def sweep(root: Path, text: str, project: Path, properties: dict[str, str], outputs: list[str]) -> tuple[list[str], list[str]]:
+    """(existing in-repo files, in-repo glob patterns) the preprocessed project names anywhere."""
+    project_dir = project.parent
+    files: set[str] = set()
+    patterns: set[str] = set()
+
+    def admit(path: str) -> str | None:
+        rel = _in_repo(root, path)
+        if rel is None or rel in ("", ".") or rel == ".git" or rel.startswith(".git/"):
+            return None
+        if any(path == o or path.startswith(o.rstrip("/") + "/") for o in outputs):
+            return None
+        return rel
+
+    for f, seg in pp_segments(text, project):
+        seg = _COMMENT.sub("", seg)
+        for value in _candidates(seg):
+            for chunk in [value] + _QUOTED.findall(value):
+                for piece in chunk.split(";"):
+                    piece = piece.strip().replace("\\", "/")
+                    if not piece or "@(" in piece or "%(" in piece or not any(c in piece for c in "/."):
+                        continue
+                    if any(c in piece for c in "<>\n'\"") or " " in piece.strip():
+                        continue
+                    v = piece
+                    # A plain relative path is the PROJECT's (items, task inputs, HintPath): MSBuild
+                    # runs with the project directory as its base. Import paths, the one kind
+                    # relative to the defining file, come from the banners above.
+                    bases = [project_dir]
+                    if v.startswith("$(MSBuildThisFileDirectory)"):
+                        v, bases = v[len("$(MSBuildThisFileDirectory)"):], [f.parent]
+                    elif v.startswith("$(MSBuildProjectDirectory)"):
+                        v, bases = v[len("$(MSBuildProjectDirectory)"):].lstrip("/"), [project_dir]
+                    v = _PROPERTY.sub(lambda m: properties.get(m.group(1), m.group(0)), v).replace("\\", "/")
+                    if "$(" in v or not v:
+                        continue
+                    for base in ([Path("/")] if v.startswith("/") else bases):
+                        path = os.path.normpath(v if v.startswith("/") else str(base / v))
+                        if _is_glob(v):
+                            cut = min(i for i in (path.find("*"), path.find("?")) if i >= 0)
+                            static_dir = path[:cut] if path[:cut].endswith("/") else os.path.dirname(path[:cut])
+                            # rooted at an in-repo directory, never the repository root itself
+                            # rooted at an EXISTING in-repo directory: never the root, never an
+                            # output, and not the project's own (already tree-hashed) directory
+                            sd = admit(static_dir.rstrip("/") or "/")
+                            own = _in_repo(root, str(project_dir)) or ""
+                            if sd is not None and os.path.isdir(static_dir) and not (sd == own or sd.startswith(own + "/")):
+                                try:
+                                    patterns.add(Path(path).resolve().relative_to(root).as_posix())
+                                except (ValueError, OSError):
+                                    pass
+                            continue
+                        if os.path.isfile(path):
+                            rel = admit(path)
+                            if rel is not None:
+                                files.add(rel)
+    return sorted(files), sorted(patterns)
+
+
 def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -> dict:
     proj = root / rel
     props = ["-p:Configuration=Release"] + [f"-p:{p}" for p in properties]
@@ -278,8 +391,10 @@ def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -
         text = pp.read_text(encoding="utf-8", errors="replace")
         if not text.strip():
             raise RuntimeError(f"`dotnet msbuild -pp` wrote nothing for {rel}")
-    imports = sorted({r for m in _PP_FILE.findall(text) if (r := _in_repo(root, m)) is not None} | {rel})
-    wanted = sorted(set(_referenced_properties(root, imports)) | set(_OUTPUT_PROPERTIES))
+    # Every in-repo file the banners name, WHATEVER its suffix (a .msbuild, a .proj, a .xml import).
+    imports = sorted(pp_imports(root, text) | {rel})
+    wanted = sorted(set(_referenced_properties(root, imports)) | set(_OUTPUT_PROPERTIES)
+                    | set(pp_properties(root, text, root / rel)))
     got = json.loads(_run([dotnet, "msbuild", str(proj), "-nologo", *props,
                            *[f"-getItem:{t}" for t in ITEM_TYPES],
                            *[f"-getProperty:{n}" for n in wanted]], root))
@@ -294,7 +409,10 @@ def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -
     values = {k: v for k, v in (got.get("Properties") or {}).items() if isinstance(v, str)}
     project_dir = Path(rel).parent.as_posix()
     declared_imports, declared_patterns, unknown = declared(root, imports, project_dir, values)
-    tracked = {p for paths in items.values() for p in paths} | set(imports)
+    outputs = _output_dirs(root / rel, values)
+    swept, swept_patterns = sweep(root, text, (root / rel).resolve(), values, outputs)
+    declared_patterns = sorted(set(declared_patterns) | set(swept_patterns))
+    tracked = {p for paths in items.values() for p in paths} | set(imports) | set(swept)
     violations = target_item_violations(root, imports, rel, values, tracked)
     if violations:
         raise RuntimeError(
@@ -302,7 +420,7 @@ def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -
             "nor the scope would — refused rather than keyed on a guess:\n  " + "\n  ".join(violations)
             + "\nDeclare the item at evaluation time (outside the <Target>), or stage it under a build output.")
     return {"imports": imports, "declaredImports": declared_imports, "declaredPatterns": declared_patterns,
-            "unknownPatterns": unknown, "items": items, "references": references}
+            "unknownPatterns": unknown, "items": items, "references": references, "swept": swept}
 
 
 def _pinned(root: Path, sdk: str):

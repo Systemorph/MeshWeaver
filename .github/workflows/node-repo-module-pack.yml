@@ -1007,6 +1007,9 @@ jobs:
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ (vars.MW_RUNNER || 'ubuntu-latest') != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
       # The helper is lane orchestration, while the workflow below is the exact definition GitHub
       # loaded for this job. Keep both absolute so a later `cd` cannot silently change either.
       MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
@@ -1713,6 +1716,10 @@ jobs:
       # (the same "the checkout IS the platform" reading its bundle-identity block takes), and is
       # RED only when neither can be established.
       platform-version: ${{ steps.platform-version.outputs.version }}
+    env:
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ (vars.MW_RUNNER_DOCKER || 'ubuntu-latest') != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     steps:
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
@@ -2016,6 +2023,9 @@ jobs:
     # this env covers every process the job launches, whatever pin it was built at.
     env:
       DOTNET_TieredPGO: "0"
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ inputs.workspace-runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
     # callers must remain able to grant `actions: read` without also granting an identity token.
     steps:

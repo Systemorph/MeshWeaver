@@ -687,12 +687,15 @@ def self_test() -> int:
             (shared / "notes.txt").write_text("not an item\n", encoding="utf-8")
             evx = ev({"imports": [shelf, "tools/build/Ext.props"],
                       "declaredImports": ["tools/build/Ext.props", "tools/build/Optional.props"],
-                      "items": {"Compile": ["tools/Shared/Emitter.cs"], "EmbeddedResource": ["tools/Shared/Gen/a.res"]}})
+                      "items": {"Compile": ["tools/Shared/Emitter.cs"], "EmbeddedResource": ["tools/Shared/Gen/a.res"]},
+                      "swept": ["tools/Shared/logo.png"]})
+            (shared / "logo.png").write_text("png v1\n", encoding="utf-8")
             x0 = key(ext_p=shelf, evaluation=evx)
             for label, rel, text in (
                     ("an imported file (a DefineConstants change in Ext.props)", "tools/build/Ext.props",
                      "<Project><PropertyGroup><DefineConstants>X</DefineConstants></PropertyGroup></Project>\n"),
-                    ("an evaluated Compile item outside the project", "tools/Shared/Emitter.cs", "// v2\n")):
+                    ("an evaluated Compile item outside the project", "tools/Shared/Emitter.cs", "// v2\n"),
+                    ("a file the conservative sweep found (a Copy task's SourceFiles)", "tools/Shared/logo.png", "png v2\n")):
                 mutate, restore = edit(rel, text)
                 mutate()
                 try:
