@@ -1119,9 +1119,9 @@ public static class ProjectBuild
                 + string.Join(", ", unresolved)
                 + ". This mode resolves references from the image, the module-libraries shelf and "
                 + "--extra-refs only — there is no NuGet here. Only libraries ADDITIONAL to the platform "
-                + "have to be specified, and these are they: add the package to the curated shelf "
-                + "(tools/MeshWeaver.ModuleLibraries — its deps.json is the ride closure), pass "
-                + "--extra-refs <dir>, or build against an image that carries them.";
+                + "have to be specified, and these are they: add the package to the module repository's "
+                + "shelf (the project its lane publishes as --module-libs; its deps.json is the ride "
+                + "closure), pass --extra-refs <dir>, or build against an image that carries them.";
             sink.Error($"[{name}] {message}");
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, 0, 0, null, unresolved.ToImmutable(), message);

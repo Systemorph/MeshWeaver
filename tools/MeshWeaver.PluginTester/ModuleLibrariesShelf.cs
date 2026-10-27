@@ -4,9 +4,11 @@ using System.Text.Json;
 namespace MeshWeaver.PluginTester;
 
 /// <summary>
-/// The curated ADDITIONAL-libraries shelf (<c>module-libs/</c> beside the builder — the publish of
-/// <c>tools/MeshWeaver.ModuleLibraries</c>, staged into the tester image by CD like
-/// <c>sdk-generators/</c>). A container build resolves an
+/// The curated ADDITIONAL-libraries shelf: a publish whose <c>deps.json</c> lists the libraries a
+/// module repository allows its modules beyond the platform. The repository that owns the list
+/// supplies it (MeshWeaver.Plugins' <c>src/MeshWeaver.ModuleLibraries</c>, which the module-pack
+/// lane publishes per run and passes as <c>--module-libs</c>); the platform image carries none
+/// (Doc/Architecture/CoreCarriesNoGuiTechnology). A container build resolves an
 /// otherwise-unsupplied <c>PackageReference</c> here, and the package's assemblies RIDE the bundle
 /// together with their transitive shelf closure — every ride derived from the shelf's own
 /// <c>deps.json</c>, never guessed (the 2026-08-19/20 outage was a guessed closure, and the lane's
@@ -61,9 +63,9 @@ public sealed class ModuleLibrariesShelf
     public int PackageCount => _assembliesByPackage.Count;
 
     /// <summary>
-    /// Locates the shelf: <c>module-libs/</c> beside the builder first (the in-image layout), then
-    /// under the reference container's directory. Null when no shelf ships — a dev build without
-    /// the staging; a shelf-needing module then fails by name exactly as before.
+    /// Locates the shelf: <c>module-libs/</c> beside the builder first, then under the reference
+    /// container's directory. Null when neither carries one (the platform image ships none); a
+    /// shelf-needing module then fails by name.
     ///
     /// <para>🚨 <c>--module-libs</c> REPLACES that search rather than heading it, exactly as
     /// <c>--extensions</c> does: the module repository that names its own shelf has made a

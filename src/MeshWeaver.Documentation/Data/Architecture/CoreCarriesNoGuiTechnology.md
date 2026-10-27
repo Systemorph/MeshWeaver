@@ -156,7 +156,10 @@ project. Core keeps the *mechanism* and the module repository owns the *list*:
    MailKit, Microsoft.Graph, ExcelDataReader, the Orleans clustering/persistence and
    ModelContextProtocol members only Plugins restores), and `InstanceSetupDefaults.RequiredModules`,
    the list of first-party modules a portal must load, which the Fleet Console now declares. The
-   tester keeps reading `module-libs/` when one is staged or named, so the mechanism outlives the list.
+   tester's own build no longer stages a shelf either (its `StageModuleLibraries` target and the
+   `MeshWeaverModuleLibrariesRoot` property are gone with the step that set it). The tester keeps
+   reading a shelf named by `--module-libs`, or a `module-libs/` laid beside it or the container, so
+   the mechanism outlives the list.
 
 **Risk.** The closure stops being one shared, image-baked fact and becomes per-run: a lane that
 publishes the shelf itself must derive the closure from that publish's `deps.json` exactly as the
