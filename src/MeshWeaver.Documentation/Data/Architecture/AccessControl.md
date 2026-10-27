@@ -1224,7 +1224,7 @@ retype lands, and deleting the rule removes the grant everywhere at once.
 | Field | Meaning |
 |---|---|
 | `nodeType` | The node type the partition ROOT must carry. Ordinal match. |
-| `contentField` / `contentValue` | Optional. A TOP-LEVEL field of the root's content and the text it must hold — a string as written, any other value as its JSON text (Postgres' `content->>'field'`). A missing or null field never matches. Omit both to match every root of the type. |
+| `contentField` / `contentValue` | Optional. A TOP-LEVEL field of the root's content and the text it must hold. **Only a JSON string or boolean field can match** — a string as written, a boolean as `true`/`false` (the text Postgres' `content->>'field'` yields for those two kinds, so both evaluators agree). A number, array or object NEVER matches: `jsonb` re-renders those canonically, so their text need not equal what was stored, and a rule filtering on one grants nothing. A missing or null field never matches either. Omit both to match every root of the type. |
 | `accessObject` | A user id or a group path. `Public` and `Anonymous` are never honoured — a rule is for a NAMED subject. |
 | `role` | The role granted at each matching root — built-in or a custom `Role`. |
 
