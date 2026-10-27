@@ -540,7 +540,7 @@ public static class CascadeBuild
             NodeSetCompiler.CompiledNode compiled;
             try
             {
-                compiled = NodeSetCompiler.Compile(
+                compiled = NodeSetCompiler.CompileWithModules(
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,

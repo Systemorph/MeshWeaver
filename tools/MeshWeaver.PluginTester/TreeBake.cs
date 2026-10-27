@@ -538,7 +538,7 @@ public static class TreeBake
 
             try
             {
-                var compiled = NodeSetCompiler.Compile(
+                var compiled = NodeSetCompiler.CompileWithModules(
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,

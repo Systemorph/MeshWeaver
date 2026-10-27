@@ -66,7 +66,7 @@ public class DependencyEdgeExtractionTest
         var output = Path.Combine(Path.GetTempPath(), "mw-depedges-" + Guid.NewGuid().ToString("N"));
         try
         {
-            return NodeSetCompiler.Compile(
+            return NodeSetCompiler.CompileWithModules(
                 NodeSet.Create([TypeNode(B), .. nodes]), TypeNode(B),
                 sources, tests: null, configuration: null, contentCollections: null,
                 references: references ?? CompileReferences.Default,

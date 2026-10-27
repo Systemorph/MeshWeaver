@@ -276,12 +276,15 @@ public static class NodeSetCompiler
         Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>? resolveNuGet = null,
         ILogger? logger = null,
         CancellationToken ct = default)
-        => Compile(nodes, typeNode, sources, tests, configuration, contentCollections, references,
+        => CompileWithModules(nodes, typeNode, sources, tests, configuration, contentCollections, references,
             dependencyIdOf, toolchainId, outputDirectory, moduleAssemblyPaths: null, resolveNuGet, logger, ct);
 
     /// <summary>
     /// <see cref="Compile(NodeSet, MeshNode, IReadOnlyList{string}?, IReadOnlyList{string}?, string?, IReadOnlyList{ContentCollectionConfig}?, IReadOnlyList{MetadataReference}, Func{string, string?}, string, string, Func{IReadOnlyList{NuGetPackageReference}, CancellationToken, IReadOnlyList{string}}?, ILogger?, CancellationToken)"/>,
     /// naming the installed module files so the dependency edges include the <c>Module</c> edges.
+    /// A distinct NAME, not an overload: an overload whose extra parameter sits where
+    /// <c>resolveNuGet</c> sits would make an existing positional call ending in
+    /// <c>outputDirectory, null</c> ambiguous (CS0121).
     /// </summary>
     /// <param name="nodes">The node set the sources are resolved from.</param>
     /// <param name="typeNode">The NodeType's own MeshNode.</param>
@@ -298,7 +301,7 @@ public static class NodeSetCompiler
     /// <param name="resolveNuGet">Resolves <c>#r "nuget:"</c> references to assembly paths.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <param name="ct">Cancellation.</param>
-    public static CompiledNode Compile(
+    public static CompiledNode CompileWithModules(
         NodeSet nodes,
         MeshNode typeNode,
         IReadOnlyList<string>? sources,

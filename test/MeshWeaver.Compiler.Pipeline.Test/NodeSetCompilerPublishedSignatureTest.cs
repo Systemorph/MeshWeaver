@@ -53,6 +53,51 @@ public class NodeSetCompilerPublishedSignatureTest
     }
 
     [Fact(Timeout = 120_000)]
+    public void APositionalCallEndingInANullResolver_StillBindsThePublishedSignature()
+    {
+        // SOURCE compatibility: `outputDirectory, null` positionally. With the module-aware compile
+        // as an OVERLOAD whose extra parameter sits where resolveNuGet sits, this line did not
+        // compile (CS0121, ambiguous). That this file compiles is the regression; the call runs too.
+        var ct = TestContext.Current.CancellationToken;
+        var output = Path.Combine(Path.GetTempPath(), "mw-published-pos-" + Guid.NewGuid().ToString("N"));
+        var (type, code) = Nodes("Pos");
+        try
+        {
+            var compiled = NodeSetCompiler.Compile(
+                NodeSet.Create([type, code]), type, null, null, null, null, CompileReferences.Default,
+                _ => null, NodeTypeCompilationHelpers.ProcessToolchainId, output, null);
+            compiled.DependencyEdges.Should().NotBeNull();
+            ct.IsCancellationRequested.Should().BeFalse();
+        }
+        finally
+        {
+            try { Directory.Delete(output, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    [Fact]
+    public void TheModuleAwareCompile_IsADistinctName_NotAnOverloadOfThePublishedOne()
+    {
+        typeof(NodeSetCompiler).GetMethods().Where(m => m.Name == nameof(NodeSetCompiler.Compile))
+            .Should().ContainSingle("one Compile, the published one — a second overload is what made positional calls ambiguous");
+        typeof(NodeSetCompiler).GetMethod(nameof(NodeSetCompiler.CompileWithModules)).Should().NotBeNull();
+    }
+
+    private static (MeshNode Type, MeshNode Code) Nodes(string id) => (
+        MeshNode.FromPath($"App/{id}") with
+        {
+            Name = id, NodeType = MeshNode.NodeTypePath, State = MeshNodeState.Active,
+            LastModified = DateTimeOffset.UtcNow, Content = new NodeTypeDefinition(),
+        },
+        new MeshNode("Own", $"App/{id}/Source")
+        {
+            NodeType = "Code", Name = "Own", State = MeshNodeState.Active, LastModified = DateTimeOffset.UtcNow,
+            Content = new CodeConfiguration { Language = "csharp", Code = $"/// <summary>Own.</summary>\npublic record {id}Own(int V);" },
+        });
+
+    [Fact(Timeout = 120_000)]
     public void ACallThroughThePublishedSignature_Compiles_AndRecordsTheEdgeSet()
     {
         var ct = TestContext.Current.CancellationToken;

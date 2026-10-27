@@ -146,7 +146,7 @@ which is what step 1 does.
 |---|---|---|
 | runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane; modules are the files of the SAME reference snapshot Roslyn compiled against, so a live module swap mid-compile cannot drop a used module | the compile settle, beside the terminal stamp, as the edge-set node |
 | cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate — and only when the stamp LANDED (a refused compare-and-set writes no edges over a newer build's) |
-| build-process bake (`NodeSetCompiler.Compile`) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges` for the bundle — writing it into a mesh at adoption is a follow-up |
+| build-process bake (`NodeSetCompiler.CompileWithModules`; the published `Compile` forwards with none) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges` for the bundle — writing it into a mesh at adoption is a follow-up |
 | module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | not yet | follow-up: it runs in CI with no mesh, so its edges need a transport (the bundle, then the registry) that belongs with step (4); and its one-body-pass discipline means `GetUsedAssemblyReferences`' extra binding cost is measured there before it is added |
 
 ## The reverse closure (step 3)
