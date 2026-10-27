@@ -329,6 +329,49 @@ arm" possible at all.
 retired, the registry holds consumer reports and no records, and it refuses (the missing-denominator
 row above). The consumer declaration must then reach it another way first.
 
+## One sweep per store, whatever the replica count (#7382)
+
+Every replica of a store's owner mounts the **same** store and runs this service. Before the lease,
+each replica swept at boot and on every tick, so N passes enumerated and deleted one tree at once.
+Measured on a three-replica owner, at the first armed pass: one pass collected 787 identities, and
+the other two aborted with `could not read /data/prebuilt-bundles`, at the moment the first pass was
+removing directories under their walk. The abort fails closed. Nothing, though, stopped two armed
+passes from planning deletions against each other's half-removed state.
+
+Each pass now runs under the **retention lease**, the mesh node `Admin/RetentionLease/prebuilt-bundles`
+(`PrebuiltBundleRetentionLease`, registered by `AddPrebuiltBundleRetention` itself, so no host has
+to change):
+
+- **The lease is taken with a fold.** A pass writes its claim through `GetMeshNodeStream(path).Update(…)`.
+  The lease node's owning hub decides the writes one at a time. A second claimant against the same
+  base is refused, re-runs its fold on the winner's state, and leaves it. A replica that does not hold
+  the lease sweeps nothing, and logs which pass holds it and until when.
+- **The lease is bounded both ways.** The hold is most of the interval, and never less than an hour.
+  A pass runs for at most half its hold: past that it is unsubscribed, and the pool leaf stops at its
+  next step boundary. A pass that finishes or faults releases the lease at once. A pass cut short by
+  teardown or by the deadline leaves the lease to lapse, so a pass that dies holding it delays the
+  next sweep by at most one hold.
+
+🚨 **The claim is ONE number, and a lapsed claim is never `0`.** A remote `Update` reaches the owner
+as a three-way merge resolved per leaf (`MeshNodePatchMerge`). A string changed on both sides is
+rebased. A leaf the writer's base lacks is applied outright. Only a non-string scalar changed on both
+sides is refused whole. A first cut kept the holder and the hold's end as two strings, and two silos
+produced a torn lease: the winner's holder with the loser's hold end and replica name. The claim
+therefore packs the hold's end and the holder's nonce into a single `long`. The hub serializer
+omits default values, so a lapsed claim of `0` is missing from the writer's base, and the owner
+then applied a losing claim over the winner's: both claimants settled as holders. A lapsed lease
+therefore carries `-1`. The replica name is diagnostic only. The confirmed holder stamps it in a
+second write, after its claim has landed, and a claimant never writes it.
+
+A replica decides "held by another" on its own mirror of the lease, and then writes nothing. A mirror
+that trails the owner can therefore skip a pass the lease would have allowed, and a skipped pass's log
+line can name the replica that held the previous claim. Both are safe: a claim counts as held only
+once the owner has committed it, and the next tick asks again.
+
+| Pinned by | What it fails on |
+|---|---|
+| `PrebuiltBundleRetentionLeaseAcrossSilosTest` (`MeshWeaver.Hosting.Orleans.Test`) | two silos passing at one instant where both sweep or neither is told who does; a finished pass that keeps the lease; a dead pass's lease that never lapses, or one released by a token that no longer holds it; a lease shape the owner's merge can tear, or a lapsed value it omits from the base |
+
 ## Rolling it out
 
 1. **Report-only, everywhere** — the chart default above. The sweep runs, plans and writes its
