@@ -30,17 +30,29 @@ public sealed class MemexConfig
         return new MemexConfig { BaseUrl = baseUrl.TrimEnd('/'), Token = token };
     }
 
+    /// <summary>The base URL alone, resolved in the same order — for reading a cached tool catalog
+    /// when no token is configured.</summary>
+    public static string ResolveBaseUrl(string? flagBaseUrl) =>
+        Pick(flagBaseUrl, Environment.GetEnvironmentVariable(EnvBaseUrl), ReadConfigFile()?.BaseUrl, DefaultBaseUrl)!.TrimEnd('/');
+
     public static string ConfigPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".memex", "config.json");
 
     public static void SaveFile(string? baseUrl, string token)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
-        var file = new ConfigFile { BaseUrl = baseUrl, Token = token };
+        // Keep the image settings a `memex login` has no business resetting.
+        var existing = ReadConfigFile();
+        var file = new ConfigFile
+        {
+            BaseUrl = baseUrl, Token = token,
+            ImageRegistry = existing?.ImageRegistry, ImageTag = existing?.ImageTag, ImageMajor = existing?.ImageMajor,
+        };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(file, Json));
     }
 
-    private static ConfigFile? ReadConfigFile()
+    /// <summary>The parsed <c>~/.memex/config.json</c>, or null when absent or unreadable.</summary>
+    public static ConfigFile? ReadConfigFile()
     {
         try
         {
@@ -62,5 +74,11 @@ public sealed class MemexConfig
     {
         [JsonPropertyName("baseUrl")] public string? BaseUrl { get; set; }
         [JsonPropertyName("token")] public string? Token { get; set; }
+        /// <summary>Registry of the images <c>build plugin</c> runs by default (see <see cref="ImageReferences"/>).</summary>
+        [JsonPropertyName("imageRegistry")] public string? ImageRegistry { get; set; }
+        /// <summary>Tag of the images <c>build plugin</c> runs by default, verbatim as the registry carries it.</summary>
+        [JsonPropertyName("imageTag")] public string? ImageTag { get; set; }
+        /// <summary>Platform major whose armed set a <c>latest</c> portal pairs with on the tester side (see <see cref="ImageReferences"/>).</summary>
+        [JsonPropertyName("imageMajor")] public string? ImageMajor { get; set; }
     }
 }

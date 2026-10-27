@@ -76,8 +76,8 @@ on `main` and on the schedule, once for each new digest.
 ## What this does not cover
 
 - **`FROM` lines of images core builds** (`deploy/node-gate`, `deploy/python-gate`,
-  `clients/voice-gateway`) — and of the service images that moved to MeshWeaver.Deploy
-  (`deploy/{s1-extract,whisper,ocr,ollama}` there). BuildKit pulls those base
+  and, outside core, of the images that left it — the service images in MeshWeaver.Deploy
+  (`deploy/{s1-extract,whisper,ocr,ollama}`) and `clients/voice-gateway` in MeshWeaver.Plugins). BuildKit pulls those base
   images from Docker Hub. The workflows that build them are path-filtered and run rarely, and no
   measured failure was there. Moving their bases is a separate change, because it
   changes the production image's provenance, not only CI's.

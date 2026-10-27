@@ -1,7 +1,7 @@
 ---
 Name: The Image Tag Contract
 Category: Architecture
-Description: A tag with no producer is not a contract. memex-portal-ai:latest was written by a lane that was retired, then deleted by retention, and every check in the fleet stayed green because nothing had ever asserted it. What the promotion actually publishes, why `latest` is not part of it, and the phase ordering the gate has to respect.
+Description: A tag with no producer is not a contract. memex-portal-ai:latest was written by a lane that was retired, then deleted by retention, and every check in the fleet stayed green because nothing had ever asserted it. What the promotion actually publishes, how `latest` on the portal and the migration got a producer back (it moves with `<major>-latest` on every armed set), and the phase ordering the gate has to respect.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z"/><circle cx="7" cy="7" r="1.2"/></svg>
 ---
 
@@ -26,6 +26,11 @@ assemblies, joined them as the set's fifth digest — the deploy-test-switch des
 | `latest` | `mw-plugin-test` **only** | phase B | moving pointer, repo-scoped |
 | `<version>` | `memex-portal-ai` | **phase C — in `arm`, not `promote`** | immutable pointer — *the arming write*, made only once MeshWeaver.Plugins' dependent suites passed against this set's pair (policy `one-promotion-gate`, [One Promotion Gate](/Doc/Architecture/OnePromotionGate)) |
 | `<major>-latest`, `<major.minor>-latest`, `<major.minor.patch>-latest` | `memex-portal-ai`, `memex-migration` | **phase D — in `arm`** | moving line pointers; never moved backwards |
+| `latest` | `memex-portal-ai`, `memex-migration` | **phase D — in `arm`**, in the same write as `<major>-latest` | moving pointer to the newest ARMED set; never moved backwards |
+| `<major>-latest`, `<major.minor>-latest` | `mw-plugin-test` | **phase D — in `arm`**, before the portal's | the tester of the SAME armed set — the matched channel `mw build plugin` needs; the tester's `latest` stays phase B's |
+
+Phase D writes every one of its pointers to ACR, to GHCR and — through the digest-verified
+`mirror-image-to-registry.sh` — to the fleet registry `cr.meshweaver.cloud`.
 
 The three legs compute `$(Version)` from the same root `Directory.Build.props` inside one workflow
 run, so `GITHUB_RUN_NUMBER` is shared and the three version strings are **equal by construction**.
@@ -35,8 +40,11 @@ one argument suffices to assert it on all three.
 There is exactly one other writer, and it obeys the same rule. An **official release**
 (`release.yml`) retags the promoted set `<short-sha>` → the clean `<version>` (e.g. `3.1.0`) on all
 three repositories, `memex-portal-ai` **last** — the same arming-write ordering phase C uses, for the
-same reason. So a release adds one more immutable pointer, applied symmetrically; it adds no floating
-tag, and since `28fc2da4b` it writes no `latest` at all.
+same reason. So a release adds one more immutable pointer, applied symmetrically. For a
+`<major>.<minor>.<run>` set it moves no pointer on the portal or the migration — neither the line
+pointers nor `latest`: CD's `arm` already moved them to that build or past it, so a release-side move
+could only move them backwards. It never writes the portal's or the migration's `latest` at all. Only
+the tester's GHCR `latest` is still mirrored at release time.
 
 > 📅 **2026-09-12 — and there is no tag that means "validated", by decision.** `<version>` is the
 > arming write; it precedes `publish-bake` and `verify-images` (and preceded `plugins-bake` until #6143), so a set is *sealed*
@@ -46,12 +54,41 @@ tag, and since `28fc2da4b` it writes no `latest` at all.
 > daily satellite runs staying green on it, not a pointer; the clean `X.Y.Z` is the only tag-shaped
 > promotion. See `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
 
-**There is no `memex-portal-ai:latest`, and that is the contract, not an omission.** The portal's
-moving pointer is `main`; its selectable pointer is `<version>`. Nothing in `.github/` writes a
-portal `latest`, and nothing should: a floating tag on the portal would have no producer this
-repository can name, and `lock-pinned-digests.py` refuses to lock floating tags by design
-(`FLOATING_TAGS = {"latest", "main", …}`), so it would carry no protection from retention either — it
-would age out exactly as the last one did.
+## `latest` on the portal and the migration
+
+The Aspire integration and the CLI default to `cr.meshweaver.cloud/memex-portal-ai:latest` and
+`…/memex-migration:latest`. That default has to be **pullable**, so the tag needs exactly what the
+section below shows it lacked: a producer, and protection from retention.
+
+* **The producer is `arm`'s phase D.** `latest` is written in the same `imagetools create` as
+  `<major>-latest`, from the armed set's staging tag, after the arming PUT and under the same
+  never-backwards re-check. So `latest` names the newest **armed** set — what a fresh install should
+  start from — and never a set that was merely promoted (that is `main`, phase B), and never an
+  older set than the one already there. `promote` writes `latest` on the tester only.
+* **The protection is by name.** `.github/release-channels.json` declares the `latest` channel with
+  `arm` as a writer on both repositories; every pruner protects a declared label, and the purge
+  record filters only per-build tag shapes. `lock-pinned-digests.py` still never LOCKS it (a moving
+  label locked to a digest pins bytes the label has left) — it is protected by being excluded.
+* **The self-updater never selects it.** `latest` has no numeric core, so `PlatformReleaseOrder`
+  cannot place it and no update pattern can make it a candidate; it is only ever a first-start
+  address, like the line pointers.
+* **The tester's `latest` is NOT its pair.** `mw-plugin-test:latest` follows PROMOTED sets (phase B,
+  MeshWeaver.Plugins' `MW_TEST_IMAGE`), the portal's `latest` follows ARMED ones, so after a promotion
+  ahead of arming the two name different builds and `mw build plugin` refuses the pair at its
+  framework-identity check. The matched pair is `mw-plugin-test:<major>-latest` with
+  `memex-portal-ai:<major>-latest` (or `latest`): phase D writes the tester's line pointers first, from
+  the armed set's own version tag, and refuses a set whose tester and portal disagree on the version.
+  A consumer that pairs the two images names the tester by that pointer, or by the portal's version.
+* **`arm` is its ONLY writer.** `release.yml` never moves the portal's or the migration's `latest`, in
+  either notation: a release can promote a set OLDER than the one already armed (a retired-notation
+  set always is), and only `arm` re-checks freshness before it writes.
+
+`test-cd-steps.py` executes phase D against stub registries: the newest armed set writes `latest` on
+both repositories in all three registries, a newer armed set leaves it untouched, a failing pointer
+reader writes nothing (never `latest` without its line pointers), and a `promote` that wrote the
+portal's `latest` is caught. `release-channels.py check` holds the declaration to the writers.
+
+The portal's moving pointer for CI is still `main`; its selectable pointer is still `<version>`.
 
 ## What happened: two writers, then none (#3670)
 
@@ -132,7 +169,9 @@ repository the promotion publishes it to**:
 * `main` on all three repositories (set-wide);
 * `<version>` on all three repositories (set-wide);
 * `latest` on `mw-plugin-test` (repo-scoped — the tester's own contract, which the satellites resolve
-  as `vars.MW_TEST_IMAGE`; deliberately *not* generalised to the portal).
+  as `vars.MW_TEST_IMAGE`). The portal's and the migration's `latest` are NOT asserted here: `arm`
+  writes them in phase D, often in a later run than the one that promoted the set — the same reason
+  the portal's `<version>` is not asserted (below).
 
 A promoted pair where only one half carries the tag is now unrepresentable: it fails the run that
 produced it, naming the repository and the tag. `release.yml` runs the same assertion before it
@@ -185,10 +224,10 @@ Two corollaries worth carrying:
 * **Retention deletes what nothing rewrites.** `--ago`/`--keep` cannot tell a deliberate moving
   pointer from an abandoned one; only a producer can. Raising the window moves the cliff rather than
   removing it — see [Pinned Image Retention](/Doc/Architecture/PinnedImageRetention).
-* **A stale moving tag is worse than a missing one.** `memex-portal-ai:latest` on GHCR still resolves
-  and is over a week old; the chart default in `deploy/helm/values.yaml` and the compose files name
-  exactly that reference (the AKS deploy script repoints it to ACR, which is why nothing has tripped
-  over it). An absent tag fails loudly at pull time. A frozen one starts, and looks healthy.
+* **A stale moving tag is worse than a missing one.** `memex-portal-ai:latest` on GHCR still resolved
+  in September, frozen on `3.0.0-rc13`; the chart default and the compose files named exactly that
+  reference. An absent tag fails loudly at pull time. A frozen one starts, and looks healthy. That is
+  why `latest` came back only with a writer on every arming, never as a one-off retag.
 
 ## See also
 

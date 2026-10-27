@@ -286,7 +286,8 @@ compiled by two independent lanes, and not covered by `samples-gate.allow`.
 
 **`clients/voice-gateway` — 35 files with no CI job at all**, excluded from CD change detection, and
 the workflow says so in a comment. A Home Assistant / Ollama voice satellite sitting in the framework
-repo, unbuilt and untested.
+repo, unbuilt and untested. **Done:** it moved to MeshWeaver.Plugins `clients/voice-gateway`, which
+runs its 44 pytest cases in a `Voice gateway` workflow of its own.
 
 ## The plan, ranked by value over cost
 
@@ -297,7 +298,7 @@ repo, unbuilt and untested.
 | 3 | **Build `ModuleDocProvider`** in `MeshWeaver.Hosting` | — | enables 2, 4 | depth, page assets, and porting the doc gate to modules |
 | 4 | **The ~20 module-owned `Architecture` pages** | ~20 | **yes** | per-page; 838 inbound links, so redirects are mandatory |
 | 5 | **`samples/` → plugins**, Northwind first | 953 | **yes** — closes the two-repo split | 13 test projects; one PR gate stage must move with it |
-| 6 | **`clients/voice-gateway`** | 35 | yes | none measurable — nothing builds it |
+| 6 | **`clients/voice-gateway`** — done, now in MeshWeaver.Plugins | 35 | yes | none measurable — nothing builds it |
 
 **Stays in core, and the reason is the rule, not inertia:** `Architecture`'s reactive, storage,
 security, node-type, plugin-system and release pages; all of `DataMesh` bar two; all of `GUI` bar

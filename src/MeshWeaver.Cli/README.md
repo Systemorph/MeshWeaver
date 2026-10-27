@@ -1,6 +1,6 @@
 # MeshWeaver.Cli (`memex`)
 
-Command-line interface for MeshWeaver / Memex. Operates a portal's mesh over the REST API — read, search, mutate, compile, and mirror mesh nodes from the shell or from scripts.
+Command-line interface for MeshWeaver / Memex. Operates a portal's mesh over its MCP endpoint — every tool the connected instance serves becomes a command, loaded at run time — and builds plugins inside the platform image.
 
 ## Run it
 
@@ -43,6 +43,31 @@ The whole CI contract for a plugin repo, in three lines:
 The tool pulls both images, **pins them by digest**, and runs the platform's own builder and tester
 inside them. Nothing in the job needs to know about docker, mounts, seeds or allow-files.
 
+### Which images, when the flags are omitted
+
+The image version comes from **configuration**, never from the CLI's own version. Without
+`--image` / `--platform-image` the verb runs `<registry>/memex-portal-ai:<tag>` and the tester
+from the SAME set, resolved in this order:
+
+1. `$MEMEX_IMAGE_REGISTRY` / `$MEMEX_IMAGE_TAG` / `$MEMEX_IMAGE_MAJOR`
+2. `imageRegistry` / `imageTag` / `imageMajor` in `~/.memex/config.json`
+3. `cr.meshweaver.cloud`, `latest` and `3`
+
+🚨 **One set, not one string.** A set version (`3.1.11786`) or a line pointer (`3-latest`) names
+both repositories as written. The moving `latest` does NOT: CD moves `memex-portal-ai:latest` on the
+ARMED set but `mw-plugin-test:latest` at PROMOTION, which can run ahead of arming. So a portal tag
+of `latest` pairs with `mw-plugin-test:<major>-latest`, the tester tag CD moves on the same armed
+set. The default pair is therefore `memex-portal-ai:latest` + `mw-plugin-test:3-latest`.
+
+```json
+{ "baseUrl": "https://memex.meshweaver.cloud", "token": "mw_…",
+  "imageRegistry": "cr.meshweaver.cloud", "imageTag": "3.1.11786", "imageMajor": "3" }
+```
+
+A flag always wins, and a digest pin from the same CD wave (above) is still what CI should pass.
+The tag is used verbatim, so it must be a tag the registry really carries; the verb refuses a
+tester/portal pair that does not resolve one framework identity.
+
 ### Two images, two roles
 
 **`--image` EXECUTES; `--platform-image` supplies the reference set.** The tester image's `/app` is a
@@ -57,8 +82,11 @@ laid beside it, started by the portal image's own `dotnet` — composed by
 `.github/scripts/compose-gate-host.sh`, the same file the reusable node-repo lanes fetch. The CLI
 embeds that script and runs it; it does not carry a second copy of the rules.
 
-🚨 **There is no fallback to the tester's `/app`.** Omit `--platform-image` and the build is REFUSED
-before anything is pulled, and passing the tester image as the platform is refused by name. Pin the
+🚨 **There is no fallback to the tester's `/app`.** Omit `--platform-image` on the command line and
+the CLI uses the CONFIGURED portal image (above) — always a `memex-portal-ai` image, never the
+tester's subset. A caller that drives `BuildPluginCommand` from code with no platform image at all
+is REFUSED before anything is pulled, and passing the tester image as the platform is refused by
+name. Pin the
 two digests from ONE CD wave: the run asserts, with the tester's own `framework-identity` verb, that
 the two images resolve ONE framework identity, and that the bake it produces is keyed to the identity
 the platform host resolves.
@@ -73,8 +101,8 @@ It runs the two stages the plugin build contract defines, in order:
 
 | option | meaning |
 |---|---|
-| `--image` *(required)* | the TESTER image (`mw-plugin-test`); pulled and pinned by digest. It executes the build |
-| `--platform-image` *(required)* | the PORTAL image (`memex-portal-ai`); pulled and pinned by digest. It supplies the reference set, the framework identity and the runtime. No default, no fallback |
+| `--image` | the TESTER image (`mw-plugin-test`); pulled and pinned by digest. It executes the build. Default: the configured `<registry>/mw-plugin-test:<tag>` (see *Which images, when the flags are omitted*) |
+| `--platform-image` | the PORTAL image (`memex-portal-ai`); pulled and pinned by digest. It supplies the reference set, the framework identity and the runtime. Default: the configured `<registry>/memex-portal-ai:<tag>`; never a fallback to the tester's `/app` |
 | `--bake-output <dir>` | where the bundles land (default: a temp dir) |
 | `--external-modules <dir>` | module DLLs to mount at `/ext` |
 | `--source-sha <sha>` | commit stamped into the bake |
@@ -144,23 +172,71 @@ Same behaviour, no install — useful for trying it on a repo before the tool ve
 
 ## Commands
 
+### Mesh commands come from the instance, not from the CLI
+
+The mesh verbs are **not compiled into the CLI**. On each run `memex` reads the connected instance's
+MCP tool catalog — `tools/list` on `{base-url}/mcp`, authenticated with the same `mw_…` token
+`memex login` stores — and generates one subcommand per tool; the command runs it with `tools/call`.
+A tool the server adds or changes is therefore available the moment the instance serves it, with no
+CLI release. `memex --help` lists what the connected instance offers.
+
+The catalog is cached per instance URL in `~/.memex/tools/` for 10 minutes. `--refresh` re-reads it.
+When the instance cannot be reached the last cached catalog is used and a warning on stderr says how
+old it is; with no cache the command fails with exit 2 and names why.
+
+**The mapping rule** (`DynamicCommands`):
+
+| tool schema | command line |
+|---|---|
+| tool name | the command, kebab-case: `get_diagnostics` → `get-diagnostics`. When two tools share a kebab form (`foo_bar`, `foo-bar`), each keeps its exact MCP name instead — decided over the whole catalog, never by its order |
+| any property | an option `--kebab-name` (`basePath` → `--base-path`); its description is the help text |
+| `string` / `enum` | a value; an enum accepts only its listed values |
+| `integer` / `number` | a number, validated before the call |
+| `boolean` | a flag: `--force`, or `--force false` |
+| `array` | repeatable (`--tag a --tag b`), or one JSON array |
+| `object` / anything without a simple type | a JSON value: `--meta '{"k":1}'` |
+| a REQUIRED `string` | ALSO a positional argument, in schema order — `memex get Doc/X`, `memex search 'nodeType:Agent'`, `memex move A/X B/X` |
+| the whole argument object | `--json '{…}'` or `--file args.json`; options and positionals given beside it win |
+| a property whose option name is reserved (`token`, `base-url`, `json`, `file`, …) or already taken | `--arg-<name>`, then `--arg2-<name>`, … — every property stays addressable |
+
+A missing required argument is refused before anything is sent. Output is the tool's text content,
+verbatim, so JSON pipes cleanly into `jq`. Exit codes: `0` success; `1` the tool answered an error
+(`isError`, or the mesh's `Error: …` sentence, printed on stderr), a JSON-RPC refusal, or a usage
+error; `2` an HTTP or connection failure, or no catalog; `3` anything else (a malformed result, a
+timeout). A required property is about PRESENCE: `--json '{"x":null}'` supplies it.
+
+**Compatibility with the verbs the CLI used to hand-code.** The rule above already keeps
+`get <path>`, `search <query> [--base-path]`, `move <src> <dst>`, `copy <src> <ns> [--force]`,
+`patch <path> --fields '…'`, `recycle <path> [--reason]`, `compile <path>`, `navigate-to <path>`,
+`execute-script <path>` and `mirror push|pull <remote> <source>` reading as before. A few shapes the
+generic rule cannot express are declared in `DynamicCommands.LegacyShapes`, and each applies only
+while the tool still has the named parameter AS A STRING (any other schema takes the generic rule):
+
+| old form | sent as |
+|---|---|
+| `create -f node.json`, `update -f nodes.json`, `patch <path> -f fields.json` | the file's TEXT as `node` / `nodes` / `fields` (on these three the argument-object file is `--args-file`) |
+| `delete <path> <path> …` | `paths` as a JSON array |
+| `diagnostics <path>` | the `get_diagnostics` tool |
+| `execute-script --timeout N`, `mirror … --target P` | `timeoutSeconds`, `targetPath` |
+
+### Built-in commands
+
+Compiled in, because they are not single tool calls:
+
 | Command | Purpose |
 |---|---|
-| `get <path>` | Read a node or resource by path |
-| `search <query>` | Search the mesh (GitHub-style query, e.g. `nodeType:Agent`) |
-| `create -f node.json` | Create a node from a JSON file |
-| `update -f nodes.json` | Full-replace update from a JSON array file — **every field the file omits is still written**, so a concurrent writer's field is reverted |
-| `patch <path> …` | Partial update of a node's top-level fields (content deep-merged per RFC 7396) |
-| `delete <paths…>` | Delete nodes (recursive) |
-| `move <src> <dst>` / `copy <src> <ns>` | Move / copy a node and its descendants |
-| `upload <path> <file>` | Upload a file into a node's content collection |
-| `compile <path>` / `diagnostics <path>` | Compile a NodeType and inspect diagnostics |
-| `execute-script <path>` | Run an executable Code node through the kernel |
-| `mirror push\|pull <remoteUrl> <source>` | Mirror a subtree between two portals |
-| `recycle <path>` | Force a fresh hub initialisation |
-| `navigate-to <path>` / `base-url` | Print the browser URL for a path / the portal base URL |
+| `login [token] [--base-url]` | Store the API token and base URL in `~/.memex/config.json` |
+| `base-url` | Print the portal base URL |
+| `build plugin` / `build project` | Build inside a platform image (above) |
+| `tests <path>` | Run a node's Tests area and stream its progress until the verdict |
+| `upload <path> <file>` | Multipart upload into a node's content collection |
 
-All commands print the server's JSON verbatim, so output pipes cleanly into `jq`. Errors go to stderr with a non-zero exit code.
+A built-in wins over a server tool of the same name; `memex --help` names any server tool it shadows.
+
+### When the CLI needs a new release
+
+Only when its **transport, auth or built-ins** change — never because a server tool was added,
+renamed or given a new parameter (policy `cli-thin-wrapper-own-version`).
 
 ### Choosing between `update` and `patch`
 
@@ -174,8 +250,8 @@ Two things neither can do, both by construction:
   writer can invalidate before your write lands. The agent/MCP surface has the same gap; only
   in-process C# (`GetMeshNodeStream(path).Update(lambda)`) folds against the live node.
 - **Neither splices text.** Both replace a text field wholesale, so editing one line of a long
-  markdown body or code source means re-emitting the document. The agent/MCP surface has an anchored
-  `edit_content` for this; the CLI has no equivalent verb yet.
+  markdown body or code source means re-emitting the document. The anchored `edit_content` tool does
+  this, and because the CLI reads the catalog it is `memex edit-content <path> <old-text> <new-text>`.
 
 The full design — the four shapes a write can take and which context may use which — is
 `Doc/Architecture/ExpressingAWrite`.
