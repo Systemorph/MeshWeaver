@@ -40,6 +40,12 @@
 #                          repository.txt so an instance can attribute the seal (see the marker
 #                          below). Defaults to $GITHUB_REPOSITORY, which is the LANE's repository
 #                          and therefore right only when the lane bakes its own content.
+#   BAKE_PLATFORM_SET / BAKE_TESTER_REF / BAKE_PORTAL_REF
+#                          optional, ALL THREE or none. The platform this bake ran on: the portal
+#                          image's own MESHWEAVER_PLATFORM_VERSION and the two image references
+#                          (repository@sha256:…) the lane composed. Recorded as platform-set.json —
+#                          THE PLATFORM RECORD below — so a consumer gate composes its host on
+#                          exactly the set the publication was sealed on (MeshWeaver#7337).
 #   BAKE_PUBLICATION_DIR   optional. When set, and ONLY after every target above is published (or
 #                          was already), the EXACT publication — every file of the upload plan,
 #                          byte-for-byte, then `_complete` LAST — is written into this directory
@@ -355,6 +361,75 @@ else
   HAS_PACKAGES=false
 fi
 
+# ══════════════════════ THE PLATFORM RECORD (MeshWeaver#7337) ══════════════════════
+# `platform-set.json`: the platform set this publication was sealed on — the set name (the portal
+# image's own MESHWEAVER_PLATFORM_VERSION, the version every bundle's `producerPlatformVersion`
+# floor is checked against before this script runs) and the TWO image digests the bake composed,
+# plus the framework identity it was keyed to. A consumer gate reads it FIRST and composes its host
+# on exactly that set, so the seed and the host are one set identity by construction: a gate that
+# resolved its platform independently of the seed lost the race whenever this lane resealed on a
+# newer set between the gate's preflight and its seed fetch, and every bundle was DECLINED
+# ("its platform floor … is NEWER than the running platform"). Doc/Architecture/PublicationNamesItsPlatform.
+#
+# It describes the BYTES, so it is written only when bytes are: inside the publication, before the
+# sentinel, verified by the postcondition like every other file. The sealed-skip leaves the
+# incumbent's record in place, which is still the record of the incumbent's bytes. It is NOT a
+# content marker (MARKER_RELS): two bakes of one commit on two platforms are two publications, and
+# the convergence verdict below treats it as part of the payload it compares by owner, not by bytes.
+#
+# 🚨 OPTIONAL, like sealed-packages.json: a lane at a ref that predates it passes none, and every
+# consumer then names the absence ("predates the platform record") and keeps its own platform. A
+# PARTIAL record — some of the three values and not the others, a digest that is not sha256, a set
+# name that is not a platform version — is refused: a record a consumer would compose a host on
+# must never be a guess.
+PLATFORM_RECORD_FILE="platform-set.json"
+PLATFORM_RECORD_LOCAL="$SENTINEL_LOCAL_DIR/$PLATFORM_RECORD_FILE"
+HAS_PLATFORM_RECORD=false
+if [ -n "${BAKE_PLATFORM_SET:-}${BAKE_TESTER_REF:-}${BAKE_PORTAL_REF:-}" ]; then
+  if python3 - "$PLATFORM_RECORD_LOCAL" "$IDENTITY" <<'PLATFORM_RECORD_PY'
+import json, os, re, sys
+out, identity = sys.argv[1], sys.argv[2]
+values = {k: os.environ.get(k, "").strip() for k in ("BAKE_PLATFORM_SET", "BAKE_TESTER_REF", "BAKE_PORTAL_REF")}
+missing = [k for k, v in values.items() if not v]
+if missing:
+    sys.exit(f"::error::the platform record is PARTIAL — {', '.join(missing)} empty beside the others. "
+             "A consumer composes its host on this record, so it is all three or none.")
+version = values["BAKE_PLATFORM_SET"]
+if not re.fullmatch(r"\d+\.\d+\.\d+(-([0-9A-Za-z]+\.)?(ci|edge)\.\d+)?", version):
+    sys.exit(f"::error::BAKE_PLATFORM_SET '{version}' is not a platform version (X.Y.Z, X.Y.Z-ci.N, X.Y.Z-edge.N).")
+digests = {}
+for key, name in (("BAKE_TESTER_REF", "testerDigest"), ("BAKE_PORTAL_REF", "portalDigest")):
+    ref = values[key]
+    digest = ref.rsplit("@", 1)[1] if "@" in ref else ref
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        # A TAG-followed bake (allow-unpinned, a released-version ref) is a real lane shape, so it
+        # is not refused — but a record naming a tag would let a consumer compose a different
+        # build than the one these bytes were baked on, so none is written, and that is SAID.
+        print(f"::warning::{key} '{ref}' carries no sha256 digest — no platform record is written "
+              "for this publication (a record naming a TAG could compose another build); consumers "
+              "keep resolving their own platform for it (MeshWeaver#7337).")
+        sys.exit(3)
+    digests[name] = digest
+record = {"set": version, **digests, "identity": identity}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(record, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+PLATFORM_RECORD_PY
+  then
+    record_rc=0
+  else
+    record_rc=$?
+  fi
+  case "$record_rc" in
+    0) HAS_PLATFORM_RECORD=true
+       echo "platform record: $(cat "$PLATFORM_RECORD_LOCAL")" ;;
+    3) rm -f "$PLATFORM_RECORD_LOCAL" ;;   # a tag-followed bake: warned above, no record
+    *) exit 1 ;;
+  esac
+else
+  echo "::notice::no platform record (BAKE_PLATFORM_SET / BAKE_TESTER_REF / BAKE_PORTAL_REF unset) — the calling lane predates MeshWeaver#7337, so consumers of this publication cannot take their platform from it and keep resolving their own."
+fi
+
 # ══════════════════════ THE TWO-WRITER POSTCONDITION (MeshWeaver#3461) ══════════════════════
 #
 # 🚨 `<identity>/plugins` HAS SEVERAL WRITERS. Core CD's `plugins-bake` job publishes `bake-source:
@@ -664,6 +739,7 @@ manifest_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 manifest_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
 if [ "$HAS_SURFACE" = "true" ]; then manifest_add "$SURFACE_FILE" "$SURFACE_LOCAL"; fi
 if [ "$HAS_PACKAGES" = "true" ]; then manifest_add "$PACKAGES_FILE" "$PACKAGES_LOCAL"; fi
+if [ "$HAS_PLATFORM_RECORD" = "true" ]; then manifest_add "$PLATFORM_RECORD_FILE" "$PLATFORM_RECORD_LOCAL"; fi
 manifest_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 manifest_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
 # The denominator every verification prints and every refusal quotes. A publication with nothing
@@ -705,7 +781,7 @@ $1
   esac
   return 1
 }
-echo "publication $PUBLICATION: $MANIFEST_COUNT file(s) to publish and verify per target (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), $MARKER_COUNT marker/index file(s)$([ "$HAS_SURFACE" = "true" ] && echo ", surface published" || echo ", NO platform surface"))"
+echo "publication $PUBLICATION: $MANIFEST_COUNT file(s) to publish and verify per target (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), $MARKER_COUNT marker/index file(s)$([ "$HAS_SURFACE" = "true" ] && echo ", surface published" || echo ", NO platform surface")$([ "$HAS_PLATFORM_RECORD" = "true" ] && echo ", platform record" || echo ", NO platform record"))"
 
 # The upload PLAN: "<path-under-dest><TAB><local-file><TAB><sha256>", one line per file, in the
 # order the files used to be uploaded one by one — bundles, modules, modules/_index, the markers,
@@ -729,6 +805,9 @@ plan_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 plan_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
 if [ "$HAS_SURFACE" = "true" ]; then plan_add "$SURFACE_FILE" "$SURFACE_LOCAL"; fi
 if [ "$HAS_PACKAGES" = "true" ]; then plan_add "$PACKAGES_FILE" "$PACKAGES_LOCAL"; fi
+# Before architecture.txt, which stays the LAST planned upload (SealedPublicationGenerations: "Any
+# new marker file is LISTED and UPLOADED before architecture.txt").
+if [ "$HAS_PLATFORM_RECORD" = "true" ]; then plan_add "$PLATFORM_RECORD_FILE" "$PLATFORM_RECORD_LOCAL"; fi
 plan_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 plan_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
 PLAN_COUNT=$(grep -c '[^[:space:]]' "$PLAN" || true)
@@ -1337,6 +1416,7 @@ dispose_flat_copy() { # <account> <share> <dest> — ONLY after pointer_is_live 
     --match "$SOURCE_MARKER" \
     --match "$SURFACE_FILE" \
     --match "$PACKAGES_FILE" \
+    --match "$PLATFORM_RECORD_FILE" \
     --match "$REPO_MARKER" \
     --match "$ARCH_MARKER" \
     --workers "$PUBLISH_BAKE_UPLOAD_WORKERS" < /dev/null

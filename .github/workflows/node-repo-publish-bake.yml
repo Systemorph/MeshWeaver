@@ -2433,6 +2433,14 @@ jobs:
           # The exact publication, materialised locally AFTER every share sealed — the directory
           # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
+          # 🚨 THE PLATFORM RECORD (MeshWeaver#7337): the set this publication is sealed on — the
+          # portal image's own version (the same value every bundle's floor was checked against in
+          # "Gate: no bundle stamps a platform floor above …") and the two image references this
+          # bake composed, by digest. Written into the publication as platform-set.json; a consumer
+          # gate composes its host on exactly that set (Doc/Architecture/PublicationNamesItsPlatform).
+          BAKE_PLATFORM_SET: ${{ steps.platform-version.outputs.version }}
+          BAKE_TESTER_REF: ${{ steps.image.outputs.ref }}
+          BAKE_PORTAL_REF: ${{ steps.platform.outputs.ref }}
           # BAKE_PUBLISH_LOCK_HOLDER and PUBLISH_BAKE_PYTHON arrive through GITHUB_ENV from the
           # re-bind step when it ran: the script then PROVES it holds every target's lock instead
           # of acquiring, and reuses the venv. Without it the script takes the lock itself.
