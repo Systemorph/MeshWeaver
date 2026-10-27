@@ -163,15 +163,11 @@ internal static class DeclaredDefaultsSurviveTheWire
 
     /// <summary>
     /// Rebuilds an instance the way the reader will: the deserialization constructor called with the
-    /// instance's own parameter-bound member values. Holds only the most recent (instance, rebuilt)
-    /// pair, so the members of one object share one rebuild and nothing is retained beyond it.
+    /// instance's own parameter-bound member values. Stateless: it holds no instance, so a check
+    /// always reads the current inputs and nothing outlives the write.
     /// </summary>
     private sealed class Rebuilder(ConstructorInfo constructor, Func<object, object?>[] arguments, Type type, ILogger? logger)
     {
-        private sealed record Last(object Instance, object? Rebuilt);
-
-        private volatile Last? last;
-
         public static Rebuilder? For(JsonTypeInfo typeInfo, ILogger? logger)
         {
             if (typeInfo.ConstructorAttributeProvider is not ConstructorInfo constructor)
@@ -197,15 +193,10 @@ internal static class DeclaredDefaultsSurviveTheWire
         /// <summary>Whether the reader, given <paramref name="instance"/>'s constructor arguments, rebuilds <paramref name="value"/>.</summary>
         public bool RebuildsTo(object instance, Func<object, object?> get, object? value)
         {
-            var cached = last;
-            object? rebuilt;
-            if (cached is not null && ReferenceEquals(cached.Instance, instance))
-                rebuilt = cached.Rebuilt;
-            else
-            {
-                rebuilt = Rebuild(instance);
-                last = new Last(instance, rebuilt);
-            }
+            // Rebuilt on every check from the instance's CURRENT constructor inputs — never cached:
+            // a mutable instance can change between writes, and a cache on this metadata-owned
+            // object would also keep the last payload graph reachable after serialization ends.
+            var rebuilt = Rebuild(instance);
             if (rebuilt is null)
                 return false;
             try

@@ -89,6 +89,13 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         public bool Flag { get; init; } = Left != Right;
     }
 
+    /// <summary>A MUTABLE type whose initializer reads a constructor argument that can change between writes.</summary>
+    public sealed class MutableFromArgument(bool left)
+    {
+        public bool Left { get; set; } = left;
+        public bool Flag { get; set; } = left;
+    }
+
     /// <summary>Proven CLR default on a constructor-built type — must still be omitted.</summary>
     public sealed record ProvenDefault(string Id)
     {
@@ -202,6 +209,63 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         RoundTrip(new MixedArguments(true, false) { Flag = false }, options).Flag.Should().BeFalse();
         // Compact where the reader rebuilds the same value: (true, true) yields Flag == false.
         JsonSerializer.Serialize(new MixedArguments(true, true), options).Should().NotContain("flag");
+    }
+
+    [Fact]
+    public void A_repeated_write_of_a_mutated_instance_uses_its_current_constructor_inputs()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var instance = new MutableFromArgument(false);
+        JsonSerializer.Serialize(instance, options).Should().NotContain("flag",
+            "the reader rebuilds Flag == false from Left == false, so the value is omittable");
+
+        instance.Left = true;
+        var back = JsonSerializer.Deserialize<MutableFromArgument>(JsonSerializer.Serialize(instance, options), options)!;
+        back.Left.Should().BeTrue();
+        back.Flag.Should().BeFalse("the second write must judge against Left == true, not the first write's rebuild");
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_the_mutated_instance_loses_the_false()
+    {
+        var instance = new MutableFromArgument(false) { Left = true };
+        var options = WithoutTheFix();
+        JsonSerializer.Deserialize<MutableFromArgument>(JsonSerializer.Serialize(instance, options), options)!
+            .Flag.Should().BeTrue("if this ever fails, the repeated-write case no longer exercises the trap");
+    }
+
+    [Fact]
+    public void A_serialized_instance_is_not_retained_after_the_write()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var weak = SerializeAndForget(options);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        weak.IsAlive.Should().BeFalse("the serializer metadata must not keep the last payload reachable");
+    }
+
+    [Fact]
+    public void Negative_control_a_held_instance_is_seen_as_retained()
+    {
+        // The reachability instrument can fail: an instance something still holds reads alive.
+        var held = new MixedArguments(true, true);
+        var weak = new WeakReference(held);
+        JsonSerializer.Serialize(held, Mesh.JsonSerializerOptions);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        weak.IsAlive.Should().BeTrue();
+        GC.KeepAlive(held);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference SerializeAndForget(JsonSerializerOptions options)
+    {
+        // CLR-default Flag on a constructor-built type: the rebuild path runs.
+        var instance = new MixedArguments(true, true);
+        JsonSerializer.Serialize(instance, options);
+        return new WeakReference(instance);
     }
 
     [Fact]
