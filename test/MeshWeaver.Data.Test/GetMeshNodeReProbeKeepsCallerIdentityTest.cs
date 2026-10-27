@@ -35,6 +35,15 @@ namespace MeshWeaver.Data.Test;
 /// AccessContext (as <c>RoutingGrain.PostFailure</c> does) and answers the second. A NACK posted
 /// through <c>ResponseFor</c> carries the requester's identity back and hides the defect — that
 /// variant passes on the unfixed code, and it is not what the Orleans router sends.</para>
+///
+/// <para><b>It also pins #7395.</b> The owner here NACKs in well under a millisecond, so the NACK
+/// regularly reaches the issuing hub before the first probe's <c>Subscribe</c> has returned: the
+/// response <c>AsyncSubject</c> replays it synchronously and the re-probe is issued NESTED inside the
+/// first probe. When the probe's subscription was assigned to the serial slot only after
+/// <c>Subscribe</c> returned, that late assignment disposed the nested re-probe, its response
+/// subject was removed, the owner's answer was dropped ("No subject found for response") and the
+/// read errored "still recycling after 1 probe(s)" at the end of its budget — on every local run of
+/// core main at the time.</para>
 /// </summary>
 public class GetMeshNodeReProbeKeepsCallerIdentityTest(ITestOutputHelper output) : HubTestBase(output)
 {
