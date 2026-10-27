@@ -108,8 +108,12 @@ public class ErrorSignatureCollectorTest
 
         collector.Record("A", 0, LogLevel.Error, $"{filler} Password=\"{secret}\" refused", null, null, T0);
 
-        var wire = JsonSerializer.Serialize(collector.Pending().Single(), ErrorDigestPayloads.Json);
+        // Collector to digest: what the reporter would POST, bounded exactly as it leaves the process.
+        var digest = ErrorDigestPayloads.Bound(new ErrorDigestPayloads.Request(new InstanceTelemetry("3.1.0"), T0, collector.Pending()));
+        var wire = JsonSerializer.Serialize(digest, ErrorDigestPayloads.Json);
         wire.Should().NotContain("SuperSecret").And.NotContain(secret[..10], "masked whole BEFORE the clip, not clipped mid-quote");
+        digest.Signatures.Single().Template.Should().Contain(TelemetryRedaction.Masked)
+            .And.HaveLength(ErrorDigestPayloads.MaxTemplateLength, "the clip still applies, to the masked text");
     }
 
     [Theory]
@@ -121,6 +125,39 @@ public class ErrorSignatureCollectorTest
         var normalized = TelemetryRedaction.Normalize(text);
 
         normalized.Should().NotContain(mustNotSurvive).And.Contain("{path}");
+    }
+
+    [Theory]
+    [InlineData("Import of alice/Private/Invoices failed", "alice")]
+    [InlineData(@"Cannot open C:\Users\alice\Private\Invoices.xlsx", "alice")]
+    public void APrivatePath_LoggedWithoutATemplate_ReachesTheDigestWithoutAUserName(string message, string mustNotSurvive)
+    {
+        var (collector, logger) = Tap();
+
+        // Parameter-free: the state is a plain string, so the collector normalises the formatted text.
+        logger.Log(LogLevel.Error, 0, message, null, (state, _) => state);
+
+        var digest = ErrorDigestPayloads.Bound(new ErrorDigestPayloads.Request(new InstanceTelemetry("3.1.0"), T0, collector.Pending()));
+        var wire = JsonSerializer.Serialize(digest, ErrorDigestPayloads.Json);
+        wire.Should().NotContain(mustNotSurvive).And.NotContain("Private").And.NotContain("Invoices",
+            "a relative mesh path or a Windows path names a person or a machine; the digest carries {path}");
+        digest.Signatures.Single().Template.Should().Contain("{path}");
+    }
+
+    [Theory]
+    [InlineData("""token exchange refused: {"client_secret":"SuperSecretValue"}""")]
+    [InlineData("callback carried access_token=SuperSecretValue&scope=x")]
+    [InlineData("refresh_token: SuperSecretValue rejected")]
+    public void AnOAuthCredential_LoggedWithoutATemplate_ReachesTheDigestMasked(string message)
+    {
+        var (collector, logger) = Tap();
+
+        logger.Log(LogLevel.Error, 0, message, null, (state, _) => state);
+
+        var digest = ErrorDigestPayloads.Bound(new ErrorDigestPayloads.Request(new InstanceTelemetry("3.1.0"), T0, collector.Pending()));
+        var wire = JsonSerializer.Serialize(digest, ErrorDigestPayloads.Json);
+        wire.Should().NotContain("SuperSecretValue", "an OAuth field name is a credential key like any other");
+        digest.Signatures.Single().Template.Should().Contain(TelemetryRedaction.Masked);
     }
 
     [Fact]
