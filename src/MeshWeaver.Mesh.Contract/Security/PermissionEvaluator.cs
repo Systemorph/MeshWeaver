@@ -1104,7 +1104,11 @@ internal static class PermissionEvaluator
     /// <para>Two reads, both cached process-wide: the rule set (<c>$security-grant-rules</c>, one
     /// anchored read of <c>Admin/_GrantRule</c>), and — only while at least one rule is declared —
     /// the partition ROOT (<c>$security-root:{partition}</c>, a point read in the partition's own
-    /// schema). A mesh that declares no rule never opens the second. Both re-emit on change, so a
+    /// schema). A mesh that declares no rule never opens the second; once opened, the root read has
+    /// the lifetime of the partition's other anchored fold reads (<c>_Access</c>, <c>_Policy</c>,
+    /// sync config) — cached until the partition is torn down
+    /// (<see cref="SecurityQueries.PartitionAnchoredQueryIds"/>), never released when the last rule
+    /// goes, so a re-declared rule never replays a root snapshot from before. Both re-emit on change, so a
     /// new matching partition, a retyped root, or an edited or deleted rule takes effect on the
     /// next emission — nothing is materialised, so nothing has to be swept.</para>
     ///

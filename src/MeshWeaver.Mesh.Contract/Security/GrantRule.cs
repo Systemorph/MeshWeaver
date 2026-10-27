@@ -63,9 +63,15 @@ public record GrantRule
     public string? ContentField { get; init; }
 
     /// <summary>
-    /// The value <see cref="ContentField"/> must hold, compared ordinally against the field's text
-    /// (a string as written; a number or boolean as its JSON text) — the same text Postgres'
-    /// <c>content->>'field'</c> yields. A missing or null field never matches.
+    /// The value <see cref="ContentField"/> must hold, compared ordinally against the field's text.
+    ///
+    /// <para>🚨 <b>Only a JSON STRING or BOOLEAN field can match</b> — a string as written,
+    /// <c>true</c>/<c>false</c> for a boolean. Those are the kinds whose text is identical in both
+    /// evaluators (this fold and Postgres' <c>content->>'field'</c>). A number, array or object
+    /// never matches: <c>jsonb</c> re-renders them canonically (<c>[1, 2]</c>, <c>1E+20</c> as
+    /// digits) while the stored JSON text is the writer's, so an ordinal comparison could grant in
+    /// one evaluator and deny in the other. The SQL projection restricts to the same two kinds
+    /// (<c>jsonb_typeof</c>). A missing or null field never matches.</para>
     /// </summary>
     public string? ContentValue { get; init; }
 
@@ -161,8 +167,11 @@ public static class GrantRuleEvaluator
     }
 
     /// <summary>
-    /// The text of a top-level content field, as Postgres' <c>-&gt;&gt;</c> yields it: a string's
-    /// value, any other non-null value's JSON text, and null for a missing or JSON-null field.
+    /// The text of a top-level content field, for the kinds whose text both evaluators agree on
+    /// (<see cref="GrantRule.ContentValue"/>): a string's value, or <c>true</c>/<c>false</c> — exactly
+    /// what Postgres' <c>-&gt;&gt;</c> yields for them. Null — never matches — for a missing field,
+    /// JSON null, and a number, array or object, whose <c>jsonb</c> text is a canonical
+    /// re-rendering that need not equal the stored JSON text.
     /// </summary>
     private static string? FieldText(JsonElement content, string field)
     {
@@ -171,8 +180,9 @@ public static class GrantRuleEvaluator
         return value.ValueKind switch
         {
             JsonValueKind.String => value.GetString(),
-            JsonValueKind.Null or JsonValueKind.Undefined => null,
-            _ => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null,
         };
     }
 

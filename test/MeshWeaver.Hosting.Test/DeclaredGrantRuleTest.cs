@@ -328,6 +328,30 @@ public class GrantRuleEvaluatorTest
     }
 
     [Fact]
+    public void Matching_ComparesOnlyKindsWhoseTextBothEvaluatorsAgreeOn()
+    {
+        GrantRule On(string value) => ClientEditor with { ContentField = "kind", ContentValue = value };
+
+        GrantRuleEvaluator.Matching([On("true")], Root("Acme", "Crm/Counterparty", new { kind = true }), Options)
+            .Should().ContainSingle("a boolean's text is true/false in both evaluators");
+        GrantRuleEvaluator.Matching([On("false")], Root("Acme", "Crm/Counterparty", new { kind = false }), Options)
+            .Should().ContainSingle();
+        GrantRuleEvaluator.Matching([On("x")], Root("Acme", "Crm/Counterparty", new { kind = "x" }), Options)
+            .Should().ContainSingle("a string matches as written");
+
+        // jsonb re-renders these canonically — [1, 2], exponent-free digits — so their stored JSON
+        // text is no contract; neither evaluator matches them.
+        GrantRuleEvaluator.Matching([On("[1,2]")], Root("Acme", "Crm/Counterparty", new { kind = new[] { 1, 2 } }), Options)
+            .Should().BeEmpty("an array never matches");
+        GrantRuleEvaluator.Matching([On("{\"a\":1}")], Root("Acme", "Crm/Counterparty", new { kind = new { a = 1 } }), Options)
+            .Should().BeEmpty("an object never matches");
+        GrantRuleEvaluator.Matching([On("1")], Root("Acme", "Crm/Counterparty", new { kind = 1 }), Options)
+            .Should().BeEmpty("a number never matches");
+        GrantRuleEvaluator.Matching([On("null")], Root("Acme", "Crm/Counterparty", new { kind = (string?)null }), Options)
+            .Should().BeEmpty("JSON null never matches");
+    }
+
+    [Fact]
     public void ReadRules_DropsIneffectiveAndMisplacedRules()
     {
         var nodes = new[]

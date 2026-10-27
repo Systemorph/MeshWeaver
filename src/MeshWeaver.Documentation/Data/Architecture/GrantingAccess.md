@@ -278,7 +278,7 @@ governance.
 
 | Pitfall | Cause |
 |---|---|
-| The rule grants nothing | `contentValue` differs from the root's text (compare `get @{partition}/data/` exactly — no leading `/`), the node is not in `Admin/_GrantRule`, or `accessObject` is `Public`/`Anonymous` (never honoured) |
+| The rule grants nothing | the root's `contentField` is not a JSON string or boolean (a number, array or object never matches in either evaluator, because `jsonb` re-renders their text), `contentValue` differs from the root's text (compare `get @{partition}/data/` exactly — no leading `/`), the node is not in `Admin/_GrantRule`, or `accessObject` is `Public`/`Anonymous` (never honoured) |
 | A member can read but not write | The partition is system-owned (one-way `_GitSync`) — no role writes there — or a `_Policy` caps the write, or an assignment denies the role |
 | Search lists nothing though `get` works | The portal's Postgres projection predates grant rules — the MeshWeaver.Plugins half has not reached that instance |
 
