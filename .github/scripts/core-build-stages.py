@@ -188,13 +188,23 @@ def problems(committed_text: str | None, workflow_text: str) -> list[str]:
 # left core (#2847 and its successors) and the `test` job pulls no image. That is a FACT about the tree,
 # so it is checked, not assumed — a suite that starts a container again reds here, and either moves to
 # the host's prepared service or re-opens the debt (`containers:` in OWES) in the same change.
-CONTAINER_PACKAGE = re.compile(r'Include="(Testcontainers[^"]*|Docker\.DotNet[^"]*)"', re.I)
+# Any valid MSBuild spelling of the attribute: either quote style, whitespace around `=`.
+CONTAINER_PACKAGE = re.compile(r"""Include\s*=\s*(["'])\s*(Testcontainers[^"']*|Docker\.DotNet[^"']*)\1""", re.I)
 CONTAINER_CODE = re.compile(r"^\s*using\s+(DotNet\.Testcontainers|Testcontainers)\b|new\s+ContainerBuilder\b", re.M)
 SKIP_DIRS = {"bin", "obj", "node_modules", ".git", ".core-tests"}
 
 
-def container_problems(root: str) -> list[str]:
-    """Every place in core's build that would make a shard start a container."""
+def container_debt_open(owes: list[str]) -> bool:
+    """The `containers:` debt re-opened in OWES — then a Docker-dependent suite is DECLARED unmet, the
+    ciEquivalent rule keeps every run on Actions, and the scan is not a second, contradicting gate."""
+    return any(str(o).startswith("containers:") for o in owes)
+
+
+def container_problems(root: str, owes: list[str] | None = None) -> list[str]:
+    """Every place in core's build that would make a shard start a container (nothing while the
+    `containers:` debt is declared open)."""
+    if container_debt_open(OWES if owes is None else owes):
+        return []
     out: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
@@ -284,8 +294,14 @@ def _self_test() -> int:
         expect(container_problems(t) == [], "a tree with no container package and no container code is green")
         open(os.path.join(t, "Directory.Packages.props"), "w").write('<PackageVersion Include="Testcontainers.PostgreSql" Version="4.0.0" />')
         expect(any("container package" in p for p in container_problems(t)), "RED: Testcontainers.PostgreSql pinned centrally")
+        open(os.path.join(t, "Directory.Packages.props"), "w").write("<PackageVersion Include = 'Testcontainers.PostgreSql' Version='4.0.0' />")
+        expect(any("container package" in p for p in container_problems(t)), "RED: the same pin single-quoted with spaces around =")
+        expect(container_problems(t, OWES + ["containers: a suite starts a database in Docker"]) == [],
+               "a re-opened `containers:` debt declares it unmet — the scan does not contradict the declaration")
+        expect(any("container package" in p for p in container_problems(t, OWES)),
+               "…and without that debt the same tree is RED again")
         os.remove(os.path.join(t, "Directory.Packages.props"))
-        open(os.path.join(t, "test", "A", "A.csproj"), "w").write('<PackageReference Include="Docker.DotNet" />')
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<PackageReference Include='Docker.DotNet' />")
         expect(any("container package" in p for p in container_problems(t)), "RED: a test project referencing Docker.DotNet")
         open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project/>")
         open(os.path.join(t, "test", "A", "T.cs"), "w").write("using DotNet.Testcontainers.Builders;\n")
