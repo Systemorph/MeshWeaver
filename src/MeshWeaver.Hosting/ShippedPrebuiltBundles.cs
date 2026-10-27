@@ -1752,6 +1752,9 @@ public static class ShippedPrebuiltBundles
                             platformCeiling)
                         .Take(1)
                         .Timeout(SeedBudget)
+                        // The producer's dependency edges for the build the record now serves
+                        // (Doc/Architecture/DependencyGraph → adopted prebuilts). Never changes the verdict.
+                        .SelectMany(outcome => PrebuiltAssemblySeeder.WithAdoptedEdges(mesh, a.NodePath, a.DependencyEdges, outcome, logger))
                         .Do(outcome =>
                         {
                             if (outcome is PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSources

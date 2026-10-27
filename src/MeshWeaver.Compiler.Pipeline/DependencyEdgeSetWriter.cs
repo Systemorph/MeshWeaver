@@ -89,6 +89,63 @@ internal static class DependencyEdgeSetWriter
         && !string.Equals(recordBuild, incoming.BuildMvid, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Whether <paramref name="stored"/> already describes <paramref name="incoming"/>'s build with
+    /// the same edges — a rewrite would change nothing but the row's version. Makes every writer
+    /// idempotent, which the adoption writer needs: it runs on every bundle pass of every boot.
+    /// </summary>
+    /// <param name="stored">The set currently stored, or null.</param>
+    /// <param name="incoming">The set about to be written.</param>
+    internal static bool DescribesSameBuild(DependencyEdgeSet? stored, DependencyEdgeSet incoming) =>
+        stored is not null
+        && incoming.BuildMvid is { Length: > 0 }
+        && string.Equals(stored.BuildMvid, incoming.BuildMvid, StringComparison.OrdinalIgnoreCase)
+        && stored.Edges.Select(e => (e.Kind, e.Target)).SequenceEqual(incoming.Edges.Select(e => (e.Kind, e.Target)))
+        && stored.IncludedWithoutUse.SequenceEqual(incoming.IncludedWithoutUse);
+
+    /// <summary>
+    /// Writes the edges a prebuilt bundle CARRIED for bytes this mesh adopted
+    /// (<c>Doc/Architecture/DependencyGraph</c> → adopted prebuilts). An adoption compiles nothing,
+    /// so without this an adopting mesh has no edge set for the build it serves. Written only while
+    /// the source's durable record NAMES the bundle's build (<see cref="NodeTypeDefinition.LatestAssemblyMvid"/>
+    /// = the set's <see cref="DependencyEdgeSet.BuildMvid"/>), under that record's version as the
+    /// generation — so a later local compile (a higher stamp) always wins, and an adoption the owner
+    /// refused (the record names another build) writes nothing. Idempotent across boots
+    /// (<see cref="DescribesSameBuild"/>). Without a storage adapter there is no record to check
+    /// against, so nothing is written.
+    /// </summary>
+    /// <param name="hub">The seeding hub.</param>
+    /// <param name="edges">The bundle's set for the adopted bytes.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IObservable<Unit> WriteAdopted(IMessageHub hub, DependencyEdgeSet edges, ILogger? logger)
+    {
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (storage is null || edges.BuildMvid is not { Length: > 0 })
+            return Observable.Empty<Unit>();
+        var options = hub.JsonSerializerOptions;
+        return storage.Read(edges.Source, options)
+            .Take(1)
+            .SelectMany(record =>
+            {
+                var definition = record?.ContentAs<NodeTypeDefinition>(options, logger);
+                if (record is null || definition?.LatestAssemblyMvid is not { Length: > 0 } served
+                    || !string.Equals(served, edges.BuildMvid, StringComparison.OrdinalIgnoreCase))
+                {
+                    logger?.LogDebug(
+                        "Adopted dependency edges of {Source} (build {BuildMvid}) not written: the record "
+                        + "serves {Served}", edges.Source, edges.BuildMvid, definition?.LatestAssemblyMvid ?? "no build");
+                    return Observable.Empty<Unit>();
+                }
+                return Write(hub, edges with { StampVersion = record.Version }, logger);
+            })
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger?.LogError(ex,
+                    "Writing the adopted dependency edges of {Source} (build {BuildMvid}) failed", edges.Source, edges.BuildMvid);
+                return Observable.Empty<Unit>();
+            });
+    }
+
+    /// <summary>
     /// Writes <paramref name="edges"/>. Cold. A failure is reported at Error naming the type and
     /// completes the observable: the compile it follows has already landed, and an edge set that
     /// did not land reads as "not extracted for this build" (its <see cref="DependencyEdgeSet.BuildMvid"/>
@@ -143,6 +200,8 @@ internal static class DependencyEdgeSetWriter
             .SelectMany(stored =>
             {
                 var storedSet = stored?.ContentAs<DependencyEdgeSet>(options, logger);
+                if (DescribesSameBuild(storedSet, edges))
+                    return Observable.Return(Unit.Default);
                 if (IsSupersededBy(storedSet, edges))
                 {
                     logger?.LogDebug(

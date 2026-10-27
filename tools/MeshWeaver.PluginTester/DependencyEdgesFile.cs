@@ -98,6 +98,13 @@ public static class DependencyEdgesFile
         return path;
     }
 
+    /// <summary>One set as the JSON a bundle entry carries (<c>BundleWriter.AssemblyEntry.DependencyEdges</c>),
+    /// stamped with <paramref name="commit"/> when it names none.</summary>
+    /// <param name="edges">The set.</param>
+    /// <param name="commit">The tree the bake read.</param>
+    public static JsonElement ToBundleJson(DependencyEdgeSet edges, string? commit) =>
+        JsonSerializer.SerializeToElement(edges with { Commit = edges.Commit ?? commit }, Json);
+
     /// <summary>The document's JSON text (camelCase, nulls omitted).</summary>
     /// <param name="document">The document.</param>
     public static string Serialize(Document document) => JsonSerializer.Serialize(document, Json);
