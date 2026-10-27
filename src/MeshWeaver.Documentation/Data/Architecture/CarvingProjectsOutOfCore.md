@@ -137,27 +137,67 @@ each has to be converted deliberately.
 ## The real boundary is the CONTENT SURFACE
 
 The `.csproj` graph is not what decides whether a project can leave cheaply.
-`FrameworkBuildIdentity.ContentSurfaceAssemblies` is — the 26 assemblies whose reference-assembly
-hashes are folded into the framework build identity `s<hash>`, and therefore the set that in-mesh
-content compiles against by default.
+`FrameworkBuildIdentity.ContentSurfaceAssemblies` is. It lists the 26 assemblies that are the
+closure of the content gate (`tools/MeshWeaver.PluginTester`). That makes it the set shipped content
+is PROVEN to compile against: the bake host compiles against that closure plus the modules it
+lands, so content that binds anything else does not pass the gate. Their reference-assembly hashes
+make up the surface identity `s<hash>`.
 
-**Both projects moved in the first wave were OUTSIDE that list, and that is the entire reason they
-were free.** `MeshWeaver.Hosting.Embeddings` and `MeshWeaver.Observability.Contract` are not content
-surface, so nothing in any mesh binds them by name, no bake was invalidated, and the move was a
-`.csproj` edit.
+🚨 **The surface identity is no longer the adoption key.** Adoption keys on
+`FrameworkBuildIdentity.FrameworkVersion`, which is the compatibility key `c<major>e<epoch>`
+(`PlatformCompatibility.KeyOf`, policy `platform-backwards-compatibility`). The `s<hash>` is
+`FrameworkBuildIdentity.BuildProvenance`: it is logged and recorded, and it never causes a cache
+miss. So a change to a content-surface assembly's public surface does **not** by itself invalidate
+any bake or re-bake any portal. Earlier versions of this page said it did. That was true while the
+surface hash was the key, and it no longer is.
 
-🚨 **Every remaining candidate is INSIDE the content surface**, and leaving it is a different class
-of operation with a precedent to copy rather than a decision to improvise. `MeshWeaver.AI` and
-`MeshWeaver.Markdown.Collaboration` have both already made the trip, and the comment left in
-`FrameworkBuildIdentity` states the shape exactly: the project becomes a MODULE, leaves the
-identity list, is composed into content compiles per-mesh via
+**What removing a public type IS: a binary break**, judged by
+[The Platform Compatibility Ladder](../PlatformCompatibilityLadder). Its pull-request check links the
+DEPLOYED plugin set against the candidate platform, and its break catalogue
+(`ModulePlatformMemberLinkTest`) pins what each kind of change does to a compiled plugin. A removal
+that a published plugin still binds is red, and it has exactly three answers:
+
+1. **Keep it compatible**: an `[Obsolete]` forwarder under the old signature, or a
+   `[TypeForwardedTo]` to an assembly the platform still ships. Core cannot forward to a plugins
+   assembly, so a type that leaves for a module cannot use the second form.
+2. **No published plugin binds it any more**: the plugin side moves to the new home and republishes
+   FIRST, and the core removal lands after. This is the deleting-half-last order that
+   `Pairs-with:` already enforces.
+3. **A DECLARED epoch bump**: `"epoch"` plus a `"breaks"` entry in
+   `src/MeshWeaver.Compiler/platform-compatibility.json`. This is the real fleet-wide event: a new
+   compatibility key, so every plugin must rebuild before its bytes are adopted again. It is a
+   delivery event for the owner to schedule. Never treat it as a side effect of a refactor.
+
+🚨 **The ladder cannot see reflection or string-named binding** (`Type.GetType("…")`). A removal
+reached that way links green and fails at runtime, so search for it by hand (see `Graph/Apps`
+below).
+
+🚨 **The pull-request ladder links only FOUR plugins.** Its input is
+`.github/scripts/fetch-deployed-plugin-set.sh`, whose `modules=` list is fixed:
+`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps` and `.Payments.Stripe`. Every other published
+module is outside the check. That includes the `Mail.MicrosoftGraph`, `Mail.Gmail` and `OgCard`
+modules, and also `Memex.Portal.Shared`, which ships in the image rather than as a module. So a
+removal that only those consumers bind leaves the ladder **green with nothing checked**. A green
+ladder is evidence only for the four. A carve that removes types any other plugin binds needs its
+own compatibility check of those consumers:
+- build each one from source against the candidate core, with Release `-warnaserror`;
+- or, better, link its published bytes against the candidate.
+
+Answer 2 above is then shown by that check, not by the gate. (Measured on the pull-request lane,
+`dotnet-test.yml`. Whether the promoted-image rung in `main-cd.yml` reads a wider set was not
+measured here.)
+
+**Both projects moved in the first wave were OUTSIDE the content surface, and that is why they
+were free.** Nothing in any mesh bound `MeshWeaver.Hosting.Embeddings` or
+`MeshWeaver.Observability.Contract`, so the move was a `.csproj` edit.
+
+🚨 **Every remaining candidate is INSIDE the content surface**, and leaving it means copying a
+precedent rather than improvising. `MeshWeaver.AI` and `MeshWeaver.Markdown.Collaboration` have both
+already made the trip, and the comment in `FrameworkBuildIdentity` states the shape: the project
+becomes a MODULE, leaves the list, is composed into content compiles per-mesh via
 `CompileReferences.ComposeWithModules`, and is made `required` by a pre-installed package so every
-portal still lands it.
-
-The cost is a **framework identity flip**: a new `s<hash>`, so every existing bake is invalidated
-and every portal and satellite re-bakes (a degraded start of roughly ten minutes per pod, and
-satellites must republish under the new identity before their bundles are adoptable). That is a
-delivery event, not a refactor, and it is why these do not get done casually or in batches of one.
+portal still lands it. What that costs is the ladder's question above: which published plugins bind
+the departing types, and which of the three answers each of them gets.
 
 ## The remaining core projects, and what pins each
 
@@ -165,10 +205,10 @@ delivery event, not a refactor, and it is why these do not get done casually or 
 |---|---|---|---|---|
 | `Hosting.Embeddings` | 471 | no | **nothing at all** | moved out — free |
 | `Observability.Contract` | 1 320 | no | a ships-the-bits reference + one test project | moved out — free |
-| `Maps` | 116 | **yes** | in-mesh sample content (`Cornerstone/Pricing`), 5 test meshes, PluginTester | module + identity flip |
-| `ContentCollections.Indexing` | 1 851 | **yes** | one `using` in `Mesh.Operations`; in-mesh content | module + identity flip |
+| `Maps` | 116 | **yes** | in-mesh sample content (`Cornerstone/Pricing`), 5 test meshes, PluginTester | module; answer the ladder (see above) |
+| `ContentCollections.Indexing` | 1 851 | **yes** | one `using` in `Mesh.Operations`; in-mesh content | module; answer the ladder (see above) |
 | `ContentCollections.Indexing.Graph` | 2 253 | **yes** | PluginTester; in-mesh content | with the above |
-| `GitSync` | 9 649 | **yes** | `PluginCatalog` (Portal.Shared's GitHub sign-in now calls it from plugins) | module + identity flip; auth ⇒ `Modules:Required` |
+| `GitSync` | 21 917 | **yes** | `PluginCatalog` (13 files), `Mesh.Operations`, PluginTester/ComboAssembler/ComboVerifier, the portal hosts in plugins, and in-mesh content in five plugin packages — see the next section | **stays** until `PluginCatalog` reaches it through a seam; then module, answering the ladder; auth ⇒ `Modules:Required` |
 | `PluginCatalog` | 21 245 | **yes** | PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
 | `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
 | `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
@@ -192,6 +232,122 @@ meshes compile that sample.
 **So neither direction of the `.csproj` graph can be trusted here.** A reference may be dead weight,
 and a live consumer may have no reference at all. Check both: a warnings-as-errors build of the
 consumer settles the first; the content trees and the node JSON settle the second.
+
+## Feature folders inside content-surface projects
+
+The table above is per project. A second survey looked one level down, at feature subsystems that
+sit as folders inside a content-surface assembly and whose names match something MeshWeaver.Plugins
+already ships. Removing any one of them removes public types from a content-surface assembly. Under
+the ladder above, that is a **binary break for every published plugin that still binds them**. The
+`s<hash>` changes too, but only as provenance. So the order is: the plugin side moves and
+republishes first, the core removal lands after, and an epoch bump is only for a break that cannot
+be answered any other way. Batching is still worth it, but the reason is different. If moves must
+end in a declared break, one bump costs the fleet one rebuild instead of several.
+
+Measured against `Systemorph/MeshWeaver@4cc5c17fbf` and `Systemorph/MeshWeaver.Plugins@f1752c83b`.
+
+| Folder | Lines | What Plugins has | Who reaches it | Verdict |
+|---|---|---|---|---|
+| `Mesh.Contract/Threading` | 4 993 | `MeshWeaver.Threading.Test`, a test project only | everything: it is `IIoPool`, `PromiseCache`, `AlcLeaseRegistry` and the teardown signal (namespace `MeshWeaver.Mesh.Threading`) | **stays** — kernel. The name only looked like a feature |
+| `Mesh.Contract/Payments` | 2 222 | `MeshWeaver.Payments.Stripe`, the implementer (a **second half**, not a duplicate) | the Store package's in-mesh sources (`Store/Order`, `CouponClaim`, `Catalog`, `Maintenance`), `Hosting/Deployment`, the Stripe module | **stays** — it *is* the seam. It was put in core so commerce content compiles on a portal that mounts no payment module ([The Payment Provider Contract](../PaymentProviderContract)). As a module it would bring back the `CS0234` it was created to remove |
+| `Hosting/SelfUpdate` | 790 | `MeshWeaver.SelfUpdate.Aks`, the implementer (**second half**) | `PluginCatalog.RegistryUpdateReconciler` (`SelfUpdateOptions.HostOf`, the one registry-host rule), `Deployment.Contract`, core's `Memex.Portal.ServiceDefaults` health check, `Memex.Portal.Shared` | **stays** — interfaces plus options that core code calls; the provider half has already left |
+| `Graph/Apps` | 1 401 | nothing of that name | the kernel home page (`UserActivityLayoutAreas` → `HomeAppSource`), `GraphConfigurationExtensions.AddAppDirectory`, in-mesh content in `AppleMaps`/`AppleWeather`/`Edu`/`Store/Core` | **stays** — the kernel calls into it, and `AppleMaps/Maps/Source/AmapsConnect.cs` reflects on `"MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph"` by **assembly-qualified name**, which a move would break silently |
+| `Graph/ControlLane` | 2 940 | nothing of that name; consumers only | image assemblies `Memex.Portal.Shared` (endpoints, settings tab, self-update hand-over) and `MeshWeaver.Hosting.Instance`; in-mesh sources in `Hosting/InstanceAction`, `Hosting/Deployment`, `Hosting/PlatformBuildInbox`, `Approvals/Elsewhere` | **stays** — see below |
+| `Graph/OpenGraph` | 668 | `MeshWeaver.OgCard`, a consumer (**second half**) | `GraphConfigurationExtensions` registers it on every mesh; `Memex.Portal.Shared` (`SeoEndpoints`, `OgCardRenderer`) and the OgCard module call it | **stays for now** — see below |
+| `Graph/MailCopy` | 3 379 | consumers only: the `Mail.MicrosoftGraph` and `Mail.Gmail` modules | those two modules; core's compile-time impersonation table names its types; no core `src/` caller, no in-mesh binder in either repo's content trees | **move, once its home is decided** — see below |
+
+### Why ControlLane and OpenGraph stay
+
+Both have **an image assembly and a module or in-mesh source** among their consumers. Two
+questions about a new home are easy to conflate. Keep them apart:
+
+- **Compiler visibility** is per host. `CompileReferences.GetDefaultReferences()` takes the host's
+  whole `TRUSTED_PLATFORM_ASSEMBLIES`, and `ComposeWithModules` adds the installed modules on top
+  without filtering down to the content surface. So on a PORTAL, an in-mesh source CAN see an
+  image-shipped plugins assembly such as `Memex.Portal.Shared`.
+- **Being proven** is the bake host's question. The content gate compiles against ITS closure, which
+  is the content surface plus the modules it lands, and that closure has no portal-only assemblies.
+  A source that binds an image-only plugins assembly can therefore compile on the portal and still
+  fail the gate.
+
+Identity membership is a third question, and since the compatibility key it decides nothing about
+adoption (see above).
+
+So for each candidate home, ask whether BOTH the portal's references and the bake host's references
+carry it:
+
+- **A module**: both hosts see it, but an image project cannot reference a module. An image copy
+  and a registry module of the same name is a 409. `Memex.Portal.Shared` binds ControlLane (its
+  endpoints, settings tab and self-update hand-over), so ControlLane cannot be a module.
+- **An image-only plugins assembly**: `Memex.Portal.Shared` is fine, and the in-mesh
+  Hosting / Approvals sources would compile on a portal. But the gate's bake host would not see it,
+  so those sources would no longer be proven.
+
+Neither home satisfies all of ControlLane's consumers, so it stays in the content surface. Not
+established: `MeshWeaver.Hosting.Instance` is described both as shipping in the image and as the
+`Hosting.Instance` package's module. Whether the bake host lands it, which would make it a possible
+home, needs a trial bake, not a reading.
+
+OpenGraph is smaller and has no in-mesh binder. A SOURCE move into a plugins image project (beside
+`Memex.Portal.Shared/Seo/OgCardRenderer`) would work, because a module may reference an image-shipped
+plugins project (`Mail.MicrosoftGraph` references `MeshWeaver.Blazor`). But the OgCard module
+would then bind the portal host assembly. The module's own declaration also says the fetcher "stays
+a core singleton": it is the SSRF-guarded outbound fetch (`http(s)` only, loopback and private
+addresses refused). Its two callers are both published plugin bytes (the OgCard module, and
+`Memex.Portal.Shared` in the image), so the move would need answer 2 of the ladder for each, for
+668 lines. Reconsider it when another carve out of `MeshWeaver.Graph` is sequencing the same
+republish anyway.
+
+### MailCopy: movable, but it has no home yet
+
+MailCopy is the one subsystem with **no caller in core and no in-mesh binder**. Its consumers are
+two plugin modules, and the core-side ties are both data, not code:
+
+- **The runtime caller check survives a module move.** `MailCopyAuthority` judges the immediate
+  calling assembly through `InMeshImpersonationGuard`, and modules load into `ModuleLoadContext`,
+  which is an authentic `IPlatformLoadContext`. So a module is platform code to the guard, exactly
+  as `MeshWeaver.Graph` is today.
+- **The compile-time table names its types by string.** `InMeshImpersonationReferences.Members` is
+  keyed `Namespace.TypeName`, with no assembly. Keeping the namespace `MeshWeaver.Graph.MailCopy` in
+  the new home keeps every entry live. The table then names plugin types from core, which is a
+  core→plugins edge in the sense of [Repository Dependency Direction](../RepositoryDependencyDirection).
+  Close it with a seam modules contribute to, or record it.
+- **One core test class spans the boundary, and it holds two different checks.**
+  `InMeshImpersonationReferencesTest` does two things:
+  - Its snippet tests compile code against `typeof(MeshMailCopyStore)` and assert that the table
+    reports each call. That is core's subject. Those snippets can stay in core and declare stub types
+    with the same full names.
+  - 🚨 **`EveryMailCopySurface_IsRegistered` must NOT be stubbed.** It reflects over the REAL MailCopy
+    assembly and asserts that every method carrying `[ImpersonationSurface]` appears in the
+    compiler's table. That is the check that catches a newly added, unguarded System entry point.
+    Against stubs it either fails its `Assert.NotEmpty` or checks the stubs instead of the
+    production API. It must follow the real types: split it out into the test project of
+    MailCopy's new home, reading core's `InMeshImpersonationReferences.Members`. The move is not
+    finished while that guard has no real subject.
+
+  The eight `MeshWeaver.Graph.Test/MailCopy*` suites (2 284 lines) follow the code.
+- **The ladder decides the order.** `Mail.MicrosoftGraph` and `Mail.Gmail` are published modules
+  that bind `MeshWeaver.Graph`'s MailCopy types. Core cannot `[TypeForwardedTo]` into a plugins
+  assembly, so the answer is "no published plugin binds it any more". Both modules move to the new
+  home and republish first, and the core removal lands after. No epoch bump is needed if that order
+  holds. Neither module is in the pull-request ladder's input (see above), so a green ladder says
+  nothing about them. Before the removal lands, link the two republished modules against the
+  candidate explicitly.
+- **Persisted content is safe.** `MailCopySource` and `MailMessageCopy` are registered under
+  `nameof(...)`, so the stored discriminator does not carry the assembly.
+
+What blocks the move is **where it goes**. Every plugin package declares exactly one module, and
+both consumers need this code:
+
+1. **A new provider-neutral package** whose module carries MailCopy, required by `Mail` and `Google`.
+   This is the clean shape, but a new package in MeshWeaver.Plugins needs the owner's explicit go,
+   because merging it publishes it.
+2. **Fold it into the `Mail` module** (`MeshWeaver.Mail.MicrosoftGraph`). `Mail.Gmail` then
+   references that project, and `Google` requires `Mail`. `Mail` is pre-installed, so no portal
+   installs anything new. The cost is that the Gmail module binds the Outlook module.
+
+Until that choice is made the folder stays. Once it is made, MailCopy is the only member of this
+survey that can move, and it moves without a declared break.
 
 ## Two defects this survey found
 
