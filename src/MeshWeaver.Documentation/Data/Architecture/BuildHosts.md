@@ -482,7 +482,9 @@ repository with no admission job of its own, from the `node-repo-build-executor.
 1. the repository **declares** its stages (`.github/build-stages.json`, at least one) and **claims them
    CI-equivalent** (`"ciEquivalent": true` — a reviewed statement that they check everything the Actions
    legs they replace check; without it the stages can be PROBED on a host, never routed — see *Before a
-   repository claims equivalence* below);
+   repository claims equivalence* below) **with nothing left in `owes`** — a claim beside an open debt is
+   void here too, not only in the declaration's own gate (*Moving a repository's tests to the build
+   server*, below);
 2. the operations instance **says** host for it: `GET /api/builds/queue?channel=<c>&repo=<name>`
    answers `"executor":"host"` (the instance's `Hosting:Builds:Executor`, narrowed per repository by
    `Hosting:Builds:HostRepos`);
@@ -611,23 +613,64 @@ what the Actions legs they replace check — each item is a reason a host green 
 **Status (2026-10-25).** Wired, dormant, in MeshWeaver.Plugins (#4180) and the four satellites
 (SocialMedia #254, Reinsurance #273, Manufacturing #136, Education #411): every run answers `actions`
 until a declaration claims `ciEquivalent` AND the instance says `host` for that repository. No
-declaration claims it yet: MeshWeaver.Plugins owes the seven items in its `Hosting/StandingBuildHosts`
-(H7), and the satellites declare no stages. **This repository's own CI is NOT wired**, and must not be
-until its heavy legs can be stated as stages: they build the platform from source and test it
-(`dotnet-test.yml`'s build and shards), while a host composes an already-built platform image and
-runs a repository's checks against it — a different workload, not a missing switch.
+declaration claims it yet: MeshWeaver.Plugins owes the items listed in its `.github/build-stages.json`
+(`Hosting/StandingBuildHosts` H7). **This repository's own CI is NOT wired** — the first item core
+owes (below).
 
-**Core's stages run on a DEPLOYMENT, not on its pull requests.** Core declares
-`.github/build-stages.json` for the deploy-test-switch shape (the design page in core PR #7182, P4):
-`test-shard-0` … `test-shard-<N-1>`, one per shard of `dotnet-test.yml`'s suite (N =
-`CI_SHARD_TOTAL`), and `doc-gate`. Each runs from the set's **`mw-core-tests`** image, the set's
+### Moving a repository's tests to the build server — `owes` and the one rule
+
+Every repository's move follows one mechanism, the one MeshWeaver.Plugins introduced as rule 7 of its
+admission check: the declaration says what its stages still check LESS than the Actions legs they
+would replace, and the claim is refused until that list is empty.
+
+```json
+{ "owes": ["<one gap, naming the Actions leg it is measured against>", "…"],
+  "stages": [ { "name": "…", "kind": "build|test", "command": "…", "timeoutMinutes": 40, "needs": ["nuget"] } ] }
+```
+
+- **`ciEquivalent: true` ⟺ `owes` is empty.** The claim with an open debt is RED; a debt-free
+  declaration that does not claim is RED (`owes` is how "not yet" says why); a malformed `owes` or
+  `ciEquivalent` is RED. `build-executor.py` applies the same test where the run is ROUTED, so a
+  declaration that reached a branch without its gate still cannot send a run to a host.
+- **Parity a stage must keep.** Each stage's command must keep saying the checks its Actions leg makes
+  — a substring per check — so a stage cannot quietly shed one: the node-repo profile derives the
+  stages a satellite owes from the lanes its `ci.yml` calls (`node-repo-compile-check.yml` ⇒
+  `compile-check`, `node-repo-gate.yml` ⇒ `gate`) and checks each against the lane (core's
+  `compile-check.py`, `scripts/compile-check.allow`, the host's reference set; the tester and dotnet
+  through the host's own paths, never a hard-coded `/host/`, the lane's allow file, the warning
+  baseline when ci.yml passes one, the gate seeded with its own bake, the Tests-area ratchet over the
+  log, the log handed back as an artifact).
+- **The rule lives once**, in `.github/scripts/check-build-stages.py` (`--profile core|node-repo`,
+  `--self-test` with a negative control per breach). Core runs it through `core-build-stages.py
+  --check` in `dotnet-test.yml`'s `workflow-shell` job; every satellite runs it through the shared
+  `node-repo-validate.yml` lane. A satellite with no declaration is **not migrated** — said in the
+  lane, not red, because `build-executor.py` answers `actions` for it and every lane still runs on
+  GitHub; nothing reads green that did not run.
+- **The host comes prepared.** No stage restores, stages or prepares anything per run: a stage reads
+  the host's installed platform (`$MeshWeaverRefs`, the floor), its tester and dotnet
+  (`$MW_BUILD_GATE_HOST`, `$MW_BUILD_PORTAL_DOTNET`) and, with `needs: ["nuget"]`, the host's prepared
+  package cache (`NUGET_FALLBACK_PACKAGES`). Core's build names that cache as its ONLY `--source`, so a
+  package the host was not prepared with is a red restore, never a download.
+- **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
+
+**Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
+`.github/build-stages.json` for both routes: `build`, then `test-shard-0` … `test-shard-<N-1>`, one
+per shard of `dotnet-test.yml`'s suite (N = `CI_SHARD_TOTAL`), and `doc-gate`. A deployment (the
+deploy-test-switch shape, the design page in core PR #7182, P4) submits one pinned run per shard and
+doc-gate stage and reads the set's image; a pull-request or trunk run on a host would run `build`
+first — the whole solution, Release, `-warnaserror`, offline from the prepared package cache, every
+test project a solution member, then `core-tests.py pack` of THIS run's tree into
+`$MW_BUILD_OUTPUTS/core-tests`. Every shard and the doc gate name both packs and
+`--require-sha "$MW_BUILD_SHA"`: `core-tests.py` takes the first pack whose manifest names the run's
+own commit and is RED when none does, so a run never tests the image of whatever set the host has
+installed in place of its own tree. Each runs from the set's **`mw-core-tests`** image, the set's
 fifth digest (`BuildHostChannel.CoreTestsDigest`): main-cd's `core-tests-image-arch` builds core's
 tests with CI's flags once PER ARCHITECTURE, on a runner of that architecture — a test bin carries
 the build machine's native `mw-plugin-test` apphost and its SDK's ReadyToRun Razor generator, so an
 x64 tree cannot serve the arm64 image — `deploy/core-tests/core-tests.py pack` stores every shard's
 bins content-addressed with a manifest, `core-tests-image` joins the two platform images into the
 set's index, and `promote` tags it with the set. A stage runs
-`python3 /core-tests/core-tests.py run --shard <i> --total <N>`, which copies that shard's bins out
+`python3 deploy/core-tests/core-tests.py run --shard <i> --total <N> --root … --require-sha …`, which copies that shard's bins out
 of the read-only image tree into the run's checkout and runs them as CI's shard loop does — each
 unit in its own process group, ended whole at the wall clock, and judged on a trx written by THAT
 invocation; `doc-gate` runs the doc and samples gates with the image's plugin tester against the
@@ -635,8 +678,13 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
 - **The list is GENERATED**: `.github/scripts/core-build-stages.py --write` derives it from
   `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
   reds any drift. The runner also refuses a `--total` the image was not packed for.
-- **No `ciEquivalent`.** Core's pull-request CI stays on runners, so `build-executor.py` still
-  answers `actions` for it; `--check` refuses the claim.
+- **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
+  generator's `OWES` list is the debt — the route (`dotnet-test.yml` calls no admission and no follow
+  job), `Consolidate test results` (a host shard hands back no trx), the fan-out (one run's stages run
+  serially, past the deadline, and pinned per-stage runs do not share a pack), the prepared package
+  closure, the browser and font set, Testcontainers (no Docker daemon in the sandbox), the shards'
+  untyped-content gate, the legs that read the build's artifacts (platform-compat, licence-gate), the
+  prepared-mesh rule, and a green probe that agrees with Actions.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
