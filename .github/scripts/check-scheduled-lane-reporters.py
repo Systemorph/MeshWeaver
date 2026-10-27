@@ -113,8 +113,11 @@ _STATUS_OVERRIDE = re.compile(r"\b(?:always|failure|cancelled)\(\)")
 
 def propagates_failure(job: dict) -> bool:
     """True when the job's `if:` keeps the implicit success(): a red ancestor then SKIPS it, so its
-    result is never 'success' on a red anywhere upstream and a check on it covers its own needs."""
-    return not _STATUS_OVERRIDE.search(if_text(job))
+    result is never 'success' on a red anywhere upstream and a check on it covers its own needs.
+    An EXPLICIT success() replaces the implicit one too, so `success() || <guard>` runs — and can
+    succeed — after its own need failed (Copilot on #7422): any `||` beside success() is an override."""
+    cond = if_text(job)
+    return not (_STATUS_OVERRIDE.search(cond) or (re.search(r"\bsuccess\(\)", cond) and "||" in cond))
 
 
 def closure(jobs: dict, start: str) -> set[str]:
@@ -192,7 +195,7 @@ def _conjuncts(tokens: list[str]) -> list[list[str]]:
     return [p for p in parts]
 
 
-def _eval_guard(tokens: list[str], ctx: dict):
+def _eval_guard(tokens: list[str], ctx: dict, ident: re.Pattern = _GUARD_IDENT):
     """Evaluate a guard conjunct (==, !=, !, &&, ||, parentheses over _GUARD_IDENT and string literals)
     against a scheduled run's context. Raises ValueError on anything outside that subset."""
     pos = 0
@@ -216,7 +219,7 @@ def _eval_guard(tokens: list[str], ctx: dict):
             return not atom()
         if tok and tok.startswith("'"):
             return tok[1:-1].replace("''", "'")
-        if tok and _GUARD_IDENT.match(tok):
+        if tok and ident.match(tok):
             return {"true": True, "false": False, "null": None}.get(tok, ctx.get(tok))
         raise ValueError(f"unsupported token {tok!r}")
 
@@ -304,6 +307,39 @@ def success_condition_problem(job: dict) -> str | None:
     return None
 
 
+# What a failure reporter's predicate may read: the guard identifiers plus its needs' results.
+_REPORTER_IDENT = re.compile(_GUARD_IDENT.pattern[:-2] + r"|needs\.[\w\-]+\.result)$")
+
+
+def fire_condition_problem(job: dict) -> str | None:
+    """A failure reporter must FIRE on a scheduled run whenever ANY of its direct needs is red (Copilot on
+    #7422: `needs: [a, b]` with `if: always() && needs.a.result != 'success'` stays silent on b's red).
+    Evaluated per direct need: that need 'failure', every other 'success', a scheduled run on main, the
+    status functions as they read then. Anything outside the readable subset is a problem, never a pass."""
+    raw = if_text(job).strip()
+    if raw.startswith("${{") and raw.endswith("}}"):
+        raw = raw[3:-2]
+    if not raw.strip():
+        return None  # survives_failure reports the implicit success() on its own line
+    text = re.sub(r"\balways\(\)|\bfailure\(\)", "true", raw)
+    text = re.sub(r"\bcancelled\(\)|\bsuccess\(\)", "false", text)
+    tokens = _tokens(text)
+    if tokens is None:
+        return f"`if: {raw.strip()}` is not an expression this guard can read"
+    direct = needs_of(job)
+    for red in direct:
+        ctx = dict(SCHEDULED)
+        ctx.update({f"needs.{n}.result": ("failure" if n == red else "success") for n in direct})
+        try:
+            fires = _eval_guard(tokens, ctx, _REPORTER_IDENT)
+        except ValueError:
+            return (f"`if: {raw.strip()}` reads something beyond status functions, event/ref guards and "
+                    "needs.<n>.result — this guard cannot prove it fires on every red")
+        if not fires:
+            return f"its `if:` stays false on a scheduled run where needs.{red}.result is 'failure' — that red is never reported"
+    return None
+
+
 def reporter_problems(jobs: dict) -> tuple[bool, list[str]]:
     """(has a reporter shape at all, the problems with it). Pure."""
     ledger: dict[str, list[tuple[str, tuple[str, str]]]] = {}     # outcome -> [(job id, (label, title))]
@@ -363,6 +399,10 @@ def reporter_problems(jobs: dict) -> tuple[bool, list[str]]:
         if not survives_failure(jobs[jid]):
             problems.append(f"reporter job '{jid}' has no `if:` with always()/failure()/!cancelled() — the implicit "
                             "success() SKIPS it on every red it exists to report")
+        else:
+            why = fire_condition_problem(jobs[jid])
+            if why:
+                problems.append(f"reporter job '{jid}': {why}")
     return True, problems
 
 
@@ -538,6 +578,20 @@ jobs:
         ("success job: parenthesised `||` event guard (the lock-pinned-digests shape)", pair.replace(
             "if: always() && needs.b.result == 'success'",
             "if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode != 'report-only')) && needs.b.result == 'success'"), "", False),
+        # Copilot on #7422 (fourth round) — an explicit success() is a status override too, and a red
+        # predicate must cover EVERY direct need:
+        ("intermediate `success() || schedule` hides a's red", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: \"success() || github.event_name == 'schedule'\", runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("intermediate `success() && guard` still propagates", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: \"success() && github.ref == 'refs/heads/main'\", runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", False),
+        ("red predicate ignores a direct need", pair.replace(
+            "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
+            "  red:\n    needs: [a, b]\n    if: always() && needs.a.result != 'success'"), "", True),
+        ("red predicate covers every direct need", pair.replace(
+            "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
+            "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result != 'success' || needs.b.result != 'success')"), "", False),
         ("`on:` as a list with schedule, no reporter", "on: [schedule, push]\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n", "", True),
     ]
     failures = 0
