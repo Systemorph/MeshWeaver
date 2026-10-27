@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -685,45 +686,106 @@ public static class SpaceDeletion
     /// The install records among <paramref name="records"/> whose package installs into
     /// <paramref name="space"/> — its declared target partition, or its id when it declares none (the
     /// PluginCatalog's <c>PackageInstaller.TargetPartitionOf</c>). Ordinal-ignore-case, as a partition
-    /// name is. Pure.
+    /// name is. <c>null</c> when ANY install record's manifest cannot be read: a ledger entry whose
+    /// target is unknown may be the one naming this space, so it is never read as "not this one".
+    /// Pure.
     /// </summary>
     /// <param name="space">The space.</param>
-    /// <param name="records">The listed install records.</param>
+    /// <param name="records">The CURRENT install record nodes (never index rows — their content may be stale).</param>
     /// <param name="options">The hub's serializer options, to read each record's manifest.</param>
-    public static ImmutableList<string> InstallRecordsTargeting(
-        string space, IEnumerable<MeshNode> records, JsonSerializerOptions options) =>
-        records
-            .Where(r => string.Equals(r.NodeType, InstallRecordNodeType, StringComparison.Ordinal))
-            .Where(r =>
-            {
-                var record = r.ContentAs<InstallRecordTarget>(options);
-                var id = string.IsNullOrWhiteSpace(record?.Id) ? r.Id : record!.Id;
-                var target = string.IsNullOrWhiteSpace(record?.TargetPartition) ? id : record!.TargetPartition;
-                return string.Equals(target, space, StringComparison.OrdinalIgnoreCase);
-            })
-            .Select(r => r.Path)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(p => p, StringComparer.Ordinal)
-            .ToImmutableList();
-
-    /// <summary>The two fields of an install record's manifest a space deletion reads.</summary>
-    private sealed record InstallRecordTarget
+    public static ImmutableList<string>? InstallRecordsTargeting(
+        string space, IEnumerable<MeshNode> records, JsonSerializerOptions options)
     {
-        public string? Id { get; init; }
-        public string? TargetPartition { get; init; }
+        var targeting = ImmutableList.CreateBuilder<string>();
+        foreach (var record in records.Where(r => string.Equals(r.NodeType, InstallRecordNodeType, StringComparison.Ordinal)))
+        {
+            var target = InstallTargetOf(record, options);
+            if (target is null)
+                return null;
+            if (string.Equals(target, space, StringComparison.OrdinalIgnoreCase))
+                targeting.Add(record.Path);
+        }
+        return targeting.Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
+    }
+
+    /// <summary>
+    /// The partition an install record's manifest installs into — its <c>targetPartition</c>, else its
+    /// <c>id</c>, else the node's id — or <c>null</c> when the manifest cannot be read. Reads the
+    /// manifest as JSON whatever shape it arrives in: a <see cref="JsonElement"/>, a
+    /// <see cref="JsonNode"/>, or the catalog's own typed <c>PackageManifest</c>, which a
+    /// <c>ContentAs</c> into any locally declared projection would answer <c>null</c> for, because a
+    /// differently-named CLR type is never recovered (<see cref="ObjectAsExtensions.As{T}"/>). Pure.
+    /// </summary>
+    internal static string? InstallTargetOf(MeshNode record, JsonSerializerOptions options)
+    {
+        JsonElement manifest;
+        try
+        {
+            switch (record.Content)
+            {
+                case null:
+                    return null;
+                case JsonElement element:
+                    manifest = element;
+                    break;
+                case JsonNode node:
+                    manifest = JsonSerializer.SerializeToElement(node, options);
+                    break;
+                default:
+                    // Serialize AS the concrete runtime type, never as object: the object-declared
+                    // path would adopt a foreign (collectible) type into this hub's registry.
+                    manifest = JsonSerializer.SerializeToElement(record.Content, record.Content.GetType(), options);
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+        {
+            return null;
+        }
+        if (manifest.ValueKind != JsonValueKind.Object)
+            return null;
+        string? id = null, targetPartition = null;
+        foreach (var property in manifest.EnumerateObject())
+        {
+            var isId = string.Equals(property.Name, "id", StringComparison.OrdinalIgnoreCase);
+            var isTarget = string.Equals(property.Name, "targetPartition", StringComparison.OrdinalIgnoreCase);
+            if (!isId && !isTarget)
+                continue;
+            if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                return null;
+            var value = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
+            if (isId)
+                id = value;
+            else
+                targetPartition = value;
+        }
+        return !string.IsNullOrWhiteSpace(targetPartition) ? targetPartition
+            : !string.IsNullOrWhiteSpace(id) ? id
+            : record.Id;
     }
 
     /// <summary>
     /// The install records targeting <paramref name="space"/>, read AS SYSTEM — or <c>null</c> when
-    /// the listing was not an answer (never read as "none"). Cold.
+    /// they could not be established (never read as "none"). The listing only DISCOVERS the record
+    /// paths: an index row's content may still name a record's previous target, so each listed
+    /// record is read from its owning stream (<see cref="ReadCurrentNode"/>), and any record that
+    /// cannot be read leaves the ledger unknown. Cold.
     /// </summary>
     public static IObservable<ImmutableList<string>?> InstallRecords(IMessageHub hub, string space)
     {
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         return AsSystem(hub, () => MeshReading.Read(mesh, InstallRecordsQuery()))
-            .Select(reading => reading.IsAnswer
-                ? InstallRecordsTargeting(space, reading.Rows, hub.JsonSerializerOptions)
-                : null);
+            .SelectMany(reading => !reading.IsAnswer
+                ? Observable.Return<ImmutableList<string>?>(null)
+                : reading.Rows
+                    .Select(r => r.Path)
+                    .Distinct(StringComparer.Ordinal)
+                    .Select(path => ReadCurrentNode(hub, path))
+                    .MergeBounded(ReadConcurrency)
+                    .ToList()
+                    .Select(reads => reads.Any(r => r.Node is null)
+                        ? null
+                        : InstallRecordsTargeting(space, reads.Select(r => r.Node!), hub.JsonSerializerOptions)));
     }
 
     /// <summary>The listing that establishes whether the space root exists. Pure.</summary>

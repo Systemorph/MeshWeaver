@@ -727,6 +727,49 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         SpaceDeletion.InventoryQueries("LiveInventory").First().Should().Be(SpaceDeletion.RootQuery("LiveInventory"));
     }
 
+    /// <summary>
+    /// #7325 review: an install record's manifest is matched whatever shape its content arrives in.
+    /// The catalog writes a TYPED manifest, and a <c>ContentAs</c> into a differently-named local
+    /// projection answers null for it — which ignored the declared target and let the space of a
+    /// retargeted package read as "no record targets it". An unreadable manifest leaves the whole
+    /// ledger unknown (null), never "not this one".
+    /// </summary>
+    [Fact]
+    public void InstallRecordsTargeting_ReadsATypedManifest_AndAnUnreadableOneLeavesTheLedgerUnknown()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        MeshNode Record(string id, object? content) => new(id, "Plugins") { NodeType = "Package", Content = content };
+        var typed = Record("retarget-pkg", new TypedManifest { Id = "retarget-pkg", TargetPartition = "Retargeted" });
+        var json = Record("other", System.Text.Json.JsonSerializer.SerializeToElement(new { id = "other", targetPartition = (string?)null }));
+        var node = Record("noded", System.Text.Json.Nodes.JsonNode.Parse("""{"Id":"noded","TargetPartition":"Retargeted"}"""));
+
+        SpaceDeletion.InstallRecordsTargeting("Retargeted", [typed, json, node], options)
+            .Should().Equal("Plugins/noded", "Plugins/retarget-pkg");
+        SpaceDeletion.InstallRecordsTargeting("retarget-pkg", [typed], options)
+            .Should().BeEmpty("a declared target partition wins over the id");
+        SpaceDeletion.InstallRecordsTargeting("other", [typed, json], options).Should().Equal("Plugins/other");
+        SpaceDeletion.InstallRecordsTargeting("Retargeted", [typed, Record("broken", 42)], options)
+            .Should().BeNull("a record whose target cannot be read may be the one naming this space");
+        SpaceDeletion.InstallRecordsTargeting("Retargeted", [Record("empty", null)], options).Should().BeNull();
+        new MeshNode("x") { Content = new TypedManifest { Id = "x", TargetPartition = "Retargeted" } }
+            .ContentAs<TypedManifestProbe>(options)
+            .Should().BeNull("negative control: a differently-named CLR type is never recovered by ContentAs");
+    }
+
+    /// <summary>A typed manifest, as the catalog materializes one (a CLR type the Graph assembly does not know).</summary>
+    private sealed record TypedManifest
+    {
+        public string Id { get; init; } = "";
+        public string? TargetPartition { get; init; }
+    }
+
+    /// <summary>A differently-named projection with the same fields — the shape the previous code read through.</summary>
+    private sealed record TypedManifestProbe
+    {
+        public string? Id { get; init; }
+        public string? TargetPartition { get; init; }
+    }
+
     // ───────────────────────────── helpers ─────────────────────────────
 
     private static string Sha(string text) =>
