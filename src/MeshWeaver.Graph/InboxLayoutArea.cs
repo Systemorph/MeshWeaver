@@ -695,41 +695,27 @@ public static class InboxLayoutArea
         };
     }
 
-    /// <summary>The keys already seeded into the preferences node by this page — so a pass that rewrites them is loud, not a storm.</summary>
-    private sealed class SeededKeys
-    {
-        private ImmutableHashSet<string> done = [];
-
-        /// <summary>Records <paramref name="fingerprint"/>; false when it was recorded before.</summary>
-        public bool Add(string fingerprint)
-        {
-            var added = false;
-            ImmutableInterlocked.Update(ref done, set => (added = !set.Contains(fingerprint)) ? set.Add(fingerprint) : set);
-            return added;
-        }
-    }
-
     /// <summary>
     /// Writes the entries <paramref name="stored"/> lacks (a kind or a source a package brought since the
-    /// node was created) into the node, ONCE per set of keys: the write is a merge of the missing keys into
-    /// the node's CURRENT content, so it never overwrites a choice, and the next pass finds nothing missing.
-    /// A pass that finds the same keys missing again after writing them would be a loop — it is logged as an
-    /// error and not repeated (rule 2: never feed a reconcile its own writes).
+    /// node was created, a per-kind state filter a legacy node predates) into the node, ONCE per set of keys: the
+    /// write is a merge of the missing keys into the node's CURRENT content, so it never overwrites a choice, and the
+    /// next pass finds nothing missing.
+    /// <para>🚨 A pass that still sees the keys missing while the write is IN FLIGHT is the expected stale read, not
+    /// a loop (#7260): the rows, the filter and the tag ticks re-run this pass on their own, and any of them can
+    /// arrive before the committed write has reached the page's view of the node. Such a pass does nothing. The
+    /// guard (<see cref="InboxSeedGuard"/>) records a set of keys as done only once the owner CONFIRMED the write, and
+    /// it is the CONFIRMED node that is checked for the keys — that, and only that, is a loop, logged as an error and
+    /// not repeated (rule 2: never feed a reconcile its own writes). A write that FAILED is released, so a later pass
+    /// writes it again instead of the keys staying unwritten for the rest of the session.</para>
     /// </summary>
     private static void SeedMissing(IMessageHub hub, AccessService? access, AccessContext? viewer, ILogger? logger, string path,
-        InboxPreferences stored, InboxPreferences expected, SeededKeys seeded)
+        InboxPreferences stored, InboxPreferences expected, InboxSeedGuard seeded)
     {
         if (InboxPreferencesNodeType.Completed(stored, expected) is not { } completed)
             return;
-        var missing = completed.Kinds.Keys.Except(stored.Kinds.Keys).Select(k => "k:" + k)
-            .Concat(completed.Sources.Keys.Except(stored.Sources.Keys).Select(k => "s:" + k))
-            .Concat(InboxPreferencesNodeType.MissingStates(stored).Select(k => "st:" + k))
-            .Order(StringComparer.Ordinal).ToArray();
-        if (!seeded.Add(string.Join(',', missing)))
-        {
-            logger?.LogError("Inbox: the preference keys {Keys} were written this session and are still missing from {Path}; not writing again", string.Join(", ", missing), path);
+        var fingerprint = string.Join(',', MissingKeys(stored, completed));
+        if (!seeded.TryBegin(fingerprint))
             return;
-        }
         var options = hub.JsonSerializerOptions;
         // The write is the person's own, under their identity — this runs on whatever turn the rows landed on.
         using (access?.SwitchAccessContext(viewer))
@@ -738,8 +724,32 @@ public static class InboxLayoutArea
                                 && InboxPreferencesNodeType.Completed(current, expected) is { } merged
                     ? node with { Content = merged }
                     : node)
-                .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Inbox: could not add the missing keys to {Path}", path));
+                .Subscribe(
+                    committed =>
+                    {
+                        // The owner committed: what the committed node holds is the verdict, not the page's (possibly older) view.
+                        if (committed.ContentAs<InboxPreferences>(options) is { } held
+                            && InboxPreferencesNodeType.Completed(held, expected) is { } still)
+                            logger?.LogError("Inbox: the preference keys {Keys} were written and committed, and {Path} still lacks them; not writing again",
+                                string.Join(", ", MissingKeys(held, still)), path);
+                        seeded.Confirm(fingerprint);
+                    },
+                    ex =>
+                    {
+                        seeded.Release(fingerprint);
+                        logger?.LogWarning(ex, "Inbox: could not add the missing keys {Keys} to {Path}; a later pass writes them again", fingerprint, path);
+                    },
+                    () => seeded.Confirm(fingerprint));
     }
+
+    /// <summary>The keys <paramref name="completed"/> adds to <paramref name="stored"/>, as <c>k:</c>/<c>s:</c>/<c>st:</c> entries in ordinal order. Pure.</summary>
+    /// <param name="stored">What the node holds.</param>
+    /// <param name="completed">The same with what it lacks added (<see cref="InboxPreferencesNodeType.Completed"/>).</param>
+    internal static string[] MissingKeys(InboxPreferences stored, InboxPreferences completed)
+        => [.. completed.Kinds.Keys.Except(stored.Kinds.Keys).Select(k => "k:" + k)
+            .Concat(completed.Sources.Keys.Except(stored.Sources.Keys).Select(k => "s:" + k))
+            .Concat(InboxPreferencesNodeType.MissingStates(stored).Select(k => "st:" + k))
+            .Order(StringComparer.Ordinal)];
 
     /// <summary>The addresses the rows reached — each once, by <see cref="InboxRows.AccountKey"/>, in alphabetical order. Pure.</summary>
     /// <param name="rows">The merged rows.</param>
@@ -810,7 +820,7 @@ public static class InboxLayoutArea
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
-        var seeded = new SeededKeys();
+        var seeded = new InboxSeedGuard();
         // Resolved ONCE, on the render turn: every text a row may carry.
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
