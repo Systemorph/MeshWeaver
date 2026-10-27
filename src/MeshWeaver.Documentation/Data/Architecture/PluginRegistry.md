@@ -521,6 +521,12 @@ for". The response's `scope` is the EFFECTIVE scope — what was asked for inter
 licensed — returned explicitly so a consumer sees it got less than it requested rather than
 discovering it one 404 at a time.
 
+A third, optional field rides the same request: `telemetry` — the platform version and commit the
+instance runs, its home URL and a package summary. The registry stamps it onto the instance record
+beside `lastSeenAt` and reads nothing of it for authentication or authorization; a consumer that
+predates the field is served exactly as before. What is collected, what is not, and the error digest
+that uses the same credential: [Instance Telemetry](../InstanceTelemetry).
+
 Three properties, and each is what makes the token safe to hand out:
 
 - **Identity and scope, never authority.** The live grant is re-read on every request, so revoking a
@@ -910,3 +916,4 @@ import pipeline both paths share.
 - @../Plugins — the node-native plugin model this registry serves.
 - @../InstanceIdentityAndSetup — the 2026-08-30 design that moves the plan from grant strings onto the instance's own partition node, replaces the `mwi_` bearer with a JWT on every fetch, and adds the first-run setup app.
 - @../StaticRepoImport — the import pipeline both the registry and direct GitSync share.
+- @../InstanceTelemetry — the heartbeat every registered instance leaves on its token exchange (version, last online) and the error digest the registry turns into triage submissions.

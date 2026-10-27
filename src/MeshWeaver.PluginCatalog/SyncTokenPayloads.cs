@@ -30,7 +30,15 @@ public static class SyncTokenPayloads
     /// already licensed is dropped rather than refused: a token can only ever narrow, so asking for
     /// more than you hold is not an attack, it is a stale caller.</param>
     /// <param name="LifetimeSeconds">Requested lifetime; clamped to the registry's maximum.</param>
-    public record Request(IReadOnlyCollection<string>? Scope = null, int? LifetimeSeconds = null);
+    /// <param name="Telemetry">What the instance says about itself — platform version, commit, home
+    /// URL, package summary. OPTIONAL and additive: a consumer that predates the field sends none and
+    /// is served exactly as before; the registry stamps whatever arrives onto the instance record
+    /// beside <c>LastSeenAt</c> (<c>Doc/Architecture/InstanceTelemetry</c>). Never read for
+    /// authentication or authorization — the key is the identity, the body is a claim about a build.</param>
+    public record Request(
+        IReadOnlyCollection<string>? Scope = null,
+        int? LifetimeSeconds = null,
+        InstanceTelemetry? Telemetry = null);
 
     /// <summary>
     /// The success response.
