@@ -175,7 +175,7 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
                 using var request = new HttpRequestMessage(HttpMethod.Post, url + SyncTokenPayloads.Route);
                 request.Headers.TryAddWithoutValidation("Authorization", $"{SyncAccessToken.Scheme} {rawKey}");
                 request.Content = new StringContent(
-                    JsonSerializer.Serialize(new SyncTokenPayloads.Request(Telemetry: report), SyncTokenPayloads.Json),
+                    JsonSerializer.Serialize(new SyncTokenPayloads.Request { Telemetry = report }, SyncTokenPayloads.Json),
                     System.Text.Encoding.UTF8, "application/json");
                 using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
                 var status = (int)response.StatusCode;

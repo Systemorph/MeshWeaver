@@ -34,8 +34,10 @@ public class InstanceTelemetryPayloadTest
     [Fact]
     public void ANewConsumersBody_RoundTripsItsTelemetry()
     {
-        var sent = new SyncTokenPayloads.Request(
-            Telemetry: new InstanceTelemetry("3.1.4123+abc", "0123456789abcdef", "https://acme.example", "87 packages · 3f9a1c2e"));
+        var sent = new SyncTokenPayloads.Request
+        {
+            Telemetry = new InstanceTelemetry("3.1.4123+abc", "0123456789abcdef", "https://acme.example", "87 packages · 3f9a1c2e"),
+        };
 
         var wire = JsonSerializer.Serialize(sent, SyncTokenPayloads.Json);
         var read = JsonSerializer.Deserialize<SyncTokenPayloads.Request>(wire, SyncTokenPayloads.Json);
