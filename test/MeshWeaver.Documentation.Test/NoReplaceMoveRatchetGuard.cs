@@ -31,7 +31,7 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class NoReplaceMoveRatchetGuard
 {
-    private static readonly string[] ScannedRoots = ["src", "tools", "samples", "memex"];
+    private static readonly string[] ScannedRoots = ["src", "tools", "samples"];
 
     /// <summary>The one file that may spell the BCL call without <c>overwrite: true</c>: the
     /// primitive itself, whose Windows step is <c>MoveFileEx</c> and is a rename on one volume.</summary>

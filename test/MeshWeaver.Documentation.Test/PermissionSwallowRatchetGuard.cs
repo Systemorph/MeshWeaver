@@ -39,7 +39,7 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class PermissionSwallowRatchetGuard
 {
-    private static readonly string[] ScannedRoots = ["src", "memex", "samples"];
+    private static readonly string[] ScannedRoots = ["src", "samples"];
 
     /// <summary>
     /// A permission check and the swallow live in one statement, so the window is "from the call to
