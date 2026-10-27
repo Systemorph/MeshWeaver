@@ -85,14 +85,12 @@ BUILD_COMMAND = (
 # verdict. Remove an entry only in the change that pays it (check-build-stages.py refuses the
 # ciEquivalent claim while any remains).
 OWES = [
-    "route: dotnet-test.yml has no admission — no job calls build-executor.py and no follow job (build-follow.yml) "
-    "stands in for the `build`, `test` and `doc-gate` jobs, so even an equivalent declaration would route nothing "
-    "(the satellites' shape: node-repo-build-executor.yml + build-follow.yml + a host-verdict input)",
-    "Consolidate test results: a host shard hands back the `test` job's results tree (testResults-shard<i>/: "
-    "test/**/*.trx, test/test-results.log, collected-logs/) as H9 receipts, but collect-results still reads only the "
-    "testResults-shard<i>-attempt<a> artifacts of the `test` matrix — it does not fetch a host run's receipts "
-    "(build-artifacts-fetch.py), so a host run's consolidated verdict and failure summary cannot be built yet (lands "
-    "with the route)",
+    "Consolidate test results: host-results (GitHub-hosted — core runs nothing on the self-hosted pool and reads no "
+    "shared store) fetches each host shard's results tree over HTTPS by receipt (host-shard-results.py: the run's OIDC "
+    "token, every file verified against its receipt) and uploads it as the `test` matrix's own artifact, but the build "
+    "API serves receipts only, not their bytes — GET {api}/{repo}/{sha}/artifacts/{sha256} is owed by MeshWeaver.Plugins' "
+    "BuildHostEndpoints, and until it answers that job is RED naming it. Paid only when collect-results consolidates "
+    "results fetched that way (Actions: collect-results over the testResults-shard<i>-attempt<a> artifacts)",
     "fan-out: a host runs one run's stages serially — build 25 + 8 shards x 20 + doc-gate 25 minutes is past the run "
     "deadline; the deployment route already submits one pinned run per stage, but such runs do not share one "
     "$MW_BUILD_OUTPUTS, so the shards need this run's pack through the shared cache (`needs: outputs`), which today "
@@ -263,6 +261,52 @@ def container_problems(root: str, owes: list[str] | None = None) -> list[str]:
     return out
 
 
+FOLLOW_MATRIX = re.compile(r"^  host-follow:\n(?:    .*\n|\n)*?        stage: \[([^\]]*)\]", re.M)
+RESULTS_MATRIX = re.compile(r"^  host-results:\n(?:    .*\n|\n)*?        shard: \[([^\]]*)\]", re.M)
+FOLLOW_INPUT = re.compile(r"^  host-follow:\n(?:    .*\n|\n)*?      stage: ([^\n]*)\n", re.M)
+
+
+def _stage_of():
+    """build-follow.py's own `--stage` parser — the route is checked against what the follower accepts."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build-follow.py")
+    spec = importlib.util.spec_from_file_location("build_follow", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.stage_of, mod.Failure
+
+
+def route_problems(workflow_text: str, total: int) -> list[str]:
+    """dotnet-test.yml's host route follows EVERY declared stage and fetches EVERY shard's results —
+    a stage the follow matrix omits would be a host verdict nobody reads."""
+    out: list[str] = []
+    want = [s["name"] for s in generate(total)["stages"]]
+    m = FOLLOW_MATRIX.search(workflow_text)
+    got = [x.strip() for x in m.group(1).split(",")] if m else None
+    if got != want:
+        out.append(f"{WORKFLOW} job host-follow's stage matrix is {got} but {STAGES} declares {want} — follow every declared stage")
+    # Each matrix entry reaches build-follow.py as the `stage` input. A bare `build` is the AGGREGATE
+    # check's name there and is refused before polling, so every entry must reach it as the stage's
+    # qualified check name — held by running the follower's own parser over what the job passes.
+    m = FOLLOW_INPUT.search(workflow_text)
+    passed = m.group(1).strip().strip("'\"") if m else None
+    if passed is None or "${{ matrix.stage }}" not in passed:
+        out.append(f"{WORKFLOW} job host-follow passes no `stage: …${{{{ matrix.stage }}}}` input ({passed!r})")
+    else:
+        stage_of, failure = _stage_of()
+        for s in want:
+            value = passed.replace("${{ matrix.stage }}", s)
+            try:
+                if stage_of(value, "latest") != s:
+                    out.append(f"{WORKFLOW} job host-follow passes --stage {value!r}, which build-follow.py reads as another stage than {s!r}")
+            except failure as e:
+                out.append(f"{WORKFLOW} job host-follow passes --stage {value!r}, which build-follow.py refuses: {e}")
+    m = RESULTS_MATRIX.search(workflow_text)
+    got = [x.strip() for x in m.group(1).split(",")] if m else None
+    if got != [str(i) for i in range(total)]:
+        out.append(f"{WORKFLOW} job host-results' shard matrix is {got} but CI_SHARD_TOTAL is {total} — fetch every shard's results")
+    return out
+
+
 def _read(path: str) -> str | None:
     try:
         with open(path) as fh:
@@ -318,6 +362,21 @@ def _self_test() -> int:
         expect(False, "a workflow with no CI_SHARD_TOTAL is refused")
     except SystemExit:
         expect(True, "a workflow with no CI_SHARD_TOTAL is refused")
+    print("the host route follows every declared stage and fetches every shard:")
+    stages2 = ", ".join(x["name"] for x in generate(2)["stages"])
+    route = ("jobs:\n  host-follow:\n    strategy:\n      matrix:\n        stage: [" + stages2 + "]\n"
+             "    with:\n      stage: build/${{ matrix.stage }}\n"
+             "  host-results:\n    strategy:\n      matrix:\n        shard: [0, 1]\n")
+    expect(route_problems(route, 2) == [], "both matrices name exactly the declaration")
+    expect(any("host-follow" in p for p in route_problems(route.replace(", doc-gate", ""), 2)), "RED: a declared stage nobody follows")
+    expect(any("host-results" in p for p in route_problems(route.replace("[0, 1]", "[0]"), 2)), "RED: a shard whose results are never fetched")
+    expect(any("refuses" in p for p in route_problems(route.replace("build/${{ matrix.stage }}", "${{ matrix.stage }}"), 2)),
+           "RED: the bare `build` entry reaches build-follow.py as the aggregate check, which it refuses")
+    expect(len(route_problems("jobs:\n", 2)) == 3, "RED: no host route at all")
+    real_wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows", "dotnet-test.yml")
+    if os.path.isfile(real_wf):
+        wf_text = open(real_wf).read()
+        expect(route_problems(wf_text, read_shard_total(wf_text)) == [], "the real dotnet-test.yml's route matches the declaration")
     print("no container — core's suites need no Docker daemon:")
     import tempfile
     # The scan's controls run against an explicit DEBT-FREE list, never the live OWES: re-opening
@@ -380,7 +439,8 @@ def main(argv: list[str]) -> int:
         print(f"wrote {STAGES} for CI_SHARD_TOTAL={read_shard_total(workflow)}")
         return 0
     if argv == ["--check"]:
-        found = problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root)
+        found = (problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root)
+                 + route_problems(workflow, read_shard_total(workflow)))
         for p in found:
             print(f"::error::{p}")
         if not found:

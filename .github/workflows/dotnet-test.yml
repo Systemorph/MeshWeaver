@@ -655,9 +655,105 @@ jobs:
         i18n-mirror-sync=${{ needs.i18n-mirror-sync.result }} workflow-shell=${{ needs.workflow-shell.result }}
         cross-repo-pair=${{ needs.cross-repo-pair.result }}
 
+  # ── WHO RUNS THE BUILD AND THE SUITES: a standing build host, or Actions ─────────────────────
+  # (Doc/Architecture/BuildHosts → "Core's own route"). build-executor.py answers `host` only when
+  # core's .github/build-stages.json claims ciEquivalent with NOTHING owed, the operations instance says
+  # host for MeshWeaver, and the run was queued (one signed build-request, the base tip = precheck's
+  # main); every failure answers `actions` — today's behaviour. With `host`, `build` (and with it
+  # `test`, `doc-gate`, `platform-compat`, `licence-gate`) does not run here: host-follow follows each
+  # declared stage, host-results brings each shard's handed-back results into this run as the SAME
+  # testResults-shard<i>-attempt<a> artifacts the `test` matrix uploads, and collect-results
+  # consolidates them unchanged. Skipped exactly when `build` would be (a reused green tree, a held
+  # stage gate) — then its empty executor reads as `actions` below.
+  admission:
+    name: "Build executor (host or Actions)"
+    needs: [precheck, stage-gate]
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/node-repo-build-executor.yml
+    # No `main-sha`: precheck's main is the green-tree PROBE's and may be hours old by the time a held
+    # run is released (see precheck's output). Empty, the host resolves the tip once as the suites
+    # start — exactly what `build` does on the Actions route (policy suites-test-fresh-merge).
+    with:
+      change-mode: ${{ needs.precheck.outputs.tests-mode }}
+      scripts-ref: ${{ github.sha }}
+    secrets:
+      build-webhook-secret: ${{ secrets.BUILD_WEBHOOK_SECRET }}
+
+  # One follower per declared stage (core-build-stages.py --check holds this list to
+  # .github/build-stages.json). Only on the host route; its matrix result is what collect-results
+  # reads in place of the `test` and `doc-gate` jobs' results there.
+  host-follow:
+    name: "Host stage"
+    needs: [admission]
+    if: ${{ !cancelled() && needs.admission.outputs.executor == 'host' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [build, test-shard-0, test-shard-1, test-shard-2, test-shard-3, test-shard-4, test-shard-5, test-shard-6, test-shard-7, doc-gate]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/build-follow.yml
+    with:
+      executor: host
+      api-url: ${{ needs.admission.outputs.api-url }}
+      # The stage's CHECK name (build/<stage>): build-follow.py refuses a bare `build` as the aggregate check.
+      stage: build/${{ matrix.stage }}
+      sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      scripts-ref: ${{ github.sha }}
+
+  # Each host shard handed back the `test` job's results tree (core-tests.py run → testResults-shard<i>/)
+  # as H9 receipts. This job fetches that tree from the BUILD API over HTTPS with the run's own OIDC
+  # token (host-shard-results.py: the receipts, then each object by its content hash), verifies every
+  # file against its receipt (sha256, size, the exact set, the tree's shape), and uploads it under the
+  # name the `test` matrix uses, so collect-results' download, attempt resolution, coverage count and
+  # trx/marker gates read a host run exactly as an Actions one. Runs whatever the follows concluded.
+  # 🚨 GitHub-hosted, deliberately: core is a public repository, so it runs no job on the self-hosted
+  # pool and reads no shared store (MW_RUNNER / MW_ARTIFACT_STORE are not core's). Every missing,
+  # foreign, extra or truncated file is RED naming it — never a skip.
+  host-results:
+    name: "Host shard results (shard ${{ matrix.shard }})"
+    needs: [admission, host-follow]
+    if: ${{ !cancelled() && needs.admission.outputs.executor == 'host' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        sparse-checkout: .github
+    - name: Fetch shard ${{ matrix.shard }}'s handed-back results by receipt, over HTTPS
+      env:
+        API_URL: ${{ needs.admission.outputs.api-url }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        SHARD: ${{ matrix.shard }}
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/host-shard-results.py --self-test > /dev/null
+        python3 .github/scripts/host-shard-results.py --api-url "$API_URL" --sha "$SHA" --shard "$SHARD" \
+          --channel latest --out "$GITHUB_WORKSPACE/results"
+    - name: "Upload artifact: shard test results (from the host)"
+      uses: actions/upload-artifact@v7
+      with:
+        name: testResults-shard${{ matrix.shard }}-attempt${{ github.run_attempt }}
+        path: |
+          results/test/**/*.trx
+          results/test/test-results.log
+          results/collected-logs/
+        compression-level: 9
+        retention-days: 15
+
   build:
     name: "Build solution (once)"
-    needs: [precheck, stage-gate]
+    needs: [precheck, stage-gate, admission]
     # Skipped ONLY when this exact tree is already green (see the file header). `test`
     # needs `build`, so it skips with it; `collect-results` is if:always() and
     # reports the reused result.
@@ -671,7 +767,9 @@ jobs:
     # genuine workflow cancellation (where !cancelled() is false) still stops the run.
     # 🚨 `needs.stage-gate.result == 'success'` is EXPLICIT: a skipped gate (a stage-0 control red)
     # must hold the build too, and `!cancelled()` alone would read a skipped need as fine.
-    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' }}
+    # 🚨 Not on the host route: there the build host builds and tests (admission above). An admission
+    # that failed or answered nothing reads as `actions` — the legs run HERE, a real verdict.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' && needs.admission.outputs.executor != 'host' }}
     timeout-minutes: 25
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
     # `dotnet build` of the whole solution launches a long-lived Roslyn compiler server that
@@ -2403,6 +2501,10 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-artifacts-fetch.py --self-test
 
+    - name: "A host shard's results reach Consolidate only by verified receipt over HTTPS — none, foreign, extra or truncated is red (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/host-shard-results.py --self-test
+
     # Core's suites as build-host stages: a deployment runs them from the set's mw-core-tests image
     # (Doc/Architecture/DeployTestSwitchLatest, P4), a host PR/trunk run builds and packs its own
     # tree first (Doc/Architecture/BuildHosts → "Moving a repository's tests to the build server").
@@ -4096,7 +4198,7 @@ jobs:
     # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
     # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
     # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
-    needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
+    needs: [precheck, stage-gate, admission, host-follow, host-results, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4304,9 +4406,29 @@ jobs:
     # start, was cancelled, or died before uploading leaves the matrix result non-success.
     # `needs:` alone cannot express that under `if: always()`.
     - name: "Fail if any shard job did not succeed"
-      if: always() && needs.precheck.outputs.skip != 'true' && needs.test.result != 'success'
+      if: always() && needs.precheck.outputs.skip != 'true' && needs.admission.outputs.executor != 'host' && needs.test.result != 'success'
       run: |
         echo "::error::The test matrix concluded '${{ needs.test.result }}' — at least one shard did not succeed. See the shard jobs; this run does not cover the whole suite."
+        exit 1
+    # The route decision itself must have been made: a failed admission job is CI's own defect, not
+    # a quiet fall-back. (Skipped with the build on a reused tree; a held stage gate is red above.)
+    - name: "Fail if the build executor did not decide"
+      if: always() && needs.precheck.outputs.skip != 'true' && needs.admission.result != 'success'
+      run: |
+        echo "::error::The 'Build executor (host or Actions)' job concluded '${{ needs.admission.result }}' — see that job; this run cannot say who ran its build and suites."
+        exit 1
+    # The host route's twins of the shard check: every declared stage (build, each shard, doc-gate)
+    # must have SUCCEEDED on the host, and every shard's results must have been brought back. A
+    # skipped or cancelled follow is not a pass.
+    - name: "Fail if any host stage did not succeed"
+      if: always() && needs.precheck.outputs.skip != 'true' && needs.admission.outputs.executor == 'host' && needs.host-follow.result != 'success'
+      run: |
+        echo "::error::Host route: the stage follows concluded '${{ needs.host-follow.result }}' — see the 'Host stage' jobs (each stage's Check Run build/<stage> is the authority on its verdict)."
+        exit 1
+    - name: "Fail if any host shard's results were not brought back"
+      if: always() && needs.precheck.outputs.skip != 'true' && needs.admission.outputs.executor == 'host' && needs.host-results.result != 'success'
+      run: |
+        echo "::error::Host route: fetching the shards' handed-back results concluded '${{ needs.host-results.result }}' — see the 'Host shard results' jobs."
         exit 1
 
     - name: Publish Test Results
@@ -4390,7 +4512,7 @@ jobs:
     # already tested green, so `build` — and with it `doc-gate` — did not run); it is exempted on
     # precheck's own output, never on the gate's result.
     - name: Fail if the doc gate failed
-      if: needs.precheck.outputs.skip != 'true' && needs.doc-gate.result != 'success'
+      if: needs.precheck.outputs.skip != 'true' && needs.admission.outputs.executor != 'host' && needs.doc-gate.result != 'success'
       env:
         # Empty when the gate produced no verdict (it died before judging). Degrades to
         # "see the job", which is true either way.
