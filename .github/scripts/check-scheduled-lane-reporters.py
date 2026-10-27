@@ -27,7 +27,9 @@ and in both shapes the reporter job (the failure half, for the pair) must
 
   * `needs:` — directly or transitively — EVERY other job of the workflow except the reporters
     themselves. A job missing from the list fails without anyone hearing, which is the failure mode
-    the reporter exists to remove; and
+    the reporter exists to remove. "Transitively" counts only through an intermediate that keeps the
+    implicit success(): one whose `if:` carries always()/!cancelled()/failure() can succeed after its
+    own need failed, so that need must be listed directly; and
   * carry an `if:` with a status function that survives a failure (`always()`, `failure()` or
     `!cancelled()`). Without one GitHub applies the implicit `success()` and the reporter is SKIPPED
     on exactly the runs it exists for.
@@ -93,7 +95,34 @@ def needs_of(job: dict) -> list[str]:
     return [n] if isinstance(n, str) else [x for x in n if isinstance(x, str)]
 
 
+def if_text(job: dict) -> str:
+    """The job's `if:` as text. YAML reads a bare `if: false` as the boolean False, which `or ""` would
+    turn into an ABSENT condition (Copilot on #7422) — keep the value, spelled the way GitHub reads it."""
+    v = job.get("if")
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
+# A status function in an `if:` replaces the implicit success(), so the job can run — and SUCCEED —
+# after one of its own needs failed.
+_STATUS_OVERRIDE = re.compile(r"\b(?:always|failure|cancelled)\(\)")
+
+
+def propagates_failure(job: dict) -> bool:
+    """True when the job's `if:` keeps the implicit success(): a red ancestor then SKIPS it, so its
+    result is never 'success' on a red anywhere upstream and a check on it covers its own needs."""
+    return not _STATUS_OVERRIDE.search(if_text(job))
+
+
 def closure(jobs: dict, start: str) -> set[str]:
+    """The jobs whose red reaches `start` through its `needs.<n>.result` checks: every direct need, and
+    transitively the needs of an intermediate job only while that intermediate PROPAGATES a failure.
+    An intermediate with `always()`/`!cancelled()`/`failure()` can succeed after an ancestor failed, so
+    `a → b(if: always()) → reporter` does NOT cover `a` (Copilot on #7422) — the reporter must need `a`
+    directly."""
     seen: set[str] = set()
     stack = list(needs_of(jobs.get(start) or {}))
     while stack:
@@ -101,7 +130,9 @@ def closure(jobs: dict, start: str) -> set[str]:
         if j in seen:
             continue
         seen.add(j)
-        stack.extend(needs_of(jobs.get(j) or {}))
+        job = jobs.get(j) or {}
+        if propagates_failure(job):
+            stack.extend(needs_of(job))
     return seen
 
 
@@ -109,7 +140,7 @@ def survives_failure(job: dict) -> bool:
     """The `if:` LEADS with a failure-surviving status function and never re-adds or negates the skip.
     Deliberately a restriction, not an evaluator: the supported forms are `always() && …`,
     `failure() …` and `!cancelled() && …`, which is every reporter in the tree."""
-    cond = re.sub(r"\s+", "", str(job.get("if") or ""))
+    cond = re.sub(r"\s+", "", if_text(job))
     if cond.startswith("${{") and cond.endswith("}}"):
         cond = cond[3:-2]
     cond = cond.lstrip("(")
@@ -229,7 +260,7 @@ def success_condition_problem(job: dict) -> str | None:
     `success()`; `always()` / `!cancelled()` (then EVERY direct need carries `needs.<n>.result == 'success'`);
     `needs.<n>.result == 'success'` for a direct need; `needs.<n>.outputs.<o> == '…'` for a direct need;
     or an event/ref guard that evaluates TRUE for a scheduled run on main."""
-    raw = str(job.get("if") or "").strip()
+    raw = if_text(job).strip()
     if raw.startswith("${{") and raw.endswith("}}"):
         raw = raw[3:-2]
     if not raw.strip():
@@ -477,6 +508,28 @@ jobs:
             "if: always() && needs.b.result == 'success'", "if: always() && (needs.b.result == 'success' || needs.a.result == 'success')"), "", True),
         ("success job guarded to push only (never on schedule)", pair.replace(
             "if: always() && needs.b.result == 'success'", "if: github.event_name == 'push' && success()"), "", True),
+        ("success job: YAML boolean `if: false` never clears", pair.replace(
+            "if: always() && needs.b.result == 'success'", "if: false"), "", True),
+        # Copilot on #7422 (third round) — an intermediate that can SUCCEED after its own need failed
+        # does not carry that red to a reporter checking only the intermediate:
+        ("intermediate `if: always()` cleanup hides a's red from both halves", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: always(), runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("intermediate `if: !cancelled()` hides a's red from the success half", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: '${{ !cancelled() }}', runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}").replace(
+            "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
+            "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result != 'success' || needs.b.result != 'success')"), "", True),
+        ("intermediate `if: always()` with both halves needing a directly", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: always(), runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}").replace(
+            "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
+            "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result != 'success' || needs.b.result != 'success')").replace(
+            "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
+            "  green:\n    needs: [a, b]\n    if: always() && needs.a.result == 'success' && needs.b.result == 'success'"), "", False),
+        ("intermediate with a non-status guard still propagates", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: github.ref == 'refs/heads/main', runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", False),
         ("success job with implicit success() (no if)", pair.replace(
             "    if: always() && needs.b.result == 'success'\n", ""), "", False),
         ("success job: event guard + !cancelled() + result (the dotnet-test shape)", pair.replace(
