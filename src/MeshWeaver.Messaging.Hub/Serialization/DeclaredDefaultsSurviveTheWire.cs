@@ -45,18 +45,45 @@ namespace MeshWeaver.Messaging.Serialization;
 /// metadata does not name, or IL that cannot be read. An explicit CLR default reads back identically,
 /// so the conservative branch costs bytes, never a value. A member carrying its own
 /// <see cref="JsonIgnoreAttribute"/> keeps its author's condition. The verdict is a constant per
-/// member: nothing is cached per instance, and nothing runs during a write. Never throws from the
-/// resolver.</para>
+/// member: nothing is cached per instance, and nothing runs during a write.</para>
+/// <para><b>Populate.</b> Every proof above is about a reader that CONSTRUCTS the instance. Under
+/// <see cref="JsonObjectCreationHandling.Populate"/> the reader instead fills the instance the
+/// containing object already holds, so an omitted member keeps whatever that holder initialized
+/// (<c>Flags = new() { Enabled = true }</c>), and no metadata of the child can prove otherwise. So:
+/// when the options prefer Populate, nothing is proven and every candidate is written; and a type
+/// whose property can populate an object (the property's own attribute, or the type's preference)
+/// is refused at resolution with an <see cref="InvalidOperationException"/> when that object's
+/// metadata would omit any value — the child's verdict is shared by every holder and cannot be made
+/// per holder, and a refusal before the first byte is written is the only outcome that loses nothing.
+/// A child that omits nothing (every candidate always written, or marked
+/// <c>[JsonIgnore(Condition = JsonIgnoreCondition.Never)]</c>) may be populated. The proof itself
+/// never throws.</para>
 /// </summary>
 internal static class DeclaredDefaultsSurviveTheWire
 {
     /// <summary>Applies the rule to <paramref name="typeInfo"/> while the resolver still configures it.</summary>
     /// <param name="typeInfo">An object type's metadata, not yet locked.</param>
     /// <param name="logger">Receives the reason a proof could not be made (members then fall to "always written"), or null.</param>
-    public static void Apply(JsonTypeInfo typeInfo, ILogger? logger)
+    /// <param name="probe">Builds fresh, uncached metadata of another type exactly as the resolver
+    /// would before this rule runs; used to refuse a property that populates an object whose values
+    /// would be omitted. Null skips that check.</param>
+    /// <exception cref="InvalidOperationException">A property of <paramref name="typeInfo"/> can
+    /// populate an object whose metadata omits values: an omitted value would read back as the
+    /// holder's.</exception>
+    public static void Apply(JsonTypeInfo typeInfo, ILogger? logger, Func<Type, JsonTypeInfo>? probe = null)
+    {
+        if (typeInfo.Kind != JsonTypeInfoKind.Object)
+            return;
+        if (probe is not null)
+            RefusePopulatingAnOmittingObject(typeInfo, probe, logger);
+        ApplyOmission(typeInfo, logger);
+    }
+
+    /// <summary>The omission rule; true when some member may still be omitted at its CLR default.</summary>
+    private static bool ApplyOmission(JsonTypeInfo typeInfo, ILogger? logger)
     {
         if (typeInfo.Kind != JsonTypeInfoKind.Object || typeInfo.Type.IsAbstract || typeInfo.Type.IsInterface)
-            return;
+            return false;
 
         List<JsonPropertyInfo>? candidates = null;
         foreach (var property in typeInfo.Properties)
@@ -70,18 +97,65 @@ internal static class DeclaredDefaultsSurviveTheWire
             (candidates ??= []).Add(property);
         }
         if (candidates is null)
-            return;
+            return false;
 
         // The constructor proof says what the reader holds BEFORE it sets members. It is a proof of
-        // the read only when nothing else writes during the read: an OnDeserializing callback runs
-        // after construction, and a hand-written setter of any member it sets can store anywhere.
-        var stores = typeInfo.OnDeserializing is null && SettersAreContained(typeInfo, candidates, logger)
+        // the read only when the reader constructs the instance — never when the options make it
+        // populate one a holder already has — and when nothing else writes during the read: an
+        // OnDeserializing callback runs after construction, and a hand-written setter of any member
+        // it sets can store anywhere.
+        var stores = typeInfo.Options.PreferredObjectCreationHandling != JsonObjectCreationHandling.Populate
+            && typeInfo.OnDeserializing is null && SettersAreContained(typeInfo, candidates, logger)
             ? ConstructorStores.Read(typeInfo, logger)
             : null;
+        var omits = false;
         foreach (var property in candidates)
+        {
             if (stores is null || !ProvenClrDefault(property, stores))
                 property.ShouldSerialize = static (_, _) => true;
+            else
+                omits = true;
+        }
+        return omits;
     }
+
+    /// <summary>
+    /// Refuses a property of <paramref name="holder"/> that can populate an object whose metadata
+    /// omits values (or whose runtime type is unknown: abstract or interface): the reader would keep
+    /// the holder's initialized value for every omitted member.
+    /// </summary>
+    private static void RefusePopulatingAnOmittingObject(JsonTypeInfo holder, Func<Type, JsonTypeInfo> probe, ILogger? logger)
+    {
+        // STJ populates only through a holder it constructs with no constructor parameters.
+        if (UsesParameterizedConstructor(holder))
+            return;
+        foreach (var property in holder.Properties)
+        {
+            var handling = property.ObjectCreationHandling
+                ?? holder.PreferredPropertyObjectCreationHandling
+                ?? holder.Options.PreferredObjectCreationHandling;
+            if (handling != JsonObjectCreationHandling.Populate
+                || property.Get is null
+                || (property.PropertyType.IsValueType && property.Set is null)
+                || IsScalar(property.PropertyType))
+                continue;
+            var child = probe(property.PropertyType);
+            if (child.Kind != JsonTypeInfoKind.Object)
+                continue;
+            if (!child.Type.IsAbstract && !child.Type.IsInterface && !ApplyOmission(child, logger))
+                continue;
+            throw new InvalidOperationException(
+                $"{holder.Type.FullName}.{property.Name} populates an existing {child.Type.FullName}, whose "
+                + "metadata omits values at their CLR default; such a value would read back as the one the "
+                + "holder initialized. Replace the object instead of populating it, or mark the omitted "
+                + "members [JsonIgnore(Condition = JsonIgnoreCondition.Never)].");
+        }
+    }
+
+    private static bool UsesParameterizedConstructor(JsonTypeInfo typeInfo) =>
+        typeInfo.CreateObject is null
+        && typeInfo.ConstructorAttributeProvider is ConstructorInfo constructor
+        && constructor.GetParameters().Length > 0;
 
     /// <summary>
     /// True when every hand-written setter the reader may call provably stores only into fields no

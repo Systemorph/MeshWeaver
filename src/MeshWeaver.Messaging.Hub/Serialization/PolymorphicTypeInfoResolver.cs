@@ -38,7 +38,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
         // An explicitly stored value must never come back as the member's declared default
         // (e.g. `bool Enabled = true` stored false) — WhenWritingDefault alone would drop it.
         if (options.DefaultIgnoreCondition == JsonIgnoreCondition.WhenWritingDefault)
-            DeclaredDefaultsSurviveTheWire.Apply(jsonTypeInfo, logger);
+            DeclaredDefaultsSurviveTheWire.Apply(jsonTypeInfo, logger, other => base.GetTypeInfo(other, options));
         // Only configure polymorphism for supported types that need it
         if (ShouldConfigurePolymorphism(type) && CanConfigurePolymorphism(jsonTypeInfo))
         {

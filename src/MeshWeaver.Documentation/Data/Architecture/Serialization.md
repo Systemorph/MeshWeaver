@@ -171,6 +171,20 @@ with these settings:
 > `ActionHandlerRule.Enabled = true` and `MeshNode.MainNode = … Id …` are always written, while a
 > sparse `MeshNode`'s unset `Name` / `Description` / `Icon` stay omitted.
 >
+> **Populate is not a construction, so it gets no proof.** Every proof above is about a reader that
+> CONSTRUCTS the instance. Under `JsonObjectCreationHandling.Populate` the reader fills the object
+> the holder already has, so an omitted member keeps whatever the holder initialized
+> (`Flags = new() { Enabled = true }` turns a stored `false` back into `true`), and the child's
+> metadata cannot know who holds it. So: options that prefer Populate prove nothing — every
+> candidate is written; and a type whose property can populate an object (the property's own
+> `[JsonObjectCreationHandling(Populate)]`, or the holder type's preference) is REFUSED at
+> resolution with an `InvalidOperationException` when that object's metadata would omit any
+> value. The child's verdict is shared by every holder and cannot be made per holder; refusing
+> before the first byte is written is the only outcome that loses nothing. Populating a child
+> that omits nothing — every candidate written, or marked `[JsonIgnore(Condition = Never)]` —
+> stays allowed. Guard: `A_populated_child_never_loses_an_explicit_false`, with its negative
+> control over options without the rule.
+>
 > **Nothing is constructed and nothing is cached per instance.** The verdict is a constant per
 > member, fixed at metadata resolution; no constructor, initializer or getter runs to decide it,
 > during resolution or during a write. An earlier design rebuilt each instance through its

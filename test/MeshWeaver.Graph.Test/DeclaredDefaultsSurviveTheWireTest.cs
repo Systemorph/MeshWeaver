@@ -205,6 +205,45 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         private static bool Arm(ref bool value) => value = true;
     }
 
+    /// <summary>Review round 8: a child with no constructor store, populated into an existing instance.</summary>
+    public sealed class PopulatedFlags
+    {
+        public bool Enabled { get; set; }
+    }
+
+    /// <summary>Review round 8: the containing PROPERTY populates its initialized child.</summary>
+    public sealed class PopulatingProperty
+    {
+        [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+        public PopulatedFlags Flags { get; set; } = new() { Enabled = true };
+    }
+
+    /// <summary>Review round 8: the containing TYPE prefers populating its properties.</summary>
+    [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+    public sealed class PopulatingType
+    {
+        public PopulatedFlags Flags { get; set; } = new() { Enabled = true };
+    }
+
+    /// <summary>Review round 8: a child whose only scalar is never omitted (its initializer is not the CLR default).</summary>
+    public sealed class WrittenFlags
+    {
+        public bool Enabled { get; set; } = true;
+    }
+
+    /// <summary>Review round 8: populating a child that omits nothing is safe and stays allowed.</summary>
+    public sealed class PopulatingWrittenChild
+    {
+        [JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
+        public WrittenFlags Flags { get; set; } = new() { Enabled = true };
+    }
+
+    /// <summary>Review round 8: populated only through the options' preference.</summary>
+    public sealed class PreferringParent
+    {
+        public PopulatedFlags Flags { get; set; } = new() { Enabled = true };
+    }
+
     private static JsonSerializerOptions WithoutTheFix() => new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -546,5 +585,47 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
             "if this ever fails, the starg case no longer exercises the trap");
         JsonSerializer.Serialize(new ArgumentAddressEscapes { Flag = false }, options).Should().NotContain("flag\"",
             "if this ever fails, the ldarga case no longer exercises the trap");
+    }
+
+    /// <summary>
+    /// Review round 8: "no constructor store" proves nothing when the reader POPULATES an existing
+    /// instance instead of constructing one — the instance holds whatever its holder initialized. A
+    /// holder that populates an omitting child (its property's attribute, or its type's preference) is
+    /// refused before anything is written; under the options' preference nothing is proven, so the
+    /// explicit false is written and survives.
+    /// </summary>
+    [Fact]
+    public void A_populated_child_never_loses_an_explicit_false()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        ((Action)(() => JsonSerializer.Serialize(new PopulatingProperty { Flags = new() { Enabled = false } }, options)))
+            .Should().Throw<InvalidOperationException>();
+        ((Action)(() => JsonSerializer.Serialize(new PopulatingType { Flags = new() { Enabled = false } }, options)))
+            .Should().Throw<InvalidOperationException>();
+
+        var preferring = new JsonSerializerOptions(options) { PreferredObjectCreationHandling = JsonObjectCreationHandling.Populate };
+        var json = JsonSerializer.Serialize(new PreferringParent { Flags = new() { Enabled = false } }, preferring);
+        json.Should().Contain("\"enabled\":false");
+        JsonSerializer.Deserialize<PreferringParent>(json, preferring)!.Flags.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_populated_child_that_omits_nothing_round_trips()
+    {
+        RoundTrip(new PopulatingWrittenChild { Flags = new() { Enabled = false } }, Mesh.JsonSerializerOptions)
+            .Flags.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_a_populated_child_reads_its_owners_initializer()
+    {
+        var options = WithoutTheFix();
+        RoundTrip(new PopulatingProperty { Flags = new() { Enabled = false } }, options).Flags.Enabled.Should().BeTrue(
+            "if this ever fails, the populated-property case no longer exercises the trap");
+        RoundTrip(new PopulatingType { Flags = new() { Enabled = false } }, options).Flags.Enabled.Should().BeTrue(
+            "if this ever fails, the populated-type case no longer exercises the trap");
+        var preferring = new JsonSerializerOptions(options) { PreferredObjectCreationHandling = JsonObjectCreationHandling.Populate };
+        RoundTrip(new PreferringParent { Flags = new() { Enabled = false } }, preferring).Flags.Enabled.Should().BeTrue(
+            "if this ever fails, the options-preference case no longer exercises the trap");
     }
 }
