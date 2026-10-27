@@ -168,7 +168,8 @@ which is what step 1 does.
 |---|---|---|
 | runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane; modules are the files of the SAME reference snapshot Roslyn compiled against, so a live module swap mid-compile cannot drop a used module | the compile settle, beside the terminal stamp, as the edge-set node |
 | cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate — and only when the stamp LANDED (a refused compare-and-set writes no edges over a newer build's) |
-| build-process bake (`NodeSetCompiler.CompileWithModules`; the published `Compile` forwards with none) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges`; `TreeBake` writes every attempted type's set to `dependency-edges.json` beside the bundles (`DependencyEdgesFile`), and `node-repo-publish-bake.yml` uploads it as the run artifact `dependency-edges-<identity>` for CI selection. Writing it into a mesh at adoption is a follow-up |
+| build-process bake (`NodeSetCompiler.CompileWithModules`; the published `Compile` forwards with none) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges`. `TreeBake` writes every attempted type's set to `dependency-edges.json` beside the bundles (`DependencyEdgesFile`), which `node-repo-publish-bake.yml` uploads as `dependency-edges-<identity>` for CI selection, AND into each bundle entry (`BundleWriter.AssemblyEntry.DependencyEdges`), so an adopting mesh can write it (below) |
+| prebuilt ADOPTION (`ShippedPrebuiltBundles`, `PluginBundleClient` → `PrebuiltAssemblySeeder.WithAdoptedEdges`) | none — the mesh compiles nothing | the bundle's set for the bytes, via `DependencyEdgeSetWriter.WriteAdopted`: only for a COVERED outcome, only while the record's `LatestAssemblyMvid` equals the set's `BuildMvid`, under the durable record's version as the generation; offered to the `MeshPublicationGate` BEHIND the adoption stamp, so a stamp held while the process is provisional is released first and the edges follow it; idempotent across boots (`DescribesSameBuild`, which never skips a NEWER generation of the same build). An entry the image-bundle pass finds ALREADY CURRENT (it never reaches the seeding hook) still writes the edges its manifest carries, so a build adopted before its bundle carried edges is backfilled on the next pass |
 | module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | opt-in, `build-project --dependency-edges`: after each green emit, `GetUsedAssemblyReferences()` and the emitted image's metadata plus the dynamic scan, timed and printed as the phases `used assembly references` and `platform/package/dynamic edges` | `dependency-edges.json` in the output directory: one set per project, a `Module` edge to each IN-TREE project assembly the compilation used (a declared-but-unused `ProjectReference` is not an edge), plus its `Platform`, `Package` and dynamic edges. A `--prebuilt` sibling is an eligible target but gets no set of its own. The file is keyed by the host's compatibility key — the identity a bake writes — and a host that resolves none is refused before anything builds. Still opt-in — see *Module workspace builds* below for the measurement and the reason |
 
 ### The bake's edge file — the transport to CI (2026-10-27)
@@ -511,9 +512,12 @@ by the reader's access to the node: the closure table spans every partition, the
 - **Retention of stale build identities.** The set is replaced whole on every compile and keeps no
   history, so only the current build's edges exist. If CI needs "the edges of build X" after X was
   superseded, history has to be kept — decide before step (4).
-- **Adopted prebuilts.** A portal that adopts a bake's bytes compiles nothing, so it has no edge set
-  for that build. Either the bundle carries `CompiledNode.DependencyEdges` and adoption writes it,
-  or step (4)'s check names those types RED. The design says RED and named; carrying the bake's
-  edges would make it green.
+- **Adopted prebuilts — DECIDED 2026-10-27: the bundle carries the edges and adoption writes them.**
+  A portal that adopts a bake's bytes compiles nothing, so until then it had no edge set for that
+  build: measured on two production meshes after the roll that shipped extraction, 0 edge sets,
+  every type adopted (`buildProvenance: AdoptedVerified`). The bake now writes each assembly's set
+  into its bundle entry, and the seeding pass writes it for the build the record serves. A bundle
+  from an older producer carries none, and that type stays "never extracted" until its next
+  compile or a newer bundle.
 - **Included but unused.** Whether a `shared=` inclusion the type never binds to should count as a
   dependency for CI selection (a change there can still break this type's compile).
