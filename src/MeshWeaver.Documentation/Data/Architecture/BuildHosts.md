@@ -688,8 +688,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
   reds any drift. The runner also refuses a `--total` the image was not packed for.
 - **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
-  generator's `OWES` list is the debt — `Consolidate test results` (the variables the host-results job
-  needs are not provisioned for core), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
+  generator's `OWES` list is the debt — `Consolidate test results` (the build API does not yet serve a
+  receipt's bytes, which the host-results job fetches), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
   do not share a pack), the prepared package closure, the browser and font set, the legs that read
   the build's artifacts (platform-compat,
   licence-gate), the prepared-mesh rule, and a green probe that agrees with Actions.
@@ -712,18 +712,39 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   - `build` does not run here, and with it `test`, `doc-gate`, `platform-compat` and `licence-gate`;
   - `host-follow` follows EVERY declared stage (`build`, each `test-shard-<i>`, `doc-gate`) with
     `build-follow.yml`;
-  - `host-results` fetches each shard's handed-back results by receipt (`build-artifacts-fetch.py`,
-    every hash and size verified) and uploads them under the `test` matrix's own artifact name
+  - `host-results` fetches each shard's handed-back results tree over HTTPS by receipt
+    (`host-shard-results.py`, below) and uploads it under the `test` matrix's own artifact name
     `testResults-shard<i>-attempt<a>`, so `collect-results` consolidates a host run unchanged (download,
     attempt resolution, the coverage count, the trx and exit-marker gates);
   - `collect-results` reds a failed admission, a host stage that did not succeed and a shard whose
     results were not brought back; on the host route `platform-compat` and `licence-gate` read as not
     run, which is RED — they are owed (`dependent legs`).
 
-  `core-build-stages.py --check` holds both matrices to the declaration. `host-results` reads the
-  runners' shared store, so it runs on the self-hosted pool and is RED, naming them, while core's
-  repository has no `MW_RUNNER` / `MW_ARTIFACT_STORE` variable. Any other admission answer runs every
-  leg on Actions, as before.
+  `core-build-stages.py --check` holds both matrices to the declaration. Any other admission answer
+  runs every leg on Actions, as before.
+
+  **Core runs no job on the self-hosted pool.** Core is a public repository: it never gets the
+  private `MW_RUNNER` / `MW_ARTIFACT_STORE` organisation variables, and no job of its reads the
+  runners' shared store. `host-results` therefore runs on `ubuntu-latest` and takes everything from the
+  build API over HTTPS with the run's own GitHub OIDC token (`permissions: id-token: write`) —
+  `host-shard-results.py`:
+  1. `GET {api}/{repo}/{sha}/artifacts?channel=…` — the receipts, read and shape-checked by
+     `build-artifacts-fetch.py`'s reader, kept for the shard's own stage `test-shard-<i>` and its unit
+     directory `testResults-shard<i>/`;
+  2. `GET {api}/{repo}/{sha}/artifacts/{sha256}?channel=…` — each receipt's bytes by content hash,
+     written under `--out` with its relative path PRESERVED (two `.trx` of one name in two projects
+     do not collide), at most the receipt's size plus one byte read, redirects refused so the bearer
+     never follows one.
+
+  It is RED, naming the file, on: no receipt for the tree, a unit escaping it or FOREIGN to the `test`
+  job's shape (`test/**/*.trx`, `test/test-results.log`, `collected-logs/**`), one path with two
+  contents, a missing `test/test-results.log` or one with no `[CI] <project> exit=<n>` marker, a
+  refused fetch, a body whose size or sha256 differs from its receipt (TRUNCATED or padded), and a
+  written tree that is not exactly the receipts' set. 🚨 **Owed outside core:** the build API
+  (MeshWeaver.Plugins `BuildHostEndpoints`) serves the receipts but not yet the object route in step 2,
+  so on the host route `host-results` is RED with a 404 naming it until that lands — and the
+  `Consolidate test results` owes entry is paid only when collect-results consolidates results
+  fetched this way.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's

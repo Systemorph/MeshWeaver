@@ -672,8 +672,10 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/node-repo-build-executor.yml
+    # No `main-sha`: precheck's main is the green-tree PROBE's and may be hours old by the time a held
+    # run is released (see precheck's output). Empty, the host resolves the tip once as the suites
+    # start — exactly what `build` does on the Actions route (policy suites-test-fresh-merge).
     with:
-      main-sha: ${{ needs.precheck.outputs.main-sha }}
       change-mode: ${{ needs.precheck.outputs.tests-mode }}
       scripts-ref: ${{ github.sha }}
     secrets:
@@ -702,11 +704,14 @@ jobs:
       scripts-ref: ${{ github.sha }}
 
   # Each host shard handed back the `test` job's results tree (core-tests.py run → testResults-shard<i>/)
-  # as H9 receipts. This job fetches them by receipt, verifies every hash and size against it
-  # (build-artifacts-fetch.py), and uploads them under the name the `test` matrix uses, so
-  # collect-results' download, attempt resolution, coverage count and trx/marker gates read a host run
-  # exactly as an Actions one. Runs whatever the follows concluded — a red shard's results are the
-  # evidence. The store is the runners' shared file store, so this job runs on the self-hosted pool.
+  # as H9 receipts. This job fetches that tree from the BUILD API over HTTPS with the run's own OIDC
+  # token (host-shard-results.py: the receipts, then each object by its content hash), verifies every
+  # file against its receipt (sha256, size, the exact set, the tree's shape), and uploads it under the
+  # name the `test` matrix uses, so collect-results' download, attempt resolution, coverage count and
+  # trx/marker gates read a host run exactly as an Actions one. Runs whatever the follows concluded.
+  # 🚨 GitHub-hosted, deliberately: core is a public repository, so it runs no job on the self-hosted
+  # pool and reads no shared store (MW_RUNNER / MW_ARTIFACT_STORE are not core's). Every missing,
+  # foreign, extra or truncated file is RED naming it — never a skip.
   host-results:
     name: "Host shard results (shard ${{ matrix.shard }})"
     needs: [admission, host-follow]
@@ -715,55 +720,25 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
-    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
     steps:
-    # 🚨 Not a skip: on the host route this job's inputs are REQUIRED, and their absence is RED,
-    # naming what to provision — never a quietly empty shard (which the coverage gate would also red).
-    - name: "Preflight: the self-hosted pool and the shared artifact store"
-      env:
-        RUNNER_POOL: ${{ vars.MW_RUNNER }}
-        STORE: ${{ vars.MW_ARTIFACT_STORE }}
-        API_URL: ${{ needs.admission.outputs.api-url }}
-      run: |
-        set -uo pipefail
-        missing=()
-        [ -n "${RUNNER_POOL:-}" ] || missing+=("variable MW_RUNNER (the self-hosted pool that mounts the shared artifact store)")
-        case "${STORE:-}" in file:/*) ;; *) missing+=("variable MW_ARTIFACT_STORE as file:/<shared path> (the store the build host hands results to)");; esac
-        [ -n "${API_URL:-}" ] || missing+=("the build API (admission answered no api-url)")
-        if [ "${#missing[@]}" -gt 0 ]; then
-          printf '::error title=Host shard results::provision for Systemorph/MeshWeaver: %s\n' "${missing[@]}"
-          exit 1
-        fi
     - uses: actions/checkout@v7
       with:
         sparse-checkout: .github
-    - name: Resolve and bind the artifact store
-      id: store
-      uses: ./.github/actions/resolve-artifact-store
-      with:
-        store: ${{ vars.MW_ARTIFACT_STORE }}
-    - name: Fetch shard ${{ matrix.shard }}'s handed-back results by receipt
+    - name: Fetch shard ${{ matrix.shard }}'s handed-back results by receipt, over HTTPS
       env:
         API_URL: ${{ needs.admission.outputs.api-url }}
-        STORE: ${{ steps.store.outputs.store }}
-        STORE_ID: ${{ steps.store.outputs.store-id }}
         SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         SHARD: ${{ matrix.shard }}
-        ATTEMPT: ${{ github.run_attempt }}
       run: |
         set -euo pipefail
-        python3 .github/scripts/build-artifacts-fetch.py --self-test > /dev/null
-        python3 .github/scripts/build-artifacts-fetch.py --api-url "$API_URL" --store "$STORE" \
-          --expect-store-id "$STORE_ID" --sha "$SHA" --channel latest --stage "test-shard-$SHARD" \
-          --out "$RUNNER_TEMP/host"
-        unit="$RUNNER_TEMP/host/testResults-shard$SHARD"
-        [ -s "$unit/test/test-results.log" ] || { echo "::error::shard $SHARD handed back no test/test-results.log — its results tree is not the \`test\` job's"; exit 1; }
-        mkdir -p results
-        mv "$unit"/* results/
+        python3 .github/scripts/host-shard-results.py --self-test > /dev/null
+        python3 .github/scripts/host-shard-results.py --api-url "$API_URL" --sha "$SHA" --shard "$SHARD" \
+          --channel latest --out "$GITHUB_WORKSPACE/results"
     - name: "Upload artifact: shard test results (from the host)"
       uses: actions/upload-artifact@v7
       with:
@@ -2524,6 +2499,10 @@ jobs:
     - name: "A host-executed run's modules are staged only by verified receipt (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-artifacts-fetch.py --self-test
+
+    - name: "A host shard's results reach Consolidate only by verified receipt over HTTPS — none, foreign, extra or truncated is red (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/host-shard-results.py --self-test
 
     # Core's suites as build-host stages: a deployment runs them from the set's mw-core-tests image
     # (Doc/Architecture/DeployTestSwitchLatest, P4), a host PR/trunk run builds and packs its own

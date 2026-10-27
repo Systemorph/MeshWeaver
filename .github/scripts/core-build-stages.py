@@ -85,10 +85,12 @@ BUILD_COMMAND = (
 # verdict. Remove an entry only in the change that pays it (check-build-stages.py refuses the
 # ciEquivalent claim while any remains).
 OWES = [
-    "Consolidate test results: host-results brings each host shard's handed-back results into the run as the "
-    "`test` matrix's own artifacts, from the runners' shared store, on the self-hosted pool — core's repository has "
-    "no MW_RUNNER / MW_ARTIFACT_STORE variable today, so on the host route that job is RED naming them (Actions: "
-    "collect-results over the testResults-shard<i>-attempt<a> artifacts)",
+    "Consolidate test results: host-results (GitHub-hosted — core runs nothing on the self-hosted pool and reads no "
+    "shared store) fetches each host shard's results tree over HTTPS by receipt (host-shard-results.py: the run's OIDC "
+    "token, every file verified against its receipt) and uploads it as the `test` matrix's own artifact, but the build "
+    "API serves receipts only, not their bytes — GET {api}/{repo}/{sha}/artifacts/{sha256} is owed by MeshWeaver.Plugins' "
+    "BuildHostEndpoints, and until it answers that job is RED naming it. Paid only when collect-results consolidates "
+    "results fetched that way (Actions: collect-results over the testResults-shard<i>-attempt<a> artifacts)",
     "fan-out: a host runs one run's stages serially — build 25 + 8 shards x 20 + doc-gate 25 minutes is past the run "
     "deadline; the deployment route already submits one pinned run per stage, but such runs do not share one "
     "$MW_BUILD_OUTPUTS, so the shards need this run's pack through the shared cache (`needs: outputs`), which today "
