@@ -100,7 +100,7 @@ the platform's builder inside the platform image, so a new platform build does n
 
 | | |
 |---|---|
-| Version | its own: `<CliVersion>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0`. Bumped by pull request when the CLI changes |
+| Version | its own: `<CliVersion>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0` and now `3.1.0`, matching the platform's 3.1 line. Bumped by pull request when the CLI changes |
 | When | on demand: dispatch `publish-packages.yml` with `packages=cli`. The lane reads the csproj version and refuses any other; a version already on nuget.org is skipped |
 | Bytes | packed by `publish-packages.yml`, asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll`, then verified LISTED |
 | Retirement sweep | `src/MeshWeaver.Cli` is packable again, so `orphaned-nuget-packages.py` derives `MeshWeaver.Cli` as packed and never unlists it; `PackableProjectReadmeTest` holds the packable set at two projects |
@@ -142,9 +142,13 @@ The fix is owner provisioning, and nothing in the repository can supply it:
    1), add a **Trusted Publishing policy**: repository owner `Systemorph`, repository `MeshWeaver`,
    workflow file `publish-packages.yml`, environment blank.
 2. Set the **Actions variable** `NUGET_TRUSTED_USER` on `Systemorph/MeshWeaver` to that policy's
-   owner account. It is a variable, not a secret.
+   owner account. It is a variable, not a secret. **Done 2026-10-27**: the repository variable is
+   set to `rbuergi`, the account that already holds the policy MeshWeaver.Plugins' Aspire lane
+   uses. Step 1 is still the owner's, and a nuget.org policy cannot be read from here, so whether it
+   exists for `Systemorph/MeshWeaver` + `publish-packages.yml` is unverified until a dispatch's
+   `NuGet/login` step answers.
 3. Dispatch `publish-packages.yml` with `packages=cli` and no version. The lane publishes the
-   csproj's `3.0.0`, and *Verify every published version reads as LISTED* is the evidence.
+   csproj's version (`3.1.0` since the CLI joined the 3.1 line; `3.0.0` was never published), and *Verify every published version reads as LISTED* is the evidence.
 
 The same two inputs unblock the Aspire integration on the next release tag. They do **not** by
 themselves unblock `unlist-orphaned-packages.yml`: it reads the same variable, but nuget.org issues
