@@ -276,6 +276,9 @@ public class IoPoolSiloTeardownTest
                 nameof(WhenTheJoinBudgetExpires_TheReportNamesThePoolAndTheLeaf),
                 "and it must name WHERE the leaf is: a lambda's compiler-generated method name "
                 + "carries its enclosing method, which is the pointer 'fix the leaf' needs");
+            expiry.Message.Should().MatchRegex(@" — in flight \d+(\.\d+)? s, opened by .+, started on thread \d+",
+                "per leaf the report also says how long it has been in flight, who opened it and the "
+                + "thread it started on — a site shared by every caller named nothing more (#7277)");
             expiry.Message.Should().NotContain("every pool reported",
                 "a pool IS still holding a leaf, so the report must not claim the opposite finding");
         }

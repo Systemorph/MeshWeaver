@@ -579,6 +579,13 @@ A person who never chose gets the node on first open, seeded with `InboxPreferen
 The page never overwrites a choice: a kind or source a package brings LATER is added by one idempotent merge of the
 missing keys into the node's current content (sources at their `ShownByDefault`, kinds unticked, and a second
 pass finds nothing missing — a pass that did would be logged as an error and not repeated).
+🚨 A set of keys counts as written only once the owner CONFIRMED the write (`InboxSeedGuard`), and the loop check
+reads the CONFIRMED node, never the page's own view of it. The rows, the filter and the tag ticks each re-run the
+pass, and any of them can arrive before the committed write reaches the page: that pass sees the keys still missing,
+which is a stale read, not a loop. Until #7260 the guard recorded the keys when the write STARTED, so that stale pass
+logged *"written this session and are still missing … not writing again"* over a write that had in fact landed
+(measured: the node's new version is stamped the same second as the error). A write that FAILS is released and
+written again by a later pass, instead of being skipped for the rest of the session.
 
 **By address.** A multi-account source is filtered by the ADDRESS an item reached, not by provider: a row's
 `Account` is the content's `account` (a live mailbox stamps it) or the address of its `to` (stored mail); the
