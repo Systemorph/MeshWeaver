@@ -65,16 +65,51 @@ aggregator attaches the NAME. The single-provider fast path does the identical f
 provider is the shape a Monolith and every test actually run, and a consumer must not have to know
 how many providers happened to be registered.
 
-### Why the sink is per subscription
+### Why the sink is per run
 
 A field on the provider would be process-wide mutable state shared by every concurrent query on
 that adapter: one partition's timeout would mark every other caller's snapshot incomplete, and
-nothing would ever clear it. The completeness sink is created once per subscription by the method
-that emits the Initial, threaded down to the catches, and collected with the run. It is monotone —
-a run whose first read faulted and whose second succeeded still produced a short snapshot.
+nothing would ever clear it. A completeness sink is created for each RUN — the Initial, and every
+live re-query — threaded down to the catches, and collected with the run. It is monotone within
+its run: a run whose first read faulted and whose second succeeded still produced a short snapshot.
+
+One sink per *subscription* is not enough, and it was the shape until #7399: monotone and spent on
+the Initial, it could not say WHICH live re-query was short — see the next section.
 
 A teardown cancellation is deliberately **not** recorded. That query is not answering at all, it is
 stopping; marking it incomplete would label every in-flight snapshot at every mesh teardown.
+
+## The live path: an incomplete re-query removes nothing
+
+A live query re-runs the whole read on every relevant change and diffs the answer against the rows
+it holds (`StorageAdapterMeshQueryProvider.ProcessBatch`). The same catches fire inside that
+re-run — and the diff used to treat the short answer as complete, so **every row the run failed to
+read was emitted as `Removed`**. Nothing re-triggers a query with no write to react to, so the live
+result stayed wrong until a later write under the same scope. Measured in a stress loop: a live
+listing went from 174 rows to 0 and stayed there, while a fresh subscription listed every row
+(#7399).
+
+The rule:
+
+| live run | what it may assert |
+|---|---|
+| complete | `Added`, `Updated` **and** `Removed` — the held set becomes exactly what it read |
+| incomplete | `Added` and `Updated` only — every held row it did not see is KEPT, and a Warning says how many |
+
+A row missing from an incomplete answer may be a row the run could not READ, so the run has no
+evidence it is gone. The next complete run — on the next trigger under the scope — settles the
+removals, including those an incomplete run deferred.
+
+**Deliberately no retry.** Re-running an incomplete run until it completes would turn a persistent
+fault into a storm of full re-reads, one per trigger and then some, on the same read pools every
+activation waits on ([Live Query Re-query Cost](../LiveQueryRequeryCost)). The residual is
+stated, not hidden: a write whose re-query was short is not seen until the next trigger, and the
+gap is logged.
+
+`AnIncompleteLiveRequeryRemovesNothingTest` carries both sides: a listing fault injected exactly
+once into a live re-query emits no `Removed` and leaves nothing for the next complete run to
+re-add; and its control — a row genuinely deleted after such a run — is still removed by the next
+complete one.
 
 ## What the grain may now say
 
