@@ -59,6 +59,12 @@ public sealed class PrebuiltBundleRetentionStatus
 /// outlives the interval simply delays the next one. A faulted pass is logged, recorded on
 /// <see cref="PrebuiltBundleRetentionStatus"/>, and the schedule continues — one bad listing must
 /// not end the recurring process.</para>
+///
+/// <para>🚨 <b>…and never overlap ACROSS REPLICAS either (#7382).</b> Every replica of a store's owner
+/// mounts the same store and runs this service, so each pass first takes the mesh-wide
+/// <see cref="PrebuiltBundleRetentionLease"/>; a replica that does not hold it sweeps nothing and logs
+/// who does. Without it, N replicas enumerated and deleted the same tree at once — one pass collected
+/// while the others aborted on directories vanishing under their walk.</para>
 /// </summary>
 public sealed class PrebuiltBundleRetentionHostedService(
     IServiceProvider services,
@@ -129,17 +135,48 @@ public sealed class PrebuiltBundleRetentionHostedService(
                 ex => logger.LogWarning(ex, "PrebuiltBundleRetention: the schedule over {Root} STOPPED", root));
     }
 
-    private IObservable<PrebuiltBundleSweepResult> RunPass(string root, IIoPool pool) =>
-        PassOver(StampedIdentities(), PinnedReferences(), (stamps, pinned) =>
-            PrebuiltBundleStore.Sweep(
-                root,
-                PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                PrebuiltAdoptionPolicy.RunningPlatformVersion,
-                stamps,
-                pinned,
-                retention,
-                pool,
-                logger));
+    private IObservable<PrebuiltBundleSweepResult> RunPass(string root, IIoPool pool)
+    {
+        // 🚨 Single-writer over the SHARED store (#7382): only the replica holding the lease sweeps.
+        // No mesh hub means no lease can be taken, and an unleased sweep is exactly the overlap the
+        // lease exists to prevent — the pass aborts with nothing collected instead.
+        var mesh = services.GetService<IMessageHub>();
+        if (mesh is null)
+            return Observable.Throw<PrebuiltBundleSweepResult>(new InvalidOperationException(
+                "no mesh hub on this host — the retention lease cannot be taken, so this pass may not sweep "
+                + "a store other replicas may be sweeping"));
+        // The lease content is written from this mesh hub; register its type on the mesh's shared
+        // registry so the writer and the lease node's hub agree on its name (idempotent).
+        PrebuiltBundleRetentionLease.RegisterContentType(mesh.ServiceProvider);
+        var now = (services.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow();
+        var replica = Environment.MachineName;
+        return PrebuiltBundleRetentionLease.RunLeased(
+            mesh, now, PrebuiltBundleRetentionLease.HoldFor(retention.Interval), replica,
+            () => PassOver(StampedIdentities(), PinnedReferences(), (stamps, pinned) =>
+                PrebuiltBundleStore.Sweep(
+                    root,
+                    PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                    PrebuiltAdoptionPolicy.RunningPlatformVersion,
+                    stamps,
+                    pinned,
+                    retention,
+                    pool,
+                    logger)),
+            verdict =>
+            {
+                if (verdict.Lease is null)
+                    logger.LogWarning(
+                        "PrebuiltBundleRetention: {Replica} skipped this pass over {Root} — the lease at {Lease} "
+                        + "could not be read, so NO replica may sweep on it until it is repaired",
+                        replica, root, PrebuiltBundleRetentionLease.LeasePath);
+                else
+                    logger.LogInformation(
+                        "PrebuiltBundleRetention: {Replica} skipped this pass over {Root} — the lease at {Lease} is "
+                        + "held by pass {Holder} on {HolderReplica} until {Until:O}, which runs the one sweep",
+                        replica, root, PrebuiltBundleRetentionLease.LeasePath,
+                        verdict.Lease.Holder, verdict.Lease.Replica ?? "(unnamed)", verdict.Lease.Until);
+            });
+    }
 
     /// <summary>
     /// One pass: the sweep runs only once BOTH reference sets were read. A reference read that
@@ -299,6 +336,7 @@ public static class PrebuiltBundleRetentionExtensions
     {
         services.AddSingleton(FromConfiguration(configuration));
         services.AddSingleton<PrebuiltBundleRetentionStatus>();
+        services.AddPrebuiltBundleRetentionLease();
         services.AddHostedService<PrebuiltBundleRetentionHostedService>();
         return services;
     }
