@@ -206,6 +206,23 @@ follower given the aggregate's name is refused rather than matched to a stage. A
 
    Every declaration in the fleet passes it.
 
+   **Prepared inputs.** Some inputs are built from the repository's own sources but are not the
+   run's subject: MeshWeaver.Plugins' module-libraries shelf (`MW_BUILD_MODULE_LIBS`) and its Razor
+   build extension (`MW_BUILD_EXTENSIONS`). A repository declares them beside its stages as
+   `prepared: [{name, env, key, build, timeoutMinutes}]`. Before the stages, the host runs the
+   repository's own `key` command in the sandbox and looks for the input under
+   `/cache/prepared/<repo>/<name>/<sha256(platform|key)>/`, stamped `.source-key`:
+
+   - **already installed:** it is bound read-only and nothing is prepared;
+   - **a trunk run, key not installed:** it is built once (`build`, against the image's platform
+     source `MW_PLATFORM_SOURCE`, which is the set's `src/`, `tools/` and root build files) and
+     installed persistently. Every push to main queues a trunk run, so the server follows main;
+   - **a pull request whose sources differ:** it is built for that run only, reported as
+     `MWPREP002`, and never installed.
+
+   A failed build, a key command that answers no key, or a missing input on a host without
+   platform source is RED, naming the input.
+
    **The run budget.** A stage's `timeoutMinutes` is a PER-STAGE CAP. The run's deadline is the
    host's `MW_BUILD_RUN_DEADLINE_SECONDS` (`buildHosts.runDeadlineSeconds`, default 7200 s, refused
    outside [600, 43200]) and must COVER the declared stages: the default fits MeshWeaver.Plugins'
