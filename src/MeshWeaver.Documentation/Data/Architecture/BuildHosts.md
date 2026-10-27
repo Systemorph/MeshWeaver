@@ -132,14 +132,17 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    registry, the registry broadcasts `module-published`, and the reconciler rewrites
    `Plugins/_RegistryReconcileLedger`. The host reads `inputs` on every loop turn it already makes,
    an idle one included, and reads the index only when `modules.key` moved since it staged its
-   layer. So an idle host installs a handed-over module ahead of the next build. Three cases still
-   read the index:
+   layer. So an idle host installs a handed-over module ahead of the next build. Two cases read
+   the index although the key did not move:
    - there is no signal (a null `modules`, unreadable inputs): the index is read on every turn;
    - the staged layer is no longer intact on the cache (install-on-miss): it is installed again,
-     whatever the key says;
-   - the host has just started. The installed layer is recorded per framework identity at
-     `/cache/plugin-sets/current-<identity digest>.json`, so a restarted or new host starts with it
-     installed and reads the index only if a hand-over happened since.
+     whatever the key says.
+
+   A START is not a third case. The installed layer is recorded per framework identity at
+   `/cache/plugin-sets/current-<identity digest>.json`. A restarted or new host ADOPTS that record
+   without reading the index when the layer is intact and its recorded key matches the available
+   `modules.key`. It reads the index only when a hand-over moved the key since then, which is the
+   ordinary rule above.
 2. **Claim** with `{host, channel, platformVersion, frameworkIdentity, pluginsDigest, pluginsKey,
    claimId}`. `claimId` is a fresh uuid per claim attempt; a network error or a 5xx is retried
    with the SAME claimId, so the instance answers the assignment it already made. A host keeps no
