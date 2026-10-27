@@ -1,16 +1,16 @@
 ---
 Name: OCR Service — local Tesseract in the cluster
 Category: Architecture
-Description: The fleet's default OCR engine is a stateless Tesseract 5 pod (core deploy/ocr) with the eng, deu, fra, ita and ind packs and osd baked into its image, language detection when no hints are given, no egress, and a chart that renders nothing until an instance's deployment record turns it on. The portal reaches it through MeshWeaver.Ocr's HttpService engine.
+Description: The fleet's default OCR engine is a stateless Tesseract 5 pod (MeshWeaver.Deploy deploy/ocr) with the eng, deu, fra, ita and ind packs and osd baked into its image, language detection when no hints are given, no egress, and a chart that renders nothing until an instance's deployment record turns it on. The portal reaches it through MeshWeaver.Ocr's HttpService engine.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg>
 ---
 
 # OCR Service — local Tesseract in the cluster
 
 Scanned pages and image attachments are read by a **local** OCR engine, never a cloud service.
-By default that engine is **Tesseract 5**, run as one stateless pod per instance from core's
-`deploy/ocr`. It is built and shipped the same way as the two local model services that came
-before it, [`deploy/whisper`](../CentralizedSpeech) and `deploy/s1-extract`:
+By default that engine is **Tesseract 5**, run as one stateless pod per instance from
+[`deploy/ocr`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/ocr) in the public MeshWeaver.Deploy repository. It is built and shipped the same way as the two local model services that came
+before it, [`deploy/whisper`](../CentralizedSpeech) and `deploy/s1-extract` (both in MeshWeaver.Deploy too):
 
 - the engine's data, here the language packs, is **baked into the image**;
 - CI builds the image and pushes it to the fleet registry;
@@ -93,7 +93,7 @@ Its negative controls are part of the same run:
 - a blank page must come back with no text and no languages;
 - `languages=en` must report neither German nor Indonesian.
 
-`.github/workflows/ocr-image.yml` adds checks a build cannot show:
+MeshWeaver.Deploy's `.github/workflows/ocr-image.yml` adds checks a build cannot show:
 
 - it re-runs the smoke with German removed from the default set and is red unless the smoke
   **fails on the German assertion** — the exit code must be the smoke's own failure count, never a
@@ -117,7 +117,7 @@ changes what that instance's cluster runs and where its documents go, so it is a
 change to the image pin of the portal. In the estate's deployment repository (for the fleet,
 `Systemorph/Memex`), following the whisper precedent (`Deployments/memex-cloud-whisper`):
 
-1. **Vendor the chart.** Copy `deploy/ocr/helm` to `deployments/aks/<env>/ocr/helm`.
+1. **Vendor the chart.** Copy MeshWeaver.Deploy's `deploy/ocr/helm` to `deployments/aks/<env>/ocr/helm`.
    `scripts/check-vendored-charts.py` holds it byte-identical.
 2. **Write the values overlay.** In `values.<env>.yaml`, set `enabled: true`,
    `image.repository: meshweaver.azurecr.io/ocr`, the **immutable** `image.tag` printed in the

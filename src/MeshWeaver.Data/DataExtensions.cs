@@ -1467,6 +1467,40 @@ public static class DataExtensions
     }
 
     /// <summary>
+    /// The verdict of a cross-hub patch whose merge turn found its echo watcher already ended
+    /// (#7346 review): the turn committed NOTHING, so the write is provably not applied and safe to
+    /// retry. The writer has normally been answered already by the watcher's own end (its bound, or
+    /// the owner going away) — <c>AckOnce</c> latches, so this only answers one that was not.
+    /// </summary>
+    /// <param name="path">The owner hub's address.</param>
+    /// <returns>An <see cref="MeshNodeErrorCode.OwnerNotReady"/> error naming the condition.</returns>
+    internal static MeshNodeError WatcherEndedBeforeCommit(string path) => new(
+        MeshNodeErrorCode.OwnerNotReady, path,
+        "the patch's acknowledgement watcher ended before its merge turn could commit — "
+        + "the patch was NOT applied; safe to retry");
+
+    /// <summary>
+    /// Answers a merge turn that aborted because its echo watcher had ended (#7346 review). The turn
+    /// commits nothing either way; only the VERDICT is in question. While the owner is shutting down
+    /// with a route armed for the ShutDown-phase disposal NACK, the watcher stood aside for that NACK
+    /// (#3197) — and so does the abort: claiming the acknowledgement gate here would detach the
+    /// disposal NACK and answer from the closing activation, so the writer's retry would land on it
+    /// instead of on a fresh one. Otherwise the abort answers itself (normally a no-op: the
+    /// watcher's own end has answered already, and the gate latches).
+    /// </summary>
+    /// <param name="standAsideForDisposalNack">The echo watcher's stand-aside condition.</param>
+    /// <param name="ackOnce">The patch's latched acknowledgement.</param>
+    /// <param name="hubPath">The owner hub's address.</param>
+    internal static void AnswerWatcherEndedAbort(
+        Func<bool> standAsideForDisposalNack,
+        Action<bool, MeshNodeError?> ackOnce,
+        string hubPath)
+    {
+        if (!standAsideForDisposalNack())
+            ackOnce(false, WatcherEndedBeforeCommit(hubPath));
+    }
+
+    /// <summary>
     /// 🚨 TEARDOWN IS NOT A VERDICT ABOUT THE WRITE — issue #3499, and the reason a package
     /// install could not survive its own root recycling.
     ///
@@ -2714,6 +2748,16 @@ public static class DataExtensions
         // Detaches the owner-disposing NACK once the gate is claimed here (#3432) — see
         // RegisterOwnerDisposingNack's return value.
         var ownerNackDetach = new SingleAssignmentDisposable();
+        // 🚨 The write's admission against the deletion scopes, taken in the merge turn and held from
+        // the COMMIT to the durable flush's STORAGE answer (#7346) — so a delete or move that opens
+        // its scope in between waits for this write instead of refusing its flush after the owner
+        // has committed and served it. Exactly one holder at a time: the merge turn takes it, the
+        // flush leg TAKES it over on the commit echo and releases it on the flush's own terminal,
+        // and every path that commits nothing (a refusal, a no-op, a fault, an echo that never
+        // comes) releases it at once. The commit decision is atomic against the echo watcher's end:
+        // a turn whose watcher has ended commits NOTHING, and the watcher never releases an
+        // admission for a turn that is still deciding (CommitAdmissionHandoff).
+        var commitAdmission = new CommitAdmissionHandoff();
         // The version the entity carries once this patch is committed — minted by the merge, or the
         // live version for a patch that changed nothing. -1 until the merge turn decides.
         long committedVersion = -1;
@@ -2736,6 +2780,15 @@ public static class DataExtensions
             // here or the verdict is lost with the door shut behind it.
             PostPatchVerdict(hub, request, resp, lateVerdicts, ackLogger);
         }
+
+        // The echo watcher's stand-aside condition (#3197): while the owner is shutting down and a route
+        // is ARMED to receive the ShutDown-phase disposal NACK, that NACK — not this patch's own arms —
+        // claims the verdict, so the writer's retry lands on a FRESH activation rather than the closing
+        // one. Shared by the watcher's completion arm and the merge turn's watcher-ended aborts (#7346
+        // review): an abort that claimed the gate here would detach the disposal NACK and answer from
+        // the closing activation instead.
+        bool StandAsideForTheDisposalNack()
+            => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id);
 
         // 🚨 Write-identity stamps — set by the merge lambda AT COMMIT TIME (the same
         // happens-before pattern as MeshNodeStreamHandle.UpdateOwn's echo detection):
@@ -2781,7 +2834,14 @@ public static class DataExtensions
                 // posted yet (e.g. commit emission lost in a teardown) — the caller's
                 // retry machinery takes over; never a silent hang.
                 .Timeout(TimeSpan.FromSeconds(20))
-                .Finally(postDetach.Dispose),
+                .Finally(() =>
+                {
+                    postDetach.Dispose();
+                    // The echo watcher ended. If the flush leg took the admission over it is no longer
+                    // here; a turn still deciding aborts and releases it; otherwise nothing will flush
+                    // this write, so nothing may wait for it.
+                    commitAdmission.OnWatcherEnded();
+                }),
             // Durable flush (persist + publish the cache-eviction feed event), then ack; no hook
             // registered → ack on the in-memory commit. Armed through the totality seam so a
             // stream that ENDS before the echo arrives, or a flush that ends without emitting,
@@ -2792,7 +2852,27 @@ public static class DataExtensions
                 // The echo CONTAINING this write reached the watcher: the merge committed. What
                 // follows is durability; a trail ending here names a slow or lost flush.
                 hub.NoteRequestStage(request.Id, "PATCH_ECHO_SEEN");
-                return hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!);
+                // The flush now holds this write's admission (#7346), until ITS storage write answers
+                // — not the ack, which the flush bound may post while the write is still in flight.
+                var admission = commitAdmission.TakeForFlush();
+                IObservable<bool>? durable;
+                try
+                {
+                    durable = hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!);
+                }
+                catch
+                {
+                    // Rethrown, not swallowed: the watcher NACKs it (PATCH_FLUSH_FAULTED_SYNC). Nothing
+                    // will be stored, so nothing may wait for it.
+                    admission?.Dispose();
+                    throw;
+                }
+                if (durable is null)
+                {
+                    admission?.Dispose();
+                    return null;
+                }
+                return admission is null ? durable : durable.Finally(admission.Dispose);
             },
             TimeSpan.FromSeconds(10),
             AckOnce,
@@ -2806,7 +2886,7 @@ public static class DataExtensions
             // large subtree making steady progress never trips it). With no sink, or with the
             // caller's watch already gone, standing aside converts an answerable write into
             // silence — so answer now, on whatever transport is still open.
-            () => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id),
+            StandAsideForTheDisposalNack,
             hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"),
             noteStage: stage => hub.NoteRequestStage(request.Id, stage));
         postDetach.Disposable = hub.RegisterForDisposalDetachable(postSub);
@@ -3036,8 +3116,14 @@ public static class DataExtensions
                         && pathValue.TryGetValue<string>(out var livePath)
                             ? livePath
                             : hub.Address.Path;
-                    if (deletionScopes is not null
-                        && deletionScopes.IsUnderActiveDeletion(patchedPath, out var deletionRoot))
+                    // 🚨 And ADMITTED here when it is not refused (#7346): the check and the storage
+                    // write are separated by the commit echo and the flush, and a delete opening its
+                    // scope in that gap must wait for this write rather than refuse its flush after it
+                    // has committed. The admission is held until the flush's storage write answers,
+                    // and released at once on every path below that commits nothing.
+                    string? deletionRoot = null;
+                    var admission = deletionScopes?.AdmitCommit(patchedPath, out deletionRoot);
+                    if (deletionScopes is not null && admission is null)
                     {
                         AckOnce(false, new MeshNodeError(
                             MeshNodeErrorCode.NotFound, hubPath,
@@ -3045,6 +3131,16 @@ public static class DataExtensions
                             "Node being deleted: "
                             + new MeshWeaver.Mesh.SubtreeDeletionInFlightException(patchedPath, deletionRoot).Message
                             + " The patch was NOT applied."));
+                        return null;
+                    }
+                    // Handed to the flush leg through the shared holder. An echo watcher that already
+                    // ended will never hand it to a flush — and has already answered the writer — so
+                    // the turn commits NOTHING (#7346 review): committing would land a write nothing
+                    // stores, with no admission for a delete to wait on.
+                    if (!commitAdmission.TryBeginDecision(admission))
+                    {
+                        hub.NoteRequestStage(request.Id, "PATCH_MERGE_ABORTED watcher-ended");
+                        AnswerWatcherEndedAbort(StandAsideForTheDisposalNack, AckOnce, hubPath);
                         return null;
                     }
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
@@ -3069,6 +3165,8 @@ public static class DataExtensions
                     if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
                     {
                         hub.NoteRequestStage(request.Id, $"PATCH_MERGE_NOCHANGE refused={refusedKeys}");
+                        // Nothing commits, so nothing is flushed for a deletion to wait on.
+                        commitAdmission.Abandon();
                         if (refusedKeys > 0)
                             AckOnce(false, new MeshNodeError(
                                 MeshNodeErrorCode.Conflict, hubPath,
@@ -3129,7 +3227,19 @@ public static class DataExtensions
                             hub.Address.Path, request.AccessContext, jsonOpts) is { } commitRefusal)
                     {
                         hub.NoteRequestStage(request.Id, "PATCH_COMMIT_REFUSED");
+                        commitAdmission.Abandon();
                         AckOnce(false, new MeshNodeError(MeshNodeErrorCode.Validation, hubPath, commitRefusal));
+                        return null;
+                    }
+
+                    // 🚨 THE COMMIT DECISION against the echo watcher (#7346 review): if the watcher
+                    // ended while this turn was deciding, nothing would flush the write and the writer
+                    // has been answered — commit nothing. Decided before the stamps below, so an
+                    // aborted turn leaves no stamp an echo could match.
+                    if (!commitAdmission.TryCommit())
+                    {
+                        hub.NoteRequestStage(request.Id, "PATCH_MERGE_ABORTED watcher-ended");
+                        AnswerWatcherEndedAbort(StandAsideForTheDisposalNack, AckOnce, hubPath);
                         return null;
                     }
 
@@ -3149,6 +3259,7 @@ public static class DataExtensions
                 }
                 catch (Exception ex)
                 {
+                    commitAdmission.Abandon();
                     AckOnce(false, ClassifyPatchException(ex, hubPath));
                     return null;
                 }
@@ -3161,7 +3272,12 @@ public static class DataExtensions
                         coldLane.ReleaseHead();
                 }
             },
-            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+            ex =>
+            {
+                // The turn's change failed to apply: nothing committed, nothing will be flushed.
+                commitAdmission.Abandon();
+                AckOnce(false, ClassifyPatchException(ex, hubPath));
+            });
 
         // Dispatched to the primary's executor; the next stage is recorded on that executor.
         hub.NoteRequestStage(request.Id, "PATCH_MERGE_DISPATCHED");
