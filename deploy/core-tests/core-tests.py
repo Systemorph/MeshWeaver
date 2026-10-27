@@ -358,15 +358,20 @@ def collect_logs(work: str, bins: list[str], dest: str) -> None:
             shutil.copyfile(full, os.path.join(dest, f"_{n}"))
 
 
-def hand_back(work: str, shard: int, artifacts: str) -> int:
+def hand_back(work: str, shard: int, artifacts: str, trx_files: list[str]) -> int:
     """Leave the shard's results under $MW_BUILD_ARTIFACTS/testResults-shard<i>/ in the SAME tree the
     `test` job uploads as its testResults-shard<i>-attempt<a> artifact (test/**/*.trx,
     test/test-results.log, collected-logs/), so collect-results consolidates a host shard exactly as an
     Actions one. The host uploads every file to the CI artifact store, reads it back and posts a receipt
-    (Doc/Architecture/BuildHosts §2 step 7). Returns how many files were handed back."""
+    (Doc/Architecture/BuildHosts §2 step 7). Returns how many files were handed back.
+
+    Only `trx_files` — the trx THIS invocation's units wrote or had synthesized — are handed back: a
+    reused work directory (or a bin packed with a TestResults of its own) can hold another
+    invocation's trx, which consolidation would otherwise count as this shard's."""
     unit = os.path.join(artifacts, f"testResults-shard{shard}")
     if os.path.exists(unit):
         shutil.rmtree(unit)
+    produced = {os.path.abspath(f) for f in trx_files}
     count = 0
     for top in ("test", "collected-logs"):
         base = os.path.join(work, top)
@@ -375,7 +380,7 @@ def hand_back(work: str, shard: int, artifacts: str) -> int:
             for n in sorted(filenames):
                 full = os.path.join(dirpath, n)
                 rel = os.path.relpath(full, work)
-                keep = (top == "collected-logs" or n.endswith(".trx") or rel == os.path.join("test", "test-results.log"))
+                keep = (top == "collected-logs" or full in produced or rel == os.path.join("test", "test-results.log"))
                 if not keep or os.path.islink(full) or not os.path.isfile(full):
                     continue
                 out = os.path.join(unit, rel)
@@ -404,6 +409,9 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
     if not units:
         raise Refusal(f"shard {shard}/{total} carries no unit — a stage that runs nothing is not a green one")
     repo = os.path.abspath(repo)
+    # Absolute: the untyped-content gate runs with cwd=repo, where a relative work path would name
+    # another directory — absent (a false red) or holding stale logs (a false green).
+    work = os.path.abspath(work)
     recorder = _script(repo, "record-host-crash.py")
     untyped_gate = _script(repo, "check-untyped-content.sh")
     os.makedirs(work, exist_ok=True)
@@ -432,12 +440,17 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
                TESTCONTAINERS_RYUK_DISABLED="true")
     bins: dict[str, str] = {}
     failed: list[str] = []
+    trx_files: list[str] = []
     for entry in units:
         csproj, part, parts = split_unit(entry)
         name = os.path.basename(csproj)[: -len(".csproj")]
         label = name if parts == 1 else f"{name} (part {part}/{parts})"
         if csproj not in bins:
             bins[csproj] = materialise(root, m, csproj, work)
+            # This invocation's logs only: a reused work directory keeps an earlier run's per-bin
+            # test-logs/ (materialise overwrites packed files, never removes), which the gate would
+            # read again. Cleared once per bin, so a later split part's logs in this run survive.
+            shutil.rmtree(os.path.join(bins[csproj], "test-logs"), ignore_errors=True)
         d = bins[csproj]
         if not os.path.isfile(os.path.join(d, f"{name}.dll")) or not os.path.isfile(os.path.join(d, "xunit.v3.core.dll")):
             record(f"[CI] {name} exit=0 (helper project — no xUnit v3 test host)")
@@ -448,9 +461,13 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
             classes = _list_classes(dotnet, name, d)
             if not classes:
                 record(f"[CI] {name} exit=96 NO_CLASSES (class enumeration failed for a split project)")
-                record_crash(os.path.join(d, "TestResults", f"{name}.part{part}.trx"), label, 96,
+                no_classes_trx = os.path.join(d, "TestResults", f"{name}.part{part}.trx")
+                if os.path.lexists(no_classes_trx):
+                    os.remove(no_classes_trx)
+                record_crash(no_classes_trx, label, 96,
                              f"NO_CLASSES: class enumeration failed for a split project — part {part}/{parts} ran nothing.",
                              label)
+                trx_files.append(no_classes_trx)
                 failed.append(label)
                 continue
             for c in classes[part - 1::parts]:
@@ -471,11 +488,12 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
         if crash:
             record_crash(trx_path, name, rc, crash, label)
         record(f"{marker} elapsed={int(time.monotonic() - started)}s")
+        trx_files.append(trx_path)
         if rc != 0:
             failed.append(label)
     collect_logs(work, sorted(set(bins.values())), collected)
     if artifacts:
-        n = hand_back(work, shard, artifacts)
+        n = hand_back(work, shard, artifacts, trx_files)
         print(f"handed back {n} result file(s) as testResults-shard{shard}/ (trx, test-results.log, collected-logs)", flush=True)
     gate = subprocess.run(["bash", untyped_gate, collected], cwd=repo).returncode
     print(f"[CI] untyped-content gate exit={gate}", flush=True)
@@ -724,6 +742,8 @@ def _self_test() -> int:
         art = os.path.join(t, "artifacts")
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("trace")
         pack(repo, img, sha, "3.1.1")
+        # The work directory first ran SHARD 0 (A.trx, Split.part1.trx): those are not shard 1's.
+        expect(run_shard(img, 0, 2, os.path.join(t, "wr"), dotnet, repo=repo) == 0, "shard 0/2 into a work directory shard 1 then reuses")
         expect(run_shard(img, 1, 2, os.path.join(t, "wr"), dotnet, repo=repo, artifacts=art) == 0, "a green shard with a host to hand back to")
         markers = open(os.path.join(t, "wr", "test", "test-results.log")).read()
         expect("[CI] B exit=0 elapsed=" in markers and "[CI] Helper exit=0 (helper project" in markers,
@@ -732,7 +752,8 @@ def _self_test() -> int:
         handed = sorted(os.path.relpath(os.path.join(dp, n), unit) for dp, _, ns in os.walk(unit) for n in ns)
         expect(handed == ["collected-logs/_meshweaver-test-trace.log", "test/B/bin/Release/net10.0/TestResults/B.trx",
                           "test/Split/bin/Release/net10.0/TestResults/Split.part2.trx", "test/test-results.log"],
-               f"the hand-back is the `test` job's artifact tree — trx, markers, collected-logs, and no bins ({handed})")
+               f"the hand-back is the `test` job's artifact tree — THIS run's trx (not the reused directory's "
+               f"A.trx / Split.part1.trx), markers, collected-logs, and no bins ({handed})")
         os.remove(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log"))
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("degrade")
         pack(repo, img, sha, "3.1.1")
@@ -740,6 +761,17 @@ def _self_test() -> int:
                "RED: every unit exits 0 but a log shows content NEVER resolvable — the untyped-content gate decides")
         expect(os.path.isfile(os.path.join(unit, "collected-logs", "B.log")),
                "…and the log it was red on was handed back first (the evidence survives the red)")
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("pass")
+        pack(repo, img, sha, "3.1.1")
+        expect(run_shard(img, 1, 2, os.path.join(t, "wu"), dotnet, repo=repo, artifacts=art) == 0,
+               "a passing run in the SAME work directory is green (the earlier run's test-logs/B.log is not re-read)")
+        cwd = os.getcwd()
+        os.chdir(t)
+        try:
+            expect(run_shard(img, 1, 2, "wrel", dotnet, repo=repo) == 0,
+                   "a RELATIVE --work is gated where its logs were collected (not resolved against --repo)")
+        finally:
+            os.chdir(cwd)
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("segv")
         pack(repo, img, sha, "3.1.1")
         expect(run_shard(img, 1, 2, os.path.join(t, "wc"), dotnet, repo=repo) == 1, "RED: a host that died on SIGSEGV")
