@@ -237,6 +237,32 @@ jobs:
       - name: "No two source files import to the same node path"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-node-path-collisions.py" --root .
+      # ── THE BUILD-HOST DECLARATION CLAIMS EQUIVALENCE ONLY WHEN IT OWES NOTHING ──
+      # A satellite moves its heavy legs to a standing build host by declaring the stages that
+      # replace them in `.github/build-stages.json`, with `owes` naming every thing those stages still
+      # check LESS than the lanes this ci.yml calls (Doc/Architecture/BuildHosts → "Moving a
+      # repository's tests to the build server"). build-executor.py routes a run to a host only on
+      # `"ciEquivalent": true` with nothing owed. This guard holds the declaration to that rule and
+      # to the parity each stage must keep with the lane it replaces (the stages it owes are DERIVED
+      # from the lanes ci.yml calls). A repository that declares nothing is NOT MIGRATED — said, not
+      # red: build-executor.py answers `actions` for it and every lane runs on GitHub as before.
+      - name: Fetch the platform's build-host declaration rule at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the build-host declaration rule has no ref to be fetched at"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-build-stages.py" > "$RUNNER_TEMP/check-build-stages.py" \
+            || { echo "::error::could not fetch .github/scripts/check-build-stages.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the rule needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-build-stages.py" | grep -q "check-build-stages" || { echo "::error::the fetched check-build-stages.py at ${SCRIPTS_REF} does not look like the rule"; exit 1; }
+      - name: "A claim with an open debt, and a stage that sheds a check, are caught — the rule can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-build-stages.py" --self-test
+      - name: "This repo's build-host stages claim CI equivalence only when they owe nothing"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-build-stages.py" --profile node-repo
       # ── A RETIRED MeshNode FIELD IS A BUILD ERROR (#6638) ──
       # GitSync reads a repository strictly, so ONE node file still carrying a member MeshNode no
       # longer has (`isPersistent`, a top-level `requires`, …) refuses the WHOLE snapshot and the

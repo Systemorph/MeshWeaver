@@ -2407,12 +2407,19 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/host-gate-log.py --self-test
 
-    # Core's suites as build-host stages, from the set's mw-core-tests image
-    # (Doc/Architecture/DeployTestSwitchLatest, P4). The stage list is GENERATED from CI_SHARD_TOTAL
-    # above, so a shard count changed here without regenerating .github/build-stages.json reds;
-    # and the image's runner must red a shard total it was not packed for, a tampered blob, a
-    # failing, silent or wedged unit, and a shard that runs nothing.
-    - name: "Core's build stages are one per CI shard, generated from CI_SHARD_TOTAL (self-test + check)"
+    # Core's suites as build-host stages: a deployment runs them from the set's mw-core-tests image
+    # (Doc/Architecture/DeployTestSwitchLatest, P4), a host PR/trunk run builds and packs its own
+    # tree first (Doc/Architecture/BuildHosts → "Moving a repository's tests to the build server").
+    # The stage list is GENERATED from CI_SHARD_TOTAL above, so a shard count changed here without
+    # regenerating .github/build-stages.json reds; and the declaration is held to the fleet's ONE
+    # rule (check-build-stages.py): no ciEquivalent claim while `owes` names a gap, no stage that
+    # sheds a check its Actions leg has. The image's runner must red a shard total it was not packed
+    # for, a tampered blob, a failing, silent or wedged unit, a shard that runs nothing, and a pack
+    # that was not built from the run's own commit.
+    - name: "The build-host declaration rule can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-build-stages.py --self-test
+    - name: "Core's build stages are build + one per CI shard + doc-gate, generated from CI_SHARD_TOTAL, owing what they owe (self-test + check)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: |
         python3 .github/scripts/core-build-stages.py --self-test
