@@ -142,9 +142,33 @@ with these settings:
 > 🚨 **`DefaultIgnoreCondition` is `WhenWritingDefault`, not `WhenWritingNull`** — and the
 > difference bites. Under `WhenWritingDefault` a `bool` property whose value is `false` is
 > **omitted from the JSON entirely**, so a property declared `public bool Flag { get; init; } = true`
-> silently fails to round-trip a `true → false` change: the `false` is not written, and the
-> reader re-applies the `true` default. When a default-valued member must survive the wire,
-> annotate it `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]`.
+> would silently fail to round-trip a `true → false` change: the `false` is not written, and the
+> reader re-applies the `true` default.
+>
+> **The hub's resolver now closes that class** (`DeclaredDefaultsSurviveTheWire`, applied by
+> `PolymorphicTypeInfoResolver`): a settable scalar member — primitive, enum, `decimal`, their
+> nullable forms, or `string` — keeps `WhenWritingDefault` only when its DECLARED default is
+> PROVEN to be the CLR default whatever the constructor was given; otherwise it is always written,
+> so an explicitly stored `false` / `0` / `null` is never re-materialised as the declared value.
+> Proof is: the constructor parameter's default (for a parameter-bound member); one probe instance
+> (for a parameterless constructor); or, for a parameterized constructor, a PER-INSTANCE check at
+> write time — the instance's own constructor arguments rebuild a fresh instance exactly as the
+> reader will, and a CLR-default value is omitted only when the rebuilt instance reads it too. No
+> fixed set of probes can prove an initializer ignores its arguments (`Flag = Left != Right` agrees
+> on `(false,false)` and `(true,true)`), so none is used. This covers initializers computed from an
+> argument, like `MeshNode.MainNode`. ONE rebuild answers every member of one write (a sparse
+> `MeshNode` with several unset members costs one constructor call, not one per member); the
+> per-write verdicts are keyed weakly by the instance and dropped once every member was checked,
+> so the next write judges its own current inputs and nothing is retained. A probe, rebuild or getter that throws, or a constructor
+> parameter with no serialized member, means "not proven" and the member is written. The conservative branch costs bytes, never
+> a value: an explicit CLR default reads back identically. A member carrying its own
+> `[JsonIgnore(...)]` keeps its author's condition, so the per-property
+> `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]` annotations that predate the rule are
+> redundant but harmless. Measured before the rule: an `ActionHandlerRule` committed with
+> `"enabled": false` read `enabled: true` after its repository sync, re-arming a rule that ships
+> disabled. Guard: `DeclaredDefaultsSurviveTheWireTest` (with a negative control over options
+> without the rule). Options built OUTSIDE the hub (a bare `new JsonSerializerOptions` with
+> `WhenWritingDefault`) do not get the rule.
 >
 > `WriteIndented` and `PropertyNameCaseInsensitive` are **not** set on the hub's options —
 > they keep the `System.Text.Json` defaults (`false`). Indented output is opt-in per adapter:

@@ -46,9 +46,9 @@ public class NodeTypeOffSwitchesSurviveTheWireTest(ITestOutputHelper output) : M
         return instance;
     }
 
-    private bool RoundTrip(object instance, PropertyInfo property)
+    private bool RoundTrip(object instance, PropertyInfo property, JsonSerializerOptions? options = null)
     {
-        var options = Mesh.JsonSerializerOptions;
+        options ??= Mesh.JsonSerializerOptions;
         var json = JsonSerializer.Serialize(instance, instance.GetType(), options);
         var read = JsonSerializer.Deserialize(json, instance.GetType(), options)!;
         return (bool)property.GetValue(read)!;
@@ -113,8 +113,20 @@ public class NodeTypeOffSwitchesSurviveTheWireTest(ITestOutputHelper output) : M
     [Fact]
     public void Negative_control_the_instrument_sees_the_trap()
     {
+        // Options WITHOUT the hub's declared-default rule: the trap shape loses its false there, so a
+        // round trip that could not lose the value cannot pass for a fixed one.
         var flag = typeof(TrapShaped).GetProperty(nameof(TrapShaped.Flag))!;
-        Assert.True(RoundTrip(WithFlagOff(new TrapShaped(), flag), flag),
+        var withoutTheFix = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault };
+        Assert.True(RoundTrip(WithFlagOff(new TrapShaped(), flag), flag, withoutTheFix),
             "a true-defaulted flag with no write override loses its false; if this ever passes, the round trip measures nothing");
+    }
+
+    [Fact]
+    public void The_hub_serializer_keeps_the_false_even_without_a_write_override()
+    {
+        // The class fix: the hub's resolver writes a member whose declared default differs from its
+        // CLR default, so the trap shape no longer needs a per-property JsonIgnore(Never).
+        var flag = typeof(TrapShaped).GetProperty(nameof(TrapShaped.Flag))!;
+        Assert.False(RoundTrip(WithFlagOff(new TrapShaped(), flag), flag));
     }
 }
