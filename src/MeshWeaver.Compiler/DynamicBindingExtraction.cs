@@ -224,8 +224,12 @@ public static class DynamicBindingExtraction
         var key = $"{FullName(original.ContainingType)}.{original.Name}";
         if (Apis.TryGetValue(key, out var shape))
             return new Api(key, $"{original.ContainingType.Name}.{original.Name}", shape);
-        // An ITypeRegistry implementation (or a derived interface) is the registry surface.
+        // An ITypeRegistry implementation (or a derived interface) is the registry surface. Matched
+        // by NAME and POSITION, never by parameter name: an implementation may legally rename the
+        // parameter (`GetType(string typeName)`), and a rename must not take a call off the ratchet.
         if (original.Name is "GetType" or "TryGetType"
+            && original.Parameters.Length > 0
+            && original.Parameters[0].Type.SpecialType == SpecialType.System_String
             && original.ContainingType.AllInterfaces.Append(original.ContainingType)
                 .Any(i => FullName(i) == RegistryInterface)
             && Apis.TryGetValue(RegistryInterface + "." + original.Name, out var registryShape))
@@ -249,7 +253,8 @@ public static class DynamicBindingExtraction
             Shape.TypeNameInReceiver => Has("name", "typeName", "className"),
             Shape.AssemblyAndType => Has("assemblyName") && Has("typeName"),
             Shape.FileAndType => Has("assemblyFile") && Has("typeName"),
-            Shape.RegistryName => Has("name") && method.Parameters[0].Type.SpecialType == SpecialType.System_String,
+            // Position, not name — ApiOf already required a leading string parameter.
+            Shape.RegistryName => method.Parameters.Length > 0 && method.Parameters[0].Type.SpecialType == SpecialType.System_String,
             _ => true,
         };
     }
@@ -259,6 +264,7 @@ public static class DynamicBindingExtraction
             .Any(i => i.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" });
 
     private readonly record struct Resolution(string Target, string? TargetKind, string Literal);
+
 
     private static Resolution? Resolve(
         Shape shape, IInvocationOperation operation, CSharpCompilation compilation,
@@ -271,36 +277,38 @@ public static class DynamicBindingExtraction
                     return ConstantString(argument.Value);
             return null;
         }
+        string? ArgAt(int ordinal)
+        {
+            foreach (var argument in operation.Arguments)
+                if (argument.Parameter is { } p && p.Ordinal == ordinal)
+                    return ConstantString(argument.Value);
+            return null;
+        }
 
         switch (shape)
         {
             case Shape.TypeName:
-            {
-                if (Arg("typeName") is not { } typeName)
-                    return null;
-                return ForTypeName(typeName, receiverAssembly: null, compilation, assemblies);
-            }
+                return Arg("typeName") is { } typeName
+                    ? ForTypeName(typeName, Receiver.None, compilation, assemblies)
+                    : null;
             case Shape.TypeNameInReceiver:
-            {
-                if (Arg("name", "typeName", "className") is not { } typeName)
-                    return null;
-                return ForTypeName(typeName, ReceiverAssembly(operation.Instance), compilation, assemblies);
-            }
+                return Arg("name", "typeName", "className") is { } inReceiver
+                    ? ForTypeName(inReceiver, ReceiverOf(operation.Instance), compilation, assemblies)
+                    : null;
             case Shape.AssemblyAndType:
             {
                 if (Arg("assemblyName") is not { } assembly || Arg("typeName") is not { } type)
                     return null;
-                var name = SimpleAssemblyName(assembly);
-                return new Resolution($"{TypePart(type)}, {name}",
-                    WithArguments(assemblies.KindOf(name), TypePart(type), compilation, assemblies), $"{assembly}\", \"{type}");
+                return ForTypeName(type, Receiver.Of(SimpleAssemblyName(assembly)), compilation, assemblies)
+                    with { Literal = $"{assembly}\", \"{type}" };
             }
             case Shape.FileAndType:
             {
                 if (Arg("assemblyFile") is not { } file || Arg("typeName") is not { } type)
                     return null;
-                var name = Path.GetFileNameWithoutExtension(file.Replace('\\', '/'));
-                return new Resolution($"{TypePart(type)}, {name}",
-                    WithArguments(assemblies.KindOf(name), TypePart(type), compilation, assemblies), $"{file}\", \"{type}");
+                return ForTypeName(type, Receiver.Of(Path.GetFileNameWithoutExtension(file.Replace('\\', '/'))),
+                        compilation, assemblies)
+                    with { Literal = $"{file}\", \"{type}" };
             }
             case Shape.AssemblyName:
             {
@@ -318,7 +326,8 @@ public static class DynamicBindingExtraction
             }
             case Shape.RegistryName:
             {
-                if (Arg("name") is not { } registered)
+                // By POSITION (the interface's first parameter), whatever the implementation calls it.
+                if (ArgAt(0) is not { } registered)
                     return null;
                 // A registry name is whatever some hub registered it under: the assembly is not
                 // knowable at compile time, so the target kind stays unknown.
@@ -329,27 +338,57 @@ public static class DynamicBindingExtraction
         }
     }
 
-    /// <summary>A type-name argument: assembly-qualified ⇒ that assembly; otherwise the receiver's
-    /// assembly when known, otherwise the compilation's own resolution of the metadata name (a type
-    /// in the compiling source itself is a <see cref="DependencyEdgeKinds.NodeType"/> target).</summary>
-    private static Resolution ForTypeName(
-        string typeName, string? receiverAssembly, CSharpCompilation compilation, AssemblyLookup assemblies)
+    /// <summary>Where a type name is looked up when it carries no assembly of its own: nowhere
+    /// special (<c>Type.GetType</c> — the calling assembly and CoreLib), a STATICALLY known assembly,
+    /// or an assembly the compile cannot know (an arbitrary <c>Assembly</c> instance, <c>typeof(T)</c>
+    /// of a type parameter).</summary>
+    private readonly record struct Receiver(bool Known, string? Assembly)
     {
-        var (type, assembly) = SplitAssemblyQualifiedName(typeName);
-        var (target, kind) = assembly is not null ? ($"{type}, {assembly}", assemblies.KindOf(assembly))
-            : receiverAssembly is not null ? ($"{type}, {receiverAssembly}", assemblies.KindOf(receiverAssembly))
-            : OuterOf(type, compilation, assemblies) is { } outer ? ($"{type}, {outer.Assembly}", outer.Kind)
-            : ($"{type}, ?", (string?)null);
-        return new Resolution(target, WithArguments(kind, type, compilation, assemblies), typeName);
+        public static Receiver None => new(true, null);
+        public static Receiver Unknown => new(false, null);
+        public static Receiver Of(string assembly) => new(true, assembly);
+    }
+
+    /// <summary>
+    /// Resolves a CONSTANT type name — conservatively. 🚨 <b>Only a FULLY understood name may leave
+    /// the ratchet.</b> The name is parsed with a strict grammar (<see cref="TryParseTypeName"/>); a
+    /// name that does not parse, a part whose assembly the compile cannot classify, or a lookup in an
+    /// assembly the compile cannot know makes the whole target UNKNOWN (<c>TargetKind</c> null), which
+    /// counts as into core exactly like a <see cref="DependencyEdgeKinds.DynamicUnresolved"/> edge.
+    /// Reflection's name grammar and the shapes a lookup can take are open-ended; classifying them
+    /// completely would never converge, so the scanner is complete in the other direction — whatever
+    /// it does not fully resolve, it counts.
+    /// </summary>
+    private static Resolution ForTypeName(
+        string typeName, Receiver receiver, CSharpCompilation compilation, AssemblyLookup assemblies)
+    {
+        if (!TryParseTypeName(typeName, out var parsed, out var ownAssembly))
+        {
+            var (raw, rawAssembly) = SplitAssemblyQualifiedName(typeName);
+            return new Resolution($"{raw}, {rawAssembly ?? receiver.Assembly ?? "?"}", null, typeName);
+        }
+        string? outerAssembly;
+        string? outerKind;
+        if (ownAssembly is not null)
+            (outerAssembly, outerKind) = (ownAssembly, assemblies.KindOf(ownAssembly));
+        else if (!receiver.Known)
+            (outerAssembly, outerKind) = (null, null);
+        else if (receiver.Assembly is { } known)
+            (outerAssembly, outerKind) = (known, assemblies.KindOf(known));
+        else if (Resolved(parsed!.Name, compilation, assemblies) is { } outer)
+            (outerAssembly, outerKind) = (outer.Assembly, outer.Kind);
+        else
+            (outerAssembly, outerKind) = (null, null);
+        var typePart = SplitAssemblyQualifiedName(typeName).Type;
+        return new Resolution($"{typePart}, {outerAssembly ?? "?"}",
+            Combine(outerKind, parsed!, compilation, assemblies), typeName);
     }
 
     /// <summary>The assembly and kind the compilation resolves an UNQUALIFIED metadata name to, or
     /// null when it resolves none.</summary>
-    private static (string Assembly, string? Kind)? OuterOf(string type, CSharpCompilation compilation, AssemblyLookup assemblies)
+    private static (string Assembly, string? Kind)? Resolved(string metadataName, CSharpCompilation compilation, AssemblyLookup assemblies)
     {
-        // A closed generic's metadata name is its definition's (`List`1`), the arguments ride in brackets.
-        var definition = type.IndexOf('[') is var bracket and > 0 ? type[..bracket] : type;
-        if (compilation.GetTypeByMetadataName(definition) is not { } symbol)
+        if (compilation.GetTypeByMetadataName(metadataName) is not { } symbol)
             return null;
         if (SymbolEqualityComparer.Default.Equals(symbol.ContainingAssembly, compilation.Assembly))
             return (compilation.AssemblyName ?? "?", DependencyEdgeKinds.NodeType);
@@ -358,69 +397,187 @@ public static class DynamicBindingExtraction
     }
 
     /// <summary>
-    /// The target kind of a type name INCLUDING its generic arguments: a closed generic needs every
-    /// argument's assembly to resolve, so <c>List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]],
-    /// System.Private.CoreLib</c> reaches into the platform although its outer type is the
-    /// framework's. Unknown anywhere ⇒ unknown (null — "may be the platform"); otherwise the
-    /// platform anywhere ⇒ <see cref="DependencyEdgeKinds.Platform"/>; otherwise the outer kind.
+    /// The target kind of a parsed name INCLUDING every generic argument at every depth: a closed
+    /// generic needs each argument's assembly to resolve, so
+    /// <c>List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib</c>
+    /// reaches into the platform although its outer type is the framework's. Unknown anywhere ⇒
+    /// unknown (null); otherwise the platform anywhere ⇒ <see cref="DependencyEdgeKinds.Platform"/>;
+    /// otherwise the outer kind.
     /// </summary>
-    private static string? WithArguments(
-        string? outerKind, string type, CSharpCompilation compilation, AssemblyLookup assemblies)
+    private static string? Combine(
+        string? outerKind, ParsedTypeName parsed, CSharpCompilation compilation, AssemblyLookup assemblies)
     {
         var kinds = new List<string?> { outerKind };
-        foreach (var argument in GenericArguments(type))
+        foreach (var argument in parsed.Arguments)
         {
-            var (argumentType, argumentAssembly) = SplitAssemblyQualifiedName(argument);
-            var argumentKind = argumentAssembly is not null
-                ? assemblies.KindOf(argumentAssembly)
-                : OuterOf(argumentType, compilation, assemblies)?.Kind;
-            kinds.Add(WithArguments(argumentKind, argumentType, compilation, assemblies));
+            var argumentKind = argument.Assembly is { } qualified
+                ? assemblies.KindOf(qualified)
+                // An unqualified argument resolves like Type.GetType would: the calling assembly or CoreLib.
+                : Resolved(argument.Type.Name, compilation, assemblies)?.Kind;
+            kinds.Add(Combine(argumentKind, argument.Type, compilation, assemblies));
         }
         return kinds.Any(k => k is null) ? null
             : kinds.Contains(DependencyEdgeKinds.Platform) ? DependencyEdgeKinds.Platform
             : outerKind;
     }
 
-    /// <summary>The bracketed generic arguments of a type name (<c>G`2[[A, X],[B, Y]]</c> ⇒
-    /// <c>A, X</c> and <c>B, Y</c>), each as written — possibly assembly-qualified, possibly generic.</summary>
-    /// <param name="type">The type part of a type name.</param>
-    public static IEnumerable<string> GenericArguments(string type)
+    /// <summary>A parsed type name: its metadata name (with arity, without arguments or array
+    /// suffixes) and its generic arguments.</summary>
+    /// <param name="Name">The metadata name of the type definition.</param>
+    /// <param name="Arguments">The generic arguments, in order.</param>
+    public sealed record ParsedTypeName(string Name, ImmutableArray<ParsedTypeArgument> Arguments);
+
+    /// <summary>One generic argument: its type, and the assembly simple name when it is
+    /// assembly-qualified (<c>[T, Asm]</c>), null when it is bare (<c>T</c>).</summary>
+    /// <param name="Type">The argument's type.</param>
+    /// <param name="Assembly">The assembly's simple name, or null.</param>
+    public sealed record ParsedTypeArgument(ParsedTypeName Type, string? Assembly);
+
+    /// <summary>
+    /// Parses a reflection type name with a STRICT grammar — false for anything it does not fully
+    /// understand, which the caller turns into "unknown", never into a classification:
+    /// <code>
+    /// AQN      := TypeName [ ',' AssemblyDisplayName ]
+    /// TypeName := Name [ '[' Arg { ',' Arg } ']' ] { '[' { ',' | '*' } ']' | '&amp;' | '*' }
+    /// Arg      := '[' TypeName [ ',' AssemblyDisplayName ] ']'  |  TypeName
+    /// </code>
+    /// Mixed qualified and bare arguments (<c>Dictionary`2[System.String,[T, Asm]]</c>) parse; an
+    /// escape character, an unbalanced bracket or a stray token does not.
+    /// </summary>
+    /// <param name="name">The name as written.</param>
+    /// <param name="parsed">The parsed type name.</param>
+    /// <param name="assembly">The outer assembly's simple name, or null when unqualified.</param>
+    public static bool TryParseTypeName(string name, out ParsedTypeName? parsed, out string? assembly)
     {
-        ArgumentNullException.ThrowIfNull(type);
-        var open = type.IndexOf("[[", StringComparison.Ordinal);
-        if (open < 0)
-            yield break;
-        var depth = 0;
-        var start = -1;
-        for (var i = open + 1; i < type.Length; i++)
-        {
-            switch (type[i])
-            {
-                case '[':
-                    if (depth == 0)
-                        start = i + 1;
-                    depth++;
-                    break;
-                case ']':
-                    depth--;
-                    if (depth < 0)
-                        yield break;
-                    if (depth == 0 && start >= 0)
-                    {
-                        yield return type[start..i];
-                        start = -1;
-                    }
-                    break;
-            }
-        }
+        ArgumentNullException.ThrowIfNull(name);
+        parsed = null;
+        assembly = null;
+        if (name.Contains('\\'))
+            return false;
+        var i = 0;
+        if (!TryParseType(name, ref i, out parsed))
+            return false;
+        SkipSpaces(name, ref i);
+        if (i == name.Length)
+            return true;
+        if (name[i] != ',')
+            return false;
+        var display = name[(i + 1)..];
+        if (display.IndexOfAny(['[', ']']) >= 0)
+            return false;
+        assembly = SimpleAssemblyName(display);
+        return assembly.Length > 0;
     }
 
-    /// <summary>The receiver of <c>typeof(T).Assembly.GetType(…)</c>: <c>T</c>'s assembly; null otherwise.</summary>
-    private static string? ReceiverAssembly(IOperation? instance) =>
-        Unwrap(instance) is IPropertyReferenceOperation { Property.Name: "Assembly" } property
-        && Unwrap(property.Instance) is ITypeOfOperation typeOf
-            ? typeOf.TypeOperand.ContainingAssembly?.Identity.Name
-            : null;
+    private static bool TryParseType(string s, ref int i, out ParsedTypeName? parsed)
+    {
+        parsed = null;
+        SkipSpaces(s, ref i);
+        var start = i;
+        while (i < s.Length && s[i] is not ('[' or ']' or ',' or '&' or '*'))
+            i++;
+        var name = s[start..i].Trim();
+        if (name.Length == 0)
+            return false;
+        var arguments = ImmutableArray.CreateBuilder<ParsedTypeArgument>();
+        // A generic argument list: '[' followed by something that is not an array rank.
+        if (i < s.Length && s[i] == '[' && i + 1 < s.Length && s[i + 1] is not (']' or ',' or '*'))
+        {
+            i++;
+            while (true)
+            {
+                SkipSpaces(s, ref i);
+                if (i >= s.Length)
+                    return false;
+                if (s[i] == '[')
+                {
+                    i++;
+                    if (!TryParseType(s, ref i, out var qualified))
+                        return false;
+                    SkipSpaces(s, ref i);
+                    string? argumentAssembly = null;
+                    if (i < s.Length && s[i] == ',')
+                    {
+                        var close = s.IndexOf(']', i);
+                        var open = s.IndexOf('[', i);
+                        if (close < 0 || (open >= 0 && open < close))
+                            return false;
+                        argumentAssembly = SimpleAssemblyName(s[(i + 1)..close]);
+                        if (argumentAssembly.Length == 0)
+                            return false;
+                        i = close;
+                    }
+                    if (i >= s.Length || s[i] != ']')
+                        return false;
+                    i++;
+                    arguments.Add(new ParsedTypeArgument(qualified!, argumentAssembly));
+                }
+                else
+                {
+                    if (!TryParseType(s, ref i, out var bare))
+                        return false;
+                    arguments.Add(new ParsedTypeArgument(bare!, null));
+                }
+                SkipSpaces(s, ref i);
+                if (i >= s.Length)
+                    return false;
+                if (s[i] == ',')
+                {
+                    i++;
+                    continue;
+                }
+                if (s[i] == ']')
+                {
+                    i++;
+                    break;
+                }
+                return false;
+            }
+        }
+        // Array ranks, by-ref and pointer suffixes.
+        while (i < s.Length)
+        {
+            if (s[i] is '&' or '*')
+            {
+                i++;
+                continue;
+            }
+            if (s[i] != '[')
+                break;
+            var j = i + 1;
+            while (j < s.Length && s[j] is ',' or '*' or ' ')
+                j++;
+            if (j >= s.Length || s[j] != ']')
+                return false;
+            i = j + 1;
+        }
+        parsed = new ParsedTypeName(name, arguments.ToImmutable());
+        return true;
+    }
+
+    private static void SkipSpaces(string s, ref int i)
+    {
+        while (i < s.Length && s[i] == ' ')
+            i++;
+    }
+
+    /// <summary>The assembly a lookup on <paramref name="instance"/> searches. Known only for
+    /// <c>typeof(X).Assembly</c> where <c>X</c> is a STATICALLY known type; <c>typeof(T)</c> of a type
+    /// parameter (its runtime argument decides), any other <c>Assembly</c> value, and anything this
+    /// does not recognise are UNKNOWN — never a fall-back to the compilation's own lookup.</summary>
+    private static Receiver ReceiverOf(IOperation? instance)
+    {
+        if (Unwrap(instance) is not IPropertyReferenceOperation { Property.Name: "Assembly" } property
+            || Unwrap(property.Instance) is not ITypeOfOperation typeOf)
+            return Receiver.Unknown;
+        var operand = typeOf.TypeOperand;
+        while (operand is IArrayTypeSymbol or IPointerTypeSymbol)
+            operand = operand is IArrayTypeSymbol array ? array.ElementType : ((IPointerTypeSymbol)operand).PointedAtType;
+        return operand is INamedTypeSymbol { TypeKind: not TypeKind.Error } named
+               && named.ContainingAssembly is { } containing
+            ? Receiver.Of(containing.Identity.Name)
+            : Receiver.Unknown;
+    }
 
     private static IOperation? Unwrap(IOperation? operation)
     {
@@ -463,8 +620,6 @@ public static class DynamicBindingExtraction
         }
         return (name.Trim(), null);
     }
-
-    private static string TypePart(string type) => SplitAssemblyQualifiedName(type).Type;
 
     /// <summary>The simple name of an assembly display name (<c>Asm, Version=1.0</c> ⇒ <c>Asm</c>).</summary>
     private static string SimpleAssemblyName(string displayName)
@@ -514,10 +669,12 @@ public static class DynamicBindingExtraction
             return builder.ToImmutable();
         }
 
+        // Framework only for an assembly the compile REFERENCES, or one of the runtime's core names
+        // a reference set (built from reference assemblies) never carries. Anything else the compile
+        // does not reference is unknown — a name that merely looks like the framework is not proof.
         public string? KindOf(string assemblyName) =>
             kinds.TryGetValue(assemblyName, out var kind) ? kind
-            : DependencyReferenceClasses.IsPlatformName(assemblyName) ? null
-            : assemblyName is "mscorlib" or "netstandard" || assemblyName.StartsWith("System.", StringComparison.Ordinal)
+            : assemblyName is "mscorlib" or "netstandard" or "System.Private.CoreLib" or "System.Runtime"
                 ? DependencyEdgeKinds.Framework
                 : null;
     }

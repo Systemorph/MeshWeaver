@@ -5,6 +5,7 @@ using System.Linq;
 using MeshWeaver.Compiler;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -49,7 +50,8 @@ public class PlatformPackageAndDynamicEdgesTest
 
     /// <summary>Compiles <see cref="B"/> through the build-process bake — the same extraction the
     /// runtime compile runs — and returns its edge set.</summary>
-    private static DependencyEdgeSet CompileB(System.Threading.CancellationToken ct, MeshNode[] nodes, IReadOnlyList<string>? sources = null)
+    private static DependencyEdgeSet CompileB(System.Threading.CancellationToken ct, MeshNode[] nodes, IReadOnlyList<string>? sources = null,
+        Func<IReadOnlyList<NuGetPackageReference>, System.Threading.CancellationToken, IReadOnlyList<string>>? resolveNuGet = null)
     {
         var output = Path.Combine(Path.GetTempPath(), "mw-depedges-dyn-" + Guid.NewGuid().ToString("N"));
         try
@@ -62,6 +64,7 @@ public class PlatformPackageAndDynamicEdgesTest
                 toolchainId: NodeTypeCompilationHelpers.ProcessToolchainId,
                 outputDirectory: output,
                 moduleAssemblyPaths: null,
+                resolveNuGet: resolveNuGet,
                 ct: ct).DependencyEdges!;
         }
         finally
@@ -354,12 +357,194 @@ public class PlatformPackageAndDynamicEdgesTest
         }
     }
 
+    /// <summary>
+    /// A NODE-SUPPLIED source generator (one the node <c>#r</c>'d) runs code the node chose, so the
+    /// reflection lookup it EMITS is the node's dynamic edge — the scan reads authored + node-generated
+    /// trees. Negative control: the same authored code without the generator has no dynamic edge, so
+    /// the edge comes from the generated tree.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AReflectionLookupANodeSuppliedGeneratorEmits_IsADynamicEdge()
+    {
+        var generator = BuildLookupGenerator();
+        try
+        {
+            var withGenerator = CompileB(TestContext.Current.CancellationToken, [Code(B, "Plain", """
+                #r "nuget:Probe.LookupGenerator, 1.0.0"
+                /// <summary>No reflection of its own.</summary>
+                public static class Plain { }
+                """)], resolveNuGet: (_, _) => [generator]);
+            var edge = withGenerator.Edges.Should().ContainSingle(e => e.Kind == DependencyEdgeKinds.Dynamic).Which;
+            edge.Target.Should().Be("MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph");
+            edge.TargetKind.Should().Be(DependencyEdgeKinds.Platform);
+
+            var without = CompileB(TestContext.Current.CancellationToken, [Code(B, "Plain", """
+                /// <summary>No reflection of its own.</summary>
+                public static class Plain { }
+                """)]);
+            without.Edges.Should().NotContain(e => e.EvidenceClass == DependencyEvidenceClasses.Dynamic,
+                "negative control: the authored code alone binds nothing by name");
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(generator)!, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>A generator assembly built here, on disk, the way a node's <c>#r "nuget:"</c>
+    /// resolve hands one over; it emits a reflection lookup into the platform.</summary>
+    private static string BuildLookupGenerator()
+    {
+        const string source = """
+            using Microsoft.CodeAnalysis;
+            [Generator]
+            public sealed class LookupGenerator : ISourceGenerator
+            {
+                public void Initialize(GeneratorInitializationContext context) { }
+                public void Execute(GeneratorExecutionContext context) =>
+                    context.AddSource("Lookup.g.cs",
+                        "public static class Lookup { public static System.Type? Home() => System.Type.GetType(\"MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph\"); }");
+            }
+            """;
+        var name = $"Probe.LookupGenerator_{Guid.NewGuid():N}";
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Append(typeof(ISourceGenerator).Assembly.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p));
+        var compilation = CSharpCompilation.Create(name, [CSharpSyntaxTree.ParseText(source)], references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var directory = Directory.CreateTempSubdirectory("lookup-gen-").FullName;
+        var path = Path.Combine(directory, name + ".dll");
+        var emitted = compilation.Emit(path, cancellationToken: TestContext.Current.CancellationToken);
+        emitted.Success.Should().BeTrue(string.Join("; ", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return path;
+    }
+
+    /// <summary>The strict grammar: what it accepts it fully describes; what it does not
+    /// understand is REFUSED (the caller then counts the target as unknown — into core).</summary>
     [Theory]
-    [InlineData("G`2[[A, X],[B`1[[C, Y]], Z]]", "A, X|B`1[[C, Y]], Z")]
-    [InlineData("Ns.Plain", "")]
-    [InlineData("Ns.Array[]", "")]
-    public void GenericArguments_AreTheTopLevelBracketGroups(string type, string expected) =>
-        string.Join("|", DynamicBindingExtraction.GenericArguments(type)).Should().Be(expected);
+    [InlineData("G`2[[A, X],[B`1[[C, Y]], Z]], Out", true, "G`2<A@X,B`1<C@Y>@Z>@Out")]
+    [InlineData("System.Collections.Generic.Dictionary`2[System.String,[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib",
+        true, "System.Collections.Generic.Dictionary`2<System.String,MeshWeaver.Mesh.MeshNode@MeshWeaver.Mesh.Contract>@System.Private.CoreLib")]
+    [InlineData("Ns.Plain", true, "Ns.Plain")]
+    [InlineData("Ns.Array[], Asm, Version=1.0.0.0", true, "Ns.Array@Asm")]
+    [InlineData("Ns.Outer+Inner[,]&", true, "Ns.Outer+Inner")]
+    [InlineData("G`1[[A, X]", false, "")]
+    [InlineData("G`1[A,]", false, "")]
+    [InlineData("Ns.Esc\\,aped", false, "")]
+    [InlineData("Ns.T[x", false, "")]
+    public void TypeNames_ParseStrictly_OrNotAtAll(string name, bool parses, string expected)
+    {
+        static string Render(DynamicBindingExtraction.ParsedTypeName t) =>
+            t.Arguments.IsEmpty
+                ? t.Name
+                : $"{t.Name}<{string.Join(",", t.Arguments.Select(a => Render(a.Type) + (a.Assembly is null ? "" : "@" + a.Assembly)))}>";
+        DynamicBindingExtraction.TryParseTypeName(name, out var parsed, out var assembly).Should().Be(parses);
+        if (parses)
+            (Render(parsed!) + (assembly is null ? "" : "@" + assembly)).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// A MIXED-qualified generic (a bare first argument, a qualified second) still needs the platform
+    /// argument's assembly. Negative control: the same shape over framework arguments stays Framework.
+    /// A name the strict grammar refuses is unknown, never a guess.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AMixedQualifiedGeneric_AndAnUnparsableName_AreJudgedConservatively()
+    {
+        var set = CompileB(TestContext.Current.CancellationToken, [Code(B, "Mixed", """
+            /// <summary>Mixed generics by name.</summary>
+            public static class Mixed
+            {
+                /// <summary>Into the platform.</summary>
+                public static System.Type? Core() => System.Type.GetType(
+                    "System.Collections.Generic.Dictionary`2[System.String,[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib");
+                /// <summary>Framework only.</summary>
+                public static System.Type? Bcl() => System.Type.GetType(
+                    "System.Collections.Generic.Dictionary`2[System.String,[System.Int32, System.Private.CoreLib]], System.Private.CoreLib");
+                /// <summary>Unbalanced.</summary>
+                public static System.Type? Broken() => System.Type.GetType("System.Collections.Generic.List`1[[System.Int32, System.Private.CoreLib], System.Private.CoreLib");
+            }
+            """)]);
+
+        var kinds = set.Edges.Where(e => e.Kind == DependencyEdgeKinds.Dynamic).ToDictionary(e => e.Target, e => e.TargetKind);
+        kinds.Single(k => k.Key.Contains("MeshNode", StringComparison.Ordinal)).Value.Should().Be(DependencyEdgeKinds.Platform);
+        kinds.Single(k => k.Key.Contains("System.Int32, System.Private.CoreLib]]", StringComparison.Ordinal)).Value
+            .Should().Be(DependencyEdgeKinds.Framework, "negative control: nothing in it is the platform");
+        kinds.Single(k => k.Key.Contains("List`1", StringComparison.Ordinal)).Value
+            .Should().BeNull("a name the strict grammar refuses is unknown, which counts as into core");
+    }
+
+    /// <summary>
+    /// <c>typeof(T).Assembly</c> of a TYPE PARAMETER names whatever assembly the runtime argument
+    /// comes from — unknown at compile time, never the parameter's declaring assembly and never a
+    /// fall-back to the compilation's own lookup. Negative control: <c>typeof(string).Assembly</c> is
+    /// statically the framework's.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void ALookupInTypeofAGenericParameter_IsUnknown_NotTheDeclaringAssembly()
+    {
+        var set = CompileB(TestContext.Current.CancellationToken, [Code(B, "Receivers", """
+            /// <summary>Lookups in an assembly chosen by a receiver.</summary>
+            public static class Receivers
+            {
+                /// <summary>In T's assembly — the caller decides.</summary>
+                public static System.Type? Of<T>() => typeof(T).Assembly.GetType("MeshWeaver.Graph.Apps.HomeAppSource");
+                /// <summary>In the framework's.</summary>
+                public static System.Type? Bcl() => typeof(string).Assembly.GetType("System.Text.StringBuilder");
+                /// <summary>Any Assembly value.</summary>
+                public static System.Type? Any(System.Reflection.Assembly assembly) => assembly.GetType("Receivers");
+            }
+            """)]);
+
+        var kinds = set.Edges.Where(e => e.Kind == DependencyEdgeKinds.Dynamic).ToDictionary(e => e.Target, e => e.TargetKind);
+        kinds["MeshWeaver.Graph.Apps.HomeAppSource, ?"].Should().BeNull("T's runtime argument decides the assembly");
+        kinds["Receivers, ?"].Should().BeNull(
+            "an arbitrary Assembly is unknown — never resolved against the compiling type's own types");
+        // string's assembly is whichever the reference set carries (a reference or an implementation
+        // assembly) — the point is that it is KNOWN, and the framework's.
+        kinds.Single(k => k.Key.StartsWith("System.Text.StringBuilder, ", StringComparison.Ordinal)).Value
+            .Should().Be(DependencyEdgeKinds.Framework, "negative control: typeof(string) is statically known");
+    }
+
+    /// <summary>
+    /// A type-registry lookup is matched by the interface's NAME and POSITION, so a registry that
+    /// renames the parameter (<c>GetType(string typeName)</c>) stays on the ratchet. Negative control:
+    /// the same signature on a type that is not a registry is no edge.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void ARegistryThatRenamesItsParameter_IsStillMatched()
+    {
+        var set = CompileB(TestContext.Current.CancellationToken, [Code(B, "Registries", """
+            /// <summary>A registry surface with a renamed parameter.</summary>
+            public interface IRenamedRegistry : MeshWeaver.Domain.ITypeRegistry
+            {
+                /// <summary>By another name.</summary>
+                new System.Type? GetType(string typeName);
+            }
+            /// <summary>Not a registry.</summary>
+            public interface INotARegistry
+            {
+                /// <summary>Same signature, different surface.</summary>
+                System.Type? GetType(string typeName);
+            }
+            /// <summary>Calls both.</summary>
+            public static class Registries
+            {
+                /// <summary>Through the registry.</summary>
+                public static System.Type? Registered(IRenamedRegistry r) => r.GetType("Story");
+                /// <summary>Through something else.</summary>
+                public static System.Type? Other(INotARegistry r) => r.GetType("Other");
+            }
+            """)]);
+
+        var registry = set.Edges.Should().ContainSingle(e => e.EvidenceClass == DependencyEvidenceClasses.Dynamic).Which;
+        registry.Target.Should().Be("Story, ?");
+        registry.TargetKind.Should().BeNull("a registry name resolves to whatever some hub registered");
+    }
 
     [Theory]
     [InlineData("MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph", "MeshWeaver.Graph.Apps.HomeAppSource", "MeshWeaver.Graph")]

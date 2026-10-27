@@ -251,6 +251,22 @@ group handed along (`names.Select(Type.GetType)`) is unresolved.
   `List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib` is
   `Platform`, not `Framework`; an argument whose assembly the compile cannot classify makes the target
   unknown.
+- **Conservative by construction.** Reflection's type-name grammar and the shapes a lookup can take
+  are open-ended, so classifying every one exactly would never converge. The scanner is complete in
+  the other direction: a lookup leaves the ratchet ONLY when it is fully resolved. The name is
+  parsed with a strict grammar (`DynamicBindingExtraction.TryParseTypeName` — mixed qualified and
+  bare generic arguments, array/by-ref/pointer suffixes); a name it refuses, any part whose assembly
+  the compile does not reference (only `mscorlib`, `netstandard`, `System.Private.CoreLib` and
+  `System.Runtime` are known without a reference), and a lookup in an assembly the compile cannot
+  know (any `Assembly` value, `typeof(T).Assembly` of a type parameter) make the target UNKNOWN —
+  `TargetKind` null, counted into core exactly like `DynamicUnresolved`. A new shape the scanner
+  does not understand therefore costs a baseline line, never a silent pass.
+- **Matched by position where names can vary.** `ITypeRegistry.GetType`/`TryGetType` are matched by
+  name and their leading `string` parameter, never by the parameter's name, so an implementation
+  that renames it stays on the ratchet.
+- **What is scanned** is the source's own code AND the trees a NODE-SUPPLIED source generator (one
+  the node `#r`'d) emitted — the author's code, as the impersonation scan already treats it; the
+  platform's built-in generators' output is left out.
 - **Anything else** is `DynamicUnresolved`, one edge per API (`?System.Type.GetType`), the call sites
   as evidence. Unknown is recorded as unknown — never dropped.
 - **Cost**: a syntactic prefilter on the invoked name means only candidate invocations are ever

@@ -2007,6 +2007,13 @@ jobs:
               mkdir -p "$NARROW/$(dirname "$WARNING_BASELINE_FILE")"
               cp "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" "$NARROW/$WARNING_BASELINE_FILE"
             fi
+            # The dynamic-edge baseline travels for the same reason, at the same relative path (a
+            # narrowed run whose baseline is missing would be refused, exit 2). Not narrowed in
+            # content either: an entry for a type this run did not bake is unverifiable, never stale.
+            if [ -n "${DYNAMIC_BASELINE_FILE:-}" ] && [ -f "$GITHUB_WORKSPACE/$DYNAMIC_BASELINE_FILE" ]; then
+              mkdir -p "$NARROW/$(dirname "$DYNAMIC_BASELINE_FILE")"
+              cp "$GITHUB_WORKSPACE/$DYNAMIC_BASELINE_FILE" "$NARROW/$DYNAMIC_BASELINE_FILE"
+            fi
             REPO_MOUNT="$NARROW"
             echo "narrowed bake: $BAKE_MODULES"
           else

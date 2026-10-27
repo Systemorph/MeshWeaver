@@ -2426,7 +2426,9 @@ internal class MeshNodeCompilationService(
 
         logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
         return new CompileEmit(actualPath, generatedInputDigest, warnings,
-            ExtractDependencyEdges(compilation, authored.SyntaxTrees, node.Path, references, moduleLocations,
+            // Authored + NODE-SUPPLIED generator output (the author's code, as the impersonation scan
+            // above already treats it); the platform's built-in generators' output is left out.
+            ExtractDependencyEdges(compilation, authored.SyntaxTrees.Concat(nodeGeneratedTrees), node.Path, references, moduleLocations,
                 nugetAssemblyPaths, emittedImage, dependencyInputs, ct));
     }
 

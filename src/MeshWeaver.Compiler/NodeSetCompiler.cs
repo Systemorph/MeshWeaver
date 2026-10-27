@@ -348,7 +348,10 @@ public static class NodeSetCompiler
         var nodeName = CodeConventions.SanitizeNodeName(inputs.NodePath);
         var authored = EmitPipeline.CreateEmitCompilation(
             inputs.GeneratedSource, inputs.AssemblyName, allReferences, parsePath: "", ct);
-        var compilation = GeneratorPipeline.RunSourceGenerators(authored, generatorPaths, logger, ct);
+        // The NODE-SUPPLIED generators' trees are the author's code too: the dependency scan reads
+        // them (a generator the node #r'd can emit a reflection lookup just as its source can).
+        var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
+            authored, generatorPaths, logger, ct, out var nodeGeneratedTrees);
 
         var artifact = EmitPipeline.EmitCompilationToDirectory(
             compilation, nodeName, inputs.NodePath, outputDirectory, ct);
@@ -373,7 +376,7 @@ public static class NodeSetCompiler
             // None named ⇒ no module edges, never a guess. The packages are the files the
             // `#r "nuget:"` resolution returned (generatorPaths), told apart the same way.
             DependencyEdges = DependencyEdgeExtraction.Extract(
-                    compilation, authored.SyntaxTrees, inputs.NodePath, inputs.SourceUnits, inputs.ResolvedIncludes,
+                    compilation, authored.SyntaxTrees.Concat(nodeGeneratedTrees), inputs.NodePath, inputs.SourceUnits, inputs.ResolvedIncludes,
                     DependencyReferenceClasses.Of(allReferences, moduleAssemblyPaths ?? [], generatorPaths),
                     () => File.OpenRead(artifact.DllPath),
                     ct)
