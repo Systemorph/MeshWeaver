@@ -90,6 +90,16 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
   can restart the stage (a lost host, a re-queue), and the restart is printed — and at
   `runTerminal` it exits with the stage's FINAL `state` (`succeeded` → 0, anything else, `not-run`
   included → 1).
+- **progress is printed even when the log is quiet**: while the stage is pending or running, the
+  log page's one-line `heartbeat` — the stage, its elapsed time, units/tests/errors, what is left of
+  it, and the run's done/total, percent and estimate (the operations instance's run board) — is
+  printed at most every 30 s (`HEARTBEAT_SECONDS`), marked `⏱` so it is never a command. An
+  instance that serves no heartbeat gets none printed; nothing is computed on the runner.
+- **the step summary carries the run's stage board** — the page's `board`, the same markdown as the
+  `build` Check Run's summary — and a link to the run's live page on the operations instance
+  (`<origin>/<runPath>`, linked only when `runPath` is `Hosting/Builds/<repo>/<id>` and the API is
+  https), on a pass and on a red alike. The admission (`build-executor.py`) links the same page in
+  its own summary the moment the run is queued.
 - **only `::error`, `::warning` and `::notice` pass through** as workflow commands (annotations on
   the Files tab). Every other `::` line is defused with a leading space: a build must not be able to
   steer the runner that prints its log (`::add-mask::`, `::stop-commands::`, …).

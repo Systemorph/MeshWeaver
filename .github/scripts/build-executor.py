@@ -92,6 +92,17 @@ class Decision:
     api_url: str
     why: str
     lines: list[str] = field(default_factory=list)   # workflow-command lines to print
+    page_url: str = ""   # the run's live page on the operations instance (host only)
+
+
+def run_page_url(api: str, repo_name: str, sha: str) -> str:
+    """The queued run's live page: the API's origin + `Hosting/Builds/<repo>/<sha>` (a latest run's node id
+    is its sha — the only channel a build-request queues). '' when the API is not a safe URL or the
+    names are not path-shaped."""
+    if not safe_url(api) or not re.fullmatch(r"[A-Za-z0-9._-]+", repo_name or "") or not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+        return ""
+    p = urllib.parse.urlparse(api)
+    return f"{p.scheme}://{p.netloc}/Hosting/Builds/{repo_name}/{sha}"
 
 
 def safe_url(raw: str) -> str:
@@ -239,8 +250,10 @@ def decide(i: Inputs, get: Get, post: Post) -> Decision:
         verdict = None
     if verdict != "verified":
         return actions(f"the inbox stored the build-request but did not verify its signature (signature: {verdict!r})")
+    page = run_page_url(api, repo_name, i.sha)
     return Decision(HOST, api, f"the instance runs {repo_name}'s stages ({', '.join(stages)}) on build-{i.channel}; the run is queued", [
-        f"::notice title=Heavy legs on a build host::{repo_name}@{i.sha[:12]} is queued on build-{i.channel} — every heavy leg is followed from the host ({', '.join(stages)})"])
+        f"::notice title=Heavy legs on a build host::{repo_name}@{i.sha[:12]} is queued on build-{i.channel} — every heavy leg is followed from the host ({', '.join(stages)})"
+        + (f"; live progress: {page}" if page else "")], page)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -306,6 +319,8 @@ def emit(d: Decision, env: dict) -> None:
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(f"- 🏗️ Heavy legs: **{d.executor}** — {d.why.replace(chr(10), ' ')}\n")
+            if d.executor == HOST and d.page_url:
+                f.write(f"- 📡 Live progress of the run (stage board, what is left, log tail): {d.page_url}\n")
 
 
 def main(argv: list[str]) -> int:
@@ -496,9 +511,17 @@ def self_test() -> int:
         pass
     # 6. outputs and summary
     out, summ = os.path.join(tmp, "out"), os.path.join(tmp, "summary")
-    emit(Decision(HOST, "https://control.example.com/api/builds", "queued", []), {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})
+    emit(Decision(HOST, "https://control.example.com/api/builds", "queued", [], run_page_url("https://control.example.com/api/builds", "MeshWeaver.Plugins", "a" * 40)),
+         {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})
     check("emit/outputs", open(out).read() == "executor=host\napi-url=https://control.example.com/api/builds\n", open(out).read())
     check("emit/summary says which and why", "**host** — queued" in open(summ).read())
+    check("emit/summary links the run's live page", "https://control.example.com/Hosting/Builds/MeshWeaver.Plugins/" + "a" * 40 in open(summ).read(), open(summ).read())
+    check("page/no link off an unsafe API or a non-sha", run_page_url("http://evil.example/api/builds", "R", "a" * 40) == ""
+          and run_page_url("https://control.example.com/api/builds", "R", "abc") == ""
+          and run_page_url("https://control.example.com/api/builds", "../x", "a" * 40) == "", "linked")
+    summ2 = os.path.join(tmp, "summary2")
+    emit(Decision(ACTIONS, "", "no stages", []), {"GITHUB_STEP_SUMMARY": summ2})
+    check("emit/an actions run links no page", "Live progress" not in open(summ2).read(), open(summ2).read())
     for f in failures:
         print(f"SELF-TEST FAILED: {f}")
     if failures:
