@@ -65,7 +65,7 @@ class Red(Exception):
     """A refusal with its reason."""
 
 
-def receipts_of(body: object, stage: str = "") -> list[dict]:
+def receipts_of(body: object, stage: str = "", unit_dir: str = "") -> list[dict]:
     rows = body.get("artifacts") if isinstance(body, dict) else body
     if not isinstance(rows, list):
         raise Red("the artifacts answer carries no list of receipts")
@@ -74,6 +74,10 @@ def receipts_of(body: object, stage: str = "") -> list[dict]:
         if not isinstance(r, dict):
             raise Red(f"a receipt is not an object: {str(r)[:80]}")
         if stage and r.get("stage") not in (stage, None):
+            continue
+        # The host hands over EVERY file under $MW_BUILD_ARTIFACTS after each successful stage, so a
+        # later stage's receipts repeat an earlier stage's units; --unit-dir keeps one unit directory.
+        if unit_dir and not (isinstance(r.get("unit"), str) and r["unit"].startswith(unit_dir.strip("/") + "/")):
             continue
         unit, key, sha, size = r.get("unit"), r.get("key"), r.get("sha256"), r.get("bytes")
         if not isinstance(unit, str) or "/" not in unit or not isinstance(key, str) or not key \
@@ -128,6 +132,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--sha", default="")
     ap.add_argument("--channel", default="latest")
     ap.add_argument("--stage", default="")
+    ap.add_argument("--unit-dir", default="", help="keep only receipts whose unit lies under this directory")
     ap.add_argument("--audience", default="")
     ap.add_argument("--store", default="")
     ap.add_argument("--expect-store-id", default="")
@@ -166,7 +171,7 @@ def main(argv: list[str]) -> int:
                 cmd += ["--expect-store-id", a.expect_store_id]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             return r.returncode, (r.stdout or "") + (r.stderr or "")
-        names = fetch_all(receipts_of(body, a.stage), a.out, a.store, get)
+        names = fetch_all(receipts_of(body, a.stage, a.unit_dir), a.out, a.store, get)
     except Red as r:
         # Receipt-derived text (a stage named the files) never reaches the runner as a command.
         print(f"::error title=Host artifacts::{_inert(str(r))}", flush=True)
@@ -226,12 +231,17 @@ def self_test() -> int:
     check("output/an error message is one inert line", "\n" not in _inert("x\n::add-mask::y") and "::add-mask" not in _inert("x\n::add-mask::y"))
     check("receipts/a stage filter keeps that stage's receipts",
           len(receipts_of([receipt("A/x", "k", b"x"), dict(receipt("B/y", "k", b"y"), stage="gate")], "gate")) == 1)
+    mixed = [receipt("Store/S.zip", "k1", blobs["k1"]), dict(receipt("gate-log/gate.log", "k2", blobs["k2"]), stage="gate"),
+             dict(receipt("gate-logs/x.log", "k2", blobs["k2"]), stage="gate")]
+    kept = receipts_of(mixed, "", "gate-log")
+    check("receipts/a unit-dir filter keeps only that unit directory (not a prefix-sharing sibling)",
+          [r["unit"] for r in kept] == ["gate-log/gate.log"], kept)
     if failures:
         for f in failures:
             print(f"SELF-TEST FAILED: {f}")
         return 1
     print("build-artifacts-fetch self-test: all cases passed (staging side by side, receipt hash + size, no receipts, "
-          "a refused fetch, duplicate names, malformed receipts, the stage filter)")
+          "a refused fetch, duplicate names, malformed receipts, the stage and unit-dir filters)")
     return 0
 
 
