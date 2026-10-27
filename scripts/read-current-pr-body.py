@@ -32,6 +32,7 @@ import argparse
 import base64
 import binascii
 import datetime
+import http.client
 import json
 import os
 from pathlib import Path
@@ -137,7 +138,9 @@ def api_get(path, *, token, base_url=None, budget_seconds=DEFAULT_BUDGET_SECONDS
             if kind == "refused":
                 raise ApiRefused(f"HTTP {error.code} for GET {path}") from error
             reason = f"HTTP {error.code}" + (" rate limit" if kind == "rate-limited" else "")
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
+        # http.client.HTTPException covers IncompleteRead: a connection closed before the full
+        # Content-Length body arrived is transient, retried under the same budget, never a traceback.
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
             reason = f"transport failure: {type(error).__name__}"
         delay, reset_epoch = wait_for(attempt, headers, clock())
         if clock() + delay > deadline:

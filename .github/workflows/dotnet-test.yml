@@ -4047,45 +4047,34 @@ jobs:
           exit 1
         fi
         bad=0
+        # The shared reader (.github/scripts/github-api-get.py → scripts/read-current-pr-body.py)
+        # classifies every answer: a rate limit (403/429 with or WITHOUT reset headers, or "rate
+        # limit" in the body), a 5xx or a transport failure is exit 3 = NO VERDICT, never "the token
+        # cannot read issues" (Doc/Architecture/CiRestBudget). One budget for all three probes.
+        GITHUB_API_DEADLINE=$(( $(date +%s) + 120 ))
+        export GITHUB_API_DEADLINE
+        probe() { python3 .github/scripts/github-api-get.py "repos/${{ github.repository }}/labels/$1" > /dev/null; }
+        no_verdict() {
+          echo "::error::NO VERDICT — the label probe could not ask GitHub (see the line above). This is not a finding about the pull request; re-run after the reset."
+          exit 3
+        }
         for label in "sev:H" "sev:B"; do
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -D "$RUNNER_TEMP/label-headers" \
-            --connect-timeout 10 --max-time 30 \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/labels/$label") || code=000
-          # A rate-limited 403/429 is NO VERDICT, never "the token cannot read issues" (2026-10-27,
-          # Doc/Architecture/CiRestBudget): name the reset so the reader re-runs after it.
-          if [ "$code" = 403 ] || [ "$code" = 429 ]; then
-            reset=$(tr -d '\r' < "$RUNNER_TEMP/label-headers" | awk -F': ' 'tolower($1)=="x-ratelimit-remaining"{r=$2} tolower($1)=="x-ratelimit-reset"{t=$2} tolower($1)=="retry-after"{a=$2} END{if (r=="0" && t!="") print t; else if (a!="") print "retry-after " a "s"}')
-            if [ -n "$reset" ]; then
-              case "$reset" in retry*) until="$reset" ;; *) until=$(date -u -d "@$reset" +%Y-%m-%dT%H:%M:%SZ) ;; esac
-              echo "::error title=NO VERDICT — GitHub API::NO VERDICT — GitHub API rate-limited until $until; re-run after it. This is not a finding about the pull request."
-              bad=1; continue
-            fi
-          fi
-          case "$code" in
-            200) echo "  ok   label $label exists and is readable" ;;
-            404) echo "::error::label '$label' does not exist in ${{ github.repository }} — create it (gh label create '$label'). An UNKNOWN label folds every label query to green, so this gate would pass on every pull request while checking nothing."; bad=1 ;;
-            401|403) echo "::error::label '$label' -> HTTP $code: the token cannot read issues here. This job needs \`issues: read\` in its permissions block."; bad=1 ;;
-            000) echo "::error::label '$label' -> could not reach api.github.com."; bad=1 ;;
-            *)   echo "::error::label '$label' -> HTTP $code."; bad=1 ;;
+          rc=0; probe "$label" || rc=$?
+          case "$rc" in
+            0) echo "  ok   label $label exists and is readable" ;;
+            4) echo "::error::label '$label' does not exist in ${{ github.repository }} — create it (gh label create '$label'). An UNKNOWN label folds every label query to green, so this gate would pass on every pull request while checking nothing."; bad=1 ;;
+            3) no_verdict ;;
+            *) echo "::error::label '$label' -> refused (exit $rc, the line above names the HTTP status): the token cannot read issues here. This job needs \`issues: read\` in its permissions block."; bad=1 ;;
           esac
         done
         # 🚨 THE NEGATIVE CONTROL. Without it, an endpoint (or a proxy) answering 200 to everything
         # would satisfy the two probes above and the whole severity check would be unfalsifiable.
-        code=$(curl -sS -o /dev/null -w '%{http_code}' \
-          --connect-timeout 10 --max-time 30 \
-          -H "Authorization: Bearer $GH_TOKEN" \
-          -H "Accept: application/vnd.github+json" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/repos/${{ github.repository }}/labels/sev:DOESNOTEXIST") || code=000
-        if [ "$code" = "404" ]; then
-          echo "  ok   a label that does not exist answers 404 — the probe discriminates"
-        else
-          echo "::error::the negative control answered HTTP $code instead of 404. The label endpoint is not discriminating, so a 200 from it proves nothing and the severity check cannot be trusted."
-          bad=1
-        fi
+        rc=0; probe "sev:DOESNOTEXIST" || rc=$?
+        case "$rc" in
+          4) echo "  ok   a label that does not exist answers 404 — the probe discriminates" ;;
+          3) no_verdict ;;
+          *) echo "::error::the negative control answered (exit $rc) instead of 404. The label endpoint is not discriminating, so a 200 from it proves nothing and the severity check cannot be trusted."; bad=1 ;;
+        esac
         [ "$bad" = "0" ] || { echo "::error::Refusing to report on evidence this job does not have."; exit 1; }
 
     # The event body is frozen at run creation, even on reruns. Read the current body through REST
@@ -4602,7 +4591,9 @@ jobs:
     # each fails on its own line here. This line names the one cause. Same event predicate as the
     # job's own `if:`.
     - name: Fail if the pull-request body could not be read
-      if: github.event_name == 'pull_request' && needs.pr-body.result != 'success'
+      # always(): the 'Stage 2 held?' step above has already failed this job when pr-body failed
+      # (stage-gate needs it), and a bare `if:` carries an implicit success() that would skip this.
+      if: always() && github.event_name == 'pull_request' && needs.pr-body.result != 'success'
       run: |
         echo "::error::The 'Pull-request body (read once)' job concluded '${{ needs.pr-body.result }}' — see that job. A line there reading 'NO VERDICT — GitHub API rate-limited until …' is not a finding about this pull request: re-run after the reset. Rationale: Doc/Architecture/CiRestBudget."
         exit 1

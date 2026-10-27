@@ -3,6 +3,7 @@
 import base64
 import copy
 import email.message
+import http.client
 import importlib.util
 import io
 import json
@@ -92,6 +93,13 @@ def http_error(status, headers=None, body=""):
                                   io.BytesIO(body.encode("utf-8")))
 
 
+class Truncated(io.BytesIO):
+    """A response whose connection closed before the full Content-Length body arrived."""
+
+    def read(self, *args):
+        raise http.client.IncompleteRead(b'{"numb', 40)
+
+
 class FakeApi:
     """A scripted GitHub: each call pops the next answer (an HTTPError, an OSError or a dict)."""
 
@@ -106,6 +114,8 @@ class FakeApi:
         answer = self.answers.pop(0)
         if isinstance(answer, BaseException):
             raise answer
+        if isinstance(answer, Truncated):
+            return answer
         return io.BytesIO(json.dumps(answer).encode("utf-8"))
 
     def sleep(self, seconds):
@@ -163,6 +173,15 @@ class ApiBudgetTest(unittest.TestCase):
             always.get(budget=30)
         self.assertLessEqual(sum(always.slept), 30)
         self.assertIn("NO VERDICT — GitHub API unavailable (HTTP 503", caught.exception.sentence())
+
+    def test_truncated_response_is_transient_then_no_verdict_never_a_traceback(self):
+        api = FakeApi(Truncated(), {"number": 1})
+        self.assertEqual(api.get(), {"number": 1})
+        self.assertEqual(api.calls, 2)
+        always = FakeApi(*[Truncated() for _ in range(50)])
+        with self.assertRaises(reader.ApiUnavailable) as caught:
+            always.get(budget=30)
+        self.assertIn("transport failure: IncompleteRead", caught.exception.sentence())
 
     def test_deliberate_refusals_fail_at_once_without_retry(self):
         for status, body in ((404, '{"message":"Not Found"}'), (401, "{}"),
