@@ -2408,6 +2408,10 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-artifacts-fetch.py --self-test
 
+    - name: "A node repo's ratchet reads a host gate log only by verified receipt — none, empty, truncated or foreign is red (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/host-gate-log.py --self-test
+
     # Core's suites as build-host stages, from the set's mw-core-tests image
     # (Doc/Architecture/DeployTestSwitchLatest, P4). The stage list is GENERATED from CI_SHARD_TOTAL
     # above, so a shard count changed here without regenerating .github/build-stages.json reds;
