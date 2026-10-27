@@ -3246,6 +3246,12 @@ jobs:
     # rebuilt, and its self-test is one of the two proofs `SealedPublicationGenerations.md` leans on
     # for phase 2's reader half — measured 2026-09-13, nothing in .github/workflows/ ever ran it.
     # A proof a doc cites and no lane executes is a claim, not a control.
+    # The gate's prepared bake (Doc/Architecture/NodeRepoGateSharding → "The prepared bake"): equal
+    # inputs adopt an isolated copy, a stale bake refreshes by name, a damaged hand-off is refused.
+    - name: "Execute gate-bake-handoff.py against its own fixtures (stale refused, isolation holds)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/gate-bake-handoff.py --self-test
+
     - name: "Execute bake-scope.sh against its own fixtures"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/bake-scope.sh --self-test
