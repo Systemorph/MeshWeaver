@@ -17,6 +17,57 @@ public static class DependencyEdgeKinds
     /// <summary>The source's compilation USED an installed module assembly
     /// (<c>Compilation.GetUsedAssemblyReferences()</c>).</summary>
     public const string Module = "Module";
+
+    /// <summary>The source's compilation USED a MeshWeaver PLATFORM assembly — one of the host's
+    /// own <c>MeshWeaver.*</c> assemblies that is neither an installed module nor a package
+    /// (<c>Compilation.GetUsedAssemblyReferences()</c>). The target is the assembly's simple name.
+    /// This is the edge a core carve-out reads: which in-mesh code binds <c>MeshWeaver.Graph</c>.
+    /// Base-class-library and other third-party host assemblies are NOT recorded (see
+    /// <c>Doc/Architecture/DependencyGraph</c> → <i>Why the BCL is not an edge</i>).</summary>
+    public const string Platform = "Platform";
+
+    /// <summary>The source's compilation USED an assembly a <c>#r "nuget:…"</c> directive (or, for
+    /// a module workspace build, a package from the module-libraries shelf) supplied. The target is
+    /// the package id, read off the resolved file's package folder.</summary>
+    public const string Package = "Package";
+
+    /// <summary>A reflection call in the source's own code names its target with a CONSTANT
+    /// string (<c>Type.GetType("Ns.T, Asm")</c>, <c>Assembly.Load("Asm")</c>, a type-registry
+    /// lookup by name, …). The target is always an assembly-qualified pattern
+    /// <c>{type}, {assembly}</c> — <c>*</c> for a whole-assembly load, <c>?</c> for a part the
+    /// compile could not resolve — so it can never collide with a path or an assembly name.
+    /// <see cref="DependencyEdge.TargetKind"/> says what the resolved assembly is.</summary>
+    public const string Dynamic = "Dynamic";
+
+    /// <summary>A reflection call in the source's own code whose argument is NOT a constant: what
+    /// it binds is unknown at compile time. Recorded honestly as unknown — never dropped. The
+    /// target is <c>?{api}</c> (for example <c>?System.Type.GetType</c>), one edge per API, with
+    /// the call sites as evidence.</summary>
+    public const string DynamicUnresolved = "DynamicUnresolved";
+
+    /// <summary>Only ever a <see cref="DependencyEdge.TargetKind"/>, never an edge's
+    /// <see cref="DependencyEdge.Kind"/>: a dynamic binding into the base class library or another
+    /// non-MeshWeaver assembly the host supplies.</summary>
+    public const string Framework = "Framework";
+}
+
+/// <summary>
+/// The three EVIDENCE CLASSES a dependency is known by (<c>Doc/Architecture/DependencyGraph</c>).
+/// An open vocabulary, like <see cref="DependencyEdgeKinds"/>.
+/// </summary>
+public static class DependencyEvidenceClasses
+{
+    /// <summary>Roslyn BOUND it: a symbol reference, or a used assembly reference.</summary>
+    public const string Static = "Static";
+
+    /// <summary>A reflection call names it by string at run time — resolved from a constant
+    /// argument, or unresolved.</summary>
+    public const string Dynamic = "Dynamic";
+
+    /// <summary>A declaration states it (a csproj reference, a package manifest's <c>requires</c>
+    /// or <c>module</c>, a <c>#r "nuget:"</c> directive) — what the reconciliation report compares
+    /// the static and dynamic edges against.</summary>
+    public const string Declared = "Declared";
 }
 
 /// <summary>
@@ -26,7 +77,10 @@ public static class DependencyEdgeKinds
 public sealed record DependencyEdge
 {
     /// <summary>What the source depends on — a NodeType path for <see cref="DependencyEdgeKinds.NodeType"/>,
-    /// an assembly simple name for <see cref="DependencyEdgeKinds.Module"/>.</summary>
+    /// an assembly simple name for <see cref="DependencyEdgeKinds.Module"/> and
+    /// <see cref="DependencyEdgeKinds.Platform"/>, a package id for <see cref="DependencyEdgeKinds.Package"/>,
+    /// an assembly-qualified pattern for <see cref="DependencyEdgeKinds.Dynamic"/> and <c>?{api}</c>
+    /// for <see cref="DependencyEdgeKinds.DynamicUnresolved"/>. Unique within one set.</summary>
     public required string Target { get; init; }
 
     /// <summary>The edge's kind — see <see cref="DependencyEdgeKinds"/>.</summary>
@@ -38,8 +92,24 @@ public sealed record DependencyEdge
     public string? TargetBuildMvid { get; init; }
 
     /// <summary>A few of the referenced symbols that made the edge (fully qualified type names,
-    /// ordinal order, capped) — WHY the source depends on the target. Empty for a module edge.</summary>
+    /// ordinal order, capped) — WHY the source depends on the target. Empty for a module or
+    /// platform edge; the package's assembly names for a package edge; the call sites
+    /// (<c>{api}("…") in {type}</c>) for a dynamic edge.</summary>
     public ImmutableList<string> Evidence { get; init; } = [];
+
+    /// <summary>How the edge is known — see <see cref="DependencyEvidenceClasses"/>.
+    /// <see cref="DependencyEvidenceClasses.Static"/> for a bound reference, which is also what a
+    /// set written before the field existed reads as.</summary>
+    public string EvidenceClass { get; init; } = DependencyEvidenceClasses.Static;
+
+    /// <summary>For a dynamic edge: what the resolved target IS — a
+    /// <see cref="DependencyEdgeKinds"/> value (<see cref="DependencyEdgeKinds.Platform"/>,
+    /// <see cref="DependencyEdgeKinds.Module"/>, <see cref="DependencyEdgeKinds.Package"/>,
+    /// <see cref="DependencyEdgeKinds.NodeType"/> for a type in the source's own compilation,
+    /// <see cref="DependencyEdgeKinds.Framework"/>), or null when the compile could not tell —
+    /// which a reader must treat as "may be the platform". Null for a static edge, whose
+    /// <see cref="Kind"/> already says it.</summary>
+    public string? TargetKind { get; init; }
 }
 
 /// <summary>
