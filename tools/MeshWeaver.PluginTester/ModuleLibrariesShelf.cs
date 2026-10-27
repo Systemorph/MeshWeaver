@@ -182,6 +182,20 @@ public sealed class ModuleLibrariesShelf
     /// <returns>True when the shelf's deps.json has a node for it.</returns>
     public bool Knows(string packageId) => _assembliesByPackage.ContainsKey(packageId);
 
+    /// <summary>
+    /// The package that OWNS an assembly on the shelf, per its deps.json (the package whose own
+    /// assembly list names it), or null when no package claims it. The shelf is a FLAT directory, so
+    /// a file's path carries no package; this is the only place that ownership survives — the
+    /// dependency graph names a <c>Package</c> edge by it (<c>Doc/Architecture/DependencyGraph</c>).
+    /// </summary>
+    /// <param name="assemblyName">The assembly's simple name.</param>
+    public string? OwnerOf(string assemblyName) =>
+        _assembliesByPackage
+            .Where(kv => kv.Value.Contains(assemblyName, StringComparer.OrdinalIgnoreCase))
+            .Select(kv => kv.Key)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .FirstOrDefault();
+
     /// <summary>The assembly simple names this package contributes, per the shelf's deps record.</summary>
     /// <param name="packageId">The package id.</param>
     /// <returns>The simple names, empty when the shelf does not carry the package.</returns>

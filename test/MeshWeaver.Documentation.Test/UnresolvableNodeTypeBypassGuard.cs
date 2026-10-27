@@ -46,7 +46,7 @@ public class UnresolvableNodeTypeBypassGuard(ITestOutputHelper output)
     private const string Marker = "AllowUnresolvableNodeType";
 
     /// <summary>Production roots. A bypass in a sample or a tool would strand real content too.</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex", "tools", "samples"];
+    private static readonly string[] ScannedRoots = ["src", "tools", "samples"];
 
     /// <summary>
     /// The complete sanctioned inventory, and what each entry is for:

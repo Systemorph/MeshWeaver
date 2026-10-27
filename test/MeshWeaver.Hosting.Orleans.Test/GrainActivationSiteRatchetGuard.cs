@@ -89,7 +89,7 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
 
     /// <summary>Production roots only. A grain call in a test stands up its own cluster and cannot
     /// strand a production silo.</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex", "tools"];
+    private static readonly string[] ScannedRoots = ["src", "tools"];
 
     private static readonly string[] ExcludedSegments =
         ["bin", "obj", "node_modules", "TestResults", ".git", ".vs", "dist"];

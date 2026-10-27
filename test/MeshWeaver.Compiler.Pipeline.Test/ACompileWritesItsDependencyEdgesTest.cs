@@ -70,7 +70,7 @@ public class ACompileWritesItsDependencyEdgesTest(ITestOutputHelper output) : Mo
 
         result.Should().NotBeNull();
         result!.AssemblyLocation.Should().NotBeNullOrEmpty(string.Join("; ", result.Log?.Messages.Select(m => m.Message) ?? []));
-        var edges = result.DependencyEdges;
+        var edges = result.DependencyEdges?.GraphEdges();
         edges.Should().NotBeNull("a compile that ran Roslyn here always carries its edges");
         edges!.Source.Should().Be(B);
         var edge = edges.Edges.Should().ContainSingle().Which;
@@ -95,8 +95,8 @@ public class ACompileWritesItsDependencyEdgesTest(ITestOutputHelper output) : Mo
             .Emit("the compile must settle", cancellationToken: TestContext.Current.CancellationToken);
 
         result!.DependencyEdges.Should().NotBeNull();
-        result.DependencyEdges!.Edges.Should().BeEmpty();
-        result.DependencyEdges.IncludedWithoutUse.Should().Equal([A]);
+        result.DependencyEdges!.GraphEdges().Edges.Should().BeEmpty("no NodeType or Module edge — the platform edges every skeleton makes are not this test's subject");
+        result.DependencyEdges!.IncludedWithoutUse.Should().Equal([A]);
     }
 
     [Fact(Timeout = 300_000)]
@@ -130,7 +130,7 @@ public class ACompileWritesItsDependencyEdgesTest(ITestOutputHelper output) : Mo
                 "the settle writes the edge set after the stamp", cancellationToken: TestContext.Current.CancellationToken);
 
         stored.NodeType.Should().Be(DependencyEdgeSetPaths.NodeType);
-        var edges = stored.ContentAs<DependencyEdgeSet>(Mesh.JsonSerializerOptions)!;
+        var edges = stored.ContentAs<DependencyEdgeSet>(Mesh.JsonSerializerOptions)!.GraphEdges();
         edges.Source.Should().Be(B);
         edges.Edges.Select(e => (e.Target, e.Kind)).Should().Equal([(A, DependencyEdgeKinds.NodeType)]);
         edges.BuildMvid.Should().Be(definition.LatestAssemblyMvid,

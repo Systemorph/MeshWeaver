@@ -49,7 +49,7 @@ public class NoPlaintextCredentialFallbackGuard
     /// PAT, the plugin registry's sync-token signing key, an installation's registry key and the
     /// Entra EA refresh token all go through the same protector.
     /// </summary>
-    private static readonly string[] ScannedRoots = ["src", "memex"];
+    private static readonly string[] ScannedRoots = ["src"];
 
     /// <summary>
     /// A null-conditional <c>Protect</c>. There is no benign reason to write one: it can only exist

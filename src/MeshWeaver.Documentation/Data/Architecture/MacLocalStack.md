@@ -182,7 +182,7 @@ metrics, and the **portal** for the app. The MAUI client is separate — see [§
 |---|---|
 | Local-cluster extras (LGTM + Ollama/Qwen wiring, opt-in flags) | `../MeshWeaver.Plugins/src/Memex.AppHost/MemexLocalStack.cs` |
 | Observability configs (collector, Loki, Tempo, Prometheus, Grafana datasources) | `../MeshWeaver.Plugins/src/Memex.AppHost/observability/` |
-| OpenTelemetry emission (already wired) | `memex/aspire/Memex.Portal.ServiceDefaults/ServiceDefaults.cs` |
+| OpenTelemetry emission (already wired) | MeshWeaver.Plugins `src/Memex.Portal.ServiceDefaults/ServiceDefaults.cs` |
 | OpenAI-compatible provider (serves Ollama) | `src/MeshWeaver.AI.OpenAI/OpenAIExtensions.cs` |
 | On-device voice + CoreML apple image | [On-device voice](/Doc/Architecture/OnDeviceVoice) · `memex/Memex.Client/Voice/` |
 | Client feature flags | `memex/Memex.Client/Services/FeatureFlags.cs` |
