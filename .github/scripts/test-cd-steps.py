@@ -94,8 +94,10 @@ if argv[:3] == ["acr", "repository", "show-tags"]:
             repo = argv[i + 1]
         if a == "--query":
             query = argv[i + 1]
-    if repo is None or query is None:
-        sys.stderr.write("stub az: show-tags without --repository/--query\n")
+    # A listing WITHOUT --query is Phase D's never-backwards read (`--orderby time_desc --top 200
+    # -o tsv`): every tag, one per line. Without --repository nothing is modelled.
+    if repo is None:
+        sys.stderr.write("stub az: show-tags without --repository\n")
         sys.exit(97)
     if repo in os.environ.get("AZ_TAGS_FAIL", "").split(","):
         sys.stderr.write("ERROR: (ResponseError) the request could not be completed\n")
@@ -108,7 +110,7 @@ if argv[:3] == ["acr", "repository", "show-tags"]:
         if name == repo:
             tags = [v for v in values.split(",") if v]
     try:
-        result = jmespath.compile(query).search(tags)
+        result = tags if query is None else jmespath.compile(query).search(tags)
     except JMESPathError as e:
         sys.stderr.write(f"{e}\n")
         sys.exit(1)
@@ -1297,6 +1299,206 @@ def run_image_version_cases(root, case) -> None:
              rc != 0 and "version=" not in outputs, f"rc={rc} out={outputs!r} {log}")
 
 
+# ── Phase D: the line pointers AND `latest` on the portal and the migration ─────────────────────
+# `latest` on memex-portal-ai / memex-migration is the default the Aspire integration and the CLI
+# pull from the fleet registry. Its only producer had been a retired release lane, so it vanished
+# (Doc/Architecture/ImageTagContract). It now moves in `arm`'s Phase D beside `<major>-latest`:
+# on an ARMED set, forward only, on ACR + GHCR + cr. The step is EXECUTED here against stub
+# registries — what it writes, where, from which source — and against two controls that must
+# leave `latest` untouched (a newer armed set; an unplaceable version).
+LINE_POINTERS_STEP_ID = "line_pointers"
+LP_ACR = "meshweaver.azurecr.io"
+LP_REGISTRY = "cr.meshweaver.cloud"
+LP_VERSION = "3.1.10400"
+LP_STAGING = "staging-abc1234-777"
+
+RECORDING_DOCKER = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_CALLS"
+'''
+RECORDING_MIRROR = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MIRROR_CALLS"
+'''
+
+
+def line_pointer_step(root: Path) -> str:
+    try:
+        return workflow_yaml.step_run(root / WORKFLOW, LINE_POINTERS_STEP_ID, job_name="arm", expressions={
+            "env.ACR": LP_ACR, "env.REGISTRY": LP_REGISTRY, "github.repository_owner": "Systemorph"})
+    except workflow_yaml.WorkflowYamlError as e:
+        die(str(e))
+
+
+def run_line_pointer_step(root: Path, body: str, portal_tags: list[str],
+                          platform_version: str | None = None,
+                          v_plugin: str = LP_VERSION) -> tuple[int, str, list[str], list[str]]:
+    """Run Phase D in a scratch tree: the real platform-version.py (or a replacement), a recording
+    `docker` and mirror script, and the stub `az` answering memex-portal-ai's tag listing."""
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        scripts = tmp / "tree" / ".github" / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "platform-version.py").write_text(
+            platform_version if platform_version is not None
+            else (root / ".github/scripts/platform-version.py").read_text())
+        (scripts / "mirror-image-to-registry.sh").write_text(RECORDING_MIRROR)
+        (scripts / "mirror-image-to-registry.sh").chmod(0o755)
+        binp = tmp / "bin"
+        binp.mkdir()
+        (binp / "docker").write_text(RECORDING_DOCKER)
+        (binp / "docker").chmod(0o755)
+        (binp / "az").write_text(AZ_STUB)
+        (binp / "az").chmod(0o755)
+        docker_calls, mirror_calls, summary = tmp / "docker", tmp / "mirror", tmp / "summary"
+        for f in (docker_calls, mirror_calls, summary):
+            f.touch()
+        e = dict(os.environ)
+        for knob in ("AZ_FAIL", "AZ_TAGS_FAIL"):
+            e.pop(knob, None)
+        e.update({
+            "PATH": f"{binp}:{e['PATH']}", "DOCKER_CALLS": str(docker_calls), "MIRROR_CALLS": str(mirror_calls),
+            "GITHUB_STEP_SUMMARY": str(summary), "AZ_TAGS": "memex-portal-ai=" + ",".join(portal_tags),
+            "V_PORTAL": LP_VERSION, "V_MIGRATION": LP_VERSION, "V_PLUGIN": v_plugin, "SRC_PORTAL_TAG": LP_STAGING,
+        })
+        p = subprocess.run(["bash", "-c", body], env=e, cwd=tmp / "tree", capture_output=True, text=True)
+        return (p.returncode, p.stdout + p.stderr + summary.read_text(),
+                docker_calls.read_text().splitlines(), mirror_calls.read_text().splitlines())
+
+
+def latest_writes(docker: list[str], mirror: list[str]) -> dict[str, list[str]]:
+    """Every call that writes `<repo>:latest`, keyed by the reference it writes."""
+    out: dict[str, list[str]] = {}
+    for call in docker + mirror:
+        for ref in re.findall(r"(\S+/(?:memex-portal-ai|memex-migration):latest)\b", call):
+            out.setdefault(ref, []).append(call)
+    return out
+
+
+def promote_latest_problems(workflow_text: str) -> list[str]:
+    """`promote` (phase A/B — a PROMOTED, not yet armed, set) may write `latest` on the tester alone.
+    A portal or migration `latest` there would hand a fresh install a set nobody armed."""
+    import yaml
+
+    job = ((yaml.safe_load(workflow_text).get("jobs") or {}).get("promote")) or {}
+    if not job:
+        return ["`promote` is missing — the guard's subject moved; re-point it rather than pass on nothing"]
+    problems = []
+    for st in job.get("steps") or []:
+        for line in str(st.get("run", "")).splitlines():
+            code = line.split(" #", 1)[0]
+            if code.lstrip().startswith("#") or ":latest" not in code:
+                continue
+            if "mw-plugin-test" not in code:
+                problems.append(f"`promote` step {st.get('name')!r} writes a `latest` that is not the tester's: {code.strip()[:140]}")
+    return problems
+
+
+def run_line_pointer_cases(root, case) -> None:
+    body = line_pointer_step(root)
+    if "line-pointers" not in body or "mirror-image-to-registry.sh" not in body:
+        die(f"step `{LINE_POINTERS_STEP_ID}` no longer derives the pointers or mirrors to the fleet registry — "
+            "these cases would pass vacuously")
+    want = {f"{reg}/{repo}:latest" for repo in ("memex-portal-ai", "memex-migration")
+            for reg in (LP_ACR, "ghcr.io/systemorph", LP_REGISTRY)}
+
+    # 1 ── The newest armed set: `latest` moves with `3-latest`, on all three registries.
+    newest = [LP_VERSION, "3.1.10399", LP_STAGING, "main", "3-latest"]
+    rc, log, docker, mirror = run_line_pointer_step(root, body, newest)
+    writes = latest_writes(docker, mirror)
+    case("Phase D moves `latest` on memex-portal-ai and memex-migration in ACR, GHCR and the fleet registry",
+         rc == 0 and set(writes) == want, f"rc={rc} wrote={sorted(writes)} log={log}")
+    portal_acr = writes.get(f"{LP_ACR}/memex-portal-ai:latest", [""])[0]
+    case("...in the SAME write as `3-latest`, from the armed set's staging tag (never `main`)",
+         f"{LP_ACR}/memex-portal-ai:3-latest" in portal_acr and portal_acr.endswith(f"memex-portal-ai:{LP_STAGING}"),
+         f"call={portal_acr!r}")
+    case("...and the fleet-registry copy goes through the digest-verified mirror",
+         any(f"{LP_REGISTRY}/memex-portal-ai:latest" in m and f"{LP_REGISTRY}/memex-portal-ai:3-latest" in m for m in mirror)
+         and any(f"{LP_REGISTRY}/memex-migration:latest" in m for m in mirror), f"mirror={mirror}")
+
+    # 1b ── THE MATCHED CHANNEL (#7303 review). `mw build plugin` refuses a tester/portal pair whose
+    #       framework identities differ, and the tester's `latest` follows PROMOTED sets (phase B)
+    #       while the portal's pointers follow ARMED ones. So when a newer set is promoted ahead of
+    #       arming, the tester's `<major>-latest` must name the ARMED set: written here, from the
+    #       armed version tag (never `latest`/`main`), BEFORE the portal's pointers, and never
+    #       touching the tester's own `latest`.
+    tester_calls = [c for c in docker if "/mw-plugin-test:" in c]
+    tester_mirror = [m for m in mirror if "/mw-plugin-test:" in m]
+    tester_refs = {r for c in tester_calls + tester_mirror for r in re.findall(r"(\S+/mw-plugin-test:\S+)", c)}
+    want_tester = {f"{reg}/mw-plugin-test:{t}" for reg in (LP_ACR, "ghcr.io/systemorph", LP_REGISTRY)
+                   for t in ("3-latest", "3.1-latest")}
+    case("promotion ahead of arming: the tester's `3-latest`/`3.1-latest` move to the ARMED set on ACR, GHCR and cr",
+         want_tester <= tester_refs, f"tester refs={sorted(tester_refs)}")
+    case("...from the armed set's own version tag — the same set the portal's `latest` names",
+         bool(tester_calls) and all(c.endswith(f"mw-plugin-test:{LP_VERSION}") for c in tester_calls)
+         and bool(tester_mirror) and all(f"{LP_ACR}/mw-plugin-test:{LP_VERSION}" in m.split()[0] for m in tester_mirror),
+         f"calls={tester_calls} mirror={tester_mirror}")
+    case("...and Phase D NEVER moves the tester's `latest` (that is phase B's, following promoted sets)",
+         not any(r.endswith("/mw-plugin-test:latest") for r in tester_refs), f"tester refs={sorted(tester_refs)}")
+    first_portal = next((i for i, c in enumerate(docker) if "/memex-portal-ai:" in c), len(docker))
+    case("...and the tester's pointers land BEFORE the portal's `latest` (a puller never sees the portal ahead)",
+         bool(tester_calls) and docker.index(tester_calls[-1]) < first_portal, f"docker={docker}")
+
+    # 1c ── NEGATIVE CONTROL: a set whose tester and portal disagree on the version moves NOTHING.
+    rc, log, docker_m, mirror_m = run_line_pointer_step(root, body, newest, v_plugin="3.1.10401")
+    case("an armed set whose tester and portal disagree on the version moves no pointer at all",
+         rc != 0 and not docker_m and not mirror_m, f"rc={rc} docker={docker_m}")
+
+    # 1d ── MUTATION CONTROL: Phase D without the tester leg must fail the matched-channel detector.
+    no_tester = body.replace('for pair in "mw-plugin-test:$V_PLUGIN:$V_PLUGIN" ', 'for pair in ', 1)
+    rc, log, docker_m, mirror_m = run_line_pointer_step(root, no_tester, newest)
+    case("control: a Phase D that leaves the tester's line pointers behind is caught",
+         no_tester != body and rc == 0 and not any("/mw-plugin-test:3-latest" in c for c in docker_m + mirror_m),
+         "the mutation could not apply, or the tester still received its pointers")
+
+    # 2 ── NEGATIVE CONTROL: a newer set was armed meanwhile — no pointer moves, `latest` included.
+    rc, log, docker, mirror = run_line_pointer_step(root, body, ["3.1.10401"] + newest)
+    case("a NEWER armed set leaves `latest` (and every line pointer) where that set put it",
+         rc == 0 and not docker and not mirror and "newer set" in log, f"rc={rc} docker={docker} mirror={mirror}")
+
+    # 3 ── FAIL CLOSED: the pointer reader fails — nothing moves, never `latest` alone.
+    real = (root / ".github/scripts/platform-version.py").read_text()
+    broken = real.replace('if len(argv) == 3 and argv[1] == "line-pointers":',
+                          'if len(argv) == 3 and argv[1] == "line-pointers":\n        return 1\n    if False:', 1)
+    rc, log, docker, mirror = run_line_pointer_step(root, body, newest, platform_version=broken)
+    case("a line-pointer reader that fails moves NOTHING (no `latest` without its line pointers)",
+         broken != real and rc != 0 and not latest_writes(docker, mirror), f"rc={rc} docker={docker} log={log}")
+
+    # 4 ── MUTATION CONTROL: Phase D without `latest` must fail case 1's detector.
+    mutated = body.replace("printf '%s latest' \"$p\"", "printf '%s' \"$p\"", 1)
+    rc, log, docker, mirror = run_line_pointer_step(root, mutated, newest)
+    case("control: a Phase D that drops `latest` is caught by the detector above",
+         mutated != body and rc == 0 and set(latest_writes(docker, mirror)) != want,
+         "the mutation could not apply, or the detector still saw every `latest` write")
+
+    # 4b ── `release.yml` never writes the portal's or the migration's `latest` (#7303 review): a
+    #       release can promote an OLDER set than the armed one, and only `arm` checks freshness.
+    rel = (root / ".github/workflows/release.yml").read_text()
+    def release_latest_problems(text: str) -> list[str]:
+        out = []
+        for n, line in enumerate(text.splitlines(), 1):
+            code = re.split(r"\s#", line, maxsplit=1)[0]
+            if code.lstrip().startswith("#") or ":latest" not in code:
+                continue
+            if "mw-plugin-test:latest" not in code:
+                out.append(f"release.yml:{n} writes a `latest` that is not the tester's: {code.strip()[:140]}")
+        return out
+    problems = release_latest_problems(rel)
+    case("release.yml writes `latest` on the tester only — never the portal's or the migration's (arm owns them)",
+         not problems and "mw-plugin-test:latest" in rel, "; ".join(problems) or "the tester's GHCR `latest` vanished")
+    back = rel.replace('"${args[@]}" "$ACR/$repo:$SHORT"', '"${args[@]}" --tag "$ACR/$repo:latest" "$ACR/$repo:$SHORT"', 1)
+    case("control: the guard catches a release moving the portal's ACR `latest` (backwards on an older set)",
+         back != rel and bool(release_latest_problems(back)), "the mutation could not apply, or passed")
+
+    # 5 ── `promote` (an unarmed set) never writes the portal's or the migration's `latest`.
+    text = (root / WORKFLOW).read_text()
+    problems = promote_latest_problems(text)
+    case("`promote` writes `latest` on the tester only — never on a set that is not armed", not problems, "; ".join(problems))
+    leaked = text.replace(
+        '            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"\n',
+        '            docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" --tag "${{ env.ACR }}/$repo:latest" "${{ env.ACR }}/$repo:$STAGING"\n', 1)
+    case("control: the guard catches phase B moving the portal's `latest` on a promoted, unarmed set",
+         leaked != text and bool(promote_latest_problems(leaked)), "the mutation could not apply, or passed")
+
+
 def separation_problems(workflow_text: str) -> list[str]:
     """🚨 Policy `platform-module-deploy-separate` + `platform-deploy-control-first`, held structurally.
 
@@ -1762,6 +1964,10 @@ def main() -> int:
     print()
     print(f"── steps `{IMAGE_VERSION_STEP_NAME}` (every image leg) ──")
     run_image_version_cases(root, case)
+
+    print()
+    print(f"── step `{LINE_POINTERS_STEP_ID}` (arm, Phase D: line pointers + `latest`) ──")
+    run_line_pointer_cases(root, case)
 
     print()
     if failures:

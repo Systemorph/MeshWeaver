@@ -312,6 +312,17 @@ two plugin modules, and the core-side ties are both data, not code:
   the new home keeps every entry live. The table then names plugin types from core, which is a
   core→plugins edge in the sense of [Repository Dependency Direction](../RepositoryDependencyDirection).
   Close it with a seam modules contribute to, or record it.
+  **Chosen: the Mail module, namespace `MeshWeaver.Mail.MailCopy`.** A new namespace keeps the module
+  from colliding with core's copy while both exist. The move is therefore three ordered steps, so
+  that no moment exists in which the moved System entry points are missing from the compile-time
+  table. A method group handed to a platform callback is the shape only that table sees, because
+  the runtime guard then sees the trusted callback, not the in-mesh caller.
+  1. Core registers the module's names BESIDE its own, with the same members
+     (`EveryCoreMailCopyKey_HasItsModuleTwin`). This step is additive.
+  2. The Plugins move requires a platform that carries step 1 (`Requires-platform:`). Its
+     `MailCopySurfaceRegistrationTest` requires the new names, with no fallback.
+  3. Core deletes its copy, and the `MeshWeaver.Graph.MailCopy` keys go with the types. The
+     `MeshWeaver.Mail.MailCopy` keys stay, as this recorded edge.
 - **One core test class spans the boundary, and it holds two different checks.**
   `InMeshImpersonationReferencesTest` does two things:
   - Its snippet tests compile code against `typeof(MeshMailCopyStore)` and assert that the table
