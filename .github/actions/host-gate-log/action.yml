@@ -1,0 +1,71 @@
+name: Read a build host's gate log by its receipt
+description: >-
+  For a node repo whose gate ran on a standing build host — fetch the gate stage's handed-back
+  gate.log by its H9 receipt (OIDC-gated, hash and size verified), so the repository's Tests-area
+  ratchet reads the tester's own console exactly as it does after an Actions gate.
+# Doc/Architecture/BuildHosts §2 step 7 and "Moving a repository's tests to the build server". The
+# scripts live beside this action (.github/scripts/host-gate-log.py, build-artifacts-fetch.py,
+# build-follow.py, ci-artifact-store.py) at the ref `uses:` named — one copy for every caller.
+#
+# The calling JOB needs `permissions: id-token: write` (the build API serves receipts only to the
+# run's own GitHub OIDC token) and python3 on PATH. Every failure is RED and named; there is no
+# input whose absence turns this into a pass.
+#
+#   - uses: Systemorph/MeshWeaver/.github/actions/host-gate-log@main
+#     with:
+#       api-url: ${{ needs.build-executor.outputs.api-url }}
+#       store: ${{ vars.MW_ARTIFACT_STORE }}
+#       out: ${{ runner.temp }}/gate-log/gate.log
+inputs:
+  api-url:
+    description: The operations instance's build API (the build-executor lane's `api-url` output).
+    required: true
+  store:
+    description: "The CI artifact store the HOST hands its artifacts to (a file store on the runners' share: vars.MW_ARTIFACT_STORE)."
+    required: true
+  sha:
+    description: The commit the host run is keyed by. Empty = the PR HEAD (never the merge commit), else github.sha.
+    default: ''
+  channel:
+    description: The release channel whose host ran the gate stage.
+    default: latest
+  out:
+    description: Where the verified gate.log is written.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: The host gate log's inputs are named
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+        STORE: ${{ inputs.store }}
+      run: |
+        set -euo pipefail
+        [ -n "${API_URL:-}" ] || { echo "::error title=Build host::host-gate-log: api-url is empty — the gate ran on a host but there is no build API to read its receipts from"; exit 1; }
+        [ -n "${STORE:-}" ] || { echo "::error title=Build host::host-gate-log: store is empty — name the store the host hands its artifacts to (vars.MW_ARTIFACT_STORE)"; exit 1; }
+    - name: Bind the host's artifact store
+      id: store
+      uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+      with:
+        store: ${{ inputs.store }}
+    - name: Fetch the gate log by its receipt and verify it
+      shell: bash
+      env:
+        S: ${{ github.action_path }}/../../scripts
+        API_URL: ${{ inputs.api-url }}
+        STORE: ${{ steps.store.outputs.store }}
+        STORE_ID: ${{ steps.store.outputs.store-id }}
+        SHA: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
+        CHANNEL: ${{ inputs.channel }}
+        OUT: ${{ inputs.out }}
+      run: |
+        set -euo pipefail
+        [ -n "${STORE_ID:-}" ] || { echo "::error title=Build host::the host's artifact store resolved no store-id — an unbound fetch could read another store"; exit 1; }
+        for f in host-gate-log.py build-artifacts-fetch.py build-follow.py ci-artifact-store.py; do
+          [ -s "$S/$f" ] || { echo "::error::the host-gate-log action has no $f beside it at $S"; exit 1; }
+        done
+        python3 "$S/host-gate-log.py" --self-test > /dev/null
+        python3 "$S/build-artifacts-fetch.py" --self-test > /dev/null
+        python3 "$S/host-gate-log.py" --api-url "$API_URL" --store "$STORE" --expect-store-id "$STORE_ID" \
+          --sha "$SHA" --channel "$CHANNEL" --out "$OUT"
