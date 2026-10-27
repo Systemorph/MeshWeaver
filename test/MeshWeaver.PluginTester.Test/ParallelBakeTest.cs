@@ -183,6 +183,52 @@ public partial class ParallelBakeTest(ITestOutputHelper output)
         Assert.Equal(1, idleCleaned);
     }
 
+    /// <summary>
+    /// The last compile leaving while termination is cancelling must not run the cleanup — which
+    /// disposes the cancellation source — before <c>Cancel()</c> has returned. A cancellation
+    /// callback stands in for that compile (callbacks run inside <c>Cancel()</c>, newest first):
+    /// it leaves, and a callback registered earlier, so running later, marks the point at which
+    /// cancellation is still in progress. The cleanup must observe it finished.
+    /// </summary>
+    [Fact]
+    public void BakeLifetime_LastCompileLeavingDuringCancel_CleansOnlyAfterCancelReturned()
+    {
+        using var source = new CancellationTokenSource();
+        var callbacksDone = false;
+        bool? cleanedAfterCancel = null;
+        var lifetime = new TreeBake.BakeLifetime(source, () => cleanedAfterCancel = callbacksDone);
+        Assert.True(lifetime.TryEnter());
+        source.Token.Register(() => callbacksDone = true); // runs LAST
+        source.Token.Register(lifetime.Exit);              // runs FIRST: the last compile leaves
+
+        lifetime.Terminate();
+
+        Assert.True(cleanedAfterCancel, "the cleanup ran while Cancel() was still running its callbacks");
+    }
+
+    /// <summary>
+    /// Work run through the lifetime (the fold that writes bundles from the work directory) keeps
+    /// the resources alive across a termination that happens while it runs, and is refused once
+    /// the pipeline has terminated.
+    /// </summary>
+    [Fact]
+    public void BakeLifetime_Run_HoldsCleanupUntilTheBodyReturned_AndRefusesAfterTermination()
+    {
+        var cleaned = 0;
+        var lifetime = new TreeBake.BakeLifetime(new CancellationTokenSource(), () => cleaned++);
+
+        var seenInside = lifetime.Run(() =>
+        {
+            lifetime.Terminate(); // an unsubscription while the fold is writing bundles
+            return cleaned;
+        });
+
+        Assert.Equal(0, seenInside);
+        Assert.Equal(1, cleaned);
+        Assert.Throws<OperationCanceledException>(() => lifetime.Run(() => 0));
+        Assert.Equal(1, cleaned);
+    }
+
     // ── 2. byte-identical output ──────────────────────────────────────────────────────────────
 
     private const string PackageIndexJson =

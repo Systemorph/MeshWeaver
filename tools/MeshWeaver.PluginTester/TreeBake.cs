@@ -418,14 +418,46 @@ public static class TreeBake
                 Clean();
         }
 
-        /// <summary>The pipeline terminated: cancel what runs, refuse what would start.</summary>
+        /// <summary>
+        /// Runs <paramref name="body"/> entered: the shared resources outlive it even when the
+        /// pipeline terminates while it runs. Throws <see cref="OperationCanceledException"/>
+        /// (nothing run) once the pipeline has terminated.
+        /// </summary>
+        public T Run<T>(Func<T> body)
+        {
+            if (!TryEnter())
+                throw new OperationCanceledException(Token);
+            try
+            {
+                return body();
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        /// <summary>
+        /// The pipeline terminated: cancel what runs, refuse what would start. Termination itself
+        /// counts as one user until <c>Cancel()</c> has returned, so a last compile leaving in
+        /// between cannot run the cleanup — which disposes the cancellation source — under it.
+        /// </summary>
         public void Terminate()
         {
+            Interlocked.Increment(ref inside);
             if (Interlocked.Exchange(ref terminated, 1) == 1)
+            {
+                Interlocked.Decrement(ref inside);
                 return;
-            cancellation.Cancel();
-            if (Interlocked.CompareExchange(ref inside, 0, 0) == 0)
-                Clean();
+            }
+            try
+            {
+                cancellation.Cancel();
+            }
+            finally
+            {
+                Exit();
+            }
         }
 
         private void Clean()
@@ -629,16 +661,7 @@ public static class TreeBake
         {
             // The pipeline ended (an unsubscription): start nothing that would touch the resolver
             // or the work directory after their cleanup could have run.
-            if (!lifetime.TryEnter())
-                throw new OperationCanceledException(lifetime.Token);
-            try
-            {
-                return CompileEntered(candidate);
-            }
-            finally
-            {
-                lifetime.Exit();
-            }
+            return lifetime.Run(() => CompileEntered(candidate));
         }
 
         TypeOutcome? CompileEntered(TreeNodeLoader.TreeNode candidate)
@@ -791,8 +814,11 @@ public static class TreeBake
                 buildAfter,
                 path => byPath[path].Select(CompileOne).OfType<TypeOutcome>().ToImmutableArray(),
                 options.MaxParallel)
-            .Select(settled => Fold(
-                options, packages, snapshot, host, settled, wall.Elapsed));
+            // The fold writes the bundles, which read the compiled DLL/PDB files out of the work
+            // directory lazily — so it is entered too, and an unsubscription during it cannot
+            // delete that directory under a bundle being written.
+            .Select(settled => lifetime.Run(() => Fold(
+                options, packages, snapshot, host, settled, wall.Elapsed)));
     }
 
     /// <summary>One attempted compile: its verdict, its bundle entry when it produced bytes, and
