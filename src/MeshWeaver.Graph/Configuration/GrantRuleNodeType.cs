@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -37,7 +38,7 @@ public static class GrantRuleNodeType
     {
         Name = "Grant Rule",
         IsSatelliteType = false,
-        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+        ExcludeFromContext = ImmutableHashSet.Create("search", "create", "content"),
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<GrantRule>())
