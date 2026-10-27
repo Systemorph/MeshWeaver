@@ -61,24 +61,36 @@ public partial class ParallelBakeTest(ITestOutputHelper output)
         var withheld = await RecordSchedule(
             Chain.ToImmutableDictionary(kv => kv.Key, _ => ImmutableArray<string>.Empty, StringComparer.Ordinal),
             ct,
-            checkAgainst: Chain);
+            checkAgainst: Chain,
+            midWait: SignalBound);
         output.WriteLine("without edges: " + string.Join(" ", withheld));
         Assert.Contains("Mid started before Base finished", Violations(withheld, Chain));
     }
 
     /// <summary>
+    /// Bound on waiting for a worker that MUST arrive (dispatch on a busy pool can be slow) — long,
+    /// because it only ever ends early on the signal; it is a cap on a hang, never a timing claim.
+    /// </summary>
+    private static readonly TimeSpan SignalBound = TimeSpan.FromSeconds(20);
+
+    /// <summary>
     /// Runs the four ids through <see cref="BakeSchedule.Run{T}"/> with four slots. Base PARKS until
-    /// Mid has started (bounded): with the edge honoured Mid cannot start, so the park times out
-    /// and Base ends first; with the edge withheld Mid starts at once and Base ends after it. The
-    /// park is a volatile flag polled under a bounded SpinWait, released in a <c>finally</c>.
+    /// Free has FINISHED — so "Free ran beside Base" never depends on how fast the pool dispatches —
+    /// and then until Mid has started, for <paramref name="midWait"/>. With the edge honoured Mid
+    /// cannot start, so that short wait lapses and Base ends first; with the edge withheld the caller
+    /// passes the long <see cref="SignalBound"/>, Mid starts whenever it is dispatched, and Base ends
+    /// after it. Each park is a volatile flag polled under a bounded SpinWait, written in a
+    /// <c>finally</c>.
     /// </summary>
     private static Task<ImmutableList<string>> RecordSchedule(
         ImmutableDictionary<string, ImmutableArray<string>> buildAfter,
         CancellationToken ct,
-        ImmutableDictionary<string, ImmutableArray<string>>? checkAgainst = null)
+        ImmutableDictionary<string, ImmutableArray<string>>? checkAgainst = null,
+        TimeSpan? midWait = null)
     {
         var events = ImmutableList<string>.Empty;
         var midStarted = 0;
+        var freeEnded = 0;
         void Record(string e) => ImmutableInterlocked.Update(ref events, l => l.Add(e));
 
         return BakeSchedule.Run(
@@ -92,12 +104,17 @@ public partial class ParallelBakeTest(ITestOutputHelper output)
                         if (id == "Mid")
                             Volatile.Write(ref midStarted, 1);
                         if (id == "Base")
-                            SpinWait.SpinUntil(() => Volatile.Read(ref midStarted) == 1, TimeSpan.FromMilliseconds(750));
+                        {
+                            SpinWait.SpinUntil(() => Volatile.Read(ref freeEnded) == 1, SignalBound);
+                            SpinWait.SpinUntil(() => Volatile.Read(ref midStarted) == 1, midWait ?? TimeSpan.FromMilliseconds(250));
+                        }
                         return id;
                     }
                     finally
                     {
                         Record("end:" + id);
+                        if (id == "Free")
+                            Volatile.Write(ref freeEnded, 1);
                     }
                 },
                 maxParallel: 4)
@@ -129,6 +146,28 @@ public partial class ParallelBakeTest(ITestOutputHelper output)
         Assert.Empty(after["Ctrl/Base"]);
         Assert.Empty(after["Ctrl/X"]); // a cycle waits on nothing inside itself, or nothing in it would ever start
         Assert.Empty(after["Ctrl/Y"]);
+    }
+
+    /// <summary>
+    /// A path the tree carries twice (<c>Ctrl/Uses.json</c> and <c>Ctrl/Uses/index.json</c>) is
+    /// compiled twice inside its one work item, so EVERY definition's dependencies order that item —
+    /// not only the first's. Negative control: from the first definition alone, it waits on nothing.
+    /// </summary>
+    [Fact]
+    public void ScheduleOf_APathCarriedTwice_WaitsForTheDependenciesOfEveryDefinition()
+    {
+        var byPath = new Dictionary<string, ImmutableArray<(string Path, NodeTypeDefinition? Definition)>>(StringComparer.Ordinal)
+        {
+            ["Ctrl/Base"] = [("Ctrl/Base", new NodeTypeDefinition())],
+            ["Ctrl/Uses"] =
+            [
+                ("Ctrl/Uses", new NodeTypeDefinition()),
+                ("Ctrl/Uses", new NodeTypeDefinition { Sources = ["shared=@Ctrl/Base/Source"] }),
+            ],
+        };
+
+        Assert.Equal(["Ctrl/Base"], TreeBake.ScheduleOf(byPath.Values)["Ctrl/Uses"]);
+        Assert.Empty(BakeSchedule.BuildAfter(byPath.Values.Select(g => g[0]))["Ctrl/Uses"]);
     }
 
     /// <summary>

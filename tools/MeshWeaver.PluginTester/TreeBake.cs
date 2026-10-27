@@ -221,6 +221,23 @@ public static class TreeBake
     public static IObservable<Report> Bake(Options options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        // Cold end to end: the snapshot is read per SUBSCRIPTION, so each subscription bakes the
+        // tree as it is when it subscribes — never one read when the pipeline was composed.
+        return Observable.Defer(() => BakeOnSubscribe(options));
+    }
+
+    /// <summary>
+    /// The DEPENDENCY ORDER of the bake's work items: one item per path, and every definition the
+    /// tree carries for that path contributes — a path carried twice is compiled twice inside its
+    /// one item, so each compile's dependencies must have finished before it starts.
+    /// </summary>
+    /// <param name="byPath">Each path's definitions, in tree order.</param>
+    internal static ImmutableDictionary<string, ImmutableArray<string>> ScheduleOf(
+        IEnumerable<ImmutableArray<(string Path, NodeTypeDefinition? Definition)>> byPath) =>
+        BakeSchedule.BuildAfter(byPath.SelectMany(g => g));
+
+    private static IObservable<Report> BakeOnSubscribe(Options options)
+    {
         // The identity a report carries when the bake stops BEFORE its host is resolved — this
         // process's own, the only one known at that point. Every bundle is keyed to the HOST's.
         var processIdentity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
@@ -653,8 +670,8 @@ public static class TreeBake
         var byPath = compilable
             .GroupBy(t => t.Node.Path, StringComparer.Ordinal)
             .ToImmutableDictionary(g => g.Key, g => g.ToImmutableArray(), StringComparer.Ordinal);
-        var buildAfter = BakeSchedule.BuildAfter(byPath.Values
-            .Select(g => (g[0].Node.Path, g[0].Node.Content as NodeTypeDefinition)));
+        var buildAfter = ScheduleOf(byPath.Values
+            .Select(g => g.Select(t => (t.Node.Path, t.Node.Content as NodeTypeDefinition)).ToImmutableArray()));
 
         // 🚨 A compile never WRITES the console. It carries its lines back in its outcome and the
         // fold below prints them in path order, so the log of a parallel bake is the serial bake's
