@@ -472,6 +472,97 @@ public class DependencyEdgeExtractionTest
         }
     }
 
+    /// <summary>
+    /// Three more callees that erase their arguments, each leaving a module extension in those
+    /// arguments with no <c>AssemblyRef</c> (asserted as the precondition): a <c>[Conditional]</c>
+    /// method of a module that IS already an edge (its live member is called too), a partial method
+    /// declared without an implementation, and a consumer method whose <c>[Conditional]</c> is spelled
+    /// through a using ALIAS. Each extension's module is still a module edge. Negative control: the
+    /// already-edged module is its edge once, from the image, and a module the consumer never uses is none.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AnArgumentOfAnyErasedCall_IsStillAModuleEdge_EdgedModuleConditionalPartialAndAlias()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var log = EmitModule("DepGraphProbeLiveAndErased", """
+            namespace DepGraphProbe.Mixed;
+            /// <summary>One live and one erased method.</summary>
+            public static class Log
+            {
+                /// <summary>Live: the image references this module.</summary>
+                public static void Live() { }
+                /// <summary>Erased at the call site.</summary>
+                [System.Diagnostics.Conditional("NEVER")]
+                public static void Note(string value) { }
+            }
+            """);
+        string Ext(string assembly, string ns, string method) => EmitModule(assembly, $$"""
+            namespace {{ns}};
+            /// <summary>An extension used only inside an erased call.</summary>
+            public static class E
+            {
+                /// <summary>Erased with its call.</summary>
+                public static string {{method}}(this string value) => value;
+            }
+            """);
+        var mixed = Ext("DepGraphProbeMixedArgOnly", "DepGraphProbe.MixedArg", "ProbeM");
+        var partial = Ext("DepGraphProbePartialArgOnly", "DepGraphProbe.PartialArg", "ProbeP");
+        var aliased = Ext("DepGraphProbeAliasArgOnly", "DepGraphProbe.AliasArg", "ProbeA");
+        var unused = Ext("DepGraphProbeUnusedModule", "DepGraphProbe.Unused", "ProbeU");
+        var all = new[] { log, mixed, partial, aliased, unused };
+        try
+        {
+            var references = CompileReferences.Default.Concat(all.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))).ToList();
+            var tree = CSharpSyntaxTree.ParseText("""
+                using C = System.Diagnostics.ConditionalAttribute;
+                using DepGraphProbe.MixedArg;
+                using DepGraphProbe.PartialArg;
+                using DepGraphProbe.AliasArg;
+                public static partial class P
+                {
+                    static partial void Pnote(string value);
+                    [C("NEVER")]
+                    static void Drop(string value) { }
+                    public static void M() { DepGraphProbe.Mixed.Log.Live(); DepGraphProbe.Mixed.Log.Note("x".ProbeM()); }
+                    public static void Q() => Pnote("x".ProbeP());
+                    public static void A() => Drop("x".ProbeA());
+                }
+                """, cancellationToken: ct);
+            var compilation = CSharpCompilation.Create("ErasedArgProbe", [tree], references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var image = new MemoryStream();
+            var emit = compilation.Emit(image, cancellationToken: ct);
+            emit.Success.Should().BeTrue(string.Join("\n", emit.Diagnostics));
+            using (var pe = new PEReader(new MemoryStream(image.ToArray(), writable: false)))
+            {
+                var reader = pe.GetMetadataReader();
+                var refs = reader.AssemblyReferences.Select(h => reader.GetString(reader.GetAssemblyReference(h).Name)).ToList();
+                refs.Should().Contain("DepGraphProbeLiveAndErased", "precondition: the live call references the conditional's module");
+                refs.Should().NotContain(["DepGraphProbeMixedArgOnly", "DepGraphProbePartialArgOnly", "DepGraphProbeAliasArgOnly"],
+                    "precondition: every extension is used only inside an erased call");
+            }
+            var classes = DependencyReferenceClasses.Of(references, all, new Dictionary<string, string>());
+
+            var modules = DependencyEdgeExtraction.Extract(compilation, [tree], "App/P", [], null, classes,
+                    () => new MemoryStream(image.ToArray(), writable: false), ct: ct)
+                .Edges.Where(e => e.Kind == DependencyEdgeKinds.Module).Select(e => e.Target).ToList();
+
+            modules.Should().Equal(
+                ["DepGraphProbeAliasArgOnly", "DepGraphProbeLiveAndErased", "DepGraphProbeMixedArgOnly", "DepGraphProbePartialArgOnly"],
+                "an argument of an already-edged module's conditional, of an unimplemented partial and of an aliased "
+                + "[Conditional] is a use the image cannot show; an unused module is not an edge");
+        }
+        finally
+        {
+            foreach (var path in all)
+            {
+                try { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+    }
+
     [Fact(Timeout = 120_000)]
     public void NegativeControl_AReferenceTheCallerDoesNotNameAsAModule_IsNoModuleEdge()
     {

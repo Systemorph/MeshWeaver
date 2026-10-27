@@ -186,10 +186,14 @@ expression (`(int)default(Color)`), and any name inside a `nameof`, a generic ar
 change to that module changes or breaks the type's compile, and CI selection reads the module edge to
 know it. The candidates are nominated by name: every identifier inside a `nameof`, plus every
 identifier that spells a type name, a constant or a `[Conditional]` method of a module that is not
-yet an edge; and every name inside an invocation whose callee is a `[Conditional]` method — known by
-name from the pending modules, the compilation's own source and the framework's `Debug`, `Trace`,
-`Debugger` and `Contract`, and confirmed by binding that one invocation. Only those nodes are bound,
-so this never costs a second binding pass.
+yet an edge; and every name inside an invocation whose callee ERASES its call — a `[Conditional]`
+method, or a partial method declared without an implementation — known by name from EVERY module
+(an already-edged module's conditional method still erases another module's member in its
+arguments), the compilation's own source (decided by the declared symbol, so an aliased attribute
+counts) and the framework's `Debug`, `Trace`, `Debugger` and `Contract`, and confirmed by binding that
+one invocation. Only those nodes are bound, so this never costs a second binding pass. Not yet
+covered: a module member used only in code the compiler discards as constant-false
+(`if (false) { … }`, `false && …`) — tracked as a follow-up.
 
 🚨 **Why not "a symbol whose containing assembly is another NodeType's assembly".** A NodeType
 compile is never referenced against another NodeType's emitted assembly: its reference set is the

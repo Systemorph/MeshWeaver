@@ -604,8 +604,17 @@ public static class DependencyEdgeExtraction
             return [];
         var nominated = new HashSet<string>(StringComparer.Ordinal);
         var conditionalNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var assembly in pending.Keys)
-            CollectErasableNames(assembly.GlobalNamespace, nominated, conditionalNames, ct);
+        // Erasable NAMES come from the pending modules only; erasing CALLEES from every module — an
+        // already-edged module's [Conditional] method still erases its arguments, and a module member
+        // used only there belongs to a module that may not be an edge yet.
+        var discarded = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reference in moduleReferences)
+            if (compilation.GetAssemblyOrModuleSymbol(reference) is IAssemblySymbol assembly)
+            {
+                discarded.Clear();
+                CollectErasableNames(assembly.GlobalNamespace, pending.ContainsKey(assembly) ? nominated : discarded,
+                    conditionalNames, ct);
+            }
         CollectConditionalCallees(compilation, conditionalNames, ct);
 
         var found = new SortedDictionary<string, DependencyEdge>(StringComparer.Ordinal);
@@ -638,7 +647,7 @@ public static class DependencyEdgeExtraction
                     continue;
                 model ??= compilation.GetSemanticModel(tree);
                 if (model.GetSymbolInfo(invocation, ct).Symbol is not IMethodSymbol method
-                    || !(method.ReducedFrom ?? method).OriginalDefinition.GetAttributes().Any(IsConditional))
+                    || !IsErasingCallee((method.ReducedFrom ?? method).OriginalDefinition))
                     continue;
                 foreach (var inner in invocation.ArgumentList.DescendantNodes().OfType<SimpleNameSyntax>())
                     erased.Add(inner);
@@ -732,18 +741,34 @@ public static class DependencyEdgeExtraction
     /// the framework's. Names only nominate; the invocation is bound before its arguments count.</summary>
     private static void CollectConditionalCallees(CSharpCompilation compilation, HashSet<string> names, CancellationToken ct)
     {
+        // The compilation's own erasing methods are decided by their DECLARED symbol, never the
+        // attribute's spelling (an alias, `using C = System.Diagnostics.ConditionalAttribute;`, spells
+        // anything): only declarations that carry an attribute or are a body-less partial are bound.
         foreach (var tree in compilation.SyntaxTrees)
+        {
+            SemanticModel? model = null;
             foreach (var method in tree.GetRoot(ct).DescendantNodes().OfType<MethodDeclarationSyntax>())
-                if (method.AttributeLists.SelectMany(l => l.Attributes).Any(a => a.Name.ToString() is var n
-                        && (n.EndsWith("Conditional", StringComparison.Ordinal)
-                            || n.EndsWith("ConditionalAttribute", StringComparison.Ordinal))))
+            {
+                if (method.AttributeLists.Count == 0
+                    && !(method.Modifiers.Any(SyntaxKind.PartialKeyword) && method.Body is null && method.ExpressionBody is null))
+                    continue;
+                model ??= compilation.GetSemanticModel(tree);
+                if (model.GetDeclaredSymbol(method, ct) is { } declared && IsErasingCallee(declared))
                     names.Add(method.Identifier.ValueText);
+            }
+        }
         foreach (var metadataName in FrameworkConditionalTypes)
             if (compilation.GetTypeByMetadataName(metadataName) is { } type)
                 foreach (var method in type.GetMembers().OfType<IMethodSymbol>())
                     if (method.GetAttributes().Any(IsConditional))
                         names.Add(method.Name);
     }
+
+    /// <summary>A method whose CALL the compiler drops together with its arguments and receiver: a
+    /// <c>[Conditional]</c> method, or a partial method declared without any implementation.</summary>
+    private static bool IsErasingCallee(IMethodSymbol method) =>
+        method.GetAttributes().Any(IsConditional)
+        || method is { IsPartialDefinition: true, PartialImplementationPart: null };
 
     private static bool IsConditional(AttributeData attribute) =>
         attribute.AttributeClass is { Name: "ConditionalAttribute" } attributeClass
