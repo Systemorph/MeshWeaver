@@ -474,6 +474,175 @@ public class DependencyEdgeExtractionTest
         edges.Edges[0].Evidence.Should().Equal(["Second.AThing"]);
     }
 
+    private static readonly string[] OwnAndAAndC =
+        ["namespace:Source scope:subtree", $"shared=@{A}/Source", $"shared=@{C}/Source"];
+
+    [Fact(Timeout = 120_000)]
+    public void AnIndexerOfAThirdOwner_IsAnEdge_PlainAndConditional()
+    {
+        var edges = CompileB(
+            [
+                Code(C, "Grid", """
+                    /// <summary>Lib/C's indexed type.</summary>
+                    public sealed class Grid
+                    {
+                        /// <summary>The cell.</summary>
+                        public int this[int i] => i * 2;
+                    }
+                    """),
+                Code(A, "Factory", """
+                    /// <summary>Lib/A's factory, returning Lib/C's type.</summary>
+                    public static class GridFactory
+                    {
+                        /// <summary>A grid.</summary>
+                        public static Grid Make() => new();
+                    }
+                    """),
+                Code(B, "Reads", """
+                    /// <summary>B names only A's factory; the element access binds C's indexer.</summary>
+                    public static class Reads
+                    {
+                        /// <summary>Plain.</summary>
+                        public static int Plain() => GridFactory.Make()[1];
+                    }
+                    """),
+            ],
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+        var conditional = CompileB(
+            [
+                Code(C, "Grid", """
+                    /// <summary>Lib/C's indexed type.</summary>
+                    public sealed class Grid
+                    {
+                        /// <summary>The cell.</summary>
+                        public int this[int i] => i * 2;
+                    }
+                    """),
+                Code(A, "Factory", """
+                    /// <summary>Lib/A's factory, returning Lib/C's type.</summary>
+                    public static class GridFactory
+                    {
+                        /// <summary>A grid, or none.</summary>
+                        public static Grid? Maybe() => new();
+                    }
+                    """),
+                Code(B, "Reads", """
+                    /// <summary>B names only A's factory; the conditional access binds C's indexer.</summary>
+                    public static class Reads
+                    {
+                        /// <summary>Conditional.</summary>
+                        public static int? Conditional() => GridFactory.Maybe()?[1];
+                    }
+                    """),
+            ],
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        foreach (var set in new[] { edges, conditional })
+        {
+            set.Edges.Select(e => e.Target).Should().Equal([A, C]);
+            set.Edges.Single(e => e.Target == C).Evidence.Should().Equal(["Grid"]);
+            set.IncludedWithoutUse.Should().BeEmpty();
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AUsingOfAThirdOwnersDisposable_IsAnEdge_ThoughNoNameOfItAppears()
+    {
+        var edges = CompileB(
+            [
+                Code(C, "Lease", """
+                    /// <summary>Lib/C's ref struct, disposable by pattern only.</summary>
+                    public ref struct Lease
+                    {
+                        /// <summary>Releases nothing.</summary>
+                        public void Dispose() { }
+                    }
+                    """),
+                Code(A, "Factory", """
+                    /// <summary>Lib/A's factory, returning Lib/C's type.</summary>
+                    public static class LeaseFactory
+                    {
+                        /// <summary>A lease.</summary>
+                        public static Lease Make() => new();
+                    }
+                    """),
+                Code(B, "Holds", """
+                    /// <summary>B names only A's factory; the using statement calls C's Dispose.</summary>
+                    public static class Holds
+                    {
+                        /// <summary>Takes and releases.</summary>
+                        public static int Once()
+                        {
+                            using (LeaseFactory.Make())
+                            {
+                            }
+                            return 1;
+                        }
+                    }
+                    """),
+            ],
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Select(e => e.Target).Should().Equal([A, C]);
+        edges.Edges.Single(e => e.Target == C).Evidence.Should().Equal(["Lease"]);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void AnAliasOverAForeignTypeArgument_IsAnEdge()
+    {
+        var edges = CompileB(
+            [AThing(), Code(B, "Aliased", """
+                using AList = System.Collections.Generic.List<AThing>;
+
+                /// <summary>B uses A's type only through an alias over an external generic.</summary>
+                public static class Aliased
+                {
+                    /// <summary>How many.</summary>
+                    public static int Count(AList list) => list.Count;
+                }
+                """)],
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A,
+            "the alias binds List<T>, and only its type argument names A");
+        edges.Edges[0].Evidence.Should().Equal(["AThing"]);
+        edges.IncludedWithoutUse.Should().BeEmpty();
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void IdenticalSnippetsOfTwoOwners_NameBothOwners_NeverOnlyTheLastOne()
+    {
+        const string snippet = """
+            /// <summary>The same text, shipped by two owners.</summary>
+            public record Twin(int Value);
+            """;
+        var edges = CompileB(
+            [Code(A, "Twin", snippet), Code(C, "Twin", snippet), Code(B, "UsesA", """
+                namespace FromA
+                {
+                    @@Lib/A/Source/Twin
+                }
+
+                namespace FromC
+                {
+                    @@Lib/C/Source/Twin
+                }
+
+                /// <summary>B binds only the copy A supplied.</summary>
+                public static class UsesFromA
+                {
+                    /// <summary>One.</summary>
+                    public static FromA.Twin One() => new(1);
+                }
+                """)],
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Select(e => e.Target).Should().Contain(A,
+            "text cannot tell the two copies apart, so the edge to A must not be lost to C's copy");
+        edges.Edges.Select(e => e.Target).Should().BeSubsetOf([A, C],
+            "the ambiguity may cost an extra edge to C, never one to anybody else");
+    }
+
     [Fact]
     public void DeclaredTypeNames_SpellNestedGenericAndNamespacedTypesAsTheBoundSymbolDoes()
     {

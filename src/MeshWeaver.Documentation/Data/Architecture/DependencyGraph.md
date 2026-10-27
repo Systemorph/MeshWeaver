@@ -28,14 +28,24 @@ One node per compiled source, holding that source's whole forward edge set:
 |---|---|
 | path | `{NodeTypePath}/_Dependency/Forward` |
 | node type | `DependencyEdgeSet` (registered by `AddGraph`, keeps no history) |
-| content | `DependencyEdgeSet` — `Source`, `BuildMvid`, `InputDigest`, `Commit`, `Edges`, `IncludedWithoutUse` |
+| content | `DependencyEdgeSet` — `Source`, `BuildMvid`, `StampVersion`, `InputDigest`, `Commit`, `Edges`, `IncludedWithoutUse` |
 | one edge | `DependencyEdge` — `Target`, `Kind`, `TargetBuildMvid`, `Evidence` |
 
 `Kind` is an open vocabulary (`DependencyEdgeKinds`): `NodeType` and `Module` today.
 
-- **One node per source, replaced whole.** A recompile writes the complete set in one
-  `CreateOrUpdateNode`, so a dropped edge disappears in the same write that adds the new ones —
-  never a half-state, and never a query to find which edges to delete.
+- **One node per source, replaced whole.** A recompile writes the complete set in one write, so a
+  dropped edge disappears in the same write that adds the new ones — never a half-state, and never
+  a query to find which edges to delete.
+- **The newest generation wins, whatever order the writes arrive in.** Two writers publish one
+  source's set (the activation's compile settle and the cold-start batch bake), each AFTER its own
+  stamp landed, so an older compile can land its stamp, pause, and write its edges after a newer
+  build has stamped and written. `StampVersion` is the version of the NodeType record that the
+  build's stamp landed at — minted monotonically per path, so it orders the two writers' builds.
+  `DependencyEdgeSetWriter.Write` is a compare-and-set on the edge-set row
+  (`IStorageAdapter.WriteIfVersion`, the batch stamp's own primitive): it reads the stored set,
+  skips when that set is of a newer generation, otherwise writes conditioned on the row version it
+  read, and on a refusal re-reads and decides again. A host with no storage adapter falls back to
+  `CreateOrUpdateNode`.
 - **Build identity on the set.** `BuildMvid` is the MVID of the emitted assembly the edges were
   read from (the same value as `NodeTypeDefinition.LatestAssemblyMvid` after the stamp), and
   `InputDigest` the generated-input digest of that compile. A consumer that finds a set whose
@@ -83,7 +93,11 @@ used — after the source generators, before the emitted bytes are loaded — an
 What "binds" covers: every simple name, plus the bindings no name spells — a `foreach` enumerator
 pattern (an extension `GetEnumerator`), an `await` awaiter, a deconstruction's `Deconstruct`, query
 clause operators, a collection initializer's `Add`, a target-typed `new()`, user-defined unary,
-binary and compound-assignment operators, and a user-defined implicit conversion. A referenced type
+binary and compound-assignment operators, an indexer (`Make()[0]`, `Make()?[0]`), the
+`Dispose`/`DisposeAsync` a `using` calls on a value nobody names, and a user-defined implicit
+conversion. A bound type counts together with every type its construction mentions (type
+arguments, containing types' arguments, array elements), so an alias over an external generic
+(`using AList = List<AThing>;`) is still an edge to `AThing`'s owner. A referenced type
 is looked up from its innermost declaration outwards, so a foreign record spliced into the compiling
 type's class (`Host+AThing`) stays the foreign owner's. A `using` directive is an import, not a use, and is skipped (hoisted directives
 sit in the skeleton, outside every attributed type). An `@@` include spliced inside a namespace of
@@ -97,6 +111,10 @@ Known limits, each failing towards an extra edge rather than a missing one:
 - **An include nested inside another include** is attributed by a separate parse of its own text, so
   when the outer snippet is spliced into a namespace, its inner snippet's types lose that namespace.
   A reference to them then reads as the compiling type's own.
+- **Two owners supplying IDENTICAL include text.** An include is located in the root by its text, so
+  both owners' texts match both copies. The declaration is attributed to every owner whose text
+  covers it, and a reference to either copy is an edge to both — an extra edge, never the missing
+  one the last-match-wins rule produced.
 
 Telling these apart exactly needs each reference's file origin carried through source shaping. That
 is a change to the emitted input, and it moves every content key.
@@ -116,7 +134,7 @@ which is what step 1 does.
 
 | compile | extraction | written by |
 |---|---|---|
-| runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane | the compile settle, beside the terminal stamp, as the edge-set node |
+| runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane; modules are the files of the SAME reference snapshot Roslyn compiled against, so a live module swap mid-compile cannot drop a used module | the compile settle, beside the terminal stamp, as the edge-set node |
 | cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate — and only when the stamp LANDED (a refused compare-and-set writes no edges over a newer build's) |
 | build-process bake (`NodeSetCompiler.Compile`) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges` for the bundle — writing it into a mesh at adoption is a follow-up |
 | module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | not yet | follow-up: it runs in CI with no mesh, so its edges need a transport (the bundle, then the registry) that belongs with step (4); and its one-body-pass discipline means `GetUsedAssemblyReferences`' extra binding cost is measured there before it is added |

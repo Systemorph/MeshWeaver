@@ -61,6 +61,17 @@ public sealed record DependencyEdgeSet
     /// same value <c>NodeTypeDefinition.LatestAssemblyMvid</c> carries for that build.</summary>
     public string? BuildMvid { get; init; }
 
+    /// <summary>
+    /// The version of the source's NodeType record that this build's compile stamp LANDED at — the
+    /// per-source GENERATION of the set. Record versions are minted monotonically per path, so a
+    /// later stamp always carries a higher one, whichever writer (the activation's settle or the
+    /// batch bake) made it. The writer never replaces a stored set with a set of a LOWER
+    /// generation: an older compile whose stamp landed first and whose edge write arrives last
+    /// cannot overwrite the newer build's edges. Null when the producer stamped nothing (a
+    /// build-process bake carried on its bundle).
+    /// </summary>
+    public long? StampVersion { get; init; }
+
     /// <summary>The generated-input digest of the compile that produced the build (the content
     /// key's first stage), or null when the producer did not compute one.</summary>
     public string? InputDigest { get; init; }

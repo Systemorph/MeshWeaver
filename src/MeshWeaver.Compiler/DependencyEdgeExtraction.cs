@@ -95,20 +95,25 @@ public static class DependencyEdgeExtraction
     }
 
     /// <summary>
-    /// Declared type metadata name → owning NodeType, from a per-file PARSE (no binding). Root files
-    /// first; then each include's own declarations are attributed to the INCLUDED node's owner, which
-    /// is the more specific answer for text that was spliced into a root. A type declared (partially)
-    /// by the compiling type itself stays the compiling type's, so a partial class it extends is
-    /// never an edge to itself.
+    /// Declared type metadata name → its owning NodeType(s), from a per-file PARSE (no binding). Root
+    /// files first; then each include's own declarations are attributed to the INCLUDED node's owner,
+    /// which is the more specific answer for text that was spliced into a root. A type declared
+    /// (partially) by the compiling type itself stays the compiling type's, so a partial class it
+    /// extends is never an edge to itself.
+    ///
+    /// <para>Usually ONE owner. More than one only when a declaration sits in a span that two
+    /// owners' include texts both match (identical snippets): text alone cannot tell which copy came
+    /// from whom, so the declaration is attributed to EVERY candidate — an extra edge, never a
+    /// missing one.</para>
     /// </summary>
-    internal static ImmutableDictionary<string, string> DeclaredTypeOwners(
+    internal static ImmutableDictionary<string, ImmutableSortedSet<string>> DeclaredTypeOwners(
         string selfPath,
         IReadOnlyList<DependencySourceUnit> roots,
         IReadOnlyDictionary<string, string>? includes,
         CancellationToken ct)
     {
         var parseOptions = EmitPipeline.CreateParseOptions();
-        var byName = new Dictionary<string, string>(StringComparer.Ordinal);
+        var byName = new Dictionary<string, ImmutableSortedSet<string>>(StringComparer.Ordinal);
 
         void Attribute(string path, string code, bool overrideExisting)
         {
@@ -119,9 +124,9 @@ public static class DependencyEdgeExtraction
             foreach (var name in DeclaredTypeNames(root))
             {
                 if (!byName.TryGetValue(name, out var existing))
-                    byName[name] = owner;
-                else if (overrideExisting || (!IsSelf(existing, selfPath) && IsSelf(owner, selfPath)))
-                    byName[name] = owner;
+                    byName[name] = Owners(owner);
+                else if (overrideExisting || (!ContainsSelf(existing, selfPath) && IsSelf(owner, selfPath)))
+                    byName[name] = Owners(owner);
             }
         }
 
@@ -152,14 +157,23 @@ public static class DependencyEdgeExtraction
                     if (TypeDeclarationName(declaration) is not { } name)
                         continue;
                     var at = declaration.SpanStart;
-                    foreach (var span in spans)
-                        if (at >= span.Start && at < span.Start + span.Length)
-                            byName[name] = span.Owner!;
+                    // EVERY owner whose text covers the declaration. Two owners supplying the same
+                    // snippet both match both copies, and text cannot say which copy is whose — so
+                    // both are named rather than the last one overwriting the other.
+                    var covering = spans
+                        .Where(span => at >= span.Start && at < span.Start + span.Length)
+                        .Select(span => span.Owner!)
+                        .ToImmutableSortedSet(StringComparer.OrdinalIgnoreCase);
+                    if (!covering.IsEmpty)
+                        byName[name] = covering;
                 }
             }
         }
         return byName.ToImmutableDictionary(StringComparer.Ordinal);
     }
+
+    private static ImmutableSortedSet<string> Owners(string owner) =>
+        ImmutableSortedSet.Create(StringComparer.OrdinalIgnoreCase, owner);
 
     private static IEnumerable<int> Occurrences(string text, string value)
     {
@@ -223,7 +237,7 @@ public static class DependencyEdgeExtraction
         CSharpCompilation compilation,
         IEnumerable<SyntaxTree> authoredTrees,
         string selfPath,
-        ImmutableDictionary<string, string> owners,
+        ImmutableDictionary<string, ImmutableSortedSet<string>> owners,
         CancellationToken ct)
     {
         var found = new Dictionary<string, ImmutableSortedSet<string>.Builder>(StringComparer.OrdinalIgnoreCase);
@@ -239,16 +253,19 @@ public static class DependencyEdgeExtraction
                 if (node is UsingDirectiveSyntax)
                     continue;
                 var bound = BoundSymbols(node, model, ct).ToArray();
-                if (bound.Length == 0 || !IsSelf(OwnerOfLocation(node, owners) ?? selfPath, selfPath))
+                if (bound.Length == 0
+                    || OwnerOfLocation(node, owners) is { } locationOwners && !ContainsSelf(locationOwners, selfPath))
                     continue;
-                foreach (var symbol in bound)
+                foreach (var (typeName, typeOwners) in bound.SelectMany(symbol => OwnedSourceTypes(symbol, compilation, owners)))
                 {
-                    if (OwnedSourceType(symbol, compilation, owners) is not var (typeName, owner)
-                        || IsSelf(owner, selfPath))
+                    if (ContainsSelf(typeOwners, selfPath))
                         continue;
-                    if (!found.TryGetValue(owner, out var set))
-                        found[owner] = set = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
-                    set.Add(typeName);
+                    foreach (var owner in typeOwners)
+                    {
+                        if (!found.TryGetValue(owner, out var set))
+                            found[owner] = set = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
+                        set.Add(typeName);
+                    }
                 }
             }
         }
@@ -259,8 +276,9 @@ public static class DependencyEdgeExtraction
     /// Every symbol a syntax node BINDS — named (a simple name) or implicit: the enumerator pattern
     /// of a <c>foreach</c> (an extension <c>GetEnumerator</c> nobody names), the awaiter pattern of an
     /// <c>await</c>, a deconstruction's <c>Deconstruct</c>, a query clause's operator methods, a
-    /// collection initializer's <c>Add</c>, a target-typed <c>new()</c>'s constructor, and a
-    /// user-defined implicit conversion.
+    /// collection initializer's <c>Add</c>, a target-typed <c>new()</c>'s constructor, an indexer
+    /// (plain or conditional), the <c>Dispose</c> a <c>using</c> calls, and a user-defined implicit
+    /// conversion.
     /// </summary>
     private static IEnumerable<ISymbol?> BoundSymbols(SyntaxNode node, SemanticModel model, CancellationToken ct)
     {
@@ -310,10 +328,38 @@ public static class DependencyEdgeExtraction
                 foreach (var element in initializer.Expressions)
                     yield return model.GetCollectionInitializerSymbolInfo(element, ct).Symbol;
                 break;
+            case ElementAccessExpressionSyntax or ElementBindingExpressionSyntax:
+                // An indexer: `Make()[0]` and `Make()?[0]` name no member of the indexed type.
+                yield return model.GetSymbolInfo(node, ct).Symbol;
+                break;
+            case UsingStatementSyntax usingStatement:
+                // `using (Make()) { }` disposes a value whose type nobody names.
+                var resource = usingStatement.Expression is { } usedExpression
+                    ? model.GetTypeInfo(usedExpression, ct).Type
+                    : usingStatement.Declaration is { } declared ? model.GetTypeInfo(declared.Type, ct).Type : null;
+                yield return DisposeOf(resource, usingStatement.AwaitKeyword.IsKind(SyntaxKind.AwaitKeyword));
+                break;
+            case LocalDeclarationStatementSyntax { UsingKeyword.RawKind: (int)SyntaxKind.UsingKeyword } usingDeclaration:
+                yield return DisposeOf(model.GetTypeInfo(usingDeclaration.Declaration.Type, ct).Type,
+                    usingDeclaration.AwaitKeyword.IsKind(SyntaxKind.AwaitKeyword));
+                break;
         }
 
         if (node is ExpressionSyntax expression && model.GetConversion(expression, ct) is { IsUserDefined: true } conversion)
             yield return conversion.MethodSymbol;
+    }
+
+    /// <summary>The method a <c>using</c> calls on <paramref name="type"/> — its own (or inherited)
+    /// parameterless <c>Dispose</c> / <c>DisposeAsync</c>, the pattern a ref struct relies on — or the
+    /// type itself when the call goes through an explicit interface implementation.</summary>
+    private static ISymbol? DisposeOf(ITypeSymbol? type, bool isAsync)
+    {
+        var name = isAsync ? "DisposeAsync" : "Dispose";
+        for (var t = type; t is not null; t = t.BaseType)
+            if (t.GetMembers(name).OfType<IMethodSymbol>()
+                    .FirstOrDefault(m => !m.IsStatic && m.Parameters.All(p => p.IsOptional || p.IsParams)) is { } method)
+                return method;
+        return type;
     }
 
     private static IEnumerable<ISymbol?> DeconstructMethods(DeconstructionInfo info)
@@ -328,7 +374,8 @@ public static class DependencyEdgeExtraction
     /// declaration the ownership map names, or null when it sits outside every attributed type (the generated skeleton, the
     /// <c>configuration</c> lambda, an assembly attribute) — which the caller reads as the compiling
     /// type's own code.</summary>
-    private static string? OwnerOfLocation(SyntaxNode node, ImmutableDictionary<string, string> owners)
+    private static ImmutableSortedSet<string>? OwnerOfLocation(
+        SyntaxNode node, ImmutableDictionary<string, ImmutableSortedSet<string>> owners)
     {
         // Innermost enclosing declaration the map names: a foreign record spliced into the compiling
         // type's class is the foreign owner's code, not the class's.
@@ -340,29 +387,64 @@ public static class DependencyEdgeExtraction
         return null;
     }
 
-    /// <summary>The OWNED type a symbol belongs to — its own type (or containing type for a member),
-    /// then each enclosing type outwards, the first one the ownership map names — when declared in
-    /// THIS compilation's source; null for a namespace, a local, or anything from a referenced
-    /// assembly. Innermost first, so A's record spliced into B's class (<c>Host+AThing</c>) is A's.</summary>
-    private static (string Name, string Owner)? OwnedSourceType(
-        ISymbol? symbol, CSharpCompilation compilation, ImmutableDictionary<string, string> owners)
+    /// <summary>The OWNED types a symbol reaches — its own type (or containing type for a member),
+    /// plus every type argument of a constructed type or generic method, array element and pointer
+    /// target, recursively — each looked up from itself outwards through its containing types, the
+    /// first one the ownership map names, when declared in THIS compilation's source. Nothing for a
+    /// namespace, a local, or anything from a referenced assembly. Innermost first, so A's record
+    /// spliced into B's class (<c>Host+AThing</c>) is A's. The type arguments are what keep an alias
+    /// (<c>using AList = List&lt;AThing&gt;;</c>) an edge: its uses bind the external <c>List&lt;T&gt;</c>,
+    /// and only the argument names the foreign owner.</summary>
+    private static IEnumerable<(string Name, ImmutableSortedSet<string> Owners)> OwnedSourceTypes(
+        ISymbol? symbol, CSharpCompilation compilation, ImmutableDictionary<string, ImmutableSortedSet<string>> owners)
     {
-        var type = symbol switch
+        IEnumerable<INamedTypeSymbol> reached = symbol switch
         {
             null or INamespaceSymbol or ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
-                or ILabelSymbol or IDiscardSymbol => null,
-            INamedTypeSymbol named => named.OriginalDefinition,
-            _ => symbol.ContainingType?.OriginalDefinition,
+                or ILabelSymbol or IDiscardSymbol => [],
+            ITypeSymbol type => TypesIn(type),
+            IMethodSymbol method => TypesIn(method.ContainingType).Concat(method.TypeArguments.SelectMany(TypesIn)),
+            _ => TypesIn(symbol.ContainingType),
         };
-        if (type is null || !SymbolEqualityComparer.Default.Equals(type.ContainingAssembly, compilation.Assembly))
-            return null;
-        for (var t = type; t is not null; t = t.ContainingType?.OriginalDefinition)
+        foreach (var type in reached.Distinct<INamedTypeSymbol>(SymbolEqualityComparer.Default))
         {
-            var name = MetadataNameOf(t);
-            if (owners.TryGetValue(name, out var owner))
-                return (name, owner);
+            if (!SymbolEqualityComparer.Default.Equals(type.ContainingAssembly, compilation.Assembly))
+                continue;
+            for (var t = type; t is not null; t = t.ContainingType?.OriginalDefinition)
+            {
+                var name = MetadataNameOf(t);
+                if (owners.TryGetValue(name, out var typeOwners))
+                {
+                    yield return (name, typeOwners);
+                    break;
+                }
+            }
         }
-        return null;
+    }
+
+    /// <summary>The original definitions of <paramref name="type"/> and of every type its
+    /// construction mentions (type arguments, containing types' arguments, array elements, pointer
+    /// targets).</summary>
+    private static IEnumerable<INamedTypeSymbol> TypesIn(ITypeSymbol? type)
+    {
+        switch (type)
+        {
+            case INamedTypeSymbol named:
+                yield return named.OriginalDefinition;
+                for (var t = named; t is not null; t = t.ContainingType)
+                    foreach (var argument in t.TypeArguments)
+                        foreach (var inner in TypesIn(argument))
+                            yield return inner;
+                break;
+            case IArrayTypeSymbol array:
+                foreach (var inner in TypesIn(array.ElementType))
+                    yield return inner;
+                break;
+            case IPointerTypeSymbol pointer:
+                foreach (var inner in TypesIn(pointer.PointedAtType))
+                    yield return inner;
+                break;
+        }
     }
 
     /// <summary>The module edges: every reference the compilation USED that is an installed module,
@@ -431,4 +513,8 @@ public static class DependencyEdgeExtraction
 
     private static bool IsSelf(string owner, string selfPath) =>
         string.Equals(owner, selfPath, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A declaration the compiling type (partly) owns is its own: never an edge to itself.</summary>
+    private static bool ContainsSelf(ImmutableSortedSet<string> owners, string selfPath) =>
+        owners.Any(o => IsSelf(o, selfPath));
 }
