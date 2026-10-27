@@ -101,7 +101,11 @@ record leaves the field blank. Precedence, per field: code (`.WithImage(…)`,
 above. The configured tag is resolved when the containers are composed and is never pinned onto the
 record. The package README carries the `appsettings.json` example. `memex build plugin` follows the
 same rule for its two images (`$MEMEX_IMAGE_REGISTRY` / `$MEMEX_IMAGE_TAG`, or `imageRegistry` /
-`imageTag` in `~/.memex/config.json`, else `cr.meshweaver.cloud` and `latest`).
+`imageTag` in `~/.memex/config.json`, else `cr.meshweaver.cloud` and `latest`), with one twist:
+the two images must come from ONE set, and CD moves `mw-plugin-test:latest` at promotion but
+`memex-portal-ai:latest` on the armed set, so a portal tag of `latest` pairs with the tester's
+`<major>-latest` (`imageMajor` / `$MEMEX_IMAGE_MAJOR`, default `3`), the tester tag moved on the
+same armed set.
 
 🚨 Measured 2026-10-27: CD moves `latest` on `mw-plugin-test` only ([Image Tag Contract](../ImageTagContract));
 `memex-portal-ai` and `memex-migration` carry `main` and the line pointers (`3-latest`,

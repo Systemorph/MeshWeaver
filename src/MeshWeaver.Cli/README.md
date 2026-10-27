@@ -46,20 +46,22 @@ inside them. Nothing in the job needs to know about docker, mounts, seeds or all
 ### Which images, when the flags are omitted
 
 The image version comes from **configuration**, never from the CLI's own version. Without
-`--image` / `--platform-image` the verb runs `<registry>/mw-plugin-test:<tag>` and
-`<registry>/memex-portal-ai:<tag>`, ONE registry and ONE tag for both, resolved in this order:
+`--image` / `--platform-image` the verb runs `<registry>/memex-portal-ai:<tag>` and the tester
+from the SAME set, resolved in this order:
 
-1. `$MEMEX_IMAGE_REGISTRY` / `$MEMEX_IMAGE_TAG`
-2. `imageRegistry` / `imageTag` in `~/.memex/config.json`
-3. `cr.meshweaver.cloud` and `latest`
+1. `$MEMEX_IMAGE_REGISTRY` / `$MEMEX_IMAGE_TAG` / `$MEMEX_IMAGE_MAJOR`
+2. `imageRegistry` / `imageTag` / `imageMajor` in `~/.memex/config.json`
+3. `cr.meshweaver.cloud`, `latest` and `3`
 
-🚨 CD moves `latest` on `mw-plugin-test` only ([Image Tag Contract](https://memex.meshweaver.cloud/Doc/Architecture/ImageTagContract));
-`memex-portal-ai` carries no `latest` yet, so until CD writes it, set `imageTag` to an exact set
-version (both images carry `<version>`, e.g. `3.1.11786`) or pass the flags.
+🚨 **One set, not one string.** A set version (`3.1.11786`) or a line pointer (`3-latest`) names
+both repositories as written. The moving `latest` does NOT: CD moves `memex-portal-ai:latest` on the
+ARMED set but `mw-plugin-test:latest` at PROMOTION, which can run ahead of arming. So a portal tag
+of `latest` pairs with `mw-plugin-test:<major>-latest`, the tester tag CD moves on the same armed
+set. The default pair is therefore `memex-portal-ai:latest` + `mw-plugin-test:3-latest`.
 
 ```json
 { "baseUrl": "https://memex.meshweaver.cloud", "token": "mw_…",
-  "imageRegistry": "cr.meshweaver.cloud", "imageTag": "3.1.11786" }
+  "imageRegistry": "cr.meshweaver.cloud", "imageTag": "3.1.11786", "imageMajor": "3" }
 ```
 
 A flag always wins, and a digest pin from the same CD wave (above) is still what CI should pass.

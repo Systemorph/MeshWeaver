@@ -41,7 +41,7 @@ public sealed class MemexConfig
         var file = new ConfigFile
         {
             BaseUrl = baseUrl, Token = token,
-            ImageRegistry = existing?.ImageRegistry, ImageTag = existing?.ImageTag,
+            ImageRegistry = existing?.ImageRegistry, ImageTag = existing?.ImageTag, ImageMajor = existing?.ImageMajor,
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(file, Json));
     }
@@ -73,5 +73,7 @@ public sealed class MemexConfig
         [JsonPropertyName("imageRegistry")] public string? ImageRegistry { get; set; }
         /// <summary>Tag of the images <c>build plugin</c> runs by default, verbatim as the registry carries it.</summary>
         [JsonPropertyName("imageTag")] public string? ImageTag { get; set; }
+        /// <summary>Platform major whose armed set a <c>latest</c> portal pairs with on the tester side (see <see cref="ImageReferences"/>).</summary>
+        [JsonPropertyName("imageMajor")] public string? ImageMajor { get; set; }
     }
 }
