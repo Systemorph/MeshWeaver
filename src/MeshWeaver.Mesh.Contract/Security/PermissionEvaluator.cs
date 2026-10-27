@@ -617,20 +617,24 @@ internal static class PermissionEvaluator
     {
         for (var s = ns; ; s = GetParentScope(s))
         {
-            if (policies.TryGetValue(s, out var p) && p.PublicPreview is { } stated)
+            var stored = policies.TryGetValue(s, out var p) ? p.PublicPreview : null;
+            // A `false` — stored or effective — always decides: anyone may opt a scope out.
+            if (stored == false)
+                return false;
+            if (!declaredOnly)
             {
-                // On a closed instance a STORED `true` is not a decision either way: it is skipped and the walk
-                // continues, so a subtree that opted in itself still inherits the operator's declared `true`
-                // above it — answering `false` there showed it the generic card the declaration exists to
-                // replace (PR #7293 review). A `false`, stored or declared, always decides.
-                var eligible = !stated || !declaredOnly
-                    || (staticPolicies.TryGetValue(s, out var declared) && declared.PublicPreview == true);
-                if (eligible)
-                    return stated;
-                // The skipped stored `true` may have REPLACED a declared policy at this same scope (the effective
-                // map holds one policy per scope): the declaration there still decides, so a declared `false`
-                // cannot be bypassed by writing a `true` over it (PR #7293 review).
-                if (staticPolicies.TryGetValue(s, out var underneath) && underneath.PublicPreview is { } declaredHere)
+                if (stored is { } open)
+                    return open;
+            }
+            else
+            {
+                // On a closed instance only the DECLARATION at this scope decides. The effective map holds ONE
+                // policy per scope, so a stored policy may have replaced the declared one — whatever the stored
+                // one states (`true`, or nothing at all), the declaration underneath is read directly, so a
+                // declared opt-out cannot be bypassed by writing over it. A stored `true` with no declaration
+                // here is skipped and the walk continues, so a subtree that opted itself in still inherits the
+                // operator's declared answer above it (PR #7293 review, three rounds).
+                if (staticPolicies.TryGetValue(s, out var declared) && declared.PublicPreview is { } declaredHere)
                     return declaredHere;
             }
             if (string.IsNullOrEmpty(s)) break;

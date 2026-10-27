@@ -152,6 +152,17 @@ public class EffectivePublicPreviewTest
     }
 
     [Fact]
+    public void AStoredPolicyStatingNothing_OverADeclaredFalse_DoesNotBypassIt_OnAClosedInstance()
+    {
+        var declared = Stating("", true).Add("A", new PartitionAccessPolicy { PublicPreview = false });
+        var effective = Stating("", true).Add("A", new PartitionAccessPolicy { PublicRead = false });
+        PermissionEvaluator.EffectivePublicPreview(effective, declared, "A/B", declaredOnly: true)
+            .Should().BeFalse("a stored policy that replaced the declared one at A, stating nothing, leaves its opt-out standing");
+        PermissionEvaluator.EffectivePublicPreview(effective, declared, "A/B", declaredOnly: false)
+            .Should().BeTrue("on an open instance the effective policy at A states nothing, so the root decides — unchanged");
+    }
+
+    [Fact]
     public void ANearerFalse_OptsOutOfADeclaredTrue()
     {
         var policies = Stating("", true).Add("A", new PartitionAccessPolicy { PublicPreview = false });
