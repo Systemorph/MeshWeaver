@@ -44,6 +44,7 @@ public sealed class DynamicMcpCommandsTest : IDisposable
               "mode":{"type":"string","enum":["fast","slow"]},
               "tags":{"type":"array","items":{"type":"string"}},
               "counts":{"type":"array","items":{"type":"integer"}},
+              "modes":{"type":"array","items":{"type":"string","enum":["fast","slow"]}},
               "meta":{"type":"object"},
               "token":{"type":"string","description":"Collides with the global --token."}},
             "required":["path","mode"]}},
@@ -60,7 +61,11 @@ public sealed class DynamicMcpCommandsTest : IDisposable
           {"name":"upload","description":"SERVER upload (base64).",
            "inputSchema":{"type":"object","properties":{"path":{"type":"string"},"base64Content":{"type":"string"}},"required":["path","base64Content"]}},
           {"name":"login","description":"A server tool named like a built-in.","inputSchema":{"type":"object","properties":{}}},
-          {"name":"malformed","description":"Answers a content item whose type is a number.","inputSchema":{"type":"object","properties":{}}}
+          {"name":"malformed","description":"Answers a content item whose type is a number.","inputSchema":{"type":"object","properties":{}}},
+          {"name":"empty_envelope","description":"Answers {}.","inputSchema":{"type":"object","properties":{}}},
+          {"name":"content_not_array","description":"Answers content: 42.","inputSchema":{"type":"object","properties":{}}},
+          {"name":"empty_content","description":"Answers content: [].","inputSchema":{"type":"object","properties":{}}},
+          {"name":"wrong_id","description":"Answers with another request's id.","inputSchema":{"type":"object","properties":{}}}
         ]
         """)!;
 
@@ -548,5 +553,74 @@ public sealed class DynamicMcpCommandsTest : IDisposable
         Assert.Equal(
             ToolCatalogCache.CachePath(configDir, "HTTPS://Portal.Example.com/TenantA/"),
             ToolCatalogCache.CachePath(configDir, "https://portal.example.com/TenantA"));
+    }
+
+    // --- third review round ---------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("--base-url:https://b.example.com", "https://b.example.com")]
+    [InlineData("--base-url=https://b.example.com", "https://b.example.com")]
+    public void The_pre_scan_reads_colon_and_equals_delimited_values(string arg, string expected)
+    {
+        var scan = CliApp.Scan([arg, "--token:mw_x", "get", "X"]);
+        Assert.Equal(expected, scan.BaseUrl);
+        Assert.Equal("mw_x", scan.Token);
+        Assert.Equal("get", scan.Command);
+    }
+
+    [Fact]
+    public async Task A_colon_delimited_base_url_reaches_the_instance_it_names()
+    {
+        await using var a = await FakeMcpServer.StartAsync(Catalog());
+        await using var b = await FakeMcpServer.StartAsync(Catalog());
+        Assert.Equal(0, (await Run(a, "", "get", "Doc/X")).Exit); // control: A is reachable and cached
+
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var exit = await CliApp.RunAsync(
+            ["--base-url:" + b.BaseUrl, "--token:" + FakeMcpServer.Token, "get", "Doc/Y"],
+            new CliHost(stdout, stderr, configDir, () => now), TestContext.Current.CancellationToken);
+
+        Assert.True(exit == 0, stderr.ToString());
+        Assert.Equal(["get"], b.Calls.Select(c => c.Name));
+        Assert.Single(a.Calls); // only the control call: nothing reached the instance not named
+    }
+
+    [Theory]
+    [InlineData("empty-envelope")]
+    [InlineData("content-not-array")]
+    [InlineData("wrong-id")]
+    public async Task A_malformed_response_is_exit_3_never_success(string tool)
+    {
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        var (exit, stdout, stderr) = await Run(server, "", tool);
+        Assert.Equal(3, exit);
+        Assert.Equal("", stdout);
+        Assert.StartsWith("error:", stderr);
+    }
+
+    [Fact]
+    public async Task An_empty_content_array_is_still_a_success()
+    {
+        // Negative control for the malformed-response rule: [] is a valid, empty answer.
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        var (exit, _, stderr) = await Run(server, "", "empty-content");
+        Assert.True(exit == 0, stderr);
+    }
+
+    [Fact]
+    public async Task Array_items_are_validated_against_their_enum()
+    {
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        Assert.NotEqual(0, (await Run(server, "", "mixed-bag", "Doc/X", "--mode", "fast", "--modes", "invalid")).Exit);
+        Assert.NotEqual(0, (await Run(server, "", "mixed-bag", "Doc/X", "--mode", "fast", "--modes", """["fast","invalid"]""")).Exit);
+        Assert.Empty(server.Calls);
+
+        // Negative control: valid items, both forms, are sent.
+        Assert.Equal(0, (await Run(server, "", "mixed-bag", "Doc/X", "--mode", "fast", "--modes", "fast", "--modes", "slow")).Exit);
+        Assert.Equal(0, (await Run(server, "", "mixed-bag", "Doc/X", "--mode", "fast", "--modes", """["slow"]""")).Exit);
+        Assert.Collection(server.Calls,
+            c => Assert.Equal("""["fast","slow"]""", c.Arguments["modes"]!.ToJsonString()),
+            c => Assert.Equal("""["slow"]""", c.Arguments["modes"]!.ToJsonString()));
     }
 }

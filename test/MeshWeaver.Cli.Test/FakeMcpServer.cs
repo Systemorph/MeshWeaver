@@ -146,6 +146,8 @@ internal sealed class FakeMcpServer : IAsyncDisposable
                 var name = message["params"]!["name"]!.GetValue<string>();
                 if (!Tools.Any(t => t!["name"]!.GetValue<string>() == name))
                     reply["error"] = new JsonObject { ["code"] = -32602, ["message"] = $"Unknown tool: '{name}'" };
+                else if (name == "wrong_id")
+                    reply["id"] = 999_999; // a reply that answers some other request
                 else
                     reply["result"] = Answer(name, (JsonObject)message["params"]!["arguments"]!);
                 break;
@@ -189,6 +191,9 @@ internal sealed class FakeMcpServer : IAsyncDisposable
     {
         "fails" => Text("the tool failed on purpose", isError: true),
         "sentinel" => Text("Error: Not permitted at Doc/X"),
+        "empty_envelope" => new JsonObject(),
+        "content_not_array" => new JsonObject { ["content"] = 42 },
+        "empty_content" => new JsonObject { ["content"] = new JsonArray() },
         // A content item whose `type` is a number, not a string: a malformed result.
         "malformed" => new JsonObject { ["content"] = new JsonArray(new JsonObject { ["type"] = 5, ["text"] = "x" }) },
         _ => Text(new JsonObject { ["tool"] = name, ["arguments"] = arguments.DeepClone() }.ToJsonString()),

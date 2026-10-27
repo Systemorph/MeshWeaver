@@ -335,13 +335,29 @@ public static class DynamicCommands
             case Option<string[]> many:
             {
                 var values = result.GetValue(many) ?? [];
+                var itemSchema = schema["items"] as JsonObject;
+                var allowed = itemSchema is not null && KindOf(itemSchema) == SchemaKind.Enum
+                    ? ((JsonArray)itemSchema["enum"]!).Select(v => v!.GetValue<string>()).ToImmutableHashSet(StringComparer.Ordinal)
+                    : null;
                 if (values.Length == 1 && values[0].TrimStart().StartsWith('['))
-                    return ParseJson(values[0], display);
-                var itemKind = schema["items"] is JsonObject items ? KindOf(items) : SchemaKind.String;
+                {
+                    var parsed = ParseJson(values[0], display);
+                    if (allowed is not null && parsed.Item2 is JsonArray given)
+                        foreach (var item in given)
+                            if (item is not JsonValue v || !v.TryGetValue<string>(out var text) || !allowed.Contains(text))
+                                parsed.Item3 = parsed.Item3.Add($"{display}: {item?.ToJsonString() ?? "null"} is not one of {string.Join(", ", allowed)}.");
+                    return parsed;
+                }
+                var itemKind = itemSchema is not null ? KindOf(itemSchema) : SchemaKind.String;
                 var array = new JsonArray();
                 var errors = none;
                 foreach (var value in values)
                 {
+                    if (allowed is not null && !allowed.Contains(value))
+                    {
+                        errors = errors.Add($"{display}: '{value}' is not one of {string.Join(", ", allowed)}.");
+                        continue;
+                    }
                     var (node, error) = Convert(value, itemKind);
                     if (error is not null) errors = errors.Add($"{display}: {error}");
                     else array.Add(node);

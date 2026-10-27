@@ -44,11 +44,13 @@ public static class CliApp
         {
             var a = args[i];
             if (a == "--") break;
-            var eq = a.IndexOf('=');
-            var head = a.StartsWith("--", StringComparison.Ordinal) && eq > 0 ? a[..eq] : a;
+            // System.CommandLine accepts `--name value`, `--name=value` AND `--name:value`; the
+            // pre-scan must read all three, or it would connect to a different instance than the
+            // one the parser later reports (RunAsync also refuses any disagreement that remains).
+            var (head, inline) = SplitInline(a);
             if (GlobalValueOptions.Contains(head))
             {
-                var value = eq > 0 && head != a ? a[(eq + 1)..] : i + 1 < args.Count ? args[++i] : null;
+                var value = inline ?? (i + 1 < args.Count ? args[++i] : null);
                 if (head == "--base-url") baseUrl = value; else token = value;
                 continue;
             }
@@ -56,7 +58,7 @@ public static class CliApp
             {
                 // A bool option: `--refresh`, `--refresh=false`, `--refresh true`. An explicit value
                 // is CONSUMED here, so `--refresh false` never reads `false` as the command.
-                if (head != a) refresh = !bool.TryParse(a[(eq + 1)..], out var given) || given;
+                if (inline is not null) refresh = !bool.TryParse(inline, out var given) || given;
                 else if (i + 1 < args.Count && bool.TryParse(args[i + 1], out var next)) { refresh = next; i++; }
                 else refresh = true;
                 continue;
@@ -66,6 +68,17 @@ public static class CliApp
             if (command is null && !a.StartsWith('-')) command = a;
         }
         return new PreScan(baseUrl, token, refresh, command, help, version);
+    }
+
+    private static readonly ImmutableArray<string> InlineValueOptions = ["--base-url", "--token", "--refresh"];
+
+    /// <summary><c>--base-url=x</c> / <c>--base-url:x</c> → (<c>--base-url</c>, <c>x</c>); anything else → (arg, null).</summary>
+    private static (string Head, string? Inline) SplitInline(string arg)
+    {
+        foreach (var name in InlineValueOptions)
+            if (arg.Length > name.Length && arg.StartsWith(name, StringComparison.Ordinal) && arg[name.Length] is '=' or ':')
+                return (name, arg[(name.Length + 1)..]);
+        return (arg, null);
     }
 
     /// <summary>Runs the CLI: loads the catalog when the command needs it, builds the tree, invokes.</summary>
@@ -123,6 +136,18 @@ public static class CliApp
 
             var root = BuildRoot(host, catalog, unavailable, client);
             var parse = root.Parse(args);
+            // 🚨 Fail closed if the parser read the connection options differently from the
+            // pre-scan the client was built from: a generated command must never run against an
+            // instance other than the one the command line names.
+            if (needCatalog && parse.Errors.Count == 0
+                && (!SameValue(parse.GetValue<string?>("--base-url"), scan.BaseUrl)
+                    || !SameValue(parse.GetValue<string?>("--token"), scan.Token)))
+            {
+                await host.Err.WriteLineAsync(
+                    "error: --base-url / --token were given in a form the CLI could not read before parsing; "
+                    + "use `--base-url <url>` and `--token <token>`.");
+                return 2;
+            }
             return await parse.InvokeAsync(new InvocationConfiguration { Output = host.Out, Error = host.Err }, ct);
         }
         finally
@@ -189,6 +214,9 @@ public static class CliApp
 
         return root;
     }
+
+    private static bool SameValue(string? parsed, string? scanned) =>
+        string.Equals(parsed?.TrimEnd('/'), scanned?.TrimEnd('/'), StringComparison.Ordinal);
 
     /// <summary>
     /// The command name of every catalog tool. A tool's name is its kebab-case form — unless two or
@@ -265,6 +293,12 @@ public static class CliApp
     /// <summary>The printable form of a <c>CallToolResult</c>: text items verbatim, any other item as JSON.</summary>
     public static string RenderContent(JsonObject result)
     {
+        // A result with neither `content` nor `structuredContent`, or a `content` that is not an
+        // array, is MALFORMED — never an empty success (exit 3 through CallTool).
+        if (result["content"] is { } raw && raw is not JsonArray)
+            throw new InvalidDataException($"the tool result's `content` is not an array: {raw.ToJsonString()}");
+        if (result["content"] is null && result["structuredContent"] is null)
+            throw new InvalidDataException("the tool result has neither `content` nor `structuredContent`.");
         if (result["content"] is JsonArray content && content.Count > 0)
             return string.Join("\n", content.Select(item =>
                 item is JsonObject o && o["type"]?.GetValue<string>() == "text" && o["text"] is JsonValue t && t.TryGetValue<string>(out var s)

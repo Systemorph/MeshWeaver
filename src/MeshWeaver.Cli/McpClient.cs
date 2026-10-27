@@ -60,7 +60,7 @@ public sealed class McpClient : IDisposable
             // A reply without a `tools` array is MALFORMED, never an empty catalog: an empty one would
             // be cached over a good one and remove every mesh command.
             if (result?["tools"] is not JsonArray tools)
-                throw new McpRpcException(0, "tools/list answered no `tools` array.");
+                throw new InvalidDataException("tools/list answered no `tools` array.");
             foreach (var tool in tools.ToArray())
                 all.Add(tool?.DeepClone());
             cursor = result?["nextCursor"]?.GetValue<string>();
@@ -74,7 +74,7 @@ public sealed class McpClient : IDisposable
     {
         await EnsureInitialized(ct);
         var result = await Request("tools/call", new JsonObject { ["name"] = name, ["arguments"] = arguments }, ct);
-        return result as JsonObject ?? throw new McpRpcException(0, $"tools/call '{name}' answered no result object.");
+        return result as JsonObject ?? throw new InvalidDataException($"tools/call '{name}' answered no result object.");
     }
 
     private async Task EnsureInitialized(CancellationToken ct)
@@ -95,7 +95,7 @@ public sealed class McpClient : IDisposable
     {
         var id = ++nextId;
         var reply = await Send(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method, ["params"] = parameters }, id, ct)
-                    ?? throw new McpRpcException(0, $"{method}: the server answered no JSON-RPC reply for id {id}.");
+                    ?? throw new InvalidDataException($"{method}: the server answered no JSON-RPC reply for id {id}.");
         if (reply["error"] is JsonObject error)
             throw new McpRpcException(
                 error["code"]?.GetValue<int>() ?? 0,
