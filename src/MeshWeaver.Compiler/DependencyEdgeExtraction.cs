@@ -582,7 +582,8 @@ public static class DependencyEdgeExtraction
     /// <summary>The MODULE edges the emitted image cannot show. The compiler leaves no
     /// <c>AssemblyRef</c> for a module symbol it ERASED: a constant (an enum member included) it
     /// inlined, a call to a <c>[Conditional]</c> method (or a use of a <c>[Conditional]</c>
-    /// attribute) whose symbol is undefined, a module type that only appears in a constant
+    /// attribute) whose symbol is undefined — and every module member inside that call's arguments
+    /// and receiver, whoever declares the conditional method — a module type that only appears in a constant
     /// expression (<c>(int)default(Color)</c>), and any name inside a <c>nameof</c> — a generic
     /// argument included. A change to that module still changes or breaks this type's compile.
     /// Candidates are nominated by NAME — every identifier inside a <c>nameof</c>, and every
@@ -602,8 +603,10 @@ public static class DependencyEdgeExtraction
         if (pending.Count == 0)
             return [];
         var nominated = new HashSet<string>(StringComparer.Ordinal);
+        var conditionalNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var assembly in pending.Keys)
-            CollectErasableNames(assembly.GlobalNamespace, nominated, ct);
+            CollectErasableNames(assembly.GlobalNamespace, nominated, conditionalNames, ct);
+        CollectConditionalCallees(compilation, conditionalNames, ct);
 
         var found = new SortedDictionary<string, DependencyEdge>(StringComparer.Ordinal);
         foreach (var tree in compilation.SyntaxTrees)
@@ -617,11 +620,37 @@ public static class DependencyEdgeExtraction
                 .Where(i => i is { Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" }, ArgumentList.Arguments.Count: 1 })
                 .SelectMany(i => i.ArgumentList.Arguments[0].Expression.DescendantNodesAndSelf().OfType<SimpleNameSyntax>())
                 .ToHashSet();
+            // An erased [Conditional] call erases its ARGUMENTS and receiver too: a module member used
+            // only there (an extension method, a property) leaves no AssemblyRef, whoever declares the
+            // conditional method. Only invocations whose callee NAME is a known conditional method are
+            // bound; every name inside such a call's receiver and arguments is then bound below.
+            var erased = new HashSet<SimpleNameSyntax>();
+            foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                var (callee, receiver) = invocation.Expression switch
+                {
+                    MemberAccessExpressionSyntax access => (access.Name, (SyntaxNode?)access.Expression),
+                    MemberBindingExpressionSyntax binding => (binding.Name, null),
+                    SimpleNameSyntax simple => (simple, null),
+                    _ => (null, null),
+                };
+                if (callee is null || !conditionalNames.Contains(callee.Identifier.ValueText))
+                    continue;
+                model ??= compilation.GetSemanticModel(tree);
+                if (model.GetSymbolInfo(invocation, ct).Symbol is not IMethodSymbol method
+                    || !(method.ReducedFrom ?? method).OriginalDefinition.GetAttributes().Any(IsConditional))
+                    continue;
+                foreach (var inner in invocation.ArgumentList.DescendantNodes().OfType<SimpleNameSyntax>())
+                    erased.Add(inner);
+                if (receiver is not null)
+                    foreach (var inner in receiver.DescendantNodesAndSelf().OfType<SimpleNameSyntax>())
+                        erased.Add(inner);
+            }
             foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>())
             {
                 if (pending.Count == 0)
                     break;
-                if (!insideNameof.Contains(name) && !nominated.Contains(name.Identifier.ValueText))
+                if (!insideNameof.Contains(name) && !erased.Contains(name) && !nominated.Contains(name.Identifier.ValueText))
                     continue;
                 model ??= compilation.GetSemanticModel(tree);
                 var info = model.GetSymbolInfo(name, ct);
@@ -657,32 +686,63 @@ public static class DependencyEdgeExtraction
     /// emitted image: every type name (an attribute type's also without its <c>Attribute</c>
     /// suffix), every constant field (enum members included) and every <c>[Conditional]</c> method,
     /// nested types included.</summary>
-    private static void CollectErasableNames(INamespaceSymbol ns, HashSet<string> names, CancellationToken ct)
+    private static void CollectErasableNames(INamespaceSymbol ns, HashSet<string> names, HashSet<string> conditionals,
+        CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         foreach (var member in ns.GetMembers())
             switch (member)
             {
                 case INamespaceSymbol inner:
-                    CollectErasableNames(inner, names, ct);
+                    CollectErasableNames(inner, names, conditionals, ct);
                     break;
                 case INamedTypeSymbol type:
-                    CollectErasableNames(type, names);
+                    CollectErasableNames(type, names, conditionals);
                     break;
             }
     }
 
-    private static void CollectErasableNames(INamedTypeSymbol type, HashSet<string> names)
+    private static void CollectErasableNames(INamedTypeSymbol type, HashSet<string> names, HashSet<string> conditionals)
     {
         names.Add(type.Name);
         if (type.Name.Length > "Attribute".Length && type.Name.EndsWith("Attribute", StringComparison.Ordinal))
             names.Add(type.Name[..^"Attribute".Length]);
         foreach (var member in type.GetMembers())
-            if (member is IFieldSymbol { IsConst: true }
-                || member is IMethodSymbol method && method.GetAttributes().Any(IsConditional))
+            if (member is IFieldSymbol { IsConst: true })
                 names.Add(member.Name);
+            else if (member is IMethodSymbol method && method.GetAttributes().Any(IsConditional))
+            {
+                names.Add(member.Name);
+                conditionals.Add(member.Name);
+            }
         foreach (var nested in type.GetTypeMembers())
-            CollectErasableNames(nested, names);
+            CollectErasableNames(nested, names, conditionals);
+    }
+
+    /// <summary>The framework types whose <c>[Conditional]</c> methods in-mesh code calls
+    /// (<c>Debug.Assert</c> under a compile without <c>DEBUG</c>, …).</summary>
+    private static readonly string[] FrameworkConditionalTypes =
+    [
+        "System.Diagnostics.Debug", "System.Diagnostics.Trace", "System.Diagnostics.Debugger",
+        "System.Diagnostics.Contracts.Contract",
+    ];
+
+    /// <summary>The names of <c>[Conditional]</c> methods a call in this compilation can bind to
+    /// beyond the pending modules': the ones its own source declares (by syntax — no binding) and
+    /// the framework's. Names only nominate; the invocation is bound before its arguments count.</summary>
+    private static void CollectConditionalCallees(CSharpCompilation compilation, HashSet<string> names, CancellationToken ct)
+    {
+        foreach (var tree in compilation.SyntaxTrees)
+            foreach (var method in tree.GetRoot(ct).DescendantNodes().OfType<MethodDeclarationSyntax>())
+                if (method.AttributeLists.SelectMany(l => l.Attributes).Any(a => a.Name.ToString() is var n
+                        && (n.EndsWith("Conditional", StringComparison.Ordinal)
+                            || n.EndsWith("ConditionalAttribute", StringComparison.Ordinal))))
+                    names.Add(method.Identifier.ValueText);
+        foreach (var metadataName in FrameworkConditionalTypes)
+            if (compilation.GetTypeByMetadataName(metadataName) is { } type)
+                foreach (var method in type.GetMembers().OfType<IMethodSymbol>())
+                    if (method.GetAttributes().Any(IsConditional))
+                        names.Add(method.Name);
     }
 
     private static bool IsConditional(AttributeData attribute) =>

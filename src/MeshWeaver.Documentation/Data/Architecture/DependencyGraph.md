@@ -179,12 +179,17 @@ type whose emitted code references nothing in it (measured: MeshWeaver.Markdown.
 declares types in the `MeshWeaver.Graph` namespace, dropped out of 2 of 30 sets) — the same over-count the
 platform edges were moved off for. A module symbol the compiler ERASED from the image is still a
 module edge: an inlined constant (an enum member included), a call to a `[Conditional]` method or a
-`[Conditional]` attribute whose symbol is undefined, a module type that only appears in a constant
+`[Conditional]` attribute whose symbol is undefined — together with every module member inside that
+call's arguments and receiver, whoever declares the conditional method (`Trace("x".Probe())` on a
+consumer's own method, `Debug.Assert(…)` compiled without `DEBUG`) — a module type that only appears in a constant
 expression (`(int)default(Color)`), and any name inside a `nameof`, a generic argument included. A
 change to that module changes or breaks the type's compile, and CI selection reads the module edge to
 know it. The candidates are nominated by name: every identifier inside a `nameof`, plus every
 identifier that spells a type name, a constant or a `[Conditional]` method of a module that is not
-yet an edge. Only those nodes are bound, so this never costs a second binding pass.
+yet an edge; and every name inside an invocation whose callee is a `[Conditional]` method — known by
+name from the pending modules, the compilation's own source and the framework's `Debug`, `Trace`,
+`Debugger` and `Contract`, and confirmed by binding that one invocation. Only those nodes are bound,
+so this never costs a second binding pass.
 
 🚨 **Why not "a symbol whose containing assembly is another NodeType's assembly".** A NodeType
 compile is never referenced against another NodeType's emitted assembly: its reference set is the
