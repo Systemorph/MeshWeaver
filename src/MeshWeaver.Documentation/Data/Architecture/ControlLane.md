@@ -115,7 +115,9 @@ outlives every target:
    a reading that was a floor, a target that is not there, nothing left to delete) is reported
    `Refused`. Otherwise `Planned`, carrying the plan and its digest. A dry run ends here.
    🚨 A package's partition is refused only while an install record (`Plugins/{id}`, matched by
-   the package's target partition or its id) targets it — the Store uninstall is then the path.
+   the manifest's target partition, else the record's own id) targets it — the Store uninstall is
+   then the path. The records are discovered from the store's own enumeration of `Plugins` as well
+   as the query index, so a record the index has not reached yet still blocks the deletion.
    A space installed by a `Store/Provision` has no such record: the Store uninstall refuses it and
    nothing re-installs it, so it is planned like any other space (#7325). An install ledger that
    could not be read is a refusal, never "none".
