@@ -93,8 +93,6 @@ OWES = [
     "browser: the shards that run browser tests need the headless browser and the font set the `browser-fonts` job "
     "stages and each `test` shard provisions; the build-host image (MeshWeaver.Deploy deploy/build-host/Dockerfile) "
     "carries neither",
-    "containers: the shards' Testcontainers projects start a database in Docker; a host's sandbox has no Docker "
-    "daemon (its database is sandbox-postgres.sh), so those projects cannot run there as they run in the `test` job",
     "dependent legs: platform-compat and licence-gate read the `build` job's artifacts (shard 0's output, the licence "
     "evidence); with the build on a host they need its outputs handed back",
     "prepared mesh: on a host no test may install a mesh from scratch — a prepared mesh snapshot is cloned per run; "
@@ -173,6 +171,43 @@ def problems(committed_text: str | None, workflow_text: str) -> list[str]:
     return out
 
 
+# A host stage's sandbox has no Docker daemon (Doc/Architecture/BuildHosts §2 step 5; its database is a
+# prepared server, host-postgres.sh / sandbox-postgres.sh). Core's suites need none: the Postgres suites
+# left core (#2847 and its successors) and the `test` job pulls no image. That is a FACT about the tree,
+# so it is checked, not assumed — a suite that starts a container again reds here, and either moves to
+# the host's prepared service or re-opens the debt (`containers:` in OWES) in the same change.
+CONTAINER_PACKAGE = re.compile(r'Include="(Testcontainers[^"]*|Docker\.DotNet[^"]*)"', re.I)
+CONTAINER_CODE = re.compile(r"^\s*using\s+(DotNet\.Testcontainers|Testcontainers)\b|new\s+ContainerBuilder\b", re.M)
+SKIP_DIRS = {"bin", "obj", "node_modules", ".git", ".core-tests"}
+
+
+def container_problems(root: str) -> list[str]:
+    """Every place in core's build that would make a shard start a container."""
+    out: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        rel_dir = os.path.relpath(dirpath, root)
+        for n in sorted(filenames):
+            rel = os.path.normpath(os.path.join(rel_dir, n))
+            if n.endswith((".csproj", ".props", ".targets")):
+                pattern, what = CONTAINER_PACKAGE, "references a container package"
+            elif n.endswith(".cs") and (rel.startswith("test" + os.sep) or rel == "test"):
+                pattern, what = CONTAINER_CODE, "starts a container"
+            else:
+                continue
+            try:
+                with open(os.path.join(dirpath, n), errors="replace") as fh:
+                    hit = pattern.search(fh.read())
+            except OSError as e:
+                out.append(f"{rel}: unreadable ({e}) — the no-container check reached no verdict on it")
+                continue
+            if hit:
+                out.append(f"{rel} {what} ({hit.group(0).strip()[:80]}) — a build host's sandbox has no Docker daemon; "
+                           f"run the suite against the host's prepared service, or re-open the `containers:` debt in "
+                           f"core-build-stages.py OWES in this change")
+    return out
+
+
 def _read(path: str) -> str | None:
     try:
         with open(path) as fh:
@@ -227,6 +262,25 @@ def _self_test() -> int:
         expect(False, "a workflow with no CI_SHARD_TOTAL is refused")
     except SystemExit:
         expect(True, "a workflow with no CI_SHARD_TOTAL is refused")
+    print("no container — core's suites need no Docker daemon:")
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(os.path.join(t, "test", "A"))
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write('<Project><ItemGroup><PackageReference Include="xunit.v3" /></ItemGroup></Project>')
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n// mentions Testcontainers in a comment only\n")
+        expect(container_problems(t) == [], "a tree with no container package and no container code is green")
+        open(os.path.join(t, "Directory.Packages.props"), "w").write('<PackageVersion Include="Testcontainers.PostgreSql" Version="4.0.0" />')
+        expect(any("container package" in p for p in container_problems(t)), "RED: Testcontainers.PostgreSql pinned centrally")
+        os.remove(os.path.join(t, "Directory.Packages.props"))
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write('<PackageReference Include="Docker.DotNet" />')
+        expect(any("container package" in p for p in container_problems(t)), "RED: a test project referencing Docker.DotNet")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project/>")
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write("using DotNet.Testcontainers.Builders;\n")
+        expect(any("starts a container" in p for p in container_problems(t)), "RED: a test that builds a container")
+        os.makedirs(os.path.join(t, "test", "A", "bin"))
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n")
+        open(os.path.join(t, "test", "A", "bin", "X.props"), "w").write('<PackageReference Include="Testcontainers" />')
+        expect(container_problems(t) == [], "build output (bin/) is not the tree")
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every drift is red, the generated file is green'}")
     return 1 if fails else 0
 
@@ -245,7 +299,7 @@ def main(argv: list[str]) -> int:
         print(f"wrote {STAGES} for CI_SHARD_TOTAL={read_shard_total(workflow)}")
         return 0
     if argv == ["--check"]:
-        found = problems(_read(os.path.join(root, STAGES)), workflow)
+        found = problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root)
         for p in found:
             print(f"::error::{p}")
         if not found:
