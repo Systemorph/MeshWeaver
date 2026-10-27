@@ -30,6 +30,10 @@ public sealed class ErrorSignatureCollector
 
     private readonly ConcurrentDictionary<string, SignatureEntry> entries = new(StringComparer.Ordinal);
     private long dropped;
+    // Admission is a CAS on this counter, never a read of entries.Count: two loggers racing past a
+    // Count check would both insert and overshoot the bound. A slot is reserved before TryAdd and
+    // released when the add lost to a concurrent insert of the same signature or an entry is evicted.
+    private int held;
 
     /// <summary>Creates a collector holding at most <paramref name="capacity"/> signatures.</summary>
     public ErrorSignatureCollector(int capacity = DefaultCapacity)
@@ -108,7 +112,7 @@ public sealed class ErrorSignatureCollector
                 continue; // lost the CAS to a concurrent record — re-read and fold again
             }
 
-            if (entries.Count >= Capacity && !EvictOneReported())
+            if (!TryReserveSlot())
             {
                 Interlocked.Increment(ref dropped);
                 return;
@@ -118,7 +122,26 @@ public sealed class ErrorSignatureCollector
                 boundedException, boundedFrame, 1, at, at, 0);
             if (entries.TryAdd(signature, fresh))
                 return;
-            // a concurrent record added the same signature first — fold into it
+            // a concurrent record added the same signature first — give the slot back, fold into it
+            Interlocked.Decrement(ref held);
+        }
+    }
+
+    /// <summary>Atomically takes one of the <see cref="Capacity"/> slots, evicting a reported entry
+    /// when none is free; false when every held entry is still unreported.</summary>
+    private bool TryReserveSlot()
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref held);
+            if (current >= Capacity)
+            {
+                if (!EvictOneReported())
+                    return false;
+                continue;
+            }
+            if (Interlocked.CompareExchange(ref held, current + 1, current) == current)
+                return true;
         }
     }
 
@@ -160,7 +183,10 @@ public sealed class ErrorSignatureCollector
             .Where(entry => entry.ReportedCount > 0 && !entry.IsPending)
             .OrderBy(entry => entry.LastSeen)
             .FirstOrDefault();
-        return victim is not null && entries.TryRemove(new KeyValuePair<string, SignatureEntry>(victim.Signature, victim));
+        if (victim is null || !entries.TryRemove(new KeyValuePair<string, SignatureEntry>(victim.Signature, victim)))
+            return false;
+        Interlocked.Decrement(ref held);
+        return true;
     }
 
     private static string Clip(string value, int max)

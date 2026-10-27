@@ -35,10 +35,12 @@ public static partial class TelemetryRedaction
     [GeneratedRegex(@"\b(mwi_|mwa_|mwr_|ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abp]-)[A-Za-z0-9_\-]{6,}", RegexOptions.CultureInvariant)]
     private static partial Regex KnownToken();
 
-    [GeneratedRegex(@"(?i)([?&;](?:sig|signature|token|key|secret|password|pwd|access_token|refresh_token|client_secret|sas|code|api[_-]?key)=)[^&\s""']+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?i)([?&;](?:sig|signature|token|key|secret|password|pwd|access_token|refresh_token|client_secret|sas|code|api[_-]?key)=)(?:""[^""&\s]*""|'[^'&\s]*'|[^&\s""']+)", RegexOptions.CultureInvariant)]
     private static partial Regex QuerySecret();
 
-    [GeneratedRegex(@"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|accountkey|sharedaccesskey|sharedaccesssignature|authorization|connectionstring)\s*[=:]\s*[^;\s,""']+", RegexOptions.CultureInvariant)]
+    // The key may be bare or quoted (a JSON field), the separator = or :, the value bare or quoted;
+    // the whole value — quotes included — is replaced, so a quoted secret cannot survive by its quotes.
+    [GeneratedRegex(@"(?i)(""?\b(?:password|passwd|pwd|secret|token|api[_-]?key|accountkey|sharedaccesskey|sharedaccesssignature|authorization|connectionstring)\b""?\s*[=:]\s*)(?:""(?:\\.|[^""\\])*""|'[^']*'|[^;\s,""'}]+)", RegexOptions.CultureInvariant)]
     private static partial Regex KeyValueSecret();
 
     [GeneratedRegex(@"(?i)(https?://)[^/\s@]+@", RegexOptions.CultureInvariant)]
@@ -76,7 +78,7 @@ public static partial class TelemetryRedaction
         masked = Credential().Replace(masked, "$1 " + Masked);
         masked = KnownToken().Replace(masked, Masked);
         masked = QuerySecret().Replace(masked, "$1" + Masked);
-        masked = KeyValueSecret().Replace(masked, "$1=" + Masked);
+        masked = KeyValueSecret().Replace(masked, "$1" + Masked);
         masked = Email().Replace(masked, MaskedEmail);
         return masked;
     }

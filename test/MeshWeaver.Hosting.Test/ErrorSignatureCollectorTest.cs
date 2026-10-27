@@ -83,6 +83,35 @@ public class ErrorSignatureCollectorTest
     }
 
     [Fact]
+    public void AnInterpolatedMessage_HasNoNamedPlaceholder_AndIsNormalisedLikeAPreFormattedOne()
+    {
+        var (collector, logger) = Tap();
+        var guid = Guid.NewGuid();
+
+        // The standard overload with an interpolated string: FormattedLogValues still carries an
+        // {OriginalFormat} — the already-interpolated text — and no named property.
+        logger.LogError($"Node {guid} failed for jane.roe@example.com at /data/Store/Orders/42");
+        logger.LogError($"Node {Guid.NewGuid()} failed for max.muster@example.com at /data/Store/Orders/43");
+
+        var pending = collector.Pending();
+        pending.Should().HaveCount(1, "the two interpolated lines normalise to ONE signature");
+        pending[0].Template.Should().NotContain(guid.ToString()).And.NotContain("jane.roe").And.NotContain("Orders/42");
+        pending[0].Template.Should().Contain("{guid}").And.Contain(TelemetryRedaction.MaskedEmail).And.Contain("{path}");
+    }
+
+    [Fact]
+    public void TheBound_HoldsUnderConcurrentRecords()
+    {
+        var collector = new ErrorSignatureCollector(capacity: 8);
+
+        System.Threading.Tasks.Parallel.For(0, 2000, i =>
+            collector.Record("A", 0, LogLevel.Error, $"distinct {i}", null, null, T0.AddTicks(i)));
+
+        collector.Count.Should().BeLessThanOrEqualTo(8, "admission is a CAS on the slot counter, never a read of Count");
+        (collector.Count + collector.Dropped).Should().Be(2000);
+    }
+
+    [Fact]
     public void TheLedgerIsBounded_EvictingOnlyWhatWasReported_AndCountingWhatItDropped()
     {
         var collector = new ErrorSignatureCollector(capacity: 2);
@@ -218,6 +247,11 @@ public class ErrorSignatureCollectorTest
     [InlineData("Password=SuperSecret1;Server=db", "SuperSecret1")]
     [InlineData("https://user:pw@host.example/path", "user:pw")]
     [InlineData("mail from max.muster@example.com bounced", "max.muster")]
+    [InlineData("token='SuperSecret1' refused", "SuperSecret1")]
+    [InlineData("Password=\"SuperSecret1\";Server=db", "SuperSecret1")]
+    [InlineData("GET https://store.example/files?sig=\"SuperSecret1\"&x=1", "SuperSecret1")]
+    [InlineData("""body {"password":"SuperSecret1","user":"max"}""", "SuperSecret1")]
+    [InlineData("""{"apiKey": "SuperSecret1"}""", "SuperSecret1")]
     public void Mask_RemovesCredentialsAndPeople(string text, string mustNotSurvive)
     {
         var masked = TelemetryRedaction.Mask(text);

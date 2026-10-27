@@ -92,7 +92,18 @@ public sealed class InstanceTelemetryReader(IMessageHub hub, ILogger<InstanceTel
         if (combo is null)
             return Observable.Return(Snapshot());
         return Observable.Defer(() => combo.Read().Take(1).Timeout(SummaryBudget))
-            .Do(read => summary = new SummaryReading(Summarize(read), DateTimeOffset.UtcNow))
+            .Do(read =>
+            {
+                // A combo whose source queries partly failed answers with IsComplete == false and a
+                // shortened list — a count and digest of THAT would overwrite a correct summary with a
+                // wrong one for half an hour. Only a complete read refreshes the memo.
+                if (read.IsComplete)
+                    summary = new SummaryReading(Summarize(read), DateTimeOffset.UtcNow);
+                else
+                    logger.LogDebug(
+                        "[InstanceTelemetry] the package inventory read was incomplete ({Caveats}); the previous summary ({Summary}) is kept",
+                        string.Join("; ", read.Caveats), summary?.Summary ?? "none");
+            })
             .Select(_ => Snapshot())
             .Catch((Exception exception) =>
             {

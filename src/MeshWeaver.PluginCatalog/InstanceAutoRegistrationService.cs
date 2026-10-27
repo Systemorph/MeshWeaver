@@ -112,7 +112,10 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
     /// one, else that key itself. Cold; emits once.</summary>
     public IObservable<string> ResolveToken(PluginRegistryReference registry) =>
         ConfiguredToken(registry) is { } configured
-            ? Observable.Return(configured)
+            // A CONFIGURED instance key is exchanged like a stored one, so an installation that
+            // pulls on PluginCatalog:Registries:N:Token still leaves its heartbeat
+            // (Doc/Architecture/InstanceTelemetry); Exchange hands any other token shape back as is.
+            ? Exchange(registry.Url, configured)
             : StoredCredential(registry)
                 .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
 

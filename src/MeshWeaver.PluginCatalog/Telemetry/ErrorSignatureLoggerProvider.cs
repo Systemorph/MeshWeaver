@@ -32,18 +32,33 @@ public sealed class ErrorSignatureLoggerProvider(ErrorSignatureCollector collect
     {
     }
 
-    /// <summary>The template of a structured log call, or <c>null</c> when the state carries none.</summary>
+    /// <summary>
+    /// The template of a structured log call, or <c>null</c> when the state carries none worth
+    /// trusting. 🚨 A state whose ONLY property is <c>{OriginalFormat}</c> is a PRE-FORMATTED message
+    /// — <c>LogError($"Node {id} failed")</c> still goes through <c>FormattedLogValues</c>, with the
+    /// interpolated string as its "format" and no named placeholder — so it is handed back as
+    /// <c>null</c> for normalisation, which turns its values into placeholders. A real template has
+    /// at least one named property beside the format.
+    /// </summary>
     internal static string? TemplateOf<TState>(TState state)
     {
         if (state is not IReadOnlyList<KeyValuePair<string, object?>> properties)
             return null;
+        string? template = null;
+        var named = 0;
         foreach (var property in properties)
         {
-            if (string.Equals(property.Key, OriginalFormatKey, StringComparison.Ordinal)
-                && property.Value is string template && template.Length > 0)
-                return template;
+            if (string.Equals(property.Key, OriginalFormatKey, StringComparison.Ordinal))
+            {
+                if (property.Value is string format && format.Length > 0)
+                    template = format;
+            }
+            else
+            {
+                named++;
+            }
         }
-        return null;
+        return named > 0 ? template : null;
     }
 
     /// <summary>

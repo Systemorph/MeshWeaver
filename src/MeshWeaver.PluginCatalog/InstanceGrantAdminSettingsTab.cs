@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -632,14 +633,26 @@ public static class InstanceGrantAdminSettingsTab
     /// <param name="host">The rendering host.</param>
     /// <param name="zoneId">The viewer's IANA zone, resolved on the render turn; <c>null</c> renders UTC.</param>
     internal static IObservable<IReadOnlyList<GrantRow>> GrantRowsFeed(LayoutAreaHost host, string? zoneId)
-        => host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+    {
+        var options = host.Hub.JsonSerializerOptions;
+        var instances = host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
             .Query<MeshNode>(new MeshQueryRequest
             {
                 // Instances live under whichever user registered them (#3202 — see above).
                 Query = MeshWideQuery.OfType(MeshWeaverInstanceNodeType.NodeType),
             })
-            .Select(change => Rows(change.Items, host.Hub.JsonSerializerOptions, DateTimeOffset.UtcNow, zoneId,
-                (key, args) => host.Localize(key, args)));
+            // The query emits DELTAS after its first frame, never whole snapshots; the grid is the
+            // accumulated set — the same Reset / Removed / upsert fold the coupon list uses.
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty, CouponAdminSettingsTab.Accumulate)
+            // Let the chunked first snapshot settle instead of re-emitting per chunk.
+            .Throttle(TimeSpan.FromMilliseconds(300));
+        // "12 min ago" and the one-day offline boundary are functions of the CLOCK as much as of the
+        // data: re-project every minute, so an instance that fell silent crosses the boundary on an
+        // open page without waiting for another query emission.
+        return instances
+            .CombineLatest(Observable.Timer(TimeSpan.Zero, TimeSpan.FromMinutes(1)), (map, _) => map)
+            .Select(map => Rows(map.Values, options, DateTimeOffset.UtcNow, zoneId, (key, args) => host.Localize(key, args)));
+    }
 
     /// <summary>
     /// The rows of the instance list from the instance nodes — the routing-index rows (which share
