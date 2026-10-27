@@ -3210,6 +3210,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-gate-shard-plan.py
 
+    # The gate's affected-closure step narrowed `pull_request` only; a main push the caller hands a
+    # `push-base` (its newest green main run) now gates the closure of `<push-base>..HEAD`. The
+    # step is extracted by `id:` and executed: the narrowing, every malformed/unreachable/empty/CI
+    # base that must stay FULL with its reason, and the unchanged pull-request path.
+    - name: "Execute the node-repo gate's affected-closure step (a push narrows only by a valid push-base)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-gate-affected-closure.py
+
     # carry-forward-bundles.sh is the other half of that publication and had NO CI execution at
     # all: it runs only inside a node repo's publish lane, so the first execution of an edit was a
     # production publish. Its self-test covers the shrink refusals it has always owed and the
