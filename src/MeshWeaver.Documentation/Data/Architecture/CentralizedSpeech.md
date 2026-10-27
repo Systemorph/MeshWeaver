@@ -34,7 +34,7 @@ portal configures.
 
 | Piece | Where | Status |
 |---|---|---|
-| **The container** — `whisper.cpp` server + the Swiss-German model **baked in** (see [Voice model distribution](../VoiceModelDistribution)) | `deploy/whisper/` (Dockerfile + compose + helm + README) | built; not runtime-verified in CI (no Docker in the sandbox) |
+| **The container** — `whisper.cpp` server + the Swiss-German model **baked in** (see [Voice model distribution](../VoiceModelDistribution)) | MeshWeaver.Deploy [`deploy/whisper/`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/whisper) (Dockerfile + compose + helm + README) | built; not runtime-verified in CI (no Docker in the sandbox) |
 | **`SpeechConfiguration`** — endpoint, language, enabled; the portal-settable config | `src/MeshWeaver.Speech/SpeechConfiguration.cs` | done |
 | **`ISpeechTranscriber` / `WhisperContainerTranscriber`** — the centralized client; `POST /inference` on the HTTP `IIoPool`, cold `IObservable` | `src/MeshWeaver.Speech/` | done + unit tests against the real `/inference` contract |
 | **Portal endpoint** — `POST /api/speech/transcribe` the clients call | `memex/Memex.Portal.Shared/Api/SpeechEndpoints.cs` (`MapSpeechApi`, wired in `MemexConfiguration`) | done |
@@ -77,7 +77,7 @@ ever see `/api/speech/transcribe`, so the model host stays behind the portal's a
 
 ## Status
 
-**Shipped:** the container definition (`deploy/whisper`), `MeshWeaver.Speech` (config + transcriber) with unit
+**Shipped:** the container definition (MeshWeaver.Deploy `deploy/whisper`), `MeshWeaver.Speech` (config + transcriber) with unit
 tests driving `WhisperContainerTranscriber` against an in-process server mimicking whisper.cpp's `/inference`
 (transcribe, language forward + per-call override, unconfigured error, server-error propagation), the portal
 `POST /api/speech/transcribe` endpoint, the `ThreadChatView` mic button, and the React / React Native record

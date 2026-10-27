@@ -48,7 +48,7 @@ Every moving label lives in
 | `main` | continuous | newest promoted set, before arming (also `hosting-operator:main`) | `main-cd.yml` `promote`, MeshWeaver.Plugins `hosting-operator.yml` | written |
 | `latest` | continuous | the tester's moving tag, GHCR's latest release, and `memex-portal-ai-base:latest` | `main-cd.yml` `promote`, `release.yml`, `base-image-acr.yml` | written |
 | `edge` | edge | newest unverified edge build; never a fleet seed | `edge-images.yml` | written |
-| `gliner-multi-2.1`, `1.7.4-flix-large-v3-q8`, `tesseract-5.5`, `0.33.2-qwen3.6-bge-m3` | service | the s1-extract, whisper, OCR and local model service line tags, re-pushed by each main build | `s1-extract-image.yml`, `whisper-image.yml`, `ocr-image.yml`, `ollama-image.yml` | written |
+| `gliner-multi-2.1`, `1.7.4-flix-large-v3-q8`, `tesseract-5.5`, `0.33.2-qwen3.6-bge-m3` | service | the s1-extract, whisper, OCR and local model service line tags, re-pushed by each main build | MeshWeaver.Deploy `s1-extract-image.yml`, `whisper-image.yml`, `ocr-image.yml`, `ollama-image.yml` (declared with `"repo"`) | written |
 
 Each label lists its **writer bindings**. A binding names a workflow, a job, and the repositories
 and registries that job writes the label to. For example, `promote` writes `latest` only to
