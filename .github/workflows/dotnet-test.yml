@@ -3145,7 +3145,8 @@ jobs:
       run: python3 .github/scripts/test-module-pack-extension-sdk.py
     # The MSBuild reading behind the extension/shelf key and scope REFUSES what it cannot model, and a
     # rule written against fixtures alone once refused the one real extension. This positive control
-    # runs both scripts over the real tools/MeshWeaver.PluginTester.Razor, with a negative control.
+    # runs both scripts over an extension laid in this tree for the run (shaped like MeshWeaver.Plugins'
+    # Razor extension, referencing the real contract), with negative controls.
     # The conservative sweep's ONE path parser (paths_in), held by a table of every spelling class:
     # spaces, separators after a property, `\`, `..`, quotes, `;`-lists, globs, trailing separators,
     # and the negatives (nonexistent, outside, root, output, .git, unresolved).
