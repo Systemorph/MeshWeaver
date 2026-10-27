@@ -90,4 +90,27 @@ public class ACommitAdmissionNeverOutlivesItsWatcherTest
         handoff.OnWatcherEnded();
         admission.Releases.Should().Be(1, "a released admission is released exactly once");
     }
+
+    [Fact]
+    public void AnAbortDuringOwnerTeardownLeavesTheVerdictToTheDisposalNack()
+    {
+        // While the owner shuts down with a route armed for the ShutDown-phase disposal NACK, the echo
+        // watcher stands aside for it — and so must the turn that aborts because the watcher ended:
+        // claiming the gate would detach that NACK and send the writer's retry into the closing
+        // activation (#7346 review).
+        var answers = 0;
+        DataExtensions.AnswerWatcherEndedAbort(() => true, (_, _) => answers++, "owner/path");
+        answers.Should().Be(0, "the disposal NACK, not the aborting turn, claims the verdict");
+
+        // Negative control: with no disposal NACK to stand aside for, the abort answers itself.
+        MeshWeaver.Mesh.MeshNodeError? error = null;
+        DataExtensions.AnswerWatcherEndedAbort(() => false, (success, e) =>
+        {
+            answers++;
+            success.Should().BeFalse();
+            error = e;
+        }, "owner/path");
+        answers.Should().Be(1);
+        error!.Code.Should().Be(MeshWeaver.Mesh.MeshNodeErrorCode.OwnerNotReady);
+    }
 }

@@ -418,8 +418,15 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones, IActiveDeletio
     {
         if (_admittedWrites.IsEmpty)
             return false;
-        foreach (var kv in _admittedWrites)
-            foreach (var path in kv.Value)
+        // 🚨 An atomic SNAPSHOT (Values takes every bucket lock), never the live enumerator (#7346
+        // review). A write admitted at its owner's commit lets a write to the same path through an
+        // open scope, so a NEW registration can be added under the root while an older one is
+        // released. The live enumerator is not a snapshot: it could pass the new entry's bucket
+        // before the add and reach the old one's after the remove, see neither, and let the deletion
+        // run while the newer write was still on its way to the store. The new entry is always
+        // added before the old one is removed, so a snapshot holds at least one of them.
+        foreach (var paths in _admittedWrites.Values)
+            foreach (var path in paths)
                 if (Covers(path, rootPath, rowOnly))
                     return true;
         return false;

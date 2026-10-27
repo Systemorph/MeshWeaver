@@ -1467,6 +1467,40 @@ public static class DataExtensions
     }
 
     /// <summary>
+    /// The verdict of a cross-hub patch whose merge turn found its echo watcher already ended
+    /// (#7346 review): the turn committed NOTHING, so the write is provably not applied and safe to
+    /// retry. The writer has normally been answered already by the watcher's own end (its bound, or
+    /// the owner going away) — <c>AckOnce</c> latches, so this only answers one that was not.
+    /// </summary>
+    /// <param name="path">The owner hub's address.</param>
+    /// <returns>An <see cref="MeshNodeErrorCode.OwnerNotReady"/> error naming the condition.</returns>
+    internal static MeshNodeError WatcherEndedBeforeCommit(string path) => new(
+        MeshNodeErrorCode.OwnerNotReady, path,
+        "the patch's acknowledgement watcher ended before its merge turn could commit — "
+        + "the patch was NOT applied; safe to retry");
+
+    /// <summary>
+    /// Answers a merge turn that aborted because its echo watcher had ended (#7346 review). The turn
+    /// commits nothing either way; only the VERDICT is in question. While the owner is shutting down
+    /// with a route armed for the ShutDown-phase disposal NACK, the watcher stood aside for that NACK
+    /// (#3197) — and so does the abort: claiming the acknowledgement gate here would detach the
+    /// disposal NACK and answer from the closing activation, so the writer's retry would land on it
+    /// instead of on a fresh one. Otherwise the abort answers itself (normally a no-op: the
+    /// watcher's own end has answered already, and the gate latches).
+    /// </summary>
+    /// <param name="standAsideForDisposalNack">The echo watcher's stand-aside condition.</param>
+    /// <param name="ackOnce">The patch's latched acknowledgement.</param>
+    /// <param name="hubPath">The owner hub's address.</param>
+    internal static void AnswerWatcherEndedAbort(
+        Func<bool> standAsideForDisposalNack,
+        Action<bool, MeshNodeError?> ackOnce,
+        string hubPath)
+    {
+        if (!standAsideForDisposalNack())
+            ackOnce(false, WatcherEndedBeforeCommit(hubPath));
+    }
+
+    /// <summary>
     /// 🚨 TEARDOWN IS NOT A VERDICT ABOUT THE WRITE — issue #3499, and the reason a package
     /// install could not survive its own root recycling.
     ///
@@ -1521,19 +1555,6 @@ public static class DataExtensions
     /// as <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed — visible at the
     /// consumer GUI so the gap is diagnosable, not silent.</para>
     /// </summary>
-    /// <summary>
-    /// The verdict of a cross-hub patch whose merge turn found its echo watcher already ended
-    /// (#7346 review): the turn committed NOTHING, so the write is provably not applied and safe to
-    /// retry. The writer has normally been answered already by the watcher's own end (its bound, or
-    /// the owner going away) — <c>AckOnce</c> latches, so this only answers one that was not.
-    /// </summary>
-    /// <param name="path">The owner hub's address.</param>
-    /// <returns>An <see cref="MeshNodeErrorCode.OwnerNotReady"/> error naming the condition.</returns>
-    internal static MeshNodeError WatcherEndedBeforeCommit(string path) => new(
-        MeshNodeErrorCode.OwnerNotReady, path,
-        "the patch's acknowledgement watcher ended before its merge turn could commit — "
-        + "the patch was NOT applied; safe to retry");
-
     internal static MeshNodeError ClassifyPatchException(Exception ex, string path)
     {
         if (IsOwnerTeardown(ex))
@@ -2760,6 +2781,15 @@ public static class DataExtensions
             PostPatchVerdict(hub, request, resp, lateVerdicts, ackLogger);
         }
 
+        // The echo watcher's stand-aside condition (#3197): while the owner is shutting down and a route
+        // is ARMED to receive the ShutDown-phase disposal NACK, that NACK — not this patch's own arms —
+        // claims the verdict, so the writer's retry lands on a FRESH activation rather than the closing
+        // one. Shared by the watcher's completion arm and the merge turn's watcher-ended aborts (#7346
+        // review): an abort that claimed the gate here would detach the disposal NACK and answer from
+        // the closing activation instead.
+        bool StandAsideForTheDisposalNack()
+            => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id);
+
         // 🚨 Write-identity stamps — set by the merge lambda AT COMMIT TIME (the same
         // happens-before pattern as MeshNodeStreamHandle.UpdateOwn's echo detection):
         // the ack watcher below fires ONLY for an emission that provably CONTAINS this
@@ -2856,7 +2886,7 @@ public static class DataExtensions
             // large subtree making steady progress never trips it). With no sink, or with the
             // caller's watch already gone, standing aside converts an answerable write into
             // silence — so answer now, on whatever transport is still open.
-            () => hub.IsShuttingDown && lateVerdicts is not null && lateVerdicts.IsAdmissible(request.Id),
+            StandAsideForTheDisposalNack,
             hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.PatchAck"),
             noteStage: stage => hub.NoteRequestStage(request.Id, stage));
         postDetach.Disposable = hub.RegisterForDisposalDetachable(postSub);
@@ -3110,7 +3140,7 @@ public static class DataExtensions
                     if (!commitAdmission.TryBeginDecision(admission))
                     {
                         hub.NoteRequestStage(request.Id, "PATCH_MERGE_ABORTED watcher-ended");
-                        AckOnce(false, WatcherEndedBeforeCommit(hubPath));
+                        AnswerWatcherEndedAbort(StandAsideForTheDisposalNack, AckOnce, hubPath);
                         return null;
                     }
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
@@ -3209,7 +3239,7 @@ public static class DataExtensions
                     if (!commitAdmission.TryCommit())
                     {
                         hub.NoteRequestStage(request.Id, "PATCH_MERGE_ABORTED watcher-ended");
-                        AckOnce(false, WatcherEndedBeforeCommit(hubPath));
+                        AnswerWatcherEndedAbort(StandAsideForTheDisposalNack, AckOnce, hubPath);
                         return null;
                     }
 
