@@ -10,11 +10,13 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.ControlLane;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -349,6 +351,48 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             .Should().Equal(["Plugins/lagged-pkg"], "the store enumeration has no index lag");
         (await target.InstallRecordsOver("Lagged", new MeshReading(query, [], false, null, [])))
             .Should().BeNull("negative control: a listing that is not an answer never reads as 'no record'");
+    }
+
+    /// <summary>
+    /// #7325 review: a STORAGE FAULT on the ledger's enumeration leaves the ledger unknown, even when
+    /// the query listing is a complete answer that omits the record (an index trailing the store). The
+    /// store is read through the production composite (<see cref="PersistenceService"/>) with the fault
+    /// injected under it — the layer whose child listing turns a provider fault into an EMPTY listing.
+    /// Controls: the same composite answers <c>ListChildPaths</c> with nothing while the fault is armed
+    /// (the swallow the ledger must not read through), the fault is proven injected by its arrivals,
+    /// and with the fault released the very same composite finds the committed record.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task InstallRecords_AStorageFaultWithACompleteButEmptyListing_LeavesTheLedgerUnknown()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        await target!.SeedPackageSpace("Faulted");
+        await target.SeedInstallRecord("faulted-pkg", targetPartition: "Faulted");
+        var completeButEmpty = new MeshReading(SpaceDeletion.InstallRecordsQuery(), [], true, null, []);
+        var injector = new FaultInjectingStorageAdapter(target.Hub.ServiceProvider.GetRequiredService<IStorageAdapter>(), "ledger");
+        IStorageAdapter composite = new PersistenceService([new WritableProvider(injector)]);
+
+        using (var fault = injector.FailOperations(SpaceDeletion.InstalledPackagesPartition, StorageLegs.Enumerate))
+        {
+            (await target.InstallRecordsOver("Faulted", composite, completeButEmpty))
+                .Should().BeNull("a store that could not be enumerated never reads as 'no install record'");
+            fault.ArrivalCount.Should().BeGreaterThan(0, "the fault must actually have been injected");
+            var swallowed = await composite.ListChildPaths(SpaceDeletion.InstalledPackagesPartition).Take(1)
+                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+            swallowed.NodePaths.Should().BeEmpty(
+                "negative control: the composite's child listing swallows the same fault into an empty answer");
+        }
+
+        (await target.InstallRecordsOver("Faulted", composite, completeButEmpty))
+            .Should().Equal(["Plugins/faulted-pkg"], "positive control: the same composite, unfaulted, finds the record");
+    }
+
+    /// <summary>A writable partition provider over one adapter — the composite's input.</summary>
+    private sealed class WritableProvider(IStorageAdapter adapter) : IPartitionStorageProvider
+    {
+        public string Name => "ledger";
+        public bool IsReadOnly => false;
+        public IStorageAdapter Adapter => adapter;
     }
 
     // ───────────────────────────── forwarded events ─────────────────────────────
@@ -936,6 +980,10 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         /// <summary>The install records targeting <paramref name="space"/>, with <paramref name="listing"/> standing in for the query index.</summary>
         public Task<ImmutableList<string>?> InstallRecordsOver(string space, MeshReading listing) =>
             AsSystem(Mesh, () => SpaceDeletion.InstallRecords(Mesh, space, Observable.Return(listing)));
+
+        /// <summary>As above, enumerating the ledger through <paramref name="storage"/>.</summary>
+        public Task<ImmutableList<string>?> InstallRecordsOver(string space, IStorageAdapter storage, MeshReading listing) =>
+            AsSystem(Mesh, () => SpaceDeletion.InstallRecords(Mesh, space, storage, Observable.Return(listing)));
 
         public Task SeedPage(string path) =>
             AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(new MeshNode(path)

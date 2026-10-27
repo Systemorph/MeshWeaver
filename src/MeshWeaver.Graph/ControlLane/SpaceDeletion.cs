@@ -762,7 +762,7 @@ public static class SpaceDeletion
     /// <summary>
     /// The install records targeting <paramref name="space"/>, read AS SYSTEM — or <c>null</c> when
     /// they could not be established (never read as "none"). The record paths are DISCOVERED from two
-    /// sources unioned: the storage seam's own child enumeration of <c>Plugins</c>, which is
+    /// sources unioned: the storage seam's own fault-propagating enumeration of <c>Plugins</c>, which is
     /// authoritative and has no index lag — a record committed seconds ago is already in it — and the
     /// query listing. A complete query frame alone never establishes that the ledger is empty: the
     /// index trails the store, and a committed record it has not reached yet would otherwise let a
@@ -784,7 +784,16 @@ public static class SpaceDeletion
     /// </summary>
     internal static IObservable<ImmutableList<string>?> InstallRecords(
         IMessageHub hub, string space, IObservable<MeshReading> listing) =>
-        StoredInstallRecordPaths(hub)
+        InstallRecords(hub, space, hub.ServiceProvider.GetService<IStorageAdapter>(), listing);
+
+    /// <summary>
+    /// <see cref="InstallRecords(IMessageHub, string, IObservable{MeshReading})"/> over a supplied
+    /// store as well — the seam a test uses to put the production composite (and a fault under it)
+    /// on the enumeration. Cold.
+    /// </summary>
+    internal static IObservable<ImmutableList<string>?> InstallRecords(
+        IMessageHub hub, string space, IStorageAdapter? storage, IObservable<MeshReading> listing) =>
+        StoredInstallRecordPaths(hub, storage)
             .Zip(listing.Take(1).DefaultIfEmpty(new MeshReading(InstallRecordsQuery(), [], false, null, [])),
                 (stored, reading) => (stored, reading))
             .SelectMany(both => both.stored is null || !both.reading.IsAnswer
@@ -804,16 +813,31 @@ public static class SpaceDeletion
     /// no index lag), read AS SYSTEM — or <c>null</c> when the store could not be enumerated (no
     /// storage adapter, a fault, a timeout or an empty completion), which is never read as "none".
     /// Never errors. Cold.
+    ///
+    /// <para>🚨 Enumerated through <see cref="IStorageAdapter.ListDescendantPaths"/>, never
+    /// <see cref="IStorageAdapter.ListChildPaths"/>: the child listing is a best-effort surface whose
+    /// production composite (<c>PersistenceService</c>) and routed handler
+    /// (<c>PartitionStorageHubExtensions.HandleListChildPaths</c>) turn a storage fault into an EMPTY
+    /// listing, so a fault would never reach the <c>Catch</c> below and would read as "no install
+    /// record" — and, with the record not yet in the query index, plan the deletion of a still-installed
+    /// package's partition. The descendant enumeration is the recursive-delete verifier's contract:
+    /// every layer of it (the composite, the routed request, the routing proxy) PROPAGATES a fault.
+    /// Only the direct children are kept — an install record is <c>Plugins/{id}</c>.</para>
     /// </summary>
-    private static IObservable<ImmutableList<string>?> StoredInstallRecordPaths(IMessageHub hub)
+    private static IObservable<ImmutableList<string>?> StoredInstallRecordPaths(IMessageHub hub, IStorageAdapter? storage)
     {
-        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
             return Observable.Return<ImmutableList<string>?>(null);
-        return AsSystem(hub, () => storage.ListChildPaths(InstalledPackagesPartition))
+        var prefix = InstalledPackagesPartition + "/";
+        return AsSystem(hub, () => storage.ListDescendantPaths(InstalledPackagesPartition))
             .Take(1)
             .Timeout(MeshReading.DefaultBudget)
-            .Select(children => (ImmutableList<string>?)(children.NodePaths ?? []).ToImmutableList())
+            .Select(paths => (ImmutableList<string>?)(paths ?? [])
+                .Select(p => p.Trim('/'))
+                .Where(p => p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    && p.Length > prefix.Length
+                    && p.IndexOf('/', prefix.Length) < 0)
+                .ToImmutableList())
             .DefaultIfEmpty(null)
             .Catch((Exception _) => Observable.Return<ImmutableList<string>?>(null));
     }
