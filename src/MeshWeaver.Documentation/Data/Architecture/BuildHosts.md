@@ -539,9 +539,10 @@ red:
   (`build-follow.yml`, `node-repo-compile-check.yml`, `node-repo-gate.yml`, `node-repo-module-pack.yml`,
   `build-host-publication.yml`) fails its FIRST step on `host-forced`, naming the policy, and the
   lanes' heavy jobs skip so the forced path puts no load on Actions. The context-owning jobs run
-  `always()`/`!cancelled()`, so the context is published as a FAILURE, never skipped. Core's own
-  required context, `Consolidate test results`, runs `build-executor.py --route-only`, which exits 1
-  on `host-forced`.
+  `always()`/`!cancelled()`, so the context is published as a FAILURE, never skipped. In core,
+  `precheck` decides with `build-executor.py --route-only` and `build` (with every leg that needs it)
+  does not run on `host-forced`; the required context, `Consolidate test results`, asks again and
+  exits 1, naming the debt.
 - **What it never touches.** Trunk runs (main's CD keeps sealing the platform sets that carry the
   host's own fixes), `MeshWeaver.Deploy` and `Memex` (they carry the host fixes and the
   infrastructure, and must stay mergeable). An unreadable routing file or an unanswering queue reads
