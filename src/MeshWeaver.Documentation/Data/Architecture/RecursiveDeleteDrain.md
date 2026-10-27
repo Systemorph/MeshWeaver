@@ -134,6 +134,14 @@ a turn that is still deciding (`ACommitAdmissionNeverOutlivesItsWatcherTest`). A
 and whose echo then never arrives is released at the watcher's end; the sampler stores it, as for the
 owner's own write below.
 
+Because the bypass lets a NEW registration appear under an open scope, the drain's "is anything
+pending under the root" test reads an atomic snapshot of the registrations, never the live
+enumerator: the guard's write registers before the commit admission it overlapped is released, and a
+live enumeration could pass the new entry's bucket before the add and reach the old entry's after the
+remove, seeing neither (`AnOverlappingAdmissionHandoffIsNeverMissedByTheDrainTest`). And a turn that
+aborts because its watcher ended during the owner's teardown stands aside for the ShutDown-phase
+disposal NACK exactly as the watcher does, so the writer's retry still lands on a fresh activation.
+
 A patch that reaches the owner AFTER the scope opened is still refused at commit. Regression test:
 `AWriteAdmittedAtCommitIsWaitedForByTheDeleteTest` (parks the owner's flush above the guard after the
 commit, starts the delete, releases the flush only once the delete has provably begun, and asserts the
