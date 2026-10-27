@@ -2382,6 +2382,8 @@ internal class MeshNodeCompilationService(
         // The compile's own diagnostics, on the way to the activity. Empty is a real answer here —
         // it means the compiler produced none, not that nobody looked.
         IReadOnlyList<string> warnings = [];
+        // The emitted bytes, for the platform/package edges (read off the image's AssemblyRefs).
+        Func<Stream>? emittedImage;
         if (cacheService.IsDiskCacheEnabled)
         {
             var emitted = default(EmittedArtifact);
@@ -2407,6 +2409,8 @@ internal class MeshNodeCompilationService(
             // structured, uncapped set because the BUILD lane ratchets on diagnostic ids; the
             // activity a human opens keeps the cap it has always had.
             warnings = EmitPipeline.Report(emitted.Warnings);
+            var publishedPath = actualPath;
+            emittedImage = () => File.OpenRead(publishedPath);
         }
         else
         {
@@ -2417,11 +2421,13 @@ internal class MeshNodeCompilationService(
             var (assemblyBytes, pdbBytes) = EmitPipeline.EmitToMemory(compilation, node.Path, ct);
             cacheService.LoadAssemblyFromBytes(nodeName, assemblyBytes, pdbBytes);
             actualPath = $"memory://{nodeName}";
+            emittedImage = () => new MemoryStream(assemblyBytes, writable: false);
         }
 
         logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
         return new CompileEmit(actualPath, generatedInputDigest, warnings,
-            ExtractDependencyEdges(compilation, authored.SyntaxTrees, node.Path, references, moduleLocations, dependencyInputs, ct));
+            ExtractDependencyEdges(compilation, authored.SyntaxTrees, node.Path, references, moduleLocations,
+                nugetAssemblyPaths, emittedImage, dependencyInputs, ct));
     }
 
     /// <summary>
@@ -2437,6 +2443,8 @@ internal class MeshNodeCompilationService(
         string nodePath,
         IEnumerable<MetadataReference> references,
         ImmutableArray<string> moduleLocations,
+        IReadOnlyList<string> nugetAssemblyPaths,
+        Func<Stream> emittedImage,
         DependencyInputs inputs,
         CancellationToken ct)
     {
@@ -2445,9 +2453,10 @@ internal class MeshNodeCompilationService(
             var clock = System.Diagnostics.Stopwatch.StartNew();
             // The module files of the SAME snapshot the references were composed from — never a
             // re-read of the live installed set, which a module swap during the compile has moved.
-            var modules = DependencyEdgeExtraction.ModuleReferences(references, moduleLocations);
+            // The package files are this compile's own `#r "nuget:"` resolution.
+            var classes = DependencyReferenceClasses.Of(references, moduleLocations, nugetAssemblyPaths);
             var edges = DependencyEdgeExtraction.Extract(
-                compilation, authoredTrees, nodePath, inputs.Roots, inputs.Includes, modules, ct);
+                compilation, authoredTrees, nodePath, inputs.Roots, inputs.Includes, classes, emittedImage, ct);
             logger.LogDebug(
                 "Dependency edges for {NodePath}: {EdgeCount} edge(s), {Included} included without use, in {Ms}ms",
                 nodePath, edges.Edges.Count, edges.IncludedWithoutUse.Count, clock.ElapsedMilliseconds);
