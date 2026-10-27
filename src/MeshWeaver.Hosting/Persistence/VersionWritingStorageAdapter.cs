@@ -476,7 +476,7 @@ internal class VersionWritingStorageAdapter(
                 if (!purged)
                     logger?.LogWarning(
                         "The version store {Store} cannot purge the history of {Path}, whose NodeType keeps no history — its snapshots are retained",
-                        versionQuery.GetType().Name, path);
+                        versionQuery!.GetType().Name, path);
             });
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
