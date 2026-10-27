@@ -33,7 +33,8 @@ THE RULES THIS FILE ENFORCES
   (the framework identity, the platform reference, the source sha, the compile arguments). Each
   tree's per-file digests stay in the key document so a mismatch can NAME the paths that differ.
   `.git` and `__pycache__` are not inputs of a compile and differ between two checkouts of one
-  commit, so they are skipped by name and nothing else is.
+  commit, so they are skipped by name and nothing else is — except that a `.git` BELOW a tree's
+  root is keyed by its presence, because the sweep skips the directory that holds one.
 * A STALE BAKE IS REFRESHED, LOUDLY. `adopt` exit 3 means "this bake was compiled from other inputs
   than this shard's" and prints which ones; the lane then compiles the shard's own bake with a
   ::warning::. A stale bake is never used.
@@ -92,8 +93,9 @@ def tree_digests(root: Path) -> dict[str, str]:
     that leads back into a directory already on the current path records `link:<target> (cycle)`
     instead of being walked again. A link whose target is outside every hashed tree is therefore
     keyed by what it RESOLVES to on this runner — the name alone would let a shard adopt a bake
-    compiled from other bytes. A dangling link records `link:<target> (missing)`. Skips
-    SKIPPED_NAMES only."""
+    compiled from other bytes. A dangling link records `link:<target> (missing)`. A `.git` entry
+    BELOW the root records only that it is there (`nested-git-marker`) — the sweep skips the
+    directory that holds one. Skips SKIPPED_NAMES only."""
     if not root.is_dir():
         raise Refused(f"'{root}' is not a directory — a key over a missing tree would key less than was compiled")
     out: dict[str, str] = {}
@@ -101,6 +103,12 @@ def tree_digests(root: Path) -> dict[str, str]:
     def walk(directory: Path, prefix: str, ancestors: frozenset[str]) -> None:
         ancestors = ancestors | {os.path.realpath(directory)}
         for name in sorted(os.listdir(directory)):
+            if name == ".git" and prefix:
+                # Below the root a `.git` marker (file or directory) makes LocalNodeRepo.Sweep
+                # skip the WHOLE directory (IsNestedGitTree), so its PRESENCE changes what is
+                # compiled. Key the presence, never the volatile Git metadata behind it.
+                out[prefix + ".git"] = "nested-git-marker"
+                continue
             if name in SKIPPED_NAMES:
                 continue
             p = directory / name
@@ -344,6 +352,25 @@ def self_test() -> int:
               after_dir["dir/inner.cs"] != after_file["dir/inner.cs"], json.dumps(after_dir))
         check("links: an unchanged tree keys the same twice", tree_digests(linked) == after_dir)
         shutil.rmtree(linked)
+
+        # A NESTED `.git` marker makes the sweep skip its whole directory, so its presence is a
+        # compile input; the metadata behind it is not. Negative control: the root's own `.git`.
+        nested = t / "nested"
+        (nested / "Pkg").mkdir(parents=True)
+        (nested / "Pkg" / "a.cs").write_text("class A {}")
+        (nested / ".git").write_text("gitdir: one")
+        no_marker = tree_digests(nested)
+        (nested / "Pkg" / ".git").mkdir()
+        (nested / "Pkg" / ".git" / "HEAD").write_text("ref: one")
+        with_marker = tree_digests(nested)
+        check("nested .git: gaining a marker below the root changes the key",
+              digest_of(with_marker) != digest_of(no_marker) and with_marker.get("Pkg/.git") == "nested-git-marker",
+              json.dumps(with_marker))
+        (nested / "Pkg" / ".git" / "HEAD").write_text("ref: two")
+        (nested / ".git").write_text("gitdir: two")
+        check("nested .git: its metadata, and the root's own .git, do not change the key",
+              tree_digests(nested) == with_marker, json.dumps(tree_digests(nested)))
+        shutil.rmtree(nested)
 
         rc, out = run(*key(t / "bake.key.json"))
         check("key: writes a key document", rc == 0 and (t / "bake.key.json").is_file(), out)

@@ -264,7 +264,9 @@ plan ──▶ bake (once) ──▶ gate (matrix: shard 1..N) ──▶ verify
   composed gate host (the portal's `/app` and the tester), of the staged repository tree and of the
   external-module directory, the names of the shared frameworks (volume mode), and the identity,
   platform reference, source sha and compile arguments. Only `.git` and `__pycache__` are skipped,
-  by name: they differ between two checkouts of one commit and no compile reads them. A symbolic
+  by name: they differ between two checkouts of one commit and no compile reads them. A `.git` BELOW
+  a tree's root is the one exception: the sweep skips the whole directory that holds one, so its
+  PRESENCE is keyed (never the Git metadata behind it). A symbolic
   link is keyed by what it RESOLVES to, because the compile follows it: a file link by its target's
   bytes, a directory link by the target's contents (a link back into a directory already on the
   walk is recorded as a cycle, not walked again). A link out of every hashed tree whose target
