@@ -393,7 +393,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// MeshWeaver#6556 — the Radzen shape on a LIVE SWAP. N+1 adds services that belong to a circuit:
+    /// MeshWeaver#6556 — the circuit-scoped shape on a LIVE SWAP. N+1 adds services that belong to a circuit:
     /// a scoped one over circuit state, a singleton whose constructor takes circuit state, and a
     /// singleton that takes that one — all module types, so the forwarded shape stays the same. None is a process-lifetime
     /// instance the root reaches, so none is built before the commit, and the swap goes live. Its

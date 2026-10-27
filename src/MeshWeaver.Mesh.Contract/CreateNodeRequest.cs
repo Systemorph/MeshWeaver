@@ -443,7 +443,7 @@ public class CreateNodesPermissionAttribute() : RequiresPermissionAttribute(Perm
 /// Request to delete a MeshNode from the catalog.
 /// </summary>
 /// <param name="Path">The path of the node to delete</param>
-[RequiresPermission(Permission.Delete)]
+[DeleteNodePermission]
 public record DeleteNodeRequest(string Path)
     : IRequest<DeleteNodeResponse>, IDiagnosticKeyed, IDetachedResponseContinuation
 {
@@ -1170,8 +1170,29 @@ public record MoveNodeRequest(string SourcePath, string TargetPath)
 }
 
 /// <summary>
-/// Custom permission attribute for MoveNodeRequest.
-/// Checks Delete on source namespace and Create on target namespace.
+/// Permission attribute for <see cref="DeleteNodeRequest"/>: the demand
+/// <see cref="DeletePermission.RequiredFor"/> sets for the node being deleted — Update for ordinary
+/// content, Delete for a partition root or a governance satellite — checked on the hub's path.
+/// </summary>
+public class DeleteNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Delete)
+{
+    /// <inheritdoc />
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        yield return (hubPath, delivery.Message is DeleteNodeRequest delete
+            ? DeletePermission.RequiredFor(delete.Path)
+            : Permission.Delete);
+    }
+}
+
+/// <summary>
+/// Custom permission attribute for MoveNodeRequest. A move IS a delete at the source plus a create
+/// at the target, so it demands those two: the delete demand
+/// (<see cref="DeletePermission.RequiredFor"/>) on the source namespace and Create on the target
+/// namespace. Into ANOTHER partition the source demand is Delete itself: a move carries the node's
+/// authorship verbatim, and only an administrator of the source may carry it out of the governance
+/// that covered it.
 /// </summary>
 public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Update)
 {
@@ -1181,7 +1202,11 @@ public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permiss
     {
         if (delivery.Message is MoveNodeRequest move)
         {
-            yield return (GetNamespace(move.SourcePath), Permission.Delete);
+            // Within a partition: the delete demand. Into another partition: Delete itself, because
+            // the node's authorship travels with it (MeshExtensions.MoveEntitlement).
+            yield return (GetNamespace(move.SourcePath), DeletePermission.SamePartition(move.SourcePath, move.TargetPath)
+                ? DeletePermission.RequiredFor(move.SourcePath)
+                : Permission.Delete);
             yield return (GetNamespace(move.TargetPath), Permission.Create);
         }
         else

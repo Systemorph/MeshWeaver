@@ -44,7 +44,7 @@ internal sealed class CapturedLogs : ILoggerFactory, ILoggerProvider
 /// the aliasing shape the review of #7027 named.</summary>
 public interface IDiagnosedAlias;
 
-/// <summary>A scoped service whose constructor throws when built for no caller — the shape of Radzen's
+/// <summary>A scoped service whose constructor throws when built for no caller — the shape of a component library's
 /// <c>DialogService</c> over an uninitialised <c>RemoteNavigationManager</c> (MeshWeaver#6584).</summary>
 public sealed class ThrowsWithoutACaller
 {
@@ -65,7 +65,7 @@ public sealed class DiagnosedSingleton : IDisposable, IDiagnosedAlias
     public void Dispose() => Interlocked.Increment(ref disposed);
 }
 
-/// <summary>A platform class a module registers SCOPED — one per caller, like Radzen's ThemeService.</summary>
+/// <summary>A platform class a module registers SCOPED — one per caller, like a component library's ThemeService.</summary>
 public sealed class DiagnosedPerCircuit : IDisposable
 {
     private int disposed;

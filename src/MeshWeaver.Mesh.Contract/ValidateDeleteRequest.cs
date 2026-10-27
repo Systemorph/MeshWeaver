@@ -40,7 +40,7 @@ namespace MeshWeaver.Mesh;
 /// is going away — deleting the last admin of a space is fine when the space itself is
 /// part of the same delete.
 /// </param>
-[RequiresPermission(Permission.Delete)]
+[ValidateDeletePermission]
 public sealed record ValidateDeleteRequest(string Path, string? RootPath = null) : IRequest<ValidateDeleteResponse>
 {
     /// <summary>
@@ -204,4 +204,21 @@ public sealed record ValidateDeleteResponse
     /// <summary>Response with a single advisory warning.</summary>
     public static ValidateDeleteResponse FromWarning(string warning) =>
         new() { Warnings = [warning] };
+}
+
+/// <summary>
+/// Permission attribute for <see cref="ValidateDeleteRequest"/>: the same demand the delete itself
+/// makes (<see cref="DeletePermission.RequiredFor"/>), so the pre-flight and the delete cannot
+/// disagree about who may remove the node.
+/// </summary>
+public class ValidateDeletePermissionAttribute() : RequiresPermissionAttribute(Permission.Delete)
+{
+    /// <inheritdoc />
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        yield return (hubPath, delivery.Message is ValidateDeleteRequest validate
+            ? DeletePermission.RequiredFor(validate.Path)
+            : Permission.Delete);
+    }
 }
