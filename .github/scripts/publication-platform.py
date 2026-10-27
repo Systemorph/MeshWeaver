@@ -188,10 +188,23 @@ class Decision:
     mode: str                     # publication | pin | legacy
     notes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # The upstreams whose publication carried a platform record WHEN THE HOST WAS CHOSEN. `verify`
+    # refuses a record that vanished only for these: an upstream that never had one (a lane
+    # predating the record, beside a recorded one) is the documented fallback, not a reseal.
+    recorded: list[str] = field(default_factory=list)
 
 
-def decide(run: Platform, pinned: bool, ceiling: str | None, readings: dict[str, Reading]) -> Decision:
-    """The platform this gate composes on. Pure; every branch is in the self-test."""
+def decide(run: Platform, pinned: bool, ceiling: str | None, readings: dict[str, Reading],
+           frozen: str | None = None) -> Decision:
+    """The platform this gate composes on. Pure; every branch is in the self-test.
+
+    `frozen` — the caller's MW_PLATFORM_REF freeze, when the run's platform was resolved through it.
+    A freeze is an INSTRUCTION (an incident), so it binds like a pin: the host stays the frozen set,
+    and a publication the frozen host cannot adopt is refused by name — never silently replaced by
+    the publication's set, and never measured against the ceiling, which the freeze overrides."""
+    if frozen:
+        pinned, ceiling = True, None
+    who = (f"the MW_PLATFORM_REF freeze '{frozen}' FROZE the host at" if frozen else "the caller PINNED")
     with_record = {src: r.record for src, r in readings.items() if r.kind == "record" and r.record}
     without = [src for src, r in readings.items() if r.kind == "no-record"]
     absent = [src for src, r in readings.items() if r.kind == "absent"]
@@ -209,27 +222,36 @@ def decide(run: Platform, pinned: bool, ceiling: str | None, readings: dict[str,
                       + ". One gate host cannot be both; the upstreams must reseal on one set.")
     src, rec = sorted(with_record.items())[0]
     names = "', '".join(sorted(with_record))
+    recorded = sorted(with_record)
     if pinned:
         if rec.same_build(run):
-            return Decision(run, "pin", notes + [f"the caller's pin IS the platform '{names}' was sealed on — {run.text()}"], warnings)
+            return Decision(run, "pin", notes + [f"{who} the platform '{names}' was sealed on — {run.text()}"], warnings, recorded)
         order = compare_sets(rec.set, run.set)
         if order is None or order >= 0:
             what = ("NEWER than" if order and order > 0 else
                     "the same set NAME as, but a different build from" if order == 0 else
                     "not orderable against")
             raise Refusal(
-                f"the caller PINNED {run.text()}, and the '{names}' publication was sealed on {rec.text()} — "
-                f"{what} the pin. Composing on the pin would DECLINE every bundle whose floor exceeds it "
-                f"(the bake-consumption failure {TRANSITIONAL} names). Either pin exactly the publication's "
-                f"set, or pass NO digests (and, on a pull request, platform-ceiling) so this lane composes "
-                f"on the set the publication names.")
+                f"{who} {run.text()}, and the '{names}' publication was sealed on {rec.text()} — "
+                f"{what} the {'freeze' if frozen else 'pin'}. Composing on it would DECLINE every bundle whose floor exceeds it "
+                f"(the bake-consumption failure {TRANSITIONAL} names). "
+                + (f"Lift or move the freeze (repository variable MW_PLATFORM_REF) to the publication's set "
+                   f"{rec.set}, or wait for '{names}' to publish on the frozen set." if frozen else
+                   f"Either pin exactly the publication's set, or pass NO digests (and, on a pull request, "
+                   f"platform-ceiling) so this lane composes on the set the publication names."))
+        if frozen:
+            warnings.append(
+                f"the MW_PLATFORM_REF freeze '{frozen}' holds the host at {run.text()}, NEWER than the set the "
+                f"'{names}' publication was sealed on ({rec.text()}). Composing on the freeze — every floor is "
+                f"at or below it, so nothing is declined — but not on the publication's set.")
+            return Decision(run, "pin", notes, warnings, recorded)
         warnings.append(
             f"TRANSITIONAL ({TRANSITIONAL}): the caller pinned {run.text()}, NEWER than the set the "
             f"'{names}' publication was sealed on ({rec.text()}). Composing on the pin as before — every "
             f"floor is at or below it, so nothing is declined — but the gate is NOT on the publication's "
             f"set. Pass no digests (and platform-ceiling on a pull request) to compose on it; a disagreeing "
             f"pin becomes red once every upstream-seed caller has.")
-        return Decision(run, "pin", notes, warnings)
+        return Decision(run, "pin", notes, warnings, recorded)
     if ceiling:
         order = compare_sets(rec.set, ceiling)
         if order is None:
@@ -243,16 +265,23 @@ def decide(run: Platform, pinned: bool, ceiling: str | None, readings: dict[str,
                 f"floored above it. Re-run once main has passed {rec.set}, or label the pull request to "
                 f"follow the newest sealed set.")
     moved = "" if rec.same_build(run) else f" (this run had resolved {run.text()} — the publication decides)"
-    return Decision(rec, "publication", notes + [f"composing on the set '{names}' was sealed on: {rec.text()}{moved}"], warnings)
+    return Decision(rec, "publication", notes + [f"composing on the set '{names}' was sealed on: {rec.text()}{moved}"],
+                    warnings, recorded)
 
 
-def verify(composed: Platform, mode: str, source: str, reading: Reading) -> list[str]:
+def verify(composed: Platform, mode: str, source: str, reading: Reading,
+           recorded: frozenset[str] | None = None) -> list[str]:
     """After composition: the publication the seed is ABOUT to read must still be one this host can
-    adopt. Returns warnings; raises Refusal when it cannot."""
+    adopt. Returns warnings; raises Refusal when it cannot.
+
+    `recorded` — the upstreams that carried a record when the host was chosen (`choose`'s
+    `recorded-sources`). A missing record is a reseal only for one of THOSE: an upstream that had
+    none then (beside a recorded one, mode `publication`) is the documented fallback. None = not
+    told, which presumes every upstream was recorded (the strict reading)."""
     if reading.kind == "absent":
         return []                                   # the seed step's own refusal names it
     if reading.kind == "no-record":
-        if mode == "publication":
+        if mode == "publication" and (recorded is None or source in recorded):
             raise Refusal(f"the '{source}' publication this shard composed from carried a platform record, and "
                           f"the one it now reads ({reading.where}) carries none — it was resealed by a lane that "
                           f"predates the record, whose floors are unknown. Re-run: the gate then reads the "
@@ -413,10 +442,20 @@ def cmd_choose(args: argparse.Namespace, reader: Reader | None = None) -> int:
     run = Platform(args.run_set.strip(), args.run_tester.strip(), args.run_portal.strip())
     pinned = args.pinned == "true"
     ceiling = (args.ceiling or "").strip() or None
+    # 🚨 A FREEZE WINS (the incident instruction): when the run's platform was resolved through
+    # MW_PLATFORM_REF, the host is the frozen set — addressed by it, held to it, and the ceiling
+    # (which the freeze already overrode when the set was resolved) is not consulted.
+    frozen = (args.freeze or "").strip() or None
+    if frozen and pinned:
+        frozen = None                               # the caller's digests are the pin; plan resolved nothing
+    if frozen and ceiling:
+        print(f"::notice title=Platform from the publication::the MW_PLATFORM_REF freeze '{frozen}' overrides "
+              f"platform-ceiling {ceiling} — the host stays the frozen set")
+        ceiling = None
     upstreams = args.upstreams.split()
     if not upstreams:
         raise Refusal("--upstreams is empty — there is no publication to take a platform from")
-    address_set = ceiling if (ceiling and not pinned) else run.set
+    address_set = ceiling if (ceiling and not pinned and not frozen) else run.set
     if not address_set:
         print(f"::warning title=Platform not taken from the publication::this run names no platform SET "
               f"(the caller pinned digests without platform-set, or follows tags), so the framework identity "
@@ -424,7 +463,7 @@ def cmd_choose(args: argparse.Namespace, reader: Reader | None = None) -> int:
               f"{run.text()} — the race {TRANSITIONAL} closes stays open for this caller; pass platform-set "
               f"with pins, or no pins at all.")
         emit({"image-digest": run.tester, "platform-image-digest": run.portal, "platform-set": run.set,
-              "identity": "", "mode": "legacy"})
+              "identity": "", "mode": "legacy", "recorded-sources": ""})
         return 0
     identity = key_for(address_set, declaration)
     if reader is None:
@@ -441,13 +480,14 @@ def cmd_choose(args: argparse.Namespace, reader: Reader | None = None) -> int:
     for src, r in readings.items():
         rec = f": {r.record.text()}" if r.record else ""
         print(f"publication '{src}' @ {identity}: {r.kind}{rec} ({r.where})")
-    decision = decide(run, pinned, ceiling, readings)
+    decision = decide(run, pinned, ceiling, readings, frozen)
     for line in decision.notes:
         print(f"::notice title=Platform from the publication::{line}")
     for line in decision.warnings:
         print(f"::warning title=Platform from the publication::{line}")
     emit({"image-digest": decision.platform.tester, "platform-image-digest": decision.platform.portal,
-          "platform-set": decision.platform.set, "identity": identity, "mode": decision.mode})
+          "platform-set": decision.platform.set, "identity": identity, "mode": decision.mode,
+          "recorded-sources": " ".join(decision.recorded)})
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
@@ -468,7 +508,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
                                                args.identity, args.record), args.record)
     else:
         reading = Reading("no-record", None, "the publication")
-    for line in verify(composed, args.mode, args.source, reading):
+    recorded = None if args.recorded_sources is None else frozenset(args.recorded_sources.split())
+    for line in verify(composed, args.mode, args.source, reading, recorded):
         print(f"::warning title=Seed vs host::{line}")
     print(f"seed '{args.source}': {reading.kind}{(' — ' + reading.record.text()) if reading.record else ''}; "
           f"host {composed.text()} (mode {args.mode}) — consistent")
@@ -558,7 +599,31 @@ def self_test() -> int:
     check("two upstreams sealed on different platforms are RED naming each", "'crm' on" in why and "'plugins' on" in why, why)
     d = decide(old, False, None, {"plugins": rec(new), "crm": Reading("no-record", None, "x")})
     check("a recorded upstream beside an unrecorded one: the record decides, the other is warned",
-          d.platform == new and any("'crm'" in w for w in d.warnings), d)
+          d.platform == new and any("'crm'" in w for w in d.warnings) and d.recorded == ["plugins"], d)
+    # …and the seed re-read accepts the unrecorded one unchanged (it never had a record), while a
+    # RECORDED upstream that lost its record is still a reseal. NEGATIVE CONTROL: without the
+    # per-upstream status (recorded=None, the shard-wide mode alone) the legacy one is refused —
+    # every re-run of a mixed seed failed that way.
+    mixed = frozenset(d.recorded)
+    check("mixed seed: the legacy upstream re-read with no record passes verify",
+          verify(new, d.mode, "crm", Reading("no-record", None, "x"), mixed) == [])
+    check("mixed seed NEGATIVE CONTROL: the shard-wide mode alone refuses the unchanged legacy upstream",
+          "predates the record" in refused(lambda: verify(new, d.mode, "crm", Reading("no-record", None, "x"))))
+    why = refused(lambda: verify(new, d.mode, "plugins", Reading("no-record", None, "x"), mixed))
+    check("mixed seed: the RECORDED upstream losing its record is still RED", "predates the record" in why, why)
+
+    print("\nthe MW_PLATFORM_REF freeze wins over the publication (and the ceiling):")
+    check("NEGATIVE CONTROL: without the freeze the same inputs replace the frozen set by the publication's",
+          decide(old, pinned=False, ceiling="3.1.11080", readings=race).platform == new)
+    why = refused(lambda: decide(old, pinned=False, ceiling="3.1.11080", readings=race, frozen="3.1.11069"))
+    check("a publication NEWER than the frozen host is RED naming the freeze and both sets",
+          "MW_PLATFORM_REF freeze '3.1.11069'" in why and "3.1.11069" in why and "3.1.11076" in why, why)
+    d = decide(Platform("3.1.11080", T[5], T[6]), pinned=False, ceiling="3.1.11070", readings=race, frozen="3.1.11080")
+    check("a frozen host NEWER than the publication keeps the freeze (ceiling not consulted), warning naming both",
+          d.platform.set == "3.1.11080" and d.mode == "pin"
+          and any("freeze" in w and "3.1.11076" in w for w in d.warnings), d)
+    d = decide(new, pinned=False, ceiling=None, readings=race, frozen="3.1.11076")
+    check("a frozen host that IS the publication's set passes", d.platform == new and d.mode == "pin" and not d.warnings, d)
     why = refused(lambda: decide(old, False, "3.1.11080", {"plugins": rec(Platform("3.1.0-edge.5", T[3], T[4]))}))
     check("an unorderable record under a ceiling is refused, not guessed", "cannot be ordered" in why, why)
     why = refused(lambda: record_of({"set": "3.1.5", "testerDigest": "sha256:x", "portalDigest": T[1]}, "plugins", "c003e001", "w"))
@@ -644,6 +709,7 @@ def main() -> int:
     c.add_argument("--run-portal", default="")
     c.add_argument("--pinned", choices=("true", "false"), required=True)
     c.add_argument("--ceiling", default="")
+    c.add_argument("--freeze", default="")
     c.add_argument("--registry-url", default="")
     c.add_argument("--targets", default="")
     v = sub.add_parser("verify")
@@ -653,6 +719,7 @@ def main() -> int:
     v.add_argument("--composed-tester", default="")
     v.add_argument("--composed-portal", default="")
     v.add_argument("--identity", default="")
+    v.add_argument("--recorded-sources", default=None)
     g = v.add_mutually_exclusive_group(required=True)
     g.add_argument("--index")
     g.add_argument("--record")

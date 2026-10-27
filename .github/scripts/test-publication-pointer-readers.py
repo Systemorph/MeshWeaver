@@ -246,7 +246,7 @@ def run_seed(workdir: Path, root: Path, body: str, *, upstreams: str = SOURCE,
         REGISTRY_URL="", REGISTRY_KEY="",
         RUNNER_TEMP=str(runner_temp), GITHUB_OUTPUT=str(runner_temp / "outputs"),
         GITHUB_ENV=str(runner_temp / "github-env"),
-        EXPECTED_IDENTITY="", PLATFORM_MODE="legacy",
+        EXPECTED_IDENTITY="", PLATFORM_MODE="legacy", RECORDED_SOURCES="",
         COMPOSED_SET="", COMPOSED_TESTER="", COMPOSED_PORTAL="")
     env.update(platform or {})
     proc = subprocess.run(["bash", str(script)], capture_output=True, text=True,
@@ -626,6 +626,24 @@ def main() -> int:
                       proc.returncode != 0 and "RESEALED" in proc.stdout and "3.1.11080" in proc.stdout
                       and "3.1.11076" in proc.stdout,
                       "a seed from another set than the host is the DECLINE wall #7337 removes", proc)
+        # A MIXED seed (one upstream recorded, this one predating the record): the shard composes in
+        # mode `publication` off the OTHER upstream's record. This one's unchanged record-less
+        # generation is the documented fallback and must seed; only an upstream that HAD a record when
+        # the host was chosen and lost it is a reseal. NEGATIVE CONTROL: the same generation with this
+        # source named as recorded is refused — the shard-wide mode alone refused it on every re-run.
+        for label, recorded, ok in (("mixed seed: this upstream never had a record (another one decided)", "crm", True),
+                                    ("mixed seed CONTROL: this upstream HAD a record and lost it", f"crm {SOURCE}", False)):
+            slug = "mixed-ok" if ok else "mixed-lost"
+            root = base / slug / "remote"
+            stage(root, pointer=GENERATION)
+            proc, bundle = run_seed(base / slug / "seed", root, body,
+                                    platform={**composed, "RECORDED_SOURCES": recorded})
+            if ok:
+                check(f"{label}: the seed proceeds", proc.returncode == 0 and read(bundle) == GEN_BYTES,
+                      f"seeded {read(bundle)!r}", proc)
+            else:
+                check(f"{label}: REFUSED", proc.returncode != 0 and "predates the record" in proc.stdout,
+                      "a recorded upstream resealed by a pre-record lane has unknown floors", proc)
         root = base / "rec-identity" / "remote"
         stage(root, pointer=GENERATION)
         proc, _ = run_seed(base / "rec-identity" / "seed", root, body,

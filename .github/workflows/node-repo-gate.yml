@@ -1372,6 +1372,10 @@ jobs:
           RUN_PORTAL: ${{ steps.platform.outputs.platform-image-digest }}
           RUN_SET: ${{ steps.platform.outputs.platform-set }}
           CEILING: ${{ inputs.platform-ceiling }}
+          # The freeze the step above resolved through (the CALLER's variable). A freeze is an
+          # incident instruction: it binds like a pin here and overrides the ceiling, so the
+          # publication can never silently replace the frozen set (refused by name instead).
+          FREEZE: ${{ vars.MW_PLATFORM_REF }}
           REGISTRY_URL: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
           TARGETS: ${{ inputs.bake-publish-targets }}
@@ -1386,6 +1390,7 @@ jobs:
               echo "platform-set=${RUN_SET}"
               echo "identity="
               echo "mode=legacy"
+              echo "recorded-sources="
             } >> "$GITHUB_OUTPUT"
             echo "platform: no upstream-seed — nothing is seeded, so the platform above is the host (no publication to take it from)"
             exit 0
@@ -1405,9 +1410,13 @@ jobs:
           # empty digests under allow-unpinned are not a pin.
           PINNED=false
           if [ "${RESOLVED:-}" != "true" ] && [ -n "${RUN_TESTER:-}" ] && [ -n "${RUN_PORTAL:-}" ]; then PINNED=true; fi
+          # The freeze applies only where this lane RESOLVED the platform (the step above passed it
+          # to resolve-platform.py); beside the caller's pin it was never consulted.
+          FROZEN=""
+          if [ "${RESOLVED:-}" = "true" ]; then FROZEN="${FREEZE:-}"; fi
           python3 "$SCRIPT" choose --declaration "$DECL" --upstreams "$UPSTREAMS" \
             --run-set "${RUN_SET:-}" --run-tester "${RUN_TESTER:-}" --run-portal "${RUN_PORTAL:-}" \
-            --pinned "$PINNED" --ceiling "${CEILING:-}" \
+            --pinned "$PINNED" --ceiling "${CEILING:-}" --freeze "$FROZEN" \
             ${REGISTRY_URL:+--registry-url "$REGISTRY_URL"} ${TARGETS:+--targets "$TARGETS"}
       # ───────────── TWO IMAGES, ONE BUILD: resolve, pull, extract, compose (MeshWeaver#3022) ─────────────
       - name: Resolve the tester and the platform image
@@ -1720,6 +1729,9 @@ jobs:
           # publication by, the host it chose, and why (publication | pin | legacy).
           EXPECTED_IDENTITY: ${{ steps.publication-platform.outputs.identity }}
           PLATFORM_MODE: ${{ steps.publication-platform.outputs.mode }}
+          # The upstreams that carried a platform record when the host was chosen: only for these is
+          # a vanished record a reseal (a legacy upstream beside a recorded one is the fallback).
+          RECORDED_SOURCES: ${{ steps.publication-platform.outputs.recorded-sources }}
           COMPOSED_SET: ${{ steps.publication-platform.outputs.platform-set }}
           COMPOSED_TESTER: ${{ steps.publication-platform.outputs.image-digest }}
           COMPOSED_PORTAL: ${{ steps.publication-platform.outputs.platform-image-digest }}
@@ -1743,7 +1755,8 @@ jobs:
             local src="$1"; shift
             python3 "$PUBPLAT" verify --source "$src" --mode "${PLATFORM_MODE:-legacy}" \
               --composed-set "${COMPOSED_SET:-}" --composed-tester "${COMPOSED_TESTER:-}" \
-              --composed-portal "${COMPOSED_PORTAL:-}" --identity "$IDENTITY" "$@"
+              --composed-portal "${COMPOSED_PORTAL:-}" --identity "$IDENTITY" \
+              --recorded-sources "${RECORDED_SOURCES:-}" "$@"
           }
 
           # 🚨 "THE UPSTREAM HAS NOT PUBLISHED FOR THIS IDENTITY" IS A WAIT, NOT A REPO DEFECT — and

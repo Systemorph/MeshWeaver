@@ -139,6 +139,12 @@ def main() -> int:
     check("9b the decision receives the shard's `platform-set` and hands it through when nothing is seeded",
           "RUN_SET: ${{ steps.platform.outputs.platform-set }}" in decided
           and 'echo "platform-set=${RUN_SET}"' in decided)
+    # The freeze the shard resolved through must reach the decision, or the publication silently
+    # replaces the frozen set (#7424 review): same variable as `platform`, applied where it resolved.
+    check("9c the decision receives the MW_PLATFORM_REF freeze and passes it where the lane resolved",
+          "FREEZE: ${{ vars.MW_PLATFORM_REF }}" in decided
+          and 'if [ "${RESOLVED:-}" = "true" ]; then FROZEN="${FREEZE:-}"; fi' in decided
+          and '--freeze "$FROZEN"' in decided)
 
     if failures:
         print(f"::error::node-repo-gate.yml drops a pinned caller's set name at: {'; '.join(failures)}")
