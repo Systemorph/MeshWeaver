@@ -86,6 +86,18 @@ public static class DependencyEdgesFile
         return path;
     }
 
+    /// <summary>Writes an already-built document (the module workspace build's).</summary>
+    /// <param name="outputDirectory">The output directory.</param>
+    /// <param name="document">The document.</param>
+    /// <returns>The path written.</returns>
+    public static string WriteDocument(string outputDirectory, Document document)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        var path = Path.Combine(outputDirectory, FileName);
+        File.WriteAllText(path, Serialize(document));
+        return path;
+    }
+
     /// <summary>The document's JSON text (camelCase, nulls omitted).</summary>
     /// <param name="document">The document.</param>
     public static string Serialize(Document document) => JsonSerializer.Serialize(document, Json);

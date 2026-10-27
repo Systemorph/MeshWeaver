@@ -30,6 +30,7 @@ internal static class BuildProjectCommandLine
         string? sharedFrameworks = null;
         var prebuilt = new List<string>();
         var verbose = false;
+        var dependencyEdges = false;
         var extraRefs = new List<string>();
         var generatorPaths = new List<string>();
         var extensionDirectories = new List<string>();
@@ -104,6 +105,11 @@ internal static class BuildProjectCommandLine
                 case "--verbose":
                     verbose = true;
                     break;
+                // Forward edges for CI selection (Doc/Architecture/DependencyGraph): each green
+                // project's USED in-tree references, written to dependency-edges.json.
+                case "--dependency-edges":
+                    dependencyEdges = true;
+                    break;
                 case "--bind-to-image":
                     bindToImage = true;
                     break;
@@ -167,6 +173,7 @@ internal static class BuildProjectCommandLine
             AllowWarnings = allowWarnings,
             Verbose = verbose,
             MaxParallel = maxParallel,
+            DependencyEdges = dependencyEdges,
         }, 0);
     }
 

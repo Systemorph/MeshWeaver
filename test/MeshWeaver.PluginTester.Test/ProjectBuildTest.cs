@@ -166,6 +166,78 @@ public class ProjectBuildTest : IDisposable
         (await Build(OptionsFor(project))).ExitCode.Should().Be(0);
     }
 
+    // ── the forward dependency edges (Doc/Architecture/DependencyGraph → Where it runs) ──────────
+
+    /// <summary>
+    /// <c>--dependency-edges</c> writes each green project's USED in-tree references. App references
+    /// both Used and Unused but binds only Used: the edge is App → Used, and the negative controls are
+    /// that the DECLARED-but-unused reference is not an edge, that nothing points backwards, and that
+    /// without the option no file is written at all.
+    /// </summary>
+    [Fact]
+    public async Task DependencyEdges_AreTheUsedInTreeReferences_NotTheDeclaredOnes()
+    {
+        Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
+        Write("Used/Used.csproj", LibraryProject);
+        Write("Used/Thing.cs", """
+            namespace Used;
+            /// <summary>A thing.</summary>
+            public sealed class Thing { }
+            """);
+        Write("Unused/Unused.csproj", LibraryProject);
+        Write("Unused/Other.cs", """
+            namespace Unused;
+            /// <summary>Another thing.</summary>
+            public sealed class Other { }
+            """);
+        var app = Write("App/App.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <GenerateDocumentationFile>true</GenerateDocumentationFile>
+              </PropertyGroup>
+              <ItemGroup>
+                <ProjectReference Include="../Used/Used.csproj" />
+                <ProjectReference Include="../Unused/Unused.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+        Write("App/Program.cs", """
+            namespace App;
+            /// <summary>Uses one of its two references.</summary>
+            public static class Entry
+            {
+                /// <summary>Makes a thing.</summary>
+                /// <returns>The thing.</returns>
+                public static Used.Thing Make() => new();
+            }
+            """);
+
+        var report = await Build(OptionsFor(app) with { DependencyEdges = true });
+        report.ExitCode.Should().Be(0, report.FatalError ?? "");
+
+        var path = Path.Combine(_root, "out", DependencyEdgesFile.FileName);
+        File.Exists(path).Should().BeTrue("the workspace build was asked for its edges");
+        var document = DependencyEdgesFile.Deserialize(File.ReadAllText(path));
+        document.Should().NotBeNull();
+        var appSet = document!.Sets.Single(s => s.Source == "App");
+        appSet.Edges.Select(e => e.Target).Should().Equal("Used");
+        appSet.Edges.Should().OnlyContain(e => e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Module);
+        appSet.BuildMvid.Should().NotBeNullOrEmpty();
+        document.Sets.Single(s => s.Source == "Used").Edges.Should().BeEmpty("nothing points backwards");
+        document.Failed.Should().BeEmpty();
+        report.Projects.Single(p => p.Result!.AssemblyName == "App").Result!.UsedReferences
+            .Should().Contain("Used").And.NotContain("Unused");
+
+        // Negative control: off by default — no file, no second binding pass.
+        Directory.Delete(Path.Combine(_root, "out"), recursive: true);
+        var plain = await Build(OptionsFor(app));
+        plain.ExitCode.Should().Be(0, plain.FatalError ?? "");
+        File.Exists(path).Should().BeFalse("the option is off by default");
+    }
+
     // ── the ProjectReference graph ─────────────────────────────────────────────────────────────
 
     [Fact]

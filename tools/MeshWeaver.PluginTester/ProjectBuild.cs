@@ -162,6 +162,15 @@ public static class ProjectBuild
         /// <summary>Concurrency cap across independent projects.</summary>
         public int MaxParallel { get; init; } = Math.Max(1, Environment.ProcessorCount);
 
+        /// <summary>
+        /// Read each green project's USED assembly references (<c>Compilation.GetUsedAssemblyReferences()</c>)
+        /// and write the in-tree ones as forward edges to <see cref="DependencyEdgesFile.FileName"/> in
+        /// the output directory (<c>Doc/Architecture/DependencyGraph</c> → <i>Where it runs</i>). Off
+        /// by default: the call binds every method body a second time (the emit's body pass is not
+        /// reused), and its cost is measured per project and printed as a phase.
+        /// </summary>
+        public bool DependencyEdges { get; init; }
+
         /// <summary>Where the secondary, human rendering goes.</summary>
         public TextWriter Output { get; init; } = Console.Out;
 
@@ -311,6 +320,17 @@ public static class ProjectBuild
         /// <para>🚨 An <c>init</c> PROPERTY, for the same reason.</para>
         /// </summary>
         public ImmutableArray<PrivateClosure.NativeRide> NativeRides { get; init; } = [];
+
+        /// <summary>
+        /// The simple names of the assemblies this project's compilation USED, when
+        /// <see cref="Options.DependencyEdges"/> asked for them (empty otherwise). An <c>init</c>
+        /// PROPERTY, for the arity reason <see cref="ExtensionGeneratedSources"/> records.
+        /// </summary>
+        public ImmutableArray<string> UsedReferences { get; init; } = [];
+
+        /// <summary>What reading <see cref="UsedReferences"/> cost — the measurement the dependency
+        /// graph's design asked for before the call is turned on in a lane.</summary>
+        public TimeSpan UsedReferencesElapsed { get; init; }
 
         /// <summary>Compiled, emitted, and within the warning policy.</summary>
         public bool IsGreen => Failure is null && AssemblyPath is not null;
@@ -577,6 +597,11 @@ public static class ProjectBuild
                             sink);
                     }
                 }
+                if (options.DependencyEdges)
+                {
+                    var edgesFile = WriteDependencyEdges(workRoot, container.PlatformAssemblyVersion, results);
+                    options.Output.WriteLine($"build-project: dependency edges → {edgesFile}");
+                }
                 Print(options.Output, report);
                 return report;
             })
@@ -584,6 +609,43 @@ public static class ProjectBuild
             // the same fatal report every other refusal produces rather than a stack trace.
             .Catch((InvalidOperationException ex) => Observable.Return(
                 Fatal(options, sink, wall, container.PlatformAssemblyVersion, ex.Message)));
+    }
+
+    /// <summary>
+    /// The workspace's forward edges: for every project that built, an edge to each IN-TREE project
+    /// assembly its compilation used (<c>Kind = Module</c>); a project whose build did not produce an
+    /// assembly is listed as failed. Platform and package assemblies are not edges — the same rule the
+    /// NodeType extraction applies.
+    /// </summary>
+    internal static string WriteDependencyEdges(
+        string outputDirectory, string identity, IEnumerable<Cascade.NodeResult<ProjectResult>> results)
+    {
+        var built = results.Where(r => r.Result is not null).Select(r => r.Result!).ToList();
+        var inTree = built.Select(r => r.AssemblyName).ToHashSet(StringComparer.Ordinal);
+        var sets = built
+            .Where(r => r.IsGreen)
+            .Select(r => new MeshWeaver.Mesh.DependencyEdgeSet
+            {
+                Source = r.AssemblyName,
+                BuildMvid = EmitPipelineMvid(r.AssemblyPath!),
+                Edges = [.. r.UsedReferences
+                    .Where(n => inTree.Contains(n) && n != r.AssemblyName)
+                    .Select(n => new MeshWeaver.Mesh.DependencyEdge { Target = n, Kind = MeshWeaver.Mesh.DependencyEdgeKinds.Module })],
+            })
+            .OrderBy(e => e.Source, StringComparer.Ordinal)
+            .ToImmutableArray();
+        var failed = built.Where(r => !r.IsGreen).Select(r => r.AssemblyName)
+            .OrderBy(n => n, StringComparer.Ordinal).ToImmutableArray();
+        return DependencyEdgesFile.WriteDocument(outputDirectory,
+            new DependencyEdgesFile.Document(DependencyEdgesFile.Schema, identity, null, sets, failed));
+    }
+
+    private static string? EmitPipelineMvid(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+        var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+        return reader.GetGuid(reader.GetModuleDefinition().Mvid).ToString("N");
     }
 
     private static Report Fatal(Options options, Sink sink, Stopwatch wall, string platformVersion, string message)
@@ -1413,6 +1475,22 @@ public static class ProjectBuild
                 + string.Concat(staticAssets.Summaries.Select(s => $" + {s}"))
                 + $", {warnings} warning(s), "
                 + $"{artifact.Length} bytes in {clock.Elapsed.TotalMilliseconds:F0} ms → {artifact.DllPath}");
+            var used = ImmutableArray<string>.Empty;
+            var usedElapsed = TimeSpan.Zero;
+            if (options.DependencyEdges)
+            {
+                phase.Restart();
+                used = [.. compilation.GetUsedAssemblyReferences()
+                    .Select(r => r is PortableExecutableReference { FilePath: { } file }
+                        ? Path.GetFileNameWithoutExtension(file)
+                        : r.Display ?? string.Empty)
+                    .Where(n => n.Length > 0)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(n => n, StringComparer.Ordinal)];
+                usedElapsed = phase.Elapsed;
+                sink.Info($"[{name}] phase: used assembly references {phase.ElapsedMilliseconds} ms "
+                          + $"({used.Length} used of {compilation.References.Count()})");
+            }
             return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
                 model.CompileItems.Length, 0, warnings, artifact.DllPath, [], null)
             {
@@ -1420,6 +1498,8 @@ public static class ProjectBuild
                 ResourceCount = model.EmbeddedResources.Length,
                 Rides = privateClosure.Rides,
                 NativeRides = privateClosure.Natives,
+                UsedReferences = used,
+                UsedReferencesElapsed = usedElapsed,
             };
         }
         catch (CompilationException ex)
