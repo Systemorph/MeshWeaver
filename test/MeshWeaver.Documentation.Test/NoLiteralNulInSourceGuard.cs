@@ -54,7 +54,7 @@ public class NoLiteralNulInSourceGuard(ITestOutputHelper output)
     /// than skipping it, because a root that scans nothing is indistinguishable from a clean one.
     /// </summary>
     private static readonly ImmutableArray<string> ScannedRoots =
-        ["src", "test", "samples", "memex", "clients", ".github", "tools", "scripts", "deploy"];
+        ["src", "test", "samples", "clients", ".github", "tools", "scripts", "deploy"];
 
     /// <summary>
     /// Extensions of files a human authors. Deliberately an allow-list: a deny-list would have to

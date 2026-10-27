@@ -48,7 +48,55 @@ public static class DependencyEdgesFile
         string FrameworkIdentity,
         string? Commit,
         ImmutableArray<DependencyEdgeSet> Sets,
-        ImmutableArray<string> Failed);
+        ImmutableArray<string> Failed)
+    {
+        /// <summary>
+        /// What the PRODUCER measured (<see cref="Measures"/>). A reader may judge an edge kind only
+        /// when the file says it was measured: a schema-1 file written before a capability existed
+        /// carries none of it, and its silence about dynamic bindings is UNKNOWN — never "none".
+        /// An <c>init</c> property, so the positional signature is unchanged.
+        /// </summary>
+        public ImmutableArray<string> Measured { get; init; } = [];
+
+        /// <summary>
+        /// The producer's own EVALUATED declarations per source (a module workspace build's
+        /// <c>ProjectReference</c>s and <c>PackageReference</c>s, after imports, conditions and
+        /// property expansion), so a reconciliation never re-reads raw project XML. Absent for a
+        /// bake, whose declarations are the tree's manifests.
+        /// </summary>
+        public ImmutableSortedDictionary<string, DeclaredDependencies> Declarations { get; init; } =
+            ImmutableSortedDictionary<string, DeclaredDependencies>.Empty;
+
+        /// <summary>Whether the producer measured <paramref name="capability"/>.</summary>
+        /// <param name="capability">One of <see cref="Measures"/>.</param>
+        public bool Has(string capability) => !Measured.IsDefault && Measured.Contains(capability);
+    }
+
+    /// <summary>One source's evaluated declarations.</summary>
+    /// <param name="ProjectReferences">The referenced projects' assembly names.</param>
+    /// <param name="PackageReferences">The package ids.</param>
+    public sealed record DeclaredDependencies(
+        ImmutableArray<string> ProjectReferences, ImmutableArray<string> PackageReferences);
+
+    /// <summary>The capabilities a producer records in <see cref="Document.Measured"/> — an open
+    /// vocabulary; a reader that does not find one treats that measurement as never taken.</summary>
+    public static class Measures
+    {
+        /// <summary><c>Platform</c> and <c>Package</c> edges were read off the emitted images.</summary>
+        public const string ReferencedAssemblies = "referenced-assemblies";
+
+        /// <summary><c>Dynamic</c>/<c>DynamicUnresolved</c> edges were scanned for.</summary>
+        public const string DynamicBindings = "dynamic-bindings";
+
+        /// <summary><see cref="Document.Declarations"/> holds the producer's evaluated declarations.</summary>
+        public const string Declarations = "declarations";
+
+        /// <summary>What a bake measures.</summary>
+        public static ImmutableArray<string> Bake { get; } = [ReferencedAssemblies, DynamicBindings];
+
+        /// <summary>What a module workspace build measures.</summary>
+        public static ImmutableArray<string> ModuleBuild { get; } = [ReferencedAssemblies, DynamicBindings, Declarations];
+    }
 
     /// <summary>Builds the document for a bake's attempted types.</summary>
     /// <param name="frameworkIdentity">The host identity.</param>
@@ -68,7 +116,7 @@ public static class DependencyEdgesFile
             .Distinct(StringComparer.Ordinal)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToImmutableArray();
-        return new Document(Schema, frameworkIdentity, commit, sets, failed);
+        return new Document(Schema, frameworkIdentity, commit, sets, failed) { Measured = Measures.Bake };
     }
 
     /// <summary>Writes <see cref="FileName"/> into <paramref name="outputDirectory"/>.</summary>

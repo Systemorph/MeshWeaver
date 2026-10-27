@@ -103,7 +103,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries
     /// would bury the ones that matter.</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex", "tools"];
+    private static readonly string[] ScannedRoots = ["src", "tools"];
 
     /// <summary>
     /// 🚨 The call being matched, as a PATTERN and not a literal. <c>Observable.Using</c> and the

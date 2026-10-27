@@ -32,7 +32,7 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class PlatformCompatibilityRatchetGuard
 {
-    private static readonly ImmutableArray<string> ScannedRoots = ["src", "memex", "tools"];
+    private static readonly ImmutableArray<string> ScannedRoots = ["src", "tools"];
 
     private static readonly Regex ProvenanceMember = new(
         @"\b(?:FrameworkBuildIdentity\s*\.\s*(?:BuildProvenance|ProducerStatedProvenance|ResolveBuildProvenanceForDirectory)|FrameworkIdentity\s*\.\s*ReadProvenance)\b",

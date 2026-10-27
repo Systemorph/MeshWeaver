@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Dependency Graph
 category: Architecture
-description: Forward dependency edges computed by Roslyn at the end of every NodeType compile, stored once per environment, and the reverse closure ("who depends on X") answered through the query surface — a closure table maintained by triggers on Postgres, and the same answer walked in memory.
+description: Forward dependency edges computed by Roslyn at the end of every NodeType compile — static (bound NodeTypes, modules, platform assemblies, packages) and dynamic (reflection by name) — reconciled with what the tree declares, ratcheted where they reach into core, stored once per environment, and the reverse closure ("who depends on X") answered through the query surface.
 icon: /static/NodeTypeIcons/code.svg
 ---
 
@@ -29,9 +29,30 @@ One node per compiled source, holding that source's whole forward edge set:
 | path | `{NodeTypePath}/_Dependency/Forward` |
 | node type | `DependencyEdgeSet` (registered by `AddGraph`, keeps no history) |
 | content | `DependencyEdgeSet` — `Source`, `BuildMvid`, `StampVersion`, `InputDigest`, `Commit`, `Edges`, `IncludedWithoutUse` |
-| one edge | `DependencyEdge` — `Target`, `Kind`, `TargetBuildMvid`, `Evidence` |
+| one edge | `DependencyEdge` — `Target`, `Kind`, `TargetBuildMvid`, `Evidence`, `EvidenceClass`, `TargetKind` |
 
-`Kind` is an open vocabulary (`DependencyEdgeKinds`): `NodeType` and `Module` today.
+`Kind` is an open vocabulary (`DependencyEdgeKinds`, policy `open-vocabulary-string-constants`):
+
+| kind | target | evidence class | read from |
+|---|---|---|---|
+| `NodeType` | the owning NodeType's path | Static | the `SemanticModel` walk (below) |
+| `Module` | the module assembly's simple name | Static | `GetUsedAssemblyReferences()` ∩ the installed module files |
+| `Platform` | a `MeshWeaver.*` host assembly's simple name | Static | the EMITTED assembly's `AssemblyRef`/`TypeRef` tables |
+| `Package` | `package:{id}` — the package id (`#r "nuget:"`, or a shelf package for a module build) in its own namespace | Static | the emitted `AssemblyRef`s ∩ the package files |
+| `Dynamic` | `{type}, {assembly}` — `*` for a whole-assembly load, `?` for an unknown part | Dynamic | a reflection call with a CONSTANT argument |
+| `DynamicUnresolved` | `?{api}`, e.g. `?System.Type.GetType` | Dynamic | a reflection call whose argument is not constant |
+
+Targets are unique within one set by construction (`DependencyEdgeTargets`): a NodeType target is
+a path (contains `/`), a module or platform target an assembly simple name (one runtime identity per
+name — when a module and a host assembly share one, the installed module is the edge), a package
+target `package:{id}` (a package id can equal an assembly name: `Acme.Bundle` shipping
+`Acme.Widget.dll` beside a module ASSEMBLY `Acme.Bundle`), a dynamic target `{type}, {assembly}` or
+`?{api}`. `DependencyEdgeExtraction.UniqueTargets` proves it on every set written and fails LOUDLY
+on a collision, so a target-keyed reader — the Postgres projection's `(source, target)` key — never
+has to choose between two kinds. `TargetKind`
+says what a dynamic target IS — `Platform`, `Module`, `Package`, `NodeType` (a type in the source's
+own compilation), `Framework` (the BCL), or null when the compile cannot tell, which a reader must
+read as "may be the platform".
 
 - **One node per source, replaced whole.** A recompile writes the complete set in one write, so a
   dropped edge disappears in the same write that adds the new ones — never a half-state, and never
@@ -92,7 +113,8 @@ used — after the source generators, before the emitted bytes are loaded — an
    compile records them, and the closure joins the two.
 3. **Module edges — `Compilation.GetUsedAssemblyReferences()`.** Every used reference that is one
    of the mesh's installed modules is an edge `self → module assembly`, carrying the module's MVID
-   as `TargetBuildMvid`. Platform (TPA) assemblies and NuGet packages are not edges.
+   as `TargetBuildMvid`. Platform and package assemblies are their own kinds, read off the emitted
+   image — see *Platform and package edges* below.
 4. **Included but unused.** A foreign owner whose code was compiled in but never referenced from
    the compiling type's own code is listed in `IncludedWithoutUse`, not as an edge — the inclusion
    is a declared source query, the edge is what Roslyn bound. The candidates are read off the
@@ -147,8 +169,8 @@ which is what step 1 does.
 | runtime NodeType compile (`MeshNodeCompilationService.EmitCompiled`) | after the emit, on the CPU lane; modules are the files of the SAME reference snapshot Roslyn compiled against, so a live module swap mid-compile cannot drop a used module | the compile settle, beside the terminal stamp, as the edge-set node |
 | cold-start batch bake (`NodeTypeBatchBake.BakeOne`) | the same compile service | its own gated stamp (`WriteStamp`), the same writer, inside the same publication gate — and only when the stamp LANDED (a refused compare-and-set writes no edges over a newer build's) |
 | build-process bake (`NodeSetCompiler.CompileWithModules`; the published `Compile` forwards with none) | after the emit; modules are the files the caller NAMES (`moduleAssemblyPaths`, from `BakeHost`) | carried on `CompiledNode.DependencyEdges`. `TreeBake` writes every attempted type's set to `dependency-edges.json` beside the bundles (`DependencyEdgesFile`), which `node-repo-publish-bake.yml` uploads as `dependency-edges-<identity>` for CI selection, AND into each bundle entry (`BundleWriter.AssemblyEntry.DependencyEdges`), so an adopting mesh can write it (below) |
-| prebuilt ADOPTION (`ShippedPrebuiltBundles`, `PluginBundleClient` → `PrebuiltAssemblySeeder.WithAdoptedEdges`) | none — the mesh compiles nothing | the bundle's set for the bytes, via `DependencyEdgeSetWriter.WriteAdopted`: only for a COVERED outcome, only while the record's `LatestAssemblyMvid` equals the set's `BuildMvid`, under the durable record's version as the generation; idempotent across boots (`DescribesSameBuild`) |
-| module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | opt-in, `build-project --dependency-edges`: after each green emit, `GetUsedAssemblyReferences()`, timed and printed as the phase `used assembly references` | `dependency-edges.json` in the output directory: one set per project, a `Module` edge to each IN-TREE project assembly the compilation used (a declared-but-unused `ProjectReference` is not an edge). A `--prebuilt` sibling is an eligible target but gets no set of its own. The file is keyed by the host's compatibility key — the identity a bake writes — and a host that resolves none is refused before anything builds. Off by default until the lane's phase timing shows the second binding pass is affordable on the largest module |
+| prebuilt ADOPTION (`ShippedPrebuiltBundles`, `PluginBundleClient` → `PrebuiltAssemblySeeder.WithAdoptedEdges`) | none — the mesh compiles nothing | the bundle's set for the bytes, via `DependencyEdgeSetWriter.WriteAdopted`: only for a COVERED outcome, only while the record's `LatestAssemblyMvid` equals the set's `BuildMvid`, under the durable record's version as the generation; offered to the `MeshPublicationGate` BEHIND the adoption stamp, so a stamp held while the process is provisional is released first and the edges follow it; idempotent across boots (`DescribesSameBuild`, which never skips a NEWER generation of the same build). An entry the image-bundle pass finds ALREADY CURRENT (it never reaches the seeding hook) still writes the edges its manifest carries, so a build adopted before its bundle carried edges is backfilled on the next pass |
+| module workspace build (`tools/MeshWeaver.PluginTester/ProjectBuild`) | opt-in, `build-project --dependency-edges`: after each green emit, `GetUsedAssemblyReferences()` and the emitted image's metadata plus the dynamic scan, timed and printed as the phases `used assembly references` and `platform/package/dynamic edges` | `dependency-edges.json` in the output directory: one set per project, a `Module` edge to each IN-TREE project assembly the compilation used (a declared-but-unused `ProjectReference` is not an edge), plus its `Platform`, `Package` and dynamic edges. A `--prebuilt` sibling is an eligible target but gets no set of its own. The file is keyed by the host's compatibility key — the identity a bake writes — and a host that resolves none is refused before anything builds. Still opt-in — see *Module workspace builds* below for the measurement and the reason |
 
 ### The bake's edge file — the transport to CI (2026-10-27)
 
@@ -167,6 +189,244 @@ publication lock, so a red there has published nothing. A narrowed bake writes o
 compiled, so a reader merges runs by source, newest first. The reader and its rules (currency
 against the tree, unknown widens) are MeshWeaver.Plugins `scripts/dependency-graph.py` and
 `Hosting/DependencyGraphSelection.md`.
+
+## The three evidence classes
+
+"Who breaks if X moves" and "what can leave core" need three different kinds of fact, and the edge
+says which one it is (`DependencyEdge.EvidenceClass`, `DependencyEvidenceClasses`):
+
+- **Static** — Roslyn BOUND it: a symbol reference (`NodeType`), a used module (`Module`), an
+  `AssemblyRef` the compiler wrote into the emitted image (`Platform`, `Package`). Breaks at
+  COMPILE time when the target moves.
+- **Dynamic** — a reflection call names it by STRING (`Dynamic`, `DynamicUnresolved`). Compiles
+  fine after the target moves and breaks at RUN time — the reason it needs its own ratchet.
+- **Declared** — a declaration states it: a package manifest's `requires` and `module`, a
+  `#r "nuget:"` directive, a `.csproj` `ProjectReference`/`PackageReference`. Never an edge in the
+  file; the reconciliation report compares it with the other two.
+
+A set written before `EvidenceClass` existed reads as Static, which is what every edge of that era
+was.
+
+### Platform and package edges
+
+The extractor used to drop platform (TPA) assemblies and NuGet packages, so nothing recorded which
+in-mesh code binds which core assembly — exactly what a core carve-out needs. Both are now edges,
+read off the EMITTED assembly (`DependencyEdgeExtraction.EmittedReferenceEdges`): every
+`AssemblyRef` the compiler wrote, classified by the compile's reference FILES (module / package /
+host — `DependencyReferenceClasses`), with the `TypeRef`s resolved through it as evidence.
+
+🚨 **Why the emitted metadata, and neither of the two obvious sources.**
+`GetUsedAssemblyReferences()` counts an assembly whose namespace a `using` merely imports, and every
+NodeType compile carries the skeleton's global usings: measured on core's doc tree, every type
+reported the SAME 21 MeshWeaver assemblies — "who binds `MeshWeaver.Graph`" answered with
+"everyone". A semantic walk that re-binds every name gives the right set, but measured on a 90-file
+module it cost 792 ms against 621 ms for the emit itself, and the runtime compile runs on every
+portal. The C# compiler writes an `AssemblyRef` only for an assembly the IL or metadata needs, so two
+metadata tables give the bound set for about 50 ms. With it core's two trees report 3–8 platform
+assemblies per type, differing by type. What metadata cannot show — a constant inlined from a
+platform type, a `nameof` — is not an edge. A NodeType's emitted image also carries the foreign
+owners' code compiled in through `shared=`/`@@`, so a platform assembly only that code binds is
+still this type's edge: an extra edge, never a missing one, the direction every limit here fails in.
+Each emitted `AssemblyRef` is matched to the compilation's references by FULL identity — name,
+version, culture, public key (token) — because a host assembly and a package assembly can share a
+simple name with different publishers and both stay referenced; when no reference matches the full
+identity, every candidate of that name is classified (an extra edge, never a lost one).
+
+**Why the BCL is not an edge.** Only `MeshWeaver` and `MeshWeaver.*` host assemblies are recorded.
+The base class library and the host's third-party libraries are on every host, at the version the
+image pins; nothing carves out of them, and no change in this tree moves them. Recording them would
+add a dozen rows per source to the closure and answer no question anybody asks. A `#r "nuget:"`
+package is different — the source chose it, so it IS an edge (`Package`).
+
+### Dynamic edges
+
+`DynamicBindingExtraction` scans the source's OWN code (the same ownership rule as the NodeType walk)
+for the APIs that resolve a type or an assembly by name: `Type.GetType`, `Assembly.GetType`,
+`Module.GetType`, `Assembly.CreateInstance`, `Activator.CreateInstance(string, string…)` and
+`CreateInstanceFrom`, `AppDomain.CreateInstance*`, `Assembly.Load` / `LoadFrom` / `LoadFile` /
+`LoadWithPartialName` / `UnsafeLoadFrom`, `AssemblyLoadContext.LoadFromAssemblyName` /
+`LoadFromAssemblyPath` / `LoadFromNativeImagePath` / `LoadFromStream`, and the mesh's own
+name-to-type surface, `ITypeRegistry.GetType` / `TryGetType` (any implementation). A call is matched
+by its BOUND method, so `using static` cannot hide it; overloads that take a `Type`
+(`Activator.CreateInstance(typeof(T))`) and `object.GetType()` are static and not matched. A method
+group handed along (`names.Select(Type.GetType)`) is unresolved.
+
+- **Constant argument** — a literal, a `const`, a constant interpolation, `new AssemblyName("…")`
+  over one — is a `Dynamic` edge. The real shape that motivated it, MeshWeaver.Plugins
+  `AppleMaps/Maps/Source/AmapsConnect.cs`, does
+  `Type.GetType("MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph")` and becomes the edge
+  `MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph` with `TargetKind: Platform` and the call
+  site as evidence (`Type.GetType("…") in Connect`). An unqualified type name is resolved against the
+  compilation (`GetTypeByMetadataName`); `typeof(T).Assembly.GetType("…")` takes `T`'s assembly. A
+  closed generic needs EVERY argument's assembly, so its arguments decide too:
+  `List`1[[MeshWeaver.Mesh.MeshNode, MeshWeaver.Mesh.Contract]], System.Private.CoreLib` is
+  `Platform`, not `Framework`; an argument whose assembly the compile cannot classify makes the target
+  unknown.
+- **Conservative by construction — THE RULE.** Reflection's type-name grammar and the shapes a
+  lookup can take are open-ended, so classifying every one exactly would never converge. The scanner
+  is complete in the other direction: a call whose bound method is a reflection lookup — the API
+  itself, an OVERRIDE of it (matched through the override chain), or an implementation of the
+  registry surface — is RESOLVED only when its behaviour is the API's own (not an override, not an
+  implementation) AND every input that decides its result is proven: the receiver it searches
+  (`typeof(X).Assembly`/`.Module` of a named type, `AssemblyLoadContext.Default`,
+  `AppDomain.CurrentDomain`), every resolver delegate provably `null`, and every other argument a
+  compile-time constant. Anything short of that is `DynamicUnresolved`, naming the unproven input. A
+  subclass overriding `Assembly.GetType(string, bool, bool)` and `Type.GetType(name, null, resolver)`
+  are two instances of that one rule, not two special cases. A resolved lookup is then classified
+  just as conservatively: The name is
+  parsed with a strict grammar (`DynamicBindingExtraction.TryParseTypeName` — mixed qualified and
+  bare generic arguments, array/by-ref/pointer suffixes); a name it refuses, any part whose assembly
+  the compile does not reference (only `mscorlib`, `netstandard`, `System.Private.CoreLib` and
+  `System.Runtime` are known without a reference), and a lookup in an assembly the compile cannot
+  know (any `Assembly` value, `typeof(T).Assembly` of a type parameter) make the target UNKNOWN —
+  `TargetKind` null, counted into core exactly like `DynamicUnresolved`. A new shape the scanner
+  does not understand therefore costs a baseline line, never a silent pass.
+- **Matched by position where names can vary.** `ITypeRegistry.GetType`/`TryGetType` are matched by
+  name and their leading `string` parameter, never by the parameter's name, so an implementation
+  that renames it stays on the ratchet — as `DynamicUnresolved`, since a registry's contents are
+  never knowable at compile time.
+- **What is scanned** is the source's own code AND the trees a NODE-SUPPLIED source generator (one
+  the node `#r`'d) emitted — the author's code, as the impersonation scan already treats it; the
+  platform's built-in generators' output is left out. Node-generated trees are owned by the
+  compiling type by PROVENANCE (both compile callers pass them separately), even where they extend
+  a partial type a foreign owner declares: no other compile ever sees that code.
+- **Anything else** is `DynamicUnresolved`, one edge per API (`?System.Type.GetType`), the call sites
+  as evidence. Unknown is recorded as unknown — never dropped.
+- **Cost**: a syntactic prefilter on the invoked name means only candidate invocations are ever
+  bound; a compile with no reflection binds nothing.
+
+The `$type` polymorphic converter resolves type names that live in DATA (node content), not in code,
+so no compile can see it; that, and the registry names a `TryGetType` receives at run time, are the
+subject of phase 3 below.
+
+### Old edge sets lack the new kinds — read that as unknown
+
+An edge set or a `dependency-edges.json` written by an extractor that predates these kinds (an old
+bundle, an older pinned tester, an edge-set node a portal wrote before it rolled) simply has no
+`Platform`, `Package` or dynamic edges. A reader must treat their absence as **unknown, never as
+"binds no platform assembly" or "uses no reflection"**. The tell: every NodeType binds the platform
+through its skeleton (`MeshNodeProviderAttribute` lives in `MeshWeaver.Mesh.Contract`), so a NodeType
+set with ZERO `Platform` edges was written before the kind existed. The change itself is additive:
+new constants, new init-only members with defaults (`EvidenceClass` defaults to `Static`), new
+overloads — every published signature of `Extract`, `ModuleReferences` and the edge records stays,
+so it is binary-compatible under the platform compatibility ladder and moves no compatibility key.
+
+**The file says what it measured.** `dependency-edges.json` carries `measured` — `referenced-assemblies`,
+`dynamic-bindings`, and for a module build `declarations` (`DependencyEdgesFile.Measures`). A reader
+judges a kind only when its measurement is listed; a schema-1 file without the field measured none of
+them. The rule everywhere: **an unmeasured input reads as UNVERIFIABLE, never as a pass.**
+
+## The reconciliation report
+
+`mw-plugin-test dependency-report <dependency-edges.json> --tree <checkout>` — and, with no extra
+step, every `compile` (the bake) — writes `dependency-report.json` beside the edges
+(`DependencyReconciliation`). Per package (a node-repo top-level folder, for NodeType sources) or per
+module (a project, for a module workspace build's sources):
+
+| flag | NodeType package | module project |
+|---|---|---|
+| **used-but-undeclared** | a `NodeType` edge into a package outside its declared closure (`requires`, source queries, node types — `LocalNodeRepo.DependencyMap`, transitively); a `Module` edge no package in that closure declares as its `module`; a `Package` edge no `#r "nuget:"` names | a `Module` edge that is not a direct `ProjectReference` (a transitive use); a `Platform` edge no `PackageReference`/`ProjectReference` names; a `Package` edge no `PackageReference` names |
+| **declared-but-unused** | never — see THE RULE below: each of `requires`, `module` and `#r "nuget:"` has a use channel no compile measures, so an unmatched one is unverifiable | a `ProjectReference` no `Module`/`Platform`/`Package` edge matches, when compiled code AND by-name loading were both measured clean |
+| **dynamic into core** | every `Dynamic` edge whose `TargetKind` is `Platform` or unknown, and every `DynamicUnresolved` edge | the same |
+
+Plus, per unit, the platform assemblies its sources bind and how many sources bind each — the
+carve-out question's direct answer — and everything it could NOT judge, each named:
+
+- a `requires` outside the tree;
+- every unmatched declaration of a package with a source that was NOT extracted (that source could
+  be the user — `notExtracted` lists it); "declared but unused" is a claim about every source;
+- a kind the producer did not measure (`measured` lacks it);
+- a module whose producer recorded no declarations. Module declarations are the PRODUCING build's
+  evaluated ones (`ProjectFile.Load`: imports, conditions, property expansion), carried in the file
+  as `declarations` — the report never re-reads raw `.csproj` XML. A used `ProjectReference` outside
+  the source root resolves from the host and appears as a `Platform` edge, which counts as a use.
+
+`#r "nuget:"` directives are read with `NuGetDirectiveParser` from the DECODED code — a `.json` Code
+node's `content.code` string, not its escaped JSON text. A module-libraries shelf is a flat
+directory, so a shelf `Package` edge is named by the shelf's deps.json ownership
+(`ModuleLibrariesShelf.OwnerOf`), never by the DLL's file name. It is a report, never a gate.
+Measured on core's trees when it landed: 0 used-but-undeclared, 0 declared-but-unused, 0 dynamic
+edges.
+
+**THE RULE for declared-vs-used** (the reconciliation's counterpart of the scanner's rule): a
+declaration is "unused" ONLY when the extractor PROVABLY saw every way it can be used; otherwise it
+is UNVERIFIABLE, naming the first channel nobody measured. Each kind lists its channels
+(`DependencyReconciliation`):
+
+| declaration | measured | not measured — so never provably unused |
+|---|---|---|
+| package `requires` | compiled code (NodeType, Module edges) | runtime use of the package's node types, data and layout areas |
+| package `module` | compiled code (Module edges) | runtime hosting of the module with its package |
+| `#r "nuget:"` | bound assemblies (Package edges) | host unification (the host's copy keeps no package provenance); source generation (no AssemblyRef) |
+| `ProjectReference` | compiled code; by-name loading (clean only when the project has no dynamic edge) | — |
+| `PackageReference` | compiled code (Platform or Package edge — a shelf `MeshWeaver.*` package is a Package edge) | analyzers and source generators the package ships |
+
+So only a `ProjectReference` can ever be reported unused; every other unmatched declaration is
+listed as unverifiable with its reason. A use is ANY edge naming it, including a `package:` edge.
+
+## The ratchet
+
+The one gate: a shrink-only allow-file of the dynamic edges INTO CORE, in the shape of
+`--warning-baseline` (`Doc/Architecture/InMeshWarningStandard`). `compile --dynamic-baseline <file>`
+(or `dependency-report --dynamic-baseline <file>`); lines are `<source> <Dynamic|DynamicUnresolved>
+<target>`, the target being the rest of the line.
+
+- An observed dynamic edge into core that is not listed is **NEW** and fails.
+- A listed edge whose source compiled this run without it is **STALE** and fails — the line goes.
+- A listed edge whose source was not extracted this run (failed, not attempted) is
+  **unverifiable**, warned and kept: silence is not evidence.
+- No `--dynamic-baseline` is **OBSERVE-ONLY**, printed by name in every run
+  (`dependencies: dynamic-edge ratchet — OBSERVE-ONLY: <repo> has not adopted it …`) with the lines
+  to paste; a path that was given and is missing is a refusal; an EMPTY file tolerates nothing.
+- An edges file that does not record `dynamic-bindings` was never scanned: the ratchet prints
+  `UNVERIFIABLE`, keeps every entry as unverifiable (never stale), and an armed baseline is RED —
+  an empty baseline over an unscanned file is not a clean pass.
+
+**Core** baselines its own two trees — `.github/doc-gate-dynamic.allow` and
+`.github/samples-gate-dynamic.allow`, both empty (0 dynamic edges measured) — and
+`bake-then-gate.sh` asserts the `ENFORCED` line, so a dropped argument is red, not quietly
+observe-only. **Satellites** adopt with the `dynamic-baseline-file:` input on BOTH
+`node-repo-gate.yml` and `node-repo-publish-bake.yml`; until then the lanes pass no flag (a pinned
+tester that predates it would refuse an unknown option) and print a `::notice::` naming the
+repository as observe-only. The publish-bake lane uploads `dependency-report.json` in the same
+`dependency-edges-<identity>` artifact as the edges. There is no skip path: an armed baseline with no
+edges file is red.
+
+## Module workspace builds: still opt-in, now cheap
+
+`build-project --dependency-edges` now also writes `Platform`, `Package` (shelf packages) and dynamic
+edges, beside the in-tree `Module` ones (`ProjectResult.OtherEdges`). Measured on a 90-file module
+(MeshWeaver.Plugins `MeshWeaver.Import`) against core's tester host: emit 375 ms, `used assembly
+references` 58 ms, `platform/package/dynamic edges` 53 ms — about 30 % of the emit and under 10 % of
+the project's build. The cost no longer argues for keeping it off; the reason it stays OPT-IN is that
+`--dependency-edges` keys its file by the host's compatibility key and REFUSES a host that resolves
+none, so flipping the default would turn every existing `build-project` call against such a host
+into a refusal. The module-pack lane turning it on (MeshWeaver.Plugins) is the follow-up, not a
+default flip here.
+
+## The Postgres projection
+
+MeshWeaver.Plugins `DependencyGraphSchema` projects every edge of a canonical `DependencyEdgeSet`
+row into `public.dependency_edge(source, target, kind, build_identity)` with PK `(source, target)`,
+`DISTINCT ON (target)` and `kind TEXT` — it filters no kind and assumes nothing about a target's
+shape (`Module` targets were already assembly names). The new kinds therefore project unchanged, and
+because a set's targets are unique by construction, `DISTINCT ON (target)` never has to choose
+between two kinds. A non-path target (an assembly name, `{type}, {assembly}`, `?{api}`) becomes a
+SINK node of the closure — it has no outgoing edges — so `dependents:MeshWeaver.Graph` lists every
+source that binds it. Open: platform edges multiply the closure by roughly the number of platform
+assemblies per source; whether the closure should keep them or the projection should restrict the
+closure to `NodeType`/`Module` is a decision for the projection's owner, once the volume is measured
+on a real portal.
+
+## Phase 3 (follow-up): runtime observation
+
+Compile-time extraction cannot see a type name that arrives at RUN time — the `$type` discriminator
+in node content resolved by the polymorphic converter, a registry name passed into `TryGetType`, an
+assembly-qualified string read from configuration. The next step is to observe type-name resolution
+per replica (the converter, `ITypeRegistry`, the load contexts), record each `(caller, name,
+resolved assembly)` as a `Dynamic` edge with an `Observed` evidence class, and fold it into the same
+report — turning today's `DynamicUnresolved` edges into resolved ones where the running mesh has
+seen them resolve. Not built.
 
 ## The reverse closure (step 3)
 

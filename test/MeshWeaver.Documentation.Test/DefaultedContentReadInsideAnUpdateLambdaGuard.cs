@@ -47,7 +47,7 @@ public class DefaultedContentReadInsideAnUpdateLambdaGuard
 {
     /// <summary>Production trees only. A TEST may legitimately build a defaulted record while
     /// constructing a fixture; only shipped write paths are the subject.</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex"];
+    private static readonly string[] ScannedRoots = ["src"];
 
     /// <summary>
     /// An UNTYPED update lambda: <c>.Update(node =&gt;</c>. The typed overloads are

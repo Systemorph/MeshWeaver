@@ -7,7 +7,7 @@ namespace MeshWeaver.PluginCatalog;
 /// <summary>
 /// What the IMAGE's own copy of a module was built as — the package version and content hash its
 /// <c>manifest.lock</c> stated at the commit the image was built from — read from the
-/// <see cref="FileName"/> stamp the closure lane (<c>memex/MeshModulesPublish.targets</c>,
+/// <see cref="FileName"/> stamp the closure lane (MeshWeaver.Plugins <c>src/MeshModulesPublish.targets</c>,
 /// <c>WriteMeshModuleSeedStamps</c>) writes beside the module's DLL under the image's
 /// <c>modules/&lt;Name&gt;/</c> (MeshWeaver#6044).
 ///
