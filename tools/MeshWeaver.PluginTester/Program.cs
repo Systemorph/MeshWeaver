@@ -76,6 +76,8 @@ try
         return RunPlatformSurface(args[1..]);
     if (args.Length > 0 && args[0] == PlatformLink.Verb)
         return PlatformLink.Run(args[1..]);
+    if (args.Length > 0 && args[0] == DependencyReconciliation.Verb)
+        return DependencyReconciliation.Run(args[1..], Console.Out, Console.Error);
     return await RunGate(args);
 }
 catch (Exception ex)
@@ -259,6 +261,8 @@ static int RunCompile(string[] args)
     var compileAllow = GateAllowlist.Empty;
     var compileAllowApplied = false;
     var compileWarnings = WarningBaseline.ObserveOnly;
+    var compileDynamic = DynamicEdgeBaseline.ObserveOnly;
+    string? compileRepoName = null;
     var compileModules = new List<string>();
     for (var i = 0; i < args.Length; i++)
     {
@@ -381,8 +385,23 @@ static int RunCompile(string[] args)
                 }
                 break;
             }
+            // 🚨 THE DYNAMIC-EDGE RATCHET'S BASELINE (Doc/Architecture/DependencyGraph → The
+            // ratchet): reflection bindings into core this tree carries today. Same contract as
+            // --warning-baseline — absent is OBSERVE-ONLY and printed by name, a missing path is a
+            // refusal, an empty file tolerates nothing.
+            case "--dynamic-baseline" when i + 1 < args.Length:
+            {
+                if (DependencyReconciliation.LoadBaseline(args[++i], Console.Error, "compile") is not { } dynamicBaseline)
+                    return 2;
+                compileDynamic = dynamicBaseline;
+                break;
+            }
+            // The repository the bake is for — named in the dynamic-edge ratchet's OBSERVE-ONLY line.
+            case "--repo-name" when i + 1 < args.Length:
+                compileRepoName = args[++i];
+                break;
             case "--output" or "--source-sha" or "--allow" or "--module" or "--app"
-                or "--shared-frameworks" or "--warning-baseline":
+                or "--shared-frameworks" or "--warning-baseline" or "--dynamic-baseline" or "--repo-name":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
                 return 2;
             case "--help" or "-h":
@@ -474,16 +493,36 @@ static int RunCompile(string[] args)
         Console.Error.WriteLine(
             "compile: RED — the in-mesh warning standard was not met; see the "
             + $"'{WarningReportWriter.Prefix}' lines above for the NEW and STALE entries.");
+    // The RECONCILIATION and the DYNAMIC-EDGE RATCHET, read off the edges file this bake just wrote
+    // — the same bytes CI uploads. No file while a baseline is armed is RED: a ratchet that could
+    // not read its input must not look like one that passed.
+    var dependenciesAccepted = true;
+    var edgesPath = Path.Combine(outputDirectory, DependencyEdgesFile.FileName);
+    if (File.Exists(edgesPath) && DependencyEdgesFile.Deserialize(File.ReadAllText(edgesPath)) is { } edgesDocument)
+        dependenciesAccepted = DependencyReconciliation.Apply(
+            edgesDocument, compileRoot, outputDirectory, compileDynamic, compileRepoName, Console.Out);
+    else if (compileDynamic.Enforced)
+    {
+        Console.Error.WriteLine(
+            $"compile: RED — --dynamic-baseline is armed but '{edgesPath}' was not written (or is of an "
+            + "unknown schema), so the dynamic-edge ratchet judged nothing.");
+        dependenciesAccepted = false;
+    }
+    if (!dependenciesAccepted)
+        Console.Error.WriteLine(
+            "compile: RED — the dynamic-edge ratchet failed; see the "
+            + $"'{DynamicEdgeRatchet.Prefix}' lines above for the NEW and STALE entries.");
     if (!compileAllowApplied)
-        return bake.ExitCode;
+        return bake.ExitCode != 0 ? bake.ExitCode : dependenciesAccepted ? 0 : 1;
     return bake.FatalError is null && newFailures == 0 && stale.Count == 0 && bake.WarningsAccepted
+           && dependenciesAccepted
         ? 0
         : 1;
 }
 
 static string CompileUsage() =>
     "usage: mw-compiler compile <checkout-root> --output <dir> [--allow <file>] "
-    + "[--warning-baseline <file>] "
+    + "[--warning-baseline <file>] [--dynamic-baseline <file>] [--repo-name <owner/repo>] "
     + "[--source-sha <sha>] [--module <dll>]... [--app <dir> --shared-frameworks <dir>]\n"
     + "  --warning-baseline arms the two shrink-only in-mesh warning ratchets against <file>: one "
     + "over the REAL warnings (CS0219, CS1574, …) and a separate one over CS1591 (a missing XML "
@@ -491,6 +530,9 @@ static string CompileUsage() =>
     + "fails the bake and a listed pair whose type compiled clean is STALE and fails it too, so "
     + "the debt can only shrink. WITHOUT the flag the bake still MEASURES and reports the "
     + "inventory and says, by name, that it enforced nothing.\n"
+    + "  --dynamic-baseline arms the shrink-only dynamic-edge ratchet over the bake's reflection "
+    + "bindings into core ('<source> <Dynamic|DynamicUnresolved> <target>' lines); the bake always "
+    + "writes dependency-report.json beside dependency-edges.json (see `dependency-report --help`).\n"
     + "  Compiles every NodeType of the node repos under <checkout-root> with MeshWeaver.Compiler "
     + "— no mesh — and writes one prebuilt-assembly bundle per package plus framework-mvid.txt. "
     + "--app names the PLATFORM HOST's application directory (a portal image's /app) and "

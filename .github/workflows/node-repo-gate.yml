@@ -400,6 +400,24 @@ on:
         required: false
         type: string
         default: ''
+      dynamic-baseline-file:
+        description: >-
+          The dynamic-edge debt this repo carries, passed as --dynamic-baseline (repo-relative):
+          reflection bindings INTO CORE (Type.GetType / Assembly.Load / Activator / a type-registry
+          lookup BY NAME whose target is a MeshWeaver platform assembly, or cannot be told). Lines
+          are `<source> <Dynamic|DynamicUnresolved> <target>`; an unlisted edge fails the bake and a
+          listed one whose source compiled without it is stale and fails it too, so the debt can
+          only shrink. Pass the SAME file to node-repo-gate.yml and node-repo-publish-bake.yml. See
+          Doc/Architecture/DependencyGraph → "The ratchet" in the platform repo.
+
+          EMPTY (the default) is OBSERVE-ONLY: the bake still writes dependency-report.json and the
+          lane prints, by name, that this repository has not adopted the ratchet. Adopting needs a
+          pinned tester that knows `--dynamic-baseline` (an older one refuses the flag — exit 2, red,
+          never a silent pass). To adopt: run one bake, paste its `dependencies: baseline …` lines
+          into a file (an EMPTY file when there are none), commit it and name it here.
+        required: false
+        type: string
+        default: ''
       affected-narrowing:
         description: >-
           On pull_request diffs, gate only the affected module closure computed by the caller's
@@ -2202,6 +2220,7 @@ jobs:
           STAGE_MODULES: ${{ inputs.stage-modules }}
           ALLOW_FILE: ${{ inputs.allow-file }}
           WARNING_BASELINE_FILE: ${{ inputs.warning-baseline-file }}
+          DYNAMIC_BASELINE_FILE: ${{ inputs.dynamic-baseline-file }}
           AFFECTED_MOUNT: ${{ needs.plan.outputs.mount }}
           AFFECTED_RUN_ALL: ${{ needs.plan.outputs.run_all }}
           # `<index>/<total>`, or empty for the unsharded lane — see the `shards` input.
@@ -2303,6 +2322,22 @@ jobs:
               WARN_ARGS=(--warning-baseline "$P_REPO/$(basename "$WARNING_BASELINE_FILE")")
             fi
           fi
+          # The dynamic-edge ratchet (Doc/Architecture/DependencyGraph → "The ratchet"). Absent =
+          # OBSERVE-ONLY, and the lane SAYS so by name — the flag is passed only when adopted, so a
+          # pinned tester that predates it is never handed an option it would refuse. Copied into a
+          # narrowed mount exactly like the warning baseline (an entry naming a type this run did
+          # not bake is unverifiable, never stale).
+          DYN_ARGS=()
+          if [ -n "${DYNAMIC_BASELINE_FILE:-}" ]; then
+            if [ "$AFFECTED_RUN_ALL" = "true" ]; then
+              DYN_ARGS=(--dynamic-baseline "$P_REPO/$DYNAMIC_BASELINE_FILE")
+            else
+              cp "$GITHUB_WORKSPACE/$DYNAMIC_BASELINE_FILE" "$REPO_MOUNT/"
+              DYN_ARGS=(--dynamic-baseline "$P_REPO/$(basename "$DYNAMIC_BASELINE_FILE")")
+            fi
+          else
+            echo "::notice::dynamic-edge ratchet OBSERVE-ONLY — $GITHUB_REPOSITORY has not adopted it (no dynamic-baseline-file input). Reflection bindings into core are measured in dependency-report.json and enforced nowhere."
+          fi
           # 🚨 `--module` was written with the CONTAINER's /ext prefix by the external-modules step
           # (whose shell `test-module-asset-landing.py` extracts and executes verbatim, so it is
           # left byte-identical). In volume mode the same modules are the same files on this
@@ -2382,7 +2417,7 @@ jobs:
           # shellcheck disable=SC2086  # MODULE_ARGS is a flag list; word-splitting is the point
           run_tester compile "$P_REPO" \
             --app "$P_APP" --shared-frameworks "$P_SHARED" \
-            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
+            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" "${DYN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           baked="$(tr -d '[:space:]' < "$OWN_BAKE/framework-mvid.txt")"
           [ "$baked" = "$TARGET_IDENTITY" ] || { echo "::error::the run's own bake is keyed to '$baked' but the portal's /app resolves '$TARGET_IDENTITY' — the compile did not run against the platform host (is --app set to the portal's /app?)"; exit 1; }
