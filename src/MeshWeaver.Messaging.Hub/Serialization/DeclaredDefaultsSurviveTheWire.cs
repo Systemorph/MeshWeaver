@@ -159,9 +159,14 @@ internal static class DeclaredDefaultsSurviveTheWire
 
     /// <summary>
     /// True when every hand-written setter the reader may call provably stores only into fields no
-    /// candidate lives in: its IL is nothing but <c>ldarg.0</c>/<c>ldarg.1</c>/<c>stfld</c>/<c>nop</c>/<c>ret</c>
-    /// (no call, no branch, no normalization). Anything else makes every candidate written — another
-    /// member's setter could otherwise set an omitted member behind the proof's back.
+    /// candidate lives in. The setter is straight-line IL made of stores, each
+    /// <c>ldarg.0; &lt;value&gt;; stfld</c> into a field no candidate lives in, where the value may be
+    /// normalized through calls (<c>_skins = value.ToImmutableList()</c>) but never touches the instance:
+    /// <c>this</c> is loaded once per store and stays buried under the stack until its <c>stfld</c>
+    /// consumes it, so no call ever receives it and nothing can reach a candidate through it. A branch,
+    /// a second use of <c>this</c>, an argument written or whose address escapes, or an instruction this
+    /// reader cannot account for makes every candidate written — another member's setter could
+    /// otherwise set an omitted member behind the proof's back.
     /// </summary>
     private static bool SettersAreContained(JsonTypeInfo typeInfo, List<JsonPropertyInfo> candidates, ILogger? logger)
     {
@@ -201,21 +206,103 @@ internal static class DeclaredDefaultsSurviveTheWire
             return false;
         var declaring = setter.DeclaringType!;
         var typeArguments = declaring.IsGenericType ? declaring.GetGenericArguments() : Type.EmptyTypes;
+        // Stack depth counted from the `this` that opens the current store; 0 = between stores.
+        var depth = 0;
+        var returned = false;
         var position = 0;
         while (position < il.Length)
         {
             var code = ConstructorStores.ReadOpCode(il, ref position);
             var operand = position;
             position += ConstructorStores.OperandSize(code, il, position);
-            if (code == OpCodes.Nop || code == OpCodes.Ldarg_0 || code == OpCodes.Ldarg_1 || code == OpCodes.Ret)
+            if (code == OpCodes.Nop)
                 continue;
-            if (code != OpCodes.Stfld)
+            if (returned)
                 return false;
-            var field = setter.Module.ResolveField(BitConverter.ToInt32(il, operand), typeArguments, Type.EmptyTypes);
-            if (field is null || backing.Contains((field.Module, field.MetadataToken)))
+            if (code == OpCodes.Ret)
+            {
+                if (depth != 0)
+                    return false;
+                returned = true;
+                continue;
+            }
+            if (IsLoadThis(code, il, operand))
+            {
+                if (depth != 0)
+                    return false;
+                depth = 1;
+                continue;
+            }
+            // Between stores nothing but the next `this` and the final ret is accounted for.
+            if (depth == 0
+                || (code.FlowControl != FlowControl.Next && code.FlowControl != FlowControl.Call)
+                || code == OpCodes.Starg || code == OpCodes.Starg_S || code == OpCodes.Ldarga || code == OpCodes.Ldarga_S
+                || code == OpCodes.Calli || code == OpCodes.Ldflda)
                 return false;
+            if (code == OpCodes.Stfld)
+            {
+                if (depth != 2)
+                    return false;
+                var field = setter.Module.ResolveField(BitConverter.ToInt32(il, operand), typeArguments, Type.EmptyTypes);
+                if (field is null || backing.Contains((field.Module, field.MetadataToken)))
+                    return false;
+                depth = 0;
+                continue;
+            }
+            if (StackEffect(code, setter.Module, il, operand, typeArguments) is not var (pops, pushes))
+                return false;
+            // `this` (depth 1) must never be popped by anything but its own stfld.
+            depth -= pops;
+            if (depth < 1)
+                return false;
+            depth += pushes;
         }
-        return true;
+        return returned && depth == 0;
+    }
+
+    private static bool IsLoadThis(OpCode code, byte[] il, int operand) =>
+        code == OpCodes.Ldarg_0
+        || (code == OpCodes.Ldarg_S && il[operand] == 0)
+        || (code == OpCodes.Ldarg && BitConverter.ToUInt16(il, operand) == 0);
+
+    /// <summary>The values an instruction pops and pushes, or null when this reader cannot tell.</summary>
+    private static (int Pops, int Pushes)? StackEffect(OpCode code, Module module, byte[] il, int operand, Type[] typeArguments)
+    {
+        int pops, pushes;
+        if (code.StackBehaviourPop == StackBehaviour.Varpop || code.StackBehaviourPush == StackBehaviour.Varpush)
+        {
+            if (code != OpCodes.Call && code != OpCodes.Callvirt && code != OpCodes.Newobj)
+                return null;
+            if (module.ResolveMethod(BitConverter.ToInt32(il, operand), typeArguments, Type.EmptyTypes) is not { } method)
+                return null;
+            var parameters = method.GetParameters().Length;
+            if (code == OpCodes.Newobj)
+                return (parameters, 1);
+            pops = parameters + (method.IsStatic ? 0 : 1);
+            pushes = method is MethodInfo { ReturnType: var returns } && returns != typeof(void) ? 1 : 0;
+            return (pops, pushes);
+        }
+        pops = code.StackBehaviourPop switch
+        {
+            StackBehaviour.Pop0 => 0,
+            StackBehaviour.Pop1 or StackBehaviour.Popi or StackBehaviour.Popref => 1,
+            StackBehaviour.Pop1_pop1 or StackBehaviour.Popi_pop1 or StackBehaviour.Popi_popi
+                or StackBehaviour.Popi_popi8 or StackBehaviour.Popi_popr4 or StackBehaviour.Popi_popr8
+                or StackBehaviour.Popref_pop1 or StackBehaviour.Popref_popi => 2,
+            StackBehaviour.Popi_popi_popi or StackBehaviour.Popref_popi_popi or StackBehaviour.Popref_popi_popi8
+                or StackBehaviour.Popref_popi_popr4 or StackBehaviour.Popref_popi_popr8
+                or StackBehaviour.Popref_popi_popref or StackBehaviour.Popref_popi_pop1 => 3,
+            _ => -1,
+        };
+        pushes = code.StackBehaviourPush switch
+        {
+            StackBehaviour.Push0 => 0,
+            StackBehaviour.Push1 or StackBehaviour.Pushi or StackBehaviour.Pushi8 or StackBehaviour.Pushr4
+                or StackBehaviour.Pushr8 or StackBehaviour.Pushref => 1,
+            StackBehaviour.Push1_push1 => 2,
+            _ => -1,
+        };
+        return pops < 0 || pushes < 0 ? null : (pops, pushes);
     }
 
     private static bool ProvenClrDefault(JsonPropertyInfo property, ConstructorStores stores)

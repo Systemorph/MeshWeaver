@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -188,6 +189,28 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
     {
         public string? Text { get => null; set => Flag = true; }
         public bool Flag { get; set; }
+    }
+
+    /// <summary>A normalizing setter (the <c>UiControl.Skins</c> shape): it calls out to compute the
+    /// stored value, but never hands <c>this</c> to anything — the CLR-default flag stays provable.</summary>
+    public sealed class NormalizingSetter
+    {
+        private ImmutableList<string> items = [];
+        public ImmutableList<string> Items { get => items; init => items = value.ToImmutableList(); }
+        public bool Flag { get; init; }
+    }
+
+    /// <summary>A setter that hands <c>this</c> to a call, which can set another member.</summary>
+    public sealed class SetterPassingThis
+    {
+        private string? text;
+        public string? Text { get => text; set => text = Arm(this, value); }
+        public bool Flag { get; set; }
+        private static string? Arm(SetterPassingThis self, string? value)
+        {
+            self.Flag = true;
+            return value;
+        }
     }
 
     /// <summary>Review round 7: an initializer writes the parameter (starg) before the direct store.</summary>
@@ -561,6 +584,34 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         var options = Mesh.JsonSerializerOptions;
         JsonSerializer.Serialize(new CrossMemberSetter(), options).Should().Contain("\"flag\":false");
         RoundTrip(new CrossMemberSetter(), options).Flag.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_normalizing_setter_that_never_hands_out_this_keeps_clr_defaults_omitted()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var json = JsonSerializer.Serialize(new NormalizingSetter { Items = ["a"] }, options);
+        json.Should().NotContain("flag", "the Items setter only normalizes its value; it cannot reach Flag");
+        RoundTrip(new NormalizingSetter { Items = ["a"] }, options).Flag.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_setter_that_hands_this_to_a_call_keeps_every_scalar_written()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var value = new SetterPassingThis { Text = "t" };
+        value.Flag = false;
+        JsonSerializer.Serialize(value, options).Should().Contain("\"flag\":false");
+        RoundTrip(value, options).Flag.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_a_setter_handing_out_this_turns_an_omitted_false_true()
+    {
+        var value = new SetterPassingThis { Text = "t" };
+        value.Flag = false;
+        RoundTrip(value, WithoutTheFix()).Flag.Should().BeTrue(
+            "if this ever fails, the this-escaping setter no longer exercises the trap");
     }
 
     /// <summary>
