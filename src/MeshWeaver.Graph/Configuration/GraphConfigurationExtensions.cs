@@ -100,6 +100,9 @@ public static class GraphConfigurationExtensions
                 .AddActivityType()
                 .AddActivityLogSegmentType()
                 .AddUserActivityType()
+                // Forward dependency edges Roslyn reads at the end of every NodeType compile —
+                // Doc/Architecture/DependencyGraph.
+                .AddDependencyEdgeSetType()
                 // Durable streams = saved mesh nodes — Doc/Architecture/DurableStreams.
                 .AddDurableStreamTypes()
                 .AddHomeTabType()
