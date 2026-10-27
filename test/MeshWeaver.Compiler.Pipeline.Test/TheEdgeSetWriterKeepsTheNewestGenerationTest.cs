@@ -1,12 +1,14 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -32,37 +34,38 @@ public class TheEdgeSetWriterKeepsTheNewestGenerationTest(ITestOutputHelper outp
         Edges = [new DependencyEdge { Target = target, Kind = DependencyEdgeKinds.NodeType }],
     };
 
-    private async Task<DependencyEdgeSet?> Stored()
+    private async Task<DependencyEdgeSet?> Stored(CancellationToken ct)
     {
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var node = await storage.Read(DependencyEdgeSetPaths.PathFor(SourcePath), Mesh.JsonSerializerOptions)
             .Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit("the store answers", TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit("the store answers", ct);
         return node?.ContentAs<DependencyEdgeSet>(Mesh.JsonSerializerOptions);
     }
 
-    private Task Write(DependencyEdgeSet set) =>
-        DependencyEdgeSetWriter.Write(Mesh, set, null)
+    private static Task Write(IMessageHub mesh, DependencyEdgeSet set, CancellationToken ct) =>
+        DependencyEdgeSetWriter.Write(mesh, set, null)
             .ToList()
-            .Should().Within(TestTimeouts.Convergence).Emit("the write completes", TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit("the write completes", ct);
 
     [Fact(Timeout = 120_000)]
     public async Task AnOlderGenerationArrivingLast_DoesNotReplaceTheNewerBuildsEdges()
     {
+        var ct = TestContext.Current.CancellationToken;
         // The reordered success: generation 7 (newer build) is written first, generation 6 (the
         // older compile whose edge write was delayed) arrives after it.
-        await Write(Set(7, "77777777777777777777777777777777", "Lib/New"));
-        await Write(Set(6, "66666666666666666666666666666666", "Lib/Old"));
+        await Write(Mesh, Set(7, "77777777777777777777777777777777", "Lib/New"), ct);
+        await Write(Mesh, Set(6, "66666666666666666666666666666666", "Lib/Old"), ct);
 
-        var stored = await Stored();
+        var stored = await Stored(ct);
         stored.Should().NotBeNull();
         stored!.StampVersion.Should().Be(7L, "the older generation must not overwrite the newer one");
         stored.BuildMvid.Should().Be("77777777777777777777777777777777");
         stored.Edges.Select(e => e.Target).Should().Equal(["Lib/New"]);
 
         // A genuinely newer generation still replaces it whole.
-        await Write(Set(8, "88888888888888888888888888888888", "Lib/Newer"));
-        stored = await Stored();
+        await Write(Mesh, Set(8, "88888888888888888888888888888888", "Lib/Newer"), ct);
+        stored = await Stored(ct);
         stored!.StampVersion.Should().Be(8L);
         stored.Edges.Select(e => e.Target).Should().Equal(["Lib/Newer"]);
     }
