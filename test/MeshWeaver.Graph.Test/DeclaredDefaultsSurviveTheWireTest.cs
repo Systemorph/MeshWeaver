@@ -28,7 +28,8 @@ namespace MeshWeaver.Graph.Test;
 /// <c>enabled: true</c> after its repository sync — an owner-approval gate armed with no approval.</para>
 ///
 /// <para>The fix is for the whole class (<c>DeclaredDefaultsSurviveTheWire</c> in the hub's type-info
-/// resolver), so the guard runs over shapes no platform type has yet. The negative control runs the
+/// resolver): a CLR-default value is omitted only when the constructor IL proves the reader rebuilds
+/// it; nothing is constructed or cached to decide. The guard runs over shapes no platform type has yet. The negative control runs the
 /// same round trip through options without the fix, so a round trip that could not lose the value
 /// cannot pass for a fixed one.</para>
 /// </summary>
@@ -96,16 +97,17 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         public bool Flag { get; set; } = left;
     }
 
-    /// <summary>Counts its own constructor calls, so a test can see how many rebuilds one write costs.</summary>
-    public sealed class ConstructorCalls
+    /// <summary>Counts how often a constructor or initializer ran against it.</summary>
+    public sealed class Counter
     {
         public int Count { get; set; }
+        public int Increment() => ++Count;
     }
 
-    /// <summary>A sparse constructor-built type: several unset members whose CLR default must be checked by a rebuild.</summary>
+    /// <summary>A constructor body with a side effect on a live argument (round 6: a rebuild would bump it).</summary>
     public sealed record Sparse
     {
-        public Sparse(string id, ConstructorCalls calls)
+        public Sparse(string id, Counter calls)
         {
             Id = id;
             Calls = calls;
@@ -113,11 +115,59 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         }
 
         public string Id { get; }
-        public ConstructorCalls Calls { get; }
+        public Counter Calls { get; }
         public string? Name { get; init; }
-        public string? Description { get; init; }
-        public string? Icon { get; init; }
         public int? Order { get; init; }
+    }
+
+    /// <summary>An initializer with a side effect on a live argument.</summary>
+    public sealed record CountedInitializer(Counter Calls)
+    {
+        public int Seen { get; init; } = Calls.Increment();
+    }
+
+    /// <summary>
+    /// Round 6, thread 1: a member derived from a constructor input whose own write condition omits it.
+    /// <c>new DerivedFromOmittedInput(null)</c> omits <c>Text</c> (its author's condition), so the reader
+    /// passes <c>"declared"</c> and the initializer would rebuild <c>Title</c> from that.
+    /// </summary>
+    public sealed record DerivedFromOmittedInput(
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Text = "declared")
+    {
+        public string? Title { get; init; } = Text;
+    }
+
+    /// <summary>Positional parameter whose default IS the CLR default — proven, so still omitted.</summary>
+    public sealed record PositionalClrDefault(string Id, bool Flag = false, int Count = 0);
+
+    /// <summary>
+    /// Round 6, thread 3: two argument-dependent members around a getter that serializes the same
+    /// instance again, so two writes of one instance interleave (W1.A → W2.A → W2.B → W1.B).
+    /// </summary>
+    public sealed class Interleaved(bool left)
+    {
+        [JsonIgnore] public JsonSerializerOptions? Options { get; set; }
+        private bool inside;
+
+        public bool Left { get; set; } = left;
+        public bool A { get; set; } = left;
+
+        public bool Reentrant
+        {
+            get
+            {
+                if (Options is not null && !inside)
+                {
+                    inside = true;
+                    try { JsonSerializer.Serialize(this, Options); }
+                    finally { inside = false; }
+                }
+                return true;
+            }
+            set { }
+        }
+
+        public bool B { get; set; } = left;
     }
 
     /// <summary>Proven CLR default on a constructor-built type — must still be omitted.</summary>
@@ -231,8 +281,8 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
     {
         var options = Mesh.JsonSerializerOptions;
         RoundTrip(new MixedArguments(true, false) { Flag = false }, options).Flag.Should().BeFalse();
-        // Compact where the reader rebuilds the same value: (true, true) yields Flag == false.
-        JsonSerializer.Serialize(new MixedArguments(true, true), options).Should().NotContain("flag");
+        // Not provable statically, so always written — even where the reader would agree.
+        JsonSerializer.Serialize(new MixedArguments(true, true), options).Should().Contain("\"flag\":false");
     }
 
     [Fact]
@@ -240,13 +290,13 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
     {
         var options = Mesh.JsonSerializerOptions;
         var instance = new MutableFromArgument(false);
-        JsonSerializer.Serialize(instance, options).Should().NotContain("flag",
-            "the reader rebuilds Flag == false from Left == false, so the value is omittable");
+        JsonSerializer.Serialize(instance, options).Should().Contain("\"flag\":false",
+            "an argument-derived member is never provable, so it is always written");
 
         instance.Left = true;
         var back = JsonSerializer.Deserialize<MutableFromArgument>(JsonSerializer.Serialize(instance, options), options)!;
         back.Left.Should().BeTrue();
-        back.Flag.Should().BeFalse("the second write must judge against Left == true, not the first write's rebuild");
+        back.Flag.Should().BeFalse("the second write carries the explicit false; no earlier verdict is reused");
     }
 
     [Fact]
@@ -286,26 +336,83 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static WeakReference SerializeAndForget(JsonSerializerOptions options)
     {
-        // CLR-default Flag on a constructor-built type: the rebuild path runs.
+        // CLR-default Flag on a constructor-built type.
         var instance = new MixedArguments(true, true);
         JsonSerializer.Serialize(instance, options);
         return new WeakReference(instance);
     }
 
     [Fact]
-    public void A_sparse_instance_costs_one_rebuild_per_write_not_one_per_unset_member()
+    public void Serialization_never_invokes_a_constructor_or_initializer()
     {
+        // Round 6, thread 2: a rebuild ran the constructor against the live payload and mutated it.
         var options = Mesh.JsonSerializerOptions;
-        var calls = new ConstructorCalls();
+        var calls = new Counter();
         var sparse = new Sparse("s", calls);
+        var counted = new CountedInitializer(new Counter());
         calls.Count.Should().Be(1);
+        counted.Calls.Count.Should().Be(1);
 
-        var json = JsonSerializer.Serialize(sparse, options);
-        json.Should().NotContain("name").And.NotContain("description").And.NotContain("icon").And.NotContain("order");
-        calls.Count.Should().Be(2, "one rebuild answers all four unset members of one write");
+        var first = JsonSerializer.Serialize(sparse, options);
+        JsonSerializer.Serialize(sparse, options).Should().Be(first, "serializing twice yields the same bytes");
+        JsonSerializer.Serialize(counted, options);
+        JsonSerializer.Serialize(counted, options);
 
-        JsonSerializer.Serialize(sparse, options);
-        calls.Count.Should().Be(3, "the next write rebuilds again from its own current inputs");
+        calls.Count.Should().Be(1, "no constructor body runs while the instance is written");
+        counted.Calls.Count.Should().Be(1, "no initializer runs while the instance is written");
+        first.Should().Contain("\"count\":1", "the source graph is written as it is, unchanged");
+    }
+
+    [Fact]
+    public void A_member_derived_from_an_omitted_constructor_input_round_trips()
+    {
+        // Round 6, thread 1.
+        var options = Mesh.JsonSerializerOptions;
+        var json = JsonSerializer.Serialize(new DerivedFromOmittedInput(null), options);
+        json.Should().NotContain("\"text\"", "Text keeps its author's WhenWritingNull condition");
+        json.Should().Contain("\"title\":null", "a derived member is not provable, so it is written");
+        var back = JsonSerializer.Deserialize<DerivedFromOmittedInput>(json, options)!;
+        back.Title.Should().BeNull();
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_the_derived_member_reads_the_declared_input()
+    {
+        RoundTrip(new DerivedFromOmittedInput(null), WithoutTheFix()).Title.Should().Be("declared",
+            "if this ever fails, the derived-member case no longer exercises the trap");
+    }
+
+    [Fact]
+    public void Interleaved_writes_of_one_instance_then_a_change_keep_the_explicit_false()
+    {
+        // Round 6, thread 3: the verdict is a per-member constant — no write state to go stale.
+        var options = Mesh.JsonSerializerOptions;
+        var instance = new Interleaved(false) { Options = options };
+        JsonSerializer.Serialize(instance, options);
+
+        instance.Options = null;
+        instance.Left = true;
+        var back = JsonSerializer.Deserialize<Interleaved>(JsonSerializer.Serialize(instance, options), options)!;
+        back.Left.Should().BeTrue();
+        back.A.Should().BeFalse();
+        back.B.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_the_interleaved_shape_loses_the_false()
+    {
+        var instance = new Interleaved(false) { Left = true };
+        var back = RoundTrip(instance, WithoutTheFix());
+        back.A.Should().BeTrue("if this ever fails, the interleaved case no longer exercises the trap");
+        back.B.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_positional_parameter_whose_default_is_the_clr_default_stays_omitted()
+    {
+        var json = JsonSerializer.Serialize(new PositionalClrDefault("x"), Mesh.JsonSerializerOptions);
+        json.Should().NotContain("flag").And.NotContain("count");
+        RoundTrip(new PositionalClrDefault("x"), Mesh.JsonSerializerOptions).Should().Be(new PositionalClrDefault("x"));
     }
 
     [Fact]
@@ -326,7 +433,7 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
     }
 
     [Fact]
-    public void A_failed_constructor_probe_keeps_every_member_written()
+    public void An_unprovable_initializer_keeps_every_member_written()
     {
         var options = Mesh.JsonSerializerOptions;
         RoundTrip(new ThrowsOnNullArgument("a") { Image = null, Title = null }, options)
