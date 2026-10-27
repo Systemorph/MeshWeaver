@@ -116,7 +116,7 @@ public sealed class PrebuiltBundleRetentionHostedService(
         var ticks = bake.Take(1).Concat(Observable.Timer(retention.Interval, retention.Interval).Select(_ => Unit.Default));
 
         schedule = ticks
-            .Select(_ => GuardedPass(RunPass(root, pool), status.Record, ex =>
+            .Select(_ => GuardedPass(Observable.Defer(() => RunPass(root, pool)), status.Record, ex =>
             {
                 status.RecordFault(ex);
                 PassLedger.ReportTerminal(PrebuiltBundleStore.PassName, logger, ex,
@@ -148,10 +148,11 @@ public sealed class PrebuiltBundleRetentionHostedService(
         // The lease content is written from this mesh hub; register its type on the mesh's shared
         // registry so the writer and the lease node's hub agree on its name (idempotent).
         PrebuiltBundleRetentionLease.RegisterContentType(mesh.ServiceProvider);
-        var now = (services.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow();
+        // The clock is read when the attempt is subscribed (RunLeased), not when the tick queued it.
+        var clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
         var replica = Environment.MachineName;
         return PrebuiltBundleRetentionLease.RunLeased(
-            mesh, now, PrebuiltBundleRetentionLease.HoldFor(retention.Interval), replica,
+            mesh, clock, PrebuiltBundleRetentionLease.HoldFor(retention.Interval), replica,
             () => PassOver(StampedIdentities(), PinnedReferences(), (stamps, pinned) =>
                 PrebuiltBundleStore.Sweep(
                     root,

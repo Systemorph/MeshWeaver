@@ -84,6 +84,14 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
+    /// <summary>A clock the test moves by hand.</summary>
+    private sealed class ManualClock(DateTimeOffset start) : TimeProvider
+    {
+        private long ticks = start.UtcTicks;
+        public void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
+        public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
+    }
+
     /// <summary>One replica's controlled pass: counts its entries, signals that it started, and parks until released.</summary>
     private sealed class ControlledPass(int replica)
     {
@@ -124,7 +132,7 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         {
             var index = i;
             PrebuiltBundleRetentionLease
-                .RunLeased(hubs[index], now, Hold, $"silo-{index}", passes[index].Run, passes[index].OnSkipped)
+                .RunLeased(hubs[index], new ManualClock(now), Hold, $"silo-{index}", passes[index].Run, passes[index].OnSkipped)
                 .Subscribe(
                     value => runs[index].OnNext(value),
                     ex => { runs[index].OnError(ex); completed[index].OnError(ex); },
@@ -173,7 +181,7 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         next.Release.OnNext(Unit.Default);
         next.Release.OnCompleted();
         var nextResult = await PrebuiltBundleRetentionLease
-            .RunLeased(hubs[loserIndex], now, Hold, $"silo-{loserIndex}", next.Run, next.OnSkipped)
+            .RunLeased(hubs[loserIndex], new ManualClock(now), Hold, $"silo-{loserIndex}", next.Run, next.OnSkipped)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
@@ -228,6 +236,89 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         // Leave the shared lease lapsed: the other tests of this class run on the same cluster, at
         // epochs this test's hold would otherwise outlast.
         await PrebuiltBundleRetentionLease.Release(hubB, AfterLapse).Timeout(TestTimeouts.Convergence).Await(ct);
+    }
+
+    /// <summary>
+    /// 🚨 A pass QUEUED behind a running one (the schedule serialises ticks through <c>Concat</c>) dates
+    /// its hold from when it STARTS, never from when its tick composed it. Composed at T and subscribed
+    /// two holds later, a compose-time clock read would claim a hold ending at T + hold — already over,
+    /// so another replica could take the lease while this pass sweeps under its fresh deadline.
+    /// </summary>
+    [Fact]
+    public async Task AQueuedPass_DatesItsHoldFromWhenItStarts_NotFromWhenItWasQueued()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hub = SiloMeshHub(0);
+        var queuedAt = new DateTimeOffset(2400, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var clock = new ManualClock(queuedAt);
+        const string Replica = "silo-queued";
+
+        // Composed now (the tick)…
+        var attempt = PrebuiltBundleRetentionLease.RunLeased(
+            hub, clock, Hold, Replica,
+            () => hub.GetWorkspace().GetMeshNodeStream(PrebuiltBundleRetentionLease.LeasePath)
+                .Select(node => node.ContentAs<PrebuiltBundleRetentionLeaseState>(hub.JsonSerializerOptions))
+                .Where(lease => lease is not null && lease.Replica == Replica)
+                .Select(lease => lease!)
+                .Take(1),
+            verdict => throw new InvalidOperationException($"PRECONDITION: the lease is free at a fresh epoch, yet the pass skipped: {verdict}"));
+
+        // …and started two holds later, when the pass ahead of it finished.
+        clock.Advance(Hold * 2);
+        var startedAt = queuedAt + Hold * 2;
+        var held = await attempt.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        held.Until.Should().Be(startedAt + Hold,
+            "the hold must cover the pass from its START — a hold dated from the tick would already have ended");
+        held.TakenAt.Should().Be(startedAt);
+
+        // The finished pass released the lease; leave it lapsed for the other tests on this cluster.
+        await Sees(hub, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
+    }
+
+    /// <summary>
+    /// 🚨 A claim that LANDED is not a claim that is HELD by the time its holder stamps it. The take is two
+    /// writes; a claimant that pauses across its own hold's end between them can find another replica's
+    /// claim there, and its stamp then (correctly) writes nothing — so the verdict must say NOT held, or
+    /// two replicas sweep at once. The interleaving is driven deterministically, write by write, across
+    /// two silos. NEGATIVE CONTROL first: while the claim is still its own, the same stamp says held.
+    /// </summary>
+    [Fact]
+    public async Task AStampThatFindsAnotherReplicasClaim_IsNotHeld()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hubA = SiloMeshHub(0);
+        var hubB = SiloMeshHub(1);
+        const int Paused = 5;
+        const int Taker = 6;
+        var t = new DateTimeOffset(2500, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var claimA = PrebuiltBundleRetentionLease.ClaimFor(t + Hold, Paused);
+
+        var landed = await PrebuiltBundleRetentionLease.Claim(hubA, t, claimA)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        landed!.Claim.Should().Be(claimA, "PRECONDITION: nobody holds the lease at a fresh epoch");
+
+        var stillOurs = await PrebuiltBundleRetentionLease.Stamp(hubA, claimA, "silo-0", t)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        stillOurs.Held.Should().BeTrue("NEGATIVE CONTROL: a stamp over its own claim holds the lease");
+
+        // A pauses across its hold's end; B takes the lapsed lease.
+        await Sees(hubB, lease => lease.Holder == Paused, ct);
+        var taken = await PrebuiltBundleRetentionLease.Take(hubB, t + Hold + TimeSpan.FromSeconds(1), Hold, Taker, "silo-1")
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        taken.Held.Should().BeTrue("PRECONDITION: A's hold has ended, so B takes the lease");
+
+        // A resumes and runs its stamp.
+        await Sees(hubA, lease => lease.Holder == Taker, ct);
+        var resumed = await PrebuiltBundleRetentionLease.Stamp(hubA, claimA, "silo-0", t)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        resumed.Held.Should().BeFalse(
+            "the lease the stamp settled carries B's claim — A sweeping now would overlap B's sweep");
+        resumed.Lease!.Holder.Should().Be(Taker);
+        resumed.Lease.Replica.Should().Be("silo-1", "A's stamp must not land over B's claim");
+
+        await PrebuiltBundleRetentionLease.Release(hubB, Taker).Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
     [Fact]

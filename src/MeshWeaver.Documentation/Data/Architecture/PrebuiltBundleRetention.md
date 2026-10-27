@@ -346,9 +346,16 @@ to change):
   The lease node's owning hub decides the writes one at a time. A second claimant against the same
   base is refused, re-runs its fold on the winner's state, and leaves it. A replica that does not hold
   the lease sweeps nothing, and logs which pass holds it and until when.
+- **The holder is what the owner settled, twice.** The clock is read when the attempt is subscribed,
+  never when a tick queued it, so a pass queued behind a long one does not take a hold that started in
+  the past. The claim and the replica stamp are two writes, and the pass sweeps only when the lease
+  the STAMP settled still carries its claim: a claimant that paused across its own hold's end and
+  finds another replica's claim there skips.
 - **The lease is bounded both ways.** The hold is most of the interval, and never less than an hour.
   A pass runs for at most half its hold: past that it is unsubscribed, and the pool leaf stops at its
-  next step boundary. A pass that finishes or faults releases the lease at once. A pass cut short by
+  next step boundary, with the other half of the hold to reach it. That bound is cooperative: one
+  synchronous directory removal that stalls past the whole remaining half-hold is not fenced at the
+  store, and is tracked as a follow-up. A pass that finishes or faults releases the lease at once. A pass cut short by
   teardown or by the deadline leaves the lease to lapse, so a pass that dies holding it delays the
   next sweep by at most one hold.
 
@@ -370,7 +377,7 @@ once the owner has committed it, and the next tick asks again.
 
 | Pinned by | What it fails on |
 |---|---|
-| `PrebuiltBundleRetentionLeaseAcrossSilosTest` (`MeshWeaver.Hosting.Orleans.Test`) | two silos passing at one instant where both sweep or neither is told who does; a finished pass that keeps the lease; a dead pass's lease that never lapses, or one released by a token that no longer holds it; a lease shape the owner's merge can tear, or a lapsed value it omits from the base |
+| `PrebuiltBundleRetentionLeaseAcrossSilosTest` (`MeshWeaver.Hosting.Orleans.Test`) | two silos passing at one instant where both sweep or neither is told who does; a finished pass that keeps the lease; a dead pass's lease that never lapses, or one released by a token that no longer holds it; a lease shape the owner's merge can tear, or a lapsed value it omits from the base; a hold dated from when the pass was queued rather than started; a claimant that sweeps although its stamp found another replica's claim |
 
 ## Rolling it out
 

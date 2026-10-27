@@ -82,8 +82,10 @@ public sealed record PrebuiltBundleRetentionLeaseVerdict(bool Held, PrebuiltBund
 /// waits — a replica that does not hold the lease skips its pass, and the next tick asks again.</para>
 ///
 /// <para><b>Bounded both ways.</b> A pass runs for at most <see cref="PassDeadline"/> (half the hold);
-/// past it the pass is unsubscribed, which cancels the pool leaf at its next step boundary, so a
-/// stuck pass can never still be deleting when the hold lapses and another replica takes it. A pass
+/// past it the pass is unsubscribed, which cancels the pool leaf at its next step boundary — so a
+/// pass has the other half of the hold to reach that boundary before another replica may take the
+/// lease. The bound is cooperative: a single synchronous directory removal that stalls past the whole
+/// remaining half-hold is not fenced at the store (a follow-up, filed to triage). A pass
 /// that finishes — or faults — releases the lease at once; a pass cut short by teardown or the
 /// deadline leaves it to lapse.</para>
 /// </summary>
@@ -181,9 +183,22 @@ public static class PrebuiltBundleRetentionLease
         IMessageHub hub, DateTimeOffset now, TimeSpan hold, int nonce, string replica)
     {
         ArgumentNullException.ThrowIfNull(hub);
+        var claim = ClaimFor(now + hold, nonce);
+        return Claim(hub, now, claim)
+            .SelectMany(lease => lease is not null && lease.Claim == claim
+                // The claim landed: stamp who holds it. Held is decided by what the stamp SETTLED.
+                ? Stamp(hub, claim, replica, now)
+                : Observable.Return(new PrebuiltBundleRetentionLeaseVerdict(false, lease)));
+    }
+
+    /// <summary>
+    /// The claiming fold of <see cref="Take"/>: proposes <paramref name="claim"/> unless the lease is held
+    /// past <paramref name="now"/> or unreadable, and returns the lease as the owner settled it. As System. COLD.
+    /// </summary>
+    internal static IObservable<PrebuiltBundleRetentionLeaseState?> Claim(IMessageHub hub, DateTimeOffset now, long claim)
+    {
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
-        var claim = ClaimFor(now + hold, nonce);
         var stream = hub.GetWorkspace().GetMeshNodeStream(LeasePath);
         return access.RunAsSystem(() => EnsureLeaseNode(hub)
             .SelectMany(_ => stream
@@ -198,16 +213,36 @@ public static class PrebuiltBundleRetentionLease
                     return current with { Content = lease with { Claim = claim } };
                 })
                 .Take(1))
-            .Select(settled => Read(settled, options))
-            .SelectMany(lease => lease is not null && lease.Claim == claim
-                // Held: stamp who holds it — only while the claim is still ours.
-                ? stream
-                    .Update(current => Read(current, options) is { } held && held.Claim == claim
-                        ? current with { Content = held with { Replica = replica, TakenAt = now } }
-                        : current)
-                    .Take(1)
-                    .Select(stamped => new PrebuiltBundleRetentionLeaseVerdict(true, Read(stamped, options)))
-                : Observable.Return(new PrebuiltBundleRetentionLeaseVerdict(false, lease))));
+            .Select(settled => Read(settled, options)));
+    }
+
+    /// <summary>
+    /// The second write of <see cref="Take"/>: stamps <paramref name="replica"/> on the lease only while
+    /// <paramref name="claim"/> is still its claim. 🚨 The verdict's <see cref="PrebuiltBundleRetentionLeaseVerdict.Held"/>
+    /// is read off the lease the stamp SETTLED, never assumed from the claim having landed one write
+    /// earlier: a claimant that paused across its own hold's end can find the lease taken by another
+    /// replica by the time this fold reads its base — and must then NOT sweep. As System. COLD.
+    /// </summary>
+    /// <param name="hub">The hub to write from.</param>
+    /// <param name="claim">The claim this pass landed.</param>
+    /// <param name="replica">This process's name.</param>
+    /// <param name="now">The instant the claim was taken.</param>
+    internal static IObservable<PrebuiltBundleRetentionLeaseVerdict> Stamp(
+        IMessageHub hub, long claim, string replica, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var options = hub.JsonSerializerOptions;
+        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
+            .Update(current => Read(current, options) is { } held && held.Claim == claim
+                ? current with { Content = held with { Replica = replica, TakenAt = now } }
+                : current)
+            .Take(1)
+            .Select(stamped =>
+            {
+                var lease = Read(stamped, options);
+                return new PrebuiltBundleRetentionLeaseVerdict(lease is not null && lease.Claim == claim, lease);
+            }));
     }
 
     /// <summary>
@@ -237,19 +272,23 @@ public static class PrebuiltBundleRetentionLease
     /// </summary>
     /// <typeparam name="TResult">The pass's result.</typeparam>
     /// <param name="hub">The hub to write the lease from.</param>
-    /// <param name="now">The instant of the attempt.</param>
+    /// <param name="clock">Read when the attempt is SUBSCRIBED — never when it is composed: a pass queued
+    /// behind a running one would otherwise take a hold that started in the past and could end while it
+    /// still sweeps.</param>
     /// <param name="hold">The hold to take (see <see cref="HoldFor"/>).</param>
     /// <param name="replica">This process's name.</param>
     /// <param name="pass">The pass — subscribed only when the lease is held.</param>
     /// <param name="notHeld">Told the settled lease when this replica does not hold it.</param>
     public static IObservable<TResult> RunLeased<TResult>(
-        IMessageHub hub, DateTimeOffset now, TimeSpan hold, string replica,
+        IMessageHub hub, TimeProvider clock, TimeSpan hold, string replica,
         Func<IObservable<TResult>> pass, Action<PrebuiltBundleRetentionLeaseVerdict> notHeld)
     {
+        ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(pass);
         ArgumentNullException.ThrowIfNull(notHeld);
         return Observable.Defer(() =>
         {
+            var now = clock.GetUtcNow();
             var nonce = NewNonce();
             var deadline = PassDeadline(hold);
             return Take(hub, now, hold, nonce, replica)
@@ -262,7 +301,7 @@ public static class PrebuiltBundleRetentionLease
                     }
                     return Observable.Defer(pass)
                         // Unsubscribing cancels the pool leaf, so a pass past its deadline stops at
-                        // its next step boundary — long before the hold lapses for another replica.
+                        // its next step boundary — with the other half of the hold to reach it.
                         .Timeout(deadline, Observable.Throw<TResult>(new OperationCanceledException(
                             $"the prebuilt-bundle retention pass outlived half its lease hold ({deadline}) "
                             + "and was stopped, so no other replica's pass can overlap it; the lease is left "
