@@ -610,6 +610,42 @@ A follow job that did not run, was cancelled or failed is RED in the lane — a 
 a pass. Any `executor` other than `actions` / `host` is RED. With the defaults (`actions`, no
 verdict) every lane behaves exactly as before, so a caller that passes nothing is unchanged.
 
+### Host-forced routing — red until the debt is paid (policy `build-server-routes-all-ci`)
+
+The rule above routes a repository to a host only once its stages CLAIM equivalence. The owner
+decided to route every code repository's pull requests to the build server BEFORE that, and to accept
+red until each gap is closed. That is a third executor answer, `host-forced`, and it can only ever be
+red:
+
+- **Where the decision lives.** `.github/build-routing.json` on core's DEFAULT branch, `hostForced`: a
+  list of repository names. `build-executor.py` reads it from `main` over the public raw URL, never
+  from the pull request under test, so no pull request routes itself on or off the host, and the
+  change that adds a repository is not itself routed before it merges. The operations instance must
+  ALSO answer `host` for the repository (`Hosting:Builds:HostRepos`); the list alone routes nothing.
+- **What it answers.** For a listed repository's pull request, when the instance says host and the
+  stages do not claim equivalence, `executor=host-forced`. The executor job prints each `owes` item
+  as an `::error` annotation (a repository with no declaration owes "no host stages"). When stages
+  are declared, the run is still queued on the host, so the host runs what it can; those host check
+  runs are not required contexts.
+- **Red, never green, never skipped.** Every lane and follow job that reads the executor
+  (`build-follow.yml`, `node-repo-compile-check.yml`, `node-repo-gate.yml`, `node-repo-module-pack.yml`,
+  `build-host-publication.yml`) fails its FIRST step on `host-forced`, naming the policy, and the
+  lanes' heavy jobs skip so the forced path puts no load on Actions. The context-owning jobs run
+  `always()`/`!cancelled()`, so the context is published as a FAILURE, never skipped. In core,
+  `precheck` decides with `build-executor.py --route-only` and `build` (with every leg that needs it)
+  does not run on `host-forced`; the required context, `Consolidate test results`, asks again and
+  exits 1, naming the debt.
+- **What it never touches.** Trunk runs (main's CD keeps sealing the platform sets that carry the
+  host's own fixes), `MeshWeaver.Deploy` and `Memex` (they carry the host fixes and the
+  infrastructure, and must stay mergeable). An unreadable routing file or an unanswering queue reads
+  as NOT forced: the legs run on Actions, a real verdict.
+- **What still needs per-repository wiring.** A required context produced by a repository's OWN job
+  (not a shared lane), and a repository that never calls `build-executor.py`, are not reached by
+  this file. Each such repository adds the executor lane and a guard in that job; until then its
+  context is an Actions verdict, which is real but is not routed.
+- **Leaving it.** A repository leaves `hostForced` when its stages claim equivalence (it then routes
+  as plain `host`), or when the owner reverses the decision.
+
 ### The host publication graph (module-pack on a host)
 
 A module repository's bundles reach the registry from a host run through three calls, and
