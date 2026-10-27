@@ -43,6 +43,14 @@ THE RULES, each of which is a way this step could otherwise read green on no evi
     45-minute job cap) ends first with the stage's verdict already in, it exits with that verdict and
     a warning that the stage's Check Run is the authority — a run may be longer than one job (its
     budget is the host's, up to 720 min); a stage still pending at the window's end is RED.
+  * PROGRESS is printed even when the log is quiet: while the stage is pending or running, the
+    page's one-line `heartbeat` (stage, elapsed, units/tests/errors, what is left, the run's
+    done/total, percent and estimate — the control instance's run board, Hosting/BuildService.md
+    "Watching a run") is printed at most every HEARTBEAT_SECONDS, marked `⏱ ` so it is never a
+    command. An instance that serves no heartbeat gets none printed — nothing is invented here.
+  * the STEP SUMMARY carries the run's stage board (the page's `board` — the SAME markdown as the
+    `build` Check Run's summary) and a link to the run's live page on the operations instance
+    (`<origin>/<runPath>`), on a pass and on a red alike.
   * workflow commands from the log are passed through ONLY for `::error`, `::warning` and
     `::notice` (an annotation on the PR's Files tab), RE-COMPOSED from validated parts. Every other
     command-shaped physical line — `::add-mask::`, `::stop-commands::`, `::group::`, `##[…]`, after
@@ -73,6 +81,13 @@ MAX_CONSECUTIVE_FAILURES = 6
 TOKEN_REFRESH_SECONDS = 240
 # The job is hard-cut at 45 minutes (check-workflow-timeouts.py); the follower must decide first.
 MAX_TIMEOUT_MINUTES = 43
+# The heartbeat's cadence — BuildBoard.HeartbeatEvery on the operations instance.
+HEARTBEAT_SECONDS = 30
+HEARTBEAT_MARK = "⏱ "
+# The step summary's board is bounded well inside GitHub's 1 MiB per step.
+MAX_BOARD_CHARS = 60_000
+# The run's page path as the instance names it: Hosting/Builds/<repo>/<id> — anything else is not linked.
+RUN_PATH = re.compile(r"^Hosting/Builds/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 GREEN = "succeeded"
 # States that mean "not decided yet". Anything else is terminal — and only GREEN is a pass.
@@ -204,8 +219,11 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
            audience: str, http: Http, env: dict, out: Callable[[str], None], probe: str = "",
            clock: Callable[[], float] = time.monotonic,
            sleep: Callable[[float], None] = time.sleep,
-           poll_seconds: float = POLL_SECONDS) -> int:
-    """Follow one stage to its verdict. Returns the exit code (0 only for `succeeded`)."""
+           poll_seconds: float = POLL_SECONDS,
+           heartbeat_seconds: float = HEARTBEAT_SECONDS,
+           report: Optional[dict] = None) -> int:
+    """Follow one stage to its verdict. Returns the exit code (0 only for `succeeded`). `report`, when
+    given, receives the newest `board` and `run_path` the instance served (for the step summary)."""
     base = api_url.rstrip("/")
     stage_path = urllib.parse.quote(stage, safe="")
     query = {"channel": channel or "latest", **({"probe": probe} if probe else {})}
@@ -219,6 +237,8 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
     first_404: Optional[float] = None
     state = ""
     summary = ""
+    last_beat: Optional[float] = None
+    report = report if report is not None else {}
     out(f"::group::{stage_check(stage, query['channel'])} — on build-{query['channel']} ({repo}@{sha[:12]})")
     try:
         while True:
@@ -310,6 +330,17 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
                 out(f"::notice title=Stage restarted::{stage} was {state} and is {new_state or 'pending'} again — "
                     f"the run restarted it (run {run_state or 'running'}); following on")
             state = new_state
+            board = body.get("board")
+            if isinstance(board, str) and board.strip():
+                report["board"] = board
+            run_path = body.get("runPath")
+            if isinstance(run_path, str) and RUN_PATH.match(run_path):
+                report["run_path"] = run_path
+            heartbeat = body.get("heartbeat")
+            if isinstance(heartbeat, str) and heartbeat.strip() and state in PENDING \
+                    and (last_beat is None or clock() - last_beat >= heartbeat_seconds):
+                out(HEARTBEAT_MARK + one_line(heartbeat))
+                last_beat = clock()
             if lines:
                 continue                # drain the log before deciding anything
             if has_run:
@@ -382,17 +413,47 @@ def main(argv: list[str]) -> int:
     if a.self_test:
         return self_test()
     env = dict(os.environ)
+    report: dict = {}
     try:
         a = resolve_args(a, env)
         code = follow(api_url=a.api_url, repo=a.repo, sha=a.sha, stage=a.stage, channel=a.channel,
                       timeout_minutes=a.timeout_minutes, audience=a.audience, http=Http(), env=env, probe=a.probe.strip(),
-                      out=lambda s: print(s, flush=True))
+                      out=lambda s: print(s, flush=True), report=report)
     except Failure as f:
         print(f"::error title=Build follow::{_escape_data(one_line(str(f)))}", flush=True)
-        summary(env, f"- ❌ `{a.stage}`: {one_line(str(f))}")
+        summary(env, f"- ❌ `{a.stage}`: {one_line(str(f))}" + summary_block(a.api_url, report))
         return 1
-    summary(env, f"- ✅ `{a.stage}` succeeded on build-{a.channel}")
+    summary(env, f"- ✅ `{a.stage}` succeeded on build-{a.channel}" + summary_block(a.api_url, report))
     return code
+
+
+def page_url(api_url: str, run_path: str) -> str:
+    """The run's live page on the operations instance — the API's origin + the run's node path — or ''
+    when the path is not a run path or the API is not https (plain http only to localhost)."""
+    if not RUN_PATH.match(run_path or ""):
+        return ""
+    p = urllib.parse.urlparse(api_url or "")
+    host = (p.hostname or "").lower()
+    local = p.scheme == "http" and host in ("localhost", "127.0.0.1", "::1")
+    if "@" in p.netloc or not ((p.scheme == "https" and host) or local):
+        return ""
+    return f"{p.scheme}://{p.netloc}/{run_path}"
+
+
+def summary_block(api_url: str, report: dict) -> str:
+    """What the step summary adds below the verdict line: the run's live page and its stage board as the
+    instance last served it (the `build` Check Run's markdown). Empty when the instance served neither."""
+    parts: list[str] = []
+    url = page_url(api_url, str(report.get("run_path") or ""))
+    if url:
+        parts.append(f"\n  - 📡 Live progress of the run (stage board, what is left, log tail): {url}")
+    board = str(report.get("board") or "").replace(LEGACY, LEGACY_BROKEN)
+    if board.strip():
+        if len(board) > MAX_BOARD_CHARS:
+            board = board[:MAX_BOARD_CHARS - 1] + "…"
+        parts.append("\n\n<details open><summary>Stage board — as of this job's last read</summary>\n\n"
+                     + board.rstrip() + "\n\n</details>\n")
+    return "".join(parts)
 
 
 def summary(env: dict, line: str) -> None:
@@ -454,6 +515,17 @@ def _run(answers, *, timeout=10.0, token_status=200):
     except Failure as f:
         code, err = 1, str(f)
     return code, err, out, http
+
+
+def _run_with(answers, *, heartbeat_seconds=HEARTBEAT_SECONDS, report=None):
+    clock = _Clock()
+    http = _FakeHttp(answers, clock)
+    out: list[str] = []
+    env = {"ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example/t?x=1", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "req"}
+    code = follow(api_url="https://control.example.com/api/builds", repo="MeshWeaver.Plugins", sha="a" * 40, stage="modules",
+                  channel="latest", timeout_minutes=10.0, audience="https://control.example.com", http=http, env=env,
+                  out=out.append, clock=clock.now, sleep=clock.sleep, heartbeat_seconds=heartbeat_seconds, report=report)
+    return code, None, out, http
 
 
 def _page(lines, nxt, state, skipped=0, summary=""):
@@ -650,12 +722,54 @@ def self_test() -> int:
         except Failure:
             pass
 
+    # 9. PROGRESS: the heartbeat is printed while the stage runs — at once, then at most every
+    #    HEARTBEAT_SECONDS whatever the poll rate — inert, and only what the instance served.
+    def _hpage(state, beat, lines=(), board=None, run_path=None):
+        st, body = _page(list(lines), None, state)
+        body = dict(body, heartbeat=beat)
+        if board is not None:
+            body["board"] = board
+        if run_path is not None:
+            body["runPath"] = run_path
+        return st, body
+    running = [_hpage("running", f"▶️ modules: running 00:00:{i:02d} · 3 units left | run 0/2 stages · 10 %") for i in range(7)]
+    code, err, out, http = _run(running + [_hpage("succeeded", "✅ modules: succeeded", board="| | stage |\n|---|---|\n| ✅ | modules |",
+                                                   run_path="Hosting/Builds/MeshWeaver.Plugins/" + "a" * 40)])
+    beats = [o for o in out if o.startswith(HEARTBEAT_MARK)]
+    # Seven running reads 10 s apart (≈ 60 s): a beat at the first read, then one per 30 s — three, never seven.
+    check("heartbeat/cadence", len(beats) == 3, beats)
+    check("heartbeat/first beat at once, carrying the instance's line", beats and "3 units left" in beats[0] and "run 0/2 stages" in beats[0], beats)
+    check("heartbeat/none after the stage's verdict", not any("succeeded" in b for b in beats), beats)
+    # The negative control for the cadence: with no throttle every running read would beat — the counter can fail.
+    _, _, out0, _ = _run_with(running + [_hpage("succeeded", "x")], heartbeat_seconds=0)
+    check("heartbeat/control: unthrottled, every running read beats", sum(o.startswith(HEARTBEAT_MARK) for o in out0) == 7, out0)
+    # An instance that serves no heartbeat (older) gets none printed — nothing is invented.
+    _, _, out_old, _ = _run([_page([], None, "running")] * 4 + [_page([], None, "succeeded")])
+    check("heartbeat/an older instance prints none", not any(o.startswith(HEARTBEAT_MARK) for o in out_old), out_old)
+    # A heartbeat cannot be a command: it starts with the mark and the legacy delimiter is broken.
+    _, _, out_cmd, _ = _run([_hpage("running", "::error::x ##[group]g"), _hpage("succeeded", "")])
+    cmd = [o for o in out_cmd if o.startswith(HEARTBEAT_MARK)]
+    check("heartbeat/inert", cmd == [HEARTBEAT_MARK + INERT + "::error::x " + LEGACY_BROKEN + "group]g"], cmd)
+
+    # 10. The step summary: the run's live page and the board the instance served.
+    report: dict = {}
+    _run_with([_hpage("running", "b", board="| | stage |", run_path="Hosting/Builds/R/" + "a" * 40),
+               _hpage("succeeded", "", run_path="../../evil")], report=report)
+    check("summary/the newest valid run path is kept (a malformed one is ignored)", report.get("run_path") == "Hosting/Builds/R/" + "a" * 40, report)
+    block = summary_block("https://control.example.com/api/builds", report)
+    check("summary/links the run's page", "https://control.example.com/Hosting/Builds/R/" + "a" * 40 in block, block)
+    check("summary/carries the board", "| | stage |" in block and "<details open>" in block, block)
+    check("summary/no page link off a non-run path", page_url("https://control.example.com/api/builds", "https://evil.example/x") == "", "linked")
+    check("summary/no page link off plain http", page_url("http://evil.example/api/builds", "Hosting/Builds/R/x") == "", "linked")
+    check("summary/nothing served → nothing added", summary_block("https://control.example.com/api/builds", {}) == "", "added")
+
     if failures:
         for f in failures:
             print(f"SELF-TEST FAILED: {f}")
         return 1
     print("build-follow self-test: all cases passed (cursor, skipped gap, verdicts, timeout, 403, 401, "
-          "transient/unreadable, 404 grace, command neutralisation, OIDC grant, argument guards)")
+          "transient/unreadable, 404 grace, command neutralisation, OIDC grant, argument guards, "
+          "heartbeat cadence + its control, step-summary board and page link)")
     return 0
 
 
