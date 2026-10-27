@@ -1521,6 +1521,19 @@ public static class DataExtensions
     /// as <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed — visible at the
     /// consumer GUI so the gap is diagnosable, not silent.</para>
     /// </summary>
+    /// <summary>
+    /// The verdict of a cross-hub patch whose merge turn found its echo watcher already ended
+    /// (#7346 review): the turn committed NOTHING, so the write is provably not applied and safe to
+    /// retry. The writer has normally been answered already by the watcher's own end (its bound, or
+    /// the owner going away) — <c>AckOnce</c> latches, so this only answers one that was not.
+    /// </summary>
+    /// <param name="path">The owner hub's address.</param>
+    /// <returns>An <see cref="MeshNodeErrorCode.OwnerNotReady"/> error naming the condition.</returns>
+    internal static MeshNodeError WatcherEndedBeforeCommit(string path) => new(
+        MeshNodeErrorCode.OwnerNotReady, path,
+        "the patch's acknowledgement watcher ended before its merge turn could commit — "
+        + "the patch was NOT applied; safe to retry");
+
     internal static MeshNodeError ClassifyPatchException(Exception ex, string path)
     {
         if (IsOwnerTeardown(ex))
@@ -2720,11 +2733,10 @@ public static class DataExtensions
         // has committed and served it. Exactly one holder at a time: the merge turn takes it, the
         // flush leg TAKES it over on the commit echo and releases it on the flush's own terminal,
         // and every path that commits nothing (a refusal, a no-op, a fault, an echo that never
-        // comes) releases it at once.
-        IDisposable? commitAdmission = null;
-        IDisposable? TakeCommitAdmission() => System.Threading.Interlocked.Exchange(ref commitAdmission, null);
-        void ReleaseCommitAdmission() => TakeCommitAdmission()?.Dispose();
-        var echoWatcherEnded = 0;
+        // comes) releases it at once. The commit decision is atomic against the echo watcher's end:
+        // a turn whose watcher has ended commits NOTHING, and the watcher never releases an
+        // admission for a turn that is still deciding (CommitAdmissionHandoff).
+        var commitAdmission = new CommitAdmissionHandoff();
         // The version the entity carries once this patch is committed — minted by the merge, or the
         // live version for a patch that changed nothing. -1 until the merge turn decides.
         long committedVersion = -1;
@@ -2795,10 +2807,10 @@ public static class DataExtensions
                 .Finally(() =>
                 {
                     postDetach.Dispose();
-                    System.Threading.Interlocked.Exchange(ref echoWatcherEnded, 1);
                     // The echo watcher ended. If the flush leg took the admission over it is no longer
-                    // here; otherwise nothing will flush this write, so nothing may wait for it.
-                    ReleaseCommitAdmission();
+                    // here; a turn still deciding aborts and releases it; otherwise nothing will flush
+                    // this write, so nothing may wait for it.
+                    commitAdmission.OnWatcherEnded();
                 }),
             // Durable flush (persist + publish the cache-eviction feed event), then ack; no hook
             // registered → ack on the in-memory commit. Armed through the totality seam so a
@@ -2812,7 +2824,7 @@ public static class DataExtensions
                 hub.NoteRequestStage(request.Id, "PATCH_ECHO_SEEN");
                 // The flush now holds this write's admission (#7346), until ITS storage write answers
                 // — not the ack, which the flush bound may post while the write is still in flight.
-                var admission = TakeCommitAdmission();
+                var admission = commitAdmission.TakeForFlush();
                 IObservable<bool>? durable;
                 try
                 {
@@ -3091,12 +3103,16 @@ public static class DataExtensions
                             + " The patch was NOT applied."));
                         return null;
                     }
-                    // Handed to the flush leg through the shared holder (a re-run turn replaces — and
-                    // releases — what an earlier one left). An echo watcher that already ended will
-                    // never hand it to a flush, so it is released at once.
-                    System.Threading.Interlocked.Exchange(ref commitAdmission, admission)?.Dispose();
-                    if (System.Threading.Volatile.Read(ref echoWatcherEnded) != 0)
-                        ReleaseCommitAdmission();
+                    // Handed to the flush leg through the shared holder. An echo watcher that already
+                    // ended will never hand it to a flush — and has already answered the writer — so
+                    // the turn commits NOTHING (#7346 review): committing would land a write nothing
+                    // stores, with no admission for a delete to wait on.
+                    if (!commitAdmission.TryBeginDecision(admission))
+                    {
+                        hub.NoteRequestStage(request.Id, "PATCH_MERGE_ABORTED watcher-ended");
+                        AckOnce(false, WatcherEndedBeforeCommit(hubPath));
+                        return null;
+                    }
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
                         as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");
@@ -3120,7 +3136,7 @@ public static class DataExtensions
                     {
                         hub.NoteRequestStage(request.Id, $"PATCH_MERGE_NOCHANGE refused={refusedKeys}");
                         // Nothing commits, so nothing is flushed for a deletion to wait on.
-                        ReleaseCommitAdmission();
+                        commitAdmission.Abandon();
                         if (refusedKeys > 0)
                             AckOnce(false, new MeshNodeError(
                                 MeshNodeErrorCode.Conflict, hubPath,
@@ -3181,8 +3197,19 @@ public static class DataExtensions
                             hub.Address.Path, request.AccessContext, jsonOpts) is { } commitRefusal)
                     {
                         hub.NoteRequestStage(request.Id, "PATCH_COMMIT_REFUSED");
-                        ReleaseCommitAdmission();
+                        commitAdmission.Abandon();
                         AckOnce(false, new MeshNodeError(MeshNodeErrorCode.Validation, hubPath, commitRefusal));
+                        return null;
+                    }
+
+                    // 🚨 THE COMMIT DECISION against the echo watcher (#7346 review): if the watcher
+                    // ended while this turn was deciding, nothing would flush the write and the writer
+                    // has been answered — commit nothing. Decided before the stamps below, so an
+                    // aborted turn leaves no stamp an echo could match.
+                    if (!commitAdmission.TryCommit())
+                    {
+                        hub.NoteRequestStage(request.Id, "PATCH_MERGE_ABORTED watcher-ended");
+                        AckOnce(false, WatcherEndedBeforeCommit(hubPath));
                         return null;
                     }
 
@@ -3202,7 +3229,7 @@ public static class DataExtensions
                 }
                 catch (Exception ex)
                 {
-                    ReleaseCommitAdmission();
+                    commitAdmission.Abandon();
                     AckOnce(false, ClassifyPatchException(ex, hubPath));
                     return null;
                 }
@@ -3218,7 +3245,7 @@ public static class DataExtensions
             ex =>
             {
                 // The turn's change failed to apply: nothing committed, nothing will be flushed.
-                ReleaseCommitAdmission();
+                commitAdmission.Abandon();
                 AckOnce(false, ClassifyPatchException(ex, hubPath));
             });
 

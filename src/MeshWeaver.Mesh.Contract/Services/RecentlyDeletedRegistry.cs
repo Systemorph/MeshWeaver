@@ -468,12 +468,17 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones, IActiveDeletio
         // refuse this write here or wait for it.
         var id = Interlocked.Increment(ref _nextAdmittedWrite);
         _admittedWrites[id] = [path];
-        ImmutableInterlocked.Update(ref _committedAdmissions, set => set.SetItem(id, path));
         if (IsUnderActiveDeletion(path, out deletionRoot))
         {
             SettleAdmittedWrite(id);
             return null;
         }
+        // 🚨 Published as a guard BYPASS only once the scope check has ACCEPTED the commit. Published
+        // before it, a refused commit's transient entry let another write to the same path through
+        // an open scope whose deletion had already finished waiting — and that write could land
+        // after the deletion and recreate the row. The bypass is never needed earlier: the write it
+        // exists for reaches the guard only after this commit, i.e. after this method returns.
+        ImmutableInterlocked.Update(ref _committedAdmissions, set => set.SetItem(id, path));
         return new AdmittedWrite(this, id);
     }
 
