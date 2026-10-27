@@ -1469,6 +1469,25 @@ def run_line_pointer_cases(root, case) -> None:
          mutated != body and rc == 0 and set(latest_writes(docker, mirror)) != want,
          "the mutation could not apply, or the detector still saw every `latest` write")
 
+    # 4b ── `release.yml` never writes the portal's or the migration's `latest` (#7303 review): a
+    #       release can promote an OLDER set than the armed one, and only `arm` checks freshness.
+    rel = (root / ".github/workflows/release.yml").read_text()
+    def release_latest_problems(text: str) -> list[str]:
+        out = []
+        for n, line in enumerate(text.splitlines(), 1):
+            code = re.split(r"\s#", line, maxsplit=1)[0]
+            if code.lstrip().startswith("#") or ":latest" not in code:
+                continue
+            if "mw-plugin-test:latest" not in code:
+                out.append(f"release.yml:{n} writes a `latest` that is not the tester's: {code.strip()[:140]}")
+        return out
+    problems = release_latest_problems(rel)
+    case("release.yml writes `latest` on the tester only — never the portal's or the migration's (arm owns them)",
+         not problems and "mw-plugin-test:latest" in rel, "; ".join(problems) or "the tester's GHCR `latest` vanished")
+    back = rel.replace('"${args[@]}" "$ACR/$repo:$SHORT"', '"${args[@]}" --tag "$ACR/$repo:latest" "$ACR/$repo:$SHORT"', 1)
+    case("control: the guard catches a release moving the portal's ACR `latest` (backwards on an older set)",
+         back != rel and bool(release_latest_problems(back)), "the mutation could not apply, or passed")
+
     # 5 ── `promote` (an unarmed set) never writes the portal's or the migration's `latest`.
     text = (root / WORKFLOW).read_text()
     problems = promote_latest_problems(text)

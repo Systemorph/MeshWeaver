@@ -43,7 +43,8 @@ three repositories, `memex-portal-ai` **last** — the same arming-write orderin
 same reason. So a release adds one more immutable pointer, applied symmetrically. For a
 `<major>.<minor>.<run>` set it moves no pointer on the portal or the migration — neither the line
 pointers nor `latest`: CD's `arm` already moved them to that build or past it, so a release-side move
-could only move them backwards. Only the tester's GHCR `latest` is still mirrored at release time.
+could only move them backwards. It never writes the portal's or the migration's `latest` at all. Only
+the tester's GHCR `latest` is still mirrored at release time.
 
 > 📅 **2026-09-12 — and there is no tag that means "validated", by decision.** `<version>` is the
 > arming write; it precedes `publish-bake` and `verify-images` (and preceded `plugins-bake` until #6143), so a set is *sealed*
@@ -78,8 +79,9 @@ section below shows it lacked: a producer, and protection from retention.
   `memex-portal-ai:<major>-latest` (or `latest`): phase D writes the tester's line pointers first, from
   the armed set's own version tag, and refuses a set whose tester and portal disagree on the version.
   A consumer that pairs the two images names the tester by that pointer, or by the portal's version.
-* **It moves only when the line pointers move.** A release of a retired-notation set moves it with
-  them (as before); a release of a `<major>.<minor>.<run>` set moves neither.
+* **`arm` is its ONLY writer.** `release.yml` never moves the portal's or the migration's `latest`, in
+  either notation: a release can promote a set OLDER than the one already armed (a retired-notation
+  set always is), and only `arm` re-checks freshness before it writes.
 
 `test-cd-steps.py` executes phase D against stub registries: the newest armed set writes `latest` on
 both repositories in all three registries, a newer armed set leaves it untouched, a failing pointer

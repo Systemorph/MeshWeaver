@@ -377,7 +377,12 @@ def self_test() -> int:
            and tags_for(real, "3.1.0", "release.yml", repository="memex-migration") == [])
     expect("release.yml moves the line pointers only for a legacy-notation set",
            sorted(tags_for(real, "3.0.0-ci.8080", "release.yml", repository="memex-portal-ai"))
-           == ["3-latest", "3.0-latest", "3.0.0-latest", "latest"])
+           == ["3-latest", "3.0-latest", "3.0.0-latest"])
+    # `latest` on the portal and the migration is arm's ALONE: a release can promote an OLDER set
+    # than the armed one (a legacy set always is), so a release-side write could only go backwards.
+    expect("release.yml never moves the portal's or the migration's `latest`, in either notation",
+           all("latest" not in tags_for(real, v, "release.yml", repository=r)
+               for v in ("3.0.0-ci.8080", "3.1.0") for r in ("memex-portal-ai", "memex-migration")))
     expect("control-first moves the line pointers on memex-control only",
            sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="control-first")) == ["3-latest", "3.1-latest"]
            and tags_for(real, "3.1.10050", "main-cd.yml", job="control-first", repository="memex-portal-ai") == [])

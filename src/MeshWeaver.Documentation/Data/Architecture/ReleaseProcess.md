@@ -304,8 +304,9 @@ CD writes them in **Phase D, after the arming PUT** (`memex-portal-ai:<version>`
 before this), so a fresh install that resolves a pointer never sees a set whose migration exists
 and whose portal does not. `release.yml` moves NO pointer when it promotes a `<major>.<minor>.<run>`
 build (CD already moved them to it or past it; a release-side move could only move them backwards),
-and keeps the old behaviour for a set of the retired notation; `latest` on the portal and the migration
-follows exactly the same rule ([The Image Tag Contract](../ImageTagContract)). The self-updater ignores them — it selects on `^\d+\.\d+\.\d+` tags — so a
+and keeps the old behaviour for a set of the retired notation. `latest` on the portal and the migration
+is written by CD's `arm` alone and never by a release, in either notation
+([The Image Tag Contract](../ImageTagContract)). The self-updater ignores them — it selects on `^\d+\.\d+\.\d+` tags — so a
 pointer is only ever a **first-start** address.
 
 **The rule this makes clear:** a package of major N names `N-latest` and is otherwise independent

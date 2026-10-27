@@ -387,20 +387,6 @@
           "state": "the GHCR mirror of every official release"
         },
         {
-          "workflow": "release.yml",
-          "job": "release",
-          "repositories": [
-            "memex-portal-ai",
-            "memex-migration"
-          ],
-          "registries": [
-            "meshweaver.azurecr.io",
-            "ghcr.io/systemorph"
-          ],
-          "state": "with the line pointers: only when the released set is in the legacy notation (CD's arm already moved it otherwise)",
-          "notation": "legacy"
-        },
-        {
           "workflow": "base-image-acr.yml",
           "job": "base",
           "repositories": [
