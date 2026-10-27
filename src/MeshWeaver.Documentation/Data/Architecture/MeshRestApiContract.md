@@ -64,8 +64,8 @@ treats the envelope as an ordinary HTTP failure.
 request."*, names no request. When the exception has no frames of its own, which is always the case
 for an Rx timeout because Rx creates the exception without throwing it, the endpoint that failed
 cannot be recovered from the incident. That is how #6790 stayed undecidable.
-`MeshWeaver.Hosting.AspNetCore.Portal.RequestNamingExceptionHandling.UseRequestNamingExceptionHandler(path)`
-(MeshWeaver.Plugins, `src/MeshWeaver.Hosting.AspNetCore.Portal`) is the drop-in replacement for `UseExceptionHandler(path)`:
+`MeshWeaver.Hosting.AspNetCore.PortalHost.RequestNamingExceptionHandling.UseRequestNamingExceptionHandler(path)`
+(MeshWeaver.Plugins, `src/MeshWeaver.Hosting.AspNetCore.PortalHost`) is the drop-in replacement for `UseExceptionHandler(path)`:
 
 - It re-executes onto the same error page.
 - It writes the line through the framework's own replacement point,

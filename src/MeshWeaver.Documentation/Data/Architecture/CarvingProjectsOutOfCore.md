@@ -223,20 +223,31 @@ Those types stay, together with what their public signatures name (`ICircuitCont
 mention `UserContextMiddleware` in comments, for instance. But a comment is not a `TypeRef`, so a text
 search over-counts.
 
-**What moved** to MeshWeaver.Plugins as `MeshWeaver.Hosting.AspNetCore.Portal` (namespace unchanged)
-is host code that no published binary binds: `UserContextMiddleware`, `ValidatedTokenCache`,
+**What moved** to MeshWeaver.Plugins as `MeshWeaver.Hosting.AspNetCore.PortalHost`, under that NEW
+namespace, is host code that no published binary binds: `UserContextMiddleware`, `ValidatedTokenCache`,
 `MeshUserProjection`, `VUserHelper`, `UserDirectoryReadiness`, `RequestNamingExceptionHandling` and
 `RequestName`, `NonfileRouteConstraint` and its extensions, `ArticleExtensions`, and
 `Authentication/AuthenticationOptions` with its two companions. Their consumers are the portal hosts
 and the Blazor host libraries, which are rebuilt with every image. `scripts/type-forwards.allow` names
 each one, and every entry is a statement this measurement backs.
 
-**The transition, in Plugins.** The moved files keep their namespace, so a graph holding both copies
-is CS0433. MeshWeaver.Plugins therefore switches on the pinned platform checkout: while it still
-carries `Portal/UserContextMiddleware.cs`, the moved project compiles nothing and nothing references
-it, and once the pin is past this delete half, the consumers reference it
-(`$(MeshWeaverAspNetCorePortalProject)` in Plugins' `src/Directory.Build.props`). Neither repository
-is ever red in between. The same switch-on-what-the-pin-carries shape moved the demo samples.
+**The transition: a new namespace, because the module build never sees a checkout.** The first
+attempt kept the namespace and switched on the pinned platform CHECKOUT: while it still carried
+`Portal/UserContextMiddleware.cs`, the Plugins copy compiled nothing. The module bundles'
+one-workspace build defeated it. That build (`mw-plugin-test build-project` inside the sealed portal
+image) compiles against the image's `/app` and has no platform checkout, so the switch read "moved"
+and compiled the copy next to an assembly still exporting the same full names: CS0436 on every type.
+Reproduced locally with the tester inside a portal image that predates the delete: 6 CS0436, the
+same as CI.
+
+A switch on a path cannot answer a question about an assembly, so the moved types took a new
+namespace, `MeshWeaver.Hosting.AspNetCore.PortalHost`. That copy never shares a full name with the
+platform's assembly, whichever platform set a build resolves. The consumers switch in the same change.
+A file that also uses a type the platform kept aliases each moved type it uses, so the simple name is
+never ambiguous while the platform still carries its copy. The platform then deletes its copy with no
+consumer left. The same 39-entry workspace build is GREEN, 52 of 52 projects, against the same
+image. **When a moved type's old full name stays exported anywhere a build path can see it, prefer a
+new namespace to any switch.**
 
 **What it does not cover.** The measurement covers the registry modules MeshWeaver.Plugins builds
 today, plus a source search of every Systemorph repository for the namespace (only

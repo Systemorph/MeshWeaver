@@ -3,7 +3,7 @@ namespace MeshWeaver.Hosting.AspNetCore.Portal;
 /// <summary>
 /// One consistent reading of the portal's user directory (<see cref="UserIdentityCache"/>).
 /// The readiness gate that classifies it (<c>UserDirectoryReadiness</c>) is host code and lives in
-/// MeshWeaver.Plugins (<c>MeshWeaver.Hosting.AspNetCore.Portal</c>); this record stays here because
+/// MeshWeaver.Plugins (<c>MeshWeaver.Hosting.AspNetCore.PortalHost</c>); this record stays here because
 /// <see cref="UserIdentityCache.Reading"/> returns it and published module bytes bind the cache.
 /// </summary>
 /// <param name="Hydrated">A snapshot is applied right now, so a miss is a definitive "no such user".</param>

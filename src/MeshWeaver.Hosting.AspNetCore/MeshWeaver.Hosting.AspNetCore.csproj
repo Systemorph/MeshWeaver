@@ -27,7 +27,7 @@
          a [TypeForwardedTo] cannot point from here into MeshWeaver.Plugins. The rest of the portal
          host's infrastructure (the user-context middleware, token cache, readiness gate, request
          naming, route constraint, authentication options) is host code and lives in
-         MeshWeaver.Plugins as MeshWeaver.Hosting.AspNetCore.Portal. Two references serve what stayed:
+         MeshWeaver.Plugins as MeshWeaver.Hosting.AspNetCore.PortalHost (a new namespace). Two references serve what stayed:
            Layout                   — PortalErrorSink
            Markdown.Export.Contract — PortalApplication -->
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
