@@ -383,12 +383,36 @@ def _module_source_dirs(plugin: Path, root: Path) -> list[Path]:
     module = declared_module(plugin)
     if not module:
         return []
-    proj = root / "src" / module
+    # 🚨 A declared module whose project cannot be found FAILS, never hashes nothing: an empty
+    # list here silently drops the module's sources from its package's moduleVersion, so a source
+    # change would publish under the old version. The caller's `module_project_dir`
+    # (MeshWeaver.Plugins#4314) resolves the project at ANY depth under src/ (`src/<cluster>/<name>`)
+    # and itself refuses a missing or ambiguous name; an older project-closure.py keeps the flat
+    # `src/<module>` path, held to the same refusal.
+    closure = _project_closure(root)
+    resolver = getattr(closure, "module_project_dir", None)
+    if callable(resolver):
+        try:
+            rel = resolver(root, module, required=True)
+        except Exception as exc:  # the caller's own layout error, whatever its class is called
+            raise SystemExit(f"✗ gen-manifests: {plugin.name} declares content.module {module!r}, "
+                             f"which {exc}") from exc
+        if not rel:
+            raise SystemExit(f"✗ gen-manifests: {plugin.name} declares content.module {module!r}, but "
+                             "project-closure.py's module_project_dir found no project for it — a mixed "
+                             "package whose module sources cannot be hashed must not be versioned without them.")
+        rel = Path(rel).as_posix()
+    else:
+        rel = f"src/{module}"
+    proj = root / rel
     if not proj.is_dir():
-        return []
+        raise SystemExit(f"✗ gen-manifests: {plugin.name} declares content.module {module!r}, but {rel}/ "
+                         "does not exist — a mixed package whose module sources cannot be hashed must not "
+                         "be versioned without them (hashModuleSources=true). Restore the project, fix the "
+                         "declared module name, or drop content.module.")
     dirs = [proj]
     graph, owned = _closure_inputs(root)
-    for sibling in _project_closure(root).riding_siblings(root, f"src/{module}", graph, owned):
+    for sibling in closure.riding_siblings(root, rel, graph, owned):
         directory = root / sibling
         if directory.is_dir():
             dirs.append(directory)
@@ -2152,6 +2176,55 @@ def self_test() -> int:
         if on == off:
             failures.append("hashModuleSources must CHANGE a mixed package's content hash — the "
                             "fixture does not reproduce the flip, so the default proves nothing")
+        # 5c. A declared module that cannot be found FAILS (it used to hash nothing, silently), and a
+        #     caller's `module_project_dir` resolves it at any depth (MeshWeaver.Plugins#4314).
+        (repo5 / "Pkg" / "index.json").write_text('{"content": {"version": "1.0", "module": "Mod.Gone"}}\n')
+        try:
+            hash_files(repo5 / "Pkg", repo5)
+            failures.append("a declared module with no src/<module>/ must FAIL, not hash nothing")
+        except SystemExit as ex:
+            if "Mod.Gone" not in str(ex):
+                failures.append(f"the missing-module error must name the module, said: {ex}")
+        (repo5 / "Pkg" / "index.json").write_text('{"content": {"version": "1.0", "module": "Mod.Asm"}}\n')
+        nested = repo5 / "src" / "cluster" / "Mod.Asm"
+        (repo5 / "src" / "Mod.Asm").rename(repo5 / "src" / "cluster")
+        (repo5 / "src" / "cluster").rename(repo5 / "src" / "_c")
+        nested.parent.mkdir(parents=True)
+        (repo5 / "src" / "_c").rename(nested)
+        resolver_closure = (
+            "def graph_of(root):\n    return {}\n"
+            "def module_owned(root):\n    return set()\n"
+            "def riding_siblings(root, proj, graph, owned):\n    return []\n"
+            "class ProjectLayoutError(Exception): pass\n"
+            "def module_project_dir(root, name, required=True):\n"
+            "    hits = sorted(str(p.parent.relative_to(root)) for p in root.glob('src/**/' + name + '/a.cs'))\n"
+            "    if hits: return hits[0]\n"
+            "    if required: raise ProjectLayoutError(f'has no project under src/ ({name})')\n"
+            "    return None\n")
+        # NEGATIVE CONTROL: without the resolver the flat src/Mod.Asm is gone — that is a failure now.
+        _CLOSURE_CACHE.pop(repo5.resolve(), None)
+        try:
+            hash_files(repo5 / "Pkg", repo5)
+            failures.append("a nested module with no resolver must FAIL on the flat path, not hash nothing")
+        except SystemExit:
+            pass
+        (repo5 / "scripts" / "project-closure.py").write_text(resolver_closure)
+        _CLOSURE_CACHE.pop(repo5.resolve(), None)
+        try:
+            if module_version(hash_files(repo5 / "Pkg", repo5)) == off:
+                failures.append("a nested module resolved by module_project_dir must be hashed into the version")
+        except SystemExit as ex:
+            failures.append(f"a nested module resolved by module_project_dir must hash, said: {ex}")
+        (repo5 / "Pkg" / "index.json").write_text('{"content": {"version": "1.0", "module": "Mod.Gone"}}\n')
+        try:
+            hash_files(repo5 / "Pkg", repo5)
+            failures.append("the resolver's refusal of a missing module must FAIL the hash")
+        except SystemExit as ex:
+            if "Mod.Gone" not in str(ex):
+                failures.append(f"the resolver's refusal must name the module, said: {ex}")
+        (repo5 / "Pkg" / "index.json").write_text('{"content": {"version": "1.0", "module": "Mod.Asm"}}\n')
+        _CLOSURE_CACHE.pop(repo5.resolve(), None)
+
         # …and the default really is the pre-centralization behaviour: with the flag off, the
         # src/ tree is not in the hash even though project-closure.py is now right there.
         declare(repo5, skip=("scripts", ".git", "src", "notapackage"))

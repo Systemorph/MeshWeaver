@@ -305,6 +305,7 @@ public class XUnitFileLoggerProvider : ILoggerProvider
     private readonly ConcurrentDictionary<string, XUnitFileLogger> _loggers = new();
     private readonly Func<XUnitFileOutputHelper?> _outputHelperFactory;
     private readonly IConfiguration? _configuration;
+    private readonly LogLevel? _levelOverride;
     private bool _disposed = false;
 
     /// <summary>
@@ -335,6 +336,7 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         try
         {
             _configuration = serviceProvider?.GetService<IConfiguration>();
+            _levelOverride = serviceProvider?.GetService<TestLogLevelOverride>()?.Level;
         }
         catch (ObjectDisposedException)
         {
@@ -356,7 +358,7 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         if (_disposed)
             throw new ObjectDisposedException(nameof(XUnitFileLoggerProvider));
             
-        return _loggers.GetOrAdd(categoryName, name => new XUnitFileLogger(name, _outputHelperFactory, _configuration));
+        return _loggers.GetOrAdd(categoryName, name => new XUnitFileLogger(name, _outputHelperFactory, _configuration, _levelOverride));
     }
 
     /// <summary>
@@ -381,6 +383,7 @@ public class XUnitFileLogger : ILogger
     private readonly string _categoryName;
     private readonly Func<XUnitFileOutputHelper?> _outputHelperFactory;
     private readonly IConfiguration? _configuration;
+    private readonly LogLevel? _levelOverride;
     private readonly Lazy<LogLevel> _minLogLevel;
 
     /// <summary>
@@ -395,11 +398,13 @@ public class XUnitFileLogger : ILogger
     /// resolves from the container is one that throws once teardown disposes it — see the note on
     /// the provider's constructor.
     /// </param>
-    public XUnitFileLogger(string categoryName, Func<XUnitFileOutputHelper?> outputHelperFactory, IConfiguration? configuration = null)
+    /// <param name="levelOverride">The explicit local level override; <c>null</c> applies the Warning floor (<see cref="TestLogLevel"/>).</param>
+    public XUnitFileLogger(string categoryName, Func<XUnitFileOutputHelper?> outputHelperFactory, IConfiguration? configuration = null, LogLevel? levelOverride = null)
     {
         _categoryName = categoryName;
         _outputHelperFactory = outputHelperFactory;
         _configuration = configuration;
+        _levelOverride = levelOverride;
         // Still lazy: parsing the level rules is pure work over an already-resolved object, so
         // deferring it costs nothing and touches no container.
         _minLogLevel = new Lazy<LogLevel>(GetMinLogLevel);
@@ -419,7 +424,8 @@ public class XUnitFileLogger : ILogger
     /// </summary>
     /// <param name="logLevel">The level to test.</param>
     /// <returns><c>true</c> if logging is enabled for <paramref name="logLevel"/>; otherwise <c>false</c>.</returns>
-    public bool IsEnabled(LogLevel logLevel) => logLevel >= _minLogLevel.Value;
+    public bool IsEnabled(LogLevel logLevel)
+        => logLevel != LogLevel.None && logLevel >= TestLogLevel.Resolve(_minLogLevel.Value, _levelOverride);
 
     private LogLevel GetMinLogLevel()
     {

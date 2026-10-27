@@ -962,7 +962,15 @@ public static class PluginGateRunner
                 // "adopted 86 of 87 … 1 were DECLINED" with every per-type verdict green and no
                 // way to tell which assembly, or why, from the job log. The volume is one line
                 // per bundle (34 on that run) — the trace levels stay opt-in via MW_LOG_LEVEL.
-                if (seed is not null)
+                //
+                // 2026-10-26 (maintainer: "unit and CI test runs: warning only", no allow-list): this
+                // raise and the recycle-attribution raises below are now OPT-IN through MW_LOG_LEVEL
+                // (Information or lower), exactly like the MessageHub pair already was. Measured on
+                // Plugins CI run 40409265629 (gate shard 1/3): 774 of the job log's 2,943 lines were
+                // these Information raises — MeshNodeHubFactory 506, PackageInstaller 135,
+                // bake-seed 75, PartitionDropPostDeletionHandler 58 — on a green run. A red gate is
+                // re-run with MW_LOG_LEVEL=Information to get them back.
+                if (seed is not null && GateVerbosity.Verbose)
                     logging.AddFilter(BakeSeedConsumer.LogCategory, LogLevel.Information);
                 // 🚨 The RECYCLE-ATTRIBUTION categories, at Information — issue #3499's second
                 // acceptance criterion, and the same argument as the two raises above, a third
@@ -988,8 +996,8 @@ public static class PluginGateRunner
                 // 2026-09-13: the MessageHub pair is two lines per hub disposal — hundreds per
                 // package on the plugin gate — so it is raised only under MW_LOG_LEVEL (Information
                 // or lower); the two recyclers' lines (a handful per package) stay on by default.
-                foreach (var category in RecycleAttributionCategories)
-                    if (GateVerbosity.Verbose || category != "MeshWeaver.Messaging.MessageHub")
+                if (GateVerbosity.Verbose)
+                    foreach (var category in RecycleAttributionCategories)
                         logging.AddFilter(category, LogLevel.Information);
                 foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
                          .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
