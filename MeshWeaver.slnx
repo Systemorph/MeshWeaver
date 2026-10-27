@@ -40,7 +40,6 @@
     <Project Path="test/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
     <Project Path="src/MeshWeaver.Reactive.Assertions/MeshWeaver.Reactive.Assertions.csproj" />
     <Project Path="src/MeshWeaver.Testing.InMesh/MeshWeaver.Testing.InMesh.csproj" />
-    <Project Path="src/MeshWeaver.Testcontainers/MeshWeaver.Testcontainers.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AspNetCore/MeshWeaver.Hosting.AspNetCore.csproj" />
     <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
     <Project Path="src/MeshWeaver.Graph.Contract/MeshWeaver.Graph.Contract.csproj" />

@@ -24,8 +24,8 @@ name: Clients
 #
 # THIS LIST WAS MUCH LONGER, and most of it is now WRONG rather than merely unused. `044a85618`
 # ("The GUI leaves the platform: the view packs and the web clients", 2026-08-25) moved the web
-# clients to MeshWeaver.Plugins. `clients/` holds only `python/` and `voice-gateway/`, one job
-# survives (`python-sdk`), and EVERY test the old inventory named is gone from this repo:
+# clients to MeshWeaver.Plugins. `clients/` holds only `python/` (`voice-gateway/` followed in the
+# core slimming), one job survives (`python-sdk`), and EVERY test the old inventory named is gone from this repo:
 #
 #     clients/react/src/i18n/localize.test.ts        clients/grpc-web/src/wireContract.test.ts
 #     clients/react/src/render/parity.test.ts        clients/grpc-web/src/restContract.test.ts
@@ -44,11 +44,10 @@ name: Clients
 # for the surviving clients, this list is maintained BY HAND and will rot again. If you add a
 # cross-tree read to `clients/python`, add its path here yourself.
 #
-# 🚨 `clients/voice-gateway` HAS NO JOB HERE — this workflow runs `python-sdk` and nothing
-# else, so a voice-gateway change triggers a run that does not test it. Adding a path for it would
-# make that worse, not better: the run would go green having verified nothing about the thing that
-# changed, which is precisely the "fires reliably, checks nothing" state this comment block exists
-# to record. If voice-gateway needs CI, it needs a JOB first, and its inputs listed second.
+# `clients/voice-gateway` used to sit here with NO job: a change to it triggered a run that tested
+# nothing about it. It moved to MeshWeaver.Plugins `clients/voice-gateway` (core slimming), where
+# its own `Voice gateway` workflow runs its suite. `clients/python` stays: core's own python-gate and
+# pandas-gate images COPY it, and it generates from core's canonical proto.
 #
 # The original rationale, still correct and still the reason the protos path is listed:
 # filtering on "clients/**" alone made every cross-tree guard blind to the side that actually
