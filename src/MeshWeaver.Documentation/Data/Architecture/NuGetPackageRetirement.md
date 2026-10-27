@@ -100,8 +100,8 @@ the platform's builder inside the platform image, so a new platform build does n
 
 | | |
 |---|---|
-| Version | its own: `<CliVersion>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0` and now `3.1.0`, matching the platform's 3.1 line. Bumped by pull request when the CLI changes |
-| When | on demand: dispatch `publish-packages.yml` with `packages=cli`. The lane reads the csproj version and refuses any other; a version already on nuget.org is skipped |
+| Version | its own: `<CliVersion>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0`; `3.1.0` is the first publish. Bumped ONLY when the CLI's MCP / tool surface changes, in the pull request that changes it, never per platform build |
+| When | after that pull request merges: dispatch `publish-packages.yml` with `packages=cli`. The lane reads the csproj version and refuses any other; a version already on nuget.org is skipped |
 | Bytes | packed by `publish-packages.yml`, asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll`, then verified LISTED |
 | Retirement sweep | `src/MeshWeaver.Cli` is packable again, so `orphaned-nuget-packages.py` derives `MeshWeaver.Cli` as packed and never unlists it; `PackableProjectReadmeTest` holds the packable set at two projects |
 
