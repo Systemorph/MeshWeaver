@@ -360,7 +360,8 @@ jobs:
           line_tags() { case "$CI_VERSION" in *-ci.*) local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v";; esac; }
           for repo in memex-migration memex-portal-ai; do
             args=(); for t in $(line_tags "$VERSION"); do args+=(--tag "$ACR/$repo:$t"); done
-            [ "${#args[@]}" -eq 0 ] || docker buildx imagetools create "${args[@]}" "$ACR/$repo:$SHORT"
+            # `latest` rides with the line pointers (CD's Phase D rule): only when they move.
+            [ "${#args[@]}" -eq 0 ] || docker buildx imagetools create "${args[@]}" --tag "$ACR/$repo:latest" "$ACR/$repo:$SHORT"
           done
           {
             echo "### Released \`$VERSION\` = \`$SHORT\` (build ${{ steps.set.outputs.ci_version }})"
@@ -385,17 +386,25 @@ jobs:
           set -euo pipefail
           NS=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
           line_tags() { case "$CI_VERSION" in *-ci.*) local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v";; esac; }
+          # 🚨 `latest` on memex-portal-ai and memex-migration is a LINE POINTER now: CD's `arm` moves it
+          # with `<major>-latest` on every armed set (Doc/Architecture/ImageTagContract). So it moves
+          # here exactly when the line pointers do — for a retired-notation set only; for a
+          # `<major>.<minor>.<run>` set CD already moved it to this build or past it, and a move here
+          # could only move it BACKWARDS. The tester's `latest` keeps its release-time mirror.
           for repo in memex-migration mw-plugin-test memex-portal-ai; do
             extra=()
-            case "$repo" in memex-migration|memex-portal-ai) for t in $(line_tags "$VERSION"); do extra+=(--tag "ghcr.io/$NS/$repo:$t"); done;; esac
+            case "$repo" in
+              memex-migration|memex-portal-ai) for t in $(line_tags "$VERSION"); do extra+=(--tag "ghcr.io/$NS/$repo:$t"); done
+                                               [ "${#extra[@]}" -eq 0 ] || extra+=(--tag "ghcr.io/$NS/$repo:latest");;
+              *) extra+=(--tag "ghcr.io/$NS/$repo:latest");;
+            esac
             docker buildx imagetools create \
               --tag "ghcr.io/$NS/$repo:$VERSION" \
-              --tag "ghcr.io/$NS/$repo:latest" \
               "${extra[@]}" \
               "$ACR/$repo:$SHORT"
           done
           pointers=$(line_tags "$VERSION")
-          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ latest${pointers:+; line pointers: $pointers})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ mw-plugin-test:latest${pointers:+; line pointers + latest: $pointers latest})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Publish the GitHub Release from the committed notes"
         env:
