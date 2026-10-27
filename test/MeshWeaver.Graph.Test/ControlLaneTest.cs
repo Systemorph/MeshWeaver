@@ -287,6 +287,49 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         refused.Message.Should().Contain("system or fleet partition");
     }
 
+    /// <summary>
+    /// #7325: a space whose root is a <c>Store/Plugin</c> but which NO install record targets — a
+    /// Store/Provision install — has no other governed removal path (the Store uninstall refuses for
+    /// want of a <c>Plugins/{id}</c> record), and nothing re-installs it. It is planned like any space.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task DeleteSpace_OfAPackagePartitionNoInstallRecordTargets_IsPlanned()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await target!.SeedPackageSpace("Provisioned");
+
+        var dry = Request(ControlLaneOperation.DeleteSpace, "Provisioned", dryRun: true);
+        (await Send(dry, ct)).Verdict.Should().Be(ControlLaneVerdict.Accepted);
+        var planned = await Terminal(dry, ct);
+        planned.Status.Should().Be(ControlLaneStatus.Planned,
+            "with no install record the Store uninstall cannot remove the space and nothing re-installs it — " + planned.Message);
+        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Tear down the partition");
+    }
+
+    /// <summary>
+    /// #7325, the other half: while an install record targets the space — by its id, or by a declared
+    /// target partition — the Store uninstall IS the path, and the deletion is refused naming the record.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task DeleteSpace_OfAPackagePartitionAnInstallRecordTargets_IsRefused_NamingTheRecord()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await target!.SeedPackageSpace("Installed");
+        await target.SeedPackageSpace("Retargeted");
+        await target.SeedInstallRecord("Installed", targetPartition: null);
+        await target.SeedInstallRecord("retarget-pkg", targetPartition: "Retargeted");
+
+        foreach (var (space, record) in new[] { ("Installed", "Plugins/Installed"), ("Retargeted", "Plugins/retarget-pkg") })
+        {
+            var dry = Request(ControlLaneOperation.DeleteSpace, space, dryRun: true);
+            (await Send(dry, ct)).Verdict.Should().Be(ControlLaneVerdict.Accepted);
+            var refused = await Terminal(dry, ct);
+            refused.Status.Should().Be(ControlLaneStatus.Refused, refused.Message);
+            refused.Message.Should().Contain("uninstall the package through the Store").And.Contain(record);
+            (await target.Exists($"{space}/Page")).Should().BeTrue();
+        }
+    }
+
     // ───────────────────────────── forwarded events ─────────────────────────────
 
     [Fact(Timeout = 120000)]
@@ -774,6 +817,10 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             => base.ConfigureMesh(builder)
                 .AddWebhookInbox()
                 .AddControlLane()
+                // The two NodeTypes a package partition and its install record carry (#7325).
+                .AddMeshNodes(
+                    new MeshNode("Plugin", "Store") { Name = "Plugin" },
+                    new MeshNode("Package") { Name = "Package" })
                 .ConfigureServices(services => services
                     .AddSingleton(TargetConfiguration())
                     .AddSingleton<IControlLaneReportSink>(new InboxSink(control)));
@@ -785,6 +832,22 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             await SeedTopLevel(new MeshNode(space) { Name = space, NodeType = "Space" });
             await SeedPage($"{space}/Page");
         }
+
+        /// <summary>A space rooted in a <c>Store/Plugin</c> (a package partition), with one page.</summary>
+        public async Task SeedPackageSpace(string space)
+        {
+            await SeedTopLevel(new MeshNode(space) { Name = space, NodeType = SpaceDeletion.PackageRootNodeType });
+            await SeedPage($"{space}/Page");
+        }
+
+        /// <summary>An install record <c>Plugins/{id}</c>, shaped as the PluginCatalog writes its manifest.</summary>
+        public Task SeedInstallRecord(string id, string? targetPartition) =>
+            Seed(new MeshNode(id, "Plugins")
+            {
+                Name = id,
+                NodeType = "Package",
+                Content = System.Text.Json.JsonSerializer.SerializeToElement(new { id, targetPartition }),
+            });
 
         public Task Seed(MeshNode node) => AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(node));
 
