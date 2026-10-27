@@ -14,16 +14,18 @@ namespace MeshWeaver.Hosting.Test;
 /// <summary>
 /// <c>CopyNodeRequest.PreserveAuthorship</c> mints a node whose <see cref="MeshNode.CreatedBy"/>
 /// names somebody else, and <c>AccessContextScope.FromNode</c> impersonates exactly that identity —
-/// so the flag is gated on the entitlement of the operation it exists for: <see cref="Permission.Delete"/>
-/// on the source's namespace, which is what <c>MoveNodePermissionAttribute</c> requires of a mover.
+/// so the flag is gated on the entitlement of the operation it exists for: relocating the node WITH
+/// its authorship (<c>MoveEntitlement</c>) — the right to delete the source and, when the target is in
+/// another partition, <see cref="Permission.Delete"/> on the source's namespace.
 ///
-/// <para>🚨 The subject is an <b>Editor</b>, and that is the whole design of this test. Editor is
-/// <c>Read | Create | Update | …</c> — everything a copy needs and no <c>Delete</c> — so it is the
-/// one caller for whom the gate can actually decide something: row-level security lets them read the
-/// source and create at the target, the copy would otherwise go through, and only the gate stands
-/// between them and a node in their own space that claims the admin as its author. A subject who
-/// simply cannot read the source would be stopped by RLS, and a gate exercised only through that
-/// case would be a gate that never fires where it matters.</para>
+/// <para>🚨 The subject is an <b>Editor</b> on BOTH partitions, and that is the whole design of this
+/// test. Editor is <c>Read | Create | Update | …</c> — everything a copy needs, and since deleting
+/// content demands Update, everything a move needs too — but no <c>Delete</c>. So it is the one caller
+/// for whom the gate can actually decide something: row-level security lets them read the source and
+/// create at the target, the copy would otherwise go through, and only the gate stands between them and
+/// a node in ANOTHER partition that claims the admin as its author. A subject who simply cannot read the
+/// source would be stopped by RLS, and a gate exercised only through that case would be a gate that
+/// never fires where it matters.</para>
 ///
 /// <para>This suite therefore builds its mesh from <see cref="MonolithMeshTestBase.ConfigureMeshBase"/>
 /// — the default one grants Public → Admin, under which every identity holds Delete and no refusal is
@@ -33,17 +35,23 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
 {
     private const string EditorId = "editor-e";
 
+    /// <summary>A second partition the Editor may create in — the target the gate is about.</summary>
+    private const string OtherPartition = "OtherData";
+
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
     private static readonly AccessContext EditorContext =
         new() { ObjectId = EditorId, Name = "Editor E" };
 
     /// <summary>
-    /// Base mesh + ONE seeded grant: <see cref="EditorId"/> is an Editor on <c>TestData</c>. No
+    /// Base mesh + a second partition, and <see cref="EditorId"/> an Editor on both. No
     /// <c>PublicAdminAccess</c> — see the class remarks.
     /// </summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
+            .AddMeshNodes(
+                new MeshNode(OtherPartition) { Name = "Other Data", NodeType = "Markdown" },
+                AssignmentNodeFactory.UserRole(EditorId, "Editor", OtherPartition))
             .AddMeshNodes(new MeshNode($"{EditorId}_Access", $"{TestPartition}/_Access")
             {
                 NodeType = "AccessAssignment",
@@ -64,7 +72,7 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
 
         Access.SetCircuitContext(EditorContext);
         var response = await ObserveNodeOperation(
-                new CopyNodeRequest(sourcePath, NewPath("gated-copy"))
+                new CopyNodeRequest(sourcePath, $"{OtherPartition}/gated-copy-{Guid.NewGuid().ToString("N")[..8]}")
                 {
                     PreserveAuthorship = true,
                 })
@@ -73,9 +81,9 @@ public class PreserveAuthorshipIsGatedTest(ITestOutputHelper output) : MonolithM
         Output.WriteLine($"refusal: success={response.Message.Success} reason={response.Message.RejectionReason} error={response.Message.Error}");
 
         response.Message.Success.Should().BeFalse(
-            "an Editor holds no Delete on the namespace, so they could not have MOVED this node — "
-            + "preserving its authorship on a copy would hand them an impersonation they cannot "
-            + "otherwise obtain");
+            "an Editor holds no Delete on the namespace, so they could not have MOVED this node into another "
+            + "partition with its authorship — preserving it on a copy would hand them an impersonation they "
+            + "cannot otherwise obtain");
         response.Message.RejectionReason.Should().Be(NodeCopyRejectionReason.Unauthorized,
             "the refusal is an authorisation decision about the flag, not a missing source");
     }
