@@ -259,12 +259,41 @@ def _block_input(block: str, key: str) -> Optional[str]:
     return value
 
 
+# A YAML alias (`with: *gate_inputs`, `- *job`), a merge key (`<<: *base`) or an anchor (`&name`) makes a
+# mapping's real content live somewhere this line reader does not look — the inputs (or a whole second
+# calling job) would read as absent. Valid YAML, so it is REFUSED by name rather than read as "none".
+_YAML_INDIRECTION = re.compile(r"(?:^\s*['\"]?<<['\"]?\s*:)|(?:(?::|^\s*-)[ \t]+[*&][A-Za-z0-9_.-]+[ \t]*(?:#.*)?$)", re.M)
+
+
+def _jobs_text(workflow_text: str) -> str:
+    return "".join(_job_blocks(workflow_text))
+
+
+def _option_problems(name: str, cmd: str, opt: str, value: str, why: str) -> list[str]:
+    """`opt value` must be passed, and EVERY `opt` must carry exactly `value` — a complete argument, never a
+    prefix (`--allow plugin-gate.allow.expanded` is another file) and never a second, different occurrence
+    (argparse keeps the last)."""
+    args = [a.strip("'\"") for a in re.findall(rf"{re.escape(opt)}(?:[ \t]+|=)(\S+?)(?=$|[\s;|&)])", cmd)]
+    bare = len(re.findall(rf"{re.escape(opt)}(?![A-Za-z0-9_-])", cmd))
+    if not args:
+        return [f"stage `{name}` no longer carries `{opt} {value}` — {why}; the host would check less than Actions"]
+    if bare != len(args) or any(a != value for a in args):
+        return [f"stage `{name}` passes `{opt}` {sorted(set(args)) or '(unreadable)'} where Actions passes exactly `{value}` — "
+                f"{why}; a different file would tolerate what Actions rejects"]
+    return []
+
+
 def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
     if workflow_text is None:
         return [f"{CI_WORKFLOW} is absent — the node-repo profile derives the stages a repository owes from the lanes it calls"]
     stages = {s["name"]: s for s in _stages(doc)}
     out: list[str] = []
     lanes = lanes_called(workflow_text)
+    indirect = _YAML_INDIRECTION.search(_jobs_text(workflow_text))
+    if indirect:
+        return [f"{CI_WORKFLOW} uses a YAML anchor, alias or merge key in its jobs (`{indirect.group(0).strip()}`) — this guard "
+                "reads only literal job blocks, so an aliased `with:` (or caller) would hide the baselines the lane enforces; "
+                "write the inputs out"]
     if not lanes:
         out.append(f"{CI_WORKFLOW} calls none of {sorted(LANE_STAGE)} — there is no Actions leg a host stage could replace")
     for lane in lanes:
@@ -300,18 +329,21 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
             allow = _block_input(block, "allow-file")
             allow = "plugin-gate.allow" if allow is None else allow
             needles = list(NODE_GATE_PARITY)
+            options: list[tuple[str, str, str]] = []
             if allow:
-                needles.append((f"--allow {allow}", "the gate's known-debt ratchet (the lane's allow-file)"))
-            elif "--allow " in cmd:
+                options.append(("--allow", allow, "the gate's known-debt ratchet (the lane's allow-file)"))
+            elif re.search(r"--allow(?![A-Za-z0-9_-])", cmd):
                 out.append(f"stage `{want}` passes `--allow` while {CI_WORKFLOW} passes the lane an EMPTY allow-file — "
                            "the host would tolerate failures the Actions leg fails on")
             baseline = _block_input(block, "warning-baseline-file")
             if baseline:
-                needles.append((f"--warning-baseline {baseline}", "the in-mesh warning ratchet ci.yml passes the lane"))
+                options.append(("--warning-baseline", baseline, "the in-mesh warning ratchet ci.yml passes the lane"))
             dynamic = _block_input(block, "dynamic-baseline-file")
             if dynamic:
-                needles.append((f"--dynamic-baseline {dynamic}", "the dynamic-edge ratchet ci.yml passes the lane"))
+                options.append(("--dynamic-baseline", dynamic, "the dynamic-edge ratchet ci.yml passes the lane"))
             out += _markers(want, cmd, needles)
+            for opt, value, why in options:
+                out += _option_problems(want, cmd, opt, value, why)
         if HARD_CODED_HOST.search(cmd):
             out.append(f"stage `{want}` hard-codes a `/host/…` path — the runner binds only $MW_BUILD_GATE_HOST / $MeshWeaverRefs into the sandbox")
     return out
@@ -498,7 +530,7 @@ def _self_test() -> int:
     wb = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      warning-baseline-file: gate-warnings.allow\n  tests-ratchet")
     red(node, "node-repo", "--warning-baseline gate-warnings.allow", "ci.yml passes a warning baseline the gate stage drops", wb)
     af = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      allow-file: other-gate.allow\n  tests-ratchet")
-    red(node, "node-repo", "--allow other-gate.allow", "ci.yml passes another allow-file than the stage's", af)
+    red(node, "node-repo", "where Actions passes exactly `other-gate.allow`", "ci.yml passes another allow-file than the stage's", af)
     # `with:` BEFORE `uses:` is the same job — the inputs must still be read.
     wb_first = NODE_CI.replace(
         "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with:\n      executor: actions\n",
@@ -550,6 +582,32 @@ def _self_test() -> int:
     expect(qk != NODE_CI, "self-test fixture: the quoted-key ci.yml was built")
     red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "--warning-baseline gate-warnings.allow",
         "a debt-free claim whose gate drops the warning baseline ci.yml passes under a QUOTED key", qk)
+    # An alias / merge key hides the inputs from a line reader — refused, never read as "no inputs".
+    alias = NODE_CI.replace(
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with:\n      executor: actions\n",
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with: *gate_inputs\n")
+    expect(alias != NODE_CI, "self-test fixture: the aliased-with ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "anchor, alias or merge key",
+        "a debt-free claim whose ci.yml passes the gate lane `with: *gate_inputs` (an alias carrying the warning baseline)", alias)
+    merge = NODE_CI.replace("    with:\n      executor: actions\n  tests-ratchet",
+                            "    with:\n      <<: *gate_inputs\n      executor: actions\n  tests-ratchet")
+    expect(merge != NODE_CI, "self-test fixture: the merge-key ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "anchor, alias or merge key",
+        "a debt-free claim whose ci.yml merges the gate inputs in with `<<: *gate_inputs`", merge)
+    # A complete argument, never a prefix: another file would tolerate what Actions rejects.
+    for opt, wf_input, value in (("--allow", None, "plugin-gate.allow"),
+                                 ("--warning-baseline", "warning-baseline-file", "gate-warnings.allow"),
+                                 ("--dynamic-baseline", "dynamic-baseline-file", "dynamic.allow")):
+        wf = NODE_CI if wf_input is None else NODE_CI.replace(
+            "      executor: actions\n  tests-ratchet", f"      executor: actions\n      {wf_input}: {value}\n  tests-ratchet")
+        honest = mutate(node, lambda d, o=opt, v=value: d.update(owes=[], ciEquivalent=True) or d["stages"][1].update(
+            command=d["stages"][1]["command"] if o == "--allow" else d["stages"][1]["command"] + f" {o} {v}"))
+        expect(problems(json.dumps(honest), "node-repo", wf)[0] == [], f"a gate passing exactly `{opt} {value}` is green")
+        suffixed = mutate(honest, lambda d, o=opt, v=value: d["stages"][1].update(
+            command=d["stages"][1]["command"].replace(f"{o} {v}", f"{o} {v}.expanded")))
+        red(suffixed, "node-repo", f"passes `{opt}`", f"a debt-free claim whose gate passes `{opt} {value}.expanded` (a SUFFIXED path)", wf)
+        second = mutate(honest, lambda d, o=opt: d["stages"][1].update(command=d["stages"][1]["command"] + f" {o} other.allow"))
+        red(second, "node-repo", f"passes `{opt}`", f"a debt-free claim whose gate adds a second `{opt} other.allow` (argparse keeps the last)", wf)
     red(node, "node-repo", "calls none of", "a ci.yml that calls no shared heavy lane", "jobs:\n  x:\n    runs-on: y\n")
     red(node, "node-repo", "is absent", "no ci.yml to derive the owed stages from", None)
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every breach is red, every honest declaration is green'}")
