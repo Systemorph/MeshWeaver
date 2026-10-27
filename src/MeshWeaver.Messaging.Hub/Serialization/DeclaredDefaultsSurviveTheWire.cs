@@ -35,6 +35,10 @@ namespace MeshWeaver.Messaging.Serialization;
 /// (<c>ldarg.0; ldarg.n; stfld</c> — the positional-record shape) whose default is the CLR default, so
 /// an omitted value comes back as that default.</item>
 /// </list>
+/// <para>The proof also requires that nothing else writes while the reader sets members: a type with
+/// an <c>OnDeserializing</c> callback, or with a hand-written setter that does more than store the
+/// value into a field no candidate lives in, has every candidate written. A constructor that writes
+/// or takes the address of an argument (<c>starg</c>, <c>ldarga</c>) is unprovable.</para>
 /// <para>Everything else is ALWAYS written: an initializer of any kind, a value derived from another
 /// argument, a store in a base or chained constructor, a constructor body that does anything at all
 /// (it could set the member through a call), a hand-written accessor, a value type, a constructor the
@@ -68,10 +72,76 @@ internal static class DeclaredDefaultsSurviveTheWire
         if (candidates is null)
             return;
 
-        var stores = ConstructorStores.Read(typeInfo, logger);
+        // The constructor proof says what the reader holds BEFORE it sets members. It is a proof of
+        // the read only when nothing else writes during the read: an OnDeserializing callback runs
+        // after construction, and a hand-written setter of any member it sets can store anywhere.
+        var stores = typeInfo.OnDeserializing is null && SettersAreContained(typeInfo, candidates, logger)
+            ? ConstructorStores.Read(typeInfo, logger)
+            : null;
         foreach (var property in candidates)
             if (stores is null || !ProvenClrDefault(property, stores))
                 property.ShouldSerialize = static (_, _) => true;
+    }
+
+    /// <summary>
+    /// True when every hand-written setter the reader may call provably stores only into fields no
+    /// candidate lives in: its IL is nothing but <c>ldarg.0</c>/<c>ldarg.1</c>/<c>stfld</c>/<c>nop</c>/<c>ret</c>
+    /// (no call, no branch, no normalization). Anything else makes every candidate written — another
+    /// member's setter could otherwise set an omitted member behind the proof's back.
+    /// </summary>
+    private static bool SettersAreContained(JsonTypeInfo typeInfo, List<JsonPropertyInfo> candidates, ILogger? logger)
+    {
+        var backing = candidates.Select(BackingField).OfType<FieldInfo>()
+            .Select(f => (f.Module, f.MetadataToken)).ToImmutableHashSet();
+        foreach (var property in typeInfo.Properties)
+        {
+            if (property.Set is null
+                || property.AttributeProvider is not PropertyInfo { SetMethod: { } setter } info
+                || setter.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false))
+                continue;
+            bool contained;
+            try
+            {
+                contained = SetterIsContained(setter, backing);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "The setter of {Type}.{Member} could not be read", typeInfo.Type.FullName, info.Name);
+                contained = false;
+            }
+            if (!contained)
+            {
+                logger?.LogDebug(
+                    "{Type}.{Member} has a setter that may store into another member; its scalar members are always written",
+                    typeInfo.Type.FullName, info.Name);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool SetterIsContained(MethodInfo setter, ImmutableHashSet<(Module, int)> backing)
+    {
+        var il = setter.GetMethodBody()?.GetILAsByteArray();
+        if (il is null)
+            return false;
+        var declaring = setter.DeclaringType!;
+        var typeArguments = declaring.IsGenericType ? declaring.GetGenericArguments() : Type.EmptyTypes;
+        var position = 0;
+        while (position < il.Length)
+        {
+            var code = ConstructorStores.ReadOpCode(il, ref position);
+            var operand = position;
+            position += ConstructorStores.OperandSize(code, il, position);
+            if (code == OpCodes.Nop || code == OpCodes.Ldarg_0 || code == OpCodes.Ldarg_1 || code == OpCodes.Ret)
+                continue;
+            if (code != OpCodes.Stfld)
+                return false;
+            var field = setter.Module.ResolveField(BitConverter.ToInt32(il, operand), typeArguments, Type.EmptyTypes);
+            if (field is null || backing.Contains((field.Module, field.MetadataToken)))
+                return false;
+        }
+        return true;
     }
 
     private static bool ProvenClrDefault(JsonPropertyInfo property, ConstructorStores stores)
@@ -195,6 +265,11 @@ internal static class DeclaredDefaultsSurviveTheWire
                     continue;
                 }
 
+                // An argument written or whose address escapes before a store makes `ldarg.n; stfld`
+                // no longer "the parameter's value": the chain is unprovable.
+                if (code == OpCodes.Starg || code == OpCodes.Starg_S || code == OpCodes.Ldarga || code == OpCodes.Ldarga_S)
+                    return false;
+
                 if (code == OpCodes.Stfld || code == OpCodes.Ldflda)
                 {
                     var field = module.ResolveField(BitConverter.ToInt32(il, operand), typeArguments, Type.EmptyTypes);
@@ -242,7 +317,7 @@ internal static class DeclaredDefaultsSurviveTheWire
             return null;
         }
 
-        private static OpCode ReadOpCode(byte[] il, ref int position)
+        internal static OpCode ReadOpCode(byte[] il, ref int position)
         {
             var first = il[position++];
             if (first != 0xFE)
@@ -250,7 +325,7 @@ internal static class DeclaredDefaultsSurviveTheWire
             return TwoByte[il[position++]];
         }
 
-        private static int OperandSize(OpCode code, byte[] il, int position) => code.OperandType switch
+        internal static int OperandSize(OpCode code, byte[] il, int position) => code.OperandType switch
         {
             OperandType.InlineNone => 0,
             OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,

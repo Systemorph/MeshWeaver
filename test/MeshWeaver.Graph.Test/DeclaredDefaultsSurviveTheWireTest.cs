@@ -176,6 +176,35 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         public bool Flag { get; init; }
     }
 
+    /// <summary>Review round 7: a default applied by an OnDeserializing callback, not the constructor.</summary>
+    public sealed class DefaultedOnDeserializing : IJsonOnDeserializing
+    {
+        public bool Enabled { get; set; }
+        public void OnDeserializing() => Enabled = true;
+    }
+
+    /// <summary>Review round 7: a hand-written setter of one member that sets ANOTHER member.</summary>
+    public sealed class CrossMemberSetter
+    {
+        public string? Text { get => null; set => Flag = true; }
+        public bool Flag { get; set; }
+    }
+
+    /// <summary>Review round 7: an initializer writes the parameter (starg) before the direct store.</summary>
+    public sealed class ArgumentWritten(bool flag = false)
+    {
+        public bool Prepared { get; init; } = flag = true;
+        public bool Flag { get; set; } = flag;
+    }
+
+    /// <summary>Review round 7: the parameter's address escapes (ldarga) before the direct store.</summary>
+    public sealed class ArgumentAddressEscapes(bool flag = false)
+    {
+        public bool Prepared { get; init; } = Arm(ref flag);
+        public bool Flag { get; set; } = flag;
+        private static bool Arm(ref bool value) => value = true;
+    }
+
     private static JsonSerializerOptions WithoutTheFix() => new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -472,5 +501,50 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         RoundTrip(AllClrDefaults(), options).Should().Be(new InitializerDefaults(),
             "if this ever fails, the round trip no longer exercises the trap and the guard above measures nothing");
         RoundTrip(new ActionHandlerRule { Enabled = false }, options).Enabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_default_applied_by_an_on_deserializing_callback_keeps_an_explicit_false()
+    {
+        RoundTrip(new DefaultedOnDeserializing { Enabled = false }, Mesh.JsonSerializerOptions).Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_the_on_deserializing_default_wins()
+    {
+        RoundTrip(new DefaultedOnDeserializing { Enabled = false }, WithoutTheFix()).Enabled.Should().BeTrue(
+            "if this ever fails, the OnDeserializing case no longer exercises the trap");
+    }
+
+    [Fact]
+    public void A_setter_that_sets_another_member_does_not_turn_an_omitted_false_true()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        JsonSerializer.Serialize(new CrossMemberSetter(), options).Should().Contain("\"flag\":false");
+        RoundTrip(new CrossMemberSetter(), options).Flag.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The proof must not accept <c>ldarg.n; stfld</c> as "the parameter's value" once the parameter was
+    /// written (<c>starg</c>) or its address escaped (<c>ldarga</c>): the explicit value is written. No
+    /// serializer setting can make these two shapes round-trip — the reader passes the value to the
+    /// constructor, which overwrites it — so what is asserted is that the value is not OMITTED.
+    /// </summary>
+    [Fact]
+    public void An_argument_written_before_the_direct_store_is_never_proven_and_stays_written()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        JsonSerializer.Serialize(new ArgumentWritten { Flag = false }, options).Should().Contain("\"flag\":false");
+        JsonSerializer.Serialize(new ArgumentAddressEscapes { Flag = false }, options).Should().Contain("\"flag\":false");
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_the_written_argument_is_omitted()
+    {
+        var options = WithoutTheFix();
+        JsonSerializer.Serialize(new ArgumentWritten { Flag = false }, options).Should().NotContain("flag\"",
+            "if this ever fails, the starg case no longer exercises the trap");
+        JsonSerializer.Serialize(new ArgumentAddressEscapes { Flag = false }, options).Should().NotContain("flag\"",
+            "if this ever fails, the ldarga case no longer exercises the trap");
     }
 }

@@ -159,7 +159,15 @@ with these settings:
 > record shape) whose default is the CLR default. Everything else is written: any initializer
 > (`= true`, `= Id`, `= Left != Right`), a value copied from another parameter, a store in a base
 > constructor, a constructor body that does anything at all (it could set the member through a
-> call), a hand-written accessor, a value type, or IL the reader does not understand. So
+> call), a hand-written accessor, a value type, or IL the reader does not understand. The proof is
+> also refused — every candidate written — when something else can write during the read: a type
+> with an `OnDeserializing` callback (it runs after the constructor), a hand-written setter that
+> does more than store its value into a field no candidate lives in (one member's setter could set
+> another, omitted member), or a constructor that writes or takes the address of an argument
+> (`starg`, `ldarga`) before the store that copies it. Writing an unproven value costs bytes; the
+> one way it can change a value is a hand-written setter that NORMALIZES the CLR default it is
+> handed (`set => text = value ?? "fallback"`) — such a type does not round-trip its own getter
+> under any ignore condition, and no hub-serialized type in this repository has one. So
 > `ActionHandlerRule.Enabled = true` and `MeshNode.MainNode = … Id …` are always written, while a
 > sparse `MeshNode`'s unset `Name` / `Description` / `Icon` stay omitted.
 >
