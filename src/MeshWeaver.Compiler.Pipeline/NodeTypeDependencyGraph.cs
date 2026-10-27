@@ -316,18 +316,10 @@ public static class NodeTypeDependencyGraph
         return owners.ToImmutable();
     }
 
-    /// <summary>Everything before the first <c>/Source/</c> or <c>/Test/</c> segment, or null.</summary>
-    private static string? OwnerBySourceSegment(string path)
-    {
-        var best = -1;
-        foreach (var segment in new[] { "/Source/", "/Test/" })
-        {
-            var index = path.IndexOf(segment, StringComparison.OrdinalIgnoreCase);
-            if (index > 0 && (best < 0 || index < best))
-                best = index;
-        }
-        return best > 0 ? path[..best] : null;
-    }
+    /// <summary>Everything before the first <c>/Source/</c> or <c>/Test/</c> segment, or null —
+    /// <see cref="MeshWeaver.Compiler.CodeConventions.OwnerOfCodePath"/>, the one rule.</summary>
+    private static string? OwnerBySourceSegment(string path) =>
+        MeshWeaver.Compiler.CodeConventions.OwnerOfCodePath(path);
 
     /// <summary><c>path</c> is <paramref name="root"/> itself or lives under it.</summary>
     private static bool IsSelfOrUnder(string path, string root) =>

@@ -70,6 +70,12 @@ internal sealed class BakeHost
     /// <summary>A degradation or divergence worth printing beside the identity, or null.</summary>
     public string? Note { get; init; }
 
+    /// <summary>The composed module assemblies' files — what a bake's dependency extraction counts as
+    /// a <c>Module</c> edge (<c>Doc/Architecture/DependencyGraph</c>). Named explicitly, because a
+    /// directory host's platform references are fresh instances no subtraction can tell from a
+    /// module's.</summary>
+    public IReadOnlyList<string> ModuleAssemblyPaths { get; init; } = [];
+
     /// <summary>
     /// 🚨 The host's TYPE SURFACE (#3651) — what the bake writes as
     /// <see cref="ModulePlatformSurface.PublishedFileName"/> beside <c>framework-mvid.txt</c>, so
@@ -133,6 +139,9 @@ internal sealed class BakeHost
     /// own content at runtime; the platform's own image baking its own Doc tree).
     /// </summary>
     /// <param name="modules">The composed module assemblies (see <see cref="TreeBake.LoadExternalModules"/>).</param>
+    private static IReadOnlyList<string> ModulePathsOf(IReadOnlyList<InstalledModuleAssembly> modules) =>
+        [.. modules.Select(m => m.Assembly.Location).Where(l => !string.IsNullOrEmpty(l))];
+
     public static BakeHost InProcess(IReadOnlyList<InstalledModuleAssembly> modules) =>
         new()
         {
@@ -151,6 +160,7 @@ internal sealed class BakeHost
                 $"reference set = this process's own application directory '{AppContext.BaseDirectory}' "
                 + $"(TRUSTED_PLATFORM_ASSEMBLIES) + {modules.Count} composed module(s)",
             IsThisProcess = true,
+            ModuleAssemblyPaths = ModulePathsOf(modules),
             Note = PrebuiltAssemblySeeder.LiveFrameworkIdentityWarning is { } warning
                 ? $"framework identity degraded — {warning}"
                 : null,
@@ -296,6 +306,7 @@ internal sealed class BakeHost
                 TreeBake.ModulePackageVersionResolverOf(modules)),
             ToolchainId = CompiledDependencies.ToolchainIdOf(identity),
             References = references,
+            ModuleAssemblyPaths = ModulePathsOf(modules),
             Description =
                 $"reference set = platform host '{app}' ({fromApp} assemblies) + its shared frameworks "
                 + $"under '{Path.GetFullPath(sharedFrameworksRoot)}' ({fromFrameworks} assemblies) + "

@@ -338,7 +338,7 @@ public static class TreeBake
     }
 
     /// <summary>
-    /// The compiler's NuGet hook is synchronous by contract (<see cref="NodeSetCompiler.Compile"/>
+    /// The compiler's NuGet hook is synchronous by contract (<c>NodeSetCompiler.Compile</c>
     /// takes a plain delegate), and the resolver is genuinely async, so this is the ONE place the
     /// bake lane blocks on it. Shared with the build verb so the production blocking-bridge
     /// inventory keeps counting exactly one site, here.
@@ -538,7 +538,7 @@ public static class TreeBake
 
             try
             {
-                var compiled = NodeSetCompiler.Compile(
+                var compiled = NodeSetCompiler.CompileWithModules(
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
@@ -547,7 +547,8 @@ public static class TreeBake
                     // scheduler. NuGet restore is genuine network IO with no reactive surface;
                     // the runtime bridges it through the IoPool for the same reason.
                     resolveNuGet: BlockingNuGetResolution(nugetResolver),
-                    logger: options.Logger);
+                    logger: options.Logger,
+                    moduleAssemblyPaths: host.ModuleAssemblyPaths);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake
                 // writes `NodeTypeDefinition.CompiledSources`, which DiscoverSourceVersionSnapshot

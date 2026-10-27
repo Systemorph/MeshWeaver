@@ -25,6 +25,29 @@ public static class CodeConventions
     public const string TestSubNamespace = "Test";
 
     /// <summary>
+    /// The NodeType that OWNS a Code node: everything before the path's first <c>/Source/</c> or
+    /// <c>/Test/</c> segment (<see cref="SourceSubNamespace"/>, <see cref="TestSubNamespace"/>), or
+    /// null for a Code node that sits under neither. The one rule the cell-surface single-home gate
+    /// (<c>NodeTypeDependencyGraph.ForeignSourceOwners</c>) and the dependency-edge extraction
+    /// (<see cref="DependencyEdgeExtraction"/>) attribute code by, so the two cannot disagree about
+    /// whose code a file is.
+    /// </summary>
+    /// <param name="codePath">The Code node's mesh path.</param>
+    public static string? OwnerOfCodePath(string? codePath)
+    {
+        if (string.IsNullOrEmpty(codePath))
+            return null;
+        var best = -1;
+        foreach (var segment in new[] { "/" + SourceSubNamespace + "/", "/" + TestSubNamespace + "/" })
+        {
+            var index = codePath.IndexOf(segment, StringComparison.OrdinalIgnoreCase);
+            if (index > 0 && (best < 0 || index < best))
+                best = index;
+        }
+        return best > 0 ? codePath[..best] : null;
+    }
+
+    /// <summary>
     /// The node path → assembly-name-safe token every dynamic NodeType compile is keyed by:
     /// the emitted assembly is <c>DynamicNode_{SanitizeNodeName(path)}</c> and the generated
     /// provider class is <c>{SanitizeNodeName(path)}MeshNodeProvider</c>.

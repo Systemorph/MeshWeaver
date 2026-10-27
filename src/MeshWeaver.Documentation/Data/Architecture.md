@@ -335,6 +335,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Build coordination — the Build node protocol](BuildCoordination)
 - [Build Identity Admission](BuildIdentityAdmission)
 - [The Build Process — compile and test as a dependency cascade](BuildProcess)
+- [Dependency Graph](DependencyGraph) — the forward edges a NodeType compile actually USED, extracted by Roslyn and stored once per environment at `{NodeType}/_Dependency/Forward`, and the reverse closure ("who depends on X") answered through the query surface: a trigger-maintained closure table on Postgres, the same answer walked in memory elsewhere
 - [What a Pull Request Rebuilds](BuildScopeNarrowing)
 - [The Build Server](BuildServer)
 - [Build Hosts](BuildHosts) — one warm host per release channel (`build-latest`, `build-stable`): the follow lane that streams a stage's log into the Actions log, the host runner, the build-host chart, and how core's CD hands build-latest each set it arms
