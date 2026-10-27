@@ -340,6 +340,7 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact(Timeout = 120000)]
     public async Task InstallRecords_FindsACommittedRecordTheQueryIndexHasNotReached()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         await target!.SeedPackageSpace("Lagged");
         await target.SeedInstallRecord("lagged-pkg", targetPartition: "Lagged");
         var query = SpaceDeletion.InstallRecordsQuery();
@@ -788,6 +789,13 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         public string? TargetPartition { get; init; }
     }
 
+    /// <summary>The install manifest the target mesh's records carry — a stand-in for the PluginCatalog's own type, registered under the same name.</summary>
+    public sealed record PackageManifest
+    {
+        public string Id { get; init; } = "";
+        public string? TargetPartition { get; init; }
+    }
+
     /// <summary>A differently-named projection with the same fields — the shape the previous code read through.</summary>
     private sealed record TypedManifestProbe
     {
@@ -889,6 +897,7 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
                 .AddMeshNodes(
                     new MeshNode("Plugin", "Store") { Name = "Plugin" },
                     new MeshNode("Package") { Name = "Package" })
+                .ConfigureHub(config => config.WithType<PackageManifest>(nameof(PackageManifest)))
                 .ConfigureServices(services => services
                     .AddSingleton(TargetConfiguration())
                     .AddSingleton<IControlLaneReportSink>(new InboxSink(control)));
@@ -908,13 +917,18 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             await SeedPage($"{space}/Page");
         }
 
-        /// <summary>An install record <c>Plugins/{id}</c>, shaped as the PluginCatalog writes its manifest.</summary>
+        /// <summary>
+        /// An install record <c>Plugins/{id}</c>, carrying a TYPED, REGISTERED manifest as the
+        /// PluginCatalog writes one. Never an untyped JSON element: the record is read from its
+        /// owning stream, and content no registered type can read degrades there (the shard gate
+        /// <c>check-untyped-content.sh</c> reports it), which is not the shape production writes.
+        /// </summary>
         public Task SeedInstallRecord(string id, string? targetPartition) =>
             Seed(new MeshNode(id, "Plugins")
             {
                 Name = id,
                 NodeType = "Package",
-                Content = System.Text.Json.JsonSerializer.SerializeToElement(new { id, targetPartition }),
+                Content = new PackageManifest { Id = id, TargetPartition = targetPartition },
             });
 
         public Task Seed(MeshNode node) => AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(node));
