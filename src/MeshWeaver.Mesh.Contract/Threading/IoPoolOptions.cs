@@ -272,6 +272,19 @@ public sealed record IoPoolOptions
     public TimeSpan SiloJoinBudget { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Whether every pooled leaf records the CALLER that opened it, so a teardown residual reads
+    /// <c>{site} — in flight N s, opened by {caller}, started on thread T</c> instead of naming only the site.
+    /// The age and the thread are always recorded; only the caller is behind this switch.
+    ///
+    /// <para>Off by default: the caller is a stack captured on every leaf submission, measured at
+    /// about 6 µs each against about 0.08 µs for the rest of a leaf's bookkeeping — 75× the cost on
+    /// every routing and query subscribe. Turn it on (a host pre-registering its
+    /// <see cref="IoPoolOptions"/>) while chasing a residual whose site many callers share, such as
+    /// the one <c>MeshQuery</c> fan-out type every query subscribes through (#7277).</para>
+    /// </summary>
+    public bool CaptureLeafOpeners { get; init; }
+
+    /// <summary>
     /// Concurrent file-system ops. These are async leaves (the thread is released
     /// during the await), so a generous cap avoids bottlenecking the many concurrent
     /// data-path reads/writes a busy mesh issues, while still preventing pathological
