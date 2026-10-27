@@ -142,9 +142,67 @@ with these settings:
 > 🚨 **`DefaultIgnoreCondition` is `WhenWritingDefault`, not `WhenWritingNull`** — and the
 > difference bites. Under `WhenWritingDefault` a `bool` property whose value is `false` is
 > **omitted from the JSON entirely**, so a property declared `public bool Flag { get; init; } = true`
-> silently fails to round-trip a `true → false` change: the `false` is not written, and the
-> reader re-applies the `true` default. When a default-valued member must survive the wire,
-> annotate it `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]`.
+> would silently fail to round-trip a `true → false` change: the `false` is not written, and the
+> reader re-applies the `true` default.
+>
+> **The hub's resolver now closes that class** (`DeclaredDefaultsSurviveTheWire`, applied by
+> `PolymorphicTypeInfoResolver`): a settable scalar member — primitive, enum, `decimal`, their
+> nullable forms, or `string` — keeps `WhenWritingDefault` only when the reader PROVABLY rebuilds
+> its CLR default; otherwise it is always written, so an explicitly stored `false` / `0` / `null` is
+> never re-materialised as a declared value.
+>
+> The proof is **static**: when the type's metadata is resolved, the resolver reads the IL of the
+> constructor the reader calls (and the base constructors it chains to). A member is omittable
+> when it is a compiler-generated auto-property (or a field) and that constructor chain either
+> never stores its backing field — no initializer, no assignment — or stores it exactly once,
+> straight from the member's OWN constructor parameter (`ldarg.0; ldarg.n; stfld`, the positional
+> record shape) whose default is the CLR default. Everything else is written: any initializer
+> (`= true`, `= Id`, `= Left != Right`), a value copied from another parameter, a store in a base
+> constructor, a constructor body that does anything at all (it could set the member through a
+> call), a hand-written accessor, a value type, or IL the reader does not understand. The proof is
+> also refused — every candidate written — when something else can write during the read: a type
+> with an `OnDeserializing` callback (it runs after the constructor), a hand-written setter that
+> does more than store its value into a field no candidate lives in (one member's setter could set
+> another, omitted member), or a constructor that writes or takes the address of an argument
+> (`starg`, `ldarga`) before the store that copies it. Writing an unproven value costs bytes; the
+> one way it can change a value is a hand-written setter that NORMALIZES the CLR default it is
+> handed (`set => text = value ?? "fallback"`) — such a type does not round-trip its own getter
+> under any ignore condition, and no hub-serialized type in this repository has one. So
+> `ActionHandlerRule.Enabled = true` and `MeshNode.MainNode = … Id …` are always written, while a
+> sparse `MeshNode`'s unset `Name` / `Description` / `Icon` stay omitted.
+>
+> **Populate is not a construction, so it gets no proof.** Every proof above is about a reader that
+> CONSTRUCTS the instance. Under `JsonObjectCreationHandling.Populate` the reader fills the object
+> the holder already has, so an omitted member keeps whatever the holder initialized
+> (`Flags = new() { Enabled = true }` turns a stored `false` back into `true`), and the child's
+> metadata cannot know who holds it. So: options that prefer Populate prove nothing — every
+> candidate is written; and a type whose property can populate an object (the property's own
+> `[JsonObjectCreationHandling(Populate)]`, or the holder type's preference) is REFUSED at
+> resolution with an `InvalidOperationException` when that object's metadata would omit any
+> value. The child's verdict is shared by every holder and cannot be made per holder; refusing
+> before the first byte is written is the only outcome that loses nothing. Populating a child
+> that omits nothing — every candidate written, or marked `[JsonIgnore(Condition = Never)]` —
+> stays allowed. Guard: `A_populated_child_never_loses_an_explicit_false`, with its negative
+> control over options without the rule.
+>
+> **Nothing is constructed and nothing is cached per instance.** The verdict is a constant per
+> member, fixed at metadata resolution; no constructor, initializer or getter runs to decide it,
+> during resolution or during a write. An earlier design rebuilt each instance through its
+> constructor at write time to decide "equals default → omit"; it ran constructors against live
+> payload objects (and could mutate them), misjudged members derived from inputs that their own
+> write condition omits, and kept per-instance verdicts that interleaved writes could leave stale.
+> The static rule cannot have any of those shapes.
+>
+> **The trade-off: bytes for soundness.** Some values the reader would in fact rebuild identically
+> are now written — e.g. a `Flag = Left != Right` that happens to be `false`, or a member whose
+> initializer the proof cannot see through. An explicit CLR default reads back identically, so the
+> conservative branch costs bytes, never a value. A member carrying its own `[JsonIgnore(...)]` keeps
+> its author's condition, so the per-property `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]`
+> annotations that predate the rule are redundant but harmless. Measured before the rule: an
+> `ActionHandlerRule` committed with `"enabled": false` read `enabled: true` after its repository
+> sync, re-arming a rule that ships disabled. Guard: `DeclaredDefaultsSurviveTheWireTest` (with
+> negative controls over options without the rule). Options built OUTSIDE the hub (a bare
+> `new JsonSerializerOptions` with `WhenWritingDefault`) do not get the rule.
 >
 > `WriteIndented` and `PropertyNameCaseInsensitive` are **not** set on the hub's options —
 > they keep the `System.Text.Json` defaults (`false`). Indented output is opt-in per adapter:
