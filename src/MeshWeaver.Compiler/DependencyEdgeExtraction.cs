@@ -31,8 +31,9 @@ public sealed record DependencySourceUnit(string Path, string Code);
 /// another NodeType's assembly; foreign code arrives as SOURCE (<c>shared=@Other/Source</c>, an
 /// <c>@@</c> include) and is compiled into this assembly, so the containing assembly of every such
 /// symbol is this one and only the declaring file can say whose it is. A
-/// <see cref="DependencyEdgeKinds.Module"/> edge is an installed module assembly the compilation
-/// USED (<see cref="Compilation.GetUsedAssemblyReferences"/>), carrying the module's MVID.</para>
+/// <see cref="DependencyEdgeKinds.Module"/> edge is an installed module assembly the emitted image
+/// carries an <c>AssemblyRef</c> to (<see cref="Compilation.GetUsedAssemblyReferences"/> only when no
+/// image is supplied), carrying the module's MVID.</para>
 /// </summary>
 public static class DependencyEdgeExtraction
 {
@@ -131,7 +132,13 @@ public static class DependencyEdgeExtraction
                 Kind = DependencyEdgeKinds.NodeType,
                 Evidence = [.. evidence.Take(MaxEvidence)],
             });
-        var modules = UsedModules(compilation, references.Modules, ct).ToList();
+        // Read off the EMITTED image when there is one — the same two metadata tables the platform
+        // and package edges come from. GetUsedAssemblyReferences re-binds and lowers every method
+        // body of the compilation a SECOND time (the emit already did it once), which made the
+        // module edges alone cost about two thirds of the emit on every NodeType compile.
+        var modules = (emittedImage is null
+            ? UsedModules(compilation, references.Modules, ct)
+            : EmittedModuleEdges(compilation, emittedImage, references.Modules, ct)).ToList();
         edges.AddRange(modules);
         if (emittedImage is not null)
         {
@@ -322,10 +329,11 @@ public static class DependencyEdgeExtraction
                 // outside every attributed type, where it would read as the compiling type's own.
                 if (node is UsingDirectiveSyntax)
                     continue;
+                if (!selfTrees.Contains(tree)
+                    && OwnerOfLocation(node, owners) is { } locationOwners && !ContainsSelf(locationOwners, selfPath))
+                    continue;
                 var bound = BoundSymbols(node, model, ct).ToArray();
-                if (bound.Length == 0
-                    || !selfTrees.Contains(tree)
-                       && OwnerOfLocation(node, owners) is { } locationOwners && !ContainsSelf(locationOwners, selfPath))
+                if (bound.Length == 0)
                     continue;
                 foreach (var (typeName, typeOwners) in bound.SelectMany(symbol => OwnedSourceTypes(symbol, compilation, owners)))
                 {
@@ -529,9 +537,240 @@ public static class DependencyEdgeExtraction
         }
     }
 
-    /// <summary>The MODULE edges: every reference the compilation USED
-    /// (<see cref="Compilation.GetUsedAssemblyReferences"/>) that is an installed module, with the
-    /// module's MVID. Ordinal by assembly name — unchanged from before the other kinds existed.</summary>
+    /// <summary>The MODULE edges of an EMITTED assembly: every <c>AssemblyRef</c> the compiler wrote
+    /// that resolves (by full identity, <see cref="ReferencesFor"/>) to an installed module, with the
+    /// module's MVID. Ordinal by assembly name, exactly as <see cref="UsedModules"/> orders them.
+    /// <para>The compiler writes an <c>AssemblyRef</c> only for an assembly the IL or metadata
+    /// needs, so this is the BOUND set — the instrument the platform and package edges already use,
+    /// for the reason <see cref="EmittedReferenceEdges(CSharpCompilation, Stream, DependencyReferenceClasses)"/>
+    /// gives: <see cref="Compilation.GetUsedAssemblyReferences"/> also counts a module whose namespace
+    /// a <c>using</c> merely imports, and it pays for that answer with a second full binding pass
+    /// over every method body. What metadata cannot show — a module symbol the compiler ERASED (an
+    /// inlined constant, a <c>[Conditional]</c> call, a <c>nameof</c>) — is added by
+    /// <see cref="CompileTimeOnlyModuleEdges"/>, so such a module is still that type's edge: a module
+    /// edge selects the type when the module changes, and that change changes or breaks the type's
+    /// compile.</para></summary>
+    private static IEnumerable<DependencyEdge> EmittedModuleEdges(
+        CSharpCompilation compilation, Func<Stream> emittedImage, IReadOnlySet<MetadataReference> moduleReferences,
+        CancellationToken ct)
+    {
+        if (moduleReferences.Count == 0)
+            return [];
+        var identities = ReferenceIdentities(compilation);
+        var edges = new SortedDictionary<string, DependencyEdge>(StringComparer.Ordinal);
+        using var image = emittedImage();
+        using var pe = new System.Reflection.PortableExecutable.PEReader(image, System.Reflection.PortableExecutable.PEStreamOptions.LeaveOpen);
+        var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+        foreach (var handle in reader.AssemblyReferences)
+            foreach (var reference in ReferencesFor(EmittedAssemblyRefOf(reader, handle), identities))
+            {
+                if (!moduleReferences.Contains(reference)
+                    || compilation.GetAssemblyOrModuleSymbol(reference) is not IAssemblySymbol assembly)
+                    continue;
+                edges[assembly.Identity.Name] = new DependencyEdge
+                {
+                    Target = assembly.Identity.Name,
+                    Kind = DependencyEdgeKinds.Module,
+                    TargetBuildMvid = MvidOf(reference),
+                };
+            }
+        foreach (var edge in CompileTimeOnlyModuleEdges(compilation, moduleReferences, edges.Keys.ToHashSet(StringComparer.Ordinal), ct))
+            edges[edge.Target] = edge;
+        return edges.Values;
+    }
+
+    /// <summary>The MODULE edges the emitted image cannot show. The compiler leaves no
+    /// <c>AssemblyRef</c> for a module symbol it ERASED: a constant (an enum member included) it
+    /// inlined, a call to a <c>[Conditional]</c> method (or a use of a <c>[Conditional]</c>
+    /// attribute) whose symbol is undefined — and every module member inside that call's arguments
+    /// and receiver, whoever declares the conditional method — a module type that only appears in a constant
+    /// expression (<c>(int)default(Color)</c>), and any name inside a <c>nameof</c> — a generic
+    /// argument included. A change to that module still changes or breaks this type's compile.
+    /// Candidates are nominated by NAME — every identifier inside a <c>nameof</c>, and every
+    /// identifier spelling a type name (an attribute's with and without its suffix), a constant or
+    /// a <c>[Conditional]</c> method that a not-yet-edged module declares — and only those nodes
+    /// are bound: an edge when one binds a symbol of that module. That is a syntax walk plus local
+    /// bindings, never the second full binding pass <see cref="Compilation.GetUsedAssemblyReferences"/> pays.</summary>
+    private static IEnumerable<DependencyEdge> CompileTimeOnlyModuleEdges(
+        CSharpCompilation compilation, IReadOnlySet<MetadataReference> moduleReferences,
+        IReadOnlySet<string> alreadyEdges, CancellationToken ct)
+    {
+        var pending = new Dictionary<IAssemblySymbol, MetadataReference>(SymbolEqualityComparer.Default);
+        foreach (var reference in moduleReferences)
+            if (compilation.GetAssemblyOrModuleSymbol(reference) is IAssemblySymbol assembly
+                && !alreadyEdges.Contains(assembly.Identity.Name))
+                pending.TryAdd(assembly, reference);
+        if (pending.Count == 0)
+            return [];
+        var nominated = new HashSet<string>(StringComparer.Ordinal);
+        var conditionalNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var assembly in pending.Keys)
+            CollectErasableNames(assembly.GlobalNamespace, nominated, conditionalNames, ct);
+        CollectConditionalCallees(compilation, conditionalNames, ct);
+
+        var found = new SortedDictionary<string, DependencyEdge>(StringComparer.Ordinal);
+        foreach (var tree in compilation.SyntaxTrees)
+        {
+            if (pending.Count == 0)
+                break;
+            SemanticModel? model = null;
+            var root = tree.GetRoot(ct);
+            var insideNameof = root.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(i => i is { Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" }, ArgumentList.Arguments.Count: 1 })
+                .SelectMany(i => i.ArgumentList.Arguments[0].Expression.DescendantNodesAndSelf().OfType<SimpleNameSyntax>())
+                .ToHashSet();
+            // An erased [Conditional] call erases its ARGUMENTS and receiver too: a module member used
+            // only there (an extension method, a property) leaves no AssemblyRef, whoever declares the
+            // conditional method. Only invocations whose callee NAME is a known conditional method are
+            // bound; every name inside such a call's receiver and arguments is then bound below.
+            var erased = new HashSet<SimpleNameSyntax>();
+            foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                var (callee, receiver) = invocation.Expression switch
+                {
+                    MemberAccessExpressionSyntax access => (access.Name, (SyntaxNode?)access.Expression),
+                    MemberBindingExpressionSyntax binding => (binding.Name, null),
+                    SimpleNameSyntax simple => (simple, null),
+                    _ => (null, null),
+                };
+                if (callee is null || !conditionalNames.Contains(callee.Identifier.ValueText))
+                    continue;
+                model ??= compilation.GetSemanticModel(tree);
+                if (model.GetSymbolInfo(invocation, ct).Symbol is not IMethodSymbol method
+                    || !(method.ReducedFrom ?? method).OriginalDefinition.GetAttributes().Any(IsConditional))
+                    continue;
+                foreach (var inner in invocation.ArgumentList.DescendantNodes().OfType<SimpleNameSyntax>())
+                    erased.Add(inner);
+                if (receiver is not null)
+                    foreach (var inner in receiver.DescendantNodesAndSelf().OfType<SimpleNameSyntax>())
+                        erased.Add(inner);
+            }
+            foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>())
+            {
+                if (pending.Count == 0)
+                    break;
+                if (!insideNameof.Contains(name) && !erased.Contains(name) && !nominated.Contains(name.Identifier.ValueText))
+                    continue;
+                model ??= compilation.GetSemanticModel(tree);
+                var info = model.GetSymbolInfo(name, ct);
+                ImmutableArray<ISymbol> symbols = info.Symbol is { } bound ? [bound] : info.CandidateSymbols;
+                if (symbols.IsEmpty && model.GetTypeInfo(name, ct).Type is { } type)
+                    symbols = [type];
+                foreach (var symbol in symbols)
+                {
+                    var declared = symbol switch
+                    {
+                        IAliasSymbol alias => alias.Target,
+                        IMethodSymbol method => (method.ReducedFrom ?? method).OriginalDefinition,
+                        _ => symbol.OriginalDefinition,
+                    };
+                    if (declared is INamespaceSymbol
+                        || declared.ContainingAssembly is not { } owner
+                        || !pending.TryGetValue(owner, out var reference))
+                        continue;
+                    found[owner.Identity.Name] = new DependencyEdge
+                    {
+                        Target = owner.Identity.Name,
+                        Kind = DependencyEdgeKinds.Module,
+                        TargetBuildMvid = MvidOf(reference),
+                    };
+                    pending.Remove(owner);
+                }
+            }
+        }
+        return found.Values;
+    }
+
+    /// <summary>The names under <paramref name="ns"/> whose use the compiler can ERASE from the
+    /// emitted image: every type name (an attribute type's also without its <c>Attribute</c>
+    /// suffix), every constant field (enum members included) and every <c>[Conditional]</c> method,
+    /// nested types included.</summary>
+    private static void CollectErasableNames(INamespaceSymbol ns, HashSet<string> names, HashSet<string> conditionals,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        foreach (var member in ns.GetMembers())
+            switch (member)
+            {
+                case INamespaceSymbol inner:
+                    CollectErasableNames(inner, names, conditionals, ct);
+                    break;
+                case INamedTypeSymbol type:
+                    CollectErasableNames(type, names, conditionals);
+                    break;
+            }
+    }
+
+    private static void CollectErasableNames(INamedTypeSymbol type, HashSet<string> names, HashSet<string> conditionals)
+    {
+        names.Add(type.Name);
+        if (type.Name.Length > "Attribute".Length && type.Name.EndsWith("Attribute", StringComparison.Ordinal))
+            names.Add(type.Name[..^"Attribute".Length]);
+        foreach (var member in type.GetMembers())
+            if (member is IFieldSymbol { IsConst: true })
+                names.Add(member.Name);
+            else if (member is IMethodSymbol method && method.GetAttributes().Any(IsConditional))
+            {
+                names.Add(member.Name);
+                conditionals.Add(member.Name);
+            }
+        foreach (var nested in type.GetTypeMembers())
+            CollectErasableNames(nested, names, conditionals);
+    }
+
+    /// <summary>The framework types whose <c>[Conditional]</c> methods in-mesh code calls
+    /// (<c>Debug.Assert</c> under a compile without <c>DEBUG</c>, …).</summary>
+    private static readonly string[] FrameworkConditionalTypes =
+    [
+        "System.Diagnostics.Debug", "System.Diagnostics.Trace", "System.Diagnostics.Debugger",
+        "System.Diagnostics.Contracts.Contract",
+    ];
+
+    /// <summary>The names of <c>[Conditional]</c> methods a call in this compilation can bind to
+    /// beyond the pending modules': the ones its own source declares (by syntax — no binding) and
+    /// the framework's. Names only nominate; the invocation is bound before its arguments count.</summary>
+    private static void CollectConditionalCallees(CSharpCompilation compilation, HashSet<string> names, CancellationToken ct)
+    {
+        foreach (var tree in compilation.SyntaxTrees)
+            foreach (var method in tree.GetRoot(ct).DescendantNodes().OfType<MethodDeclarationSyntax>())
+                if (method.AttributeLists.SelectMany(l => l.Attributes).Any(a => a.Name.ToString() is var n
+                        && (n.EndsWith("Conditional", StringComparison.Ordinal)
+                            || n.EndsWith("ConditionalAttribute", StringComparison.Ordinal))))
+                    names.Add(method.Identifier.ValueText);
+        foreach (var metadataName in FrameworkConditionalTypes)
+            if (compilation.GetTypeByMetadataName(metadataName) is { } type)
+                foreach (var method in type.GetMembers().OfType<IMethodSymbol>())
+                    if (method.GetAttributes().Any(IsConditional))
+                        names.Add(method.Name);
+    }
+
+    private static bool IsConditional(AttributeData attribute) =>
+        attribute.AttributeClass is { Name: "ConditionalAttribute" } attributeClass
+        && attributeClass.ContainingNamespace.ToDisplayString() == "System.Diagnostics";
+
+    private static List<(AssemblyIdentity Identity, MetadataReference Reference)> ReferenceIdentities(
+        CSharpCompilation compilation) =>
+        compilation.References
+            .Select(r => (Reference: r, Assembly: compilation.GetAssemblyOrModuleSymbol(r) as IAssemblySymbol))
+            .Where(x => x.Assembly is not null)
+            .Select(x => (x.Assembly!.Identity, x.Reference))
+            .ToList();
+
+    private static EmittedAssemblyRef EmittedAssemblyRefOf(
+        System.Reflection.Metadata.MetadataReader reader, System.Reflection.Metadata.AssemblyReferenceHandle handle)
+    {
+        var assemblyRef = reader.GetAssemblyReference(handle);
+        return new EmittedAssemblyRef(
+            reader.GetString(assemblyRef.Name), assemblyRef.Version, reader.GetString(assemblyRef.Culture),
+            [.. reader.GetBlobBytes(assemblyRef.PublicKeyOrToken)],
+            (assemblyRef.Flags & System.Reflection.AssemblyFlags.PublicKey) != 0);
+    }
+
+    /// <summary>The MODULE edges when no emitted image is at hand: every reference the compilation
+    /// USED (<see cref="Compilation.GetUsedAssemblyReferences"/>) that is an installed module, with
+    /// the module's MVID. Ordinal by assembly name. Costs a full binding pass over every method body,
+    /// which is why every caller that has the emitted image takes <see cref="EmittedModuleEdges"/>.</summary>
     private static IEnumerable<DependencyEdge> UsedModules(
         CSharpCompilation compilation, IReadOnlySet<MetadataReference> moduleReferences, CancellationToken ct)
     {
@@ -584,11 +823,7 @@ public static class DependencyEdgeExtraction
         ArgumentNullException.ThrowIfNull(compilation);
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(references);
-        var identities = compilation.References
-            .Select(r => (Reference: r, Assembly: compilation.GetAssemblyOrModuleSymbol(r) as IAssemblySymbol))
-            .Where(x => x.Assembly is not null)
-            .Select(x => (x.Assembly!.Identity, x.Reference))
-            .ToList();
+        var identities = ReferenceIdentities(compilation);
 
         using var pe = new System.Reflection.PortableExecutable.PEReader(image, System.Reflection.PortableExecutable.PEStreamOptions.LeaveOpen);
         var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
@@ -609,12 +844,8 @@ public static class DependencyEdgeExtraction
         var packages = new SortedDictionary<string, ImmutableSortedSet<string>>(StringComparer.Ordinal);
         foreach (var handle in reader.AssemblyReferences)
         {
-            var assemblyRef = reader.GetAssemblyReference(handle);
-            var name = reader.GetString(assemblyRef.Name);
-            var emitted = new EmittedAssemblyRef(
-                name, assemblyRef.Version, reader.GetString(assemblyRef.Culture),
-                [.. reader.GetBlobBytes(assemblyRef.PublicKeyOrToken)],
-                (assemblyRef.Flags & System.Reflection.AssemblyFlags.PublicKey) != 0);
+            var emitted = EmittedAssemblyRefOf(reader, handle);
+            var name = emitted.Name;
             // By FULL identity first; ambiguous ⇒ every candidate (an extra edge, never a lost one).
             foreach (var reference in ReferencesFor(emitted, identities))
             {
