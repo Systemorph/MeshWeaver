@@ -83,6 +83,8 @@ def structure_problems(doc: dict) -> list[str]:
         body = sel[e].get("run", "")
         if not ("worktree add" in body and "--skip-missing" in body and "msbuild-evaluation-base.json" in body):
             problems.append("the evaluation step does not also evaluate the diff BASE tree (BASE ∪ HEAD)")
+        if not ('--pin-sdk "$HEAD_SDK"' in body and "steps.ext-sdk.outputs.version" in str(sel[e].get("env", {}))):
+            problems.append("the BASE tree is not evaluated under the HEAD's resolved SDK")
     scope_body = next((s.get("run", "") for s in sel if s.get("name") == "Decide which module bundles this diff can reach"), "")
     if "msbuild-evaluation-base.json" not in scope_body:
         problems.append("the scope does not union the BASE evaluation with HEAD's")
@@ -95,6 +97,17 @@ def structure_problems(doc: dict) -> list[str]:
     newer = next((s for s in doc["jobs"]["pack"]["steps"] if s.get("id") == "newer"), {})
     if "--msbuild-evaluation" not in newer.get("run", "") or "msbuild-evaluation" not in str(newer.get("env", {})):
         problems.append("the pack job's newer-commit scope check does not read select's MSBuild evaluation")
+    nb = newer.get("run", "")
+    if not ("worktree add" in nb and "msbuild-evaluate.py" in nb and "msbuild-evaluation-tip.json" in nb
+            and '--pin-sdk "$KEYED_SDK"' in nb):
+        problems.append("the supersession check does not union this run's evaluation with the newer TIP's "
+                        "(evaluated under the keyed SDK)")
+    pack_steps = doc["jobs"]["pack"]["steps"]
+    n = next((i for i, s in enumerate(pack_steps) if s.get("id") == "newer"), 0)
+    if not any(str(s.get("uses", "")).startswith("actions/setup-dotnet@")
+               and "needs.select.outputs.build-extensions-sdk" in str((s.get("with") or {}).get("dotnet-version", ""))
+               for s in pack_steps[:n]):
+        problems.append("the pack job does not install the keyed SDK before the supersession check")
     bw = doc["jobs"]["build-workspace"]["steps"]
     if not any(str(s.get("uses", "")).startswith("actions/setup-dotnet@")
                and "needs.select.outputs.build-extensions-sdk" in str((s.get("with") or {}).get("dotnet-version", ""))
@@ -138,6 +151,16 @@ def mutations(doc: dict) -> list[tuple[str, dict]]:
         if s.get("name") == "Evaluate the shelf / build extension with MSBuild":
             s["run"] = s["run"].replace("worktree add", "worktree skip")
     out.append(("the BASE tree is no longer evaluated", m))
+    m = copy.deepcopy(doc)
+    for s in m["jobs"]["select"]["steps"]:
+        if s.get("name") == "Evaluate the shelf / build extension with MSBuild":
+            s["run"] = s["run"].replace('--pin-sdk "$HEAD_SDK"', "")
+    out.append(("the BASE tree is evaluated under whatever SDK it resolves", m))
+    m = copy.deepcopy(doc)
+    for s in m["jobs"]["pack"]["steps"]:
+        if s.get("id") == "newer":
+            s["run"] = s["run"].replace("msbuild-evaluation-tip.json", "nothing.json")
+    out.append(("the supersession check decides from this run's tree alone", m))
     m = copy.deepcopy(doc)
     for s in m["jobs"]["select"]["steps"]:
         if s.get("name") == "Consult the module build ledger":

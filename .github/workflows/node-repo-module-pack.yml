@@ -1388,6 +1388,9 @@ jobs:
           PUBLICATION_BASE: ${{ inputs.publication-base }}
           PUBLICATION_RUN: ${{ inputs.publication-run }}
           BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
+          # The SDK the HEAD resolved: the BASE tree is evaluated with exactly it (a temporary
+          # global.json, rollForward disable), so an SDK bump between the two needs no old SDK.
+          HEAD_SDK: ${{ steps.ext-sdk.outputs.version }}
         run: |
           set -euo pipefail
           projects=()
@@ -1411,7 +1414,8 @@ jobs:
           if [ -n "$base" ]; then
             git -C repo worktree add --detach "$RUNNER_TEMP/msbuild-base-tree" "$base"
             python3 build-logic/.github/scripts/msbuild-evaluate.py --root "$RUNNER_TEMP/msbuild-base-tree" \
-              "${projects[@]}" --skip-missing --out "$RUNNER_TEMP/msbuild-evaluation-base.json" "${platform[@]}"
+              "${projects[@]}" --skip-missing --pin-sdk "$HEAD_SDK" \
+              --out "$RUNNER_TEMP/msbuild-evaluation-base.json" "${platform[@]}"
             git -C repo worktree remove --force "$RUNNER_TEMP/msbuild-base-tree"
             echo "evaluated the diff base $base too: the scope reaches BASE ∪ HEAD"
           else
@@ -4314,6 +4318,11 @@ jobs:
       # 🚨 `--publication-reach`: this is a PUBLICATION question, not a pull request's build
       # selection, so a newer CI-only commit (`.github/`, `scripts/`) REACHES the module — policy
       # ci-paths-owe-no-module-leg narrows PR selection only, and a newer workflow is a newer packing.
+      # The supersession check below evaluates the newer trunk tip with the SDK select keyed.
+      - uses: actions/setup-dotnet@v6
+        if: ${{ inputs.publish && inputs.publish-newest-only && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' && (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') }}
+        with:
+          dotnet-version: ${{ needs.select.outputs.build-extensions-sdk }}
       - name: A newer trunk commit reaches this module? (publish-newest-only)
         id: newer
         if: ${{ inputs.publish && inputs.publish-newest-only && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' }}
@@ -4324,6 +4333,7 @@ jobs:
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
           MSBUILD_EVALUATION: ${{ needs.select.outputs.msbuild-evaluation }}
+          KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
@@ -4344,6 +4354,21 @@ jobs:
           if [ "$tip" != "$mine" ]; then
             # Two trees, no history needed: both commits are present in this shallow clone.
             changed=$(git diff --no-renames --name-only "$mine" "$tip" | paste -sd, -)
+          fi
+          # 🚨 THIS run's evaluation ∪ the newer TIP's, the same union the scope takes: a file the tip
+          # deleted is listed by this tree, one it added (or an import it now declares) only by the
+          # tip's. Evaluated once, under the SDK select keyed, with the platform at platform-ref.
+          if [ "${#shelf_args[@]}" -gt 0 ] && [ -n "$changed" ]; then
+            git worktree add --detach "$RUNNER_TEMP/msbuild-tip-tree" "$tip"
+            tip_projects=()
+            [ -z "${SHELF_PROJECT:-}" ] || tip_projects+=(--project "$SHELF_PROJECT")
+            [ -z "${EXTENSIONS_PROJECT:-}" ] || tip_projects+=(--project "$EXTENSIONS_PROJECT")
+            python3 build-logic/.github/scripts/msbuild-evaluate.py --root "$RUNNER_TEMP/msbuild-tip-tree" \
+              "${tip_projects[@]}" --skip-missing --pin-sdk "$KEYED_SDK" \
+              --property "MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver" \
+              --out "$RUNNER_TEMP/msbuild-evaluation-tip.json"
+            git worktree remove --force "$RUNNER_TEMP/msbuild-tip-tree"
+            shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation-tip.json")
           fi
           mapfile -t modules < <(bk list --ok --where need_publish=true)
           for MODULE in "${modules[@]}"; do

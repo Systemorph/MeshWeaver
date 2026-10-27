@@ -244,12 +244,13 @@ def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project
     evaluated: every ancestor `Directory.*` file (present or recorded absent) and every DECLARED
     import (present or recorded absent). `sdk` is the SDK the lane publishes with; it is keyed."""
     root = root.resolve()
+    project = _SCOPE.normalize_project(project)
     csproj = (root / project).resolve()
     if not csproj.is_file():
         raise ValueError(f"{kind} {project} does not exist under {root} — a compiler input "
                          "that cannot be keyed must not be silently keyed on nothing")
     try:
-        closure = _SCOPE.evaluated_closure(evaluation, Path(project).as_posix())
+        closure = _SCOPE.evaluated_closure(evaluation, project)
     except ValueError as exc:
         raise ValueError(f"{kind}: {exc}") from None
     evaluated_sdk = (evaluation or {}).get("sdk") or ""
@@ -648,6 +649,10 @@ def self_test() -> int:
             check(f"an ancestor {rel} appearing changes the shelf key (conservative extra)", k != s0["key"])
         check("…and removing them restores it", key(shelf_p=shelf)["key"] == s0["key"])
         check("the shelf is keyed with its publishing SDK", s0["inputs"]["shelf"].get("sdk") == sdk)
+        spelled = key(shelf_p="./tools/Acme.ModuleLibraries/../Acme.ModuleLibraries/Acme.ModuleLibraries.csproj")
+        check("a `./…/../…`-spelled shelf is normalized: the SAME key and project as the plain spelling",
+              spelled["key"] == s0["key"] and spelled["inputs"]["shelf"]["project"] == shelf,
+              str(spelled["inputs"]["shelf"]["project"]))
         check("a different publishing SDK is a different shelf key",
               key(shelf_p=shelf, use_sdk="10.0.201", evaluation=ev(evaluated_sdk="10.0.201"))["key"] != s0["key"])
 

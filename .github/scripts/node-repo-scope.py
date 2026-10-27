@@ -420,19 +420,26 @@ def load_msbuild_evaluation(path: str | Path) -> dict:
     return data
 
 
+def normalize_project(project: str) -> str:
+    """ONE spelling of a repository-relative project path for every consumer (`./a/../b.csproj` and
+    `b.csproj` are the same project). msbuild-evaluate.py normalizes the projects it writes with the
+    same rule, and module-build-key.py loads this one, so a lookup can never miss on spelling."""
+    return Path(os.path.normpath(project.strip().replace("\\", "/"))).as_posix()
+
+
 def evaluated_closure(evaluation: dict | None, project: str) -> list[str]:
     """The project and every in-repo project it references, transitively, as MSBuild evaluated them.
 
     ValueError when the project was not evaluated: a named input keyed or scoped without MSBuild's
-    answer would be keyed on a guess."""
+    answer would be keyed on a guess, and an EMPTY reach for a configured project is always a bug."""
     if evaluation is None:
         raise ValueError(f"{project} is named, but no --msbuild-evaluation was given — its imports and "
                          "items come from MSBuild itself (msbuild-evaluate.py), never from a guess")
     projects = evaluation.get("projects") or {}
     out: list[str] = []
-    queue = [Path(project).as_posix()]
+    queue = [normalize_project(project)]
     while queue:
-        rel = queue.pop(0)
+        rel = normalize_project(queue.pop(0))
         if rel in out:
             continue
         if rel not in projects:
@@ -445,9 +452,15 @@ def evaluated_closure(evaluation: dict | None, project: str) -> list[str]:
 
 def evaluated_files(evaluation: dict, rel: str) -> tuple[list[str], list[str], list[str]]:
     """(imports, declaredImports, every path item) of one evaluated project."""
-    entry = (evaluation.get("projects") or {})[rel]
+    entry = (evaluation.get("projects") or {})[normalize_project(rel)]
     items = sorted({p for paths in (entry.get("items") or {}).values() for p in paths})
     return list(entry.get("imports") or []), list(entry.get("declaredImports") or []), items
+
+
+# A pattern MSBuild's evaluation could not resolve (a property function, a property only a target
+# sets) is recorded as UNKNOWN, and a project carrying one is reached by ANY change: "**" matches
+# every path. Fail safe — an unknown input selects too much, never too little.
+_EVERYTHING = "**"
 
 
 def evaluated_reach(root: Path, evaluation: dict | None, project: str) -> set[str]:
@@ -460,22 +473,35 @@ def evaluated_reach(root: Path, evaluation: dict | None, project: str) -> set[st
         reach.add(Path(rel).parent.as_posix())
         imports, declared, items = evaluated_files(evaluation, rel)
         reach |= set(imports) | set(declared) | set(items)
-        # Declared in-repo GLOBS: a deletion of the last match, or a first match added to a glob
-        # that matches nothing yet, is a change no list of today's files can show.
+        # Declared in-repo GLOBS, properties substituted by MSBuild: a deletion of the last match, or
+        # a first match added to a glob that matches nothing yet, is a change no list of today's
+        # files can show.
         reach |= set(projects[rel].get("declaredPatterns") or [])
+        if projects[rel].get("unknownPatterns"):
+            reach.add(_EVERYTHING)
         reach |= set(implicit_import_candidates(root, root / rel))
     return reach
 
 
 def union_reach(root: Path, evaluations, project: str) -> set[str]:
-    """The reach over EVERY evaluation given: the scope passes HEAD's and its diff BASE's, so a file
-    the head no longer has (a deletion) is seen from the tree that still had it. A tree that
-    predates the project simply does not contain it; at least one evaluation must."""
+    """The reach over EVERY evaluation given: the scope passes HEAD's and its diff BASE's (and the
+    supersession check this run's and the newer trunk tip's), so a file one tree no longer has is
+    seen from the tree that still had it.
+
+    An evaluation that lacks the project RAISES, unless it lists it under `missing` (a tree that
+    predates the project, evaluated with --skip-missing). At least one evaluation must hold it."""
+    project = normalize_project(project)
     if evaluations is None or isinstance(evaluations, dict):
         evaluations = [evaluations]
-    holding = [e for e in evaluations if e is not None and project in (e.get("projects") or {})]
+    holding = []
+    for e in evaluations:
+        if e is not None and project in [normalize_project(m) for m in (e.get("missing") or [])]:
+            continue  # explicitly absent from that tree
+        evaluated_closure(e, project)  # raises on a miss, saying why
+        holding.append(e)
     if not holding:
-        evaluated_closure(evaluations[0] if evaluations else None, project)  # raises, saying why
+        raise ValueError(f"{project} is absent from every MSBuild evaluation given — a configured project "
+                         "with an empty reach would select nothing on a guess")
     reach: set[str] = set()
     for e in holding:
         reach |= evaluated_reach(root, e, project)
@@ -516,6 +542,7 @@ def shelf_dirs(root: Path, project: str, evaluation=None) -> frozenset[str] | No
     closure, so without this an edit to them reaches no entry and narrows to nothing.
     """
     root = root.resolve()
+    project = normalize_project(project)
     if not (root / project).is_file():
         return None
     return frozenset(union_reach(root, evaluation, project))
@@ -1343,9 +1370,33 @@ def self_test() -> int:
                                   "--msbuild-evaluation", str(ev_file)])
                 check("[modules] a BASE tree that predates the project is skipped, not refused",
                       got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+                # A second evaluation that LACKS the project without listing it as `missing` is a miss,
+                # never an empty contribution.
+                ev_file.write_text(json.dumps({"sdk": "10.0.200", "projects": {}}), encoding="utf-8")
+                proc = _raw(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"], None,
+                            ["--build-extensions-project", shelf_rel, "--msbuild-evaluation", str(head_file),
+                             "--msbuild-evaluation", str(ev_file)])
+                check("[modules] an evaluation that silently lacks the project ⇒ REFUSED (exit 2), not an empty reach",
+                      proc.returncode == 2 and "not in the MSBuild evaluation" in proc.stderr,
+                      f"exit={proc.returncode} {proc.stderr[-200:]}")
             finally:
                 base_file.unlink(missing_ok=True)
                 head_file.unlink(missing_ok=True)
+            # The project as the lane may SPELL it: `./a/../a/x.csproj` is the same project.
+            spelled = ["--build-extensions-project", "./src/Acme.ModuleLibraries/../Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"] \
+                + evaluation({"imports": [shelf_rel, "src/Acme.Other/Ext.props"]})
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/Ext.props"], extra=spelled)
+            check("[modules] a `./…/../…`-spelled project is normalized before the lookup: its import selects ALL",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']} {got['reason'][:80]}")
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=spelled)
+            check("[modules] negative control — the same spelling, an unrelated file, narrows",
+                  got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+            # A pattern MSBuild could not resolve: fail SAFE, any change reaches the project.
+            unknown = ["--build-extensions-project", shelf_rel] + evaluation(
+                {"unknownPatterns": ["src/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj: <Compile Include=\"$([System.IO.Path]::Combine('a','b'))/*.cs\">"]})
+            got = _run(root, "modules", "pull_request", ["src/Acme.Other/K.cs"], extra=unknown)
+            check("[modules] an UNKNOWN (unevaluable) pattern ⇒ an unrelated change still selects ALL (fail safe)",
+                  got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
             # Refusals: a named input is never scoped without MSBuild's evaluation of it.
             for what, extra, needle in (
                     ("named with NO --msbuild-evaluation", ["--build-extensions-project", shelf_rel], "--msbuild-evaluation"),

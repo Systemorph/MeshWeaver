@@ -48,10 +48,14 @@ def load(name: str, module: str):
     return mod
 
 
-def evaluate(root: Path, project: str, out: Path) -> dict:
-    r = subprocess.run([sys.executable, str(SCRIPTS / "msbuild-evaluate.py"), "--root", str(root),
-                        "--project", project, "--out", str(out), "--property", f"MeshWeaverRoot={ROOT}/"],
-                       capture_output=True, text=True, timeout=900)
+def run_evaluate(root: Path, project: str, out: Path, *extra: str):
+    return subprocess.run([sys.executable, str(SCRIPTS / "msbuild-evaluate.py"), "--root", str(root),
+                           "--project", project, "--out", str(out), "--property", f"MeshWeaverRoot={ROOT}/", *extra],
+                          capture_output=True, text=True, timeout=900)
+
+
+def evaluate(root: Path, project: str, out: Path, *extra: str) -> dict:
+    r = run_evaluate(root, project, out, *extra)
     if r.returncode != 0:
         raise RuntimeError(f"msbuild-evaluate.py failed (exit {r.returncode}): {(r.stdout + r.stderr)[-1500:]}")
     return json.loads(out.read_text(encoding="utf-8"))
@@ -65,6 +69,8 @@ def scratch_repo(root: Path) -> None:
   <Import Project="../Lib/Optional.props" Condition="Exists('../Lib/Optional.props')" />
   <Import Project="../Imp/*.props" />
   <ItemGroup><Compile Include="../Glob/*.cs" /></ItemGroup>
+  <PropertyGroup><EmitterRoot>$(MSBuildThisFileDirectory)../Emit</EmitterRoot></PropertyGroup>
+  <ItemGroup><Compile Include="$(EmitterRoot)/*.cs" /></ItemGroup>
   <Choose>
     <When Condition="'$(Configuration)' == 'Release'"><ItemGroup><Compile Include="../Rel/Release.cs" /></ItemGroup></When>
     <Otherwise><ItemGroup><Compile Include="../Dbg/Debug.cs" /></ItemGroup></Otherwise>
@@ -85,6 +91,11 @@ def scratch_repo(root: Path) -> None:
         "Imp/Last.props": "<Project />\n",
         "Glob/Last.cs": "// the only match of ../Glob/*.cs\n",
         "Glob/notes.txt": "beside the glob, not covered by it\n",
+        "Unk/Unk.csproj": """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><Compile Include="$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '..', 'Elsewhere'))/*.cs" /></ItemGroup>
+</Project>
+""",
     }
     for rel, text in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -190,6 +201,29 @@ def main() -> int:
             check(f"a FIRST match {f} added to an emptied glob is in reach", reaches(head_reach, f))
         check("negative control — a file in the glob's directory the pattern does not cover is NOT in reach",
               not reaches(union, "Glob/notes.txt"))
+
+        print("== PROPERTY-BASED patterns: substituted by MSBuild, or UNKNOWN and fail safe")
+        check("`$(EmitterRoot)/*.cs` (zero matches) is kept as the EVALUATED pattern Emit/*.cs",
+              "Emit/*.cs" in patterns, str(sorted(patterns)))
+        check("…so a first match Emit/First.cs is in reach", reaches(head_reach, "Emit/First.cs"))
+        check("negative control — Emit/notes.txt, not covered by it, is NOT in reach", not reaches(head_reach, "Emit/notes.txt"))
+        check("negative control — a project whose patterns all evaluate records no unknown pattern",
+              not ev["projects"][proj].get("unknownPatterns"))
+        unk = evaluate(repo, "Unk/Unk.csproj", tmp / "unk.json")
+        check("a property FUNCTION in an Include is recorded as an unknown pattern",
+              bool(unk["projects"]["Unk/Unk.csproj"].get("unknownPatterns")), str(unk["projects"]["Unk/Unk.csproj"]))
+        check("…and the scope treats that project as touched by ANY change (fail safe)",
+              reaches(scope.shelf_dirs(repo, "Unk/Unk.csproj", unk), "Other/Stray.cs"))
+
+        print("== THE HEAD's SDK, pinned for another tree")
+        pinned = evaluate(repo, "./Ext/../Ext/Ext.csproj", tmp / "pinned.json", "--pin-sdk", sdk)
+        check("--pin-sdk evaluates with exactly the HEAD's SDK, the project spelling normalized",
+              pinned["sdk"] == sdk and proj in pinned["projects"], f"{pinned['sdk']} {sorted(pinned['projects'])}")
+        check("…and the temporary global.json is removed again", not (repo / "global.json").exists())
+        r = run_evaluate(repo, proj, tmp / "bad.json", "--pin-sdk", "9.9.999")
+        check("NEGATIVE: a tree that cannot be evaluated under the pinned SDK fails RED, saying so",
+              r.returncode != 0 and "HEAD's SDK 9.9.999" in r.stderr, f"exit={r.returncode} {r.stderr[-300:]}")
+        check("…and the temporary global.json is removed after the failure too", not (repo / "global.json").exists())
 
     print()
     if failures:
