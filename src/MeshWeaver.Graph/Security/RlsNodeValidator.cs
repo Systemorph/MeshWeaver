@@ -164,7 +164,9 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
             NodeOperation.Read => Permission.Read,
             NodeOperation.Create => GetCreatePermission(context.Node),
             NodeOperation.Update => Permission.Update,
-            NodeOperation.Delete => Permission.Delete,
+            // Ordinary content is deleted with Update; a partition root or a governance satellite
+            // keeps demanding Delete — the ONE rule, DeletePermission.RequiredFor.
+            NodeOperation.Delete => DeletePermission.RequiredFor(context.Node.Path),
             _ => Permission.None
         };
 
