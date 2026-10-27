@@ -92,6 +92,13 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
     }
 
+    /// <summary>A clock whose every read returns the next scripted instant (the last one repeats).</summary>
+    private sealed class SteppingClock(params DateTimeOffset[] reads) : TimeProvider
+    {
+        private int next = -1;
+        public override DateTimeOffset GetUtcNow() => reads[Math.Min(Interlocked.Increment(ref next), reads.Length - 1)];
+    }
+
     /// <summary>One replica's controlled pass: counts its entries, signals that it started, and parks until released.</summary>
     private sealed class ControlledPass(int replica)
     {
@@ -319,6 +326,96 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         resumed.Lease.Replica.Should().Be("silo-1", "A's stamp must not land over B's claim");
 
         await PrebuiltBundleRetentionLease.Release(hubB, Taker).Timeout(TestTimeouts.Convergence).Await(ct);
+    }
+
+    /// <summary>
+    /// 🚨 The pass deadline is ABSOLUTE — half the hold from the instant the claim was dated. Taking the
+    /// lease spends from it: when acquisition has already used the half-hold (the clock read after the
+    /// take is past it), the pass must not start at all — it would run under a hold that ends while it
+    /// sweeps. NEGATIVE CONTROL: the same take with time to spare runs.
+    /// </summary>
+    [Fact]
+    public async Task APassWhoseAcquisitionUsedHalfTheHold_DoesNotStart()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hub = SiloMeshHub(0);
+        // A fresh epoch below the claim's range (seconds << NonceBits stays within a long until ~2514).
+        var t = new DateTimeOffset(2505, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var late = new ControlledPass(0);
+        late.Release.OnNext(Unit.Default);
+        late.Release.OnCompleted();
+        var refused = await PrebuiltBundleRetentionLease
+            .RunLeased(hub, new SteppingClock(t, t + PrebuiltBundleRetentionLease.PassDeadline(Hold)), Hold, "silo-late",
+                late.Run, verdict => throw new InvalidOperationException($"PRECONDITION: the lease is free at a fresh epoch: {verdict}"))
+            .Materialize()
+            .Where(n => n.Kind != System.Reactive.NotificationKind.OnNext)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        refused.Exception.Should().BeOfType<OperationCanceledException>("acquisition used the whole half-hold");
+        late.Entries.Should().Be(0, "a pass with no deadline left must not touch the store");
+        // The skipped pass leaves its lease to lapse; free it here so the other tests' epochs are not held.
+        var left = await Sees(hub, lease => lease.Replica == "silo-late", ct);
+        await PrebuiltBundleRetentionLease.Release(hub, left.Holder).Timeout(TestTimeouts.Convergence).Await(ct);
+        await Sees(hub, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
+
+        var onTime = new ControlledPass(0);
+        onTime.Release.OnNext(Unit.Default);
+        onTime.Release.OnCompleted();
+        var ran = await PrebuiltBundleRetentionLease
+            .RunLeased(hub, new SteppingClock(t + Hold, t + Hold + TimeSpan.FromMinutes(1)), Hold, "silo-ontime",
+                onTime.Run, verdict => throw new InvalidOperationException($"PRECONDITION: the lease was released: {verdict}"))
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        ran.Should().Be(0, "NEGATIVE CONTROL: with the deadline still ahead the pass runs");
+        onTime.Entries.Should().Be(1);
+        await Sees(hub, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
+    }
+
+    /// <summary>
+    /// 🚨 A stamp proposed from a STALE mirror — the stamper's base still carries its own claim while the
+    /// owner already holds another replica's — exactly as <c>MeshNodePatchMerge</c> resolves it. NEGATIVE
+    /// CONTROL first: a stamp that changes only the diagnostic strings carries no conflict on the claim,
+    /// so it lands beside the other replica's claim while the stamper's own computed content still says
+    /// it holds the lease — two sweeps.
+    /// </summary>
+    [Fact]
+    public void AStaleStamp_ThatLeavesTheClaimAlone_LandsBesideAnotherReplicasClaim()
+    {
+        var t = new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var mine = PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(1), 31);
+        var staleBase = new PrebuiltBundleRetentionLeaseState(mine);
+        var other = new PrebuiltBundleRetentionLeaseState(
+            PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(2), 32) | PrebuiltBundleRetentionLease.StampedFlag, "silo-1", t.AddHours(1));
+        var stringsOnly = staleBase with { Replica = "silo-0", TakenAt = t };
+
+        var (live, refused) = MergeLosingClaim(staleBase, other, stringsOnly);
+
+        refused.Should().NotContain("claim", "the stamp did not touch the claim, so nothing conflicts on it");
+        live.Deserialize<PrebuiltBundleRetentionLeaseState>(Web)!.Holder.Should().Be(32);
+        stringsOnly.Claim.Should().Be(mine, "…while the stamper's own computed content still reads its claim — held");
+    }
+
+    /// <summary>The fix: the stamp rewrites the claim (<see cref="PrebuiltBundleRetentionLease.StampedFlag"/>), so a stale stamp is refused WHOLE.</summary>
+    [Fact]
+    public void AStaleStamp_ThatRewritesTheClaim_IsRefusedWhole()
+    {
+        var t = new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var mine = PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(1), 31);
+        var staleBase = new PrebuiltBundleRetentionLeaseState(mine);
+        var other = new PrebuiltBundleRetentionLeaseState(
+            PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(2), 32) | PrebuiltBundleRetentionLease.StampedFlag, "silo-1", t.AddHours(1));
+        var stamp = staleBase with { Claim = mine | PrebuiltBundleRetentionLease.StampedFlag, Replica = "silo-0", TakenAt = t };
+
+        var (live, refused) = MergeLosingClaim(staleBase, other, stamp);
+
+        refused.Should().Contain("claim", "the stamp's claim and the owner's both changed since the stale base");
+        live.Deserialize<PrebuiltBundleRetentionLeaseState>(Web)!.Claim.Should().Be(other.Claim,
+            "the other replica's claim stands, and the stamper's re-run fold reads it and does not sweep");
+        new PrebuiltBundleRetentionLeaseState(mine | PrebuiltBundleRetentionLease.StampedFlag).Holder.Should().Be(31,
+            "the stamped flag is not part of the holder's nonce");
     }
 
     [Fact]

@@ -171,7 +171,10 @@ public sealed class PrebuiltBundleRetentionHostedService(
                         + "could not be read, so NO replica may sweep on it until it is repaired",
                         replica, root, PrebuiltBundleRetentionLease.LeasePath);
                 else
-                    logger.LogInformation(
+                    // Warning, like the sweep outcome itself: the cluster ships Warning+ to Loki, and a
+                    // replica that skipped writes no sweep outcome and no status — this once-per-pass
+                    // line is the only production-visible evidence that it attempted and lost the lease.
+                    logger.LogWarning(
                         "PrebuiltBundleRetention: {Replica} skipped this pass over {Root} — the lease at {Lease} is "
                         + "held by pass {Holder} on {HolderReplica} until {Until:O}, which runs the one sweep",
                         replica, root, PrebuiltBundleRetentionLease.LeasePath,

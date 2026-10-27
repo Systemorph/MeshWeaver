@@ -45,7 +45,7 @@ public sealed record PrebuiltBundleRetentionLeaseState(long Claim, string? Repli
 
     /// <summary>The nonce of the pass holding the claim; <c>0</c> when lapsed.</summary>
     [JsonIgnore]
-    public int Holder => Claim <= 0 ? 0 : (int)(Claim & PrebuiltBundleRetentionLease.NonceMask);
+    public int Holder => Claim <= 0 ? 0 : (int)(Claim & PrebuiltBundleRetentionLease.NonceMask & ~PrebuiltBundleRetentionLease.StampedFlag);
 
     /// <summary>The instant the hold ends; a lease whose hold has ended is free.</summary>
     [JsonIgnore]
@@ -81,7 +81,9 @@ public sealed record PrebuiltBundleRetentionLeaseVerdict(bool Held, PrebuiltBund
 /// that reason (see <see cref="PrebuiltBundleRetentionLeaseState"/>). Nothing is locked and nothing
 /// waits — a replica that does not hold the lease skips its pass, and the next tick asks again.</para>
 ///
-/// <para><b>Bounded both ways.</b> A pass runs for at most <see cref="PassDeadline"/> (half the hold);
+/// <para><b>Bounded both ways.</b> A pass runs until <see cref="PassDeadline"/> (half the hold) after the
+/// instant its claim was dated — taking the lease counts against it, and a pass whose acquisition used it
+/// all does not start;
 /// past it the pass is unsubscribed, which cancels the pool leaf at its next step boundary — so a
 /// pass has the other half of the hold to reach that boundary before another replica may take the
 /// lease. The bound is cooperative: a single synchronous directory removal that stalls past the whole
@@ -113,22 +115,34 @@ public static class PrebuiltBundleRetentionLease
     public const long NonceMask = (1L << NonceBits) - 1;
 
     /// <summary>
+    /// The top nonce bit, set by the confirmed holder's STAMP. 🚨 The stamp rewrites the claim scalar
+    /// (claim → claim | flag) for the same reason the claim is one scalar: a stamp that changed only the
+    /// diagnostic strings was MERGED over another replica's claim when the stamper's mirror was stale
+    /// (its base still carried its own lapsed claim), and the stamper read its own computed content back
+    /// as held — two sweeps. Rewriting the claim makes a stale stamp conflict whole on the owner, so its
+    /// fold re-runs on the live claim and leaves it. Nonces never use this bit (<see cref="NewNonce"/>).
+    /// </summary>
+    public const long StampedFlag = 1L << (NonceBits - 1);
+
+    /// <summary>
     /// The claim a pass with <paramref name="nonce"/> makes for a hold ending at <paramref name="until"/>
     /// (truncated to the second). Pure.
     /// </summary>
     /// <param name="until">The instant the hold ends.</param>
-    /// <param name="nonce">The pass's nonce, in <c>[1, 2^NonceBits)</c>.</param>
+    /// <param name="nonce">The pass's nonce, in <c>[1, 2^(NonceBits-1))</c> — the top nonce bit is <see cref="StampedFlag"/>.</param>
     public static long ClaimFor(DateTimeOffset until, int nonce)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(nonce, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan((long)nonce, NonceMask);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan((long)nonce, StampedFlag - 1);
         var seconds = until.ToUnixTimeSeconds();
         ArgumentOutOfRangeException.ThrowIfNegative(seconds);
+        // Past this the shift overflows into the sign bit and the claim reads as lapsed.
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(seconds, long.MaxValue >> NonceBits);
         return (seconds << NonceBits) | (long)nonce;
     }
 
     /// <summary>A fresh pass nonce.</summary>
-    public static int NewNonce() => System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, (int)NonceMask + 1);
+    public static int NewNonce() => System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, (int)StampedFlag);
 
     /// <summary>The shortest hold a pass takes, whatever the interval.</summary>
     public static readonly TimeSpan MinimumHold = TimeSpan.FromHours(1);
@@ -218,7 +232,8 @@ public static class PrebuiltBundleRetentionLease
 
     /// <summary>
     /// The second write of <see cref="Take"/>: stamps <paramref name="replica"/> on the lease only while
-    /// <paramref name="claim"/> is still its claim. 🚨 The verdict's <see cref="PrebuiltBundleRetentionLeaseVerdict.Held"/>
+    /// <paramref name="claim"/> is still its claim, and marks the claim stamped (<see cref="StampedFlag"/>) in
+    /// the same write so a stamp proposed from a STALE mirror conflicts on the claim scalar and is refused. 🚨 The verdict's <see cref="PrebuiltBundleRetentionLeaseVerdict.Held"/>
     /// is read off the lease the stamp SETTLED, never assumed from the claim having landed one write
     /// earlier: a claimant that paused across its own hold's end can find the lease taken by another
     /// replica by the time this fold reads its base — and must then NOT sweep. As System. COLD.
@@ -234,14 +249,14 @@ public static class PrebuiltBundleRetentionLease
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
         return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
-            .Update(current => Read(current, options) is { } held && held.Claim == claim
-                ? current with { Content = held with { Replica = replica, TakenAt = now } }
+            .Update(current => Read(current, options) is { } held && (held.Claim == claim || held.Claim == (claim | StampedFlag))
+                ? current with { Content = held with { Claim = claim | StampedFlag, Replica = replica, TakenAt = now } }
                 : current)
             .Take(1)
             .Select(stamped =>
             {
                 var lease = Read(stamped, options);
-                return new PrebuiltBundleRetentionLeaseVerdict(lease is not null && lease.Claim == claim, lease);
+                return new PrebuiltBundleRetentionLeaseVerdict(lease is not null && lease.Claim == (claim | StampedFlag), lease);
             }));
     }
 
@@ -290,7 +305,9 @@ public static class PrebuiltBundleRetentionLease
         {
             var now = clock.GetUtcNow();
             var nonce = NewNonce();
-            var deadline = PassDeadline(hold);
+            // 🚨 ABSOLUTE: the pass may run until half the hold the CLAIM dated from `now` — taking the
+            // lease spends from that budget, it never earns a fresh one.
+            var passEnd = now + PassDeadline(hold);
             return Take(hub, now, hold, nonce, replica)
                 .SelectMany(verdict =>
                 {
@@ -299,6 +316,14 @@ public static class PrebuiltBundleRetentionLease
                         notHeld(verdict);
                         return Observable.Empty<TResult>();
                     }
+                    var deadline = passEnd - clock.GetUtcNow();
+                    if (deadline <= TimeSpan.Zero)
+                        // Acquisition used the whole half-hold: the pass does not start, and the lease is
+                        // left to lapse like a cut pass's — say so; this pass is skipped, not cut.
+                        return Observable.Throw<TResult>(new OperationCanceledException(
+                            $"taking the prebuilt-bundle retention lease outlasted half its hold ({PassDeadline(hold)}), "
+                            + "so the pass did not start — its sweep could have overlapped the next holder's; "
+                            + "the lease is left to lapse and the next pass re-plans"));
                     return Observable.Defer(pass)
                         // Unsubscribing cancels the pool leaf, so a pass past its deadline stops at
                         // its next step boundary — with the other half of the hold to reach it.
