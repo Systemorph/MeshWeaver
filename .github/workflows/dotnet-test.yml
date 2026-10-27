@@ -4099,6 +4099,24 @@ jobs:
     - uses: actions/checkout@v7
       with:
         fetch-depth: 1
+    # 🚨 HOST-FORCED (policy build-server-routes-all-ci; Doc/Architecture/BuildHosts → "Host-forced routing"):
+    # when the owner has routed core's pull requests to the build server (core main's
+    # .github/build-routing.json names MeshWeaver AND the operations instance answers host for it) while
+    # core's host stages still owe parity, this required context is RED, naming the debt — the build host
+    # does not yet run core's suites, so no Actions green may stand in for it. Pull requests only: trunk
+    # runs stay on Actions so main's CD keeps sealing platform sets. An unreadable routing decision or an
+    # unanswering queue reads as NOT forced (the legs above ran here: a real verdict, never a false green).
+    - name: Routed to the build host? (owed legs are RED — policy build-server-routes-all-ci)
+      if: github.event_name == 'pull_request'
+      env:
+        QUEUE_URL: ${{ vars.BUILD_WEBHOOK_URL }}
+        BUILD_API: ${{ vars.MW_BUILD_API }}
+        REPO: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        EVENT: ${{ github.event_name }}
+        REF_NAME: ${{ github.event.pull_request.head.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: python3 .github/scripts/build-executor.py --route-only
     # The green-tree marker below must point at the commit whose tree was TESTED — on a pull request
     # that is the fresh merge onto precheck's main sha (byte-identical: a pure function of that sha
     # and the head), not github.sha. Not a gate: it only re-derives the tested commit for the push.
