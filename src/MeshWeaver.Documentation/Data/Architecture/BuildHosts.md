@@ -385,16 +385,18 @@ anything; a red reports on Deploy's own `build-host-latest` issue. The cost of t
 an armed set reaches `build-latest` within about 15 minutes, and no platform roll waits on it — the
 build host is outside the platform's delivery.
 
-**The runner image.** Deploy's `build-host.yml` job `image` builds its `deploy/build-host/Dockerfile`
+**The runner image.** Deploy's `build-host.yml` builds its `deploy/build-host/Dockerfile`
 (the .NET 10 SDK, bash, python3, git, bubblewrap, Deploy's `build-run.py`, and the platform's
 `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py` with the sibling it loads,
 `node-repo-scope.py`, `ci-artifact-store.py` and `meshweaver-plugin-build`). The Dockerfile fetches
 every source BY COMMIT inside the build (`DEPLOY_COMMIT`, and `PLATFORM_COMMIT` = the set's own
 commit), so its context is empty and nothing is staged; the runner's and `module-build-key.py`'s
-self-tests run in the build. It builds for linux/amd64 only: core's CD had added a linux/arm64 leg
-for a leased-back Mac (Plugins `Hosting/BackLease.md`) shortly before the move, and Deploy does not
-build it yet. It pushes `mw-build-host:<version>` — the version every image of the set
-carries — once per version, mirrored to the fleet registry. It is outside the platform's promotion
+self-tests run in the build. Job `image-arch` builds it natively for linux/amd64 and linux/arm64
+(one runner per architecture, pushed by digest), and job `image` joins the two into one index under
+`mw-build-host:<version>` — the version every image of the set carries — once per version, mirrored
+to the fleet registry. Both architectures are required: the tag is written once per version, so an
+amd64-only runner would leave that version unusable on an arm64 host (a leased-back Mac, Plugins
+`Hosting/BackLease.md`) for good. It is outside the platform's promotion
 (the set is complete without it). Nothing names it by a moving tag: the hosts get it BY DIGEST with
 the rest of the set. Every pull request there builds the image against core's `main` and runs every
 self-test (job `test`).
@@ -457,10 +459,10 @@ not change. As one leaf, a stale write conflicts as a whole and its retry is ref
 jobs: while `false` they write one summary line and send nothing, using no credential; `stable` must
 also be listed in its `channels`. The receiver guards the same fact on the record. Turning the hosts on
 is two acts, in order: the record's `BuildHosts` block through its approval path, then `enabled: true`
-there. The first act is done for `latest`: the operations record declares `buildHosts.enabled` with the
-`latest` channel, and core's own declaration was switched on to match while core's CD still did the
-hand-over. Deploy's copy still ships `enabled: false`, so the hand-over moves to Deploy only together
-with flipping it there. Starting a host is not running builds on it: the operations instance's build
+there. **Both acts are done for `latest`:** the operations record declares `buildHosts.enabled` with
+the `latest` channel, and Deploy's `.github/build-hosts.json` has `enabled: true` with `latest` in its
+`channels`, so every tick hands the newest armed set to `build-latest`. `stable` is not listed yet.
+Starting a host is not running builds on it: the operations instance's build
 queue has its own switch (`Hosting__Builds__QueueEnabled`), and until it is on a running host claims
 nothing.
 
