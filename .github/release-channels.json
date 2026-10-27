@@ -421,6 +421,7 @@
       "writers": [
         {
           "workflow": "s1-extract-image.yml",
+          "repo": "Systemorph/MeshWeaver.Deploy",
           "job": "publish",
           "repositories": [
             "s1-extract"
@@ -445,6 +446,7 @@
       "writers": [
         {
           "workflow": "whisper-image.yml",
+          "repo": "Systemorph/MeshWeaver.Deploy",
           "job": "publish",
           "repositories": [
             "whisper-swiss-german"
@@ -462,13 +464,14 @@
       "id": "ocr-line",
       "tag": "tesseract-5.5",
       "edition": "service",
-      "meaning": "The Tesseract OCR service line tag (deploy/ocr), re-pushed by every main build of that image (the per-build tag is <line>-<sha>). A service image, never a self-update candidate.",
+      "meaning": "The Tesseract OCR service line tag (MeshWeaver.Deploy deploy/ocr), re-pushed by every main build of that image (the per-build tag is <line>-<sha>). A service image, never a self-update candidate.",
       "platforms": [
         "linux/amd64"
       ],
       "writers": [
         {
           "workflow": "ocr-image.yml",
+          "repo": "Systemorph/MeshWeaver.Deploy",
           "job": "publish",
           "repositories": [
             "ocr"
@@ -486,13 +489,14 @@
       "id": "ollama-line",
       "tag": "0.33.2-qwen3.6-bge-m3",
       "edition": "service",
-      "meaning": "The local model service line tag (deploy/ollama: Ollama 0.33.2 with qwen3.6 and bge-m3 baked in), re-pushed by every main build of that image (the per-build tag is <line>-<sha>). Version-SHAPED, which is allowed only because no self-updater lists this repository. A service image, never a self-update candidate.",
+      "meaning": "The local model service line tag (MeshWeaver.Deploy deploy/ollama: Ollama 0.33.2 with qwen3.6 and bge-m3 baked in), re-pushed by every main build of that image (the per-build tag is <line>-<sha>). Version-SHAPED, which is allowed only because no self-updater lists this repository. A service image, never a self-update candidate.",
       "platforms": [
         "linux/amd64"
       ],
       "writers": [
         {
           "workflow": "ollama-image.yml",
+          "repo": "Systemorph/MeshWeaver.Deploy",
           "job": "publish",
           "repositories": [
             "ollama"

@@ -113,4 +113,4 @@ The default STT model behind `/api/speech/transcribe` is a derivative of
 [Flurin17/whisper-large-v3-turbo-swiss-german](https://huggingface.co/Flurin17/whisper-large-v3-turbo-swiss-german)
 (**CC BY-NC 4.0 — non-commercial use only**). A personal home assistant is non-commercial use;
 for anything commercial, point the whisper container at a permissively licensed model
-(see `deploy/whisper/README.md`).
+(see `deploy/whisper/README.md` in MeshWeaver.Deploy).

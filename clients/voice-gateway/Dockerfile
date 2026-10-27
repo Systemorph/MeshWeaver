@@ -2,7 +2,7 @@
 FROM python:3.12-slim
 
 # piper-tts brings the `piper` CLI + onnxruntime; the voice model is fetched at runtime
-# by the entrypoint (kept out of the image, same policy as deploy/whisper).
+# by the entrypoint (kept out of the image, same policy as MeshWeaver.Deploy's deploy/whisper).
 RUN pip install --no-cache-dir piper-tts
 
 WORKDIR /app
