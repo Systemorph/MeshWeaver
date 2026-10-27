@@ -737,6 +737,18 @@ first-in-process script-reference build, on the Compile pool) on the strength of
 - **Read a residual by its site.** A bracketed site is a leaf; no site is the cancel join, now
   labelled. `Query=1` and `Compile=1` are different bugs, and so are `Query=1 [MeshQuery…]` and
   `Query=1 [IoPool.Drain: the pool token's cancel did not return…]`.
+- **Read a leaf's AGE, OPENER and THREAD too.** Each leaf entry reads
+  `{site} — in flight N s, opened by X, started on thread T`, oldest first (the number always
+  formatted invariantly). The age tells a leaf that hung
+  long before the stop (N far above the drain budget) from one that was slow to unwind during it;
+  the thread is the one the leaf STARTED on — for a synchronous leaf (a blocking leaf, a pooled
+  subscribe) the one a dump shows it parked on, while an async leaf may have resumed elsewhere after
+  an await. The opener is captured only while
+  `IoPoolOptions.CaptureLeafOpeners` is on — a stack read on the caller's thread at submission,
+  measured at ~6 µs against ~0.08 µs for the rest of a leaf's bookkeeping, so it is a diagnostic
+  switch and off by default; off, it reads `(not captured — IoPoolOptions.CaptureLeafOpeners is off)`.
+  Turn it on when the site is shared by many callers, as the `MeshQuery` fan-out type every query
+  subscribes through is (MeshWeaver#7277). Pinned by `IoPoolResidualAgeAndOpenerTest`.
 
 Pinned by `IoPoolDrainCancelJoinTest` (deterministic: a `TestScheduler`-driven `Throttle` fired from a
 thread the test owns, with the two interleavings the deadlock needs made explicit).
