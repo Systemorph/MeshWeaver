@@ -185,6 +185,18 @@ def behaviour(doc: dict, hostpub: dict) -> None:
             rc, out, _ = run_bash(body, {"EXECUTOR": executor, "PUBLISH": publish, "MODE": mode}, tmp)
             check(f"executor={executor!r} publish={publish} mode={mode} -> {'green' if want == 0 else 'RED'}",
                   rc == want, out)
+        # A build extension the host would never load: refused on a host run, by name.
+        ext = "tools/Acme.Razor/Acme.Razor.csproj"
+        rc, out, _ = run_bash(body, {"EXECUTOR": "host", "PUBLISH": "true", "MODE": "staged",
+                                     "EXTENSIONS_PROJECT": ext}, tmp)
+        check("executor=host WITH build-extensions-project -> RED, naming the input and the fix",
+              rc == 1 and "build-extensions-project" in out and "executor: actions" in out, out)
+        rc, out, _ = run_bash(body, {"EXECUTOR": "actions", "PUBLISH": "true", "MODE": "direct",
+                                     "EXTENSIONS_PROJECT": ext}, tmp)
+        check("NEGATIVE CONTROL — executor=actions WITH build-extensions-project -> green", rc == 0, out)
+        rc, out, _ = run_bash(body, {"EXECUTOR": "host", "PUBLISH": "true", "MODE": "staged",
+                                     "EXTENSIONS_PROJECT": ""}, tmp)
+        check("NEGATIVE CONTROL — executor=host with NO extension -> green", rc == 0, out)
 
         print("== verify: the host arm carries the followed verdict")
         body = next(s for s in verify["steps"] if s.get("id") == "host")["run"]
