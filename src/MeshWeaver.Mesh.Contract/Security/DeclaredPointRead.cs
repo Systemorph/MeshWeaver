@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -179,10 +180,74 @@ public static class DeclaredPointRead
     public static IObservable<PermissionCheckOutcome> ObserveStandardRead(IMessageHub hub, string path, AccessContext? viewer)
     {
         ArgumentNullException.ThrowIfNull(hub);
+        return StandingReadWithPendingMarker(hub, path, viewer)
+            .Select(outcome => outcome ?? PermissionCheckOutcome.Undetermined($"the Read check on '{path}' is being re-decided"))
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// <see cref="ObserveStandardRead"/> for a seam that must tell a re-check IN FLIGHT apart from a
+    /// settled verdict: the same live standard read — the same inputs, the same fail-closed
+    /// classification — except that while a signal has withdrawn an established verdict and its
+    /// re-check has not answered yet, it emits <c>null</c> ("being re-decided") where
+    /// <see cref="ObserveStandardRead"/> emits an undetermined outcome. The re-check is bounded by the
+    /// permission-establishment budget; past it the answer IS undetermined — and that budget bounds
+    /// the whole PENDING PERIOD, not each evaluation, so access commits that keep replacing a stalled
+    /// re-check cannot hold it pending past the budget (<see cref="BoundPendingPeriods"/>).
+    ///
+    /// <para>🚨 For an owner-side subscription that follows a STANDING grant (MeshWeaver#7298, the
+    /// residual of #7016). Ending a subscription is terminal, and every access commit on the node's
+    /// scopes — any group membership or role anywhere in the mesh — withdraws the verdict while it is
+    /// re-checked; a subscription that ended on the pending marker would end on every unrelated
+    /// commit. A <c>null</c> HOLDS instead: it admits nothing new and ends nothing already admitted,
+    /// and only the settled answer — granted, denied or undetermined — decides.</para>
+    /// </summary>
+    /// <param name="hub">The hub asking.</param>
+    /// <param name="path">The exact path being read.</param>
+    /// <param name="viewer">The viewer's context, flags and all; null is the anonymous viewer.</param>
+    public static IObservable<PermissionCheckOutcome?> ObserveStandingRead(IMessageHub hub, string path, AccessContext? viewer)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
+        return BoundPendingPeriods(StandingReadWithPendingMarker(hub, path, viewer), budget, path, Scheduler.Default);
+    }
+
+    /// <summary>
+    /// 🚨 Gives every CONTINUOUS pending period of <paramref name="standing"/> one deadline, however
+    /// many withdrawals it spans (review of #7329, thread 4391236664). Each evaluation is bounded by
+    /// the budget, but every access commit replaces the evaluation in flight and restarts ITS
+    /// timeout — so a stalled rule under commits arriving faster than the budget stayed pending
+    /// forever, and an already-admitted subscription that holds on pending stayed open on a verdict
+    /// nobody could reach. A <c>null</c> repeated by a further invalidation is the SAME period and
+    /// never restarts the deadline; past it the answer IS undetermined, and only a settled verdict
+    /// ends the period.
+    /// </summary>
+    /// <param name="standing">The standing verdict with its pending marker (<c>null</c>).</param>
+    /// <param name="budget">The permission-establishment budget one pending period may last.</param>
+    /// <param name="path">The path being read, for the undetermined outcome's reason.</param>
+    /// <param name="scheduler">Where the deadline runs.</param>
+    internal static IObservable<PermissionCheckOutcome?> BoundPendingPeriods(
+        IObservable<PermissionCheckOutcome?> standing, TimeSpan budget, string path, IScheduler scheduler) =>
+        standing
+            // One pending period: consecutive nulls collapse, so the deadline below starts once.
+            .DistinctUntilChanged()
+            .Select(outcome => outcome is null
+                ? Observable.Timer(budget, scheduler)
+                    .Select(_ => (PermissionCheckOutcome?)PermissionCheckOutcome.Undetermined(
+                        $"the Read check on '{path}' stayed undecided past the permission-establishment budget ({budget})"))
+                    .StartWith((PermissionCheckOutcome?)null)
+                : Observable.Return(outcome))
+            .Switch()
+            .DistinctUntilChanged();
+
+    /// <summary>The live standing Read with its pending marker and no bound on a pending period; see <see cref="ObserveStandingRead"/>.</summary>
+    private static IObservable<PermissionCheckOutcome?> StandingReadWithPendingMarker(IMessageHub hub, string path, AccessContext? viewer)
+    {
         return Observable.Defer(() =>
         {
             if (string.IsNullOrEmpty(path))
-                return Observable.Return(PermissionCheckOutcome.Denied);
+                return Observable.Return<PermissionCheckOutcome?>(PermissionCheckOutcome.Denied);
             var userId = SubjectOf(viewer);
             var identity = viewer ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous };
             var access = hub.ServiceProvider.GetService<AccessService>();
@@ -191,20 +256,21 @@ public static class DeclaredPointRead
                 .Take(1)
                 .DefaultIfEmpty(null)
                 .SelectMany(stored => stored is null
-                    ? Observable.Return(PermissionCheckOutcome.Denied)
+                    ? Observable.Return<PermissionCheckOutcome?>(PermissionCheckOutcome.Denied)
                     // Off the mirror's gate, in order, before a revision subscribes a rule or a fold.
                     : OffTheGate(OwnerCurrent(hub, access, path)
                             .DistinctUntilChanged(node => node?.Version ?? long.MinValue))
                         .Select(node => node is null
-                            ? Observable.Return(PermissionCheckOutcome.Denied)
+                            ? Observable.Return<PermissionCheckOutcome?>(PermissionCheckOutcome.Denied)
                             : StandardRead(hub, access, path, node, identity, userId, logger))
                         .Select(evaluation => (evaluation, withdraw: true))
-                        .SwitchFailClosed(path))
+                        .SwitchFailClosed())
                 .DistinctUntilChanged()
                 .Catch((Exception ex) =>
                 {
                     logger?.LogWarning(ex, "The Read check of {Path} for {User} could not reach a verdict — undetermined, refused", path, userId);
-                    return Observable.Return(PermissionCheckOutcome.Undetermined($"the Read check on '{path}' failed ({ex.GetType().Name})"));
+                    return Observable.Return<PermissionCheckOutcome?>(
+                        PermissionCheckOutcome.Undetermined($"the Read check on '{path}' failed ({ex.GetType().Name})"));
                 });
         });
     }
@@ -216,7 +282,7 @@ public static class DeclaredPointRead
     /// (<see cref="ReadInputsChanged"/>). Both branches share the set, the pending withdrawal
     /// (<see cref="SwitchFailClosed"/>), the viewer's context and the per-evaluation budget.
     /// </summary>
-    private static IObservable<PermissionCheckOutcome> StandardRead(
+    private static IObservable<PermissionCheckOutcome?> StandardRead(
         IMessageHub hub, AccessService? access, string path, MeshNode node, AccessContext viewer, string userId, ILogger? logger)
     {
         var context = new NodeValidationContext
@@ -246,8 +312,8 @@ public static class DeclaredPointRead
                 .StartWith(false))
             .Select(withdraw => (evaluation: Classified(
                 access.RunAs(viewer, () => Observable.Defer(Evaluate).Take(1).Timeout(budget)),
-                path, userId, logger), withdraw))
-            .SwitchFailClosed(path);
+                path, userId, logger).Select(outcome => (PermissionCheckOutcome?)outcome), withdraw))
+            .SwitchFailClosed();
     }
 
     /// <summary>
@@ -327,18 +393,19 @@ public static class DeclaredPointRead
     /// <summary>
     /// 🚨 <b>Fail closed while pending.</b> Switches to each new evaluation, and when the signal that
     /// started it WITHDRAWS (a change after the verdict was established) and a verdict has already
-    /// been emitted, the evaluation starts with an undetermined "re-check pending" outcome — only
-    /// its own answer can grant again. A stall therefore stays refused, and a stream of signals can
-    /// never keep an earlier grant alive by restarting the evaluation that would have replaced it.
+    /// been emitted, the evaluation starts with the "re-check pending" marker (<c>null</c>, which
+    /// <see cref="ObserveStandardRead"/> reports as undetermined) — only its own answer can grant
+    /// again. A stall therefore stays refused, and a stream of signals can never keep an earlier
+    /// grant alive by restarting the evaluation that would have replaced it.
     /// The signals that ESTABLISH a verdict (the first evaluation, a fold's initial value) withdraw
     /// nothing, so opening a page does not blink.
     /// </summary>
-    private static IObservable<PermissionCheckOutcome> SwitchFailClosed(
-        this IObservable<(IObservable<PermissionCheckOutcome> evaluation, bool withdraw)> evaluations, string path)
+    private static IObservable<PermissionCheckOutcome?> SwitchFailClosed(
+        this IObservable<(IObservable<PermissionCheckOutcome?> evaluation, bool withdraw)> evaluations)
         => Observable.Defer(() =>
         {
             var emitted = 0;
-            var pending = PermissionCheckOutcome.Undetermined($"the Read check on '{path}' is being re-decided");
+            PermissionCheckOutcome? pending = null;
             return evaluations
                 .Select(next => next.withdraw && Volatile.Read(ref emitted) == 1
                     ? next.evaluation.StartWith(pending)
@@ -649,25 +716,47 @@ public static class DeclaredPointRead
         var partition = nodeType.Split('/', 2)[0];
         if (partition.Length == 0)
             return Observable.Return<PointReadDeclaration?>(null);
-        // 🚨 The partition's OWNERSHIP is a live input too (review of #7016, thread 4338481338). It
-        // was read once per verdict, so a sync config turned two-way, emptied or deleted withdrew
-        // nothing from an admission already established until the node itself was written again —
-        // while a fresh read was already refused. It is re-read on every commit to the config and
-        // on every declared feed gap; the stored read is authoritative, so a withdrawal answers null
-        // (no declaration) and the verdict refuses.
-        return OwnershipChanged(hub, partition)
-            .StartWith(Unit.Default)
-            .Select(_ => hub.ReadStoredNode(AccessAssignmentGuard.SyncConfigPath(partition))
-                .Take(1)
-                .DefaultIfEmpty(null)
-                .Select(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)))
-            .Switch()
-            .DistinctUntilChanged()
+        return SystemOwned(hub, access, partition)
             .Select(owned => owned
                 // The type node from its OWNER first, like the instance: a warm mirror must not keep
                 // admitting by a declaration the owner has already withdrawn or narrowed.
                 ? OwnerCurrent(hub, access, nodeType).Select(type => type is null ? null : Parse(type, options))
                 : Observable.Return<PointReadDeclaration?>(null))
+            .Switch()
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="partition"/> is system-owned (a one-way <c>_GitSync</c> naming a
+    /// repository) — LIVE, from the sync config's OWNER (MeshWeaver#7298, F5).
+    ///
+    /// <para>🚨 <b>The owner, never the store.</b> Ownership used to be read from STORAGE and re-read on
+    /// the invalidation feed (review of #7016). But the owner of the sync config acknowledges a write
+    /// before it persists it (it samples its saves), and the feed announces the change only once the
+    /// row lands — so in that window an ownership change the owner had ALREADY acknowledged (turned
+    /// two-way, emptied) still admitted a fresh point read from the stale row, and an open admission
+    /// stayed open. Now the store is only the EXISTENCE probe (a point read of an absent node opens no
+    /// live read; a stale negative refuses — the closed direction), and the content is the owner's
+    /// current revision, then followed live (<see cref="OwnerCurrent"/>): the very next revision that
+    /// ends the ownership withdraws the declaration, persisted or not.</para>
+    ///
+    /// <para>The existence probe is re-taken on every commit to the config and on every declared feed
+    /// gap (<see cref="OwnershipChanged"/>), so a config created or deleted is picked up; a config the
+    /// owner no longer has answers not-owned.</para>
+    /// </summary>
+    private static IObservable<bool> SystemOwned(IMessageHub hub, AccessService? access, string partition)
+    {
+        var options = hub.JsonSerializerOptions;
+        var syncPath = AccessAssignmentGuard.SyncConfigPath(partition);
+        return OwnershipChanged(hub, partition)
+            .StartWith(Unit.Default)
+            .Select(_ => hub.ReadStoredNode(syncPath)
+                .Take(1)
+                .DefaultIfEmpty(null)
+                .Select(stored => stored is null
+                    ? Observable.Return(false)
+                    : OwnerCurrent(hub, access, syncPath).Select(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)))
+                .Switch())
             .Switch()
             .DistinctUntilChanged();
     }
@@ -698,9 +787,20 @@ public static class DeclaredPointRead
     /// acknowledged — a revocation above all — decides the very next read; the process-wide node
     /// stream mirror can trail that acknowledgement, so it only FOLLOWS afterwards, and any mirror
     /// revision older than the owner's is ignored.
+    ///
+    /// <para>🚨 <b>The hub's OWN path is read locally</b> (MeshWeaver#7298, F8). When
+    /// <paramref name="hub"/> IS the owner, the owner's current state is its own-node stream — no
+    /// round-trip. The round-trip was not merely redundant there: a gated, declaration-only read the
+    /// hub sent to ITSELF under a caller's context (<c>hub.GetMeshNode(hub.Address.Path)</c>) is
+    /// decided at this hub's delivery gate, and the System probe this method posted carried the SAME
+    /// sender, so the gate's per-sender ordering (<c>SenderOrderedRelease</c>) queued the probe behind
+    /// the very read whose verdict waited for it — the read timed out and failed closed. Remote paths
+    /// keep the owner round-trip.</para>
     /// </summary>
     private static IObservable<MeshNode?> OwnerCurrent(IMessageHub hub, AccessService? access, string path)
     {
+        if (IsOwnPath(hub, path))
+            return SystemRead(hub, access, path);
         var ownerRead = access is null
             ? hub.GetMeshNode(path)
             : access.RunAsSystem(() => hub.GetMeshNode(path));
@@ -712,6 +812,15 @@ public static class DeclaredPointRead
                     .Where(mirror => mirror is null || mirror.Version >= current.Version)
                     .StartWith(current));
     }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is <paramref name="hub"/>'s own node — decided exactly as
+    /// <c>IWorkspace.GetMeshNodeStream(path)</c> decides it, so "own" here is precisely the case the node
+    /// stream serves from the hub's local own-node reducer.
+    /// </summary>
+    private static bool IsOwnPath(IMessageHub hub, string path)
+        => string.Equals(path, hub.Address.Path, StringComparison.Ordinal)
+           || string.Equals(path, hub.Address.ToString(), StringComparison.Ordinal);
 
     /// <summary>The node at <paramref name="path"/> from the node-stream mirror, live, read as System — the node-stream read gate passes System straight through, so this never re-enters it.</summary>
     private static IObservable<MeshNode?> SystemRead(IMessageHub hub, AccessService? access, string path)
