@@ -152,26 +152,20 @@ def _is_glob(path: str) -> bool:
     return "*" in path or "?" in path
 
 
-# ── items a <Target> creates: invisible to evaluation, so they FAIL CLOSED unless tracked ─────────
-# `-getItem` reports EVALUATION-time items only. An ItemGroup inside a <Target> (a BeforeTargets=
-# "CoreCompile" adding Compile, say) runs at build time, and its paths would reach the compiler
-# while neither the key nor the scope sees them. So every path item a target adds in an in-repo
-# MSBuild file must be one of:
-#   - outside this repository (the SDK, NuGet, the platform: keyed by the SDK version and the
-#     platform ref + digest, as everywhere else in this evaluation);
-#   - under one of the project's BUILD OUTPUT directories (_OUTPUT_PROPERTIES): output staging,
-#     like the Razor extension's razor-generators.json under $(IntermediateOutputPath), is a
-#     product of the build, not an input to it;
-#   - inside the project's own directory (tree-hashed by the key, in the scope's reach) or an
-#     item MSBuild already evaluated;
-#   - a plain `@(X)` whose every in-repo declaration passes these same rules (an X no in-repo file
-#     declares is produced by the SDK's own targets, e.g. @(ReferencePath)).
-# Anything else (an in-repo path outside them, an item transform `@(X->'…')`, a metadata path,
-# a property no evaluation resolves) is REFUSED, naming the target and the file.
+# ── what a <Target> reads: an ALLOW-LIST, everything else FAILS CLOSED ───────────────────────────
+# `-getItem` reports EVALUATION-time items only, and a target's task inputs are never items at
+# all: an ItemGroup inside a <Target> (a BeforeTargets="CoreCompile" adding Compile) or a task
+# attribute (a Copy SourceFiles) reaches the build while neither the key nor the scope sees it.
+# Deny-listing shapes did not converge, so target_item_violations() ALLOWS only (a) a literal path
+# into a tracked input, a build output or an exempt root, (b) a plain @(X) over allowed items,
+# (c) empty — after evaluation-time properties only — and refuses everything else by name.
 # Task attributes that only carry TEXT to be printed or written, never a path that is read.
 _TEXT_ONLY_ATTRIBUTES = frozenset({("Message", "Text"), ("Message", "Importance"), ("Warning", "Text"),
                                    ("Warning", "Code"), ("Error", "Text"), ("Error", "Code"),
                                    ("WriteLinesToFile", "Lines")})
+# Roots OUTSIDE the repository a target may read from: keyed by the SDK version, the NuGet lock and
+# the platform ref + digest, never per file here.
+_EXEMPT_ROOT_PROPERTIES = ("NetCoreRoot", "NetCoreTargetingPackRoot", "NuGetPackageRoot", "MeshWeaverRoot")
 _OUTPUT_PROPERTIES = ("BaseIntermediateOutputPath", "IntermediateOutputPath", "BaseOutputPath",
                       "OutputPath", "OutDir", "TargetDir", "PublishDir")
 
@@ -206,131 +200,171 @@ def _output_dirs(project: Path, properties: dict[str, str]) -> list[str]:
 
 
 def target_item_violations(root: Path, files: list[str], project_rel: str, properties: dict[str, str],
-                           tracked: set[str]) -> list[str]:
-    project_dir = (root / project_rel).parent
+                           tracked: set[str], tracked_patterns: frozenset[str] = frozenset()) -> list[str]:
+    """An ALLOW-LIST over everything a <Target> in the in-repo graph hands a task or adds as an item.
+
+    Every task attribute (except a Condition and the text-only ones) and every item Include inside a
+    target must, after substituting EVALUATION-time properties only, be one of:
+      (a) a literal path that resolves into a tracked input (the project's own tree-hashed
+          directory, a file the key already hashes, a tracked glob), a build OUTPUT, or an exempt
+          root outside the repository: the SDK, the NuGet package root, the platform checkout
+          (keyed by the SDK version and the platform ref + digest);
+      (b) a plain `@(X)` whose every declaration is itself allowed (an X no in-repo file declares
+          is produced by the SDK's own targets);
+      (c) empty.
+    Anything else is REFUSED, naming the target, the file and the expression: a property assigned
+    inside ANY target (its runtime value is not the evaluated one), any `$([…])` function, a
+    transform, metadata batching, an unresolved property, an in-repo path that is not tracked, or
+    a path outside the repository that is no exempt root. An ItemGroup, item or task whose
+    Condition is decidably FALSE over evaluation-time values never runs and is not checked.
+    A target PROPERTY may still hold a property function that depends on no item: the file it
+    reads is named in the project text, which the sweep keys."""
+    root = root.resolve()
+    project_dir = (root / project_rel).parent.resolve()
     outputs = _output_dirs(root / project_rel, properties)
-    declarations: dict[str, list[tuple[str, Path]]] = {}
-    in_targets: list[tuple[str, str, str, Path, str]] = []   # (target, tag, include, file, rel)
-    task_sites: list[tuple[str, str, str, str, Path, str]] = []  # (target, task, attribute, value, file, rel)
-    target_props: dict[str, list[str]] = {}
-    target_prop_sites: list[tuple[str, str, str, str]] = []  # (target, property, raw value, rel)
+    exempt_roots = [os.path.normpath(properties[n]) for n in _EXEMPT_ROOT_PROPERTIES if (properties.get(n) or "").strip()]
+    declarations: dict[str, list[tuple[str, Path, tuple]]] = {}
+    target_assigned: set[str] = set()
+    sites: list[tuple[str, str, str, Path, str, tuple]] = []      # (target, what, value, file, rel, conditions)
+    target_prop_sites: list[tuple[str, str, str, str]] = []       # (target, property, raw, rel)
     for rel in files:
         try:
             tree = ET.parse(root / rel)
         except ET.ParseError as exc:
             raise RuntimeError(f"{rel} is not well-formed MSBuild XML ({exc})") from None
 
-        def walk(node, target):
+        def walk(node, target, conds):
             for el in node:
                 tag = _local(el.tag)
+                if not tag:
+                    continue
+                c = conds + ((el.get("Condition"), root / rel),) if el.get("Condition") else conds
                 if tag == "Target":
-                    walk(el, el.get("Name") or "?")
-                elif tag == "PropertyGroup" and target:
+                    walk(el, el.get("Name") or "?", c)
+                elif tag == "PropertyGroup":
                     for prop in el:
-                        if _local(prop.tag):
-                            target_props.setdefault(_local(prop.tag), []).append(prop.text or "")
+                        if _local(prop.tag) and target:
+                            target_assigned.add(_local(prop.tag))
                             target_prop_sites.append((target, _local(prop.tag), prop.text or "", rel))
-                elif target and tag not in ("ItemGroup", "PropertyGroup", "OnError") and tag:
-                    # a TASK: every attribute is checked except a Condition (it decides, it reads no
-                    # path) and the attributes that only carry TEXT to be written or printed
-                    for attr, value in el.attrib.items():
-                        if attr == "Condition" or (tag, attr) in _TEXT_ONLY_ATTRIBUTES:
-                            continue
-                        task_sites.append((target, tag, attr, value, root / rel, rel))
                 elif tag == "ItemGroup":
                     for item in el:
                         name = _local(item.tag)
                         include = item.get("Include")
                         if not name or include is None or name in _NAME_ITEMS:
                             continue
-                        declarations.setdefault(name, []).append((include, root / rel))
+                        ic = c + ((item.get("Condition"), root / rel),) if item.get("Condition") else c
+                        declarations.setdefault(name, []).append((include, root / rel, ic))
                         if target:
-                            in_targets.append((target, name, include, root / rel, rel))
+                            sites.append((target, f"<{name} Include=\"{include}\">", include, root / rel, rel, ic))
+                elif target and tag != "OnError":
+                    for attr, value in el.attrib.items():
+                        if attr == "Condition" or (tag, attr) in _TEXT_ONLY_ATTRIBUTES:
+                            continue
+                        sites.append((target, f"task <{tag} {attr}=\"{value}\">", value, root / rel, rel, c))
                 else:
-                    walk(el, target)
-        walk(tree.getroot(), None)
+                    walk(el, target, c)
+        walk(tree.getroot(), None, ())
 
-    def reason(include: str, f: Path, seen: frozenset[str]) -> str | None:
-        for piece in include.split(";"):
+    def expand(value: str, f: Path):
+        """(expanded, None) with evaluation-time properties substituted, or (None, reason)."""
+        out, last = [], 0
+        for m in re.finditer(r"\$\(([^()]*)\)", value):
+            out.append(value[last:m.start()])
+            name = m.group(1).strip()
+            if name.startswith("[") or not re.fullmatch(r"[A-Za-z_][\w.-]*", name):
+                return None, f"'{value}' uses a property function; only a literal, an evaluation-time property or a plain @(X) is allowed"
+            if name in target_assigned:
+                return None, f"'{value}' uses $({name}), a property assigned inside a target: its runtime value is not the evaluated one"
+            if name == "MSBuildThisFileDirectory":
+                out.append(str(f.parent) + "/")
+            elif name == "MSBuildProjectDirectory":
+                out.append(str(project_dir))
+            elif name in properties:
+                out.append(properties[name])
+            else:
+                return None, f"'{value}' uses $({name}), which this evaluation cannot resolve"
+            last = m.end()
+        if "$([" in value:
+            return None, f"'{value}' uses a property function"
+        out.append(value[last:])
+        return "".join(out), None
+
+    def decidably_false(conds: tuple) -> bool:
+        for cond, f in conds:
+            expanded, why = expand(cond, f)
+            if why or expanded is None:
+                continue
+            m = re.fullmatch(r"\s*'([^']*)'\s*(==|!=)\s*'([^']*)'\s*", expanded)
+            if m and ((m.group(1).lower() == m.group(3).lower()) != (m.group(2) == "==")):
+                return True
+        return False
+
+    def under(path: str, base: str) -> bool:
+        return path == base or path.startswith(base.rstrip("/") + "/")
+
+    def allowed(value: str, f: Path, seen: frozenset[str]) -> str | None:
+        for piece in value.split(";"):
             piece = piece.strip()
             if not piece:
-                continue
-            if piece.startswith("@("):
-                m = re.fullmatch(r"@\(([A-Za-z_][\w.-]*)\)", piece)
-                if not m:
-                    return f"'{piece}' is an item transform; the paths it produces are not modelled"
+                continue                                              # (c) empty
+            m = re.fullmatch(r"@\(([A-Za-z_][\w.-]*)\)", piece)
+            if m:                                                     # (b) a plain @(X)
                 name = m.group(1)
                 if name in seen:
                     continue
-                for inner, inner_file in declarations.get(name, []):  # none: produced by the SDK's targets
-                    why = reason(inner, inner_file, seen | {name})
+                for inner, inner_file, inner_conds in declarations.get(name, []):
+                    if decidably_false(inner_conds):
+                        continue
+                    why = allowed(inner, inner_file, seen | {name})
                     if why:
                         return f"'{piece}' draws on {inner_file.relative_to(root).as_posix()}: {why}"
                 continue
+            if "@(" in piece or "->" in piece:
+                return f"'{piece}' is an item transform or reference that is not a plain @(X)"
             if "%(" in piece:
-                return f"'{piece}' is a metadata-based path, not modelled"
-            path = _absolute(piece, project_dir, f.parent, project_dir, properties)
-            if path is None:
-                return f"'{piece}' uses a property this evaluation cannot resolve"
-            try:
-                rel = Path(path).relative_to(root).as_posix()
-            except ValueError:
-                continue  # outside the repository: SDK / NuGet / platform bytes, keyed elsewhere
-            if any(path == o or path.startswith(o.rstrip("/") + "/") for o in outputs):
-                continue  # a build output (staging), not an input
-            if rel.startswith(Path(project_rel).parent.as_posix() + "/") or rel in tracked:
+                return f"'{piece}' uses metadata batching"
+            expanded, why = expand(piece, f)
+            if why:
+                return why
+            expanded = expanded.replace("\\", "/").strip()
+            if not expanded:
                 continue
+            path = os.path.normpath(expanded if expanded.startswith("/") else str(project_dir / expanded))
+            check = path
+            if _is_glob(path):                                        # a glob: judged by its static root
+                cut = min(i for i in (path.find("*"), path.find("?")) if i >= 0)
+                check = os.path.dirname(path[:cut]) if not path[:cut].endswith("/") else path[:cut].rstrip("/")
+                try:
+                    if Path(path).resolve().relative_to(root).as_posix() in tracked_patterns:
+                        continue
+                except (ValueError, OSError):
+                    pass
+            if any(under(check, o) for o in outputs) or any(under(check, r) for r in exempt_roots):
+                continue                                              # (a) an output, or the SDK / NuGet / platform
+            if under(check, str(project_dir)):
+                continue                                              # (a) the project's tree-hashed directory
+            try:
+                rel = Path(check).resolve().relative_to(root).as_posix()
+            except (ValueError, OSError):
+                return f"'{piece}' resolves to {check}, outside the repository and outside every exempt root (SDK, NuGet, platform)"
+            if rel in tracked:
+                continue                                              # (a) a file the key already hashes
             return f"'{piece}' resolves to {rel}, an in-repo path that is not a tracked input"
         return None
 
-    def inline(value: str) -> str:
-        """Target-defined properties replaced by EVERY raw definition (a later definition may win)."""
-        for _ in range(6):
-            new_value = _PROPERTY.sub(lambda m: " ; ".join(target_props[m.group(1)]) if m.group(1) in target_props
-                                      else m.group(0), value)
-            if new_value == value:
-                break
-            value = new_value
-        return value
-
-    def function_reason(value: str) -> str | None:
-        """A property function is statically resolved when it depends on no item: its arguments are
-        then fixed strings, and any file it reads is named in the project text the sweep reads."""
-        for m in re.finditer(r"\$\(\[", value):
-            body = value[m.start():]
-            if "@(" in body or "%(" in body:
-                return f"a property function over items ('{value.strip()[:120]}') is not statically resolved"
-        return None
-
-    def dynamic_reason(value: str) -> str | None:
-        if "->" in value:
-            return f"an item transform ('{value.strip()[:120]}') produces paths that are not modelled"
-        if "%(" in value:
-            return f"metadata batching ('{value.strip()[:120]}') produces paths that are not modelled"
-        return function_reason(value)
-
     out = []
-    for target, tag, include, f, rel in in_targets:
-        why = reason(include, f, frozenset())
+    for target, what, value, f, rel, conds in sites:
+        if decidably_false(conds):
+            continue
+        why = allowed(value, f, frozenset())
         if why:
-            out.append(f"{rel}: <Target Name=\"{target}\"> adds <{tag} Include=\"{include}\"> — {why}")
-    for target, task, attr, value, f, rel in task_sites:
-        expanded = inline(value)
-        why = dynamic_reason(expanded)
-        if why is None:
-            for piece in expanded.split(";"):
-                piece = piece.strip()
-                if re.fullmatch(r"@\(([A-Za-z_][\w.-]*)\)", piece):
-                    why = reason(piece, f, frozenset())
-                    if why:
-                        break
-        if why:
-            out.append(f"{rel}: <Target Name=\"{target}\"> task <{task} {attr}=\"{value}\"> — {why}")
+            out.append(f"{rel}: <Target Name=\"{target}\"> {what} — {why}")
     for target, prop, raw, rel in target_prop_sites:
-        why = function_reason(inline(raw))
-        if why:
-            out.append(f"{rel}: <Target Name=\"{target}\"> property <{prop}> — {why} (a property function may "
-                       "read a file, so it must be statically resolvable)")
+        for m in re.finditer(r"\$\(\[", raw):
+            if "@(" in raw[m.start():] or "%(" in raw[m.start():]:
+                out.append(f"{rel}: <Target Name=\"{target}\"> property <{prop}> — a property function over items "
+                           f"('{raw.strip()[:120]}'): it may read a file no evaluation can name")
+                break
     return out
 
 
@@ -572,7 +606,7 @@ def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -
             raise RuntimeError(f"`dotnet msbuild -pp` wrote nothing for {rel}")
     # Every in-repo file the banners name, WHATEVER its suffix (a .msbuild, a .proj, a .xml import).
     imports = sorted(pp_imports(root, text) | {rel})
-    wanted = sorted(set(_referenced_properties(root, imports)) | set(_OUTPUT_PROPERTIES)
+    wanted = sorted(set(_referenced_properties(root, imports)) | set(_OUTPUT_PROPERTIES) | set(_EXEMPT_ROOT_PROPERTIES)
                     | set(pp_properties(root, text, root / rel)))
     got = json.loads(_run([dotnet, "msbuild", str(proj), "-nologo", *props,
                            *[f"-getItem:{t}" for t in ITEM_TYPES],
@@ -592,7 +626,7 @@ def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -
     swept, swept_patterns = sweep(root, text, (root / rel).resolve(), values, outputs)
     declared_patterns = sorted(set(declared_patterns) | set(swept_patterns))
     tracked = {p for paths in items.values() for p in paths} | set(imports) | set(swept)
-    violations = target_item_violations(root, imports, rel, values, tracked)
+    violations = target_item_violations(root, imports, rel, values, tracked, frozenset(declared_patterns))
     if violations:
         raise RuntimeError(
             f"{rel}: a <Target> adds path items that MSBuild's evaluation cannot see, so neither the key "

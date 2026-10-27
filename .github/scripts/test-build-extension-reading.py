@@ -254,7 +254,7 @@ def main() -> int:
                  '<Target Name="Fn" BeforeTargets="CoreCompile"><ItemGroup>'
                  "<Compile Include=\"$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)','..','Gen2','Extra.cs'))\" />"
                  '</ItemGroup></Target>',
-                 "cannot resolve"),
+                 "property function"),
                 # TASK attributes: every dynamic expression shape that is not statically resolved
                 ("a TRANSFORM in a task attribute (Copy SourceFiles)",
                  '<ItemGroup><_GeneratorName Include="Extra" /></ItemGroup><Target Name="CopyGen" AfterTargets="Build">'
@@ -267,16 +267,34 @@ def main() -> int:
                 ("a PROPERTY FUNCTION over items in a task attribute",
                  '<ItemGroup><_G Include="Local.cs" /></ItemGroup><Target Name="Fn2" AfterTargets="Build">'
                  "<Copy SourceFiles=\"$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '@(_G)'))\" DestinationFolder=\"$(OutDir)\" /></Target>",
-                 "property function over items"),
+                 "not a plain @(X)"),
                 ("a transform reaching a task attribute THROUGH a target property",
                  '<ItemGroup><_GeneratorName Include="Extra" /></ItemGroup><Target Name="Via" AfterTargets="Build">'
                  "<PropertyGroup><_Src>@(_GeneratorName->'../Gen2/%(Identity).cs')</_Src></PropertyGroup>"
                  '<Copy SourceFiles="$(_Src)" DestinationFolder="$(OutDir)" /></Target>',
-                 "item transform"),
+                 "assigned inside a target"),
                 ("a target PROPERTY reading a file through a property function over items",
                  '<ItemGroup><_G Include="Local.cs" /></ItemGroup><Target Name="Read" AfterTargets="Build">'
                  "<PropertyGroup><_Text>$([System.IO.File]::ReadAllText('@(_G)'))</_Text></PropertyGroup></Target>",
-                 "property <_Text>")):
+                 "property <_Text>"),
+                # Thread 4384923575, both shapes — refused by the ALLOW-LIST, not by a shape rule:
+                ("a TARGET-LOCAL property in a task attribute (GeneratorDir set inside the target)",
+                 '<Target Name="Gen" AfterTargets="Build"><PropertyGroup><GeneratorDir>../Gen2</GeneratorDir></PropertyGroup>'
+                 '<Copy SourceFiles="$(GeneratorDir)/Extra.cs" DestinationFolder="$(OutDir)" /></Target>',
+                 "$(GeneratorDir), a property assigned inside a target"),
+                ("a PATH FUNCTION in a task attribute ($([System.IO.Path]::Combine(…)), item-free)",
+                 '<Target Name="Path" AfterTargets="Build">'
+                 "<Copy SourceFiles=\"$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)','..','Gen2','Extra.cs'))\" "
+                 'DestinationFolder="$(OutDir)" /></Target>',
+                 "property function"),
+                ("an in-repo literal that is NOT a tracked input (a path nothing keys)",
+                 '<Target Name="Untracked" AfterTargets="Build">'
+                 '<Copy SourceFiles="../Gen2/NotThere.cs" DestinationFolder="$(OutDir)" /></Target>',
+                 "not a tracked input"),
+                ("a literal OUTSIDE the repository and every exempt root",
+                 '<Target Name="Outside" AfterTargets="Build">'
+                 '<Copy SourceFiles="/etc/hosts" DestinationFolder="$(OutDir)" /></Target>',
+                 "outside every exempt root")):
             r = tgt_eval(body)
             check(f"{label} ⇒ REFUSED red, naming the target and the file",
                   r.returncode != 0 and "Tgt/Tgt.csproj" in r.stderr and "<Target Name=" in r.stderr and needle in r.stderr,
@@ -295,6 +313,9 @@ def main() -> int:
                  '<ItemGroup><_G Include="Local.cs" /></ItemGroup><Target Name="Text" AfterTargets="Build">'
                  "<Message Condition=\"'%(_G.Filename)' != ''\" Text=\"@(_G->'%(Filename)')\" />"
                  "<WriteLinesToFile File=\"$(IntermediateOutputPath)names.txt\" Lines=\"@(_G->'%(Filename)')\" /></Target>"),
+                ("(a) a literal in-repo path the sweep tracks, an evaluation-time property and scalars",
+                 '<Target Name="Lit" AfterTargets="Build">'
+                 '<Copy SourceFiles="../Gen2/Extra.cs" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Retries="2" /></Target>'),
                 ("a statically resolved property function reading a file in a target property",
                  '<Target Name="ReadStatic" AfterTargets="Build"><PropertyGroup>'
                  "<_Text>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/Local.cs'))</_Text></PropertyGroup></Target>")):
