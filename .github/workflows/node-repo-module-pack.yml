@@ -4942,12 +4942,12 @@ jobs:
           python3 "$DEDUPE_TREE" --self-test > /dev/null
           # The runner choice and working directory are the legs' own (see their run step): a
           # global.json is read walking UP from the cwd, and -warnaserror is the VSTest legs' flag.
-          selects_mtp() {
+          build_uses_mtp() {
             [ -f "$1/global.json" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get('test',{}).get('runner') == 'Microsoft.Testing.Platform' else 1)" "$1/global.json"
           }
           TEST_CWD="$PWD"; warn=(-warnaserror)
-          if selects_mtp "$PWD"; then warn=()
-          elif selects_mtp "$GITHUB_WORKSPACE/meshweaver"; then warn=(); TEST_CWD="$GITHUB_WORKSPACE/meshweaver"
+          if build_uses_mtp "$PWD"; then warn=()
+          elif build_uses_mtp "$GITHUB_WORKSPACE/meshweaver"; then warn=(); TEST_CWD="$GITHUB_WORKSPACE/meshweaver"
           fi
           printf '%s' "$BATCHES" | jq -r '.[].entries[].project' | sort -u > "$RUNNER_TEMP/projects.txt"
           suites=()
@@ -4962,6 +4962,7 @@ jobs:
           if [ "${#suites[@]}" -eq 0 ]; then
             echo "no selected module ships a test project — nothing to build; every leg records 'suite=absent'"
             mkdir -p "$RUNNER_TEMP/tests-bin" && echo none > "$RUNNER_TEMP/tests-bin/none"
+            echo "BUILD_RC=0" >> "$GITHUB_ENV"
             exit 0
           fi
           sln="$RUNNER_TEMP/suites.slnx"
@@ -5400,6 +5401,14 @@ jobs:
               unstarted+=("$MODULE")
               continue
             fi
+            # The restored obj/ points at the NuGet cache for the test SDK's props and targets
+            # (xunit, Microsoft.Testing.Platform), and --no-build implies --no-restore: a clean
+            # runner's cache has none of them. Restore (no compile) fills it.
+            if ! dotnet restore "$tests" -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" > "$RUNNER_TEMP/restore-$MODULE.log" 2>&1; then
+              cat "$RUNNER_TEMP/restore-$MODULE.log"
+              MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "restoring the suite's packages failed (the log is above), so it could not run"
+              continue
+            fi
             set +e
             ( set -euo pipefail
               mapfile -t flags < <(test_flags "$RUNNER_TEMP/trx/$MODULE")
@@ -5595,7 +5604,7 @@ jobs:
     name: All selected bundles built
     # `prepare` and `build-workspace` are here for the host arm alone: on a build host it must SEE that
     # they did not run (a skip asserted, never assumed). The Actions arm reads them through `pack`.
-    needs: [select, prepare, build-workspace, pack, tests]
+    needs: [select, prepare, build-workspace, pack, tests-build, tests]
     if: always()
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
@@ -5619,6 +5628,7 @@ jobs:
           WORKSPACE_RESULT: ${{ needs.build-workspace.result }}
           PACK_RESULT: ${{ needs.pack.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
+          TESTS_BUILD_RESULT: ${{ needs.tests-build.result }}
         run: |
           set -euo pipefail
           echo "bundles_built=false" >> "$GITHUB_OUTPUT"
@@ -5627,7 +5637,7 @@ jobs:
             echo "::error title=Module bundles incomplete::the selection job reported '${SELECT_RESULT:-<nothing>}' (lane '${LANE:-<none>}') — on a build host the selection is still made here and is what the host's records are checked against; without it nothing says what the host owed."
             problems=1
           fi
-          for pair in "prepare=$PREPARE_RESULT" "build-workspace=$WORKSPACE_RESULT" "pack=$PACK_RESULT" "tests=$TESTS_RESULT"; do
+          for pair in "prepare=$PREPARE_RESULT" "build-workspace=$WORKSPACE_RESULT" "pack=$PACK_RESULT" "tests-build=$TESTS_BUILD_RESULT" "tests=$TESTS_RESULT"; do
             if [ "${pair#*=}" != "skipped" ]; then
               echo "::error title=Build executor::executor is 'host' but this lane's ${pair%%=*} job reported '${pair#*=}' — the two executors disagree about who built this run; refusing to answer"
               problems=1
@@ -5705,13 +5715,21 @@ jobs:
           EXPECTED: ${{ needs.select.outputs.selected }}
           PACK_RESULT: ${{ needs.pack.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
+          TESTS_BUILD_RESULT: ${{ needs.tests-build.result }}
           SCOPE: ${{ needs.select.outputs.scope }}
           COUNT: ${{ needs.select.outputs.count }}
           DECLARED: ${{ inputs.modules }}
           LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT, tests lane: $TESTS_RESULT"
+          echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT, tests build: $TESTS_BUILD_RESULT, tests lane: $TESTS_RESULT"
+          # The legs run even after `tests-build` failed (so the suites that built still get a
+          # verdict), so green legs can coexist with a red build. The build's red is the lane's red.
+          case "$TESTS_BUILD_RESULT" in
+            failure|cancelled)
+              echo "::error title=Module suites did not build::Module tests (build once) = $TESTS_BUILD_RESULT — read that job for the suites that did not compile"
+              TESTS_RESULT=failure ;;
+          esac
           # 🚨 An INDEPENDENT recount, because the count and the selection come from the same
           # call and therefore agree by construction — they cannot catch a selection that is
           # simply wrong. This one has a second source: on a FULL scope the answer must be every

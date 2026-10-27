@@ -71,6 +71,10 @@ def unpack(root: Path, src: Path, only: list[str] | None) -> dict:
     prefixes = [p.rstrip("/") + "/" for p in only] if only else None
     matched = {p: 0 for p in (prefixes or [])}
     restored = linked = 0
+    # A hard link shares its blob's inode, so its mode is the blob's: the first link of a blob sets
+    # it, and an entry that wants a DIFFERENT mode gets a copy (else a chmod would strip the
+    # executable bit from every earlier link to the same bytes).
+    blob_mode: dict[str, int] = {}
     for e in manifest["entries"]:
         if prefixes is not None:
             hit = [p for p in prefixes if e["path"].startswith(p)]
@@ -89,10 +93,13 @@ def unpack(root: Path, src: Path, only: list[str] | None) -> dict:
         blob = store / e["sha256"]
         if not blob.is_file():
             sys.exit(f"✗ {e['path']} needs blob {e['sha256'][:12]}… which is not in the store — the artifact is incomplete; refusing to restore a tree with holes")
-        try:
-            os.link(blob, dest)
-            linked += 1
-        except OSError:
+        if blob_mode.setdefault(e["sha256"], e["mode"]) == e["mode"]:
+            try:
+                os.link(blob, dest)
+                linked += 1
+            except OSError:
+                shutil.copyfile(blob, dest)
+        else:
             shutil.copyfile(blob, dest)
         os.chmod(dest, e["mode"])
         restored += 1
@@ -122,25 +129,31 @@ def self_test() -> int:
         exe = root / "src" / "A.Test" / "bin" / "Release" / "A.Test"
         exe.write_bytes(b"apphost")
         exe.chmod(0o755)
+        plain = root / "src" / "B.Test" / "bin" / "Release" / "apphost.copy"   # same bytes, NOT executable
+        plain.write_bytes(b"apphost")
+        plain.chmod(0o644)
         os.symlink("Shared.dll", root / "src" / "B.Test" / "bin" / "Release" / "link.dll")
         out = Path(tmp) / "out"
         m = pack(root, out, ["src/A.Test/bin", "src/A.Test/obj", "src/B.Test/bin", "src/B.Test/obj"])
-        check("identical content is stored once", m["unique"] == 5 and m["files"] == 8, repr({k: v for k, v in m.items() if k != "entries"}))
+        check("identical content is stored once", m["unique"] == 5 and m["files"] == 9, repr({k: v for k, v in m.items() if k != "entries"}))
         check("the store is smaller than the tree", m["storedBytes"] < m["rawBytes"])
         fresh = Path(tmp) / "fresh"
         fresh.mkdir()
         r = unpack(fresh, out, None)
-        check("every entry is restored", r["restored"] == 8, repr(r))
+        check("every entry is restored", r["restored"] == 9, repr(r))
         check("bytes round-trip", (fresh / "src/B.Test/bin/Release/Shared.dll").read_bytes() == b"shared" * 1000
               and (fresh / "src/A.Test/bin/Release/A.Test.dll").read_bytes() == b"A.Test" * 10)
         check("the executable bit survives", (fresh / "src/A.Test/bin/Release/A.Test").stat().st_mode & 0o111 != 0)
+        check("…even when the same bytes are restored elsewhere WITHOUT it (no shared inode, no stripped bit)",
+              (fresh / "src/A.Test/bin/Release/A.Test").stat().st_mode & 0o777 == 0o755
+              and (fresh / "src/B.Test/bin/Release/apphost.copy").stat().st_mode & 0o777 == 0o644)
         check("a symlink is a symlink", os.path.islink(fresh / "src/B.Test/bin/Release/link.dll")
               and os.readlink(fresh / "src/B.Test/bin/Release/link.dll") == "Shared.dll")
         sliced = Path(tmp) / "sliced"
         sliced.mkdir()
         r = unpack(sliced, out, ["src/B.Test"])
         check("--only restores one slice and nothing else", (sliced / "src/B.Test/bin/Release/B.Test.dll").is_file()
-              and not (sliced / "src/A.Test").exists() and r["restored"] == 4, repr(r))
+              and not (sliced / "src/A.Test").exists() and r["restored"] == 5, repr(r))
         # Replace (unlink + write), never write THROUGH the restored path: it is a hard link to the
         # store blob, and writing through it would rewrite the store — the reason a restored tree is
         # read-only by contract and every test output lands in NEW files (trx, test-logs).
