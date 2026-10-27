@@ -85,14 +85,10 @@ BUILD_COMMAND = (
 # verdict. Remove an entry only in the change that pays it (check-build-stages.py refuses the
 # ciEquivalent claim while any remains).
 OWES = [
-    "route: dotnet-test.yml has no admission — no job calls build-executor.py and no follow job (build-follow.yml) "
-    "stands in for the `build`, `test` and `doc-gate` jobs, so even an equivalent declaration would route nothing "
-    "(the satellites' shape: node-repo-build-executor.yml + build-follow.yml + a host-verdict input)",
-    "Consolidate test results: a host shard hands back the `test` job's results tree (testResults-shard<i>/: "
-    "test/**/*.trx, test/test-results.log, collected-logs/) as H9 receipts, but collect-results still reads only the "
-    "testResults-shard<i>-attempt<a> artifacts of the `test` matrix — it does not fetch a host run's receipts "
-    "(build-artifacts-fetch.py), so a host run's consolidated verdict and failure summary cannot be built yet (lands "
-    "with the route)",
+    "Consolidate test results: host-results brings each host shard's handed-back results into the run as the "
+    "`test` matrix's own artifacts, from the runners' shared store, on the self-hosted pool — core's repository has "
+    "no MW_RUNNER / MW_ARTIFACT_STORE variable today, so on the host route that job is RED naming them (Actions: "
+    "collect-results over the testResults-shard<i>-attempt<a> artifacts)",
     "fan-out: a host runs one run's stages serially — build 25 + 8 shards x 20 + doc-gate 25 minutes is past the run "
     "deadline; the deployment route already submits one pinned run per stage, but such runs do not share one "
     "$MW_BUILD_OUTPUTS, so the shards need this run's pack through the shared cache (`needs: outputs`), which today "
@@ -220,6 +216,26 @@ def container_problems(root: str) -> list[str]:
     return out
 
 
+FOLLOW_MATRIX = re.compile(r"^  host-follow:\n(?:    .*\n|\n)*?        stage: \[([^\]]*)\]", re.M)
+RESULTS_MATRIX = re.compile(r"^  host-results:\n(?:    .*\n|\n)*?        shard: \[([^\]]*)\]", re.M)
+
+
+def route_problems(workflow_text: str, total: int) -> list[str]:
+    """dotnet-test.yml's host route follows EVERY declared stage and fetches EVERY shard's results —
+    a stage the follow matrix omits would be a host verdict nobody reads."""
+    out: list[str] = []
+    want = [s["name"] for s in generate(total)["stages"]]
+    m = FOLLOW_MATRIX.search(workflow_text)
+    got = [x.strip() for x in m.group(1).split(",")] if m else None
+    if got != want:
+        out.append(f"{WORKFLOW} job host-follow's stage matrix is {got} but {STAGES} declares {want} — follow every declared stage")
+    m = RESULTS_MATRIX.search(workflow_text)
+    got = [x.strip() for x in m.group(1).split(",")] if m else None
+    if got != [str(i) for i in range(total)]:
+        out.append(f"{WORKFLOW} job host-results' shard matrix is {got} but CI_SHARD_TOTAL is {total} — fetch every shard's results")
+    return out
+
+
 def _read(path: str) -> str | None:
     try:
         with open(path) as fh:
@@ -275,6 +291,18 @@ def _self_test() -> int:
         expect(False, "a workflow with no CI_SHARD_TOTAL is refused")
     except SystemExit:
         expect(True, "a workflow with no CI_SHARD_TOTAL is refused")
+    print("the host route follows every declared stage and fetches every shard:")
+    stages2 = ", ".join(x["name"] for x in generate(2)["stages"])
+    route = ("jobs:\n  host-follow:\n    strategy:\n      matrix:\n        stage: [" + stages2 + "]\n"
+             "  host-results:\n    strategy:\n      matrix:\n        shard: [0, 1]\n")
+    expect(route_problems(route, 2) == [], "both matrices name exactly the declaration")
+    expect(any("host-follow" in p for p in route_problems(route.replace(", doc-gate", ""), 2)), "RED: a declared stage nobody follows")
+    expect(any("host-results" in p for p in route_problems(route.replace("[0, 1]", "[0]"), 2)), "RED: a shard whose results are never fetched")
+    expect(len(route_problems("jobs:\n", 2)) == 2, "RED: no host route at all")
+    real_wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows", "dotnet-test.yml")
+    if os.path.isfile(real_wf):
+        wf_text = open(real_wf).read()
+        expect(route_problems(wf_text, read_shard_total(wf_text)) == [], "the real dotnet-test.yml's route matches the declaration")
     print("no container — core's suites need no Docker daemon:")
     import tempfile
     with tempfile.TemporaryDirectory() as t:
@@ -312,7 +340,8 @@ def main(argv: list[str]) -> int:
         print(f"wrote {STAGES} for CI_SHARD_TOTAL={read_shard_total(workflow)}")
         return 0
     if argv == ["--check"]:
-        found = problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root)
+        found = (problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root)
+                 + route_problems(workflow, read_shard_total(workflow)))
         for p in found:
             print(f"::error::{p}")
         if not found:

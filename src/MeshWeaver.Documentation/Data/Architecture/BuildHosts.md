@@ -688,9 +688,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
   reds any drift. The runner also refuses a `--total` the image was not packed for.
 - **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
-  generator's `OWES` list is the debt — the route (`dotnet-test.yml` calls no admission and no follow
-  job), `Consolidate test results` (collect-results does not yet fetch a host run's handed-back
-  results), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
+  generator's `OWES` list is the debt — `Consolidate test results` (the variables the host-results job
+  needs are not provisioned for core), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
   do not share a pack), the prepared package closure, the browser and font set, the legs that read
   the build's artifacts (platform-compat,
   licence-gate), the prepared-mesh rule, and a green probe that agrees with Actions.
@@ -707,6 +706,24 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `Testcontainers*` or `Docker.DotNet` or builds a container in `test/`. `core-build-stages.py --check`
   reds the day one does: such a suite either runs against the host's prepared service or re-opens
   the `containers:` debt in the same change.
+- **Core's own route** (`dotnet-test.yml`). Job `admission` calls `node-repo-build-executor.yml` (the
+  base tip = precheck's main, `BUILD_WEBHOOK_SECRET` signs the request) exactly when `build` would
+  run. With `host`:
+  - `build` does not run here, and with it `test`, `doc-gate`, `platform-compat` and `licence-gate`;
+  - `host-follow` follows EVERY declared stage (`build`, each `test-shard-<i>`, `doc-gate`) with
+    `build-follow.yml`;
+  - `host-results` fetches each shard's handed-back results by receipt (`build-artifacts-fetch.py`,
+    every hash and size verified) and uploads them under the `test` matrix's own artifact name
+    `testResults-shard<i>-attempt<a>`, so `collect-results` consolidates a host run unchanged (download,
+    attempt resolution, the coverage count, the trx and exit-marker gates);
+  - `collect-results` reds a failed admission, a host stage that did not succeed and a shard whose
+    results were not brought back; on the host route `platform-compat` and `licence-gate` read as not
+    run, which is RED — they are owed (`dependent legs`).
+
+  `core-build-stages.py --check` holds both matrices to the declaration. `host-results` reads the
+  runners' shared store, so it runs on the self-hosted pool and is RED, naming them, while core's
+  repository has no `MW_RUNNER` / `MW_ARTIFACT_STORE` variable. Any other admission answer runs every
+  leg on Actions, as before.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
