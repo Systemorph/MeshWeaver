@@ -214,7 +214,16 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    build extension (`MW_BUILD_EXTENSIONS`). A repository declares them beside its stages as
    `prepared: [{name, env, key, build, timeoutMinutes}]`. Before the stages, the host runs the
    repository's own `key` command in the sandbox and looks for the input under
-   `/cache/prepared/<repo>/<name>/<sha256(platform|key)>/`, stamped `.source-key`:
+   `/cache/prepared/<repo>/<name>/<sha256(platform|key)>/`, stamped `.source-key`. Two command
+   contracts are enforced, and a run whose command misses either is RED, naming the input:
+
+   - `key` must print the source key as the FINAL line of its stdout: exactly 64 lowercase
+     hexadecimal characters (a SHA-256 of the sources the input is built from). A 40-character
+     `git rev-parse HEAD` does not qualify.
+   - `build` must write its output into `$MW_PREPARE_OUT` — at least one non-hidden entry. A build
+     that succeeds but writes only to its usual output directory does not qualify.
+
+   With the key in hand:
 
    - **already installed:** it is bound read-only and nothing is prepared;
    - **a trunk run, key not installed:** it is built once (`build`, against the image's platform
