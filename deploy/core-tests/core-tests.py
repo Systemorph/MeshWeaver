@@ -287,8 +287,113 @@ def _list_classes(dotnet: str, name: str, cwd: str) -> list[str]:
     return sorted(line.strip() for line in out.splitlines() if CLASS_RE.match(line.strip()))
 
 
+# What a crash looks like in the marker CI's shard loop writes (dotnet-test.yml, `[CI] … exit=N`), by
+# the exit code a shell reports for a signal death (128 + signal).
+SIGNAL_NAMES = {132: "SIGILL", 134: "SIGABRT", 135: "SIGBUS", 139: "SIGSEGV"}
+# The temp-dir traces CI's "Collect logs" step copies into collected-logs/ — written by the test
+# hosts to Path.GetTempPath(), which on Unix is $TMPDIR when set (a host stage's scratch).
+TEMP_TRACES = ("meshweaver-test-trace.log", "meshweaver-memory-delta.log", "meshweaver-msg-trace.log")
+
+
+def classify(label: str, name: str, rc: int, trx_path: str, unit_timeout: int) -> tuple[str, str, int]:
+    """(marker, crash, rc) for one unit — the case statement of dotnet-test.yml's shard loop.
+
+    `crash` is non-empty for every outcome in which the host did NOT complete; it is written INTO
+    the trx (record-host-crash.py) so no trx reader can report a pass over a dead host (#2495).
+    """
+    if rc < 0:
+        rc = 128 - rc  # Popen reports a signal death as -signum; a shell reports 128 + signum
+    if rc == 0:
+        if os.path.isfile(trx_path):
+            return f"[CI] {name} exit=0", "", 0
+        return (f"[CI] {label} exit=98 MASKED (exit=0 but no trx written — the host recorded no result)",
+                "MASKED: exit=0 with no trx — the host recorded no result.", 98)
+    if rc in (124, 137):
+        return (f"[CI] {label} exit={rc} TIMEOUT ({unit_timeout}s wall-clock cap hit — likely fixture/init hang)",
+                f"TIMEOUT: killed at the {unit_timeout}s wall-clock cap — a fixture/init hang, not a test failure. "
+                "The last TEST_START without a matching TEST_END in collected-logs/_meshweaver-test-trace.log "
+                "names the test it was stuck in.", rc)
+    if rc in SIGNAL_NAMES:
+        sig = SIGNAL_NAMES[rc]
+        return (f"[CI] {label} exit={rc} SIGNAL {sig} (host died on a signal, not an assertion)",
+                f"SIGNAL {sig}: the host died on a signal, not an assertion.", rc)
+    fails = 0
+    if os.path.isfile(trx_path):
+        with open(trx_path, errors="replace") as fh:
+            fails = len(re.findall(r'<UnitTestResult[^>]*outcome="Failed"', fh.read()))
+    if fails > 0 and rc < 128:
+        return (f"[CI] {name} exit={rc} TESTFAIL ({fails} failing test(s) recorded in trx; xUnit v3 exits 1 for "
+                "any failure; the host completed normally)", "", rc)
+    if not os.path.isfile(trx_path):
+        return (f"[CI] {label} exit={rc} MASKED (no trx written — the host died before recording any result)",
+                f"MASKED: exit={rc} with no trx — the host died before recording any result.", rc)
+    return (f"[CI] {label} exit={rc} MASKED (trx records {fails} failing test(s), which does not explain exit={rc} "
+            "— host crashed after streaming results)",
+            f"MASKED: exit={rc}, but the trx records only {fails} failing test(s) — that does not explain the exit "
+            "code, so the host crashed AFTER streaming results.", rc)
+
+
+def _script(repo: str, name: str) -> str:
+    path = os.path.join(repo, ".github", "scripts", name)
+    if not os.path.isfile(path):
+        raise Refusal(f"{path} is absent — the shard cannot record/check its results as CI does (is --repo the "
+                      f"checkout of the run's commit?)")
+    return path
+
+
+def collect_logs(work: str, bins: list[str], dest: str) -> None:
+    """dotnet-test.yml's "Collect logs" step: every bin's test-logs/*.log, flat, plus the temp-dir traces."""
+    os.makedirs(dest, exist_ok=True)
+    for d in bins:
+        logs = os.path.join(d, "test-logs")
+        if os.path.isdir(logs):
+            for n in sorted(os.listdir(logs)):
+                full = os.path.join(logs, n)
+                if n.endswith(".log") and os.path.isfile(full) and not os.path.islink(full):
+                    shutil.copyfile(full, os.path.join(dest, n))
+    tmp = tempfile.gettempdir()
+    for n in TEMP_TRACES:
+        full = os.path.join(tmp, n)
+        if os.path.isfile(full) and not os.path.islink(full):
+            shutil.copyfile(full, os.path.join(dest, f"_{n}"))
+
+
+def hand_back(work: str, shard: int, artifacts: str) -> int:
+    """Leave the shard's results under $MW_BUILD_ARTIFACTS/testResults-shard<i>/ in the SAME tree the
+    `test` job uploads as its testResults-shard<i>-attempt<a> artifact (test/**/*.trx,
+    test/test-results.log, collected-logs/), so collect-results consolidates a host shard exactly as an
+    Actions one. The host uploads every file to the CI artifact store, reads it back and posts a receipt
+    (Doc/Architecture/BuildHosts §2 step 7). Returns how many files were handed back."""
+    unit = os.path.join(artifacts, f"testResults-shard{shard}")
+    if os.path.exists(unit):
+        shutil.rmtree(unit)
+    count = 0
+    for top in ("test", "collected-logs"):
+        base = os.path.join(work, top)
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames.sort()
+            for n in sorted(filenames):
+                full = os.path.join(dirpath, n)
+                rel = os.path.relpath(full, work)
+                keep = (top == "collected-logs" or n.endswith(".trx") or rel == os.path.join("test", "test-results.log"))
+                if not keep or os.path.islink(full) or not os.path.isfile(full):
+                    continue
+                out = os.path.join(unit, rel)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                shutil.copyfile(full, out)
+                count += 1
+    return count
+
+
 def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotnet",
-              unit_timeout: int = UNIT_TIMEOUT_SECONDS) -> int:
+              unit_timeout: int = UNIT_TIMEOUT_SECONDS, repo: str = ".", artifacts: Optional[str] = None) -> int:
+    """One shard, as dotnet-test.yml's `test` job runs it: the shard loop (markers in
+    test/test-results.log, a crash written INTO the trx), the log collection, the hand-back of the
+    results tree, and then the untyped-content gate (check-untyped-content.sh) over collected-logs —
+    AFTER the hand-back, as CI gates after its upload, so the logs a red is decided on are evidence.
+
+    `repo` is the checkout of the run's commit (the scripts the shard records and gates with);
+    `artifacts` is $MW_BUILD_ARTIFACTS on a host — unset elsewhere, and then nothing is handed back."""
     m = load_manifest(root)
     if total != m["shardTotal"]:
         raise Refusal(f"the stage runs shard {shard} of {total}, but this image was packed for {m['shardTotal']} "
@@ -298,7 +403,30 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
     units = m["shards"].get(str(shard)) or []
     if not units:
         raise Refusal(f"shard {shard}/{total} carries no unit — a stage that runs nothing is not a green one")
+    repo = os.path.abspath(repo)
+    recorder = _script(repo, "record-host-crash.py")
+    untyped_gate = _script(repo, "check-untyped-content.sh")
     os.makedirs(work, exist_ok=True)
+    results_log = os.path.join(work, "test", "test-results.log")
+    os.makedirs(os.path.dirname(results_log), exist_ok=True)
+    with open(results_log, "w"):
+        pass  # this invocation's markers only — a reused work directory starts empty, as CI's `: >` does
+    collected = os.path.join(work, "collected-logs")
+    if os.path.exists(collected):
+        shutil.rmtree(collected)
+
+    def record(line: str) -> None:
+        print(line, flush=True)
+        with open(results_log, "a") as fh:
+            fh.write(line + "\n")
+
+    def record_crash(trx_path: str, name: str, rc: int, crash: str, label: str) -> None:
+        os.makedirs(os.path.dirname(trx_path), exist_ok=True)
+        if subprocess.run([sys.executable, recorder, trx_path, name, str(rc), crash]).returncode != 0:
+            print(f"::error::{label}: could not record the host crash into {trx_path}", flush=True)
+            record(f"[CI] {name} exit=95 CRASH_RECORD_FAILED (the crash could not be written into the trx — "
+                   f"read the marker above, not the trx)")
+
     print(f"mw-core-tests {m['version']} ({m['coreSha'][:12]}): shard {shard}/{total}, {len(units)} unit(s)", flush=True)
     env = dict(os.environ, DOTNET_ENVIRONMENT="Development", Logging__LogLevel__Default="Warning",
                TESTCONTAINERS_RYUK_DISABLED="true")
@@ -312,14 +440,17 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
             bins[csproj] = materialise(root, m, csproj, work)
         d = bins[csproj]
         if not os.path.isfile(os.path.join(d, f"{name}.dll")) or not os.path.isfile(os.path.join(d, "xunit.v3.core.dll")):
-            print(f"[CI] {name} exit=0 (helper project — no xUnit v3 test host)", flush=True)
+            record(f"[CI] {name} exit=0 (helper project — no xUnit v3 test host)")
             continue
         args = []
         trx = name
         if parts > 1:
             classes = _list_classes(dotnet, name, d)
             if not classes:
-                print(f"[CI] {name} exit=96 NO_CLASSES (class enumeration failed for a split project)", flush=True)
+                record(f"[CI] {name} exit=96 NO_CLASSES (class enumeration failed for a split project)")
+                record_crash(os.path.join(d, "TestResults", f"{name}.part{part}.trx"), label, 96,
+                             f"NO_CLASSES: class enumeration failed for a split project — part {part}/{parts} ran nothing.",
+                             label)
                 failed.append(label)
                 continue
             for c in classes[part - 1::parts]:
@@ -332,22 +463,29 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
         if os.path.lexists(trx_path):
             os.remove(trx_path)
         print(f"::group::{label}", flush=True)
+        started = time.monotonic()
         rc, _ = _run_unit([dotnet, f"{name}.dll", "-trx", f"TestResults/{trx}.trx", "-showLiveOutput",
                            "-longRunning", "60", *args], d, unit_timeout, env=env)
         print("::endgroup::", flush=True)
-        if rc == 124:
-            print(f"[CI] {label} exit=124 TIMEOUT ({unit_timeout}s wall-clock cap hit — a wedge, not a slow pass)", flush=True)
-        elif rc == 0 and not os.path.isfile(trx_path):
-            print(f"[CI] {label} exit=0 MASKED (no trx written — the host recorded no result)", flush=True)
-            rc = 98
-        else:
-            print(f"[CI] {label} exit={rc}", flush=True)
+        marker, crash, rc = classify(label, name, rc, trx_path, unit_timeout)
+        if crash:
+            record_crash(trx_path, name, rc, crash, label)
+        record(f"{marker} elapsed={int(time.monotonic() - started)}s")
         if rc != 0:
             failed.append(label)
-    if failed:
-        print(f"shard {shard}/{total}: RED — {len(failed)} unit(s) did not pass: {', '.join(failed)}", flush=True)
+    collect_logs(work, sorted(set(bins.values())), collected)
+    if artifacts:
+        n = hand_back(work, shard, artifacts)
+        print(f"handed back {n} result file(s) as testResults-shard{shard}/ (trx, test-results.log, collected-logs)", flush=True)
+    gate = subprocess.run(["bash", untyped_gate, collected], cwd=repo).returncode
+    print(f"[CI] untyped-content gate exit={gate}", flush=True)
+    if failed or gate != 0:
+        why = [f"{len(failed)} unit(s) did not pass: {', '.join(failed)}"] if failed else []
+        if gate != 0:
+            why.append("check-untyped-content.sh found content degraded to an untyped JsonElement (or could not scan)")
+        print(f"shard {shard}/{total}: RED — {'; '.join(why)}", flush=True)
         return 1
-    print(f"shard {shard}/{total}: green — every unit passed", flush=True)
+    print(f"shard {shard}/{total}: green — every unit passed, no content degraded", flush=True)
     return 0
 
 
@@ -413,6 +551,21 @@ if rest[:2] == ["-list", "classes"]:
     print("xUnit.net v3 header line"); print("Ns.C"); print("Ns.A"); print("Ns.B"); sys.exit(0)
 if behaviour == "hang":
     time.sleep(30)
+if behaviour == "segv":
+    # A REAL signal death only on Linux (CI, the hosts). On a developer's Mac a real SIGSEGV pops a
+    # crash-report dialog per run, so there the host reports the death the way a shell would (128 + 11);
+    # the classifier reads both the same way (Popen's -11 and a shell's 139).
+    if sys.platform.startswith("linux"):
+        import signal
+        os.kill(os.getpid(), signal.SIGSEGV)
+    sys.exit(139)
+if behaviour == "degrade":
+    os.makedirs("test-logs", exist_ok=True)
+    open(os.path.join("test-logs", "B.log"), "w").write(
+        "warn: MeshWeaverX[0] MeshNodeContentUnresolvedException: content for nodeType 'Demo' was NEVER resolvable on this replica\n")
+if behaviour == "trace":
+    import tempfile
+    open(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log"), "w").write("TEST_START B.T1\n")
 if behaviour == "spawn":
     import subprocess
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -446,6 +599,13 @@ def _self_test() -> int:
         expect(False, f"{what} — NOT refused")
 
     with tempfile.TemporaryDirectory() as t:
+        # The shard collects the test hosts' temp-dir traces; the self-test's must be its OWN, never a
+        # trace another run on this machine left in the real temp dir (measured: one carried a real
+        # degradation and the gate, correctly, read it).
+        own_tmp = os.path.join(t, "tmp")
+        os.makedirs(own_tmp)
+        os.environ["TMPDIR"] = own_tmp
+        tempfile.tempdir = own_tmp
         repo = os.path.join(t, "repo")
         os.makedirs(os.path.join(repo, ".github", "workflows"))
         os.makedirs(os.path.join(repo, ".github", "scripts"))
@@ -457,6 +617,21 @@ def _self_test() -> int:
                      '0) echo test/A/A.csproj; echo "test/Split/Split.csproj#1/2";;\n'
                      '1) echo "test/Split/Split.csproj#2/2"; echo test/B/B.csproj; echo test/Helper/Helper.csproj;;\n'
                      'esac\n')
+
+        # The scripts a shard records and gates with: the REAL ones when this runs in a checkout (CI's
+        # self-test step), small stand-ins with the same contract inside the packed image.
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".github", "scripts")
+        real_scripts = all(os.path.isfile(os.path.join(here, n)) for n in ("record-host-crash.py", "check-untyped-content.sh"))
+        for n, stub_text in (("record-host-crash.py",
+                              "import sys\nopen(sys.argv[1], 'w').write('<TestRun><UnitTestResult testName=\"%s\" "
+                              "outcome=\"Failed\"/></TestRun>' % sys.argv[2])\n"),
+                             ("check-untyped-content.sh",
+                              'd="${1:?}"; [ -d "$d" ] || exit 1\n'
+                              '! grep -rlq -e MeshNodeContentUnresolvedException "$d"\n')):
+            src = os.path.join(here, n)
+            with open(os.path.join(repo, ".github", "scripts", n), "w") as fh:
+                fh.write(open(src).read() if real_scripts else stub_text)
+        print(f"  (recording and gating with the {'REAL' if real_scripts else 'stand-in'} record-host-crash.py and check-untyped-content.sh)")
 
         def bin_of(proj: str, behaviour: Optional[str], extra: str = "shared") -> None:
             d = os.path.join(repo, os.path.dirname(TESTER_PROJECT) if proj == "tester" else os.path.join("test", proj), TFM_DIR)
@@ -485,10 +660,10 @@ def _self_test() -> int:
         expect(blobs.count(shared_sha) == 1 and len(m["projects"]) == 5,
                "an identical file in five bins is stored ONCE (content-addressed)")
         expect(os.path.isfile(os.path.join(img, "core-tests.py")), "the runner ships beside the bytes it packed")
-        expect(run_shard(img, 0, 2, os.path.join(t, "w0"), dotnet) == 0, "shard 0/2 runs green")
+        expect(run_shard(img, 0, 2, os.path.join(t, "w0"), dotnet, repo=repo) == 0, "shard 0/2 runs green")
         log = open(os.path.join(t, "w0", "test", "Split", TFM_DIR, "classes.log")).read().splitlines()
         expect(log == ["Ns.A,Ns.C"], f"part 1/2 runs every 2nd class of the SORTED list from the first ({log})")
-        expect(run_shard(img, 1, 2, os.path.join(t, "w1"), dotnet) == 0, "shard 1/2 runs green (a helper bin is not a failure)")
+        expect(run_shard(img, 1, 2, os.path.join(t, "w1"), dotnet, repo=repo) == 0, "shard 1/2 runs green (a helper bin is not a failure)")
 
         print("which pack — by commit identity:")
         other = os.path.join(t, "other")
@@ -504,22 +679,22 @@ def _self_test() -> int:
         refused(lambda: select_root([], sha), "no --root", "no root at all")
 
         print("negative controls — each must be RED:")
-        refused(lambda: run_shard(img, 0, 3, os.path.join(t, "wx"), dotnet), "packed for 2",
+        refused(lambda: run_shard(img, 0, 3, os.path.join(t, "wx"), dotnet, repo=repo), "packed for 2",
                 "a stage total the image was not packed for")
-        refused(lambda: run_shard(img, 2, 2, os.path.join(t, "wx"), dotnet), "outside", "a shard index outside the total")
+        refused(lambda: run_shard(img, 2, 2, os.path.join(t, "wx"), dotnet, repo=repo), "outside", "a shard index outside the total")
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("fail")
         pack(repo, img, sha, "3.1.1")
-        expect(run_shard(img, 1, 2, os.path.join(t, "wf"), dotnet) == 1, "a unit whose host exits non-zero reds the shard")
+        expect(run_shard(img, 1, 2, os.path.join(t, "wf"), dotnet, repo=repo) == 1, "a unit whose host exits non-zero reds the shard")
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("notrx")
         pack(repo, img, sha, "3.1.1")
-        expect(run_shard(img, 1, 2, os.path.join(t, "wn"), dotnet) == 1, "a unit that exits 0 with NO trx reds the shard")
+        expect(run_shard(img, 1, 2, os.path.join(t, "wn"), dotnet, repo=repo) == 1, "a unit that exits 0 with NO trx reds the shard")
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("hang")
         pack(repo, img, sha, "3.1.1")
-        expect(run_shard(img, 1, 2, os.path.join(t, "wh"), dotnet, unit_timeout=2) == 1,
+        expect(run_shard(img, 1, 2, os.path.join(t, "wh"), dotnet, unit_timeout=2, repo=repo) == 1,
                "a unit past its wall clock is killed and reds the shard")
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("spawn")
         pack(repo, img, sha, "3.1.1")
-        expect(run_shard(img, 1, 2, os.path.join(t, "wg"), dotnet, unit_timeout=2) == 1,
+        expect(run_shard(img, 1, 2, os.path.join(t, "wg"), dotnet, unit_timeout=2, repo=repo) == 1,
                "a unit that spawned a child and hung reds the shard")
         pid = int(open(os.path.join(t, "wg", "test", "B", TFM_DIR, "child.pid")).read())
         alive = True
@@ -537,13 +712,61 @@ def _self_test() -> int:
         # A stale trx from an earlier run of the same work directory must not stand in for this one.
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("pass")
         pack(repo, img, sha, "3.1.1")
-        expect(run_shard(img, 1, 2, os.path.join(t, "ws"), dotnet) == 0, "a reused work directory: first run green")
+        expect(run_shard(img, 1, 2, os.path.join(t, "ws"), dotnet, repo=repo) == 0, "a reused work directory: first run green")
         expect(os.path.isfile(os.path.join(t, "ws", "test", "B", TFM_DIR, "TestResults", "B.trx")),
                "…and it left B.trx behind")
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("notrx")
         pack(repo, img, sha, "3.1.1")
-        expect(run_shard(img, 1, 2, os.path.join(t, "ws"), dotnet) == 1,
+        expect(run_shard(img, 1, 2, os.path.join(t, "ws"), dotnet, repo=repo) == 1,
                "a host that writes NO trx into a reused work directory reds the shard (the old trx is not this run's)")
+
+        print("CI parity — the results tree, the hand-back and the untyped-content gate:")
+        art = os.path.join(t, "artifacts")
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("trace")
+        pack(repo, img, sha, "3.1.1")
+        expect(run_shard(img, 1, 2, os.path.join(t, "wr"), dotnet, repo=repo, artifacts=art) == 0, "a green shard with a host to hand back to")
+        markers = open(os.path.join(t, "wr", "test", "test-results.log")).read()
+        expect("[CI] B exit=0 elapsed=" in markers and "[CI] Helper exit=0 (helper project" in markers,
+               f"test/test-results.log carries CI's `[CI] <name> exit=N` markers ({markers.strip()[:120]})")
+        unit = os.path.join(art, "testResults-shard1")
+        handed = sorted(os.path.relpath(os.path.join(dp, n), unit) for dp, _, ns in os.walk(unit) for n in ns)
+        expect(handed == ["collected-logs/_meshweaver-test-trace.log", "test/B/bin/Release/net10.0/TestResults/B.trx",
+                          "test/Split/bin/Release/net10.0/TestResults/Split.part2.trx", "test/test-results.log"],
+               f"the hand-back is the `test` job's artifact tree — trx, markers, collected-logs, and no bins ({handed})")
+        os.remove(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log"))
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("degrade")
+        pack(repo, img, sha, "3.1.1")
+        expect(run_shard(img, 1, 2, os.path.join(t, "wu"), dotnet, repo=repo, artifacts=art) == 1,
+               "RED: every unit exits 0 but a log shows content NEVER resolvable — the untyped-content gate decides")
+        expect(os.path.isfile(os.path.join(unit, "collected-logs", "B.log")),
+               "…and the log it was red on was handed back first (the evidence survives the red)")
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("segv")
+        pack(repo, img, sha, "3.1.1")
+        expect(run_shard(img, 1, 2, os.path.join(t, "wc"), dotnet, repo=repo) == 1, "RED: a host that died on SIGSEGV")
+        markers = open(os.path.join(t, "wc", "test", "test-results.log")).read()
+        crashed_trx = os.path.join(t, "wc", "test", "B", TFM_DIR, "TestResults", "B.trx")
+        crashed = open(crashed_trx).read() if os.path.isfile(crashed_trx) else ""
+        expect("exit=139 SIGNAL SIGSEGV" in markers and 'outcome="Failed"' in crashed,
+               "the signal death is named in the marker AND written into the trx as a failed result (#2495)")
+        expect(classify("X", "X", -11, os.path.join(t, "absent.trx"), 480)[0].startswith("[CI] X exit=139 SIGNAL SIGSEGV")
+               and classify("X", "X", 139, os.path.join(t, "absent.trx"), 480)[2] == 139,
+               "a signal death reads the same as Popen's -11 and as a shell's 139")
+        expect(not classify("X", "X", 0, os.path.join(t, "absent.trx"), 480)[1] == "",
+               "negative control: exit 0 with no trx is NOT a pass (a crash is recorded)")
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("notrx")
+        pack(repo, img, sha, "3.1.1")
+        run_shard(img, 1, 2, os.path.join(t, "wm"), dotnet, repo=repo)
+        masked_trx = os.path.join(t, "wm", "test", "B", TFM_DIR, "TestResults", "B.trx")
+        expect(os.path.isfile(masked_trx) and 'outcome="Failed"' in open(masked_trx).read(),
+               "a host that wrote no trx gets one recording the failure — no trx reader can miss it")
+        expect(classify("X", "X", 1, os.path.join(t, "absent.trx"), 480)[0].startswith("[CI] X exit=1 MASKED (no trx"),
+               "exit 1 with no trx is MASKED, never TESTFAIL")
+        bare = os.path.join(t, "bare")
+        os.makedirs(bare)
+        refused(lambda: run_shard(img, 1, 2, os.path.join(t, "wb"), dotnet, repo=bare), "is absent",
+                "RED: a checkout without the recorder and the gate (the shard could not check what CI checks)")
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("pass")
+        pack(repo, img, sha, "3.1.1")
 
         print("doc-gate — the Tests-area verifier decides alongside the gate:")
         scripts = os.path.join(repo, ".github", "scripts")
@@ -592,7 +815,7 @@ def _self_test() -> int:
         b_sha = hashlib.sha256(b"pass").hexdigest()
         os.chmod(os.path.join(img, "blobs", b_sha), 0o644)
         open(os.path.join(img, "blobs", b_sha), "w").write("tampered")
-        refused(lambda: run_shard(img, 0, 2, os.path.join(t, "wt"), dotnet), "does not hash", "a tampered blob")
+        refused(lambda: run_shard(img, 0, 2, os.path.join(t, "wt"), dotnet, repo=repo), "does not hash", "a tampered blob")
         refused(lambda: pack(repo, img, "nope", "3.1.1"), "40-hex", "a pack that names no commit")
         shutil.rmtree(os.path.join(repo, "test", "B", "bin"))
         refused(lambda: pack(repo, img, sha, "3.1.1"), "never built", "an assigned project with no built bin")
@@ -626,6 +849,7 @@ def main(argv: list[str]) -> int:
     r.add_argument("--root", action="append", default=None)
     r.add_argument("--require-sha", default=None)
     r.add_argument("--work", default=None)
+    r.add_argument("--repo", default=".")
     g = sub.add_parser("doc-gate")
     g.add_argument("--root", action="append", default=None)
     g.add_argument("--require-sha", default=None)
@@ -639,7 +863,8 @@ def main(argv: list[str]) -> int:
         root = select_root(a.root or [os.path.dirname(os.path.abspath(__file__))], a.require_sha)
         # The image tree is read-only on a host; the run's checkout (the CWD) is writable disk.
         if a.cmd == "run":
-            return run_shard(root, a.shard, a.total, a.work or os.path.abspath(f".core-tests/shard-{a.shard}"))
+            return run_shard(root, a.shard, a.total, a.work or os.path.abspath(f".core-tests/shard-{a.shard}"),
+                             repo=a.repo, artifacts=os.environ.get("MW_BUILD_ARTIFACTS") or None)
         return doc_gate(root, os.path.abspath(a.repo), a.work or os.path.abspath(".core-tests/doc-gate"))
     except Refusal as e:
         print(f"::error::{e}", flush=True)

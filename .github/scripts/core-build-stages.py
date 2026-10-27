@@ -78,9 +78,11 @@ OWES = [
     "route: dotnet-test.yml has no admission — no job calls build-executor.py and no follow job (build-follow.yml) "
     "stands in for the `build`, `test` and `doc-gate` jobs, so even an equivalent declaration would route nothing "
     "(the satellites' shape: node-repo-build-executor.yml + build-follow.yml + a host-verdict input)",
-    "Consolidate test results: collect-results consolidates the testResults-shard<i> trx artifacts of the `test` matrix; "
-    "a host shard hands no trx back (nothing is written under $MW_BUILD_ARTIFACTS), so the consolidated verdict, the "
-    "failure summary and the per-project MISSING_BIN evidence cannot be built from a host run",
+    "Consolidate test results: a host shard hands back the `test` job's results tree (testResults-shard<i>/: "
+    "test/**/*.trx, test/test-results.log, collected-logs/) as H9 receipts, but collect-results still reads only the "
+    "testResults-shard<i>-attempt<a> artifacts of the `test` matrix — it does not fetch a host run's receipts "
+    "(build-artifacts-fetch.py), so a host run's consolidated verdict and failure summary cannot be built yet (lands "
+    "with the route)",
     "fan-out: a host runs one run's stages serially — build 25 + 8 shards x 20 + doc-gate 25 minutes is past the run "
     "deadline; the deployment route already submits one pinned run per stage, but such runs do not share one "
     "$MW_BUILD_OUTPUTS, so the shards need this run's pack through the shared cache (`needs: outputs`), which today "
@@ -93,8 +95,6 @@ OWES = [
     "carries neither",
     "containers: the shards' Testcontainers projects start a database in Docker; a host's sandbox has no Docker "
     "daemon (its database is sandbox-postgres.sh), so those projects cannot run there as they run in the `test` job",
-    "shard post-gates: the `test` job runs check-untyped-content.sh (no content degraded to an untyped JsonElement) "
-    "over each shard's logs; core-tests.py run does not",
     "dependent legs: platform-compat and licence-gate read the `build` job's artifacts (shard 0's output, the licence "
     "evidence); with the build on a host they need its outputs handed back",
     "prepared mesh: on a host no test may install a mesh from scratch — a prepared mesh snapshot is cloned per run; "
@@ -126,7 +126,7 @@ def generate(total: int) -> dict:
     stages = [{"name": "build", "kind": "build", "command": BUILD_COMMAND,
                "timeoutMinutes": BUILD_TIMEOUT_MINUTES, "needs": ["nuget"]}]
     stages += [{"name": shard_stage_name(i), "kind": "test",
-                "command": f"{RUNNER} run --shard {i} --total {total} {ROOTS}",
+                "command": f"{RUNNER} run --shard {i} --total {total} {ROOTS} --repo .",
                 "timeoutMinutes": SHARD_TIMEOUT_MINUTES} for i in range(total)]
     stages.append({"name": "doc-gate", "kind": "test",
                    "command": f"{RUNNER} doc-gate {ROOTS} --repo .",
@@ -199,6 +199,8 @@ def _self_test() -> int:
     expect(all(s["timeoutMinutes"] <= 45 for s in doc["stages"]), "every stage cap is within the host's 45-minute limit")
     expect(f"run --shard 3 --total 8 " in doc["stages"][4]["command"], "stage test-shard-i runs shard i of N")
     expect(all("--require-sha" in s["command"] for s in doc["stages"][1:]), "every shard and the doc gate read only a pack of the run's own commit")
+    expect(all(s["command"].endswith(" --repo .") for s in doc["stages"][1:-1]),
+           "every shard records and gates with the checkout's own scripts (record-host-crash.py, check-untyped-content.sh)")
     expect(doc["stages"][0]["needs"] == ["nuget"], "the build reads the host's prepared package cache, and nothing else")
     expect(doc["owes"] == OWES and "ciEquivalent" not in doc, "the debt is declared and nothing is claimed")
     print("negative controls — each must be RED:")
