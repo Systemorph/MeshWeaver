@@ -60,8 +60,16 @@ except ImportError:  # pragma: no cover - the CI step installs PyYAML; locally `
 
 LEDGER_LANE = re.compile(r"(?:^|/)node-repo-ci-failure\.ya?ml(?:@.*)?$")
 SENTINEL_RUN = re.compile(r"sentinel-issue\.py\s+find\b")
-SURVIVES = ("always()", "failure()", "!cancelled()", "! cancelled()")
+# `find` only LOOKS UP the standing issue (Copilot on #7422): a sentinel job counts only when it also
+# OPENS one and CLOSES it — the writes are what report.
+SENTINEL_OPENS = re.compile(r"gh\s+issue\s+create\b|/issues\"?\s+(?:[^\n]*\s)?-f\s+title=")
+SENTINEL_CLOSES = re.compile(r"state=closed|gh\s+issue\s+close\b")
+SURVIVES = ("always()", "failure()", "!cancelled()")
+# A status function can appear and still be defeated (Copilot on #7422): `always() && success()`
+# re-adds the skip, `!failure()` is its negation. Refused outright.
+DEFEATS = ("success()", "!failure()")
 DEFAULT_LEDGER_LABEL = "ci-main-red"
+DEFAULT_LEDGER_TITLE = "ci-main-red: main is red"   # node-repo-ci-failure.yml's `issue-title` default
 
 
 def triggers(doc: dict) -> dict:
@@ -92,13 +100,19 @@ def closure(jobs: dict, start: str) -> set[str]:
 
 
 def survives_failure(job: dict) -> bool:
-    cond = str(job.get("if") or "").replace(" ", "")
-    return any(s.replace(" ", "") in cond for s in SURVIVES)
+    """The `if:` LEADS with a failure-surviving status function and never re-adds or negates the skip.
+    Deliberately a restriction, not an evaluator: the supported forms are `always() && …`,
+    `failure() …` and `!cancelled() && …`, which is every reporter in the tree."""
+    cond = re.sub(r"\s+", "", str(job.get("if") or ""))
+    if cond.startswith("${{") and cond.endswith("}}"):
+        cond = cond[3:-2]
+    cond = cond.lstrip("(")
+    return cond.startswith(SURVIVES) and not any(d in cond for d in DEFEATS)
 
 
 def reporter_problems(jobs: dict) -> tuple[bool, list[str]]:
     """(has a reporter shape at all, the problems with it). Pure."""
-    ledger: dict[str, list[tuple[str, str]]] = {}     # outcome -> [(job id, label)]
+    ledger: dict[str, list[tuple[str, tuple[str, str]]]] = {}     # outcome -> [(job id, (label, title))]
     sentinels: list[str] = []
     for jid, job in jobs.items():
         if not isinstance(job, dict):
@@ -107,26 +121,34 @@ def reporter_problems(jobs: dict) -> tuple[bool, list[str]]:
         if LEDGER_LANE.search(uses):
             w = job.get("with") or {}
             outcome = str(w.get("outcome", "")).strip()
-            label = str(w.get("label") or DEFAULT_LEDGER_LABEL).strip()
-            ledger.setdefault(outcome, []).append((jid, label))
-        for step in job.get("steps") or []:
-            if isinstance(step, dict) and SENTINEL_RUN.search(str(step.get("run") or "")):
-                sentinels.append(jid)
-                break
+            # The ledger finds its issue by label AND exact title, so the pair must agree on BOTH,
+            # with the lane's defaults filled in (Copilot on #7422).
+            key = (str(w.get("label") or DEFAULT_LEDGER_LABEL).strip(),
+                   str(w.get("issue-title") or DEFAULT_LEDGER_TITLE).strip())
+            ledger.setdefault(outcome, []).append((jid, key))
+        runs = "\n".join(str(st.get("run") or "") for st in job.get("steps") or [] if isinstance(st, dict))
+        if SENTINEL_RUN.search(runs):
+            sentinels.append(jid)
     reporters = {j for pairs in ledger.values() for j, _ in pairs} | set(sentinels)
     if not reporters:
         return False, []
     problems: list[str] = []
     failing: list[str] = []
     if ledger:
-        fail_labels = {l for _, l in ledger.get("failure", [])}
-        ok_labels = {l for _, l in ledger.get("success", [])}
-        if not fail_labels:
+        fail_keys = {k for _, k in ledger.get("failure", [])}
+        ok_keys = {k for _, k in ledger.get("success", [])}
+        if not fail_keys:
             problems.append("calls node-repo-ci-failure.yml but never with `outcome: failure` — nothing files the red")
-        for label in sorted(fail_labels - ok_labels):
-            problems.append(f"files reds under `{label}` but no `outcome: success` job closes that ledger — "
-                            "a failure-only reporter never clears a stale alert")
+        for label, title in sorted(fail_keys - ok_keys):
+            problems.append(f"files reds under label `{label}` / title {title!r} but no `outcome: success` job with that "
+                            "SAME label and title closes that ledger — the ledger matches on both, so the alert never clears")
         failing.extend(j for j, _ in ledger.get("failure", []))
+    for jid in sentinels:
+        runs = "\n".join(str(st.get("run") or "") for st in jobs[jid].get("steps") or [] if isinstance(st, dict))
+        if not SENTINEL_OPENS.search(runs) or not SENTINEL_CLOSES.search(runs):
+            problems.append(f"sentinel job '{jid}' looks the issue up (`sentinel-issue.py find`) but does not both "
+                            "OPEN one (`gh issue create` / POST …/issues -f title=) and CLOSE it (`state=closed` / "
+                            "`gh issue close`) — a lookup reports nothing")
     failing.extend(sentinels)
     others = {j for j in jobs if j not in reporters}
     for jid in failing:
@@ -226,8 +248,16 @@ jobs:
 on: {schedule: [{cron: '0 1 * * *'}]}
 jobs:
   a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}
-  report: {needs: [a], if: '${{ !cancelled() }}', runs-on: x, timeout-minutes: 5,
-           steps: [{run: 'python3 .github/scripts/sentinel-issue.py find --repo r --label l'}]}
+  report:
+    needs: [a]
+    if: ${{ !cancelled() }}
+    runs-on: x
+    timeout-minutes: 5
+    steps:
+      - run: |
+          N=$(python3 .github/scripts/sentinel-issue.py find --repo r --label l)
+          gh api -X PATCH "repos/$REPO/issues/$N" -f state=closed --silent
+          NEW=$(gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" --jq .number)
 """
     bare = "on: {schedule: [{cron: '0 1 * * *'}]}\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n"
     unscheduled = "on: {push: {branches: [main]}}\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n"
@@ -247,7 +277,18 @@ jobs:
         ("pair under two different labels", pair.replace("{outcome: success, label: lane-x}", "{outcome: success, label: lane-y}"), "", True),
         ("reporter misses a job in needs", pair.replace("  red:\n    needs: [b]", "  red:\n    needs: [a]"), "", True),
         ("reporter skipped on red (implicit success())", pair.replace("    if: always() && needs.b.result != 'success'\n", ""), "", True),
-        ("sentinel with no failure-surviving if", sentinel.replace("if: '${{ !cancelled() }}', ", ""), "", True),
+        ("sentinel with no failure-surviving if", sentinel.replace("    if: ${{ !cancelled() }}\n", ""), "", True),
+        # Copilot on #7422 — four ways the first cut was fooled, each a negative control now:
+        ("`always() && success()` re-adds the skip", pair.replace("if: always() && needs.b.result != 'success'", "if: always() && success()"), "", True),
+        ("`!failure()` is the negation", pair.replace("if: always() && needs.b.result != 'success'", "if: ${{ !failure() }}"), "", True),
+        ("sentinel that only looks up (no open, no close)", sentinel.replace(
+            '          gh api -X PATCH "repos/$REPO/issues/$N" -f state=closed --silent\n', "").replace(
+            '          NEW=$(gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" --jq .number)\n', ""), "", True),
+        ("pair with matching label but mismatched title", pair.replace(
+            "{outcome: failure, label: lane-x}", "{outcome: failure, label: lane-x, issue-title: 'lane-x: red'}"), "", True),
+        ("pair with matching label AND title", pair.replace(
+            "{outcome: failure, label: lane-x}", "{outcome: failure, label: lane-x, issue-title: 'lane-x: red'}").replace(
+            "{outcome: success, label: lane-x}", "{outcome: success, label: lane-x, issue-title: 'lane-x: red'}"), "", False),
         ("`on:` as a list with schedule, no reporter", "on: [schedule, push]\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n", "", True),
     ]
     failures = 0

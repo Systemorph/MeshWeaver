@@ -265,6 +265,11 @@ def run_cause(jobs: tuple[dict, ...]) -> str:
     reds with the same identity failed the same jobs at the same steps with the same error text."""
     if not jobs:
         return "unknown"
+    # 🚨 Comparable ONLY when every failed job carries error evidence (Copilot on #7422). Without a
+    # signature the hash is over job + step names alone — two unrelated failures in one step would
+    # read "same" without either error being read — and `-/0` is a job that printed no error at all.
+    if any(not j.get("cause") or j["cause"].startswith("-/") for j in jobs):
+        return "n/a"
     parts = sorted(f"{j['name']}|{j.get('step', '')}|{j.get('cause', '')}" for j in jobs)
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:10]
 
@@ -284,6 +289,9 @@ def cause_row(run: Run, previous_body: str) -> str:
     now_cause = run_cause(run.failed_jobs)
     if now_cause == "unknown":
         return "| cause | `unknown` — this run's failed jobs could not be listed, so its cause cannot be compared |"
+    if now_cause == "n/a":
+        return ("| cause | `n/a` — not compared: a failed job carries no error signature (the caller did not pass "
+                "`failed-jobs` from `--list-failed-jobs`, or the job printed no error beyond its exit code) |")
     before = previous_cause(previous_body)
     if before is None:
         verdict = "first recorded red in this ledger (no earlier entry carries a cause)"
@@ -478,7 +486,7 @@ def event_body(kind: str, run: Run, issue: Issue) -> str:
                "runUrl": run.run_url, "trigger": run.trigger, "failedJobs": list(run.failed_jobs),
                "neverStarted": len(never_started(run.failed_jobs)),
                "platformSet": run.platform_set, "issueUrl": issue.html_url, "issueNumber": issue.number,
-               "cause": run_cause(run.failed_jobs)}
+               "cause": (lambda c: c if c not in ("unknown", "n/a") else "")(run_cause(run.failed_jobs))}
     elif kind == "ci-green":
         obj = {"event": "ci-green", "repo": run.repo, "sha": run.sha, "run": int(run.run_id),
                "runUrl": run.run_url, "issueNumber": issue.number}
@@ -1242,6 +1250,20 @@ def self_test() -> int:
             check(f"a cause that is not a signature is refused: {bad!r}", False, "was accepted")
         except Red:
             check(f"a cause that is not a signature is refused: {bad!r}", True)
+
+    # 17b. Copilot on #7422 — no signature, no verdict: a caller that passes no causes (dotnet-test's
+    #      main build lists its own jobs) or a job with no error evidence (`-/0`) is never "same".
+    plain = run("failure", [job])
+    gh17b = _Fake()
+    go(gh17b, plain)
+    go(gh17b, plain)
+    nb = next(iter(gh17b.issues))
+    last = entries_of(gh17b.issues[nb].body)[-1]
+    check("jobs without a signature: cause `n/a`, never `same` or CHANGED",
+          "`n/a`" in last and "same" not in last and "CHANGED" not in last)
+    check("a `-/0` job (no error evidence) is not comparable", run_cause((dict(lock_job, cause="-/0"),)) == "n/a")
+    check("an n/a entry is not a predecessor to compare against", previous_cause(gh17b.issues[nb].body) is None)
+    check("the event carries no cause identity for an n/a red", json.loads(event_body("ci-failure", plain, gh17b.issues[nb]))["cause"] == "")
 
     # 18. the caller-side listing: causes from annotations, a timed-out (`cancelled`) job included,
     #     and an unreadable annotation is RED — never a job without a cause.

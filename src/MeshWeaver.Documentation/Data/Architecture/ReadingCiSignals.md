@@ -196,8 +196,13 @@ it — read both runs before calling it a new cause.
 
 **Enforced, not remembered.** `check-scheduled-lane-reporters.py` (core's `CI's own shell` lane, on
 every pull request) refuses a workflow with `on: schedule` that has neither the ledger pair nor a
-sentinel report job, a pair whose two halves use different labels, a failure-only or success-only
-reporter, a reporter that does not `needs:` every job, and one with no failure-surviving `if:`. Known
+sentinel report job (a sentinel job counts only when it also OPENS and CLOSES the issue — `find`
+alone reports nothing), a pair whose two halves differ in label or `issue-title` (the ledger matches on
+both, defaults filled in), a failure-only or success-only reporter, a reporter that does not `needs:`
+every job, and one whose `if:` does not LEAD with `always()`, `failure()` or `!cancelled()` or that
+re-adds the skip (`&& success()`, `!failure()`). And a cause is compared only when every failed job
+carries an error signature: a caller that passes none, or a job that printed no error, reads `n/a`,
+never "same". Known
 debt sits in `.github/scheduled-lane-reporters.allow` with a reason per line; that list only shrinks —
 an entry for a lane that is gone, unscheduled, or now reports is stale and reds. Satellites are not
 yet held to it: the gate is not wired into `node-repo-validate.yml`, so a satellite's scheduled lane
