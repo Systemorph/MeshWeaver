@@ -29,7 +29,10 @@ public static class LoggingBuilderExtensions
         );
         // Don't set a global minimum level or any category filters here — log levels
         // (including quietening Orleans framework noise) are configuration-driven via
-        // appsettings.json (the runtime test config), never hardcoded in the logger.
+        // appsettings.json (the runtime test config), never hardcoded in the logger. The one
+        // exception is the explicit local MW_TEST_LOG_LEVEL, which must reach past the factory's
+        // configured category rules or it could never lower the level (TestLogLevel).
+        TestLogLevel.ApplyOverride(builder);
         if (outputHelperAccessor == null)
             builder.Services.AddSingleton<TestOutputHelperAccessor>();
         else
@@ -54,8 +57,12 @@ public class TestOutputHelperAccessor
 /// </summary>
 /// <param name="testOutputHelperAccessor">Accessor providing the active test's output helper.</param>
 /// <param name="filterOptions">Monitor for log-level filter options bound from configuration.</param>
+/// <param name="levelOverride">The explicit local level override, when <see cref="TestLogLevel.ApplyOverride(ILoggingBuilder, LogLevel?)"/> registered one.</param>
 [ProviderAlias("XUnitLogger")]
-public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccessor, IOptionsMonitor<LoggerFilterOptions> filterOptions)
+public class XUnitLoggerProvider(
+    TestOutputHelperAccessor testOutputHelperAccessor,
+    IOptionsMonitor<LoggerFilterOptions> filterOptions,
+    TestLogLevelOverride? levelOverride = null)
     : ILoggerProvider, ISupportExternalScope
 {
     private readonly ConcurrentDictionary<string, XUnitLogger> loggers = new();
@@ -78,7 +85,7 @@ public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccess
     {
         return loggers.GetOrAdd(
             categoryName,
-            _ => new(categoryName, testOutputHelperAccessor, scopeProvider, filterOptions)
+            _ => new(categoryName, testOutputHelperAccessor, scopeProvider, filterOptions, levelOverride?.Level)
         );
     }
 }
@@ -91,11 +98,13 @@ public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccess
 /// <param name="testOutputHelperAccessor">Accessor providing the active test's output helper.</param>
 /// <param name="scopeProvider">Provider for external logging scopes.</param>
 /// <param name="filterOptions">Monitor for log-level filter options bound from configuration.</param>
+/// <param name="levelOverride">The explicit local level override; <c>null</c> applies the Warning floor.</param>
 public class XUnitLogger(
     string categoryName,
     TestOutputHelperAccessor testOutputHelperAccessor,
     IExternalScopeProvider scopeProvider,
-    IOptionsMonitor<LoggerFilterOptions> filterOptions)
+    IOptionsMonitor<LoggerFilterOptions> filterOptions,
+    LogLevel? levelOverride = null)
     : ILogger
 {
     /// <summary>
@@ -110,7 +119,7 @@ public class XUnitLogger(
             return false;
 
         var options = filterOptions.CurrentValue;
-        var effectiveLogLevel = TestLogLevel.Floor(GetEffectiveLogLevel(categoryName, options));
+        var effectiveLogLevel = TestLogLevel.Resolve(GetEffectiveLogLevel(categoryName, options), levelOverride);
 
         return logLevel >= effectiveLogLevel;
     }

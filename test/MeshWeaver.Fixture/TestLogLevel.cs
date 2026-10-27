@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Fixture;
@@ -21,20 +23,74 @@ namespace MeshWeaver.Fixture;
 /// <c>AddFilter&lt;TProvider&gt;</c>), which this floor does not touch. The fault sink
 /// (<c>TestTraceLog.AppendFault</c>) is Warning-and-above by construction and is unaffected.</para>
 ///
-/// <para>To read Information or Debug lines while debugging locally, set the environment variable
-/// <c>MW_TEST_LOG_LEVEL</c> (e.g. <c>Debug</c>) — never in CI, never in a committed file.</para>
+/// <para><b>Reading Information or Debug locally.</b> Set the environment variable
+/// <c>MW_TEST_LOG_LEVEL</c> (e.g. <c>Debug</c>) — never in CI, never in a committed file. That
+/// explicit setting REPLACES the floor and the configured level alike (<see cref="Resolve(LogLevel, LogLevel?)"/>),
+/// and <see cref="ApplyOverride(ILoggingBuilder, LogLevel?)"/> adds a provider-specific factory rule
+/// for both sinks, so the <c>LoggerFactory</c>'s own category rules (the shared
+/// <c>appsettings.json</c>'s <c>"MeshWeaver": "Warning"</c>) cannot filter the lines out before
+/// they reach the sink. A floor alone could only ever RAISE the level, which made the documented
+/// switch a no-op.</para>
 /// </summary>
 public static class TestLogLevel
 {
-    /// <summary>The lowest level a shared test sink writes.</summary>
-    public static readonly LogLevel Minimum =
-        System.Enum.TryParse<LogLevel>(
-            System.Environment.GetEnvironmentVariable("MW_TEST_LOG_LEVEL"), ignoreCase: true, out var level)
-            ? level
-            : LogLevel.Warning;
+    /// <summary>The lowest level a shared test sink writes when no override is set.</summary>
+    public const LogLevel Floor = LogLevel.Warning;
 
-    /// <summary>Raises <paramref name="configured"/> to <see cref="Minimum"/> when it is lower.</summary>
+    /// <summary>
+    /// The explicit local override from <c>MW_TEST_LOG_LEVEL</c>, or <c>null</c> when it is unset
+    /// or does not parse as a <see cref="LogLevel"/>.
+    /// </summary>
+    public static readonly LogLevel? Override = Parse(System.Environment.GetEnvironmentVariable("MW_TEST_LOG_LEVEL"));
+
+    /// <summary>Parses an override value; <c>null</c> for an empty or unknown value.</summary>
+    /// <param name="value">The raw environment value.</param>
+    /// <returns>The level, or <c>null</c>.</returns>
+    public static LogLevel? Parse(string? value)
+        => !string.IsNullOrWhiteSpace(value) && System.Enum.TryParse<LogLevel>(value, ignoreCase: true, out var level)
+            ? level
+            : null;
+
+    /// <summary>
+    /// The effective level of a shared sink: the explicit <paramref name="override"/> when one is
+    /// set (in either direction), otherwise <paramref name="configured"/> raised to <see cref="Floor"/>.
+    /// </summary>
     /// <param name="configured">The level the sink resolved from configuration.</param>
+    /// <param name="override">The explicit local override, or <c>null</c>.</param>
     /// <returns>The effective level.</returns>
-    public static LogLevel Floor(LogLevel configured) => configured < Minimum ? Minimum : configured;
+    public static LogLevel Resolve(LogLevel configured, LogLevel? @override)
+        => @override ?? (configured < Floor ? Floor : configured);
+
+    /// <summary>Applies the process's <see cref="Override"/> to the factory's filter rules.</summary>
+    /// <param name="builder">The logging builder the shared sinks are registered on.</param>
+    /// <returns><paramref name="builder"/>.</returns>
+    public static ILoggingBuilder ApplyOverride(this ILoggingBuilder builder) => ApplyOverride(builder, Override);
+
+    /// <summary>
+    /// When <paramref name="override"/> is set, adds a category-less filter rule for each shared
+    /// sink's provider. A provider-specific rule beats every provider-less rule in the
+    /// <c>LoggerFactory</c>'s rule selection, so configuration's category rules no longer cut the
+    /// lines off before the sink sees them. Without an override this adds nothing.
+    /// </summary>
+    /// <param name="builder">The logging builder the shared sinks are registered on.</param>
+    /// <param name="override">The explicit local override, or <c>null</c>.</param>
+    /// <returns><paramref name="builder"/>.</returns>
+    public static ILoggingBuilder ApplyOverride(ILoggingBuilder builder, LogLevel? @override)
+    {
+        if (@override is { } level)
+        {
+            builder.AddFilter<XUnitLoggerProvider>(null, level);
+            builder.AddFilter<XUnitFileLoggerProvider>(null, level);
+            builder.Services.Replace(ServiceDescriptor.Singleton(new TestLogLevelOverride(level)));
+        }
+        return builder;
+    }
 }
+
+/// <summary>
+/// The explicit level override a container's shared test sinks honour, registered ONLY by
+/// <see cref="TestLogLevel.ApplyOverride(ILoggingBuilder, LogLevel?)"/>. A provider without one
+/// applies the Warning floor.
+/// </summary>
+/// <param name="Level">The level that replaces both the floor and the configured level.</param>
+public sealed record TestLogLevelOverride(LogLevel Level);

@@ -16,7 +16,7 @@ needs a lower-level line captures that logger itself.
 In the two shared sinks of `test/MeshWeaver.Fixture` — `XUnitLogger` (every host built by a
 `HostBuilder`: an Orleans silo, its client, every hub inside them) and `XUnitFileLogger` (the
 `TestBase` container). Both resolve their level from configuration as before and then apply
-`TestLogLevel.Floor`, which raises anything below `Warning` to `Warning`.
+`TestLogLevel.Resolve`, which raises anything below `Warning` to `Warning`.
 
 **Why a floor and not a default.** The test `appsettings.json` files were already `Warning`, and
 the sinks still wrote Information, because both fell back to Information when the host they served
@@ -44,7 +44,15 @@ The fault sink (`TestTraceLog.AppendFault`) is Warning-and-above by construction
 ## Reading Information locally
 
 Set `MW_TEST_LOG_LEVEL=Debug` (or `Information`) in your shell before `dotnet test`. Never in CI and
-never in a committed file — that would be the allow-list the rule forbids. For the plugin gate the
+never in a committed file — that would be the allow-list the rule forbids.
+
+The explicit setting REPLACES the floor rather than feeding it (`TestLogLevel.Resolve(configured,
+override)` returns the override when one is set), and it also reaches the `LoggerFactory`:
+`TestLogLevel.ApplyOverride` adds a category-less rule for each shared sink's provider, and a
+provider-specific rule beats every provider-less rule in the factory's selection — so the shared
+`appsettings.json`'s `"MeshWeaver": "Warning"` cannot filter Debug out before the sink sees it. A
+floor alone could only ever raise the level, which left the switch a no-op (Copilot on #7285);
+`TestLogLevelOverrideTest` pins both halves. For the plugin gate the
 switch is `MW_LOG_LEVEL`, as before.
 
 ## Production is a different rule

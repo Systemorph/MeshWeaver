@@ -472,6 +472,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Fault-Injection Harness](FaultInjectionHarness) — deterministic, releasable faults (silo kill / drain / linger, flush hold, NotFound window, change-feed and first-frame holds, webhook loss) and one isolated regression per production incident, each with its negative control
 - [Reactive Test Assertions](ReactiveTestAssertions)
 - [Test State Isolation](TestStateIsolation)
+- [Test Log Levels — Warning Only](TestLogLevels) — unit and CI test runs write Warning and above to the shared test sinks, with no Information allow-list; how a test captures a lower-level line, and `MW_TEST_LOG_LEVEL` for local reading
 - [Disposable-mesh e2e](DisposableMeshE2E)
 - [Debugging Message Flow](DebuggingMessageFlow)
 - [Debugging Disposal & Leaks](DebuggingDisposalAndLeaks)
