@@ -70,6 +70,58 @@ public class TheEdgeSetWriterKeepsTheNewestGenerationTest(ITestOutputHelper outp
         stored.Edges.Select(e => e.Target).Should().Equal(["Lib/Newer"]);
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task TwoBuildsAtTheSameGeneration_TheOneTheRecordNames_WinsInEitherOrder()
+    {
+        // Both stamp writers can mint one version for two builds (the activation's unflushed v+1,
+        // the batch bake's v+1 from the durable v). The record decides the tie, whichever order the
+        // two edge writes arrive in.
+        var ct = TestContext.Current.CancellationToken;
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        const string named = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        await storage.Write(MeshNode.FromPath(SourcePath) with
+            {
+                NodeType = MeshNode.NodeTypePath,
+                Version = 5,
+                Content = new NodeTypeDefinition { LatestAssemblyMvid = named },
+            }, Mesh.JsonSerializerOptions).Await(ct);
+
+        await Write(Mesh, Set(5, other, "Lib/Other"), ct);
+        await Write(Mesh, Set(5, named, "Lib/Named"), ct);
+        var stored = await Stored(ct);
+        stored!.BuildMvid.Should().Be(named, "the later write is the build the record names");
+
+        await Write(Mesh, Set(5, other, "Lib/Other"), ct);
+        stored = await Stored(ct);
+        stored!.BuildMvid.Should().Be(named, "a tie the record does not name never replaces the one it does");
+        stored.Edges.Select(e => e.Target).Should().Equal(["Lib/Named"]);
+    }
+
+    [Fact]
+    public void TheEdgeSetNode_IsASatelliteOfItsSource()
+    {
+        var node = DependencyEdgeSetWriter.NodeFor(Set(1, "cccccccccccccccccccccccccccccccc", "Lib/X"));
+        node.Path.Should().Be(DependencyEdgeSetPaths.PathFor(SourcePath));
+        node.MainNode.Should().Be(SourcePath, "the edge set must not answer is:main or list as an instance");
+    }
+
+    [Fact]
+    public void IsTie_AndRecordNamesAnotherBuild()
+    {
+        DependencyEdgeSet At(long? generation, string mvid) => new() { Source = "x", StampVersion = generation, BuildMvid = mvid };
+
+        DependencyEdgeSetWriter.IsTie(At(3, "a"), At(3, "b")).Should().BeTrue();
+        DependencyEdgeSetWriter.IsTie(At(3, "a"), At(3, "A")).Should().BeFalse("the same build re-writes");
+        DependencyEdgeSetWriter.IsTie(At(3, "a"), At(4, "b")).Should().BeFalse("a newer generation is no tie");
+        DependencyEdgeSetWriter.IsTie(null, At(3, "b")).Should().BeFalse();
+
+        DependencyEdgeSetWriter.RecordNamesAnotherBuild(new NodeTypeDefinition { LatestAssemblyMvid = "a" }, At(3, "b")).Should().BeTrue();
+        DependencyEdgeSetWriter.RecordNamesAnotherBuild(new NodeTypeDefinition { LatestAssemblyMvid = "b" }, At(3, "b")).Should().BeFalse();
+        DependencyEdgeSetWriter.RecordNamesAnotherBuild(new NodeTypeDefinition(), At(3, "b")).Should().BeFalse("an in-memory record names no build");
+        DependencyEdgeSetWriter.RecordNamesAnotherBuild(null, At(3, "b")).Should().BeFalse();
+    }
+
     [Fact]
     public void IsSupersededBy_OnlyAStrictlyNewerStoredGenerationWins()
     {

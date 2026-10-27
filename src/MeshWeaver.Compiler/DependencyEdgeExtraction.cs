@@ -209,7 +209,9 @@ public static class DependencyEdgeExtraction
             if (Simple(parent) is { } outer)
                 name = outer + "+" + name;
             else if (parent is BaseNamespaceDeclarationSyntax ns)
-                namespaces.Insert(0, string.Concat(ns.Name.ToString().Where(c => !char.IsWhiteSpace(c))));
+                // ValueText, as the bound symbol spells it: `@Lib` and `\u004Cib` are both `Lib`.
+                namespaces.Insert(0, string.Join(".", ns.Name.DescendantNodesAndSelf()
+                    .OfType<IdentifierNameSyntax>().Select(i => i.Identifier.ValueText)));
         }
         return namespaces.Count == 0 ? name : string.Join(".", namespaces) + "." + name;
     }
@@ -258,9 +260,9 @@ public static class DependencyEdgeExtraction
                     continue;
                 foreach (var (typeName, typeOwners) in bound.SelectMany(symbol => OwnedSourceTypes(symbol, compilation, owners)))
                 {
-                    if (ContainsSelf(typeOwners, selfPath))
-                        continue;
-                    foreach (var owner in typeOwners)
+                    // Only the self owner is dropped: identical text supplied by the compiling type
+                    // AND a foreign owner names both, and the foreign one is still an edge.
+                    foreach (var owner in typeOwners.Where(o => !IsSelf(o, selfPath)))
                     {
                         if (!found.TryGetValue(owner, out var set))
                             found[owner] = set = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
@@ -293,6 +295,9 @@ public static class DependencyEdgeExtraction
                 yield return each.GetEnumeratorMethod;
                 yield return each.MoveNextMethod;
                 yield return each.CurrentProperty;
+                // The per-element conversions (`foreach (int v in Make())` over a C-owned element).
+                yield return each.CurrentConversion.MethodSymbol;
+                yield return each.ElementConversion.MethodSymbol;
                 if (forEach is ForEachVariableStatementSyntax deconstructed)
                     foreach (var method in DeconstructMethods(model.GetDeconstructionInfo(deconstructed)))
                         yield return method;
@@ -327,6 +332,14 @@ public static class DependencyEdgeExtraction
             case InitializerExpressionSyntax { RawKind: (int)SyntaxKind.CollectionInitializerExpression } initializer:
                 foreach (var element in initializer.Expressions)
                     yield return model.GetCollectionInitializerSymbolInfo(element, ct).Symbol;
+                break;
+            case InvocationExpressionSyntax:
+                // `Make()()` invokes a C-owned delegate's Invoke, which no name spells.
+                yield return model.GetSymbolInfo(node, ct).Symbol;
+                break;
+            case WithExpressionSyntax with:
+                // `Make() with { }` calls the receiver record's synthesized clone.
+                yield return model.GetTypeInfo(with.Expression, ct).Type;
                 break;
             case ElementAccessExpressionSyntax or ElementBindingExpressionSyntax:
                 // An indexer: `Make()[0]` and `Make()?[0]` name no member of the indexed type.

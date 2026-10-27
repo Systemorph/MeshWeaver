@@ -643,6 +643,146 @@ public class DependencyEdgeExtractionTest
             "the ambiguity may cost an extra edge to C, never one to anybody else");
     }
 
+    [Fact(Timeout = 120_000)]
+    public void IdenticalSnippetsOfTheCompilingTypeAndAForeignOwner_StillNameTheForeignOwner()
+    {
+        const string snippet = """
+            /// <summary>The same text, shipped by B itself and by A.</summary>
+            public record Twin(int Value);
+            """;
+        var edges = CompileB(
+            [Code(A, "Twin", snippet), Code(B, "Twin", snippet), Code(B, "UsesA", """
+                namespace FromA
+                {
+                    @@Lib/A/Source/Twin
+                }
+
+                namespace FromB
+                {
+                    @@App/B/Source/Twin
+                }
+
+                /// <summary>B binds the copy A supplied.</summary>
+                public static class UsesFromA
+                {
+                    /// <summary>One.</summary>
+                    public static FromA.Twin One() => new(1);
+                }
+                """)],
+            sources: ["namespace:Source scope:subtree"], TestContext.Current.CancellationToken).DependencyEdges!;
+
+        edges.Edges.Select(e => e.Target).Should().Equal([A],
+            "the self owner is dropped from the ambiguous set, never the foreign one beside it");
+    }
+
+    [Fact(Timeout = 120_000)]
+    public void ADelegateInvocation_AWithExpression_AndAForeachElementConversion_AreEdges()
+    {
+        var edges = CompileB(
+            [
+                Code(C, "Shapes", """
+                    /// <summary>Lib/C's delegate.</summary>
+                    public delegate int Doubler(int x);
+                    /// <summary>Lib/C's record.</summary>
+                    public record Point(int X);
+                    /// <summary>Lib/C's value, convertible to int.</summary>
+                    public readonly record struct Cents(int Value)
+                    {
+                        /// <summary>To int.</summary>
+                        public static explicit operator int(Cents c) => c.Value;
+                    }
+                    """),
+                Code(A, "Factory", """
+                    using System.Collections.Generic;
+                    /// <summary>Lib/A's factory, returning Lib/C's types.</summary>
+                    public static class Make
+                    {
+                        /// <summary>A doubler.</summary>
+                        public static Doubler Twice() => x => x * 2;
+                        /// <summary>A point.</summary>
+                        public static Point Origin() => new(0);
+                        /// <summary>Some cents.</summary>
+                        public static IEnumerable<Cents> Coins() => [new(1), new(2)];
+                    }
+                    """),
+                Code(B, "Uses", """
+                    /// <summary>B names only A's factory.</summary>
+                    public static class Uses
+                    {
+                        /// <summary>Invokes C's delegate.</summary>
+                        public static int Four() => Make.Twice()(2);
+                    }
+                    """),
+            ],
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+        var with = CompileB(
+            [
+                Code(C, "Shapes", """
+                    /// <summary>Lib/C's record.</summary>
+                    public record Point(int X);
+                    """),
+                Code(A, "Factory", """
+                    /// <summary>Lib/A's factory, returning Lib/C's record.</summary>
+                    public static class Make
+                    {
+                        /// <summary>A point.</summary>
+                        public static Point Origin() => new(0);
+                    }
+                    """),
+                Code(B, "Uses", """
+                    /// <summary>B names only A's factory.</summary>
+                    public static class Uses
+                    {
+                        /// <summary>Clones C's record.</summary>
+                        public static object Copy() => Make.Origin() with { };
+                    }
+                    """),
+            ],
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+        var conversion = CompileB(
+            [
+                Code(C, "Cents", """
+                    /// <summary>Lib/C's value, convertible to int.</summary>
+                    public readonly record struct Cents(int Value)
+                    {
+                        /// <summary>To int.</summary>
+                        public static explicit operator int(Cents c) => c.Value;
+                    }
+                    """),
+                Code(A, "Factory", """
+                    using System.Collections.Generic;
+                    /// <summary>Lib/A's factory, returning Lib/C's values.</summary>
+                    public static class Make
+                    {
+                        /// <summary>Some cents.</summary>
+                        public static IEnumerable<Cents> Coins() => [new(1), new(2)];
+                    }
+                    """),
+                Code(B, "Uses", """
+                    /// <summary>B names only A's factory and int.</summary>
+                    public static class Uses
+                    {
+                        /// <summary>Sums them.</summary>
+                        public static int Sum()
+                        {
+                            var sum = 0;
+                            foreach (int value in Make.Coins())
+                                sum += value;
+                            return sum;
+                        }
+                    }
+                    """),
+            ],
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+
+        foreach (var (set, evidence) in new[] { (edges, "Doubler"), (with, "Point"), (conversion, "Cents") })
+        {
+            set.Edges.Select(e => e.Target).Should().Equal([A, C]);
+            set.Edges.Single(e => e.Target == C).Evidence.Should().Contain(evidence);
+            set.IncludedWithoutUse.Should().BeEmpty();
+        }
+    }
+
     [Fact]
     public void DeclaredTypeNames_SpellNestedGenericAndNamespacedTypesAsTheBoundSymbolDoes()
     {
@@ -654,6 +794,10 @@ public class DependencyEdgeExtractionTest
                 public enum Colour { Red }
             }
             public record Top;
+            namespace @Escaped.\u0041lso
+            {
+                public class Spelled { }
+            }
             """;
         var tree = CSharpSyntaxTree.ParseText(code);
         var declared = DependencyEdgeExtraction.DeclaredTypeNames(tree.GetRoot()).ToImmutableSortedSet(StringComparer.Ordinal);
@@ -666,7 +810,8 @@ public class DependencyEdgeExtractionTest
             .ToImmutableSortedSet(StringComparer.Ordinal);
 
         declared.Should().Equal(bound, "attribution matches a parse-time name to a bind-time name — they must be spelled alike");
-        declared.Should().Contain(["Outer.Inner.Box`1", "Outer.Inner.Box`1+Lid", "Outer.Inner.Handler`2", "Outer.Inner.Colour", "Top"]);
+        declared.Should().Contain(["Outer.Inner.Box`1", "Outer.Inner.Box`1+Lid", "Outer.Inner.Handler`2", "Outer.Inner.Colour", "Top",
+            "Escaped.Also.Spelled"]);
     }
 
     [Theory]

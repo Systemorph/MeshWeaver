@@ -45,7 +45,15 @@ One node per compiled source, holding that source's whole forward edge set:
   (`IStorageAdapter.WriteIfVersion`, the batch stamp's own primitive): it reads the stored set,
   skips when that set is of a newer generation, otherwise writes conditioned on the row version it
   read, and on a refusal re-reads and decides again. A host with no storage adapter falls back to
-  `CreateOrUpdateNode`.
+  `CreateOrUpdateNode`. **A tie** — the same generation, a different build — happens because both
+  writers can mint one version for two builds (the activation acknowledges v+1 in memory before
+  its flush, the batch bake writes v+1 from the durable v). Then the source's record decides: it is
+  read AFTER the edge row, and a set whose build the record does not name is not written. What is
+  left open: while the activation's v+1 is still unflushed, the durable record can name the other
+  build, so the stored set can describe that one. A reader then sees `BuildMvid` ≠
+  `LatestAssemblyMvid` — "not current", never a silent pass — until the type's next compile.
+- **A satellite, never a main node.** The node's `MainNode` is the source, so it does not answer
+  `is:main` or list as an instance of anything.
 - **Build identity on the set.** `BuildMvid` is the MVID of the emitted assembly the edges were
   read from (the same value as `NodeTypeDefinition.LatestAssemblyMvid` after the stamp), and
   `InputDigest` the generated-input digest of that compile. A consumer that finds a set whose
@@ -94,8 +102,9 @@ What "binds" covers: every simple name, plus the bindings no name spells — a `
 pattern (an extension `GetEnumerator`), an `await` awaiter, a deconstruction's `Deconstruct`, query
 clause operators, a collection initializer's `Add`, a target-typed `new()`, user-defined unary,
 binary and compound-assignment operators, an indexer (`Make()[0]`, `Make()?[0]`), the
-`Dispose`/`DisposeAsync` a `using` calls on a value nobody names, and a user-defined implicit
-conversion. A bound type counts together with every type its construction mentions (type
+`Dispose`/`DisposeAsync` a `using` calls on a value nobody names, a delegate invocation
+(`Make()()`), the record clone a `with` expression calls, a `foreach`'s per-element conversion, and
+a user-defined implicit conversion. A bound type counts together with every type its construction mentions (type
 arguments, containing types' arguments, array elements), so an alias over an external generic
 (`using AList = List<AThing>;`) is still an edge to `AThing`'s owner. A referenced type
 is looked up from its innermost declaration outwards, so a foreign record spliced into the compiling
@@ -114,7 +123,8 @@ Known limits, each failing towards an extra edge rather than a missing one:
 - **Two owners supplying IDENTICAL include text.** An include is located in the root by its text, so
   both owners' texts match both copies. The declaration is attributed to every owner whose text
   covers it, and a reference to either copy is an edge to both — an extra edge, never the missing
-  one the last-match-wins rule produced.
+  one the last-match-wins rule produced. When the compiling type is one of the suppliers, only the
+  self owner is dropped from that set.
 
 Telling these apart exactly needs each reference's file origin carried through source shaping. That
 is a change to the emitted input, and it moves every content key.

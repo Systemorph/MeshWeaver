@@ -27,6 +27,9 @@ internal static class DependencyEdgeSetWriter
         new(DependencyEdgeSetPaths.ForwardId, DependencyEdgeSetPaths.NamespaceFor(edges.Source))
         {
             Name = "Forward dependencies",
+            // A satellite of the NodeType, never a main node: it must not answer `is:main` or list
+            // as an instance.
+            MainNode = edges.Source,
             NodeType = DependencyEdgeSetPaths.NodeType,
             State = MeshNodeState.Active,
             Content = edges,
@@ -48,6 +51,30 @@ internal static class DependencyEdgeSetWriter
     internal static bool IsSupersededBy(DependencyEdgeSet? stored, DependencyEdgeSet incoming) =>
         stored?.StampVersion is { } storedGeneration
         && (incoming.StampVersion is not { } incomingGeneration || storedGeneration > incomingGeneration);
+
+    /// <summary>
+    /// The tie: <paramref name="stored"/> and <paramref name="incoming"/> carry the SAME generation
+    /// but describe different builds. Both stamp writers can mint one version for two builds (the
+    /// activation acknowledges v+1 in memory before its flush, the batch bake writes v+1 from the
+    /// durable v), so the generation alone cannot order them; the source's own record decides.
+    /// </summary>
+    /// <param name="stored">The set currently stored, or null.</param>
+    /// <param name="incoming">The set about to be written.</param>
+    internal static bool IsTie(DependencyEdgeSet? stored, DependencyEdgeSet incoming) =>
+        stored?.StampVersion is { } storedGeneration
+        && incoming.StampVersion == storedGeneration
+        && !string.Equals(stored.BuildMvid, incoming.BuildMvid, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether the source's durable record <paramref name="record"/> names a build other than
+    /// <paramref name="incoming"/>'s. A record that names no build (an in-memory mesh) does not
+    /// contradict anything.
+    /// </summary>
+    /// <param name="record">The source NodeType's record as stored, or null.</param>
+    /// <param name="incoming">The set about to be written.</param>
+    internal static bool RecordNamesAnotherBuild(NodeTypeDefinition? record, DependencyEdgeSet incoming) =>
+        record?.LatestAssemblyMvid is { Length: > 0 } recordBuild
+        && !string.Equals(recordBuild, incoming.BuildMvid, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Writes <paramref name="edges"/>. Cold. A failure is reported at Error naming the type and
@@ -103,7 +130,8 @@ internal static class DependencyEdgeSetWriter
             .Take(1)
             .SelectMany(stored =>
             {
-                if (IsSupersededBy(stored?.ContentAs<DependencyEdgeSet>(options, logger), edges))
+                var storedSet = stored?.ContentAs<DependencyEdgeSet>(options, logger);
+                if (IsSupersededBy(storedSet, edges))
                 {
                     logger?.LogDebug(
                         "Dependency edges of {Source} (build {BuildMvid}, generation {Generation}) not written: "
@@ -111,29 +139,51 @@ internal static class DependencyEdgeSetWriter
                     return Observable.Return(Unit.Default);
                 }
                 var expected = stored?.Version ?? 0;
-                var node = NodeFor(edges) with { Version = MeshNode.NextVersion(expected) };
-                return storage.WriteIfVersion(node, expected, options)
+                if (!IsTie(storedSet, edges))
+                    return Publish(stored, expected);
+                // A tie: read the source's record AFTER the edge row, so a stamp landing in between
+                // either shows here or moves the edge row and refuses the compare-and-set below.
+                return storage.Read(edges.Source, options)
                     .Take(1)
-                    .SelectMany(applied =>
+                    .SelectMany(record =>
                     {
-                        if (applied is true)
+                        if (RecordNamesAnotherBuild(record?.ContentAs<NodeTypeDefinition>(options, logger), edges))
                         {
-                            // Post-commit announce, as the batch stamp does: the change feed is what
-                            // invalidates the resolution and stream caches for a storage-level write.
-                            hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(stored is null
-                                ? MeshChangeEvent.Created(node)
-                                : MeshChangeEvent.Updated(node));
+                            logger?.LogDebug(
+                                "Dependency edges of {Source} (build {BuildMvid}) not written: the stored set has the "
+                                + "same generation {Generation}, and the record names another build",
+                                edges.Source, edges.BuildMvid, edges.StampVersion);
                             return Observable.Return(Unit.Default);
                         }
-                        if (applied is false && attempt < MaxAttempts)
-                            return CompareAndSet(hub, storage, edges, logger, attempt + 1);
-                        logger?.LogError(
-                            "Writing the dependency edges of {Source} (build {BuildMvid}, generation {Generation}) "
-                            + "did not land after {Attempts} attempt(s) ({Outcome}) — the dependency graph has no "
-                            + "edge set for this build", edges.Source, edges.BuildMvid, edges.StampVersion, attempt,
-                            applied is false ? "the row kept moving" : "the store wrote nothing");
-                        return Observable.Return(Unit.Default);
+                        return Publish(stored, expected);
                     });
             });
+
+        IObservable<Unit> Publish(MeshNode? stored, long expected)
+        {
+            var node = NodeFor(edges) with { Version = MeshNode.NextVersion(expected) };
+            return storage.WriteIfVersion(node, expected, options)
+                .Take(1)
+                .SelectMany(applied =>
+                {
+                    if (applied is true)
+                    {
+                        // Post-commit announce, as the batch stamp does: the change feed is what
+                        // invalidates the resolution and stream caches for a storage-level write.
+                        hub.ServiceProvider.GetService<IMeshChangeFeed>()?.Publish(stored is null
+                            ? MeshChangeEvent.Created(node)
+                            : MeshChangeEvent.Updated(node));
+                        return Observable.Return(Unit.Default);
+                    }
+                    if (applied is false && attempt < MaxAttempts)
+                        return CompareAndSet(hub, storage, edges, logger, attempt + 1);
+                    logger?.LogError(
+                        "Writing the dependency edges of {Source} (build {BuildMvid}, generation {Generation}) "
+                        + "did not land after {Attempts} attempt(s) ({Outcome}) — the dependency graph has no "
+                        + "edge set for this build", edges.Source, edges.BuildMvid, edges.StampVersion, attempt,
+                        applied is false ? "the row kept moving" : "the store wrote nothing");
+                    return Observable.Return(Unit.Default);
+                });
+        }
     }
 }
