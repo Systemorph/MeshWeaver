@@ -146,12 +146,16 @@ with these settings:
 > reader re-applies the `true` default.
 >
 > **The hub's resolver now closes that class** (`DeclaredDefaultsSurviveTheWire`, applied by
-> `PolymorphicTypeInfoResolver`): every settable scalar member — primitive, enum, `decimal`, their
-> nullable forms, or `string` — whose DECLARED default (its initializer, or its constructor
-> parameter's default) differs from its CLR default is always written, so an explicitly stored
-> `false` / `0` / `null` is never re-materialised as the declared value. Nothing else changes on the
-> wire: a declared-default value was never the CLR default and was always written, and a member
-> whose declared default IS the CLR default is still omitted. A member carrying its own
+> `PolymorphicTypeInfoResolver`): a settable scalar member — primitive, enum, `decimal`, their
+> nullable forms, or `string` — keeps `WhenWritingDefault` only when its DECLARED default is
+> PROVEN to be the CLR default whatever the constructor was given; otherwise it is always written,
+> so an explicitly stored `false` / `0` / `null` is never re-materialised as the declared value.
+> Proof is: the constructor parameter's default (for a parameter-bound member); one probe instance
+> (for a parameterless constructor); or two probes with DIFFERENT arguments that agree (for a
+> parameterized constructor — this catches initializers computed from an argument, like
+> `MeshNode.MainNode`). A probe or getter that throws, or a constructor argument that cannot be
+> varied, means "not proven" and the member is written. The conservative branch costs bytes, never
+> a value: an explicit CLR default reads back identically. A member carrying its own
 > `[JsonIgnore(...)]` keeps its author's condition, so the per-property
 > `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]` annotations that predate the rule are
 > redundant but harmless. Measured before the rule: an `ActionHandlerRule` committed with

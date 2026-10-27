@@ -64,6 +64,31 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         public int Count { get; init; }
     }
 
+    /// <summary>An initializer computed from a constructor argument — the MeshNode.MainNode shape.</summary>
+    public sealed record ArgumentDependent(string Id)
+    {
+        public string? Main { get; init; } = Id;
+    }
+
+    /// <summary>An initializer that throws for a null argument, so the all-defaults probe fails.</summary>
+    public sealed record ThrowsOnNullArgument(string Area)
+    {
+        public string? Title { get; init; } = Area.ToUpperInvariant();
+        public string? Image { get; init; } = "declared.png";
+    }
+
+    /// <summary>A getter that throws on a probe instance but not on a real one.</summary>
+    public sealed record ThrowingGetter(string Text)
+    {
+        public int Length { get => Text.Length; init { } }
+    }
+
+    /// <summary>Proven CLR default on a constructor-built type — must still be omitted.</summary>
+    public sealed record ProvenDefault(string Id)
+    {
+        public bool Flag { get; init; }
+    }
+
     private static JsonSerializerOptions WithoutTheFix() => new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -151,6 +176,50 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         var json = JsonSerializer.Serialize(new ClrDefaults(), options);
         json.Should().NotContain("flag").And.NotContain("count",
             "a member whose declared default is the CLR default serialises compactly, exactly as before");
+    }
+
+    [Fact]
+    public void An_initializer_computed_from_a_constructor_argument_keeps_an_explicit_null()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        RoundTrip(new ArgumentDependent("n") { Main = null }, options).Main.Should().BeNull();
+
+        var node = JsonSerializer.Deserialize<MeshNode>("{\"id\":\"n\",\"mainNode\":null}", options)!;
+        node.MainNode.Should().BeNull();
+        RoundTrip(node, options).MainNode.Should().BeNull("the stored null is not the argument-derived default");
+    }
+
+    [Fact]
+    public void A_failed_constructor_probe_keeps_every_member_written()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        RoundTrip(new ThrowsOnNullArgument("a") { Image = null, Title = null }, options)
+            .Should().Be(new ThrowsOnNullArgument("a") { Image = null, Title = null });
+
+        var area = new MeshWeaver.Layout.LayoutAreaDefinition("Area", "/Area") { ImageUrl = null };
+        RoundTrip(area, options).ImageUrl.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_getter_that_throws_on_a_probe_does_not_break_serialization_of_a_valid_instance()
+    {
+        JsonSerializer.Serialize(new ThrowingGetter("abc"), Mesh.JsonSerializerOptions)
+            .Should().Contain("\"length\":3");
+    }
+
+    [Fact]
+    public void A_proven_clr_default_on_a_constructor_built_type_stays_omitted()
+    {
+        JsonSerializer.Serialize(new ProvenDefault("x"), Mesh.JsonSerializerOptions).Should().NotContain("flag");
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_argument_dependent_and_unprobeable_values_are_lost()
+    {
+        var options = WithoutTheFix();
+        RoundTrip(new ArgumentDependent("n") { Main = null }, options).Main.Should().Be("n",
+            "if this ever fails, the argument-dependent case no longer exercises the trap");
+        RoundTrip(new ThrowsOnNullArgument("a") { Image = null }, options).Image.Should().Be("declared.png");
     }
 
     [Fact]
