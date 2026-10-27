@@ -111,9 +111,16 @@ Then it answers `202` with a signed body and runs on the mesh's off-router execu
 outlives every target:
 
 1. **Plan** — the operation reads what it would act on, as system, writing nothing. A refusal
-   (a protected partition, a user's home, a package's partition, a reading that was a floor, a
-   target that is not there, nothing left to delete) is reported `Refused`. Otherwise `Planned`,
-   carrying the plan and its digest. A dry run ends here.
+   (a protected partition, a user's home, a package's partition an install record still targets,
+   a reading that was a floor, a target that is not there, nothing left to delete) is reported
+   `Refused`. Otherwise `Planned`, carrying the plan and its digest. A dry run ends here.
+   🚨 A package's partition is refused only while an install record (`Plugins/{id}`, matched by
+   the manifest's target partition, else the record's own id) targets it — the Store uninstall is
+   then the path. The records are discovered from the store's own enumeration of `Plugins` as well
+   as the query index, so a record the index has not reached yet still blocks the deletion.
+   A space installed by a `Store/Provision` has no such record: the Store uninstall refuses it and
+   nothing re-installs it, so it is planned like any other space (#7325). An install ledger that
+   could not be read is a refusal, never "none".
 2. **Compare** — 🚨 the plan the target computes NOW must have the digest the approval bound; any
    other plan is reported `Refused`, both digests named, and NOTHING is touched.
 3. **Execute** — the same engine as the in-process action, as system; one `Progress` report per
