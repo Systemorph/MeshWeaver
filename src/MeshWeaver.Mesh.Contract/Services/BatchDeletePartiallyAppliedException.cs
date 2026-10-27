@@ -17,6 +17,11 @@ namespace MeshWeaver.Mesh.Services;
 /// before parents. Any other exception means the adapter confirmed no removal. A caller reads the
 /// set through <see cref="RemovedBy"/>, which answers empty for every other exception, so it never
 /// has to know which kind it got.</para>
+///
+/// <para><b>Its <see cref="Exception.Message"/> is the cause's, verbatim.</b> The message reaches
+/// people (a move's <c>MoveNodeResponse.Error</c>, a delete's failure transcript), and a sentence this
+/// type composed around it would be framework-authored English no viewer's language could render.
+/// What this type adds is data, <see cref="Removed"/>, never prose.</para>
 /// </summary>
 public sealed class BatchDeletePartiallyAppliedException : Exception
 {
@@ -24,7 +29,7 @@ public sealed class BatchDeletePartiallyAppliedException : Exception
     /// <param name="removed">The rows the batch removed before it failed, children before parents.</param>
     /// <param name="cause">The failure that stopped the batch.</param>
     public BatchDeletePartiallyAppliedException(IReadOnlyList<string> removed, Exception cause)
-        : base($"The batch delete failed after removing {removed.Count} row(s): {cause.Message}", cause)
+        : base(cause.Message, cause)
     {
         Removed = removed;
     }

@@ -86,34 +86,123 @@ public class ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest
     /// <summary>
     /// The composite runs one batch per writable store. A store that failed part-way must not hide
     /// what the OTHER stores removed: every store is heard to the end, and the fault carries the
-    /// union, in the caller's order.
+    /// union, in the caller's order. Its message is the store's own, verbatim: the exception adds
+    /// data, never a framework-authored sentence no viewer's language could render.
     /// </summary>
     [Fact]
     public async Task TheUnionOverStores_CarriesEveryStoresRemovals_InTheCallersOrder()
     {
         string[] paths = ["S/A/x", "S/A", "S/B", "S"];
-        var failed = Observable.Throw<IReadOnlyList<string>>(new BatchDeletePartiallyAppliedException(
-            ["S/A"], new InvalidOperationException("store one died")));
-        var succeeded = Observable.Return<IReadOnlyList<string>>(["S/B", "S/A/x"]);
+        var failed = new BatchDeleteStore(
+            () => Observable.Throw<IReadOnlyList<string>>(new BatchDeletePartiallyAppliedException(
+                ["S/A"], new InvalidOperationException("store one died"))),
+            // Store one no longer holds anything it was asked about.
+            _ => Observable.Return(false));
+        var succeeded = new BatchDeleteStore(
+            () => Observable.Return<IReadOnlyList<string>>(["S/B", "S/A/x"]),
+            _ => Observable.Return(false));
 
         var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(
             () => StorageBatchDelete.Union(paths, [failed, succeeded]).FirstAsync().Await());
 
         Assert.Equal(["S/A/x", "S/A", "S/B"], error.Removed.ToArray());
         Assert.Equal("store one died", error.InnerException?.Message);
+        Assert.Equal("store one died", error.Message);
+    }
+
+    /// <summary>
+    /// A store whose <c>DeleteMany</c> throws while it is being CALLED, before it returns an
+    /// observable, is that one store's failure. On unfixed code the throw happened while the
+    /// composite enumerated its stores, outside every per-store outcome: it faulted the whole
+    /// fan-out with the bare exception, and the rows the healthy store had removed were named to
+    /// nobody, so no caller could retire their hubs.
+    /// </summary>
+    [Fact]
+    public async Task TheComposite_AStoreThatThrowsWhenCalled_DoesNotHideWhatAnotherRemoved()
+    {
+        var healthy = await Seeded("S/A", "S/B");
+        var throwing = await Seeded();
+        IStorageAdapter composite = new PersistenceService(
+        [
+            new WritableProvider("healthy", healthy),
+            new WritableProvider("throwing", new ThrowsWhenCalledAdapter(throwing)),
+        ]);
+
+        var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(
+            () => composite.DeleteMany(["S/A", "S/B"]).FirstAsync().Await());
+
+        Assert.Equal(["S/A", "S/B"], error.Removed.ToArray());
+        Assert.Equal(ThrowsWhenCalledAdapter.Message, error.InnerException?.Message);
+        Assert.Null(await ((IStorageAdapter)healthy).Read("S/A", Options).FirstAsync().Await());
+    }
+
+    /// <summary>
+    /// The same path in TWO writable stores: one removes its copy, the other fails before removing
+    /// its own. The node is still readable from the second store, so it must not be reported as
+    /// removed: a caller would publish <c>Deleted</c> for it and retire the hub of a node that
+    /// exists. On unfixed code the union named it because ONE store had removed it. A path the
+    /// failing store removed itself, and one no store still holds, are still reported.
+    /// </summary>
+    [Fact]
+    public async Task TheComposite_APathAFailedStoreStillHolds_IsNotReportedRemoved()
+    {
+        // Store one holds both rows and fails on S/A after removing S/B; store two holds S/A and
+        // removes it. S/A is therefore still stored, in store one.
+        var one = await Seeded("S/B", "S/A");
+        var two = await Seeded("S/A");
+        IStorageAdapter composite = new PersistenceService(
+        [
+            new WritableProvider("one", new SingleRowFaultAdapter(one, failAt: "S/A")),
+            new WritableProvider("two", two),
+        ]);
+
+        var error = await Assert.ThrowsAsync<BatchDeletePartiallyAppliedException>(
+            () => composite.DeleteMany(["S/B", "S/A"]).FirstAsync().Await());
+
+        Assert.Equal(["S/B"], error.Removed.ToArray());
+        Assert.NotNull(await composite.Read("S/A", Options).FirstAsync().Await());
+        Assert.Null(await composite.Read("S/B", Options).FirstAsync().Await());
+    }
+
+    private sealed class WritableProvider(string name, IStorageAdapter adapter) : IPartitionStorageProvider
+    {
+        public string Name => name;
+        public bool IsReadOnly => false;
+        public IStorageAdapter Adapter => adapter;
+    }
+
+    /// <summary>A store whose <see cref="IStorageAdapter.DeleteMany"/> throws synchronously, before returning an observable.</summary>
+    private sealed class ThrowsWhenCalledAdapter(IStorageAdapter inner) : ForwardingAdapter(inner)
+    {
+        public const string Message = "injected: DeleteMany threw while being called";
+
+        public override IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+            => throw new InvalidOperationException(Message);
     }
 
     /// <summary>
     /// A real in-memory store whose single-row delete of one path FAULTS without removing it. It does
     /// not override <see cref="IStorageAdapter.DeleteMany"/>, so the batch runs the interface's
-    /// default over this adapter's own <see cref="DeleteIfExists"/>.
+    /// default over this adapter's own <see cref="IStorageAdapter.DeleteIfExists"/>.
     /// </summary>
-    private sealed class SingleRowFaultAdapter(IStorageAdapter inner, string failAt) : IStorageAdapter
+    private sealed class SingleRowFaultAdapter(IStorageAdapter inner, string failAt) : ForwardingAdapter(inner)
     {
-        public IObservable<bool> DeleteIfExists(string path)
+        public override IObservable<bool> DeleteIfExists(string path)
             => string.Equals(path, failAt, StringComparison.Ordinal)
                 ? Observable.Throw<bool>(new InvalidOperationException($"injected: the store refused to delete '{path}'"))
-                : inner.DeleteIfExists(path);
+                : Inner.DeleteIfExists(path);
+    }
+
+    /// <summary>Forwards every member to a real store; subclasses override the one they inject a fault into.</summary>
+    private abstract class ForwardingAdapter(IStorageAdapter inner) : IStorageAdapter
+    {
+        protected IStorageAdapter Inner => inner;
+
+        public virtual IObservable<bool> DeleteIfExists(string path) => inner.DeleteIfExists(path);
+
+        // Unless overridden, the interface's default batch over THIS adapter's DeleteIfExists.
+        public virtual IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+            => StorageBatchDelete.OneAtATime(paths, DeleteIfExists);
 
         public IObservable<string> Delete(string path) => inner.Delete(path);
 

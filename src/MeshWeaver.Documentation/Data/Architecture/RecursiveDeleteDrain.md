@@ -533,13 +533,16 @@ says what a part-way failure removed: the fault is a `BatchDeletePartiallyApplie
 `Removed` lists exactly the rows that left storage, and any other fault means no removal was
 confirmed. The default implementation (one row at a time), the composite's union over its writable
 providers (every provider is heard to the end, so one provider's failure does not hide another's
-removals), the history-purging and write-guard decorators and the remote partition handler
+removals; a provider whose `DeleteMany` throws while being called is that provider's failure, not the
+batch's; and a path one provider removed but a FAILED provider still holds is not reported, because
+the node is still readable), the history-purging and write-guard decorators and the remote partition handler
 (`DeleteBatchResponse.DeletedPaths` alongside its `Error`) all keep it. The commit gives those rows
 the same side effects as a completed batch's rows, and the commit's failure carries them. A row the
 batch did not remove keeps its hub. A backend override that removes in several statements, such as
 the Postgres adapter's one statement per target table (MeshWeaver.Plugins), must report the rows of
 the statements that committed; until it does, its part-way failure is a bare fault and retires
-nothing, as before. Pinned by
+nothing, as before. The fault's message is the store's own, verbatim, so no framework-authored
+English reaches a move's or a delete's failure text. Pinned by
 `APartWayBatchDeleteRetiresWhatItRemovedTest` (FaultInjection.Test) and
 `ABatchDeleteThatFailsPartWayNamesWhatItRemovedTest` (Hosting.Test).
 
