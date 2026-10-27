@@ -1600,6 +1600,7 @@
   "setup.packages.other": "Sonstige",
   "setup.packages.group.one": "{0} Paket",
   "setup.packages.group.other": "{0} Pakete",
+  "setup.packages.needsPlan": "benötigt Plan {0} – diese Instanz ist auf {1}; bitten Sie den Administrator der Registry, den Plan anzuheben",
   "setup.problem.noInstanceName": "Geben Sie dieser Instanz einen Namen.",
   "setup.problem.badInstanceId": "'{0}' ist keine gültige Instanz-ID — 3 bis 48 Zeichen aus Kleinbuchstaben, Ziffern und einzelnen Bindestrichen.",
   "setup.problem.badRegistry": "'{0}' ist keine gültige Adresse. Sie sollte aussehen wie https://memex.meshweaver.cloud.",

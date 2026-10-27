@@ -1600,6 +1600,7 @@
   "setup.packages.other": "Other",
   "setup.packages.group.one": "{0} package",
   "setup.packages.group.other": "{0} packages",
+  "setup.packages.needsPlan": "needs plan {0} — this instance is on {1}; ask the registry's administrator to raise the plan",
   "setup.problem.noInstanceName": "Give this instance a name.",
   "setup.problem.badInstanceId": "'{0}' is not a valid instance id — 3 to 48 characters of lowercase letters, digits and single hyphens.",
   "setup.problem.badRegistry": "'{0}' is not a valid address. It should look like https://memex.meshweaver.cloud.",
