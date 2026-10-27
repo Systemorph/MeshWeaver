@@ -138,7 +138,7 @@ public static class DependencyEdgeExtraction
         // module edges alone cost about two thirds of the emit on every NodeType compile.
         var modules = (emittedImage is null
             ? UsedModules(compilation, references.Modules, ct)
-            : EmittedModuleEdges(compilation, emittedImage, references.Modules)).ToList();
+            : EmittedModuleEdges(compilation, emittedImage, references.Modules, ct)).ToList();
         edges.AddRange(modules);
         if (emittedImage is not null)
         {
@@ -545,10 +545,14 @@ public static class DependencyEdgeExtraction
     /// for the reason <see cref="EmittedReferenceEdges(CSharpCompilation, Stream, DependencyReferenceClasses)"/>
     /// gives: <see cref="Compilation.GetUsedAssemblyReferences"/> also counts a module whose namespace
     /// a <c>using</c> merely imports, and it pays for that answer with a second full binding pass
-    /// over every method body. What metadata cannot show — a constant inlined from a module, a
-    /// <c>nameof</c> — is not an edge, the same limit as a platform edge.</para></summary>
+    /// over every method body. What metadata cannot show — a constant (an enum member included) the
+    /// compiler inlined from a module, a <c>nameof</c> of a module symbol — is added by
+    /// <see cref="CompileTimeOnlyModuleEdges"/>, so a module whose constant a type reads is still
+    /// that type's edge: a module edge selects the type when the module changes, and a changed
+    /// constant changes the type's emitted code.</para></summary>
     private static IEnumerable<DependencyEdge> EmittedModuleEdges(
-        CSharpCompilation compilation, Func<Stream> emittedImage, IReadOnlySet<MetadataReference> moduleReferences)
+        CSharpCompilation compilation, Func<Stream> emittedImage, IReadOnlySet<MetadataReference> moduleReferences,
+        CancellationToken ct)
     {
         if (moduleReferences.Count == 0)
             return [];
@@ -570,7 +574,102 @@ public static class DependencyEdgeExtraction
                     TargetBuildMvid = MvidOf(reference),
                 };
             }
+        foreach (var edge in CompileTimeOnlyModuleEdges(compilation, moduleReferences, edges.Keys.ToHashSet(StringComparer.Ordinal), ct))
+            edges[edge.Target] = edge;
         return edges.Values;
+    }
+
+    /// <summary>The MODULE edges the emitted image cannot show: a module whose CONSTANT (an enum
+    /// member included) the compiler inlined, or whose symbol a <c>nameof</c> names, leaves no
+    /// <c>AssemblyRef</c>, yet a change to it changes — or breaks — this type's compile. Candidates
+    /// are found by NAME first (the constant names each not-yet-edged module declares, and every
+    /// <c>nameof</c>), and only those nodes are bound, so the price is a syntax walk plus a handful
+    /// of local bindings — never the second full binding pass
+    /// <see cref="Compilation.GetUsedAssemblyReferences"/> pays.</summary>
+    private static IEnumerable<DependencyEdge> CompileTimeOnlyModuleEdges(
+        CSharpCompilation compilation, IReadOnlySet<MetadataReference> moduleReferences,
+        IReadOnlySet<string> alreadyEdges, CancellationToken ct)
+    {
+        var pending = new Dictionary<IAssemblySymbol, MetadataReference>(SymbolEqualityComparer.Default);
+        foreach (var reference in moduleReferences)
+            if (compilation.GetAssemblyOrModuleSymbol(reference) is IAssemblySymbol assembly
+                && !alreadyEdges.Contains(assembly.Identity.Name))
+                pending.TryAdd(assembly, reference);
+        if (pending.Count == 0)
+            return [];
+        var constantNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var assembly in pending.Keys)
+            CollectConstantNames(assembly.GlobalNamespace, constantNames, ct);
+
+        var found = new SortedDictionary<string, DependencyEdge>(StringComparer.Ordinal);
+        foreach (var tree in compilation.SyntaxTrees)
+        {
+            if (pending.Count == 0)
+                break;
+            SemanticModel? model = null;
+            foreach (var node in tree.GetRoot(ct).DescendantNodes())
+            {
+                if (pending.Count == 0)
+                    break;
+                ExpressionSyntax? candidate = node switch
+                {
+                    IdentifierNameSyntax id when constantNames.Contains(id.Identifier.ValueText) => id,
+                    InvocationExpressionSyntax
+                    {
+                        Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" },
+                        ArgumentList.Arguments: [var argument],
+                    } => argument.Expression,
+                    _ => null,
+                };
+                if (candidate is null)
+                    continue;
+                model ??= compilation.GetSemanticModel(tree);
+                var info = model.GetSymbolInfo(candidate, ct);
+                ImmutableArray<ISymbol> symbols = info.Symbol is { } bound ? [bound] : info.CandidateSymbols;
+                foreach (var symbol in symbols)
+                {
+                    var isCompileTimeOnly = symbol is IFieldSymbol { IsConst: true } || candidate != node;
+                    if (!isCompileTimeOnly || symbol is INamespaceSymbol
+                        || symbol.ContainingAssembly is not { } owner
+                        || !pending.TryGetValue(owner, out var reference))
+                        continue;
+                    found[owner.Identity.Name] = new DependencyEdge
+                    {
+                        Target = owner.Identity.Name,
+                        Kind = DependencyEdgeKinds.Module,
+                        TargetBuildMvid = MvidOf(reference),
+                    };
+                    pending.Remove(owner);
+                }
+            }
+        }
+        return found.Values;
+    }
+
+    /// <summary>Every constant field name (enum members included) declared in <paramref name="ns"/>
+    /// and below, nested types included.</summary>
+    private static void CollectConstantNames(INamespaceSymbol ns, HashSet<string> names, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        foreach (var member in ns.GetMembers())
+            switch (member)
+            {
+                case INamespaceSymbol inner:
+                    CollectConstantNames(inner, names, ct);
+                    break;
+                case INamedTypeSymbol type:
+                    CollectConstantNames(type, names);
+                    break;
+            }
+    }
+
+    private static void CollectConstantNames(INamedTypeSymbol type, HashSet<string> names)
+    {
+        foreach (var member in type.GetMembers())
+            if (member is IFieldSymbol { IsConst: true } field)
+                names.Add(field.Name);
+        foreach (var nested in type.GetTypeMembers())
+            CollectConstantNames(nested, names);
     }
 
     private static List<(AssemblyIdentity Identity, MetadataReference Reference)> ReferenceIdentities(

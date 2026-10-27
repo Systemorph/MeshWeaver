@@ -313,6 +313,98 @@ public class DependencyEdgeExtractionTest
         }
     }
 
+    /// <summary>
+    /// What the emitted image cannot show is still a module edge: a constant (an enum member
+    /// included) the compiler INLINED, and a <c>nameof</c> of a module type, leave no
+    /// <c>AssemblyRef</c> — asserted below as the precondition, so the case really exercises the
+    /// inlining path — yet a change to the module changes or breaks the consumer, and CI selection
+    /// reads the module edge to know that. Negative control: a third module declares a constant of
+    /// the SAME name the consumer uses for its own local, and is no edge — the name only nominates,
+    /// the binding decides.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AModuleOnlyReadAtCompileTime_ConstantOrNameof_IsStillAModuleEdge()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var constants = EmitModule("DepGraphProbeConstOnly", """
+            namespace DepGraphProbe.Consts;
+            /// <summary>Constants a consumer inlines.</summary>
+            public static class Limits
+            {
+                /// <summary>Inlined by the consumer.</summary>
+                public const int Max = 7;
+            }
+            /// <summary>An enum whose member a consumer inlines.</summary>
+            public enum Color
+            {
+                /// <summary>Red.</summary>
+                Red,
+                /// <summary>Blue.</summary>
+                Blue,
+            }
+            """);
+        var named = EmitModule("DepGraphProbeNameofOnly", """
+            namespace DepGraphProbe.Named;
+            /// <summary>A type a consumer only names.</summary>
+            public sealed class Widget { }
+            """);
+        var shadowed = EmitModule("DepGraphProbeSameNameOnly", """
+            namespace DepGraphProbe.Shadow;
+            /// <summary>A constant whose NAME the consumer reuses for a local.</summary>
+            public static class Other
+            {
+                /// <summary>Never read by the consumer.</summary>
+                public const int Total = 1;
+            }
+            """);
+        try
+        {
+            var references = CompileReferences.Default
+                .Append(MetadataReference.CreateFromFile(constants))
+                .Append(MetadataReference.CreateFromFile(named))
+                .Append(MetadataReference.CreateFromFile(shadowed))
+                .ToList();
+            var tree = CSharpSyntaxTree.ParseText("""
+                using DepGraphProbe.Consts;
+                public static class P
+                {
+                    public static int S() { var Total = Limits.Max + (int)Color.Blue; return Total; }
+                    public static string N() => nameof(DepGraphProbe.Named.Widget);
+                }
+                """, cancellationToken: ct);
+            var compilation = CSharpCompilation.Create("ConstOnlyProbe", [tree], references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var image = new MemoryStream();
+            var emit = compilation.Emit(image, cancellationToken: ct);
+            emit.Success.Should().BeTrue(string.Join("\n", emit.Diagnostics));
+            using (var pe = new PEReader(new MemoryStream(image.ToArray(), writable: false)))
+            {
+                var reader = pe.GetMetadataReader();
+                reader.AssemblyReferences.Select(h => reader.GetString(reader.GetAssemblyReference(h).Name))
+                    .Should().NotContain(["DepGraphProbeConstOnly", "DepGraphProbeNameofOnly"],
+                        "precondition: the uses are compile-time only, so the image carries no AssemblyRef to either");
+            }
+            var classes = DependencyReferenceClasses.Of(references, [constants, named, shadowed], new Dictionary<string, string>());
+
+            var modules = DependencyEdgeExtraction.Extract(compilation, [tree], "App/P", [], null, classes,
+                    () => new MemoryStream(image.ToArray(), writable: false), ct: ct)
+                .Edges.Where(e => e.Kind == DependencyEdgeKinds.Module).ToList();
+
+            modules.Select(e => e.Target).Should().Equal(["DepGraphProbeConstOnly", "DepGraphProbeNameofOnly"],
+                "an inlined constant and a nameof are uses the image cannot show; a same-named local is not a use");
+            modules.Single(e => e.Target == "DepGraphProbeConstOnly").TargetBuildMvid.Should().Be(MvidOf(constants));
+        }
+        finally
+        {
+            foreach (var path in new[] { constants, named, shadowed })
+            {
+                try { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+    }
+
     [Fact(Timeout = 120_000)]
     public void NegativeControl_AReferenceTheCallerDoesNotNameAsAModule_IsNoModuleEdge()
     {
