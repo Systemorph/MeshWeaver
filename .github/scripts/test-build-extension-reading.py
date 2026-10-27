@@ -6,9 +6,13 @@ items) and writes the one JSON that both `module-build-key.py` and `node-repo-sc
 This control runs the real evaluator; it lives here, in core's dotnet-test lane (which has an SDK),
 because the two scripts' own `--self-test`s also run where no SDK or core tree exists.
 
-POSITIVE CONTROL: the real `tools/MeshWeaver.PluginTester.Razor` (the first real extension; a
-hand-written reader once refused it) evaluates, keys and scopes cleanly, its ProjectReference
-followed.
+POSITIVE CONTROL: an extension shaped like the real ones (MeshWeaver.Plugins'
+`src/MeshWeaver.PluginTester.Razor`, which a hand-written reader once refused) evaluates, keys and
+scopes cleanly, its ProjectReference followed. The platform ships no extension of its own any more
+(Doc/Architecture/CoreCarriesNoGuiTechnology), so the control lays one INSIDE this tree for the run,
+where it inherits the repository's real Directory.* imports, references the real extension contract
+(`tools/MeshWeaver.PluginTester.Extensibility`) and carries a `build-extension.json`, and removes it
+afterwards.
 
 NEGATIVE CONTROLS, each decided by MSBuild itself on a scratch repository, never argued:
   - an imported file:  its edit re-keys and selects;
@@ -30,7 +34,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / ".github" / "scripts"
-EXTENSION = "tools/MeshWeaver.PluginTester.Razor/MeshWeaver.PluginTester.Razor.csproj"
+CONTRACT = "tools/MeshWeaver.PluginTester.Extensibility/MeshWeaver.PluginTester.Extensibility.csproj"
+# Under tools/, beside the contract, like the extension that used to live here; a name no tracked
+# path uses, removed in `finally`.
+FIXTURE_DIR = "tools/MeshWeaver.PluginTester.ControlExtension"
+EXTENSION = f"{FIXTURE_DIR}/MeshWeaver.PluginTester.ControlExtension.csproj"
 
 failures: list[str] = []
 
@@ -103,10 +111,43 @@ def scratch_repo(root: Path) -> None:
 
 
 def main() -> int:
-    if not (ROOT / EXTENSION).is_file():
-        print(f"::error::{EXTENSION} is not in this tree; this control has nothing to check. If the extension "
-              "moved, point EXTENSION at its new home rather than deleting the control.")
+    if not (ROOT / CONTRACT).is_file():
+        print(f"::error::{CONTRACT} is not in this tree; the positive control's extension has no contract to "
+              "reference. If the contract moved, point CONTRACT at its new home rather than deleting the control.")
         return 1
+    fixture = ROOT / FIXTURE_DIR
+    if fixture.exists():
+        print(f"::error::{FIXTURE_DIR} already exists; this control lays its own extension there and will not "
+              "overwrite a directory it did not create.")
+        return 1
+    try:
+        lay_fixture(fixture)
+        return run_controls()
+    finally:
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+def lay_fixture(fixture: Path) -> None:
+    files = {
+        "MeshWeaver.PluginTester.ControlExtension.csproj": """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(MeshWeaverRoot)/tools/MeshWeaver.PluginTester.Extensibility/MeshWeaver.PluginTester.Extensibility.csproj" Private="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="build-extension.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Pack="false" />
+  </ItemGroup>
+</Project>
+""",
+        "build-extension.json": '{ "assembly": "MeshWeaver.PluginTester.ControlExtension" }\n',
+        "ControlExtension.cs": "namespace MeshWeaver.PluginTester.ControlExtension;\n\ninternal static class Marker;\n",
+    }
+    for rel, text in files.items():
+        (fixture / rel).parent.mkdir(parents=True, exist_ok=True)
+        (fixture / rel).write_text(text, encoding="utf-8")
+
+
+def run_controls() -> int:
     scope = load("node-repo-scope.py", "node_repo_scope")
     key = load("module-build-key.py", "module_build_key")
     sdk = subprocess.run(["dotnet", "--version"], capture_output=True, text=True, check=True).stdout.strip()
@@ -116,8 +157,8 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        print("== POSITIVE: the real Razor extension, evaluated by MSBuild")
-        evaluation = evaluate(ROOT, EXTENSION, tmp / "razor.json")
+        print("== POSITIVE: an extension in this tree, evaluated by MSBuild")
+        evaluation = evaluate(ROOT, EXTENSION, tmp / "extension.json")
         check("MSBuild followed its ProjectReference",
               "tools/MeshWeaver.PluginTester.Extensibility/MeshWeaver.PluginTester.Extensibility.csproj"
               in evaluation["projects"], str(sorted(evaluation["projects"])))
@@ -125,7 +166,7 @@ def main() -> int:
             reach = scope.shelf_dirs(ROOT, EXTENSION, evaluation)
             check("scopes cleanly: reach covers the referenced project and the manifest",
                   reaches(reach, "tools/MeshWeaver.PluginTester.Extensibility/X.cs")
-                  and reaches(reach, "tools/MeshWeaver.PluginTester.Razor/build-extension.json"), str(sorted(reach)))
+                  and reaches(reach, f"{FIXTURE_DIR}/build-extension.json"), str(sorted(reach)))
             got = key.shelf_inputs(ROOT, EXTENSION, "build-extensions-project", sdk=sdk, evaluation=evaluation)
             check("keys cleanly, with the publishing SDK recorded", got.get("sdk") == sdk)
             check("the imported MeshWeaverSurfaceManifest.targets is a key input",
@@ -382,7 +423,7 @@ def main() -> int:
     if failures:
         print(f"::error::{len(failures)} case(s) FAILED: " + "; ".join(failures))
         return 1
-    print("test-build-extension-reading: MSBuild's own evaluation keys and scopes the real extension, "
+    print("test-build-extension-reading: MSBuild's own evaluation keys and scopes an in-tree extension, "
           "and every negative control behaves")
     return 0
 

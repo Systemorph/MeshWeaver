@@ -118,9 +118,11 @@ for no doc file — which is when csc would not raise it either. The SDK's defau
 console is a rendering of that stream, which is why nothing is batched to the end.
 
 **Build extensions.** A source kind the builder does not know itself is compiled by a BUILD
-EXTENSION (`tools/MeshWeaver.PluginTester.Extensibility` is the contract): the image ships each one
-in `build-extensions/<name>/` beside the builder, `--extensions <dir>` (repeatable) names the set to
-use instead and REPLACES the search, and any other `--<name> <value>` is an option of a loaded
+EXTENSION (`tools/MeshWeaver.PluginTester.Extensibility` is the contract) that the repository owning
+that source kind supplies — the platform ships none. One staged in `build-extensions/<name>/` beside
+the builder is found by the standard search; `--extensions <dir>` (repeatable) names the set to use
+instead and REPLACES the search (the module-pack lane passes the caller's `build-extensions-project`
+publish this way), and any other `--<name> <value>` is an option of a loaded
 extension — one no extension declares is refused. An extension claims item types (their
 Include/Remove operations reach it in declaration order) and source suffixes; it contributes a
 source generator run, which the builder executes BEFORE the generic `--generators` ones, and the
@@ -128,34 +130,14 @@ static assets its inputs imply, written after the builder's verbatim `wwwroot/` 
 refusal is RED. A project carrying `.razor`/`.cshtml` that NO loaded extension claims is refused by
 name (`--accept unclaimed-sources` acknowledges it).
 
-**Razor/Blazor compiles** through the Razor extension (`tools/MeshWeaver.PluginTester.Razor`,
-staged to `build-extensions/razor/`). `.razor` and `.cshtml` are turned into C# by the SDK's Roslyn
-**source generator**, which the extension ships in `razor-generators/<rid>/` beside itself:
-`Microsoft.CodeAnalysis.Razor.Compiler.dll` + `Microsoft.AspNetCore.Razor.Utilities.Shared.dll` —
-the measured closure, everything else the compiler references binds to the host.
-
-- 🚨 **Per RID.** The SDK crossgens its Razor compiler for the SDK's own runtime identifier, so ONE
-  copy cannot serve a multi-arch image: the same 10.0.400 file carries PE machine `0xFD1D` on
-  linux-x64 and `0xD11D` on linux-arm64, and the wrong one throws `BadImageFormatException`. CD
-  stages both; the extension's option `--razor-generators <dir>` names another copy and REPLACES
-  the search rather than heading it.
-- 🚨 **Loaded into a host-first load context** (the extension AND the generator). The generator is
-  built against the SDK's Roslyn and the image carries this repo's pin; the default context refuses
-  the lower version, so every assembly the host already has is bound to the host's copy with the
-  version ignored — which is also the only way the generator, the extension and the driver agree on
-  the identity of `ISourceGenerator` and `IBuildExtension`.
-- **Refused by name rather than skipped:** a project with Razor files and no generator (it says what
-  the CS0115 wall would have been); a generator that runs and emits nothing; an unpaired
-  `*.razor.js` (the SDK's BLAZOR106); and `.razor` files under a project whose `Sdk` does not process
-  them (`--accept razor-not-compiled`). CSS isolation is reproduced: `*.razor.css` gets the SDK's
-  scope and the `<Assembly>.styles.css` aggregate is emitted.
+**Razor/Blazor** is one such extension, and it is not here: MeshWeaver.Plugins carries it
+(`src/MeshWeaver.PluginTester.Razor`) with its tests and passes it to the lane as its
+`build-extensions-project` (core `Doc/Architecture/CoreCarriesNoGuiTechnology`).
 
 **Still not supported, and each says so:** SDK source generators (they live in the SDK, not the
 runtime; `--generators` supplies them), embedded resources, `<Protobuf>`, MSBuild `<Target>`s and
 `<Sdk>` elements. Full measurements:
-**Not supported, and each says so:** Razor/Blazor compilation (needs
-`Microsoft.CodeAnalysis.Razor.Compiler`, `Microsoft.AspNetCore.Razor.Utilities.Shared` and
-`Microsoft.Extensions.ObjectPool` in the image — it ships none), SDK source generators (they live in
+**Not supported, and each says so:** a source kind no loaded extension compiles, SDK source generators (they live in
 the SDK, not the runtime; `--generators` supplies them), `<Protobuf>`, MSBuild `<Target>`s and
 `<Sdk>` elements. **Embedded resources ARE supported** — under the SDK's own manifest names, every
 rule established by building probe projects with the real SDK and reading the names back out of the

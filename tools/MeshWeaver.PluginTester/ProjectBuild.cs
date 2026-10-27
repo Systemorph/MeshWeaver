@@ -636,7 +636,7 @@ public static class ProjectBuild
     /// <c>LibraryImport</c>…). They live in the SDK's targeting pack, not the runtime the image
     /// ships, so the image build stages them here (<c>StageSdkSourceGenerators</c> in this
     /// project's <c>.csproj</c>) and every build picks them up without a flag — the same shipping
-    /// pattern as <c>razor-generators/</c>, minus the per-RID split (these are plain AnyCPU IL).
+    /// pattern as <c>module-libs/</c> (these are plain AnyCPU IL).
     /// </summary>
     public const string SdkGeneratorDirectoryName = "sdk-generators";
 
@@ -1467,8 +1467,8 @@ public static class ProjectBuild
     /// The static-asset half of the module, in the order
     /// <see href="/Doc/Architecture/ModuleStaticAssets">the architecture page</see> numbers it:
     /// <b>kind 1</b>, the project's own <c>wwwroot/**</c>, copied verbatim here; then whatever each
-    /// build extension's inputs imply (the Razor extension: kind 2, collocated JS modules, and kind 3,
-    /// the CSS-isolation aggregate). The packer sweeps <c>wwwroot/</c> into the bundle's
+    /// build extension's inputs imply (a GUI extension's collocated JS modules or stylesheet
+    /// aggregate, say), written beside it. The packer sweeps <c>wwwroot/</c> into the bundle's
     /// <c>staticAssets</c>, the landing writes it module-relative, and the host mounts it at
     /// <c>_content/&lt;Name&gt;/…</c>.
     ///
