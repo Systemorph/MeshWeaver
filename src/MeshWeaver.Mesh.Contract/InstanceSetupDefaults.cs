@@ -10,6 +10,10 @@ namespace MeshWeaver.Mesh;
 /// <para>🚨 <b>Defaults, never a policy.</b> Every value here is something the operator can change
 /// in the wizard; the point is that "next, next, finish" produces an instance that WORKS, instead
 /// of an empty mesh whose owner has to already know which seven modules make a portal render.</para>
+///
+/// <para>Which first-party modules a portal must LOAD is not stated here: those are modules of the
+/// first-party source, so that source declares them (MeshWeaver.Plugins' Fleet Console,
+/// <c>SetupDialog.RequiredModules</c>). The platform knows the image's own boot modules only.</para>
 /// </summary>
 public static class InstanceSetupDefaults
 {
@@ -42,23 +46,6 @@ public static class InstanceSetupDefaults
     /// </summary>
     public static readonly ImmutableList<string> ProvisionPackages =
         [$"{FirstPartySource}/*"];
-
-    /// <summary>
-    /// The modules a portal needs LOADED to render and serve — the registry-served set every
-    /// first-party deployment declares under <c>Modules:Required</c>, so an absence is loud rather
-    /// than a silently blank page.
-    ///
-    /// <para>These are <c>Required</c>, not <c>Assemblies</c>: they arrive from the registry, and a
-    /// baseline entry would SHADOW the landed store module. The distinction is not cosmetic — it
-    /// decides whether the deployment binds an app-closure copy the image may not even ship.</para>
-    /// </summary>
-    public static readonly ImmutableList<string> RequiredModules =
-    [
-        "MeshWeaver.Blazor.Radzen.dll",      // charts and the rich control pack
-        "MeshWeaver.Blazor.Analysis.dll",    // analysis views
-        "MeshWeaver.Blazor.EntityViews.dll", // entity edit forms
-        "MeshWeaver.AI.dll",                 // the agent runtime + its catalogs
-    ];
 
     /// <summary>
     /// Modules that ship IN THE IMAGE and are turned on by listing them — the

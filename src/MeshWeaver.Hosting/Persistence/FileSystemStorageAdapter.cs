@@ -378,7 +378,21 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
         if (!Directory.Exists(directoryPath))
             return ([], []);
+        try
+        {
+            return ListExistingChildPaths(parentPath, directoryPath);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // The parent itself was deleted after the existence check: it lists like a parent that was
+            // never there (Doc/Architecture/AVanishedChildIsAbsent).
+            return ([], []);
+        }
+    }
 
+    private static (IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths) ListExistingChildPaths(
+        string? parentPath, string directoryPath)
+    {
         var nodePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directoryPaths = new List<string>();
 
@@ -409,29 +423,61 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 continue;
             }
 
-            // Check if directory has any supported content
-            var hasContent = SupportedExtensions.Any(ext =>
-                Directory.EnumerateFiles(dir, $"*{ext}", SearchOption.AllDirectories).Any());
-
-            if (hasContent)
+            switch (ClassifyChildDirectory(dir))
             {
-                // Check if there's an index file representing this as a node
-                var hasIndex = SupportedExtensions.Any(ext =>
-                    File.Exists(Path.Combine(dir, $"index{ext}")));
-
-                if (hasIndex)
-                {
+                case ChildDirectoryKind.Node:
                     nodePaths.Add(childPath);
-                }
-                else
-                {
+                    break;
+                case ChildDirectoryKind.Container:
                     // Directory has content but no node - add as directory to scan
                     directoryPaths.Add(childPath);
-                }
+                    break;
             }
         }
 
         return (nodePaths, directoryPaths);
+    }
+
+    /// <summary>What one child directory of a listed parent turned out to be when it was probed.</summary>
+    internal enum ChildDirectoryKind
+    {
+        /// <summary>Gone between the parent's snapshot and this probe — absent, like any missing entry.</summary>
+        Vanished,
+        /// <summary>Present but holds no supported file anywhere below it.</summary>
+        NoContent,
+        /// <summary>Holds an index file: the directory IS a node.</summary>
+        Node,
+        /// <summary>Holds content but no index: a container the walk descends into.</summary>
+        Container,
+    }
+
+    /// <summary>
+    /// Probes one child directory of a parent being listed.
+    ///
+    /// <para>🚨 A child deleted after the parent's snapshot named it is <see cref="ChildDirectoryKind.Vanished"/>,
+    /// never an exception. The probe used to throw <see cref="DirectoryNotFoundException"/>, which failed the
+    /// WHOLE parent listing; the query walk records that as a dropped read and answers nothing under the
+    /// parent, and a live re-query then reported every row there removed and never listed the write it was
+    /// answering (Doc/Architecture/AVanishedChildIsAbsent). Only "not found" is absence — every other fault
+    /// still propagates and is still recorded by the walk.</para>
+    /// </summary>
+    internal static ChildDirectoryKind ClassifyChildDirectory(string dir)
+    {
+        try
+        {
+            var hasContent = SupportedExtensions.Any(ext =>
+                Directory.EnumerateFiles(dir, $"*{ext}", SearchOption.AllDirectories).Any());
+            if (!hasContent)
+                return ChildDirectoryKind.NoContent;
+            // An index file represents the directory itself as a node.
+            return SupportedExtensions.Any(ext => File.Exists(Path.Combine(dir, $"index{ext}")))
+                ? ChildDirectoryKind.Node
+                : ChildDirectoryKind.Container;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return ChildDirectoryKind.Vanished;
+        }
     }
 
     /// <inheritdoc />

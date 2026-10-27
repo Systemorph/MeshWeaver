@@ -57,7 +57,7 @@ public class ReleaseFactTest
     // same package NAME from a different repo — a distinct artefact that must not collide
     [InlineData("Systemorph/MeshWeaver", "MeshWeaver.Blazor.EntityViews", "3.0.0-rc8.ci.5432")]
     // same repo and version, different package — a repo publishes SEVERAL facts per release
-    [InlineData("Systemorph/MeshWeaver.Plugins", "MeshWeaver.Blazor.Radzen", "3.0.0-rc8.ci.5432")]
+    [InlineData("Systemorph/MeshWeaver.Plugins", "MeshWeaver.Blazor.Charts", "3.0.0-rc8.ci.5432")]
     public void IdFor_SeparatesFactsThatMustNotCollide(string repository, string packageId, string version)
     {
         var baseline = Release.IdFor("Systemorph/MeshWeaver.Plugins", "MeshWeaver.Blazor.EntityViews", "3.0.0-rc8.ci.5432");
@@ -74,9 +74,9 @@ public class ReleaseFactTest
         // commit, with nothing comparing them.
         var release = new Release
         {
-            Id = Release.IdFor("Systemorph/MeshWeaver.Plugins", "MeshWeaver.Blazor.Radzen", "3.0.0-rc8.ci.5432"),
+            Id = Release.IdFor("Systemorph/MeshWeaver.Plugins", "MeshWeaver.Blazor.Charts", "3.0.0-rc8.ci.5432"),
             Repository = "Systemorph/MeshWeaver.Plugins",
-            PackageId = "MeshWeaver.Blazor.Radzen",
+            PackageId = "MeshWeaver.Blazor.Charts",
             Version = "3.0.0-rc8.ci.5432",
             Platform = "s4d400050c6d76f830c95d0a21e56febc",
             Commit = "dbdbebc4e",
