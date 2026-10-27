@@ -1,0 +1,164 @@
+#pragma warning disable CS1591
+
+using System;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading.Tasks;
+using MeshWeaver.ActionLinks;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// An explicitly stored value must never come back as the member's DECLARED default. The hub
+/// serializes with <see cref="JsonIgnoreCondition.WhenWritingDefault"/>, which compares against the
+/// CLR default, so <c>bool Enabled = true</c> stored <c>false</c> was dropped on write and the reader
+/// re-applied <c>true</c>.
+///
+/// <para><b>Measured on the public instance:</b> <c>Store/CouponJourney/ReviewRule</c> is committed
+/// with <c>"enabled": false</c> (it ships disabled; the owner approves the enable) and read
+/// <c>enabled: true</c> after its repository sync — an owner-approval gate armed with no approval.</para>
+///
+/// <para>The fix is for the whole class (<c>DeclaredDefaultsSurviveTheWire</c> in the hub's type-info
+/// resolver), so the guard runs over shapes no platform type has yet. The negative control runs the
+/// same round trip through options without the fix, so a round trip that could not lose the value
+/// cannot pass for a fixed one.</para>
+/// </summary>
+public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Partition = "TestData";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
+        base.ConfigureMesh(builder).DeclareActionHandlerRuleNamespaces(Partition);
+
+    public enum Mode { Off, On }
+
+    /// <summary>Every scalar shape whose initializer is not its CLR default.</summary>
+    public sealed record InitializerDefaults
+    {
+        public bool Flag { get; init; } = true;
+        public bool? NullableFlag { get; init; } = true;
+        public int Count { get; init; } = 1;
+        public Mode Mode { get; init; } = Mode.On;
+        public string? Text { get; init; } = "declared";
+    }
+
+    /// <summary>Constructor-parameter defaults, plus an initializer on a type built through a constructor.</summary>
+    public sealed record ParameterDefaults(string Id, bool Flag = true, int Count = 2)
+    {
+        public bool Enabled { get; init; } = true;
+    }
+
+    /// <summary>Declared default IS the CLR default — must still be omitted, as before.</summary>
+    public sealed record ClrDefaults
+    {
+        public bool Flag { get; init; }
+        public int Count { get; init; }
+    }
+
+    private static JsonSerializerOptions WithoutTheFix() => new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
+    };
+
+    private static T RoundTrip<T>(T value, JsonSerializerOptions options) =>
+        JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, options), options)!;
+
+    private static InitializerDefaults AllClrDefaults() =>
+        new() { Flag = false, NullableFlag = null, Count = 0, Mode = Mode.Off, Text = null };
+
+    [Fact]
+    public void ActionHandlerRule_Enabled_false_survives_the_stored_node_shape()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var node = new MeshNode("ReviewRule", "Store/CouponJourney")
+        {
+            NodeType = ActionHandlerRuleNodeType.NodeType,
+            Content = new ActionHandlerRule { Id = "ReviewRule", Enabled = false, Claims = ["coupon.review"] },
+        };
+
+        var json = JsonSerializer.Serialize(node, options);
+        json.Should().Contain("\"enabled\":false", "the stored JSON must carry the explicit false");
+        JsonSerializer.Deserialize<MeshNode>(json, options)!
+            .ContentAs<ActionHandlerRule>(options)!.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_disabled_rule_read_back_from_its_stored_json_claims_nothing()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var disabledKey = "test.disabled-" + Guid.NewGuid().ToString("N")[..8];
+        var controlKey = "test.control-" + Guid.NewGuid().ToString("N")[..8];
+
+        // The node exactly as a store read hands it back: serialized and deserialized with the hub's options.
+        var stored = JsonSerializer.Deserialize<MeshNode>(JsonSerializer.Serialize(
+            new MeshNode("off" + Guid.NewGuid().ToString("N")[..6], $"{Partition}/ActionHandlers")
+            {
+                Name = "disabled rule",
+                NodeType = ActionHandlerRuleNodeType.NodeType,
+                State = MeshNodeState.Active,
+                Content = new ActionHandlerRule
+                {
+                    Claims = [disabledKey], Handler = $"{Partition}/Coupons/Review", Enabled = false,
+                },
+            }, options), options)!;
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(stored).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+
+        // Positive signal: an enabled rule written AFTER it is in the chain, so the snapshot has read both.
+        await meshService.CreateNode(new MeshNode("on" + Guid.NewGuid().ToString("N")[..6], $"{Partition}/ActionHandlers")
+        {
+            Name = "control rule",
+            NodeType = ActionHandlerRuleNodeType.NodeType,
+            State = MeshNodeState.Active,
+            Content = new ActionHandlerRule { Claims = [controlKey], Handler = $"{Partition}/Coupons/Review" },
+        }).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+
+        var chain = await Mesh.ActionHandlerChain()
+            .Where(c => c.Handlers.Any(h => h.Capability.HandlerKey == controlKey))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+
+        chain.Handlers.Should().NotContain(h => h.Capability.HandlerKey == disabledKey,
+            "a rule stored enabled:false must stay disabled after its JSON round trip");
+    }
+
+    [Fact]
+    public void Every_scalar_shape_keeps_its_clr_default_against_a_different_declared_default()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        RoundTrip(AllClrDefaults(), options).Should().Be(AllClrDefaults());
+
+        var positional = new ParameterDefaults("p", Flag: false, Count: 0) { Enabled = false };
+        RoundTrip(positional, options).Should().Be(positional);
+    }
+
+    [Fact]
+    public void Absent_members_still_read_their_declared_default_and_clr_defaults_stay_omitted()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        JsonSerializer.Deserialize<InitializerDefaults>("{}", options).Should().Be(new InitializerDefaults());
+        RoundTrip(new InitializerDefaults(), options).Should().Be(new InitializerDefaults());
+
+        var json = JsonSerializer.Serialize(new ClrDefaults(), options);
+        json.Should().NotContain("flag").And.NotContain("count",
+            "a member whose declared default is the CLR default serialises compactly, exactly as before");
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_the_round_trip_loses_the_values()
+    {
+        var options = WithoutTheFix();
+        RoundTrip(AllClrDefaults(), options).Should().Be(new InitializerDefaults(),
+            "if this ever fails, the round trip no longer exercises the trap and the guard above measures nothing");
+        RoundTrip(new ActionHandlerRule { Enabled = false }, options).Enabled.Should().BeTrue();
+    }
+}
