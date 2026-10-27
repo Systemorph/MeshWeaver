@@ -8,8 +8,10 @@ namespace MeshWeaver.PluginCatalog;
 /// <c>Critical</c> only (<c>Doc/Architecture/InstanceTelemetry</c>). It reads the record the way the
 /// digest contract needs it — the message TEMPLATE off the structured state's <c>{OriginalFormat}</c>,
 /// never the formatted text — so a value, a secret or a person's name in a log line never reaches the
-/// ledger. A record logged without a template (a pre-formatted string) is normalised first
-/// (<see cref="TelemetryRedaction.Normalize"/>): its values become placeholders.
+/// ledger. A record logged WITHOUT a template (a pre-formatted string) ships NO text at all: its
+/// template is <see cref="WithheldTemplate"/>, and its value-free shape
+/// (<see cref="TelemetryRedaction.Normalize"/>) only feeds the signature hash, so two sites stay two
+/// signatures while a bare word that could be a person's name never leaves the process.
 ///
 /// <para>🚨 A logger sink must never throw into the pipeline and never block it: every fold is
 /// wrapped, the collector is lock-free, and the provider's own category is excluded so a fault in
@@ -23,6 +25,14 @@ public sealed class ErrorSignatureLoggerProvider(ErrorSignatureCollector collect
 
     /// <summary>The structured-state key .NET logging stores the template under.</summary>
     internal const string OriginalFormatKey = "{OriginalFormat}";
+
+    /// <summary>
+    /// The template a digest carries for a record that was logged without one. The formatted text of
+    /// such a record is a VALUE — <c>LogError($"Import rejected for customer {name}")</c> carries the
+    /// name as a bare word no pattern can tell from a template word — so it is withheld, not normalised
+    /// into the wire. The normalised shape is hashed into the signature and goes nowhere else.
+    /// </summary>
+    public const string WithheldTemplate = "(pre-formatted message: text withheld)";
 
     /// <inheritdoc />
     public ILogger CreateLogger(string categoryName) => new SignatureLogger(collector, categoryName);
@@ -102,11 +112,21 @@ public sealed class ErrorSignatureLoggerProvider(ErrorSignatureCollector collect
                 return;
             try
             {
-                var template = TemplateOf(state) ?? TelemetryRedaction.Normalize(formatter(state, exception));
-                if (template.Length == 0)
+                var template = TemplateOf(state);
+                string? localShape = null;
+                if (template is null)
+                {
+                    // No trustworthy template: the text is a value and stays here. Its shape tells
+                    // this site apart from the next inside the signature; the wire gets the constant.
+                    localShape = TelemetryRedaction.Normalize(formatter(state, exception));
+                    template = WithheldTemplate;
+                }
+                else if (template.Length == 0)
+                {
                     template = exception?.GetType().FullName ?? "(no message)";
+                }
                 collector.Record(category, eventId.Id, logLevel, template, exception?.GetType().FullName,
-                    TopFrame(exception), DateTimeOffset.UtcNow);
+                    TopFrame(exception), DateTimeOffset.UtcNow, localShape);
             }
             catch (Exception)
             {

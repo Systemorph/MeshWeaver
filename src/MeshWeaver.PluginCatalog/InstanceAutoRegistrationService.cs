@@ -88,8 +88,9 @@ public static class PluginRegistryCredentials
 /// <para>The exchange degrades, it never blocks: a registry that predates the token route, or one
 /// that is momentarily unreachable, gets the durable key presented directly (the legacy window the
 /// registry still honours), with one warning per attempt so the fallback is visible in the log.
-/// Tokens are cached per registry until <see cref="RefreshMargin"/> before their expiry — an
-/// instance field on this mesh-scoped singleton, never static state.</para>
+/// Tokens are cached per registry AND credential (<see cref="TokenCacheKey"/>) until
+/// <see cref="RefreshMargin"/> before their expiry — an instance field on this mesh-scoped singleton,
+/// never static state.</para>
 /// </summary>
 public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryTokenResolver> logger)
 {
@@ -106,6 +107,16 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Token, DateTimeOffset ExpiresAt)> tokens =
         new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The cache key of an exchanged token: the registry URL plus a fingerprint of the key that was
+    /// presented. Keyed by URL alone, a second key for the same registry (a configured
+    /// <c>Token</c> beside a stored registration, or a rotated key) would be answered with the FIRST
+    /// key's token and authenticate as the wrong instance until expiry.
+    /// </summary>
+    internal static string TokenCacheKey(string registryUrl, string rawKey) =>
+        registryUrl + "#" + Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawKey)))[..16].ToLowerInvariant();
 
     /// <summary>The effective credential for <paramref name="registry"/> — a configured token as
     /// configured, never exchanged; else the stored key EXCHANGED for a JWT when the registry issues
@@ -157,7 +168,8 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
         if (url.Length == 0)
             return Observable.Return(rawKey);
 
-        if (tokens.TryGetValue(url, out var hit) && hit.ExpiresAt - DateTimeOffset.UtcNow > RefreshMargin)
+        var cacheKey = TokenCacheKey(url, rawKey);
+        if (tokens.TryGetValue(cacheKey, out var hit) && hit.ExpiresAt - DateTimeOffset.UtcNow > RefreshMargin)
             return Observable.Return(hit.Token);
 
         var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
@@ -197,7 +209,7 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
                         + "instance key directly (legacy)", url, result.Status);
                     return rawKey;
                 }
-                tokens[url] = (result.Token, DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn));
+                tokens[cacheKey] = (result.Token, DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn));
                 return result.Token;
             })
             .Catch((Exception ex) =>

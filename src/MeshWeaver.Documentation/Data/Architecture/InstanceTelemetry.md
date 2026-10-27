@@ -47,9 +47,12 @@ every instance leaves, not a second inventory.
   `{OriginalFormat}` of the structured log call — placeholders, no values), the exception TYPE and the
   first application FRAME (`Type.Method`, no arguments, no file, no line), with a count and first/last
   seen. There is no field for a formatted message, a stack trace or a sample, so a digest cannot leak
-  what a line might carry. A record logged without a template is first normalised
-  (`TelemetryRedaction.Normalize`): GUIDs, hex runs, quoted literals, paths and numbers become
-  placeholders.
+  what a line might carry. A record logged WITHOUT a template (`LogError($"…")`, a pre-formatted
+  string) ships no text at all — its template reads `(pre-formatted message: text withheld)`,
+  because its words are values and a bare word may be a person's name that no pattern can tell from
+  a template word. Its value-free shape (`TelemetryRedaction.Normalize`: GUIDs, hex runs, quoted
+  literals, paths and numbers become placeholders) is hashed into the signature so two such sites
+  stay two signatures, and goes nowhere else.
 - **No package names** in the summary — a count and a digest.
 - **Nothing from an instance that opted out** (below), and nothing from an instance that is not
   registered: an unregistered mesh has no key, so it has no channel.

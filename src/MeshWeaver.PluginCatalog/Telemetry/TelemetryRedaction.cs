@@ -12,8 +12,9 @@ namespace MeshWeaver.PluginCatalog;
 /// registry on receipt, so neither side has to trust the other to have done it.</item>
 /// <item><see cref="Normalize"/> turns a FORMATTED message into a template-shaped string — GUIDs,
 /// hex runs, quoted literals, paths and numbers become placeholders — for the one case where a log
-/// call carried no <c>{OriginalFormat}</c> and the template had to be reconstructed. Values are the
-/// part of a log line that varies and the part that can leak; a template has none.</item>
+/// call carried no <c>{OriginalFormat}</c>. That shape is hashed into the record's signature so two
+/// sites stay apart; it is NOT shipped (a bare word may be a person's name, and no pattern can tell
+/// it from a template word — see <c>ErrorSignatureLoggerProvider.WithheldTemplate</c>).</item>
 /// </list>
 /// Deliberately conservative: a false positive masks a harmless word, a false negative ships a
 /// secret, so every pattern errs towards masking.
@@ -26,7 +27,8 @@ public static partial class TelemetryRedaction
     /// <summary>What an e-mail address is replaced with.</summary>
     public const string MaskedEmail = "<email>";
 
-    [GeneratedRegex(@"(?i)\b(bearer|basic)\s+[A-Za-z0-9\-._~+/=]{8,}", RegexOptions.CultureInvariant)]
+    // Every NON-EMPTY credential after the scheme: `Basic dTpw` (u:p) is four characters.
+    [GeneratedRegex(@"(?i)\b(bearer|basic)\s+[A-Za-z0-9\-._~+/=]+", RegexOptions.CultureInvariant)]
     private static partial Regex Credential();
 
     [GeneratedRegex(@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", RegexOptions.CultureInvariant)]
@@ -39,10 +41,10 @@ public static partial class TelemetryRedaction
     private static partial Regex QuerySecret();
 
     // The key is any word CONTAINING a credential noun (password, secret, token, key, …) — so
-    // client_secret, access_token, refresh_token, apiKey and AccountKey all match — bare or quoted (a
-    // JSON field); the separator = or :; the value bare or quoted. The whole value, quotes included,
+    // client_secret, access_token, refresh_token, apiKey, AccountKey and a bare `key` all match — bare
+    // or quoted (a JSON field); the separator = or :; the value bare or quoted. The whole value, quotes included,
     // is replaced, and a quoted value whose closing quote was cut off is still consumed to the end.
-    [GeneratedRegex(@"(?i)(""?\b[\w\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|accountkey|sharedaccesskey|sharedaccesssignature|authorization|connectionstring|credential)[\w\-]*""?\s*[=:]\s*)(?:""(?:\\.|[^""\\])*""?|'[^']*'?|[^;\s,""'}]+)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?i)(""?\b[\w\-]*(?:password|passwd|pwd|secret|token|key|sharedaccesssignature|authorization|connectionstring|credential)[\w\-]*""?\s*[=:]\s*)(?:""(?:\\.|[^""\\])*""?|'[^']*'?|[^;\s,""'}]+)", RegexOptions.CultureInvariant)]
     private static partial Regex KeyValueSecret();
 
     [GeneratedRegex(@"(?i)(https?://)[^/\s@]+@", RegexOptions.CultureInvariant)]

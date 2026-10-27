@@ -66,7 +66,7 @@ public class ErrorSignatureCollectorTest
     }
 
     [Fact]
-    public void APreFormattedMessage_IsNormalised_SoValuesAndSecretsBecomePlaceholders()
+    public void APreFormattedMessage_ShipsNoText_AndItsShapeOnlyTellsSitesApart()
     {
         var (collector, logger) = Tap();
         var guid = Guid.NewGuid();
@@ -74,16 +74,21 @@ public class ErrorSignatureCollectorTest
         // No template: the state is a plain string, as a pre-formatted LogError($"…") call produces.
         logger.Log(LogLevel.Error, 0, $"Node {guid} refused for user jane.roe@example.com with Bearer abcdefghijklmnop at /data/Store/Orders/42",
             null, (state, _) => state);
+        logger.Log(LogLevel.Error, 0, $"Node {Guid.NewGuid()} refused for user max.muster@example.com with Bearer qrstuvwxyz012345 at /data/Store/Orders/43",
+            null, (state, _) => state);
+        logger.Log(LogLevel.Error, 0, "Export failed for customer Alice Smith", null, (state, _) => state);
 
-        var signature = collector.Pending().Single();
-        signature.Template.Should().NotContain(guid.ToString()).And.NotContain("jane.roe").And.NotContain("abcdefghijklmnop")
-            .And.NotContain("Orders/42");
-        signature.Template.Should().Contain("{guid}").And.Contain(TelemetryRedaction.MaskedEmail).And.Contain(TelemetryRedaction.Masked)
-            .And.Contain("{path}");
+        var pending = collector.Pending();
+        pending.Should().HaveCount(2, "two values of ONE site fold by their shape; a different site is a different signature");
+        pending.Should().OnlyContain(s => s.Template == ErrorSignatureLoggerProvider.WithheldTemplate,
+            "a pre-formatted message is a value: its text never leaves the process");
+        var wire = JsonSerializer.Serialize(pending, ErrorDigestPayloads.Json);
+        wire.Should().NotContain(guid.ToString()).And.NotContain("jane.roe").And.NotContain("abcdefghijklmnop")
+            .And.NotContain("Orders/42").And.NotContain("Alice").And.NotContain("Smith").And.NotContain("{path}");
     }
 
     [Fact]
-    public void AnInterpolatedMessage_HasNoNamedPlaceholder_AndIsNormalisedLikeAPreFormattedOne()
+    public void AnInterpolatedMessage_HasNoNamedPlaceholder_AndIsWithheldLikeAPreFormattedOne()
     {
         var (collector, logger) = Tap();
         var guid = Guid.NewGuid();
@@ -94,9 +99,10 @@ public class ErrorSignatureCollectorTest
         logger.LogError($"Node {Guid.NewGuid()} failed for max.muster@example.com at /data/Store/Orders/43");
 
         var pending = collector.Pending();
-        pending.Should().HaveCount(1, "the two interpolated lines normalise to ONE signature");
-        pending[0].Template.Should().NotContain(guid.ToString()).And.NotContain("jane.roe").And.NotContain("Orders/42");
-        pending[0].Template.Should().Contain("{guid}").And.Contain(TelemetryRedaction.MaskedEmail).And.Contain("{path}");
+        pending.Should().HaveCount(1, "the two interpolated lines share ONE shape, so ONE signature");
+        pending[0].Count.Should().Be(2);
+        pending[0].Template.Should().Be(ErrorSignatureLoggerProvider.WithheldTemplate);
+        JsonSerializer.Serialize(pending, ErrorDigestPayloads.Json).Should().NotContain(guid.ToString()).And.NotContain("jane.roe").And.NotContain("Orders/42");
     }
 
     [Fact]
@@ -130,34 +136,36 @@ public class ErrorSignatureCollectorTest
     [Theory]
     [InlineData("Import of alice/Private/Invoices failed", "alice")]
     [InlineData(@"Cannot open C:\Users\alice\Private\Invoices.xlsx", "alice")]
-    public void APrivatePath_LoggedWithoutATemplate_ReachesTheDigestWithoutAUserName(string message, string mustNotSurvive)
+    [InlineData("Import rejected for customer Alice Smith", "Alice")]
+    [InlineData("""token exchange refused: {"client_secret":"SuperSecretValue"}""", "SuperSecretValue")]
+    [InlineData("callback carried access_token=SuperSecretValue&scope=x", "SuperSecretValue")]
+    [InlineData("refresh_token: SuperSecretValue rejected", "SuperSecretValue")]
+    [InlineData("key=SuperSecretValue rejected", "SuperSecretValue")]
+    [InlineData("""refused {"key":"SuperSecretValue"}""", "SuperSecretValue")]
+    public void AValueInAPreFormattedMessage_NeverReachesTheDigest(string message, string mustNotSurvive)
     {
         var (collector, logger) = Tap();
 
-        // Parameter-free: the state is a plain string, so the collector normalises the formatted text.
+        // Parameter-free: the state is a plain string, so there is no template to trust and the
+        // text — a path naming a person, a bare name, an OAuth field, a bare key — is withheld.
         logger.Log(LogLevel.Error, 0, message, null, (state, _) => state);
 
         var digest = ErrorDigestPayloads.Bound(new ErrorDigestPayloads.Request(new InstanceTelemetry("3.1.0"), T0, collector.Pending()));
         var wire = JsonSerializer.Serialize(digest, ErrorDigestPayloads.Json);
-        wire.Should().NotContain(mustNotSurvive).And.NotContain("Private").And.NotContain("Invoices",
-            "a relative mesh path or a Windows path names a person or a machine; the digest carries {path}");
-        digest.Signatures.Single().Template.Should().Contain("{path}");
+        wire.Should().NotContain(mustNotSurvive).And.NotContain("Private").And.NotContain("Invoices");
+        digest.Signatures.Single().Template.Should().Be(ErrorSignatureLoggerProvider.WithheldTemplate);
     }
 
-    [Theory]
-    [InlineData("""token exchange refused: {"client_secret":"SuperSecretValue"}""")]
-    [InlineData("callback carried access_token=SuperSecretValue&scope=x")]
-    [InlineData("refresh_token: SuperSecretValue rejected")]
-    public void AnOAuthCredential_LoggedWithoutATemplate_ReachesTheDigestMasked(string message)
+    [Fact]
+    public void TheTokenCache_IsKeyedByRegistryAndCredential_SoASecondKeyNeverGetsTheFirstKeysToken()
     {
-        var (collector, logger) = Tap();
+        var first = RegistryTokenResolver.TokenCacheKey("https://registry.example", "mwi_firstkey0123456789");
+        var second = RegistryTokenResolver.TokenCacheKey("https://registry.example", "mwi_secondkey123456789");
 
-        logger.Log(LogLevel.Error, 0, message, null, (state, _) => state);
-
-        var digest = ErrorDigestPayloads.Bound(new ErrorDigestPayloads.Request(new InstanceTelemetry("3.1.0"), T0, collector.Pending()));
-        var wire = JsonSerializer.Serialize(digest, ErrorDigestPayloads.Json);
-        wire.Should().NotContain("SuperSecretValue", "an OAuth field name is a credential key like any other");
-        digest.Signatures.Single().Template.Should().Contain(TelemetryRedaction.Masked);
+        first.Should().NotBe(second, "two keys for ONE registry are two cache entries");
+        first.Should().Be(RegistryTokenResolver.TokenCacheKey("https://registry.example", "mwi_firstkey0123456789"), "deterministic");
+        first.Should().StartWith("https://registry.example#").And.NotContain("firstkey", "the key is a fingerprint, never the credential");
+        RegistryTokenResolver.TokenCacheKey("https://other.example", "mwi_firstkey0123456789").Should().NotBe(first);
     }
 
     [Fact]
@@ -318,6 +326,10 @@ public class ErrorSignatureCollectorTest
     [InlineData("refresh_token: SuperSecretValue", "SuperSecretValue")]
     [InlineData("""{"id_token":"SuperSecretValue","AccountKey":"SuperSecretValue2"}""", "SuperSecretValue")]
     [InlineData("""Password="SuperSecretValueCutOff""", "SuperSecretValueCutOff")]
+    [InlineData("Authorization: Basic dTpw", "dTpw")]
+    [InlineData("Bearer ab1 presented", "ab1")]
+    [InlineData("key=SuperSecretValue;Server=db", "SuperSecretValue")]
+    [InlineData("""{"key":"SuperSecretValue"}""", "SuperSecretValue")]
     public void Mask_RemovesCredentialsAndPeople(string text, string mustNotSurvive)
     {
         var masked = TelemetryRedaction.Mask(text);

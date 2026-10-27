@@ -19,9 +19,10 @@ namespace MeshWeaver.PluginCatalog;
 /// itself the finding, and the count says so. Lock-free: a logger must never block on its sink.</para>
 ///
 /// <para>Holds no log line. The template is the <c>{OriginalFormat}</c> of the structured log call
-/// (placeholders, no values); a formatted message with no template is first normalised
-/// (<see cref="TelemetryRedaction.Normalize"/>), so nothing here can carry a value, a secret or a
-/// person's name — see <see cref="ErrorSignatureLoggerProvider"/>.</para>
+/// (placeholders, no values); a formatted message with no template is WITHHELD
+/// (<see cref="ErrorSignatureLoggerProvider.WithheldTemplate"/>) and only its value-free shape is
+/// hashed into the signature, so nothing here can carry a value, a secret or a person's name — see
+/// <see cref="ErrorSignatureLoggerProvider"/>.</para>
 /// </summary>
 public sealed class ErrorSignatureCollector
 {
@@ -89,7 +90,10 @@ public sealed class ErrorSignatureCollector
     }
 
     /// <summary>Folds one error record into the ledger. Never throws, never blocks.</summary>
-    public void Record(string category, int eventId, LogLevel level, string template, string? exceptionType, string? topFrame, DateTimeOffset at)
+    /// <param name="localShape">For a record whose text is withheld: the value-free shape that tells
+    /// this site apart from the next. Hashed into the signature, never stored and never shipped.</param>
+    public void Record(string category, int eventId, LogLevel level, string template, string? exceptionType, string? topFrame, DateTimeOffset at,
+        string? localShape = null)
     {
         // MASK, then clip: clipping first could cut a quoted credential in half and leave the half
         // that no quote-aware pattern matches any more. Masked text is clipped safely.
@@ -97,7 +101,8 @@ public sealed class ErrorSignatureCollector
         var boundedCategory = Clip(TelemetryRedaction.Mask(category), ErrorDigestPayloads.MaxFieldLength);
         var boundedException = exceptionType is null ? null : Clip(TelemetryRedaction.Mask(exceptionType), ErrorDigestPayloads.MaxFieldLength);
         var boundedFrame = topFrame is null ? null : Clip(TelemetryRedaction.Mask(topFrame), ErrorDigestPayloads.MaxFieldLength);
-        var signature = ComputeSignature(boundedCategory, eventId, boundedTemplate, boundedException, boundedFrame);
+        var hashedTemplate = localShape is null ? boundedTemplate : boundedTemplate + '\n' + localShape;
+        var signature = ComputeSignature(boundedCategory, eventId, hashedTemplate, boundedException, boundedFrame);
 
         while (true)
         {
