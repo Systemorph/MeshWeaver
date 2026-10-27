@@ -142,9 +142,23 @@ with these settings:
 > 🚨 **`DefaultIgnoreCondition` is `WhenWritingDefault`, not `WhenWritingNull`** — and the
 > difference bites. Under `WhenWritingDefault` a `bool` property whose value is `false` is
 > **omitted from the JSON entirely**, so a property declared `public bool Flag { get; init; } = true`
-> silently fails to round-trip a `true → false` change: the `false` is not written, and the
-> reader re-applies the `true` default. When a default-valued member must survive the wire,
-> annotate it `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]`.
+> would silently fail to round-trip a `true → false` change: the `false` is not written, and the
+> reader re-applies the `true` default.
+>
+> **The hub's resolver now closes that class** (`DeclaredDefaultsSurviveTheWire`, applied by
+> `PolymorphicTypeInfoResolver`): every settable scalar member — primitive, enum, `decimal`, their
+> nullable forms, or `string` — whose DECLARED default (its initializer, or its constructor
+> parameter's default) differs from its CLR default is always written, so an explicitly stored
+> `false` / `0` / `null` is never re-materialised as the declared value. Nothing else changes on the
+> wire: a declared-default value was never the CLR default and was always written, and a member
+> whose declared default IS the CLR default is still omitted. A member carrying its own
+> `[JsonIgnore(...)]` keeps its author's condition, so the per-property
+> `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]` annotations that predate the rule are
+> redundant but harmless. Measured before the rule: an `ActionHandlerRule` committed with
+> `"enabled": false` read `enabled: true` after its repository sync, re-arming a rule that ships
+> disabled. Guard: `DeclaredDefaultsSurviveTheWireTest` (with a negative control over options
+> without the rule). Options built OUTSIDE the hub (a bare `new JsonSerializerOptions` with
+> `WhenWritingDefault`) do not get the rule.
 >
 > `WriteIndented` and `PropertyNameCaseInsensitive` are **not** set on the hub's options —
 > they keep the `System.Text.Json` defaults (`false`). Indented output is opt-in per adapter:
