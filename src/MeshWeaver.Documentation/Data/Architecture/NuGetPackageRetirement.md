@@ -95,12 +95,22 @@ MeshWeaver checkout. Like the two survivors it is an entry point, not platform b
 `System.CommandLine` and no framework assembly.
 
 It is distributed the way `gh` is: a thin client with its own version line, released when the client
-changes, not with every server build. The mesh verbs go over the REST API and `memex build …` runs
-the platform's builder inside the platform image, so a new platform build does not need a new CLI.
+changes, not with every server build. `memex build …` runs the platform's builder inside the platform
+image, and the mesh verbs are not compiled into the CLI at all: each run reads the connected
+instance's MCP tool catalog (`tools/list` on `{base-url}/mcp`, the same `mw_…` token, cached per
+instance for ten minutes) and generates one command per tool, run with `tools/call`. So a new
+platform build does not need a new CLI, and neither does a new or changed server tool.
+
+**When a CLI release IS needed:** only when its transport (the MCP JSON-RPC client), its auth (the
+token and how it is stored) or its built-ins (`login`, `base-url`, `build …`, `tests`, `upload`)
+change. A tool added, renamed or given a parameter on the server is never a reason to republish.
+The mapping from a tool's input schema to options and positionals, and the compatibility shapes that
+keep the verbs the CLI used to hand-code reading as before, are in
+[the CLI README](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Cli/README.md#commands).
 
 | | |
 |---|---|
-| Version | its own: `<CliVersion>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0`; `3.1.0` is the first publish. Bumped ONLY when the CLI's MCP / tool surface changes, in the pull request that changes it, never per platform build |
+| Version | its own: `<CliVersion>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0`; `3.1.0` is the first publish. Bumped ONLY when the CLI's own surface changes — its MCP transport, its auth or its built-in commands — in the pull request that changes it; never per platform build and never for a server tool, because the mesh commands are generated from the instance's catalog |
 | When | after that pull request merges: dispatch `publish-packages.yml` with `packages=cli`. The lane reads the csproj version and refuses any other; a version already on nuget.org is skipped |
 | Bytes | packed by `publish-packages.yml`, asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll`, then verified LISTED |
 | Retirement sweep | `src/MeshWeaver.Cli` is packable again, so `orphaned-nuget-packages.py` derives `MeshWeaver.Cli` as packed and never unlists it; `PackableProjectReadmeTest` holds the packable set at two projects |

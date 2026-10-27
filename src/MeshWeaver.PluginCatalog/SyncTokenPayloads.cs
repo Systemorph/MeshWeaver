@@ -30,7 +30,20 @@ public static class SyncTokenPayloads
     /// already licensed is dropped rather than refused: a token can only ever narrow, so asking for
     /// more than you hold is not an attack, it is a stale caller.</param>
     /// <param name="LifetimeSeconds">Requested lifetime; clamped to the registry's maximum.</param>
-    public record Request(IReadOnlyCollection<string>? Scope = null, int? LifetimeSeconds = null);
+    public record Request(IReadOnlyCollection<string>? Scope = null, int? LifetimeSeconds = null)
+    {
+        /// <summary>
+        /// What the instance says about itself — platform version, commit, home URL, package summary.
+        /// OPTIONAL and additive: a consumer that predates the field sends none and is served exactly
+        /// as before; the registry stamps whatever arrives onto the instance record beside
+        /// <c>LastSeenAt</c> (<c>Doc/Architecture/InstanceTelemetry</c>). Never read for authentication
+        /// or authorization — the key is the identity, the body is a claim about a build. An init
+        /// property rather than a constructor parameter on purpose: a parameter added to a record's
+        /// primary constructor REPLACES its signature and breaks every consumer compiled against the
+        /// old one, while a property is binary-compatible both ways.
+        /// </summary>
+        public InstanceTelemetry? Telemetry { get; init; }
+    }
 
     /// <summary>
     /// The success response.
