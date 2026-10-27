@@ -39,6 +39,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # The path-valued item types read. ProjectReference is followed as an edge, not hashed as a file.
@@ -154,6 +155,120 @@ def _is_glob(path: str) -> bool:
     return "*" in path or "?" in path
 
 
+# ── items a <Target> creates: invisible to evaluation, so they FAIL CLOSED unless tracked ─────────
+# `-getItem` reports EVALUATION-time items only. An ItemGroup inside a <Target> (a BeforeTargets=
+# "CoreCompile" adding Compile, say) runs at build time, and its paths would reach the compiler
+# while neither the key nor the scope sees them. So every path item a target adds in an in-repo
+# MSBuild file must be one of:
+#   - outside this repository (the SDK, NuGet, the platform: keyed by the SDK version and the
+#     platform ref + digest, as everywhere else in this evaluation);
+#   - under one of the project's BUILD OUTPUT directories (_OUTPUT_PROPERTIES): output staging,
+#     like the Razor extension's razor-generators.json under $(IntermediateOutputPath), is a
+#     product of the build, not an input to it;
+#   - inside the project's own directory (tree-hashed by the key, in the scope's reach) or an
+#     item MSBuild already evaluated;
+#   - a plain `@(X)` whose every in-repo declaration passes these same rules (an X no in-repo file
+#     declares is produced by the SDK's own targets, e.g. @(ReferencePath)).
+# Anything else (an in-repo path outside them, an item transform `@(X->'…')`, a metadata path,
+# a property no evaluation resolves) is REFUSED, naming the target and the file.
+_OUTPUT_PROPERTIES = ("BaseIntermediateOutputPath", "IntermediateOutputPath", "BaseOutputPath",
+                      "OutputPath", "OutDir", "TargetDir", "PublishDir")
+
+
+def _local(tag) -> str:
+    return tag.split("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _absolute(value: str, plain_base: Path, this_dir: Path, project_dir: Path,
+              properties: dict[str, str]) -> str | None:
+    """An absolute, normalized path for one Include piece; None when a property stays unresolved."""
+    v = value.strip().replace("\\", "/")
+    base = plain_base
+    if v.startswith("$(MSBuildThisFileDirectory)"):
+        v, base = v[len("$(MSBuildThisFileDirectory)"):], this_dir
+    elif v.startswith("$(MSBuildProjectDirectory)"):
+        v, base = v[len("$(MSBuildProjectDirectory)"):].lstrip("/"), project_dir
+    v = _PROPERTY.sub(lambda m: properties.get(m.group(1), m.group(0)), v).replace("\\", "/")
+    if "$(" in v:
+        return None
+    return os.path.normpath(v if v.startswith("/") else str(base / v))
+
+
+def target_item_violations(root: Path, files: list[str], project_rel: str, properties: dict[str, str],
+                           tracked: set[str]) -> list[str]:
+    project_dir = (root / project_rel).parent
+    outputs = []
+    for name in _OUTPUT_PROPERTIES:
+        value = (properties.get(name) or "").strip().replace("\\", "/")
+        if value:
+            outputs.append(os.path.normpath(value if value.startswith("/") else str(project_dir / value)))
+    declarations: dict[str, list[tuple[str, Path]]] = {}
+    in_targets: list[tuple[str, str, str, Path, str]] = []   # (target, tag, include, file, rel)
+    for rel in files:
+        try:
+            tree = ET.parse(root / rel)
+        except ET.ParseError as exc:
+            raise RuntimeError(f"{rel} is not well-formed MSBuild XML ({exc})") from None
+
+        def walk(node, target):
+            for el in node:
+                tag = _local(el.tag)
+                if tag == "Target":
+                    walk(el, el.get("Name") or "?")
+                elif tag == "ItemGroup":
+                    for item in el:
+                        name = _local(item.tag)
+                        include = item.get("Include")
+                        if not name or include is None or name in _NAME_ITEMS:
+                            continue
+                        declarations.setdefault(name, []).append((include, root / rel))
+                        if target:
+                            in_targets.append((target, name, include, root / rel, rel))
+                else:
+                    walk(el, target)
+        walk(tree.getroot(), None)
+
+    def reason(include: str, f: Path, seen: frozenset[str]) -> str | None:
+        for piece in include.split(";"):
+            piece = piece.strip()
+            if not piece:
+                continue
+            if piece.startswith("@("):
+                m = re.fullmatch(r"@\(([A-Za-z_][\w.-]*)\)", piece)
+                if not m:
+                    return f"'{piece}' is an item transform; the paths it produces are not modelled"
+                name = m.group(1)
+                if name in seen:
+                    continue
+                for inner, inner_file in declarations.get(name, []):  # none: produced by the SDK's targets
+                    why = reason(inner, inner_file, seen | {name})
+                    if why:
+                        return f"'{piece}' draws on {inner_file.relative_to(root).as_posix()}: {why}"
+                continue
+            if "%(" in piece:
+                return f"'{piece}' is a metadata-based path, not modelled"
+            path = _absolute(piece, project_dir, f.parent, project_dir, properties)
+            if path is None:
+                return f"'{piece}' uses a property this evaluation cannot resolve"
+            try:
+                rel = Path(path).relative_to(root).as_posix()
+            except ValueError:
+                continue  # outside the repository: SDK / NuGet / platform bytes, keyed elsewhere
+            if any(path == o or path.startswith(o.rstrip("/") + "/") for o in outputs):
+                continue  # a build output (staging), not an input
+            if rel.startswith(Path(project_rel).parent.as_posix() + "/") or rel in tracked:
+                continue
+            return f"'{piece}' resolves to {rel}, an in-repo path that is not a tracked input"
+        return None
+
+    out = []
+    for target, tag, include, f, rel in in_targets:
+        why = reason(include, f, frozenset())
+        if why:
+            out.append(f"{rel}: <Target Name=\"{target}\"> adds <{tag} Include=\"{include}\"> — {why}")
+    return out
+
+
 def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -> dict:
     proj = root / rel
     props = ["-p:Configuration=Release"] + [f"-p:{p}" for p in properties]
@@ -164,7 +279,7 @@ def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -
         if not text.strip():
             raise RuntimeError(f"`dotnet msbuild -pp` wrote nothing for {rel}")
     imports = sorted({r for m in _PP_FILE.findall(text) if (r := _in_repo(root, m)) is not None} | {rel})
-    wanted = _referenced_properties(root, imports)
+    wanted = sorted(set(_referenced_properties(root, imports)) | set(_OUTPUT_PROPERTIES))
     got = json.loads(_run([dotnet, "msbuild", str(proj), "-nologo", *props,
                            *[f"-getItem:{t}" for t in ITEM_TYPES],
                            *[f"-getProperty:{n}" for n in wanted]], root))
@@ -179,6 +294,13 @@ def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -
     values = {k: v for k, v in (got.get("Properties") or {}).items() if isinstance(v, str)}
     project_dir = Path(rel).parent.as_posix()
     declared_imports, declared_patterns, unknown = declared(root, imports, project_dir, values)
+    tracked = {p for paths in items.values() for p in paths} | set(imports)
+    violations = target_item_violations(root, imports, rel, values, tracked)
+    if violations:
+        raise RuntimeError(
+            f"{rel}: a <Target> adds path items that MSBuild's evaluation cannot see, so neither the key "
+            "nor the scope would — refused rather than keyed on a guess:\n  " + "\n  ".join(violations)
+            + "\nDeclare the item at evaluation time (outside the <Target>), or stage it under a build output.")
     return {"imports": imports, "declaredImports": declared_imports, "declaredPatterns": declared_patterns,
             "unknownPatterns": unknown, "items": items, "references": references}
 

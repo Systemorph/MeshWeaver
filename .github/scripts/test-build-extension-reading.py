@@ -214,6 +214,51 @@ def main() -> int:
               bool(unk["projects"]["Unk/Unk.csproj"].get("unknownPatterns")), str(unk["projects"]["Unk/Unk.csproj"]))
         check("…and the scope treats that project as touched by ANY change (fail safe)",
               reaches(scope.shelf_dirs(repo, "Unk/Unk.csproj", unk), "Other/Stray.cs"))
+        try:
+            key.shelf_inputs(repo, "Unk/Unk.csproj", "build-extensions-project", sdk=sdk, evaluation=unk)
+            check("…and the KEY refuses it (scope widening alone does not stop a stale reuse)", False, "no error")
+        except ValueError as exc:
+            check("…and the KEY refuses it, naming the pattern (scope widening alone does not stop a stale reuse)",
+                  "System.IO.Path" in str(exc), str(exc))
+
+        print("== ITEMS A <Target> ADDS: invisible to evaluation, so fail CLOSED unless tracked")
+        tgt = repo / "Tgt"
+        tgt.mkdir()
+        (tgt / "Local.cs").write_text("// in the project's own directory\n")
+        (repo / "Gen2").mkdir()
+        (repo / "Gen2/Extra.cs").write_text("// outside the project, not tracked\n")
+
+        def tgt_eval(body: str):
+            (tgt / "Tgt.csproj").write_text(
+                '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework>'
+                f'</PropertyGroup>{body}</Project>\n', encoding="utf-8")
+            return run_evaluate(repo, "Tgt/Tgt.csproj", tmp / "tgt.json")
+
+        for label, body, needle in (
+                ("an untracked in-repo Compile item a BeforeTargets=CoreCompile target adds",
+                 '<Target Name="AddGen" BeforeTargets="CoreCompile"><ItemGroup><Compile Include="../Gen2/Extra.cs" /></ItemGroup></Target>',
+                 "Gen2/Extra.cs"),
+                ("an item TRANSFORM inside a target",
+                 '<ItemGroup><_Src Include="Local.cs" /></ItemGroup><Target Name="Map" BeforeTargets="CoreCompile">'
+                 "<ItemGroup><Compile Include=\"@(_Src->'../Gen2/%(Filename).cs')\" /></ItemGroup></Target>",
+                 "item transform"),
+                ("a plain @(X) whose X names an untracked in-repo file",
+                 '<ItemGroup><_Mine Include="../Gen2/Extra.cs" /></ItemGroup><Target Name="Use" BeforeTargets="CoreCompile">'
+                 '<ItemGroup><Compile Include="@(_Mine)" /></ItemGroup></Target>',
+                 "Gen2/Extra.cs")):
+            r = tgt_eval(body)
+            check(f"{label} ⇒ REFUSED red, naming the target and the file",
+                  r.returncode != 0 and "Tgt/Tgt.csproj" in r.stderr and "<Target Name=" in r.stderr and needle in r.stderr,
+                  f"exit={r.returncode} {r.stderr[-300:]}")
+        for label, body in (
+                ("a target staging an OUTPUT under $(IntermediateOutputPath)",
+                 '<Target Name="Stage" BeforeTargets="CoreCompile"><ItemGroup><Compile Include="$(IntermediateOutputPath)Gen.cs" /></ItemGroup></Target>'),
+                ("a target adding a file inside the project's own (tree-hashed) directory",
+                 '<Target Name="Own" BeforeTargets="CoreCompile"><ItemGroup><Compile Include="Local.cs" /></ItemGroup></Target>'),
+                ("a target drawing on an SDK-produced item (@(ReferencePath))",
+                 '<Target Name="Refs" AfterTargets="ResolveAssemblyReferences"><ItemGroup><_R Include="@(ReferencePath)" /></ItemGroup></Target>')):
+            r = tgt_eval(body)
+            check(f"negative control — {label} is accepted", r.returncode == 0, r.stderr[-300:])
 
         print("== THE HEAD's SDK, pinned for another tree")
         pinned = evaluate(repo, "./Ext/../Ext/Ext.csproj", tmp / "pinned.json", "--pin-sdk", sdk)

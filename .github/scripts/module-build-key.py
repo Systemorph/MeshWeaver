@@ -262,6 +262,17 @@ def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project
     def inside_closure(rel: str) -> bool:
         return any(rel.startswith(d + "/") for d in dirs if d != ".")
 
+    # 🚨 A pattern MSBuild's evaluation could not resolve (a property function, a property only a
+    # target sets) names inputs this key cannot hash. Widening the SCOPE does not stop a stale
+    # reuse — the ledger would hand back a bundle under a key that never saw those bytes — so the
+    # KEY refuses, naming each one.
+    unknown = [f"{rel} → {u}" for rel in closure
+               for u in ((evaluation or {}).get("projects") or {})[rel].get("unknownPatterns") or []]
+    if unknown:
+        raise ValueError(f"{kind} {project}: MSBuild's evaluation left {len(unknown)} pattern(s) it could not "
+                         "resolve, so their files cannot be keyed: " + "; ".join(unknown)
+                         + ". Spell the path with $(MSBuildThisFileDirectory), $(MSBuildProjectDirectory) or a "
+                         "property MSBuild evaluates.")
     imports = directory_imports(root, dirs)
     linked: dict[str, str | None] = {}
     for rel in closure:
@@ -732,7 +743,15 @@ def self_test() -> int:
                 ("a shelf MSBuild did not evaluate", dict(shelf_p=shelf, evaluation={"sdk": sdk, "projects": {}}),
                  "not in the MSBuild evaluation"),
                 ("an evaluation by a different SDK than the one keyed", dict(shelf_p=shelf, evaluation=ev(evaluated_sdk="10.0.300")),
-                 "evaluated by SDK 10.0.300")):
+                 "evaluated by SDK 10.0.300"),
+                ("an extension whose evaluation has an UNKNOWN pattern",
+                 dict(ext_p=shelf, evaluation=ev({"unknownPatterns": ["x.props: <Compile Include=\"$([System.IO.Path]::Combine('a','b'))/*.cs\">"]})),
+                 "$([System.IO.Path]::Combine('a','b'))/*.cs"),
+                ("a shelf whose REFERENCED project has an unknown pattern",
+                 dict(shelf_p=shelf, evaluation={"sdk": sdk, "projects": {
+                     shelf: {"imports": [shelf], "items": {}, "references": [kit]},
+                     kit: {"imports": [kit], "items": {}, "references": [], "unknownPatterns": ["k.props: <None Include=\"$(X)\">"]}}}),
+                 "k.props")):
             try:
                 key(**kwargs)
                 check(f"{label} is refused", False, "no error raised")
