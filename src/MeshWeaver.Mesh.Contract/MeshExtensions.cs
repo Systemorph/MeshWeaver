@@ -7408,7 +7408,7 @@ public static class MeshExtensions
                 StringComparison.OrdinalIgnoreCase)
             ? node.ContentAs<AccessAssignment>(hub.JsonSerializerOptions)
             : null;
-        if (BroadGrantGuard.Evaluate(node, assignment, writer) is not { } finding)
+        if (BroadGrantGuard.EvaluateWrite(node, assignment, writer, hub.JsonSerializerOptions) is not { } finding)
             return Observable.Return<LocalizableText?>(null);
 
         var claimed = BroadGrantGuard.ClaimedActivity(node, writer, hub.JsonSerializerOptions);
