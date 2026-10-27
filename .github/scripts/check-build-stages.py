@@ -23,7 +23,7 @@ a debt-free declaration that does not claim is RED (`owes` is how "not yet" says
 command — so a stage cannot quietly shed a check it has:
 
   core       `build` (Release, warnings as errors, the whole solution, every test project a member,
-             an offline restore from the host's prepared package cache, the test pack) first; every
+             a restore from the host's prepared package cache as fallback folder, the test pack) first; every
              `test-shard-<i>` and `doc-gate` run from a pack whose commit is the run's own commit.
   node-repo  the stages follow the lanes `.github/workflows/ci.yml` calls: `node-repo-compile-check.yml`
              ⇒ `compile-check` (core's compile-check.py, the repository's compile-check.allow, the
@@ -64,7 +64,8 @@ CORE_BUILD_PARITY = [
     ("-c Release", "Release, as CI builds"),
     ("-warnaserror", "warnings as errors (merge precondition (a))"),
     ("-p:CIRun=true", "the CI build switch the `build` job passes"),
-    ("--source \"${NUGET_FALLBACK_PACKAGES", "an OFFLINE restore from the host's prepared package cache — nothing is fetched per run"),
+    ("${NUGET_FALLBACK_PACKAGES:?", "the host's prepared package cache is bound (the fallback folder every package is read from)"),
+    ("prepared package cache did not hold", "a package the cache lacks is NAMED, never fetched silently"),
     ("are not in MeshWeaver.slnx", "every test project is a solution member (the `build` job's step of that name)"),
     ("core-tests.py pack", "the shards' units packed by shard-assign.sh, the SAME assignment the matrix uses"),
     ("--sha \"${MW_BUILD_SHA", "the pack names the commit it was built from"),
@@ -181,7 +182,11 @@ def core_problems(doc: dict) -> list[str]:
         if n == "build":
             out += _markers(n, cmd, CORE_BUILD_PARITY)
             if "nuget" not in (s.get("needs") or []):
-                out.append("stage `build` does not need `nuget` — without the host's prepared package cache bound, the offline restore has nothing to restore from")
+                out.append("stage `build` does not need `nuget` — without the host's prepared package cache bound, every package is a download")
+            if "--source" in cmd:
+                out.append("stage `build` passes --source — under the repository's packageSourceMapping a command-line source "
+                           "maps no package, so every restore is NU1100 even from a complete cache; restore through "
+                           "nuget.config with the prepared cache as NUGET_FALLBACK_PACKAGES")
             if s.get("kind") != "build":
                 out.append("stage `build` must be kind `build`")
         elif n.startswith("test-shard-"):
@@ -303,7 +308,7 @@ def problems(text: Optional[str], profile: str, workflow_text: Optional[str] = N
 
 def _core_doc(total: int = 2) -> dict:
     build = ("set -euo pipefail; fb=\"${NUGET_FALLBACK_PACKAGES:?}\"; dotnet build MeshWeaver.slnx -c Release -p:CIRun=true "
-             "-warnaserror --source \"${NUGET_FALLBACK_PACKAGES:?}\"; echo are not in MeshWeaver.slnx; "
+             "-warnaserror; echo prepared package cache did not hold; echo are not in MeshWeaver.slnx; "
              "python3 deploy/core-tests/core-tests.py pack --repo . --out \"${MW_BUILD_OUTPUTS:?}/core-tests\" --sha \"${MW_BUILD_SHA:?}\"")
     roots = "--root \"${MW_BUILD_OUTPUTS:?}/core-tests\" --root /core-tests --require-sha \"${MW_BUILD_SHA:?}\""
     stages = [{"name": "build", "kind": "build", "command": build, "timeoutMinutes": 25, "needs": ["nuget"]}]
@@ -386,6 +391,8 @@ def _self_test() -> int:
         red(mutate(core, lambda d, n=needle: d["stages"][0].update(command=d["stages"][0]["command"].replace(n, "X"))), "core",
             f"`{needle}`", f"build drops `{needle}`")
     red(mutate(core, lambda d: d["stages"][0].update(needs=[])), "core", "does not need `nuget`", "build without the prepared package cache")
+    red(mutate(core, lambda d: d["stages"][0].update(command=d["stages"][0]["command"] + " --source \"$NUGET_FALLBACK_PACKAGES\"")),
+        "core", "passes --source", "a build that restores from a --source (NU1100 under packageSourceMapping)")
     for needle, _ in CORE_SHARD_PARITY:
         red(mutate(core, lambda d, n=needle: d["stages"][1].update(command=d["stages"][1]["command"].replace(n, "X"))), "core",
             f"`{needle}`", f"a shard drops `{needle}`")

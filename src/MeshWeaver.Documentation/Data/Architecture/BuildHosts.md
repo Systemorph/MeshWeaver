@@ -649,8 +649,17 @@ would replace, and the claim is refused until that list is empty.
 - **The host comes prepared.** No stage restores, stages or prepares anything per run: a stage reads
   the host's installed platform (`$MeshWeaverRefs`, the floor), its tester and dotnet
   (`$MW_BUILD_GATE_HOST`, `$MW_BUILD_PORTAL_DOTNET`) and, with `needs: ["nuget"]`, the host's prepared
-  package cache (`NUGET_FALLBACK_PACKAGES`). Core's build names that cache as its ONLY `--source`, so a
-  package the host was not prepared with is a red restore, never a download.
+  package cache (`NUGET_FALLBACK_PACKAGES`). Core's build restores through its own `nuget.config` with
+  that cache as the FALLBACK folder: every package the cache holds is read from it, nothing is fetched.
+  🚨 Never `--source "$NUGET_FALLBACK_PACKAGES"`: under the repository's `packageSourceMapping` a
+  command-line source maps no package, so EVERY package is NU1100 even from a complete cache (measured:
+  435 × NU1100 restoring `MeshWeaver.Hosting.Test`'s closure from a warm cache, against 0 errors and 0
+  downloads through the fallback folder; `check-build-stages.py` reds a `--source`). A package the cache
+  does not hold yet — a new or bumped `PackageVersion` — is restored for that run and NAMED in a
+  `::warning::`; the host reports it (`MWPREP001`) and promotes it into the cache after a succeeded
+  TRUNK build (MeshWeaver.Deploy#42), so the cache follows `main` as it moves. An offline-only restore
+  could never warm it: the first trunk build that needs a new package would be red, and nothing would
+  ever be promoted.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
@@ -658,7 +667,7 @@ would replace, and the claim is refused until that list is empty.
 per shard of `dotnet-test.yml`'s suite (N = `CI_SHARD_TOTAL`), and `doc-gate`. A deployment (the
 deploy-test-switch shape, the design page in core PR #7182, P4) submits one pinned run per shard and
 doc-gate stage and reads the set's image; a pull-request or trunk run on a host would run `build`
-first — the whole solution, Release, `-warnaserror`, offline from the prepared package cache, every
+first — the whole solution, Release, `-warnaserror`, from the prepared package cache, every
 test project a solution member, then `core-tests.py pack` of THIS run's tree into
 `$MW_BUILD_OUTPUTS/core-tests`. Every shard and the doc gate name both packs and
 `--require-sha "$MW_BUILD_SHA"`: `core-tests.py` takes the first pack whose manifest names the run's
