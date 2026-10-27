@@ -32,6 +32,7 @@ verdict is which bytes landed, so neither case can pass by accident.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -228,23 +229,32 @@ def seed_step() -> str:
     raise SystemExit(f"FAIL: no step with id '{SEED_STEP_ID}' in {GATE}.")
 
 
-def run_seed(workdir: Path, root: Path, body: str, *, upstreams: str = SOURCE
+def run_seed(workdir: Path, root: Path, body: str, *, upstreams: str = SOURCE,
+             platform: dict[str, str] | None = None,
              ) -> tuple[subprocess.CompletedProcess[str], Path]:
     workdir.mkdir(parents=True, exist_ok=True)
     script = workdir / "seed.sh"
     script.write_text(body, encoding="utf-8")
     runner_temp = workdir / "runner-temp"
     runner_temp.mkdir(parents=True, exist_ok=True)
+    # The step before the seed (`publication-platform`, MeshWeaver#7337) fetched this script and
+    # decided the host; the seed re-checks every publication it reads against that decision.
+    shutil.copy(PUBLICATION_PLATFORM, runner_temp / "publication-platform.py")
     env = environment(workdir, root)
     env.update(
         UPSTREAMS=upstreams, IDENTITY=IDENTITY, TARGETS=f"{ACCOUNT}/{SHARE}",
         REGISTRY_URL="", REGISTRY_KEY="",
         RUNNER_TEMP=str(runner_temp), GITHUB_OUTPUT=str(runner_temp / "outputs"),
-        GITHUB_ENV=str(runner_temp / "github-env"))
+        GITHUB_ENV=str(runner_temp / "github-env"),
+        EXPECTED_IDENTITY="", PLATFORM_MODE="legacy",
+        COMPOSED_SET="", COMPOSED_TESTER="", COMPOSED_PORTAL="")
+    env.update(platform or {})
     proc = subprocess.run(["bash", str(script)], capture_output=True, text=True,
                           timeout=180, check=False, env=env)
     return proc, runner_temp / "upstream-seed" / BUNDLE
 
+
+PUBLICATION_PLATFORM = Path(__file__).resolve().parent / "publication-platform.py"
 
 FAILURES: list[str] = []
 EXECUTED: list[str] = []
@@ -590,6 +600,39 @@ def main() -> int:
         proc, _ = run_seed(base / "p5-dangling" / "seed", base / "p5-dangling" / "remote", body)
         check("the gate's seed REFUSES a dangling pointer over a disposed flat copy",
               proc.returncode != 0, "a seed of nothing is an empty seed, which the step refuses", proc)
+
+        # ── THE PUBLICATION NAMES THE PLATFORM (MeshWeaver#7337) ─────────────────────────────
+        # The seed reads the platform record IN THE GENERATION it seeds and refuses one the host was
+        # not composed on. Without the check (the step before this change) both cases below seed
+        # happily — the first is the reproduction, a reseal on a newer set after composition.
+        print("the platform record in the generation the seed reads (#7337):")
+        host = {"set": "3.1.11076", "testerDigest": "sha256:" + "3" * 64, "portalDigest": "sha256:" + "4" * 64}
+        resealed = {"set": "3.1.11080", "testerDigest": "sha256:" + "5" * 64, "portalDigest": "sha256:" + "6" * 64}
+        composed = dict(PLATFORM_MODE="publication", COMPOSED_SET=host["set"],
+                        COMPOSED_TESTER=host["testerDigest"], COMPOSED_PORTAL=host["portalDigest"])
+        for label, record, ok in (("the record names the host's set", host, True),
+                                  ("the record names a set the host was NOT composed on (resealed)", resealed, False)):
+            slug = "rec-ok" if ok else "rec-moved"
+            root = base / slug / "remote"
+            stage(root, pointer=GENERATION)
+            (root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / SOURCE / GENERATION
+             / "platform-set.json").write_text(json.dumps(record), encoding="utf-8")
+            proc, bundle = run_seed(base / slug / "seed", root, body, platform=composed)
+            if ok:
+                check(f"{label}: the seed proceeds and seeds the generation",
+                      proc.returncode == 0 and read(bundle) == GEN_BYTES, f"seeded {read(bundle)!r}", proc)
+            else:
+                check(f"{label}: the seed REFUSES, naming both sets",
+                      proc.returncode != 0 and "RESEALED" in proc.stdout and "3.1.11080" in proc.stdout
+                      and "3.1.11076" in proc.stdout,
+                      "a seed from another set than the host is the DECLINE wall #7337 removes", proc)
+        root = base / "rec-identity" / "remote"
+        stage(root, pointer=GENERATION)
+        proc, _ = run_seed(base / "rec-identity" / "seed", root, body,
+                           platform={**composed, "EXPECTED_IDENTITY": "c003e001"})
+        check("the address the platform was decided by and the host's identity disagree: REFUSED",
+              proc.returncode != 0 and "c003e001" in proc.stdout and IDENTITY in proc.stdout,
+              "the decision read another identity's publication", proc)
 
     print("")
     if FAILURES:

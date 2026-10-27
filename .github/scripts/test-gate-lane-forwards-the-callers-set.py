@@ -129,9 +129,16 @@ def main() -> int:
           rc == 0 and rows.get("platform-set") == "3.0.0-ci.8687")
 
     source = step(text, "Where this shard takes the platform from")
-    check("9 the volume lookup takes the shard's `platform-set` (not `set`) as --set",
-          "PLATFORM_SET: ${{ steps.platform.outputs.platform-set }}" in source
+    # Since MeshWeaver#7337 the volume lookup takes the DECIDED platform — the set the upstream
+    # publication was sealed on, or this run's when there is none — from `publication-platform`,
+    # which forwards the shard's own `platform-set` whenever it does not take the publication's.
+    check("9 the volume lookup takes the DECIDED `platform-set` (not `set`) as --set",
+          "PLATFORM_SET: ${{ steps.publication-platform.outputs.platform-set }}" in source
           and '--set "${PLATFORM_SET:-}"' in source)
+    decided = step(text, "The platform the upstream publication was sealed on (MeshWeaver#7337)")
+    check("9b the decision receives the shard's `platform-set` and hands it through when nothing is seeded",
+          "RUN_SET: ${{ steps.platform.outputs.platform-set }}" in decided
+          and 'echo "platform-set=${RUN_SET}"' in decided)
 
     if failures:
         print(f"::error::node-repo-gate.yml drops a pinned caller's set name at: {'; '.join(failures)}")

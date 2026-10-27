@@ -2486,6 +2486,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/assert-bake-floor.py --self-test
 
+    # The consumer half of the same contract (MeshWeaver#7337): a satellite gate composes its host
+    # on the set the upstream publication RECORDS it was sealed on, so host and seed are one set.
+    # The self-test carries the reproduction (Reinsurance #264) as a NEGATIVE CONTROL — the old
+    # behaviour, composing on the run's own set under a newer seed, must fail the same predicate.
+    - name: "The gate takes its platform from the publication, and refuses a ceiling breach or a stale pin (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/publication-platform.py --self-test
+
     # The recorder that writes a DEAD test host into its own trx (#2495) — here and, from the
     # platform checkout, in every satellite's suite loop. Its reason to exist is the host that wrote
     # nothing, which is also the host whose results DIRECTORY was never created (MeshWeaver.Plugins,
