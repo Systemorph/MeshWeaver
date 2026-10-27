@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using MeshWeaver.Compiler;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.Graph.MailCopy;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -32,7 +31,70 @@ public class InMeshImpersonationReferencesTest
         using MeshWeaver.Mesh.Security;
         using MeshWeaver.Mesh.Services;
         using MeshWeaver.ContentCollections;
-        using MeshWeaver.Graph.MailCopy;
+        using MeshWeaver.Mail.MailCopy;
+        """;
+
+    /// <summary>
+    /// 🚨 STUBS of the mail copy's entry points, under the full names the table keys them by. The mail copy left
+    /// core for the Mail module (MeshWeaver.Plugins, design page Mail/MailCopy), so this project cannot reference
+    /// the real types — and the table is core's subject, so the proof that it FIRES on those names stays here. The
+    /// table is keyed by <c>Namespace.TypeName</c> with no assembly, which is exactly what makes a same-named stub
+    /// an honest stand-in. Signatures mirror the module's. That the table is COMPLETE against the real types is
+    /// checked where both are visible: the Plugins repository's <c>MailCopySurfaceRegistrationTest</c>.
+    /// Every probe compiles with this tree, so the negative controls below also prove the stubs report nothing.
+    /// </summary>
+    private const string MailCopyStubs = """
+        using System;
+        using System.Reactive;
+        namespace MeshWeaver.Mail.MailCopy
+        {
+            public sealed class MailMessageCopy { }
+            public sealed class MailCopySource { }
+            public interface IMailCopyStore
+            {
+                IObservable<MailMessageCopy> Upsert(string owner, MailMessageCopy copy);
+                IObservable<MailMessageCopy> Read(string owner, string provider, string generation, string messageId);
+            }
+            public sealed class MeshMailCopyStore : IMailCopyStore
+            {
+                public IObservable<MailMessageCopy> Upsert(string owner, MailMessageCopy copy) => throw new NotImplementedException();
+                public IObservable<MailMessageCopy> Read(string owner, string provider, string generation, string messageId) => throw new NotImplementedException();
+            }
+            public interface IMailAttachmentStore
+            {
+                IObservable<Unit> DeleteAll(string owner, string copyPath);
+                IObservable<string> Save(string owner, string copyPath, string relativePath, byte[] bytes);
+            }
+            public sealed class MeshMailAttachmentStore : IMailAttachmentStore
+            {
+                public IObservable<Unit> DeleteAll(string owner, string copyPath) => throw new NotImplementedException();
+                public IObservable<string> Save(string owner, string copyPath, string relativePath, byte[] bytes) => throw new NotImplementedException();
+            }
+            public sealed class MailCopyEngine
+            {
+                public void Kick(string owner, bool force = false) => throw new NotImplementedException();
+                public IObservable<MailCopySource> Sync(string owner) => throw new NotImplementedException();
+                public IObservable<MailCopySource> Enable(string owner, int windowDays) => throw new NotImplementedException();
+            }
+            public interface IMailAccountCopy
+            {
+                void KickAll(string owner);
+                IObservable<bool> Enable(string owner, string accountId, int windowDays);
+            }
+            public sealed class MailFeedAccountCopy : IMailAccountCopy
+            {
+                public void KickAll(string owner) => throw new NotImplementedException();
+                public IObservable<bool> Enable(string owner, string accountId, int windowDays) => throw new NotImplementedException();
+            }
+            public interface IMailCopySwitch
+            {
+                IObservable<bool> Enable(string owner, string provider, string accountId);
+            }
+            public sealed class MailCopySwitch : IMailCopySwitch
+            {
+                public IObservable<bool> Enable(string owner, string provider, string accountId) => throw new NotImplementedException();
+            }
+        }
         """;
 
     private static Compilation Compile(string body) =>
@@ -44,8 +106,7 @@ public class InMeshImpersonationReferencesTest
         _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
                     typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable),
                     typeof(System.Text.Json.JsonSerializerOptions), typeof(MessageDelivery<>),
-                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>),
-                    typeof(MeshWeaver.Graph.MailCopy.MeshMailCopyStore) };
+                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>) };
         // 🚨 Only assemblies whose file is STILL on disk. Other classes of this project compile
         // node assemblies into temp folders, load them and delete the folder when they finish; such
         // an assembly stays in the AppDomain with a Location that no longer exists, and referencing
@@ -55,7 +116,8 @@ public class InMeshImpersonationReferencesTest
             .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && System.IO.File.Exists(a.Location))
             .Select(a => MetadataReference.CreateFromFile(a.Location));
         var compilation = CSharpCompilation.Create("InMeshProbe",
-            [CSharpSyntaxTree.ParseText(source, path: "Probe.cs")],
+            [CSharpSyntaxTree.ParseText(source, path: "Probe.cs"),
+             CSharpSyntaxTree.ParseText(MailCopyStubs, path: "MailCopyStubs.cs")],
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
@@ -168,74 +230,45 @@ public class InMeshImpersonationReferencesTest
     /// The mail copy's stores (and the engine's background sync) run as System on the owner's behalf. Their
     /// runtime check judges the immediate caller, which a method group handed to a later platform callback
     /// replaces — so every reference, a DEFERRED method group included, is reported at compile time, on the
-    /// interface as on the concrete store.
+    /// interface as on the concrete store. The types live in the Mail module now; these probes bind the
+    /// same-named stubs in <see cref="MailCopyStubs"/>.
     /// </summary>
     [Theory]
     [InlineData("public static IObservable<MailMessageCopy> M(IMailCopyStore s, MailMessageCopy c) => s.Upsert(\"owner\", c);",
-        "MeshWeaver.Graph.MailCopy.IMailCopyStore.Upsert")]
+        "MeshWeaver.Mail.MailCopy.IMailCopyStore.Upsert")]
     [InlineData("public static IObservable<MailMessageCopy> M(MeshMailCopyStore s, MailMessageCopy c) => s.Upsert(\"owner\", c);",
-        "MeshWeaver.Graph.MailCopy.MeshMailCopyStore.Upsert")]
+        "MeshWeaver.Mail.MailCopy.MeshMailCopyStore.Upsert")]
     // DEFERRED: a method group handed on, invoked later by whoever holds it.
     [InlineData("public static Func<string, MailMessageCopy, IObservable<MailMessageCopy>> M(IMailCopyStore s) => s.Upsert;",
-        "MeshWeaver.Graph.MailCopy.IMailCopyStore.Upsert")]
-    [InlineData("public static Func<string, IObservable<MailMessageCopy?>> M(MeshMailCopyStore s) => o => s.Read(o, \"outlook\", \"g1\", \"m1\");",
-        "MeshWeaver.Graph.MailCopy.MeshMailCopyStore.Read")]
+        "MeshWeaver.Mail.MailCopy.IMailCopyStore.Upsert")]
+    [InlineData("public static Func<string, IObservable<MailMessageCopy>> M(MeshMailCopyStore s) => o => s.Read(o, \"outlook\", \"g1\", \"m1\");",
+        "MeshWeaver.Mail.MailCopy.MeshMailCopyStore.Read")]
     [InlineData("public static Func<string, string, IObservable<System.Reactive.Unit>> M(IMailAttachmentStore s) => s.DeleteAll;",
-        "MeshWeaver.Graph.MailCopy.IMailAttachmentStore.DeleteAll")]
+        "MeshWeaver.Mail.MailCopy.IMailAttachmentStore.DeleteAll")]
     [InlineData("public static IObservable<string> M(MeshMailAttachmentStore s, byte[] b) => s.Save(\"owner\", \"p\", \"r\", b);",
-        "MeshWeaver.Graph.MailCopy.MeshMailAttachmentStore.Save")]
+        "MeshWeaver.Mail.MailCopy.MeshMailAttachmentStore.Save")]
     [InlineData("public static Action<string, bool> M(MailCopyEngine e) => e.Kick;",
-        "MeshWeaver.Graph.MailCopy.MailCopyEngine.Kick")]
-    [InlineData("public static Func<string, IObservable<MailCopySource?>> M(MailCopyEngine e) => e.Sync;",
-        "MeshWeaver.Graph.MailCopy.MailCopyEngine.Sync")]
+        "MeshWeaver.Mail.MailCopy.MailCopyEngine.Kick")]
+    [InlineData("public static Func<string, IObservable<MailCopySource>> M(MailCopyEngine e) => e.Sync;",
+        "MeshWeaver.Mail.MailCopy.MailCopyEngine.Sync")]
     [InlineData("public static Action<string> M(IMailAccountCopy a) => a.KickAll;",
-        "MeshWeaver.Graph.MailCopy.IMailAccountCopy.KickAll")]
+        "MeshWeaver.Mail.MailCopy.IMailAccountCopy.KickAll")]
     [InlineData("public static void M(MailFeedAccountCopy a) => a.KickAll(\"owner\");",
-        "MeshWeaver.Graph.MailCopy.MailFeedAccountCopy.KickAll")]
+        "MeshWeaver.Mail.MailCopy.MailFeedAccountCopy.KickAll")]
     // Enable starts the System backfill: every public road to it.
     [InlineData("public static IObservable<MailCopySource> M(MailCopyEngine e) => e.Enable(\"owner\", 30);",
-        "MeshWeaver.Graph.MailCopy.MailCopyEngine.Enable")]
+        "MeshWeaver.Mail.MailCopy.MailCopyEngine.Enable")]
     [InlineData("public static IObservable<bool> M(MailFeedAccountCopy a) => a.Enable(\"owner\", \"acct\", 30);",
-        "MeshWeaver.Graph.MailCopy.MailFeedAccountCopy.Enable")]
+        "MeshWeaver.Mail.MailCopy.MailFeedAccountCopy.Enable")]
     [InlineData("public static Func<string, string, int, IObservable<bool>> M(IMailAccountCopy a) => a.Enable;",
-        "MeshWeaver.Graph.MailCopy.IMailAccountCopy.Enable")]
+        "MeshWeaver.Mail.MailCopy.IMailAccountCopy.Enable")]
     [InlineData("public static IObservable<bool> M(IMailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
-        "MeshWeaver.Graph.MailCopy.IMailCopySwitch.Enable")]
+        "MeshWeaver.Mail.MailCopy.IMailCopySwitch.Enable")]
     [InlineData("public static IObservable<bool> M(MailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
-        "MeshWeaver.Graph.MailCopy.MailCopySwitch.Enable")]
+        "MeshWeaver.Mail.MailCopy.MailCopySwitch.Enable")]
     public void AMailCopyStoreReference_IsFound(string body, string expected)
     {
         Assert.Contains(expected, Found(body));
-    }
-
-    /// <summary>
-    /// The registration above is a list, and a list drifts: every <c>[ImpersonationSurface]</c> of the mail
-    /// copy's types — and the interface member each one implements — must be in it, or a new System entry
-    /// point would be reachable from in-mesh code unreported.
-    /// </summary>
-    [Fact]
-    public void EveryMailCopySurface_IsRegistered()
-    {
-        var types = typeof(MeshMailCopyStore).Assembly.GetTypes()
-            .Where(t => t.Namespace == "MeshWeaver.Graph.MailCopy" && t.IsPublic && !t.IsInterface)
-            .ToArray();
-        var surfaces = types.SelectMany(t => t
-                .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly)
-                .Where(m => m.IsDefined(typeof(ImpersonationSurfaceAttribute), inherit: false))
-                .SelectMany(m => new[] { $"{t.Namespace}.{t.Name}.{m.Name}" }
-                    .Concat(t.GetInterfaces()
-                        .Where(i => i.Namespace == t.Namespace)
-                        .Where(i => t.GetInterfaceMap(i).TargetMethods.Contains(m))
-                        .Select(i => $"{i.Namespace}.{i.Name}.{m.Name}"))))
-            .Distinct()
-            .ToArray();
-        Assert.NotEmpty(surfaces);
-        var missing = surfaces.Where(s =>
-        {
-            var cut = s.LastIndexOf('.');
-            return !(InMeshImpersonationReferences.Members.TryGetValue(s[..cut], out var members) && members.Contains(s[(cut + 1)..]));
-        }).ToArray();
-        Assert.True(missing.Length == 0, "unregistered System surfaces: " + string.Join(", ", missing));
     }
 
     [Fact]

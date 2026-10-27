@@ -90,20 +90,27 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Mesh.Services.MeshQueryRequest"] = ["AsSystem", "ForViewer"],
             ["MeshWeaver.ContentCollections.ContentImportBuilder"] = ["ImpersonateAsSystem"],
             ["MeshWeaver.ContentCollections.SyncContentFilesBuilder"] = ["ImpersonateAsSystem"],
-            // The mail copy's stores write and read as System on the owner's behalf (Doc/Architecture/MailCopy).
-            // Their runtime check judges the immediate caller, which a method group handed to a platform
-            // callback replaces — so both the interfaces and the concrete stores are reported here.
-            ["MeshWeaver.Graph.MailCopy.IMailCopyStore"] = MailCopyStoreMembers,
-            ["MeshWeaver.Graph.MailCopy.MeshMailCopyStore"] = MailCopyStoreMembers,
-            ["MeshWeaver.Graph.MailCopy.IMailAttachmentStore"] = MailAttachmentStoreMembers,
-            ["MeshWeaver.Graph.MailCopy.MeshMailAttachmentStore"] = MailAttachmentStoreMembers,
+            // The mail copy's stores write and read as System on the owner's behalf. Their runtime check judges
+            // the immediate caller, which a method group handed to a platform callback replaces — so both the
+            // interfaces and the concrete stores are reported here.
+            // 🚨 These types are NOT core's: the mail copy lives in the Mail MODULE (MeshWeaver.Plugins,
+            // MeshWeaver.Mail.MicrosoftGraph, design page Mail/MailCopy). The table is keyed by
+            // Namespace.TypeName with no assembly, so naming them here reaches the module's types in any
+            // in-mesh compile that references the module, and names nothing where it is not installed. It is
+            // a recorded core→plugins edge by NAME (Doc/Architecture/CarvingProjectsOutOfCore → MailCopy):
+            // renaming the namespace there silences these entries, which is why that repository's
+            // MailCopySurfaceRegistrationTest compares this table with the module's [ImpersonationSurface]s.
+            ["MeshWeaver.Mail.MailCopy.IMailCopyStore"] = MailCopyStoreMembers,
+            ["MeshWeaver.Mail.MailCopy.MeshMailCopyStore"] = MailCopyStoreMembers,
+            ["MeshWeaver.Mail.MailCopy.IMailAttachmentStore"] = MailAttachmentStoreMembers,
+            ["MeshWeaver.Mail.MailCopy.MeshMailAttachmentStore"] = MailAttachmentStoreMembers,
             // Enable starts the System backfill, so every public road to it is a surface: the engine, the
             // per-account copy and the switch over the providers.
-            ["MeshWeaver.Graph.MailCopy.MailCopyEngine"] = ["Kick", "Sync", "Enable", "ServesFromCopy", "FollowMove"],
-            ["MeshWeaver.Graph.MailCopy.IMailAccountCopy"] = ["KickAll", "Enable"],
-            ["MeshWeaver.Graph.MailCopy.MailFeedAccountCopy"] = ["KickAll", "Enable"],
-            ["MeshWeaver.Graph.MailCopy.IMailCopySwitch"] = ["Enable"],
-            ["MeshWeaver.Graph.MailCopy.MailCopySwitch"] = ["Enable"],
+            ["MeshWeaver.Mail.MailCopy.MailCopyEngine"] = ["Kick", "Sync", "Enable", "ServesFromCopy", "FollowMove"],
+            ["MeshWeaver.Mail.MailCopy.IMailAccountCopy"] = ["KickAll", "Enable"],
+            ["MeshWeaver.Mail.MailCopy.MailFeedAccountCopy"] = ["KickAll", "Enable"],
+            ["MeshWeaver.Mail.MailCopy.IMailCopySwitch"] = ["Enable"],
+            ["MeshWeaver.Mail.MailCopy.MailCopySwitch"] = ["Enable"],
         }.ToImmutableDictionary(p => p.Key, p => p.Value.ToImmutableHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
 
     /// <summary>Members reported only when WRITTEN (an assignment, an object or <c>with</c> initializer).</summary>

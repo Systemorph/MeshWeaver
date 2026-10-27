@@ -210,7 +210,7 @@ Measured against `Systemorph/MeshWeaver@4cc5c17fbf` and `Systemorph/MeshWeaver.P
 | `Graph/Apps` | 1 401 | nothing of that name | the kernel home page (`UserActivityLayoutAreas` → `HomeAppSource`), `GraphConfigurationExtensions.AddAppDirectory`, in-mesh content in `AppleMaps`/`AppleWeather`/`Edu`/`Store/Core` | **stays** — the kernel calls into it, and `AppleMaps/Maps/Source/AmapsConnect.cs` reflects on `"MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph"` by **assembly-qualified name**, which a move would break silently |
 | `Graph/ControlLane` | 2 940 | nothing of that name; consumers only | image assemblies `Memex.Portal.Shared` (endpoints, settings tab, self-update hand-over) and `MeshWeaver.Hosting.Instance`; in-mesh sources in `Hosting/InstanceAction`, `Hosting/Deployment`, `Hosting/PlatformBuildInbox`, `Approvals/Elsewhere` | **stays** — see below |
 | `Graph/OpenGraph` | 668 | `MeshWeaver.OgCard`, a consumer (**second half**) | `GraphConfigurationExtensions` registers it on every mesh; `Memex.Portal.Shared` (`SeoEndpoints`, `OgCardRenderer`) and the OgCard module call it | **stays for now** — see below |
-| `Graph/MailCopy` | 3 379 | consumers only: the `Mail.MicrosoftGraph` and `Mail.Gmail` modules | those two modules; core's compile-time impersonation table names its types; no core `src/` caller, no in-mesh binder in either repo's content trees | **move, once its home is decided** — see below |
+| `Graph/MailCopy` | 3 379 | consumers only: the `Mail.MicrosoftGraph` and `Mail.Gmail` modules | those two modules; core's compile-time impersonation table names its types; no core `src/` caller, no in-mesh binder in either repo's content trees | **moved** into the `Mail` module, namespace `MeshWeaver.Mail.MailCopy`; `Google` requires `Mail` — see below |
 
 ### Why ControlLane and OpenGraph stay
 
@@ -234,39 +234,77 @@ a core singleton": it is the SSRF-guarded outbound fetch (`http(s)` only, loopba
 addresses refused). At 668 lines that is not worth an identity flip on its own. Reconsider it if
 another carve flips `MeshWeaver.Graph` anyway.
 
-### MailCopy: movable, but it has no home yet
+### MailCopy: moved into the Mail module
 
-MailCopy is the one subsystem with **no caller in core and no in-mesh binder**. Its consumers are
-two plugin modules, and the core-side ties are both data, not code:
+MailCopy was the one subsystem with **no caller in core and no in-mesh binder**. Its consumers were
+two plugin modules, and the core-side ties were both data, not code.
 
-- **The runtime caller check survives a module move.** `MailCopyAuthority` judges the immediate
-  calling assembly through `InMeshImpersonationGuard`, and modules load into `ModuleLoadContext`,
-  which is an authentic `IPlatformLoadContext`. So a module is platform code to the guard, exactly
-  as `MeshWeaver.Graph` is today.
-- **The compile-time table names its types by string.** `InMeshImpersonationReferences.Members` is
-  keyed `Namespace.TypeName`, with no assembly. Keeping the namespace `MeshWeaver.Graph.MailCopy` in
-  the new home keeps every entry live. The table then names plugin types from core, which is a
-  core→plugins edge in the sense of [Repository Dependency Direction](../RepositoryDependencyDirection).
-  Close it with a seam modules contribute to, or record it.
-- **One core test spans the boundary.** `InMeshImpersonationReferencesTest` compiles snippets against
-  `typeof(MeshMailCopyStore)`. The table is core's subject, so the test stays in core and its
-  snippets declare stub types with the same full names. The eight `MeshWeaver.Graph.Test/MailCopy*`
-  suites (2 284 lines) follow the code.
+**Where it went.** Every plugin package declares exactly one module, and both consumers need this
+code. Two homes were on the table: a new provider-neutral package required by `Mail` and `Google`,
+or the existing `Mail` module. The `Mail` module was chosen. The code now lives in
+`MeshWeaver.Mail.MicrosoftGraph` (folder `MailCopy/`, namespace `MeshWeaver.Mail.MailCopy`), the
+Gmail module references that project, and `Google/index.json` declares `Mail@^1.24.0` in `requires`.
+`Mail` is pre-installed, so no portal installs anything new. The cost is that the Gmail module's
+bundle carries the Outlook module's closure. At run time Gmail is served the Mail module's own copy
+of the assembly (`ModuleLoadContext`: another module's entry assembly), so every MailCopy type has
+one identity. The design page moved with the code: MeshWeaver.Plugins `Mail/MailCopy`.
+
+**How it moved: add first, delete second.** The Plugins half added the code under the NEW
+namespace while core still carried the old one. Two assemblies with one full type name would have
+made every Gmail and Outlook file that names a MailCopy type ambiguous (`CS0433`) against a core
+that still had it. With a new namespace the Plugins half compiles against core before and after
+this deletion, so neither half waits on the other's build. Core's half then deletes the folder.
+
+**The ties, and what became of each:**
+
+- **The runtime caller check survives the move.** `MailCopyAuthority` judges the immediate calling
+  assembly through `InMeshImpersonationGuard`, and modules load into `ModuleLoadContext`, which is an
+  authentic `IPlatformLoadContext`. So a module is platform code to the guard, exactly as
+  `MeshWeaver.Graph` was.
+- **The compile-time table is re-pointed, not deleted.** `InMeshImpersonationReferences.Members` is
+  keyed `Namespace.TypeName`, with no assembly. Its nine MailCopy keys now name
+  `MeshWeaver.Mail.MailCopy.*`, so the check fires on the moved types in every in-mesh compile that
+  references the Mail module, and names nothing where it is not installed. That is a core→plugins
+  edge by NAME ([Repository Dependency Direction](../RepositoryDependencyDirection)), and it is
+  RECORDED here rather than closed. Closing it needs a seam a module can contribute to. The obvious
+  seam, reading `[ImpersonationSurface]` off referenced metadata, would cost a semantic query per
+  member name in every NodeType compile, because the scan's cheap name prefilter could no longer
+  know the names in advance. Renaming the namespace in Plugins would silence the entries without a
+  sound, so the drift check moved to the side that can see both: Plugins'
+  `MailCopySurfaceRegistrationTest` fails when a public `[ImpersonationSurface]` of the module (or
+  the interface member it implements) is missing from core's table.
+- **The core test spans the boundary with stubs.** `InMeshImpersonationReferencesTest` compiles its
+  MailCopy probes against stub types declared with the same full names, because the table is core's
+  subject and the real types are no longer referenceable here. The eight `MeshWeaver.Graph.Test/MailCopy*`
+  suites (2 284 lines) moved with the code, into `MeshWeaver.Mail.MicrosoftGraph.Test/MailCopy`.
 - **Persisted content is safe.** `MailCopySource` and `MailMessageCopy` are registered under
-  `nameof(...)`, so the stored discriminator does not carry the assembly.
+  `nameof(...)`, so the stored discriminator carries neither namespace nor assembly.
 
-What blocks the move is **where it goes**. Every plugin package declares exactly one module, and
-both consumers need this code:
+🚨 **The window between the halves.** From the Plugins merge until a core image with the re-pointed
+table rolls, the module's new names are in no compile-time table. The runtime guard still judges
+every call, and no in-mesh source binds the types. Close the window by rolling core's half
+promptly, not by widening the table to both namespaces.
 
-1. **A new provider-neutral package** whose module carries MailCopy, required by `Mail` and `Google`.
-   This is the clean shape, but a new package in MeshWeaver.Plugins needs the owner's explicit go,
-   because merging it publishes it.
-2. **Fold it into the `Mail` module** (`MeshWeaver.Mail.MicrosoftGraph`). `Mail.Gmail` then
-   references that project, and `Google` requires `Mail`. `Mail` is pre-installed, so no portal
-   installs anything new. The cost is that the Gmail module binds the Outlook module.
+🚨 **Removing the folder is a BINARY break for any bundle that still binds it — and the order is what
+keeps it linkable.** It does not move the bake key: that is the compatibility key `c<major>e<epoch>`,
+and the content-surface hash is provenance only ([Platform Compatibility Ladder](../PlatformCompatibilityLadder)).
+But a published Mail or Google bundle built before the move references `MeshWeaver.Graph.MailCopy.*`
+in `MeshWeaver.Graph`, and on a platform without those types it is `Unlinkable`: the boot and landing
+probe refuses that generation rather than letting it hit a `TypeLoadException`
+([The Module Platform Link Gate](../ModulePlatformLinkGate)). So the halves land in this order, and
+no epoch is declared:
 
-Until that choice is made the folder stays. Once it is made, MailCopy is the only member of this
-survey that can join a batched flip.
+1. The Plugins half merges and its `Mail` and `Google` bundles PUBLISH. They bind no core MailCopy
+   type, and they run on a platform with or without the folder.
+2. The fleet adopts them (a new build is adopted eagerly).
+3. Only then does core's half merge.
+
+A portal that still holds a pre-move bundle when the new core rolls has that generation refused, and
+it picks up the published one; it does not crash. What the pull-request ladder check measures is
+core's own four module bundles (`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps`,
+`.Payments.Stripe`, `.github/scripts/fetch-deployed-plugin-set.sh`). Neither mail module is among
+them, so that check is not the guard for this break. The ORDER is the guard, and the pair gate
+(`Pairs-with:`) enforces the first step.
 
 ## Two defects this survey found
 
