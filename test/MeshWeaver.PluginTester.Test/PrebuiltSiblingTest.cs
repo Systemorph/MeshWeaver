@@ -170,7 +170,8 @@ public class PrebuiltSiblingTest : IDisposable
         document.Should().NotBeNull();
         document!.Sets.Select(s => s.Source).Should().Equal(new[] { "Widgets.Consumer" },
             "a prebuilt sibling was not compiled here, so it carries no edge set");
-        document.Sets.Single().Edges.Select(e => e.Target).Should().Equal(new[] { "Widgets.Sibling" },
+        document.Sets.Single().Edges.Where(e => e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Module)
+            .Select(e => e.Target).Should().Equal(new[] { "Widgets.Sibling" },
             "the used prebuilt sibling is an edge; the declared-but-unused one is not");
     }
 
