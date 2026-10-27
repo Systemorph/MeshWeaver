@@ -197,9 +197,22 @@ assets is the extension.
 
 1. ~~**Core (addition)** — a generic extension seam.~~ In place, as above.
 2. **Plugins** — takes `tools/MeshWeaver.PluginTester.Razor` (and its tests and the static-asset
-   checks) and ships it: a small tester image built `FROM` the platform tester at the pinned digest
-   that adds `build-extensions/razor/`, or `--extensions` pointing at a published extension directory,
-   and the module lane runs Razor modules with it.
+   checks) and passes it to the module lane. **No separate tester image is needed:** the shared
+   `node-repo-module-pack.yml` lane takes `build-extensions-project:`, a csproj in the caller's
+   repository whose publish is one extension directory (it carries `build-extension.json`). The
+   workspace-build job publishes it against the platform checkout at `platform-ref`, fails closed on
+   a publish without the manifest or without assemblies, removes the checkout and the project's
+   `obj`/`bin` before the source mount, and passes it to `build-project` as `--extensions`, which
+   replaces the extensions the tester image ships. A pinned tester without the flag is refused by
+   name. Like the module-libraries shelf, the extension is a compiler input of every module: it is
+   keyed into the build ledger (`module-build-key.py --build-extensions-project`) and an edit to it
+   selects every module. What it evaluates is asked of MSBuild itself, never read by hand:
+   `msbuild-evaluate.py` runs `dotnet msbuild -pp` (the exact imported files) and `-getItem` (the
+   exact path items, ProjectReferences followed) with the lane's publishing inputs, and the key and
+   the scope both read that one file. The key hashes its reference closure, the imported files and
+   the items outside its folder, and the SDK it is published with. Ancestor `Directory.*` files and
+   declared-but-absent imports are kept as conservative extras for hashing and reach, never evaluated
+   (`node-repo-scope.py --build-extensions-project --msbuild-evaluation`). Omitted, nothing changes.
 3. **Core (deletion, last)** — stops staging the Razor extension, deletes
    `tools/MeshWeaver.PluginTester.Razor`, `stage-razor-generators.py` and the Razor tests. The
    unclaimed-source refusal stays: it is what turns "no Razor extension loaded" into a named failure
