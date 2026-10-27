@@ -512,9 +512,9 @@ by the reader's access to the node: the closure table spans every partition, the
 - **Retention of stale build identities.** The set is replaced whole on every compile and keeps no
   history, so only the current build's edges exist. If CI needs "the edges of build X" after X was
   superseded, history has to be kept — decide before step (4).
-- **Adopted prebuilts — DECIDED 2026-10-27: the bundle carries the edges and adoption writes them.**
-  A portal that adopts a bake's bytes compiles nothing, so until then it had no edge set for that
-  build: measured on two production meshes after the roll that shipped extraction, 0 edge sets,
+- **Adopted prebuilts — resolved: the bundle carries the edges and adoption writes them.**
+  A portal that adopts a bake's bytes compiles nothing, so without the bundle's edges it has no
+  edge set for that build: measured on two production meshes after the roll that shipped extraction, 0 edge sets,
   every type adopted (`buildProvenance: AdoptedVerified`). The bake now writes each assembly's set
   into its bundle entry, and the seeding pass writes it for the build the record serves. A bundle
   from an older producer carries none, and that type stays "never extracted" until its next
