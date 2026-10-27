@@ -5,6 +5,11 @@
     <AssemblyName>mw-plugin-test</AssemblyName>
     <RootNamespace>MeshWeaver.PluginTester</RootNamespace>
     <IsPackable>false</IsPackable>
+    <!-- SERVER GC: the `compile` bake runs one Roslyn compilation per core (TreeBake.Options.MaxParallel),
+         and every one allocates heavily. Under workstation GC those compiles serialise on one heap and
+         the parallel bake bought only ~2x (Plugins tree, 18 cores: 143 s serial → 68 s); with a heap per
+         core it is ~5x (→ 28 s). See Doc/Architecture/CiContentBake → "The bake compiles in parallel". -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
     <!-- Multi-arch container publish (same pair as memex-portal-ai / memex-migration);
          Directory.Build.props' per-leg bin/obj isolation handles the RID-leg race (ref
          assemblies stay ON — the surface manifest below is hashed from them). -->
