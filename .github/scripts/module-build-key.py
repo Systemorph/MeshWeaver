@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -120,6 +121,23 @@ GLOBAL_INPUTS = (
 SKIP_DIRS = {"bin", "obj", ".vs", "node_modules", "TestResults", "test-logs"}
 
 _INCLUDE = r"<ProjectReference\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
+
+
+def _load_scope():
+    """node-repo-scope.py, the sibling that owns the linked-source parser and the glob matcher.
+
+    Loaded, never copied: the scope decides WHETHER a module is rebuilt from the same reading of a
+    `<Compile Include>` this key uses to decide WHICH build it is, so the two cannot drift."""
+    path = Path(__file__).resolve().with_name("node-repo-scope.py")
+    spec = importlib.util.spec_from_file_location("node_repo_scope", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path} — module-build-key.py needs its linked-source matcher")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_SCOPE = _load_scope()
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -214,25 +232,54 @@ def directory_imports(root: Path, dirs: list[str]) -> dict[str, str | None]:
     return dict(sorted(imports.items()))
 
 
-def shelf_inputs(root: Path, project: str) -> dict:
-    """The caller's module-libraries shelf as key inputs: its reference closure and its imports."""
+def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project", sdk: str = "",
+                 evaluation: dict | None = None) -> dict:
+    """A caller-supplied compiler-input project as key inputs, from MSBuild's OWN evaluation.
+
+    Used for the module-libraries shelf and for a build extension (`build-extensions-project`):
+    both are published per run and change what every module compiles against. `evaluation` is
+    msbuild-evaluate.py's JSON (the real `dotnet msbuild`): its ProjectReferences make the closure,
+    and its imported files and path items outside the closure's directories are hashed. node-repo-
+    scope.py reads the SAME evaluation, so key and scope cannot drift. Conservative extras, never
+    evaluated: every ancestor `Directory.*` file (present or recorded absent) and every DECLARED
+    import (present or recorded absent). `sdk` is the SDK the lane publishes with; it is keyed."""
     root = root.resolve()
+    project = _SCOPE.normalize_project(project)
     csproj = (root / project).resolve()
     if not csproj.is_file():
-        raise ValueError(f"module-libraries-project {project} does not exist under {root} — a shelf "
+        raise ValueError(f"{kind} {project} does not exist under {root} — a compiler input "
                          "that cannot be keyed must not be silently keyed on nothing")
-    seen: set[Path] = set()
-    queue = [csproj]
-    while queue:
-        p = queue.pop()
-        if p in seen:
-            continue
-        seen.add(p)
-        queue.extend(project_references(root, p))
-    dirs = sorted({p.parent.relative_to(root).as_posix() for p in seen})
-    return {"project": Path(project).as_posix(),
-            "closure": {d: tree_hash(root, d) for d in dirs},
-            "imports": directory_imports(root, dirs)}
+    try:
+        closure = _SCOPE.evaluated_closure(evaluation, project)
+    except ValueError as exc:
+        raise ValueError(f"{kind}: {exc}") from None
+    evaluated_sdk = (evaluation or {}).get("sdk") or ""
+    if sdk and evaluated_sdk and evaluated_sdk != sdk:
+        raise ValueError(f"{kind} {project} was evaluated by SDK {evaluated_sdk} but is keyed and published "
+                         f"with {sdk} — evaluate it with the SDK the lane publishes with")
+    dirs = sorted({Path(p).parent.as_posix() for p in closure})
+
+    def inside_closure(rel: str) -> bool:
+        return any(rel.startswith(d + "/") for d in dirs if d != ".")
+
+    imports = directory_imports(root, dirs)
+    linked: dict[str, str | None] = {}
+    for rel in closure:
+        evaluated, declared, items = _SCOPE.evaluated_files(evaluation, rel)
+        for f in evaluated + declared:
+            if f not in imports and not inside_closure(f):
+                imports[f] = file_hash(root / f) if (root / f).is_file() else None
+        for f in items:
+            if not inside_closure(f):
+                linked[f] = file_hash(root / f) if (root / f).is_file() else None
+    result = {"project": Path(project).as_posix(),
+              "closure": {d: tree_hash(root, d) for d in dirs},
+              "imports": dict(sorted(imports.items()))}
+    if linked:
+        result["linked"] = dict(sorted(linked.items()))
+    if sdk:
+        result["sdk"] = sdk
+    return result
 
 
 def read_json(path: Path) -> dict | None:
@@ -279,7 +326,9 @@ def requires_of(index: dict) -> list[str]:
 
 
 def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, platform_ref: str,
-            recipe: str = RECIPE_VERSION, shelf_project: str = "") -> dict:
+            recipe: str = RECIPE_VERSION, shelf_project: str = "",
+            extensions_project: str = "", extensions_sdk: str = "",
+            msbuild_evaluation: dict | None = None) -> dict:
     """{key, inputs} for one matrix entry. Raises KeyError-shaped ValueError on an unkeyable entry."""
     package = entry.get("package") or ""
     module = entry.get("module") or ""
@@ -343,7 +392,21 @@ def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, p
     # Only when set: a caller without its own shelf keys exactly as before, so no recorded build
     # is thrown away by this input's arrival.
     if shelf_project:
-        inputs["shelf"] = shelf_inputs(root, shelf_project)
+        inputs["shelf"] = shelf_inputs(root, shelf_project, sdk=extensions_sdk, evaluation=msbuild_evaluation)
+    # The same for a build extension (e.g. the Razor one): it decides what the compiler GENERATES,
+    # so an edit to it is a new build. Absent ⇒ the key is byte-identical to one computed before.
+    if extensions_project:
+        inputs["buildExtension"] = shelf_inputs(root, extensions_project, "build-extensions-project",
+                                                sdk=extensions_sdk, evaluation=msbuild_evaluation)
+        # 🚨 The extension's publish takes compiler bytes from OUTSIDE the repository too: the Razor
+        # extension stages its source generator from the installed .NET SDK. So the SDK the lane
+        # publishes it with is a key input — a new SDK is a new compiler, and a ledger keyed on the
+        # repository alone would reuse bundles (and recorded failures) built by the old one.
+        if not extensions_sdk:
+            raise ValueError("build-extensions-project is set but no --build-extensions-sdk was given — "
+                             "the SDK the extension is published with decides its generator bytes, so an "
+                             "unkeyed SDK lets the ledger reuse a bundle built by a different compiler")
+        inputs["buildExtension"]["sdk"] = extensions_sdk
     canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return {"key": sha256_bytes(canonical.encode("utf-8")), "inputs": inputs}
 
@@ -540,56 +603,147 @@ def self_test() -> int:
         check("build output (bin/) leaves the key unchanged",
               compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"] == k0)
 
-        print("the caller's module-libraries shelf:")
+        print("the caller's shelf / build extension, keyed from MSBuild's evaluation:")
         shelf = "tools/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj"
+        kit = "tools/Acme.ShelfKit/Acme.ShelfKit.csproj"
+        sdk = "10.0.200"
 
-        def with_shelf() -> dict:
-            return compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project=shelf)
+        def ev(extra: dict | None = None, evaluated_sdk: str = sdk) -> dict:
+            """The shape msbuild-evaluate.py writes: the shelf references ShelfKit; `extra` adds to the shelf's entry."""
+            entry = {"imports": [shelf], "declaredImports": [], "items": {}, "references": [kit]}
+            for k, v in (extra or {}).items():
+                entry[k] = v
+            return {"sdk": evaluated_sdk, "projects": {
+                shelf: entry, kit: {"imports": [kit], "declaredImports": [], "items": {}, "references": []}}}
 
-        s0 = with_shelf()
-        check("no shelf named: the inputs carry no shelf (keys recorded before it stay valid)",
-              "shelf" not in base["inputs"])
+        def key(shelf_p: str = "", ext_p: str = "", evaluation: dict | None = None, use_sdk: str = sdk) -> dict:
+            return compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project=shelf_p,
+                           extensions_project=ext_p, extensions_sdk=use_sdk,
+                           msbuild_evaluation=ev() if evaluation is None else evaluation)
+
+        s0 = key(shelf_p=shelf)
+        check("no shelf / extension named: the inputs carry neither (keys recorded before stay valid)",
+              "shelf" not in base["inputs"] and "buildExtension" not in base["inputs"])
         check("a named shelf changes the key", s0["key"] != k0)
-        check("the shelf closure is the shelf project and what it reaches",
+        check("the shelf closure is the shelf and what MSBuild says it references",
               sorted(s0["inputs"]["shelf"]["closure"]) == ["tools/Acme.ModuleLibraries", "tools/Acme.ShelfKit"],
               str(sorted(s0["inputs"]["shelf"]["closure"])))
-        for label, rel, text in (
-                ("the shelf project (a PackageReference added)",
-                 "tools/Acme.ModuleLibraries/Acme.ModuleLibraries.csproj",
-                 '<Project><ItemGroup><PackageReference Include="Radzen.Blazor" /></ItemGroup></Project>\n'),
-                ("a project the shelf reaches", "tools/Acme.ShelfKit/Code.cs", "// changed\n")):
+        for label, rel, text in (("the shelf project", shelf, _csproj(["../Acme.ShelfKit/Acme.ShelfKit.csproj"]) + "<!-- -->"),
+                                 ("a project the shelf references", "tools/Acme.ShelfKit/Code.cs", "// changed\n")):
             mutate, restore = edit(rel, text)
             mutate()
             try:
-                k = with_shelf()["key"]
+                k = key(shelf_p=shelf)["key"]
+                plain = compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"]
             finally:
                 restore()
             check(f"{label} changes the shelf key", k != s0["key"])
-            check(f"{label}: the build key WITHOUT a shelf ignores it",
-                  compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123")["key"] == k0)
-        pins = root / "tools" / "Directory.Packages.props"
-        pins.write_text("<Project><ItemGroup><PackageVersion Include=\"Radzen.Blazor\" Version=\"9.0.0\" /></ItemGroup></Project>\n",
-                        encoding="utf-8")
+            check(f"{label}: the key WITHOUT a shelf ignores it (negative control)", plain == k0)
+        for rel in ("tools/Directory.Packages.props", "tools/Directory.Packages.Plugins.props"):
+            f = root / rel
+            f.write_text("<Project />\n", encoding="utf-8")
+            try:
+                k = key(shelf_p=shelf)["key"]
+            finally:
+                f.unlink()
+            check(f"an ancestor {rel} appearing changes the shelf key (conservative extra)", k != s0["key"])
+        check("…and removing them restores it", key(shelf_p=shelf)["key"] == s0["key"])
+        check("the shelf is keyed with its publishing SDK", s0["inputs"]["shelf"].get("sdk") == sdk)
+        spelled = key(shelf_p="./tools/Acme.ModuleLibraries/../Acme.ModuleLibraries/Acme.ModuleLibraries.csproj")
+        check("a `./…/../…`-spelled shelf is normalized: the SAME key and project as the plain spelling",
+              spelled["key"] == s0["key"] and spelled["inputs"]["shelf"]["project"] == shelf,
+              str(spelled["inputs"]["shelf"]["project"]))
+        check("a different publishing SDK is a different shelf key",
+              key(shelf_p=shelf, use_sdk="10.0.201", evaluation=ev(evaluated_sdk="10.0.201"))["key"] != s0["key"])
+
+        e0 = key(ext_p=shelf)
+        check("a named extension changes the key", e0["key"] != k0)
+        check("the extension is keyed under its own name, never as the shelf",
+              "shelf" not in e0["inputs"] and e0["key"] != s0["key"])
+        check("shelf AND extension together key differently from either alone",
+              key(shelf_p=shelf, ext_p=shelf)["key"] not in (e0["key"], s0["key"]))
+        check("the publishing SDK is keyed with the extension", e0["inputs"]["buildExtension"].get("sdk") == sdk)
+
+        print("…what MSBuild evaluated is keyed, what it did not is not:")
+        build = root / "tools" / "build"
+        shared = root / "tools" / "Shared"
+        build.mkdir()
+        shared.mkdir()
         try:
-            k = with_shelf()["key"]
+            (build / "Ext.props").write_text("<Project />\n", encoding="utf-8")
+            (build / "NotImported.props").write_text("<Project />\n", encoding="utf-8")
+            (shared / "Emitter.cs").write_text("// v1\n", encoding="utf-8")
+            (shared / "notes.txt").write_text("not an item\n", encoding="utf-8")
+            evx = ev({"imports": [shelf, "tools/build/Ext.props"],
+                      "declaredImports": ["tools/build/Ext.props", "tools/build/Optional.props"],
+                      "items": {"Compile": ["tools/Shared/Emitter.cs"], "EmbeddedResource": ["tools/Shared/Gen/a.res"]}})
+            x0 = key(ext_p=shelf, evaluation=evx)
+            for label, rel, text in (
+                    ("an imported file (a DefineConstants change in Ext.props)", "tools/build/Ext.props",
+                     "<Project><PropertyGroup><DefineConstants>X</DefineConstants></PropertyGroup></Project>\n"),
+                    ("an evaluated Compile item outside the project", "tools/Shared/Emitter.cs", "// v2\n")):
+                mutate, restore = edit(rel, text)
+                mutate()
+                try:
+                    k = key(ext_p=shelf, evaluation=evx)["key"]
+                finally:
+                    restore()
+                check(f"{label} changes the key", k != x0["key"])
+            for label, rel in (("a DECLARED import that does not exist yet appearing", "tools/build/Optional.props"),
+                               ("an evaluated item path that does not exist yet appearing", "tools/Shared/Gen/a.res")):
+                f = root / rel
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text("x\n", encoding="utf-8")
+                try:
+                    k = key(ext_p=shelf, evaluation=evx)["key"]
+                finally:
+                    f.unlink()
+                check(f"{label} changes the key", k != x0["key"])
+            for label, rel in (("a props file MSBuild did not import", "tools/build/NotImported.props"),
+                               ("a file beside an item that is not an item", "tools/Shared/notes.txt")):
+                mutate, restore = edit(rel, "changed\n")
+                mutate()
+                try:
+                    k = key(ext_p=shelf, evaluation=evx)["key"]
+                finally:
+                    restore()
+                check(f"negative control — {label} leaves the key unchanged", k == x0["key"])
+            # The single-source property: every path the key hashes is one the scope selects on.
+            reach = _SCOPE.shelf_dirs(root, shelf, evx)
+            bx = x0["inputs"]["buildExtension"]
+            keyed = set(bx.get("linked", {})) | set(bx["imports"]) | {d + "/Code.cs" for d in bx["closure"]}
+            missed = sorted(f for f in keyed
+                            if not any(f == d or f.startswith(d + "/") or _SCOPE.msbuild_glob_matches(f, d) for d in reach))
+            check(f"every one of the {len(keyed)} paths the key hashes is in the scope's reach (no drift)",
+                  not missed, str(missed))
+            check("…and that set includes imports, declared imports and items (the check is not vacuous)",
+                  {"tools/build/Ext.props", "tools/build/Optional.props", "tools/Shared/Emitter.cs"} <= keyed,
+                  str(sorted(keyed)))
         finally:
-            pins.unlink()
-        check("a package pin the shelf inherits (tools/Directory.Packages.props) changes the shelf key",
-              k != s0["key"])
-        check("…and removing it restores the shelf key", with_shelf()["key"] == s0["key"])
-        split = root / "tools" / "Directory.Packages.Plugins.props"
-        split.write_text("<Project />\n", encoding="utf-8")
+            import shutil
+            shutil.rmtree(build)
+            shutil.rmtree(shared)
+
+        print("…and refusals (never keyed on a guess):")
+        for label, kwargs, needle in (
+                ("an extension without its publishing SDK", dict(ext_p=shelf, use_sdk=""), "--build-extensions-sdk"),
+                ("a named shelf that does not exist", dict(shelf_p="tools/Nope/Nope.csproj"), "does not exist"),
+                ("a named extension that does not exist", dict(ext_p="tools/Nope/Nope.csproj"), "build-extensions-project"),
+                ("a shelf MSBuild did not evaluate", dict(shelf_p=shelf, evaluation={"sdk": sdk, "projects": {}}),
+                 "not in the MSBuild evaluation"),
+                ("an evaluation by a different SDK than the one keyed", dict(shelf_p=shelf, evaluation=ev(evaluated_sdk="10.0.300")),
+                 "evaluated by SDK 10.0.300")):
+            try:
+                key(**kwargs)
+                check(f"{label} is refused", False, "no error raised")
+            except ValueError as exc:
+                check(f"{label} is refused, saying why", needle in str(exc), str(exc))
         try:
-            k = with_shelf()["key"]
-        finally:
-            split.unlink()
-        check("a split pin file the shelf's imports pull in (Directory.Packages.Plugins.props) changes the shelf key",
-              k != s0["key"])
-        try:
-            compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project="tools/Nope/Nope.csproj")
-            check("a named shelf that does not exist is refused", False, "no error raised")
+            compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project=shelf, extensions_sdk=sdk)
+            check("a named shelf with NO --msbuild-evaluation is refused", False, "no error raised")
         except ValueError as exc:
-            check("a named shelf that does not exist is refused", "does not exist" in str(exc))
+            check("a named shelf with NO --msbuild-evaluation is refused, saying why",
+                  "--msbuild-evaluation" in str(exc), str(exc))
 
         print("refusals:")
         (root / "Alpha" / "manifest.lock").unlink()
@@ -626,6 +780,14 @@ def main() -> int:
     p.add_argument("--recipe-version", default=RECIPE_VERSION, help=argparse.SUPPRESS)
     p.add_argument("--module-libraries-project", default="",
                    help="the caller's module-libraries shelf csproj (relative to --root); keyed when set")
+    p.add_argument("--build-extensions-project", default="",
+                   help="the caller's build-extension csproj (relative to --root); keyed when set")
+    p.add_argument("--build-extensions-sdk", default="",
+                   help="the exact .NET SDK version the extension and the shelf are published with; "
+                        "required with an extension, keyed with either")
+    p.add_argument("--msbuild-evaluation", default="",
+                   help="the JSON msbuild-evaluate.py writes: MSBuild's own imports and items for the shelf / "
+                        "extension; required when either is named")
     p.add_argument("--json", action="store_true", help="with --entry: print {key, inputs}")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     a = p.parse_args()
@@ -636,9 +798,11 @@ def main() -> int:
         print(f"::error::--root {a.root} is not a directory", file=sys.stderr)
         return 2
     try:
+        evaluation = _SCOPE.load_msbuild_evaluation(a.msbuild_evaluation) if a.msbuild_evaluation else None
         if a.entry:
             got = compute(root, json.loads(a.entry), a.tester_digest, a.platform_digest, a.platform_ref,
-                          a.recipe_version, a.module_libraries_project)
+                          a.recipe_version, a.module_libraries_project, a.build_extensions_project,
+                          a.build_extensions_sdk, evaluation)
             print(json.dumps(got, indent=2) if a.json else got["key"])
             return 0
         if a.modules:
@@ -649,7 +813,8 @@ def main() -> int:
             out = []
             for e in entries:
                 got = compute(root, e, a.tester_digest, a.platform_digest, a.platform_ref, a.recipe_version,
-                              a.module_libraries_project)
+                              a.module_libraries_project, a.build_extensions_project,
+                              a.build_extensions_sdk, evaluation)
                 out.append({"package": e.get("package"), "module": e.get("module"),
                             "key": got["key"], "inputs": got["inputs"]})
                 print(f"  {e.get('module')}: {got['key']} (moduleVersion {got['inputs']['moduleVersion']}, "
