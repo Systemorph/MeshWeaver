@@ -175,7 +175,7 @@ def project_references(root: Path, csproj: Path) -> list[Path]:
     return found
 
 
-def compile_includes(root: Path, csproj: Path) -> list[Path]:
+def compile_includes(root: Path, csproj: Path, sdk_keyed: bool = False) -> list[Path]:
     """In-repo files a project's explicit `<Compile Include>` items name, wildcards expanded.
 
     A project compiles more than its own directory: `<Compile Include="../Shared/Emitter.cs" />`
@@ -183,7 +183,7 @@ def compile_includes(root: Path, csproj: Path) -> list[Path]:
     matcher are node-repo-scope.py's (`linked_item_patterns`, `msbuild_glob_matches`)."""
     root = root.resolve()
     found: set[Path] = set()
-    for pattern in _SCOPE.linked_item_patterns(root, csproj):
+    for pattern in _SCOPE.linked_item_patterns(root, csproj, sdk_keyed=sdk_keyed):
         if not _SCOPE.is_msbuild_glob(pattern):
             f = root / pattern
             if f.is_file() and not any(part in SKIP_DIRS for part in Path(pattern).parts):
@@ -233,11 +233,13 @@ def closure_dirs(root: Path, entry_project: str) -> list[str]:
 SHELF_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
 
 
-def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project") -> dict:
+def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project", sdk: str = "") -> dict:
     """A caller-supplied compiler-input project as key inputs: its reference closure and its imports.
 
     Used for the module-libraries shelf and for a build extension (`build-extensions-project`):
-    both are published per run and change what every module compiles against."""
+    both are published per run and change what every module compiles against. `sdk` is the SDK the
+    lane publishes them with: a project that reads the installed SDK (a path under $(NetCoreRoot))
+    is keyed with it, and refused (node-repo-scope.SdkNotKeyed) when it is not given."""
     root = root.resolve()
     csproj = (root / project).resolve()
     if not csproj.is_file():
@@ -251,7 +253,7 @@ def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project
             continue
         seen.add(p)
         # ProjectReferences declared in the project OR anything it imports (node-repo-scope.py).
-        queue.extend(_SCOPE.project_reference_targets(root, p))
+        queue.extend(_SCOPE.project_reference_targets(root, p, sdk_keyed=bool(sdk)))
     dirs = sorted({p.parent.relative_to(root).as_posix() for p in seen})
 
     def inside_closure(rel: str) -> bool:
@@ -270,17 +272,18 @@ def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project
                         imports.setdefault(f.relative_to(root).as_posix(), file_hash(f))
             else:
                 imports.setdefault(cand, file_hash(root / cand) if (root / cand).is_file() else None)
-        for f in _SCOPE.msbuild_files(root, p):
-            rel = f.relative_to(root).as_posix()
+        # Every DECLARED import, present or not: an Exists()-guarded optional import appearing or
+        # vanishing is a different build, so its absence is recorded like the implicit ones.
+        for rel in _SCOPE.declared_imports(root, p, sdk_keyed=bool(sdk)):
             if rel not in imports and not inside_closure(rel):
-                imports[rel] = file_hash(f)
+                imports[rel] = file_hash(root / rel) if (root / rel).is_file() else None
     # Linked sources: a path item (`<Compile>`, `<EmbeddedResource>`, `<AdditionalFiles>`, …) naming
     # a file outside every closure directory is compiled or published with the project, so its bytes
     # are an input too. Recorded only when
     # present, so a project that links nothing keys exactly as it did before this input existed.
     linked: dict[str, str] = {}
     for p in sorted(seen):
-        for f in compile_includes(root, p):
+        for f in compile_includes(root, p, sdk_keyed=bool(sdk)):
             rel = f.relative_to(root).as_posix()
             if inside_closure(rel):
                 continue  # already inside a hashed closure directory
@@ -290,6 +293,9 @@ def shelf_inputs(root: Path, project: str, kind: str = "module-libraries-project
               "imports": dict(sorted(imports.items()))}
     if linked:
         result["linked"] = dict(sorted(linked.items()))
+    # Recorded only when a path actually reads the SDK, so a project that does not keys as before.
+    if any(_SCOPE.sdk_properties_used(root, p) for p in seen):
+        result["sdk"] = sdk
     return result
 
 
@@ -399,11 +405,12 @@ def compute(root: Path, entry: dict, tester_digest: str, platform_digest: str, p
     # Only when set: a caller without its own shelf keys exactly as before, so no recorded build
     # is thrown away by this input's arrival.
     if shelf_project:
-        inputs["shelf"] = shelf_inputs(root, shelf_project)
+        inputs["shelf"] = shelf_inputs(root, shelf_project, sdk=extensions_sdk)
     # The same for a build extension (e.g. the Razor one): it decides what the compiler GENERATES,
     # so an edit to it is a new build. Absent ⇒ the key is byte-identical to one computed before.
     if extensions_project:
-        inputs["buildExtension"] = shelf_inputs(root, extensions_project, "build-extensions-project")
+        inputs["buildExtension"] = shelf_inputs(root, extensions_project, "build-extensions-project",
+                                                sdk=extensions_sdk)
         # 🚨 The extension's publish takes compiler bytes from OUTSIDE the repository too: the Razor
         # extension stages its source generator from the installed .NET SDK. So the SDK the lane
         # publishes it with is a key input — a new SDK is a new compiler, and a ledger keyed on the
@@ -602,6 +609,39 @@ def self_test() -> int:
             split.unlink()
         check("a split pin file the shelf's imports pull in (Directory.Packages.Plugins.props) changes the shelf key",
               k != s0["key"])
+        # A shelf path under the installed SDK: the SDK becomes a shelf key input — refused without it.
+        shelf_csproj = root / shelf
+        shelf_old = shelf_csproj.read_text(encoding="utf-8")
+        check("negative control — a shelf that reads no SDK path carries no `sdk` input",
+              "sdk" not in s0["inputs"]["shelf"], str(s0["inputs"]["shelf"].get("sdk")))
+        shelf_csproj.write_text(shelf_old.replace(
+            "</ItemGroup>", '<Content Include="$(NetCoreRoot)sdk/gen.dll" /></ItemGroup>', 1), encoding="utf-8")
+        try:
+            try:
+                with_shelf()
+                check("a shelf reading the SDK, with no publishing SDK given, is refused", False, "no error raised")
+            except ValueError as exc:
+                check("a shelf reading the SDK, with no publishing SDK given, is refused (SdkNotKeyed), naming it",
+                      type(exc).__name__ == "SdkNotKeyed" and "$(NetCoreRoot)" in str(exc), str(exc))
+            k1 = compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project=shelf, extensions_sdk="10.0.200")
+            check("…given the SDK, the shelf is keyed with it", k1["inputs"]["shelf"].get("sdk") == "10.0.200")
+            k2 = compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project=shelf, extensions_sdk="10.0.201")
+            check("…and a different SDK is a different shelf key", k1["key"] != k2["key"])
+        finally:
+            shelf_csproj.write_text(shelf_old, encoding="utf-8")
+        # What the reading cannot model reaches the key as a refusal, never as a smaller key.
+        shelf_csproj.write_text(shelf_old.replace(
+            "<ItemGroup>", '<Import Project="../*.props" /><ItemGroup>', 1), encoding="utf-8")
+        try:
+            try:
+                with_shelf()
+                check("a wildcard <Import> in the shelf is refused by the key", False, "no error raised")
+            except ValueError as exc:
+                check("a wildcard <Import> in the shelf is refused by the key (UnmodeledMSBuild), naming it",
+                      type(exc).__name__ == "UnmodeledMSBuild" and "../*.props" in str(exc), str(exc))
+        finally:
+            shelf_csproj.write_text(shelf_old, encoding="utf-8")
+        check("…and restored, the shelf keys as before", with_shelf()["key"] == s0["key"])
         try:
             compute(root, _ENTRY, "sha256:t", "sha256:p", "abc123", shelf_project="tools/Nope/Nope.csproj")
             check("a named shelf that does not exist is refused", False, "no error raised")

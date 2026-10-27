@@ -1381,16 +1381,16 @@ jobs:
       # version resolved here without it would be one the publish never runs (it refuses the
       # mismatch) or, worse, a key naming an SDK the caller pinned away from.
       - uses: actions/setup-dotnet@v6
-        if: inputs.build-extensions-project != '' && hashFiles('repo/global.json') != ''
+        if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') != ''
         with:
           global-json-file: repo/global.json
       - uses: actions/setup-dotnet@v6
-        if: inputs.build-extensions-project != '' && hashFiles('repo/global.json') == ''
+        if: (inputs.build-extensions-project != '' || inputs.module-libraries-project != '') && hashFiles('repo/global.json') == ''
         with:
           dotnet-version: "10.0.x"
       - name: Resolve the SDK the build extension is published with
         id: ext-sdk
-        if: inputs.build-extensions-project != ''
+        if: inputs.build-extensions-project != '' || inputs.module-libraries-project != ''
         working-directory: repo
         run: |
           set -euo pipefail
@@ -1457,7 +1457,10 @@ jobs:
               # exactly as before and keeps its recorded builds.
               shelf_arg=()
               [ -z "${SHELF_PROJECT:-}" ] || shelf_arg=(--module-libraries-project "$SHELF_PROJECT")
-              [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_arg+=(--build-extensions-project "$EXTENSIONS_PROJECT" --build-extensions-sdk "${EXTENSIONS_SDK:-}")
+              [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_arg+=(--build-extensions-project "$EXTENSIONS_PROJECT")
+              # The publishing SDK keys the extension always, and the shelf when a shelf path reads
+              # the installed SDK — the key refuses either one without it.
+              [ -z "${EXTENSIONS_SDK:-}" ] || shelf_arg+=(--build-extensions-sdk "$EXTENSIONS_SDK")
               python3 build-logic/.github/scripts/module-build-key.py --root repo \
                 --modules "@$RUNNER_TEMP/selection.json" \
                 --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
@@ -2057,9 +2060,13 @@ jobs:
         if: inputs.module-libraries-project != ''
         env:
           PROJECT: ${{ inputs.module-libraries-project }}
+          KEYED_SDK: ${{ needs.select.outputs.build-extensions-sdk }}
         run: |
           set -euo pipefail
           [ -f "$PROJECT" ] || { echo "::error::module-libraries-project '$PROJECT' does not exist in this checkout — the caller named a shelf this repository does not have."; exit 1; }
+          # select keyed the SDK it resolved (a shelf path under the installed SDK is keyed by it).
+          sdk="$(dotnet --version)"
+          [ -n "$KEYED_SDK" ] && [ "$sdk" = "$KEYED_SDK" ] || { echo "::error::the shelf would be published with SDK '$sdk', but select keyed '${KEYED_SDK:-<none>}' — refusing to build with an SDK the ledger key does not name."; exit 1; }
           root="$RUNNER_TEMP/module-libs"
           rm -rf "$root"
           dotnet publish "$PROJECT" -c Release -o "$root" \

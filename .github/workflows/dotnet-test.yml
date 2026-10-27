@@ -3152,6 +3152,12 @@ jobs:
     - name: "The module-pack lane keys the extension SDK the caller's checkout resolves"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-pack-extension-sdk.py
+    # The MSBuild reading behind the extension/shelf key and scope REFUSES what it cannot model, and a
+    # rule written against fixtures alone once refused the one real extension. This positive control
+    # runs both scripts over the real tools/MeshWeaver.PluginTester.Razor, with a negative control.
+    - name: "The real Razor build extension parses and keys cleanly"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-build-extension-reading.py
 
     # The gate and publish-bake lanes compose every external module into /ext/modules/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
