@@ -31,8 +31,9 @@ public sealed record DependencySourceUnit(string Path, string Code);
 /// another NodeType's assembly; foreign code arrives as SOURCE (<c>shared=@Other/Source</c>, an
 /// <c>@@</c> include) and is compiled into this assembly, so the containing assembly of every such
 /// symbol is this one and only the declaring file can say whose it is. A
-/// <see cref="DependencyEdgeKinds.Module"/> edge is an installed module assembly the compilation
-/// USED (<see cref="Compilation.GetUsedAssemblyReferences"/>), carrying the module's MVID.</para>
+/// <see cref="DependencyEdgeKinds.Module"/> edge is an installed module assembly the emitted image
+/// carries an <c>AssemblyRef</c> to (<see cref="Compilation.GetUsedAssemblyReferences"/> only when no
+/// image is supplied), carrying the module's MVID.</para>
 /// </summary>
 public static class DependencyEdgeExtraction
 {
@@ -131,7 +132,13 @@ public static class DependencyEdgeExtraction
                 Kind = DependencyEdgeKinds.NodeType,
                 Evidence = [.. evidence.Take(MaxEvidence)],
             });
-        var modules = UsedModules(compilation, references.Modules, ct).ToList();
+        // Read off the EMITTED image when there is one — the same two metadata tables the platform
+        // and package edges come from. GetUsedAssemblyReferences re-binds and lowers every method
+        // body of the compilation a SECOND time (the emit already did it once), which made the
+        // module edges alone cost about two thirds of the emit on every NodeType compile.
+        var modules = (emittedImage is null
+            ? UsedModules(compilation, references.Modules, ct)
+            : EmittedModuleEdges(compilation, emittedImage, references.Modules)).ToList();
         edges.AddRange(modules);
         if (emittedImage is not null)
         {
@@ -322,10 +329,11 @@ public static class DependencyEdgeExtraction
                 // outside every attributed type, where it would read as the compiling type's own.
                 if (node is UsingDirectiveSyntax)
                     continue;
+                if (!selfTrees.Contains(tree)
+                    && OwnerOfLocation(node, owners) is { } locationOwners && !ContainsSelf(locationOwners, selfPath))
+                    continue;
                 var bound = BoundSymbols(node, model, ct).ToArray();
-                if (bound.Length == 0
-                    || !selfTrees.Contains(tree)
-                       && OwnerOfLocation(node, owners) is { } locationOwners && !ContainsSelf(locationOwners, selfPath))
+                if (bound.Length == 0)
                     continue;
                 foreach (var (typeName, typeOwners) in bound.SelectMany(symbol => OwnedSourceTypes(symbol, compilation, owners)))
                 {
@@ -529,9 +537,64 @@ public static class DependencyEdgeExtraction
         }
     }
 
-    /// <summary>The MODULE edges: every reference the compilation USED
-    /// (<see cref="Compilation.GetUsedAssemblyReferences"/>) that is an installed module, with the
-    /// module's MVID. Ordinal by assembly name — unchanged from before the other kinds existed.</summary>
+    /// <summary>The MODULE edges of an EMITTED assembly: every <c>AssemblyRef</c> the compiler wrote
+    /// that resolves (by full identity, <see cref="ReferencesFor"/>) to an installed module, with the
+    /// module's MVID. Ordinal by assembly name, exactly as <see cref="UsedModules"/> orders them.
+    /// <para>The compiler writes an <c>AssemblyRef</c> only for an assembly the IL or metadata
+    /// needs, so this is the BOUND set — the instrument the platform and package edges already use,
+    /// for the reason <see cref="EmittedReferenceEdges(CSharpCompilation, Stream, DependencyReferenceClasses)"/>
+    /// gives: <see cref="Compilation.GetUsedAssemblyReferences"/> also counts a module whose namespace
+    /// a <c>using</c> merely imports, and it pays for that answer with a second full binding pass
+    /// over every method body. What metadata cannot show — a constant inlined from a module, a
+    /// <c>nameof</c> — is not an edge, the same limit as a platform edge.</para></summary>
+    private static IEnumerable<DependencyEdge> EmittedModuleEdges(
+        CSharpCompilation compilation, Func<Stream> emittedImage, IReadOnlySet<MetadataReference> moduleReferences)
+    {
+        if (moduleReferences.Count == 0)
+            return [];
+        var identities = ReferenceIdentities(compilation);
+        var edges = new SortedDictionary<string, DependencyEdge>(StringComparer.Ordinal);
+        using var image = emittedImage();
+        using var pe = new System.Reflection.PortableExecutable.PEReader(image, System.Reflection.PortableExecutable.PEStreamOptions.LeaveOpen);
+        var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+        foreach (var handle in reader.AssemblyReferences)
+            foreach (var reference in ReferencesFor(EmittedAssemblyRefOf(reader, handle), identities))
+            {
+                if (!moduleReferences.Contains(reference)
+                    || compilation.GetAssemblyOrModuleSymbol(reference) is not IAssemblySymbol assembly)
+                    continue;
+                edges[assembly.Identity.Name] = new DependencyEdge
+                {
+                    Target = assembly.Identity.Name,
+                    Kind = DependencyEdgeKinds.Module,
+                    TargetBuildMvid = MvidOf(reference),
+                };
+            }
+        return edges.Values;
+    }
+
+    private static List<(AssemblyIdentity Identity, MetadataReference Reference)> ReferenceIdentities(
+        CSharpCompilation compilation) =>
+        compilation.References
+            .Select(r => (Reference: r, Assembly: compilation.GetAssemblyOrModuleSymbol(r) as IAssemblySymbol))
+            .Where(x => x.Assembly is not null)
+            .Select(x => (x.Assembly!.Identity, x.Reference))
+            .ToList();
+
+    private static EmittedAssemblyRef EmittedAssemblyRefOf(
+        System.Reflection.Metadata.MetadataReader reader, System.Reflection.Metadata.AssemblyReferenceHandle handle)
+    {
+        var assemblyRef = reader.GetAssemblyReference(handle);
+        return new EmittedAssemblyRef(
+            reader.GetString(assemblyRef.Name), assemblyRef.Version, reader.GetString(assemblyRef.Culture),
+            [.. reader.GetBlobBytes(assemblyRef.PublicKeyOrToken)],
+            (assemblyRef.Flags & System.Reflection.AssemblyFlags.PublicKey) != 0);
+    }
+
+    /// <summary>The MODULE edges when no emitted image is at hand: every reference the compilation
+    /// USED (<see cref="Compilation.GetUsedAssemblyReferences"/>) that is an installed module, with
+    /// the module's MVID. Ordinal by assembly name. Costs a full binding pass over every method body,
+    /// which is why every caller that has the emitted image takes <see cref="EmittedModuleEdges"/>.</summary>
     private static IEnumerable<DependencyEdge> UsedModules(
         CSharpCompilation compilation, IReadOnlySet<MetadataReference> moduleReferences, CancellationToken ct)
     {
@@ -584,11 +647,7 @@ public static class DependencyEdgeExtraction
         ArgumentNullException.ThrowIfNull(compilation);
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(references);
-        var identities = compilation.References
-            .Select(r => (Reference: r, Assembly: compilation.GetAssemblyOrModuleSymbol(r) as IAssemblySymbol))
-            .Where(x => x.Assembly is not null)
-            .Select(x => (x.Assembly!.Identity, x.Reference))
-            .ToList();
+        var identities = ReferenceIdentities(compilation);
 
         using var pe = new System.Reflection.PortableExecutable.PEReader(image, System.Reflection.PortableExecutable.PEStreamOptions.LeaveOpen);
         var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
@@ -609,12 +668,8 @@ public static class DependencyEdgeExtraction
         var packages = new SortedDictionary<string, ImmutableSortedSet<string>>(StringComparer.Ordinal);
         foreach (var handle in reader.AssemblyReferences)
         {
-            var assemblyRef = reader.GetAssemblyReference(handle);
-            var name = reader.GetString(assemblyRef.Name);
-            var emitted = new EmittedAssemblyRef(
-                name, assemblyRef.Version, reader.GetString(assemblyRef.Culture),
-                [.. reader.GetBlobBytes(assemblyRef.PublicKeyOrToken)],
-                (assemblyRef.Flags & System.Reflection.AssemblyFlags.PublicKey) != 0);
+            var emitted = EmittedAssemblyRefOf(reader, handle);
+            var name = emitted.Name;
             // By FULL identity first; ambiguous ⇒ every candidate (an extra edge, never a lost one).
             foreach (var reference in ReferencesFor(emitted, identities))
             {

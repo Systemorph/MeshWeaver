@@ -245,7 +245,7 @@ public class DependencyEdgeExtractionTest
                 moduleAssemblyPaths: [used, unused]).DependencyEdges!.GraphEdges();
 
             var module = edges.Edges.Should().ContainSingle(
-                "the unused module is referenced but never bound — GetUsedAssemblyReferences prunes it").Which;
+                "the unused module is referenced but never bound — the emitted image carries no AssemblyRef to it").Which;
             module.Kind.Should().Be(DependencyEdgeKinds.Module);
             module.Target.Should().Be("DepGraphProbeModuleUsed");
             module.TargetBuildMvid.Should().Be(MvidOf(used), "a module edge names the module build it compiled against");
@@ -256,6 +256,60 @@ public class DependencyEdgeExtractionTest
                 try { Directory.Delete(Path.GetDirectoryName(file)!, recursive: true); }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>
+    /// Module edges are read off the EMITTED image, not off
+    /// <see cref="Compilation.GetUsedAssemblyReferences"/>: that call re-binds every method body a
+    /// second time (it roughly doubled every NodeType compile) and counts a module the lookup merely
+    /// looked into — an imported extension that lost overload resolution. Negative control: the same
+    /// compilation without an image falls back to <see cref="Compilation.GetUsedAssemblyReferences"/>,
+    /// which DOES name that module — so the assertion discriminates.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AModuleOnlyImported_IsNoModuleEdge_FromTheEmittedImage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var module = EmitModule("DepGraphProbeImportedOnly", """
+            namespace DepGraphProbe.Imported;
+            /// <summary>An extension the probe's call LOOKS AT and does not bind.</summary>
+            public static class Extensions
+            {
+                /// <summary>A candidate for <c>"x".Count(…)</c> that loses to LINQ's predicate overload.</summary>
+                public static int Count(this string value) => value.Length;
+            }
+            """);
+        try
+        {
+            var references = CompileReferences.Default.Append(MetadataReference.CreateFromFile(module)).ToList();
+            var tree = CSharpSyntaxTree.ParseText("""
+                using System.Linq;
+                using DepGraphProbe.Imported;
+                public static class P { public static int S() => "x".Count(c => c == 'x'); }
+                """, cancellationToken: ct);
+            var compilation = CSharpCompilation.Create("ImportedOnlyProbe", [tree], references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var image = new MemoryStream();
+            compilation.Emit(image, cancellationToken: ct).Success.Should().BeTrue();
+            var classes = DependencyReferenceClasses.Of(references, [module], new Dictionary<string, string>());
+
+            var fromImage = DependencyEdgeExtraction.Extract(compilation, [tree], "App/P", [], null, classes,
+                () => new MemoryStream(image.ToArray(), writable: false), ct: ct);
+            var withoutImage = DependencyEdgeExtraction.Extract(compilation, [tree], "App/P", [], null, classes,
+                emittedImage: null, ct: ct);
+
+            fromImage.Edges.Should().NotContain(e => e.Kind == DependencyEdgeKinds.Module,
+                "nothing in the emitted code references the module — its extension was only a lookup candidate");
+            withoutImage.Edges.Should().Contain(
+                e => e.Kind == DependencyEdgeKinds.Module && e.Target == "DepGraphProbeImportedOnly",
+                "negative control: GetUsedAssemblyReferences counts the imported candidate, which is what the image avoids");
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(module)!, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
     }
 
