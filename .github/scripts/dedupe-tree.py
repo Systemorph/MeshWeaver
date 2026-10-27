@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -71,10 +72,6 @@ def unpack(root: Path, src: Path, only: list[str] | None) -> dict:
     prefixes = [p.rstrip("/") + "/" for p in only] if only else None
     matched = {p: 0 for p in (prefixes or [])}
     restored = linked = 0
-    # A hard link shares its blob's inode, so its mode is the blob's: the first link of a blob sets
-    # it, and an entry that wants a DIFFERENT mode gets a copy (else a chmod would strip the
-    # executable bit from every earlier link to the same bytes).
-    blob_mode: dict[str, int] = {}
     for e in manifest["entries"]:
         if prefixes is not None:
             hit = [p for p in prefixes if e["path"].startswith(p)]
@@ -93,7 +90,12 @@ def unpack(root: Path, src: Path, only: list[str] | None) -> dict:
         blob = store / e["sha256"]
         if not blob.is_file():
             sys.exit(f"✗ {e['path']} needs blob {e['sha256'][:12]}… which is not in the store — the artifact is incomplete; refusing to restore a tree with holes")
-        if blob_mode.setdefault(e["sha256"], e["mode"]) == e["mode"]:
+        # A hard link shares its blob's inode, so its mode IS the blob's. Link only when nothing else
+        # links the blob yet (this chmod then sets it) or the blob already has the wanted mode; any
+        # other entry gets a copy — a chmod through a shared inode would change every earlier link,
+        # including those an EARLIER unpack call made.
+        st = blob.stat()
+        if st.st_nlink == 1 or stat.S_IMODE(st.st_mode) == e["mode"]:
             try:
                 os.link(blob, dest)
                 linked += 1
@@ -149,6 +151,13 @@ def self_test() -> int:
               and (fresh / "src/B.Test/bin/Release/apphost.copy").stat().st_mode & 0o777 == 0o644)
         check("a symlink is a symlink", os.path.islink(fresh / "src/B.Test/bin/Release/link.dll")
               and os.readlink(fresh / "src/B.Test/bin/Release/link.dll") == "Shared.dll")
+        succ = Path(tmp) / "successive"
+        succ.mkdir()
+        unpack(succ, out, ["src/A.Test"])
+        unpack(succ, out, ["src/B.Test"])
+        check("successive slices keep each other's modes (an earlier call's links are not chmod-ed)",
+              (succ / "src/A.Test/bin/Release/A.Test").stat().st_mode & 0o777 == 0o755
+              and (succ / "src/B.Test/bin/Release/apphost.copy").stat().st_mode & 0o777 == 0o644)
         sliced = Path(tmp) / "sliced"
         sliced.mkdir()
         r = unpack(sliced, out, ["src/B.Test"])

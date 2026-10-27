@@ -5000,6 +5000,9 @@ jobs:
           retention-days: 1
           compression-level: 1
           if-no-files-found: error
+          # TRANSPORT, superseded the moment it is rebuilt: a re-run replaces the name, so a leg can
+          # never read the previous attempt's build (dotnet-test.yml's build-output rule, #4303).
+          overwrite: true
       - name: The graph built
         run: |
           [ "${BUILD_RC:-1}" = 0 ] || { echo "::error::the one-graph build of the module suites failed (exit ${BUILD_RC:-unset}; the compiler output is in the build step). The suites that built still run in their legs."; exit 1; }
@@ -5395,18 +5398,30 @@ jobs:
               echo "no test project at $tests — nothing to run"
               continue
             fi
+            # The restored obj/ points at the NuGet cache for the test SDK's props and targets
+            # (xunit, Microsoft.Testing.Platform), and --no-build implies --no-restore: a clean
+            # runner's cache has none of them. Restore (no compile) fills it — BOUNDED by the same
+            # suite window (at most 10 min), and the window is recomputed after it, so a slow restore
+            # can neither eat the evidence reserve nor run into the job cap with its log unkept.
+            left="$(suite_deadline)"
+            if [ "$left" -ge "$MIN_SUITE_SECONDS" ]; then
+              cap=$(( left - MIN_SUITE_SECONDS )); [ "$cap" -le 600 ] || cap=600; [ "$cap" -ge 30 ] || cap=30
+              set +e
+              timeout "${cap}s" dotnet restore "$tests" -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" > "$RUNNER_TEMP/restore-$MODULE.log" 2>&1
+              rrc=$?
+              set -e
+              if [ "$rrc" -ne 0 ]; then
+                tail -60 "$RUNNER_TEMP/restore-$MODULE.log"
+                restore_why="restoring the suite's packages failed (exit $rrc; the log's tail is above), so it could not run"
+                [ "$rrc" -eq 124 ] && restore_why="restoring the suite's packages did not finish within ${cap}s (exit 124), so it could not run"
+                MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "$restore_why"
+                continue
+              fi
+            fi
             left="$(suite_deadline)"
             if [ "$left" -lt "$MIN_SUITE_SECONDS" ]; then
               MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "the module's suite was NOT STARTED: the job's suite window was spent (${left}s left before the evidence reserve) — it was never run, which is not a pass"
               unstarted+=("$MODULE")
-              continue
-            fi
-            # The restored obj/ points at the NuGet cache for the test SDK's props and targets
-            # (xunit, Microsoft.Testing.Platform), and --no-build implies --no-restore: a clean
-            # runner's cache has none of them. Restore (no compile) fills it.
-            if ! dotnet restore "$tests" -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" > "$RUNNER_TEMP/restore-$MODULE.log" 2>&1; then
-              cat "$RUNNER_TEMP/restore-$MODULE.log"
-              MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "restoring the suite's packages failed (the log is above), so it could not run"
               continue
             fi
             set +e
@@ -5722,14 +5737,15 @@ jobs:
           LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT, tests build: $TESTS_BUILD_RESULT, tests lane: $TESTS_RESULT"
           # The legs run even after `tests-build` failed (so the suites that built still get a
-          # verdict), so green legs can coexist with a red build. The build's red is the lane's red.
+          # verdict), so green legs can coexist with a red build. The build's red is the lane's red,
+          # folded in BEFORE the line below, whose shape retry-known-transients.py parses.
           case "$TESTS_BUILD_RESULT" in
             failure|cancelled)
               echo "::error title=Module suites did not build::Module tests (build once) = $TESTS_BUILD_RESULT — read that job for the suites that did not compile"
               TESTS_RESULT=failure ;;
           esac
+          echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT, tests lane: $TESTS_RESULT"
           # 🚨 An INDEPENDENT recount, because the count and the selection come from the same
           # call and therefore agree by construction — they cannot catch a selection that is
           # simply wrong. This one has a second source: on a FULL scope the answer must be every
