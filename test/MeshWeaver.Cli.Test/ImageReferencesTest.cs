@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using MeshWeaver.Cli;
 using Xunit;
@@ -13,7 +14,7 @@ public class ImageReferencesTest
 {
     private static Func<string, string?> Env(params (string Key, string Value)[] values)
     {
-        var map = values.ToDictionary(v => v.Key, v => v.Value, StringComparer.Ordinal);
+        var map = values.ToImmutableDictionary(v => v.Key, v => v.Value, StringComparer.Ordinal);
         return key => map.TryGetValue(key, out var v) ? v : null;
     }
 

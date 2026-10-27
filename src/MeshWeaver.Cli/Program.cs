@@ -323,9 +323,9 @@ static string? PromptForToken()
     // never the tester's /app, so BuildPluginCommand's #3113 refusal still guards a caller that
     // hands it no platform image, and the identity check still refuses a mismatched pair.
     var imageOpt = new Option<string?>("--image")
-    { Description = "TESTER image, e.g. cr.meshweaver.cloud/mw-plugin-test:<tag>. Pulled and pinned by digest. It EXECUTES the build; it does not supply the reference set. Default: <registry>/mw-plugin-test:<tag> from $MEMEX_IMAGE_REGISTRY / $MEMEX_IMAGE_TAG or ~/.memex/config.json (imageRegistry / imageTag), else cr.meshweaver.cloud and latest." };
+    { Description = "TESTER image, e.g. cr.meshweaver.cloud/mw-plugin-test:<tag>. Pulled and pinned by digest. It EXECUTES the build; it does not supply the reference set. Default: the tester of the SAME set as --platform-image's default — <registry>/mw-plugin-test:<tag>, except that a <tag> of latest becomes <major>-latest (the tester tag CD moves on the armed set); registry, tag and major from $MEMEX_IMAGE_REGISTRY / $MEMEX_IMAGE_TAG / $MEMEX_IMAGE_MAJOR or ~/.memex/config.json (imageRegistry / imageTag / imageMajor), else cr.meshweaver.cloud, latest and 3 (so mw-plugin-test:3-latest)." };
     var platformImageOpt = new Option<string?>("--platform-image")
-    { Description = "PORTAL image, e.g. cr.meshweaver.cloud/memex-portal-ai@sha256:…. It supplies the reference set, the framework identity and the runtime; pin it from the SAME CD wave as --image. Default: <registry>/memex-portal-ai:<tag>, the same configured registry and tag as --image." };
+    { Description = "PORTAL image, e.g. cr.meshweaver.cloud/memex-portal-ai@sha256:…. It supplies the reference set, the framework identity and the runtime; pin it from the SAME CD wave as --image. Default: <registry>/memex-portal-ai:<tag> from $MEMEX_IMAGE_REGISTRY / $MEMEX_IMAGE_TAG or ~/.memex/config.json (imageRegistry / imageTag), else cr.meshweaver.cloud and latest; --image's default is the tester of the same set (latest pairs with mw-plugin-test:<major>-latest, $MEMEX_IMAGE_MAJOR / imageMajor, default 3)." };
     var bakeOpt = new Option<string?>("--bake-output")
     { Description = "Directory for the bake (bundles + framework-mvid.txt). Default: a temp dir." };
     var extOpt = new Option<string?>("--external-modules")
