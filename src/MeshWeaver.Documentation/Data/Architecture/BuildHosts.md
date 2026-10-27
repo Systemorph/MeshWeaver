@@ -647,7 +647,11 @@ would replace, and the claim is refused until that list is empty.
   lane, not red, because `build-executor.py` answers `actions` for it and every lane still runs on
   GitHub; nothing reads green that did not run.
 - **The host comes prepared.** No stage restores, stages or prepares anything per run: a stage reads
-  the host's installed platform (`$MeshWeaverRefs`, the floor), its tester and dotnet
+  the host's installed platform (`$MeshWeaverRefs`, the floor — the portal's `/app` as shipped, a
+  gate's `--app`; and `$MW_BUILD_COMPILE_REFS`, the same app plus its shared frameworks in CI's
+  `refs/` shape, prepared once per roll by the host's init container: a compile-check's `--refs`,
+  required by the node-repo profile, because the app alone carries no `System.Private.CoreLib` and
+  `compile-check.py` refuses it), its tester and dotnet
   (`$MW_BUILD_GATE_HOST`, `$MW_BUILD_PORTAL_DOTNET`) and, with `needs: ["nuget"]`, the host's prepared
   package cache (`NUGET_FALLBACK_PACKAGES`). Core's build names that cache as its ONLY `--source`, so a
   package the host was not prepared with is a red restore, never a download.

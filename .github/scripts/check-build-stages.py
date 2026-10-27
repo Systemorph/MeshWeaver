@@ -80,7 +80,8 @@ CORE_DOC_GATE_PARITY = [("core-tests.py doc-gate", "the doc and samples gates, t
 LANE_STAGE = {"node-repo-compile-check.yml": "compile-check", "node-repo-gate.yml": "gate"}
 NODE_COMPILE_CHECK_PARITY = [
     ("compile-check.py", "core's canonical compile-check, as node-repo-compile-check.yml runs it"),
-    ("${MeshWeaverRefs", "the host's installed platform as the reference set (the floor)"),
+    ("${MW_BUILD_COMPILE_REFS", "the host's PREPARED reference set — the installed platform's app plus its shared frameworks, "
+     "CI's refs/ shape (the floor); `${MeshWeaverRefs` alone is the app without System.Private.CoreLib, which compile-check.py refuses"),
     ("scripts/compile-check.allow", "the repository's compile-check debt (MW_ALLOW_FILE in the lane)"),
 ]
 NODE_GATE_PARITY = [
@@ -325,7 +326,7 @@ NODE_CI = """jobs:
 
 
 def _node_doc() -> dict:
-    cc = "python3 \"${MW_PLATFORM_SCRIPTS:?}/compile-check.py\" --refs \"${MeshWeaverRefs:?}\" # MW_ALLOW_FILE=scripts/compile-check.allow"
+    cc = "python3 \"${MW_PLATFORM_SCRIPTS:?}/compile-check.py\" --refs \"${MW_BUILD_COMPILE_REFS:?}\" # MW_ALLOW_FILE=scripts/compile-check.allow"
     gate = ("t=\"${MW_BUILD_GATE_HOST:?}\"; d=\"${MW_BUILD_PORTAL_DOTNET:?}\"; a=\"${MeshWeaverRefs:?}\"; \"$d\" \"$t\" compile . "
             "--allow plugin-gate.allow --output b; \"$d\" \"$t\" . --allow plugin-gate.allow --seed b | tee \"${MW_BUILD_ARTIFACTS:?}/gate-log/gate.log\"; "
             "python3 scripts/check-test-suites.py --gate-log x")
