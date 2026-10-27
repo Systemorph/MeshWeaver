@@ -235,7 +235,7 @@ should be checked the same way once, at ramp-up.
 
 ### A deployment path nobody listed: the test container (#6037)
 
-`MeshWeaver.Testcontainers` starts the portal image as a test substrate, and it is a deployment
+`MeshWeaver.Testcontainers` (MeshWeaver.Plugins `src/`) starts the portal image as a test substrate, and it is a deployment
 path too — one that stated `ConnectionStrings:memex` and **not** `Graph:Storage:Type`. Every
 container it ever started therefore served the wizard. Nothing noticed, because its wait was
 `200` on `/healthz`, and the wizard answers **every** probe path (`/healthz`, `/health`, `/alive`,

@@ -39,7 +39,7 @@ from. Measured from the model card and the HuggingFace API on 2026-09-10 — `ca
 Attribution-NonCommercial 4.0 license."*
 
 **This was already known in one corner of the repo, and the pointer was dangling.**
-`clients/voice-gateway/README.md` has carried a "Speech model license" section all along — *"**CC BY-NC 4.0
+`clients/voice-gateway/README.md` (now in MeshWeaver.Plugins) has carried a "Speech model license" section all along — *"**CC BY-NC 4.0
 — non-commercial use only**. A personal home assistant is non-commercial use; for anything commercial, point
 the whisper container at a permissively licensed model (see `deploy/whisper/README.md`)"* — but
 `deploy/whisper/README.md`, the page it sends you to, said nothing about a licence at all. So the constraint
@@ -191,7 +191,7 @@ Anything that names this asset is a consumer, and a move must visit all of them 
 | `deploy/whisper/helm/templates/deployment.yaml` | nothing at run time; the model is in the image |
 | `deploy/whisper/helm/values.yaml` | an `image.tag` whose image was built **with** a model |
 | `Systemorph/Memex` → `deployments/aks/<env>/whisper/helm/` | a **verbatim vendored copy** of the chart above — it drifts silently and must be mirrored |
-| `clients/voice-gateway/run-local.sh` + README | `gh release download` into `$WHISPER_MODEL` |
+| MeshWeaver.Plugins `clients/voice-gateway/run-local.sh` + README | `gh release download` into `$WHISPER_MODEL` |
 | `.gitignore` | keeps `deploy/whisper/models/` untracked (GitHub rejects any blob over 100 MB) |
 | MAUI `VoiceModelCatalog` | its own catalog URL — see [On-device voice](/Doc/Architecture/OnDeviceVoice) |
 
