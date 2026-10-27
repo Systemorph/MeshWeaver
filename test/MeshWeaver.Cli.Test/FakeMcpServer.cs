@@ -41,6 +41,12 @@ internal sealed class FakeMcpServer : IAsyncDisposable
 
     private int heldStreams;
 
+    /// <summary>Answer <c>tools/list</c> with a result that has no <c>tools</c> array.</summary>
+    public volatile bool MalformedToolsList;
+
+    /// <summary>Open an event stream for <c>tools/call</c> and never send the reply.</summary>
+    public volatile bool NeverAnswerCalls;
+
     /// <summary>How many replies were followed by a held-open stream.</summary>
     public int HeldStreams => Volatile.Read(ref heldStreams);
 
@@ -126,8 +132,16 @@ internal sealed class FakeMcpServer : IAsyncDisposable
                 };
                 break;
             case "tools/list":
-                reply["result"] = new JsonObject { ["tools"] = Tools.DeepClone() };
+                reply["result"] = MalformedToolsList ? new JsonObject() : new JsonObject { ["tools"] = Tools.DeepClone() };
                 break;
+            case "tools/call" when NeverAnswerCalls:
+                // An event stream that opens, carries an unrelated event, and never the reply.
+                context.Response.ContentType = "text/event-stream";
+                await context.Response.WriteAsync("event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n").ConfigureAwait(false);
+                await context.Response.Body.FlushAsync().ConfigureAwait(false);
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, context.RequestAborted).ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                return;
             case "tools/call":
                 var name = message["params"]!["name"]!.GetValue<string>();
                 if (!Tools.Any(t => t!["name"]!.GetValue<string>() == name))
@@ -143,11 +157,12 @@ internal sealed class FakeMcpServer : IAsyncDisposable
         if (ReplyAsEventStream)
         {
             context.Response.ContentType = "text/event-stream";
+            // Counted BEFORE the reply is written: a client that has the reply has the count too.
+            if (HoldEventStreamOpen) Interlocked.Increment(ref heldStreams);
             await context.Response.WriteAsync($"event: message\ndata: {reply.ToJsonString()}\n\n").ConfigureAwait(false);
             if (HoldEventStreamOpen)
             {
                 await context.Response.Body.FlushAsync().ConfigureAwait(false);
-                Interlocked.Increment(ref heldStreams);
                 try
                 {
                     // Not a wait for propagation: the hold IS the subject — the reply is out, the

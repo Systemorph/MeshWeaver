@@ -18,6 +18,7 @@ public sealed class DynamicMcpCommandsTest : IDisposable
 
     private readonly string configDir = Path.Combine(Path.GetTempPath(), "memex-cli-test-" + Guid.NewGuid().ToString("N"));
     private DateTimeOffset now = T0;
+    private TimeSpan requestTimeout = McpClient.DefaultRequestTimeout;
 
     public void Dispose()
     {
@@ -67,7 +68,7 @@ public sealed class DynamicMcpCommandsTest : IDisposable
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
-        var host = new CliHost(stdout, stderr, configDir, () => now);
+        var host = new CliHost(stdout, stderr, configDir, () => now) { McpRequestTimeout = requestTimeout };
         var all = new List<string> { "--base-url", server?.BaseUrl ?? baseUrl, "--token", FakeMcpServer.Token };
         all.AddRange(args);
         var exit = await CliApp.RunAsync(all.ToArray(), host, TestContext.Current.CancellationToken);
@@ -463,5 +464,89 @@ public sealed class DynamicMcpCommandsTest : IDisposable
         {
             if (File.Exists(cache)) File.SetUnixFileMode(cache, mode);
         }
+    }
+
+    // --- second review round --------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(new[] { "--refresh", "get", "X" }, true, "get")]
+    [InlineData(new[] { "--refresh=true", "get", "X" }, true, "get")]
+    [InlineData(new[] { "--refresh=false", "get", "X" }, false, "get")]
+    [InlineData(new[] { "--refresh", "false", "build", "--help" }, false, "build")]
+    [InlineData(new[] { "--refresh", "true", "get", "X" }, true, "get")]
+    [InlineData(new[] { "--refresh", "login" }, true, "login")]
+    [InlineData(new[] { "get", "X" }, false, "get")] // negative control: no flag, no refresh
+    public void The_pre_scan_reads_refresh_as_the_parser_does(string[] args, bool refresh, string command)
+    {
+        var scan = CliApp.Scan(args);
+        Assert.Equal(refresh, scan.Refresh);
+        Assert.Equal(command, scan.Command);
+    }
+
+    [Fact]
+    public async Task Refresh_with_an_explicit_value_reaches_discovery()
+    {
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        await Run(server, "", "get", "Doc/X");
+        await Run(server, "", "--refresh=true", "get", "Doc/X");
+        Assert.Equal(2, server.ListRequests);
+        await Run(server, "", "--refresh", "false", "get", "Doc/X");
+        Assert.Equal(2, server.ListRequests); // explicit false: the fresh cache is used
+        // `--refresh false` before a LOCAL command does not make `false` the command.
+        var (exit, _, stderr) = await Run(server, "", "--refresh", "false", "build", "--help");
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(2, server.ListRequests);
+    }
+
+    [Fact]
+    public async Task A_malformed_tools_list_never_replaces_a_good_cache()
+    {
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        Assert.Equal(0, (await Run(server, "", "get", "Doc/X")).Exit);
+
+        server.MalformedToolsList = true;
+        var (exit, _, stderr) = await Run(server, "", "--refresh", "get", "Doc/X");
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("no `tools` array", stderr);
+        Assert.Contains("using the catalog cached at", stderr);
+
+        // The cache still holds the good catalog: a later run without --refresh has every command.
+        Assert.Equal(0, (await Run(server, "", "mixed-bag", "Doc/X", "--mode", "fast")).Exit);
+
+        // Negative control: with no cache, a malformed list is a clear failure, not an empty catalog.
+        Directory.Delete(Path.Combine(configDir, "tools"), recursive: true);
+        var (noCache, _, noCacheErr) = await Run(server, "", "get", "Doc/X");
+        Assert.Equal(2, noCache);
+        Assert.Contains("no cached catalog exists", noCacheErr);
+    }
+
+    [Fact]
+    public async Task A_stream_that_never_carries_the_reply_ends_at_the_deadline()
+    {
+        await using var server = await FakeMcpServer.StartAsync(Catalog());
+        requestTimeout = TimeSpan.FromSeconds(2);
+
+        // Negative control: the same short deadline does not trip a call that is answered.
+        Assert.Equal(0, (await Run(server, "", "get", "Doc/X")).Exit);
+
+        server.NeverAnswerCalls = true;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var (exit, stdout, stderr) = await Run(server, "", "get", "Doc/X");
+        clock.Stop();
+        Assert.Equal(3, exit);
+        Assert.Equal("", stdout);
+        Assert.Contains("within 2s (tools/call)", stderr);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(15), $"took {clock.Elapsed}");
+    }
+
+    [Fact]
+    public void The_cache_identity_keeps_the_path_case_and_ignores_the_host_case()
+    {
+        Assert.NotEqual(
+            ToolCatalogCache.CachePath(configDir, "https://portal.example.com/TenantA"),
+            ToolCatalogCache.CachePath(configDir, "https://portal.example.com/tenanta"));
+        Assert.Equal(
+            ToolCatalogCache.CachePath(configDir, "HTTPS://Portal.Example.com/TenantA/"),
+            ToolCatalogCache.CachePath(configDir, "https://portal.example.com/TenantA"));
     }
 }

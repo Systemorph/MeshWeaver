@@ -22,17 +22,24 @@ public sealed class McpClient : IDisposable
     /// <summary>The protocol revision the client offers; the server's answer is what is sent afterwards.</summary>
     public const string OfferedProtocolVersion = "2025-06-18";
 
+    /// <summary>How long one request may take, from sending to the matching reply.</summary>
+    public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(10);
+
     private readonly HttpClient http;
     private readonly Uri endpoint;
+    private readonly TimeSpan timeout;
     private string? sessionId;
     private string? protocolVersion;
     private bool initialized;
     private int nextId;
 
-    public McpClient(MemexConfig config)
+    public McpClient(MemexConfig config, TimeSpan? requestTimeout = null)
     {
         endpoint = EndpointFor(config.BaseUrl);
-        http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        timeout = requestTimeout ?? DefaultRequestTimeout;
+        // 🚨 HttpClient.Timeout would cover only the wait for HEADERS once the body is streamed
+        // (ResponseHeadersRead). The deadline is a linked token carried through every read in Send.
+        http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", config.Token);
     }
 
@@ -50,9 +57,12 @@ public sealed class McpClient : IDisposable
             var parameters = new JsonObject();
             if (cursor is not null) parameters["cursor"] = cursor;
             var result = await Request("tools/list", parameters, ct);
-            if (result?["tools"] is JsonArray tools)
-                foreach (var tool in tools.ToArray())
-                    all.Add(tool?.DeepClone());
+            // A reply without a `tools` array is MALFORMED, never an empty catalog: an empty one would
+            // be cached over a good one and remove every mesh command.
+            if (result?["tools"] is not JsonArray tools)
+                throw new McpRpcException(0, "tools/list answered no `tools` array.");
+            foreach (var tool in tools.ToArray())
+                all.Add(tool?.DeepClone());
             cursor = result?["nextCursor"]?.GetValue<string>();
         }
         while (!string.IsNullOrEmpty(cursor));
@@ -101,6 +111,21 @@ public sealed class McpClient : IDisposable
     /// answering never holds the command until the HTTP timeout.
     /// </summary>
     private async Task<JsonObject?> Send(JsonObject message, int? id, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(timeout);
+        try
+        {
+            return await SendWithin(message, id, deadline.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"no reply from {endpoint} within {timeout.TotalSeconds:0.#}s ({message["method"]?.GetValue<string>()}).");
+        }
+    }
+
+    private async Task<JsonObject?> SendWithin(JsonObject message, int? id, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {

@@ -48,9 +48,13 @@ public static class ToolCatalogCache
     /// <summary>The cache file for one instance URL: readable host name plus a hash of the full URL.</summary>
     public static string CachePath(string cacheDirectory, string baseUrl)
     {
-        var normalized = baseUrl.TrimEnd('/').ToLowerInvariant();
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))[..16].ToLowerInvariant();
-        var host = Uri.TryCreate(normalized, UriKind.Absolute, out var uri) ? uri.Host : "instance";
+        // Scheme and host are case-insensitive (Uri lowercases both); the PATH is not, so
+        // `/TenantA` and `/tenanta` are two instances with two caches.
+        var trimmed = baseUrl.TrimEnd('/');
+        var parsed = Uri.TryCreate(trimmed, UriKind.Absolute, out var uri);
+        var identity = parsed ? uri!.GetLeftPart(UriPartial.Path).TrimEnd('/') : trimmed;
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..16].ToLowerInvariant();
+        var host = parsed ? uri!.Host : "instance";
         var safeHost = new string(host.Select(c => char.IsLetterOrDigit(c) || c is '.' or '-' ? c : '_').ToArray());
         return Path.Combine(cacheDirectory, "tools", $"{safeHost}-{hash}.json");
     }

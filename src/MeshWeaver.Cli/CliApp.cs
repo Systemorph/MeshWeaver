@@ -8,6 +8,9 @@ namespace MeshWeaver.Cli;
 /// <summary>Where the CLI writes, where it keeps its cache, and what time it is — the seams a test replaces.</summary>
 public sealed record CliHost(TextWriter Out, TextWriter Err, string ConfigDirectory, Func<DateTimeOffset> Now)
 {
+    /// <summary>The deadline for ONE MCP request — headers AND body, an event stream included.</summary>
+    public TimeSpan McpRequestTimeout { get; init; } = McpClient.DefaultRequestTimeout;
+
     /// <summary>The real console, <c>~/.memex</c>, the wall clock.</summary>
     public static CliHost FromConsole() =>
         new(Console.Out, Console.Error, Path.GetDirectoryName(MemexConfig.ConfigPath)!, () => DateTimeOffset.UtcNow);
@@ -49,7 +52,15 @@ public static class CliApp
                 if (head == "--base-url") baseUrl = value; else token = value;
                 continue;
             }
-            if (a == "--refresh") { refresh = true; continue; }
+            if (head == "--refresh")
+            {
+                // A bool option: `--refresh`, `--refresh=false`, `--refresh true`. An explicit value
+                // is CONSUMED here, so `--refresh false` never reads `false` as the command.
+                if (head != a) refresh = !bool.TryParse(a[(eq + 1)..], out var given) || given;
+                else if (i + 1 < args.Count && bool.TryParse(args[i + 1], out var next)) { refresh = next; i++; }
+                else refresh = true;
+                continue;
+            }
             if (HelpTokens.Contains(a)) { help = true; continue; }
             if (a == "--version") { version = true; continue; }
             if (command is null && !a.StartsWith('-')) command = a;
@@ -79,7 +90,7 @@ public static class CliApp
                 {
                     var config = MemexConfig.Resolve(scan.BaseUrl, scan.Token);
                     baseUrl = config.BaseUrl;
-                    client = new McpClient(config);
+                    client = new McpClient(config, host.McpRequestTimeout);
                 }
                 catch (InvalidOperationException ex)
                 {
