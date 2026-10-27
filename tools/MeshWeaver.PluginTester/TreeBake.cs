@@ -547,7 +547,8 @@ public static class TreeBake
                     // scheduler. NuGet restore is genuine network IO with no reactive surface;
                     // the runtime bridges it through the IoPool for the same reason.
                     resolveNuGet: BlockingNuGetResolution(nugetResolver),
-                    logger: options.Logger);
+                    logger: options.Logger,
+                    moduleAssemblyPaths: host.ModuleAssemblyPaths);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake
                 // writes `NodeTypeDefinition.CompiledSources`, which DiscoverSourceVersionSnapshot

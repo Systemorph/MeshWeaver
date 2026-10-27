@@ -5641,7 +5641,7 @@ internal static class NodeTypeCompilationHelpers
                         hub is { IsDisposing: false, RunLevel: <= MessageHubRunLevel.Started }
                             ? workspace.GetMeshNodeStream()
                             : SettleHub().GetMeshNodeStream(hubPath);
-                    IObservable<Unit> StampCompileState() =>
+                    IObservable<MeshNode> StampCompileState() =>
                     StampTarget().Update(curr =>
                     {
                         // 🚨 Tolerant read — NOT a bare `curr.Content is not NodeTypeDefinition`.
@@ -5755,12 +5755,28 @@ internal static class NodeTypeCompilationHelpers
                                 "Compile: failed to publish post-compile change-feed event for {HubPath}",
                                 hubPath);
                         }
-                    })
-                    .Select(_ => Unit.Default);
+                    });
 
+                    // The forward dependency edges this compile read (Doc/Architecture/DependencyGraph)
+                    // are written AFTER the stamp lands, from the settle hub — only for a build that
+                    // succeeded and actually ran Roslyn here (a cache hit carries none and leaves the
+                    // stored set, which names its own build, untouched).
+                    // Inside the same publication gate as the stamp: a process whose validation is
+                    // still forming, or failed, writes neither.
+                    // The set carries the record version the stamp landed at as its GENERATION, so
+                    // an older compile's edge write arriving late never replaces a newer build's
+                    // (DependencyEdgeSetWriter.Write).
+                    var dependencyEdges = ok ? outcome.Result?.DependencyEdges : null;
+                    IObservable<Unit> StampThenEdges() =>
+                        StampCompileState().SelectMany(saved => dependencyEdges is null
+                            ? Observable.Return(Unit.Default)
+                            : DependencyEdgeSetWriter.Write(
+                                    SettleHub(), dependencyEdges with { StampVersion = saved.Version }, logger)
+                                .IgnoreElements()
+                                .Concat(Observable.Return(Unit.Default)));
                     (admission is null
-                            ? Observable.Defer(StampCompileState)
-                            : admission.Publish($"NodeType compile stamp for {hubPath}", StampCompileState))
+                            ? Observable.Defer(StampThenEdges)
+                            : admission.Publish($"NodeType compile stamp for {hubPath}", StampThenEdges))
                         .Subscribe(
                             _ => { },
                             ex => logger?.LogWarning(ex,

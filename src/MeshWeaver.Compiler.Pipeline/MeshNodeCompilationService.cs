@@ -226,7 +226,15 @@ internal class MeshNodeCompilationService(
     // the boot generation for the life of the process, and a NodeType written against the new
     // member would fail exactly as the 2026-10-05 incident did (CS0117). Unchanged module set ⇒ the
     // same instance, so the steady state costs one MVID read per module.
-    private IReadOnlyList<MetadataReference> References
+    private IReadOnlyList<MetadataReference> References => ReferenceSnapshot.References;
+
+    /// <summary>
+    /// The reference set AND the module files it was composed from, read from ONE enumeration of
+    /// the installed modules. A compile takes this once and carries it to the emit, so the
+    /// dependency-edge extraction tells modules apart by the very files Roslyn was handed — a live
+    /// module swap (file N → N+1) during the compile cannot make the used module N look foreign.
+    /// </summary>
+    private ModuleReferenceSet ReferenceSnapshot
     {
         get
         {
@@ -234,16 +242,21 @@ internal class MeshNodeCompilationService(
             var key = string.Join(";", modules.Select(m => m.Mvid.ToString("N")).OrderBy(x => x, StringComparer.Ordinal));
             var cached = meshReferences;
             if (cached is not null && string.Equals(cached.Key, key, StringComparison.Ordinal))
-                return cached.References;
-            var composed = new ModuleReferenceSet(key, CompileReferences.ComposeWithModules(modules));
+                return cached;
+            var composed = new ModuleReferenceSet(
+                key, CompileReferences.ComposeWithModules(modules), [.. modules.Select(m => m.Assembly.Location)]);
             Interlocked.Exchange(ref meshReferences, composed);
-            return composed.References;
+            return composed;
         }
     }
 
     private ModuleReferenceSet? meshReferences;
 
-    private sealed record ModuleReferenceSet(string Key, IReadOnlyList<MetadataReference> References);
+    /// <param name="Key">The installed modules' MVIDs, sorted — what decides reuse.</param>
+    /// <param name="References">The composed metadata references.</param>
+    /// <param name="ModuleLocations">The installed module files those references were composed from.</param>
+    private sealed record ModuleReferenceSet(
+        string Key, IReadOnlyList<MetadataReference> References, ImmutableArray<string> ModuleLocations);
 
     /// <summary>
     /// Resolves every <c>@@</c> include via the toolchain's shaping
@@ -251,9 +264,9 @@ internal class MeshNodeCompilationService(
     /// the System-impersonated, bounded include read (<see cref="ReadIncludeNode"/>).
     /// </summary>
     private IObservable<string> ResolveCodeIncludes(
-        string code, HashSet<string> resolved, string? anchorPath)
+        string code, HashSet<string> resolved, string? anchorPath, IDictionary<string, string>? closure = null)
         => NodeCompileShaping.ResolveCodeIncludes(
-            code, resolved, anchorPath, ReadIncludeNode, logger);
+            code, resolved, anchorPath, ReadIncludeNode, logger, closure);
 
     /// <summary>
     /// 🚨 EVERY compile-path node read runs under the well-known System identity — the same rule
@@ -343,8 +356,10 @@ internal class MeshNodeCompilationService(
     /// <param name="Warnings">Diagnostics the compile produced — carried up so they reach the
     /// compile ACTIVITY. The emit deliberately does not log them itself (the log-once contract),
     /// so this is how they travel to the one funnel that reports.</param>
+    /// <param name="Edges">The forward dependency edges Roslyn read off this compile
+    /// (<see cref="DependencyEdgeExtraction"/>), without build identity — the load stamps it.</param>
     private readonly record struct CompileEmit(
-        string? Path, string? InputDigest, IReadOnlyList<string> Warnings);
+        string? Path, string? InputDigest, IReadOnlyList<string> Warnings, DependencyEdgeSet? Edges = null);
 
     /// <summary>
     /// One compile attempt's outcome: the assembly path (null on failure), the CONTENT KEY digest
@@ -361,8 +376,21 @@ internal class MeshNodeCompilationService(
     /// bundles — carry the reserved <c>!input</c> guard or not depending on whether this machine's
     /// cache was warm. Null now means only "this attempt produced no assembly".</para>
     /// </summary>
+    /// <summary>What the dependency-edge extraction needs beyond the compilation: the matched Code
+    /// files with the text Roslyn saw for each, and the include closure.</summary>
+    /// <param name="Roots">The matched Code files, in concatenation order.</param>
+    /// <param name="Includes">The <c>@@</c> include closure: included path → its text.</param>
+    private sealed record DependencyInputs(
+        ImmutableArray<DependencySourceUnit> Roots,
+        ImmutableSortedDictionary<string, string> Includes);
+
     private readonly record struct CompileAttempt(
-        string? Path, string? InputDigest, ActivityLog Log, IReadOnlyList<MeshNode> Sources);
+        string? Path, string? InputDigest, ActivityLog Log, IReadOnlyList<MeshNode> Sources)
+    {
+        /// <summary>The forward dependency edges a FRESH emit read (null on a cache hit or a
+        /// failure — no compilation ran here to read them from).</summary>
+        public DependencyEdgeSet? Edges { get; init; }
+    }
 
     /// <summary>
     /// Companion to <see cref="GetAssemblyLocation"/> that also surfaces the
@@ -488,7 +516,7 @@ internal class MeshNodeCompilationService(
 
                     IObservable<CompileAttempt> CompileSnapshot() =>
                         CompileCore(node, ntDef, selfPath, log, sources)
-                            .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources));
+                            .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources) { Edges = t.Edges });
 
                     if (cacheService.IsDiskCacheEnabled)
                     {
@@ -963,7 +991,7 @@ internal class MeshNodeCompilationService(
     /// no <c>await</c> on hub round-trips — both are the canonical deadlock
     /// patterns documented in <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
-    private IObservable<(string? Path, string? InputDigest, ActivityLog Log)> CompileCore(
+    private IObservable<(string? Path, string? InputDigest, ActivityLog Log, DependencyEdgeSet? Edges)> CompileCore(
         MeshNode node, NodeTypeDefinition? ntDef, string selfPath, ActivityLog log,
         IReadOnlyList<MeshNode>? sourcesOverride = null)
     {
@@ -973,6 +1001,10 @@ internal class MeshNodeCompilationService(
             .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
             .ToList();
         var matchedCodePaths = new List<string>();
+        // The @@ include closure the substitution actually consumed (included path → its text),
+        // collected BY the one include walk (NodeCompileShaping.ResolveCodeIncludes) — the
+        // dependency-edge extraction attributes an included type to the INCLUDED node's owner.
+        var includeClosure = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // Source discovery: on the compile path this ALWAYS receives the snapshot
         // GetAssemblyLocationWithLog already took (one snapshot per compile — see its
@@ -1014,7 +1046,7 @@ internal class MeshNodeCompilationService(
             .SelectMany(codeFiles =>
                 ValidateCellSurfaceSingleHome(node.Path, selfPath, matchedCodePaths)
                     .Select(_ => codeFiles))
-            .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
+            .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path, includeClosure))
             .SelectMany(codeFiles =>
             {
                 // Final stage: combine + compile. The Roslyn `Compile` call itself is
@@ -1110,7 +1142,11 @@ internal class MeshNodeCompilationService(
                 // Catch below leaves it alone) to RunCompile's terminal Error write.
                 return CpuLaneBound.Bound(
                         (ct, laneWait) => OnThreadPool(() =>
-                            CompileAsync(codeFile, configuration, contentCollections, node, laneWait, ct)),
+                            CompileAsync(codeFile, configuration, contentCollections, node, laneWait, ct,
+                                new DependencyInputs(
+                                    [.. matchedCodePaths.Select((path, i) =>
+                                        new DependencySourceUnit(path, codeFiles[i].Code ?? string.Empty))],
+                                    includeClosure.ToImmutableSortedDictionary(StringComparer.Ordinal)))),
                         _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path,
                         _cpuLane is IoPool lanePool ? () => lanePool.AdmissionsCompleted : null)
                     .Select(emit =>
@@ -1157,7 +1193,8 @@ internal class MeshNodeCompilationService(
                                 "activity.compile.assemblyInMemory", ("path", actualPath));
                         }
                         return (finalPath, emit.InputDigest,
-                            finalLog.FinishByOutcome((int)hub.Version));
+                            finalLog.FinishByOutcome((int)hub.Version),
+                            finalPath is null ? null : emit.Edges);
                     })
                     // 🚨 THE SINGLE REPORTER of a compile failure. Every CompilationException —
                     // Roslyn diagnostics from the disk emit (EmitCompilationToDirectory) or the
@@ -1168,7 +1205,7 @@ internal class MeshNodeCompilationService(
                     // same diagnostics too, which double-counted every failure in prod and put a
                     // context-free record first — do not re-add a log next to a `throw new
                     // CompilationException`.
-                    .Catch<(string?, string?, ActivityLog), CompilationException>(ex =>
+                    .Catch<(string?, string?, ActivityLog, DependencyEdgeSet?), CompilationException>(ex =>
                     {
                         var diag = CompileDiagnostics.BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
                         // 🚨 ORDER BY ACTIONABILITY — issue #1840. This report leads with the
@@ -1203,8 +1240,8 @@ internal class MeshNodeCompilationService(
                                 "activity.compile.failedWithDiscovery",
                                 ("detail", ex.Message), ("report", diag))
                             .Finish((int)hub.Version, ActivityStatus.Failed);
-                        return Observable.Return<(string?, string?, ActivityLog)>(
-                            (null, null, failedLog));
+                        return Observable.Return<(string?, string?, ActivityLog, DependencyEdgeSet?)>(
+                            (null, null, failedLog, null));
                     });
             });
     }
@@ -1373,7 +1410,8 @@ internal class MeshNodeCompilationService(
                             node, assemblyLocation, log, snapshot, attempt.InputDigest,
                             // This IS the publish: the emit that produced assemblyLocation just
                             // finished, so its context supersedes the older generations (#4013).
-                            publishesTheBuild: true)),
+                            publishesTheBuild: true,
+                            dependencyEdges: attempt.Edges)),
                     _cacheOptions.AssemblyLoadTimeout, "assembly-load", node.Path))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
                 // finished it, but CompileResultFromAssembly's downstream steps
@@ -1763,7 +1801,8 @@ internal class MeshNodeCompilationService(
         MeshNode node, string assemblyLocation, ActivityLog log,
         ImmutableDictionary<string, long> compiledSources,
         string? generatedInputDigest = null,
-        bool publishesTheBuild = false)
+        bool publishesTheBuild = false,
+        DependencyEdgeSet? dependencyEdges = null)
     {
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -1890,7 +1929,20 @@ internal class MeshNodeCompilationService(
 
                 return new NodeCompilationResult(
                     assemblyLocation, configurations, log, compiledSources,
-                    CompiledDependencies: dependencies);
+                    CompiledDependencies: dependencies)
+                {
+                    // The edges are stamped with the identity of the bytes they were read from —
+                    // the value the settle writes as LatestAssemblyMvid (ServedBuildIdentity, read
+                    // from the file), or the loaded image's own MVID for an in-memory build.
+                    DependencyEdges = dependencyEdges is null
+                        ? null
+                        : dependencyEdges with
+                        {
+                            BuildMvid = ServedBuildIdentity.OfFile(assemblyLocation)
+                                ?? assembly.ManifestModule.ModuleVersionId.ToString("N"),
+                            InputDigest = generatedInputDigest,
+                        },
+                };
             }
             catch (Exception ex)
             {
@@ -1964,7 +2016,7 @@ internal class MeshNodeCompilationService(
     /// compile would produce a content key that never matches, i.e. a permanent rebuild.</para>
     /// </summary>
     private IObservable<List<CodeConfiguration>> ResolveIncludesForCodeFiles(
-        List<CodeConfiguration> codeFiles, string anchorPath)
+        List<CodeConfiguration> codeFiles, string anchorPath, IDictionary<string, string>? closure = null)
     {
         if (codeFiles.Count == 0)
             return Observable.Return(codeFiles);
@@ -1975,7 +2027,7 @@ internal class MeshNodeCompilationService(
         {
             var cf = codeFile;
             includeChain = includeChain.SelectMany(acc =>
-                ResolveCodeIncludes(cf.Code!, new HashSet<string>(), anchorPath)
+                ResolveCodeIncludes(cf.Code!, new HashSet<string>(), anchorPath, closure)
                     .Select(resolvedCode =>
                     {
                         acc.Add(resolvedCode != cf.Code ? cf with { Code = resolvedCode } : cf);
@@ -2158,7 +2210,8 @@ internal class MeshNodeCompilationService(
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
         MeshNode node,
         CpuLaneWait laneWait,
-        CancellationToken ct)
+        CancellationToken ct,
+        DependencyInputs dependencyInputs)
     {
         var nodeName = cacheService.SanitizeNodeName(node.Path);
         // Single-flight: GetOrAdd with Lazy<T> ensures the factory runs at
@@ -2168,7 +2221,7 @@ internal class MeshNodeCompilationService(
         // compile instead of returning the stale completed task.
         var lazy = _inflightCompiles.GetOrAdd(nodeName, n =>
             new Lazy<InflightCompile>(() => new InflightCompile(
-                RunCompileAndEvict(codeFile, hubConfiguration, contentCollections, node, n, laneWait, ct),
+                RunCompileAndEvict(codeFile, hubConfiguration, contentCollections, node, n, laneWait, ct, dependencyInputs),
                 laneWait)));
         var inflight = lazy.Value;
         // A caller that joined a compile already in flight times its bound against the LEADER's
@@ -2185,11 +2238,12 @@ internal class MeshNodeCompilationService(
         MeshNode node,
         string nodeName,
         CpuLaneWait laneWait,
-        CancellationToken ct)
+        CancellationToken ct,
+        DependencyInputs dependencyInputs)
     {
         try
         {
-            return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, laneWait, ct);
+            return await CompileAsyncCore(codeFile, hubConfiguration, contentCollections, node, nodeName, laneWait, ct, dependencyInputs);
         }
         finally
         {
@@ -2204,7 +2258,8 @@ internal class MeshNodeCompilationService(
         MeshNode node,
         string nodeName,
         CpuLaneWait laneWait,
-        CancellationToken ct)
+        CancellationToken ct,
+        DependencyInputs dependencyInputs)
     {
         if (cacheService.IsDiskCacheEnabled)
         {
@@ -2218,7 +2273,10 @@ internal class MeshNodeCompilationService(
         // re-evaluation lane shares so a regenerated content key cannot drift from a stamped one.
         var (source, nugetRefs) = PrepareGeneratedSource(
             node, codeFile, hubConfiguration, contentCollections);
-        IEnumerable<MetadataReference> references = References;
+        // ONE snapshot: the references Roslyn compiles against and the module files the edge
+        // extraction names as modules come from the same enumeration of the installed modules.
+        var referenceSnapshot = ReferenceSnapshot;
+        IEnumerable<MetadataReference> references = referenceSnapshot.References;
         IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
         {
@@ -2228,7 +2286,7 @@ internal class MeshNodeCompilationService(
             // Microsoft.Extensions.DependencyInjection.Abstractions, …) is not referenced a second
             // time — CompileReferences.WithPackageAssemblies. The generator candidates and the
             // content key keep the full resolution, exactly as the bake does.
-            references = CompileReferences.WithPackageAssemblies(References, resolved.AssemblyPaths);
+            references = CompileReferences.WithPackageAssemblies(referenceSnapshot.References, resolved.AssemblyPaths);
             nugetAssemblyPaths = resolved.AssemblyPaths;
             cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);
         }
@@ -2265,7 +2323,8 @@ internal class MeshNodeCompilationService(
                 // The lane's token (pool drain) AND the compile's own bound (BoundLeg) both stop Roslyn.
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, laneCt);
                 return EmitCompiled(
-                    node, nodeName, source, references, nugetAssemblyPaths, sourcePath, linked.Token);
+                    node, nodeName, source, references, nugetAssemblyPaths, sourcePath, dependencyInputs,
+                    referenceSnapshot.ModuleLocations, linked.Token);
             })
             .Await(ct)
             .ConfigureAwait(false);
@@ -2282,6 +2341,8 @@ internal class MeshNodeCompilationService(
         IEnumerable<MetadataReference> references,
         IReadOnlyList<string> nugetAssemblyPaths,
         string sourcePath,
+        DependencyInputs dependencyInputs,
+        ImmutableArray<string> moduleLocations,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -2359,6 +2420,46 @@ internal class MeshNodeCompilationService(
         }
 
         logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
-        return new CompileEmit(actualPath, generatedInputDigest, warnings);
+        return new CompileEmit(actualPath, generatedInputDigest, warnings,
+            ExtractDependencyEdges(compilation, authored.SyntaxTrees, node.Path, references, moduleLocations, dependencyInputs, ct));
+    }
+
+    /// <summary>
+    /// The FORWARD dependency edges of the compile that just emitted (<c>Doc/Architecture/DependencyGraph</c>),
+    /// read off the same compilation on the same CPU-lane thread. The emit has already succeeded,
+    /// so a failure HERE must not fail the compile: it is logged at Error, naming the type, and
+    /// the build carries no edge set — which a reader sees as "not extracted for this build",
+    /// never as "depends on nothing".
+    /// </summary>
+    private DependencyEdgeSet? ExtractDependencyEdges(
+        CSharpCompilation compilation,
+        IEnumerable<SyntaxTree> authoredTrees,
+        string nodePath,
+        IEnumerable<MetadataReference> references,
+        ImmutableArray<string> moduleLocations,
+        DependencyInputs inputs,
+        CancellationToken ct)
+    {
+        try
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            // The module files of the SAME snapshot the references were composed from — never a
+            // re-read of the live installed set, which a module swap during the compile has moved.
+            var modules = DependencyEdgeExtraction.ModuleReferences(references, moduleLocations);
+            var edges = DependencyEdgeExtraction.Extract(
+                compilation, authoredTrees, nodePath, inputs.Roots, inputs.Includes, modules, ct);
+            logger.LogDebug(
+                "Dependency edges for {NodePath}: {EdgeCount} edge(s), {Included} included without use, in {Ms}ms",
+                nodePath, edges.Edges.Count, edges.IncludedWithoutUse.Count, clock.ElapsedMilliseconds);
+            return edges;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex,
+                "Dependency-edge extraction for {NodePath} failed after a successful emit — the build "
+                + "carries NO edge set, so readers of the dependency graph see this type as not "
+                + "extracted for this build", nodePath);
+            return null;
+        }
     }
 }
