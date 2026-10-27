@@ -70,6 +70,42 @@ public class ModuleLibrariesShelfTest : IDisposable
                 "the transitive shelf closure rides; the image-supplied dependency does not");
     }
 
+    /// <summary>
+    /// The flat shelf's files carry no package in their path, so the dependency graph names a
+    /// Package edge by the shelf's deps.json ownership (<c>Doc/Architecture/DependencyGraph</c>): a
+    /// package whose assembly is named differently from it (<c>Acme.Bundle</c> shipping
+    /// <c>Acme.Widget.dll</c>) and a transitive keep their OWN package ids; an assembly no package
+    /// claims has no owner rather than a guessed one.
+    /// </summary>
+    [Fact]
+    public void OwnerOf_IsTheDepsRecordedPackage_NotTheFileName()
+    {
+        var root = Path.Combine(_root, "bundle");
+        Directory.CreateDirectory(root);
+        foreach (var name in new[] { "Acme.Widget", "Acme.Transitive" })
+            File.WriteAllBytes(Path.Combine(root, name + ".dll"), [0x4D, 0x5A]);
+        File.WriteAllText(Path.Combine(root, "MeshWeaver.ModuleLibraries.deps.json"), """
+            {
+              "targets": {
+                "net10.0": {
+                  "Acme.Bundle/1.0.0": {
+                    "runtime": { "lib/net10.0/Acme.Widget.dll": {} },
+                    "dependencies": { "Acme.Transitive": "1.0.0" }
+                  },
+                  "Acme.Transitive/1.0.0": {
+                    "runtime": { "lib/net10.0/Acme.Transitive.dll": {} }
+                  }
+                }
+              }
+            }
+            """);
+        var shelf = ModuleLibrariesShelf.Read(root);
+
+        shelf.OwnerOf("Acme.Widget").Should().Be("Acme.Bundle", "the package, not the file's simple name");
+        shelf.OwnerOf("Acme.Transitive").Should().Be("Acme.Transitive", "a transitive keeps its own owner");
+        shelf.OwnerOf("Acme.Unclaimed").Should().BeNull("no package claims it — never a guess");
+    }
+
     [Fact]
     public void APackageTheShelfDoesNotCarryResolvesToNull_neverToAGuess()
         => ModuleLibrariesShelf.Read(Shelf())

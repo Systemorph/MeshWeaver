@@ -61,7 +61,7 @@ namespace MeshWeaver.Documentation.Test;
 public class SubscribeErrorArmRatchetGuard
 {
     /// <summary>Production only. A test may subscribe bare — its failure IS the report.</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex"];
+    private static readonly string[] ScannedRoots = ["src"];
 
     /// <summary>
     /// 🚨 <b>This count UNDERCOUNTS, deliberately, and the number must not be read as complete.</b>

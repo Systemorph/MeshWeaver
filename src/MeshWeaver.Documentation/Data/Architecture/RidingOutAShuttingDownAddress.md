@@ -195,6 +195,16 @@ If you write code that must survive a `ShuttingDown` answer:
    entirely. Both give-up paths log one Warning naming the owner, the activation and which bound was
    hit, and END the stream (see [A give-up ends the stream](#a-give-up-ends-the-stream-6602)). Rule 1
    is about ONE `ShuttingDown` answer; a spent budget is a different fact.
+6. **A re-ask can run NESTED inside the ask it replaces — install its slot before you subscribe.**
+   `hub.Observe` posts at call time and answers through an `AsyncSubject`, so a NACK dispatched before
+   the `Subscribe` call returns is replayed SYNCHRONOUSLY into the error arm, which re-asks right
+   there. Writing `slot.Disposable = Observe(…).Subscribe(…)` then completes the OUTER assignment
+   after the nested re-ask installed itself, and a `SerialDisposable` disposes the re-ask: its
+   response subject is removed, the owner's answer is dropped as "No subject found for response",
+   and the read spends its whole budget reporting "still recycling after 1 probe(s)" (#7395). Give
+   each attempt its own `SingleAssignmentDisposable`, put it in the serial slot FIRST, then subscribe
+   into it — a late assignment into a slot a re-ask has already replaced disposes the finished
+   attempt, never its successor.
 
 ## A give-up ends the stream (#6602)
 
@@ -355,6 +365,7 @@ unmarked, because producers outside this repository may post it too.
 | `DeferredDeliveryNackedOnDisposeTest.ADeferredReplyToTheDisposingHub_IsTeardownNormal_AndItsReplierIsNotNacked` (`MeshWeaver.Messaging.Hub.Test`) | a reply parked behind a young activation's gates reported at Error, or reported as answering its replier `ShuttingDown`, or a drain that NACKs the replier (#6791) |
 | `PatchDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | a node write parked behind a young activation's gates that does not land on the next activation after a direct teardown, or whose discard is reported at Error (#6733) |
 | `PointReadDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | the PRODUCTION claimant: a `GetMeshNodeOutcome` request — the initial one or the re-probe issued from the `ShuttingDown` NACK — that arrives without the `ReasksOnShutdown` stamp, whose bring-up discard is reported at Error, or a read that does not settle `Present` after two such discards (#6717) |
+| `GetMeshNodeReProbeKeepsCallerIdentityTest` (`MeshWeaver.Data.Test`) | a re-probe posted without the read's identity (#5227), or a re-probe issued nested inside the first probe's `Subscribe` that the first probe's late slot assignment disposes, dropping the owner's answer (#7395) |
 | `PostOptionsReaskStampTest` (`MeshWeaver.Messaging.Hub.Test`) | a reply built with `ResponseFor` / `WithRequestIdFrom` that inherits the request's `ReasksOnShutdown` stamp (#6717) |
 | `UnansweredReassertOnRecycleTest` (`MeshWeaver.Data.Test`) | an owner recycled while it holds the answer to a re-ask it accepted dropping that answer, so the subscriber's in-flight re-ask blocks every later one until the request timeout (#6759) |
 

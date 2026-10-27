@@ -67,7 +67,7 @@ reading this chart. **A rule stated in a comment is not a gate.**
 ## The shape that is now enforced
 
 Three paths, three predicates. They are declared once, in
-`memex/aspire/Memex.Portal.ServiceDefaults/ProbeEndpoints.cs`, and consumed by name:
+MeshWeaver.Plugins `src/Memex.Portal.ServiceDefaults/ProbeEndpoints.cs`, and consumed by name:
 
 | path | predicate | tagged today |
 |---|---|---|

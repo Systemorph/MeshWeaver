@@ -107,7 +107,7 @@ public class DependencyEdgeExtractionTest
                 toolchainId: NodeTypeCompilationHelpers.ProcessToolchainId, outputDirectory: output,
                 ct: TestContext.Current.CancellationToken);
 
-            var edges = compiled.DependencyEdges;
+            var edges = compiled.DependencyEdges?.GraphEdges();
             edges.Should().NotBeNull("the bake always extracts — null would read as 'never extracted'");
             edges!.Source.Should().Be(B);
             edges.Edges.Should().ContainSingle("B binds exactly one foreign owner's code");
@@ -143,7 +143,7 @@ public class DependencyEdgeExtractionTest
                     public static int Answer() => 42;
                 }
                 """)],
-            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().BeEmpty(
             "A's code was compiled in, but nothing B owns binds it — an inclusion is a declared source "
@@ -160,7 +160,7 @@ public class DependencyEdgeExtractionTest
                 /// <summary>B's own code.</summary>
                 public record Standalone(int Value);
                 """)],
-            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().BeEmpty();
         edges.IncludedWithoutUse.Should().BeEmpty("B's default source query never reaches A");
@@ -187,7 +187,7 @@ public class DependencyEdgeExtractionTest
                     """),
             ],
             ["namespace:Source scope:subtree", $"shared=@{A}/Source", $"shared=@{C}/Source"],
-            TestContext.Current.CancellationToken).DependencyEdges!;
+            TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Select(e => e.Target).Should().Equal([A],
             "A → C is A's edge, recorded by A's own compile; the closure joins B → A → C. B's own "
@@ -208,7 +208,7 @@ public class DependencyEdgeExtractionTest
                     public static AThing One() => new(1);
                 }
                 """)],
-            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A,
             "the snippet's text was spliced into B's file, but the INCLUDED node is A's");
@@ -242,7 +242,7 @@ public class DependencyEdgeExtractionTest
                 sources: null, TestContext.Current.CancellationToken,
                 references: [.. CompileReferences.Default,
                     MetadataReference.CreateFromFile(used), MetadataReference.CreateFromFile(unused)],
-                moduleAssemblyPaths: [used, unused]).DependencyEdges!;
+                moduleAssemblyPaths: [used, unused]).DependencyEdges!.GraphEdges();
 
             var module = edges.Edges.Should().ContainSingle(
                 "the unused module is referenced but never bound — GetUsedAssemblyReferences prunes it").Which;
@@ -281,7 +281,7 @@ public class DependencyEdgeExtractionTest
                     """)],
                 sources: null, TestContext.Current.CancellationToken,
                 references: [.. CompileReferences.Default, MetadataReference.CreateFromFile(used)],
-                moduleAssemblyPaths: null).DependencyEdges!;
+                moduleAssemblyPaths: null).DependencyEdges!.GraphEdges();
             edges.Edges.Should().BeEmpty("what is a module is NAMED by the caller, never guessed by subtracting a baseline");
         }
         finally
@@ -300,7 +300,7 @@ public class DependencyEdgeExtractionTest
                 /// <summary>B's own code.</summary>
                 public record Own(int Value);
                 """)],
-            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().BeEmpty();
         edges.IncludedWithoutUse.Should().Equal([A], "the file was consumed although it declares no type");
@@ -323,7 +323,7 @@ public class DependencyEdgeExtractionTest
                     public static Wrapped.AThing One() => new(1);
                 }
                 """)],
-            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A);
         edges.Edges[0].Evidence.Should().Equal(["Wrapped.AThing"]);
@@ -360,7 +360,7 @@ public class DependencyEdgeExtractionTest
                     }
                 }
                 """)],
-            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A);
         edges.Edges[0].Evidence.Should().Equal(["IntRanges"]);
@@ -382,7 +382,7 @@ public class DependencyEdgeExtractionTest
                 /// <summary>B's own code, binding nothing of A's.</summary>
                 public record Own(int Value);
                 """)],
-            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().BeEmpty("A's own using directive is hoisted into the skeleton, but an import is not a use");
         edges.IncludedWithoutUse.Should().Equal([A]);
@@ -419,7 +419,7 @@ public class DependencyEdgeExtractionTest
                     """),
             ],
             ["namespace:Source scope:subtree", $"shared=@{A}/Source", $"shared=@{C}/Source"],
-            TestContext.Current.CancellationToken).DependencyEdges!;
+            TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Select(e => e.Target).Should().Equal([A, C]);
         edges.Edges.Single(e => e.Target == C).Evidence.Should().Equal(["Money"]);
@@ -440,7 +440,7 @@ public class DependencyEdgeExtractionTest
                     public static AThing One() => new(1);
                 }
                 """)],
-            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A);
         edges.Edges[0].Evidence.Should().Equal(["Host+AThing"], "the nested identity is looked up innermost first");
@@ -468,7 +468,7 @@ public class DependencyEdgeExtractionTest
                     public static Second.AThing One() => new(1);
                 }
                 """)],
-            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A);
         edges.Edges[0].Evidence.Should().Equal(["Second.AThing"]);
@@ -507,7 +507,7 @@ public class DependencyEdgeExtractionTest
                     }
                     """),
             ],
-            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
         var conditional = CompileB(
             [
                 Code(C, "Grid", """
@@ -535,7 +535,7 @@ public class DependencyEdgeExtractionTest
                     }
                     """),
             ],
-            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         foreach (var set in new[] { edges, conditional })
         {
@@ -581,7 +581,7 @@ public class DependencyEdgeExtractionTest
                     }
                     """),
             ],
-            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Select(e => e.Target).Should().Equal([A, C]);
         edges.Edges.Single(e => e.Target == C).Evidence.Should().Equal(["Lease"]);
@@ -601,7 +601,7 @@ public class DependencyEdgeExtractionTest
                     public static int Count(AList list) => list.Count;
                 }
                 """)],
-            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndShared, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Should().ContainSingle().Which.Target.Should().Be(A,
             "the alias binds List<T>, and only its type argument names A");
@@ -635,7 +635,7 @@ public class DependencyEdgeExtractionTest
                     public static FromA.Twin One() => new(1);
                 }
                 """)],
-            sources: null, TestContext.Current.CancellationToken).DependencyEdges!;
+            sources: null, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Select(e => e.Target).Should().Contain(A,
             "text cannot tell the two copies apart, so the edge to A must not be lost to C's copy");
@@ -669,7 +669,7 @@ public class DependencyEdgeExtractionTest
                     public static FromA.Twin One() => new(1);
                 }
                 """)],
-            sources: ["namespace:Source scope:subtree"], TestContext.Current.CancellationToken).DependencyEdges!;
+            sources: ["namespace:Source scope:subtree"], TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         edges.Edges.Select(e => e.Target).Should().Equal([A],
             "the self owner is dropped from the ambiguous set, never the foreign one beside it");
@@ -714,7 +714,7 @@ public class DependencyEdgeExtractionTest
                     }
                     """),
             ],
-            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
         var with = CompileB(
             [
                 Code(C, "Shapes", """
@@ -738,7 +738,7 @@ public class DependencyEdgeExtractionTest
                     }
                     """),
             ],
-            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
         var conversion = CompileB(
             [
                 Code(C, "Cents", """
@@ -773,7 +773,7 @@ public class DependencyEdgeExtractionTest
                     }
                     """),
             ],
-            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!;
+            OwnAndAAndC, TestContext.Current.CancellationToken).DependencyEdges!.GraphEdges();
 
         foreach (var (set, evidence) in new[] { (edges, "Doubler"), (with, "Point"), (conversion, "Cents") })
         {

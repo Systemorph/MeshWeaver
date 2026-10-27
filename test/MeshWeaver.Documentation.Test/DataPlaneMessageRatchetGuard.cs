@@ -70,7 +70,7 @@ public class DataPlaneMessageRatchetGuard(ITestOutputHelper output)
     /// <c>test/</c> is out of scope here: a test of the data layer legitimately speaks its messages,
     /// and the flip to <c>internal</c> gives the data layer's own test projects
     /// <c>InternalsVisibleTo</c>.</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex", "tools", "samples"];
+    private static readonly string[] ScannedRoots = ["src", "tools", "samples"];
 
     /// <summary>The data layer — where the messages are defined, registered and served. The end
     /// state keeps them here and only here.</summary>

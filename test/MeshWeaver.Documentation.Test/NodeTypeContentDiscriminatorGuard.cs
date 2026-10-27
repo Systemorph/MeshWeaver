@@ -41,7 +41,7 @@ namespace MeshWeaver.Documentation.Test;
 public class NodeTypeContentDiscriminatorGuard
 {
     /// <summary>Where node types are declared. Both trees ship in the portal image.</summary>
-    private static readonly string[] ScannedRoots = ["src", "memex"];
+    private static readonly string[] ScannedRoots = ["src"];
 
     /// <summary>
     /// Declarations that are not a concrete content type and cannot be registered: the framework's

@@ -28,19 +28,28 @@ public static class LocalizationCatalog
     private static readonly ImmutableDictionary<string, ImmutableDictionary<string, string>> Catalogs
         = LoadAll();
 
+    // The key set of every catalog, built ONCE beside the catalogs themselves. Same category as
+    // Catalogs: immutable, never written after load. 🚨 Never derive it per call: Keys used to copy
+    // the whole English catalog (~2,600 keys) into a fresh set on every read, and module render
+    // paths call `LocalizationCatalog.Keys.Contains(key)` per label — megabytes of hash-bucket tree
+    // nodes per render (MeshWeaver#5799).
+    private static readonly ImmutableDictionary<string, ImmutableHashSet<string>> KeySets
+        = Catalogs.ToImmutableDictionary(
+            entry => entry.Key,
+            entry => entry.Value.Keys.ToImmutableHashSet(StringComparer.Ordinal),
+            Catalogs.KeyComparer);
+
     /// <summary>
     /// The keys defined in the English catalog — the key list of record, used by the
-    /// translation-completeness test to assert every shipped language covers them.
+    /// translation-completeness test to assert every shipped language covers them. The same
+    /// instance on every read; a membership test can also use <see cref="ContainsKey"/>.
     /// </summary>
     public static ImmutableHashSet<string> Keys
-        => Catalogs.TryGetValue(Locales.Default, out var en)
-            ? en.Keys.ToImmutableHashSet(StringComparer.Ordinal)
-            : ImmutableHashSet<string>.Empty;
+        => KeySets.TryGetValue(Locales.Default, out var en) ? en : ImmutableHashSet<string>.Empty;
 
     /// <summary>
     /// Whether the default (English) catalog defines <paramref name="key"/> — a membership test with
-    /// no allocation, for render paths that only need to know whether a key exists (<see cref="Keys"/>
-    /// copies the whole catalog into a new set on every call).
+    /// no allocation, for render paths that only need to know whether a key exists.
     /// </summary>
     /// <param name="key">The catalog key.</param>
     public static bool ContainsKey(string key)
@@ -50,9 +59,7 @@ public static class LocalizationCatalog
     /// Returns the keys defined for <paramref name="locale"/>, for completeness checking.
     /// </summary>
     public static ImmutableHashSet<string> KeysFor(string locale)
-        => Catalogs.TryGetValue(Locales.Resolve(locale), out var c)
-            ? c.Keys.ToImmutableHashSet(StringComparer.Ordinal)
-            : ImmutableHashSet<string>.Empty;
+        => KeySets.TryGetValue(Locales.Resolve(locale), out var keys) ? keys : ImmutableHashSet<string>.Empty;
 
     /// <summary>
     /// Looks up <paramref name="key"/> in <paramref name="locale"/>, falling back to English and
