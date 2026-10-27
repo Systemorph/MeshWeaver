@@ -599,6 +599,12 @@ public static class TreeBake
                     // #4280 — WHICH includes, beside the query-resolved key set above, so the
                     // consumer can tell an include still landing from a source that moved.
                     SourceIncludes = NodeTypeSourceFingerprint.IncludePathsOf(compiled.Inputs.ResolvedIncludes),
+                    // The edges this compile read, carried in the bundle so an ADOPTING mesh (which
+                    // compiles nothing) can write them for the build it serves
+                    // (Doc/Architecture/DependencyGraph → adopted prebuilts).
+                    DependencyEdges = compiled.DependencyEdges is { } edges
+                        ? DependencyEdgesFile.ToBundleJson(edges, options.SourceSha ?? snapshot.CommitSha)
+                        : null,
                 });
 
                 results.Add(new TypeResult(
