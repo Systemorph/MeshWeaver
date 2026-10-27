@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -419,21 +420,77 @@ public sealed class IoPool : IIoPool, IDisposable
     // 2026-08-30 on MeshWeaver.AI.Test under load, 3 of 20 runs ended in a dirty teardown naming
     // AgentStore, Query and FileSystem on different runs — three pools, no leaf, nothing to act on.
     //
-    // The delegate is kept BY REFERENCE while the leaf is in flight (no stack capture, no string
-    // built on the hot path) and formatted only when a residual is reported, so a pool that drains
-    // cleanly pays one dictionary insert and one removal per leaf and nothing else.
-    private readonly ConcurrentDictionary<long, object> _inFlightLeaves = new();
+    // …and WHEN, WHO and WHERE (#7277). A site alone could not say whether a leaf that outlived the
+    // join started long before the stop (an existing hang) or during it (slow to unwind), nor which
+    // caller opened it — a SubscribeThroughPool leaf names only its source observable's TYPE, and one
+    // MeshQuery fan-out type serves every query in the process. So each leaf also carries the moment
+    // it started, the managed thread it STARTED on (for a synchronous leaf — a blocking leaf, or a
+    // SubscribeThroughPool subscribe like #7277's — that is the thread a dump shows it parked on; an
+    // async leaf may since have resumed elsewhere after an await, so it is labelled as the start), and
+    // — only when IoPoolOptions.CaptureLeafOpeners is on — the caller that opened it.
+    //
+    // The work is kept BY REFERENCE while the leaf is in flight and formatted only when a residual is
+    // reported, so a pool that drains cleanly pays one small allocation, one dictionary insert and one
+    // removal per leaf. The opener's stack is NOT captured by default: measured ~6 µs per capture
+    // (depth ~40, no file info) against ~0.08 µs for the insert+remove — 75× the bookkeeping on every
+    // leaf of the routing pool, the hottest path in the mesh. It is a diagnostic switch, not a default.
+    private readonly ConcurrentDictionary<long, InFlightLeaf> _inFlightLeaves = new();
     private long _leafSeq;
+
+    /// <summary>One leaf in flight: the work, when it started, the thread running it, and who opened it.</summary>
+    private sealed record InFlightLeaf(object Work, long StartedAt, int ThreadId, string? Opener);
+
+    /// <summary>
+    /// Whether every leaf records the caller that opened it — a stack captured on the CALLER's thread
+    /// when the leaf is submitted. Off by default (see the cost note above); a host turns it on through
+    /// <see cref="IoPoolOptions.CaptureLeafOpeners"/> while chasing a residual whose site is shared by
+    /// many callers (#7277).
+    /// </summary>
+    internal bool CaptureLeafOpeners { get; init; }
+
+    // The frames that only say "the pool / Rx / the runtime was here" — skipped so the opener names
+    // the first frame of the code that actually asked.
+    private static readonly System.Collections.Immutable.ImmutableArray<string> OpenerNoiseNamespaces =
+        ["System.", "Microsoft.", "MeshWeaver.Mesh.Threading."];
+
+    /// <summary>
+    /// The caller that is submitting a leaf, as its first few non-infrastructure frames, or
+    /// <c>null</c> when <see cref="CaptureLeafOpeners"/> is off. Runs on the caller's thread.
+    /// </summary>
+    private string? CaptureOpener()
+    {
+        if (!CaptureLeafOpeners)
+            return null;
+        try
+        {
+            var frames = new StackTrace(1, false).GetFrames()
+                .Select(f => f.GetMethod())
+                .Where(m => m?.DeclaringType?.FullName is { } t
+                            && !OpenerNoiseNamespaces.Any(n => t.StartsWith(n, StringComparison.Ordinal)))
+                .Take(4)
+                .Select(m => $"{m!.DeclaringType!.FullName}.{m.Name}")
+                .ToArray();
+            return frames.Length == 0 ? "(no frame outside the pool and the runtime)" : string.Join(" < ", frames);
+        }
+        catch
+        {
+            // A diagnostic must never be the reason a leaf fails.
+            return "(unavailable)";
+        }
+    }
 
     /// <summary>
     /// Records an in-flight leaf so a residual can NAME it; returns its ticket. Takes the work
     /// ITSELF — a delegate on the three functional entry points, the source observable on
-    /// <see cref="SubscribeThroughPool{T}"/>, which has no delegate to name.
+    /// <see cref="SubscribeThroughPool{T}"/>, which has no delegate to name — and the
+    /// <paramref name="opener"/> <see cref="CaptureOpener"/> read on the caller's thread. Runs on the
+    /// thread that STARTS the leaf, so that is the thread it records — an async leaf may resume on
+    /// another after an await, which is why the report says "started on", never "parked on".
     /// </summary>
-    private long EnterLeaf(object io)
+    private long EnterLeaf(object io, string? opener)
     {
         var id = Interlocked.Increment(ref _leafSeq);
-        _inFlightLeaves[id] = io;
+        _inFlightLeaves[id] = new InFlightLeaf(io, Stopwatch.GetTimestamp(), Environment.CurrentManagedThreadId, opener);
         return id;
     }
 
@@ -441,8 +498,10 @@ public sealed class IoPool : IIoPool, IDisposable
     private void LeaveLeaf(long id) => _inFlightLeaves.TryRemove(id, out _);
 
     /// <summary>
-    /// The call sites of the leaves still in flight, most useful form first: a lambda's
-    /// compiler-generated method name carries its ENCLOSING method, so
+    /// The leaves still in flight, OLDEST first, each as
+    /// <c>{site} — in flight {N} s, opened by {opener}, started on thread {T}</c>, the number formatted
+    /// invariantly (a diagnostic read by tools and people in every locale, never the host's culture). The site is the most useful
+    /// form first: a lambda's compiler-generated method name carries its ENCLOSING method, so
     /// <c>MeshQuery+&lt;&gt;c__DisplayClass22_0.&lt;MergeProviderObservables&gt;b__1</c> points at the
     /// exact operation that did not unwind. Empty when the pool drained clean.
     /// </summary>
@@ -450,28 +509,23 @@ public sealed class IoPool : IIoPool, IDisposable
     {
         get
         {
+            var now = Stopwatch.GetTimestamp();
             var leaves = _inFlightLeaves.Values
-                .Select(d =>
+                .OrderBy(l => l.StartedAt)
+                .Select(l =>
                 {
                     try
                     {
-                        // A delegate names its enclosing method through the compiler-generated
-                        // lambda; anything else (the subscribe path's observable) can only offer
-                        // its type, which still says WHICH chain is stuck.
-                        if (d is Delegate del)
-                        {
-                            var m = del.Method;
-                            return $"{m.DeclaringType?.FullName ?? "?"}.{m.Name}";
-                        }
-                        return d.GetType().FullName ?? d.GetType().Name;
+                        return string.Create(CultureInfo.InvariantCulture,
+                            $"{SiteOf(l.Work)} — in flight {Stopwatch.GetElapsedTime(l.StartedAt, now).TotalSeconds:0.0} s, "
+                            + $"opened by {l.Opener ?? UncapturedOpener}, started on thread {l.ThreadId}");
                     }
                     catch
                     {
                         // A diagnostic must never be the reason a teardown fails.
                         return "(unavailable)";
                     }
-                })
-                .Distinct(StringComparer.Ordinal);
+                });
             // The third residual Drain() can report is not a leaf and registers no site of its own:
             // a cancel that never returned. Label it, or the residual reads as an anonymous count —
             // the shape that misdirected #2598 (see Drain).
@@ -479,6 +533,21 @@ public sealed class IoPool : IIoPool, IDisposable
                 ? leaves.Prepend(CancelJoinResidualSite).ToArray()
                 : leaves.ToArray();
         }
+    }
+
+    /// <summary>What a leaf's opener reads as when <see cref="CaptureLeafOpeners"/> is off.</summary>
+    internal const string UncapturedOpener = "(not captured — IoPoolOptions.CaptureLeafOpeners is off)";
+
+    // A delegate names its enclosing method through the compiler-generated lambda; anything else (the
+    // subscribe path's observable) can only offer its type, which still says WHICH chain is stuck.
+    private static string SiteOf(object work)
+    {
+        if (work is Delegate del)
+        {
+            var m = del.Method;
+            return $"{m.DeclaringType?.FullName ?? "?"}.{m.Name}";
+        }
+        return work.GetType().FullName ?? work.GetType().Name;
     }
 
     /// <summary>
@@ -585,6 +654,8 @@ public sealed class IoPool : IIoPool, IDisposable
             // the distribution's maximum read 0.2 ms. InvokeBlocking always counted from here; now all
             // four entry points mean the same thing by "waiting": accepted, and not yet running.
             var queuedAt = Stopwatch.GetTimestamp();
+            // Who asked, read on the CALLER's thread — the leaf itself runs on a pool thread (#7277).
+            var opener = CaptureOpener();
             Interlocked.Increment(ref _waiting);
             // Exactly-once, because three paths can end the wait: the gate granting a slot, the gate
             // wait being cancelled, and an unsubscribe before the prologue ever ran. A double
@@ -635,7 +706,7 @@ public sealed class IoPool : IIoPool, IDisposable
                     LeaveWaitOnce();
                     RecordWait(queuedAt);
                     Interlocked.Increment(ref _inFlight);
-                    var gated = EnterLeaf(io);
+                    var gated = EnterLeaf(io, opener);
                     try
                     {
                         return await io(ct).ConfigureAwait(false);
@@ -859,6 +930,8 @@ public sealed class IoPool : IIoPool, IDisposable
             // the distribution's maximum read 0.2 ms. InvokeBlocking always counted from here; now all
             // four entry points mean the same thing by "waiting": accepted, and not yet running.
             var queuedAt = Stopwatch.GetTimestamp();
+            // Who asked, read on the CALLER's thread — the leaf itself runs on a pool thread (#7277).
+            var opener = CaptureOpener();
             Interlocked.Increment(ref _waiting);
             // Exactly-once, because three paths can end the wait: the gate granting a slot, the gate
             // wait being cancelled, and an unsubscribe before the prologue ever ran. A double
@@ -891,7 +964,7 @@ public sealed class IoPool : IIoPool, IDisposable
                     LeaveWaitOnce();
                     RecordWait(queuedAt);
                     Interlocked.Increment(ref _inFlight);
-                    var gated = EnterLeaf(source);
+                    var gated = EnterLeaf(source, opener);
                     try
                     {
                         await foreach (var item in source(ct).WithCancellation(ct).ConfigureAwait(false))
@@ -974,6 +1047,8 @@ public sealed class IoPool : IIoPool, IDisposable
             // scope there. The increment is paired with LeaveWaitOnce on every exit — the delegate,
             // the continuation, and the scheduling-threw path.
             var queuedAt = Stopwatch.GetTimestamp();
+            // Who asked, read on the CALLER's thread — the leaf itself runs on a pool thread (#7277).
+            var opener = CaptureOpener();
             Interlocked.Increment(ref _waiting);
             Interlocked.Increment(ref _blockingWaiting);
 
@@ -1020,7 +1095,7 @@ public sealed class IoPool : IIoPool, IDisposable
                         // so CurrentInFlight reflects actually-running blocking work,
                         // capped at the scheduler's MaximumConcurrencyLevel.
                         Interlocked.Increment(ref _inFlight);
-                        var blockingLeaf = EnterLeaf(work);
+                        var blockingLeaf = EnterLeaf(work, opener);
                         if (Interlocked.Increment(ref _blockingInFlight) == 1)
                             _blockingIdle.Reset();
                         try
@@ -1218,6 +1293,8 @@ public sealed class IoPool : IIoPool, IDisposable
             // hop later — see InvokeCore for the measurement and for why the gauge and the wait
             // distribution have to mean "accepted, and not yet running" (MeshWeaver#1198).
             var queuedAt = Stopwatch.GetTimestamp();
+            // Who asked, read on the CALLER's thread — the leaf itself runs on a pool thread (#7277).
+            var opener = CaptureOpener();
             Interlocked.Increment(ref _waiting);
             var waitLeft = 0;
             void LeaveWaitOnce()
@@ -1334,7 +1411,7 @@ public sealed class IoPool : IIoPool, IDisposable
                             LeaveWaitOnce();
                             RecordWait(queuedAt);
                             Interlocked.Increment(ref _inFlight);
-                            var subLeaf = EnterLeaf(source);
+                            var subLeaf = EnterLeaf(source, opener);
                             try
                             {
                                 // Draining before we even subscribed → do not open providers / create hubs.
