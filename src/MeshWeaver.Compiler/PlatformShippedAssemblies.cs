@@ -93,7 +93,7 @@ public sealed record PlatformShippedAssembly(string Name, PlatformShipping How, 
 public static class PlatformShippedAssemblies
 {
     /// <summary>The folder a host lays seeded modules out under, beside the app
-    /// (<c>memex/MeshModulesPublish.targets</c>; <c>MeshBuilder.ResolveModulePath</c> probes it
+    /// (MeshWeaver.Plugins <c>src/MeshModulesPublish.targets</c>; <c>MeshBuilder.ResolveModulePath</c> probes it
     /// before the app directory).</summary>
     public const string SeededModulesFolder = "modules";
 

@@ -28,7 +28,7 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class MergeBoundedRatchetGuard
 {
-    private static readonly ImmutableArray<string> ScannedRoots = ["src", "memex"];
+    private static readonly ImmutableArray<string> ScannedRoots = ["src"];
 
     private const string BoundName = @"(?:\d+|[A-Za-z_][\w.]*(?i:batch|concurren|parallel|fanout|fan_out)[\w]*)";
 

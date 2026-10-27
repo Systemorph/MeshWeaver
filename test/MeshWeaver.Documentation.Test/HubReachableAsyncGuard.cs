@@ -64,7 +64,7 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     /// <c>EaCredentialReadTest</c> deliberately builds a turn that holds the drain in order to
     /// reproduce #3433. Listing them would make the ratchet a list of things it wants.
     /// </summary>
-    private static readonly string[] ScannedRoots = ["src", "memex", "tools", "samples", "clients"];
+    private static readonly string[] ScannedRoots = ["src", "tools", "samples", "clients"];
 
     /// <summary>The seeded inventory's size for <see cref="NoNewAwaitOfAMeshRead"/>. Zero: its
     /// last two sites (DevAuthController, UserRoleResolver) left with Memex.Portal.Shared for

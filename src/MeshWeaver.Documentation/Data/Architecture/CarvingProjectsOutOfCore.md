@@ -727,6 +727,12 @@ The first pass found 67 pins with no direct core reference. 12 were transitive a
 to Plugins at the versions core carried, with their comments, including security overrides such as
 `MessagePack` and `SQLitePCLRaw.lib.e_sqlite3`.
 
+A second pass, after the Razor extension, the module-libraries shelf, `MeshModulesPublish.targets` and
+`Memex.Portal.ServiceDefaults` had left, found five more: the Roslynator analyzers. They appeared in
+no graph because the only reference was a `PackageReference Update=` block in
+`MeshWeaver.Layout.csproj`, and an `Update` with no matching `Include` adds nothing. Both were
+deleted. Every satellite that runs Roslynator pins it in its own list.
+
 **🚨 "Nothing in core calls it" is not the test for a DIRECT reference either.** A third-party
 assembly that core's graph carries anyway is part of the platform image's `/app`, and the copy there
 is the one every module binds: a module's own bundled copy never loads while the platform carries the

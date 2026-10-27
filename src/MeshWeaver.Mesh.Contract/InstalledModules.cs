@@ -57,8 +57,34 @@ public sealed class InstalledModules
     private readonly ConditionalWeakTable<ServiceDescriptor, Lazy<object>> singletons = new();
     private readonly ConditionalWeakTable<IServiceProvider, ConcurrentDictionary<ServiceDescriptor, Lazy<object>>> scoped = new();
 
+    // Each loaded module assembly's version stamps, read from its file ONCE. Weakly keyed by the
+    // Assembly, so a held module's retired (collectible) generation takes its entry with it.
+    private readonly ConditionalWeakTable<System.Reflection.Assembly, InstalledModuleStamps> stamps = new();
+
     internal InstalledModules(ModuleContexts contexts) =>
         this.contexts = contexts ?? throw new ArgumentNullException(nameof(contexts));
+
+    /// <summary>
+    /// The version stamps of a loaded module assembly (<see cref="InstalledModuleAssembly.Version"/>
+    /// and <see cref="InstalledModuleAssembly.PackageVersion"/>), read from its metadata once per
+    /// assembly and held for as long as the assembly lives.
+    ///
+    /// <para>🚨 <b>Why held.</b> A loaded assembly's attributes cannot change, but each property
+    /// read opens the file and builds a <c>PEReader</c>. The build guards
+    /// (<c>NodeTypeCompilationHelpers.GuardsOf</c>) read both stamps of EVERY installed module, and
+    /// they run several times per hub activation and on content writes. Reading the file each time
+    /// made two <c>PEHeaders</c> per module per call. The heap-step sampler on a production portal
+    /// named their <c>CoffHeader</c> as one of the heaviest allocations (MeshWeaver#5799). Holding
+    /// the stamps by assembly is also the more correct answer: a file replaced on disk after the
+    /// load no longer describes the code that is running.</para>
+    /// </summary>
+    /// <param name="assembly">A loaded module assembly.</param>
+    /// <returns>Its stamps; the same instance on every call for the same assembly.</returns>
+    public InstalledModuleStamps StampsOf(System.Reflection.Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        return stamps.GetValue(assembly, static loaded => InstalledModuleAssembly.ReadStamps(loaded));
+    }
 
     /// <summary>Records <paramref name="moduleName"/> as a module installed at boot in its own load
     /// context, answered from the registry's CURRENT generation at each read, and returns the

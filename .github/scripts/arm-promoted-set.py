@@ -491,7 +491,7 @@ def contains_commit(get: Get, core_token: str, commit: str, sha: str) -> bool | 
 
 
 SELF_UPDATE_CHECK = "self_update"
-"""The `/health` entry control's OWN self-updater publishes (core memex/aspire/Memex.Portal.ServiceDefaults
+"""The `/health` entry control's OWN self-updater publishes (MeshWeaver.Plugins src/Memex.Portal.ServiceDefaults
 `SelfUpdateHealthCheck`, census-tagged, so it prints whatever its status). Its line reads
 `self_update: <Healthy|Degraded> — <the last check's verdict>`."""
 
