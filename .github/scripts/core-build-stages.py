@@ -131,7 +131,10 @@ def generate(total: int) -> dict:
     stages.append({"name": "doc-gate", "kind": "test",
                    "command": f"{RUNNER} doc-gate {ROOTS} --repo .",
                    "timeoutMinutes": DOC_GATE_TIMEOUT_MINUTES})
-    return {"$comment": COMMENT, "owes": list(OWES), "stages": stages}
+    doc = {"$comment": COMMENT, "owes": list(OWES), "stages": stages}
+    if not OWES:
+        doc["ciEquivalent"] = True  # the debt rule: owing nothing IS the claim, so the fully migrated file is reachable
+    return doc
 
 
 def _rule():
@@ -202,7 +205,16 @@ def _self_test() -> int:
     expect(all(s["command"].endswith(" --repo .") for s in doc["stages"][1:-1]),
            "every shard records and gates with the checkout's own scripts (record-host-crash.py, check-untyped-content.sh)")
     expect(doc["stages"][0]["needs"] == ["nuget"], "the build reads the host's prepared package cache, and nothing else")
-    expect(doc["owes"] == OWES and "ciEquivalent" not in doc, "the debt is declared and nothing is claimed")
+    expect(doc["owes"] == OWES and doc.get("ciEquivalent") is (True if not OWES else None),
+           "the debt is declared, and the claim is made exactly when nothing is owed")
+    saved = list(OWES)
+    try:
+        OWES.clear()  # generate() reads the module list — emptied in place, restored below
+        paid = generate(8)
+        expect(paid["owes"] == [] and paid.get("ciEquivalent") is True and problems(render(paid), wf8) == [],
+               "with OWES emptied the regenerated file claims ciEquivalent and passes the rule (the migrated end state is reachable)")
+    finally:
+        OWES[:] = saved
     print("negative controls — each must be RED:")
     expect(any("CI_SHARD_TOTAL is 9" in p for p in problems(good, "env:\n  CI_SHARD_TOTAL: 9\n")),
            "CI_SHARD_TOTAL raised to 9 without regenerating")

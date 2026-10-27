@@ -325,6 +325,12 @@ def compile_refs_problems(name: str, cmd: str) -> list[str]:
     """The marker alone is not enough: the variable must be what `--refs` actually receives — directly, or through a
     shell variable assigned from it (`refs="${MW_BUILD_COMPILE_REFS:?…}"; … --refs "$refs"`). Every `--refs` must."""
     args = REFS_ARG.findall(cmd)
+    # compile-check's argparse keeps the LAST `--refs`, so EVERY occurrence must be one this rule can read: a second
+    # `--refs /literal` (or `--refs=$(…)`) that REFS_ARG does not match would otherwise win unvalidated.
+    every = re.findall(r"--refs(?![A-Za-z0-9_-])", cmd)
+    if len(every) != len(args):
+        return [f"stage `{name}` passes `--refs` {len(every)} time(s) but only {len(args)} receive a variable — compile-check "
+                f"reads the LAST one, so each must be `${COMPILE_REFS_VAR}` (or a variable assigned from it)"]
     if not args:
         return [f"stage `{name}` passes no `--refs \"$VAR\"` — compile-check's reference set must be the host's prepared "
                 f"`${COMPILE_REFS_VAR}`"]
@@ -482,6 +488,9 @@ def _self_test() -> int:
         command='set -e; refs="${MW_BUILD_COMPILE_REFS:?no set}"; python3 "${MW_PLATFORM_SCRIPTS:?}/compile-check.py" --refs "$refs" '
                 '# MW_ALLOW_FILE=scripts/compile-check.allow'))), "node-repo", NODE_CI)[0] == [],
            "--refs through a variable assigned from $MW_BUILD_COMPILE_REFS is green (the satellites' shape)")
+    red(mutate(node, lambda d: d["stages"][0].update(command=d["stages"][0]["command"].replace(
+            '--refs "${MW_BUILD_COMPILE_REFS:?}"', '--refs "${MW_BUILD_COMPILE_REFS:?}" --refs /previous-complete-refs'))),
+        "node-repo", "compile-check reads the LAST one", "a second, literal --refs after the prepared set (argparse keeps the last)")
     red(mutate(node, lambda d: d["stages"][1].update(command=d["stages"][1]["command"] + "; dotnet /host/mw-plugin-test.dll .")), "node-repo",
         "hard-codes", "a hard-coded /host/ tester")
     red(mutate(node, lambda d: d["stages"].pop(1)), "node-repo", "no `gate` stage", "ci.yml calls the gate lane, no gate stage")
