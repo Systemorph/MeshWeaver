@@ -80,6 +80,12 @@ def structure_problems(doc: dict) -> list[str]:
             problems.append("the MSBuild evaluation does not run after the SDK resolve and before the scope")
         if "msbuild-evaluate.py" not in sel[e].get("run", ""):
             problems.append("the evaluation step does not run msbuild-evaluate.py")
+        body = sel[e].get("run", "")
+        if not ("worktree add" in body and "--skip-missing" in body and "msbuild-evaluation-base.json" in body):
+            problems.append("the evaluation step does not also evaluate the diff BASE tree (BASE ∪ HEAD)")
+    scope_body = next((s.get("run", "") for s in sel if s.get("name") == "Decide which module bundles this diff can reach"), "")
+    if "msbuild-evaluation-base.json" not in scope_body:
+        problems.append("the scope does not union the BASE evaluation with HEAD's")
     for step_name in ("Decide which module bundles this diff can reach", "Consult the module build ledger"):
         body = next((s.get("run", "") for s in sel if s.get("name") == step_name), "")
         if "--msbuild-evaluation" not in body:
@@ -122,6 +128,16 @@ def mutations(doc: dict) -> list[tuple[str, dict]]:
         if s.get("name") == "Decide which module bundles this diff can reach":
             s["run"] = s["run"].replace("--msbuild-evaluation", "--no-evaluation")
     out.append(("the scope stops reading the evaluation", m))
+    m = copy.deepcopy(doc)
+    for s in m["jobs"]["select"]["steps"]:
+        if s.get("name") == "Decide which module bundles this diff can reach":
+            s["run"] = s["run"].replace("msbuild-evaluation-base.json", "no-base.json")
+    out.append(("the scope stops unioning the BASE evaluation", m))
+    m = copy.deepcopy(doc)
+    for s in m["jobs"]["select"]["steps"]:
+        if s.get("name") == "Evaluate the shelf / build extension with MSBuild":
+            s["run"] = s["run"].replace("worktree add", "worktree skip")
+    out.append(("the BASE tree is no longer evaluated", m))
     m = copy.deepcopy(doc)
     for s in m["jobs"]["select"]["steps"]:
         if s.get("name") == "Consult the module build ledger":

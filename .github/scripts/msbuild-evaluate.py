@@ -20,6 +20,11 @@ extra is NOT evaluated: `declaredImports`, every `<Import Project>` written in a
 in-repo file whose path resolves to an in-repo location, present or not. It is kept for hashing
 and reach ONLY, so an `Exists()`-guarded import appearing is a change.
 
+Also recorded, for reach only: `declaredPatterns`, every in-repo GLOB written in an `<Import>` or
+an item `Include`, so deleting the last match or adding a first one is a change. The scope unions
+this evaluation of HEAD with one of its diff BASE (`--skip-missing` there, for a project the base
+predates), so a deletion is seen from the tree that still had the file.
+
 A failed evaluation fails the run red: a project MSBuild cannot evaluate is not keyed on a guess.
 
   msbuild-evaluate.py --root <repo> --project <rel csproj> [--project …] --out <file.json>
@@ -43,6 +48,11 @@ ITEM_TYPES = ("Compile", "EmbeddedResource", "AdditionalFiles", "Content", "None
 # `<!-- ===== <Import Project="…"> … ===== -->` banner MSBuild writes around it.
 _PP_FILE = re.compile(r"^(/[^\n<>\"]+\.(?:props|targets|csproj|proj|projitems|xml))$", re.M)
 _IMPORT = re.compile(r"<Import\b[^>]*?\bProject=(?:\"([^\"]*)\"|'([^']*)')")
+_ITEM = re.compile(r"<([A-Za-z_][\w.-]*)\s[^>]*?\bInclude=(?:\"([^\"]*)\"|'([^']*)')")
+# Item types whose Include is a NAME, not a path.
+_NAME_ITEMS = frozenset({"PackageReference", "PackageVersion", "GlobalPackageReference", "PackageDownload",
+                         "FrameworkReference", "Using", "InternalsVisibleTo", "ProjectCapability",
+                         "SupportedPlatform", "TrimmerRootAssembly", "AssemblyAttribute"})
 
 
 def _in_repo(root: Path, path: str) -> str | None:
@@ -59,26 +69,49 @@ def _run(argv: list[str], cwd: Path) -> str:
     return r.stdout
 
 
-def declared_imports(root: Path, files: list[str], project_dir: str) -> list[str]:
-    """`<Import Project>` paths WRITTEN in the evaluated in-repo files that resolve in-repo, present
-    or not, for hashing and reach only. MSBuild already decided which ones are imported."""
-    out: set[str] = set()
+def _declared_path(root: Path, value: str, plain_base: Path, this_dir: Path, project_dir: Path) -> str | None:
+    """A declared Import/Include value as a repository-relative path or glob; None when it is not a
+    plain in-repo spelling (MSBuild's evaluation already answered what it resolves to today)."""
+    value = value.strip().replace("\\", "/")
+    base = plain_base
+    if value.startswith("$(MSBuildThisFileDirectory)"):
+        value, base = value[len("$(MSBuildThisFileDirectory)"):], this_dir
+    elif value.startswith("$(MSBuildProjectDirectory)"):
+        value, base = value[len("$(MSBuildProjectDirectory)"):].lstrip("/"), project_dir
+    if not value or "$(" in value or "@(" in value or "%(" in value:
+        return None
+    return _in_repo(root, str(base / value))
+
+
+def declared(root: Path, files: list[str], project_dir: str) -> tuple[list[str], list[str]]:
+    """What the evaluated in-repo files DECLARE, for hashing and reach only (MSBuild already decided
+    what is imported and which items exist today):
+      imports   every literal `<Import Project>` path that resolves in-repo, present or not;
+      patterns  every in-repo GLOB written in an `<Import Project>` or an item `Include`, so a
+                deletion of the last match, or an addition to a glob with no match yet, is a change.
+    A plain Import path is the importing file's; a plain Include is the project's."""
+    imports: set[str] = set()
+    patterns: set[str] = set()
+    proj_dir = root / project_dir
     for rel in files:
         text = (root / rel).read_text(encoding="utf-8", errors="replace")
         this_dir = (root / rel).parent
         for a, b in _IMPORT.findall(text):
-            value = (a or b).strip().replace("\\", "/")
-            base = this_dir
-            if value.startswith("$(MSBuildThisFileDirectory)"):
-                value = value[len("$(MSBuildThisFileDirectory)"):]
-            elif value.startswith("$(MSBuildProjectDirectory)"):
-                value, base = value[len("$(MSBuildProjectDirectory)"):].lstrip("/"), root / project_dir
-            if not value or "$(" in value or "*" in value or "?" in value:
-                continue  # MSBuild resolved what it imports; this extra only adds literal paths
-            hit = _in_repo(root, str(base / value))
+            hit = _declared_path(root, a or b, this_dir, this_dir, proj_dir)
             if hit is not None:
-                out.add(hit)
-    return sorted(out)
+                (patterns if _is_glob(hit) else imports).add(hit)
+        for tag, a, b in _ITEM.findall(text):
+            if tag in _NAME_ITEMS:
+                continue
+            for include in (a or b).split(";"):
+                hit = _declared_path(root, include, proj_dir, this_dir, proj_dir)
+                if hit is not None and _is_glob(hit):
+                    patterns.add(hit)
+    return sorted(imports), sorted(patterns)
+
+
+def _is_glob(path: str) -> bool:
+    return "*" in path or "?" in path
 
 
 def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -> dict:
@@ -102,15 +135,18 @@ def evaluate_project(root: Path, rel: str, properties: list[str], dotnet: str) -
         elif paths:
             items[kind] = paths
     project_dir = Path(rel).parent.as_posix()
-    return {"imports": imports, "declaredImports": declared_imports(root, imports, project_dir),
+    declared_imports, declared_patterns = declared(root, imports, project_dir)
+    return {"imports": imports, "declaredImports": declared_imports, "declaredPatterns": declared_patterns,
             "items": items, "references": references}
 
 
-def evaluate(root: Path, projects: list[str], properties: list[str], dotnet: str) -> dict:
+def evaluate(root: Path, projects: list[str], properties: list[str], dotnet: str,
+             skip_missing: bool = False) -> dict:
     root = root.resolve()
     sdk = _run([dotnet, "--version"], root).strip()
     out: dict[str, dict] = {}
-    queue = [Path(p).as_posix() for p in projects]
+    missing = [Path(p).as_posix() for p in projects if skip_missing and not (root / p).is_file()]
+    queue = [Path(p).as_posix() for p in projects if Path(p).as_posix() not in missing]
     while queue:
         rel = queue.pop(0)
         if rel in out:
@@ -120,7 +156,7 @@ def evaluate(root: Path, projects: list[str], properties: list[str], dotnet: str
         out[rel] = evaluate_project(root, rel, properties, dotnet)
         queue += out[rel]["references"]
     return {"sdk": sdk, "properties": sorted(properties), "roots": sorted(Path(p).as_posix() for p in projects),
-            "projects": dict(sorted(out.items()))}
+            "missing": missing, "projects": dict(sorted(out.items()))}
 
 
 def main() -> int:
@@ -130,9 +166,12 @@ def main() -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--property", action="append", default=[])
     p.add_argument("--dotnet", default="dotnet")
+    p.add_argument("--skip-missing", action="store_true",
+                   help="a named project absent from this tree (a BASE tree that predates it) is recorded "
+                        "under `missing` instead of failing")
     a = p.parse_args()
     try:
-        result = evaluate(Path(a.root), a.project, a.property, a.dotnet)
+        result = evaluate(Path(a.root), a.project, a.property, a.dotnet, a.skip_missing)
     except (RuntimeError, OSError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"::error title=MSBuild evaluation::{exc}".replace("\n", "%0A"), file=sys.stderr)
         return 1

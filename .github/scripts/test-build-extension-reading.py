@@ -63,6 +63,8 @@ def scratch_repo(root: Path) -> None:
   <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
   <Import Project="../Lib/Ext.props" />
   <Import Project="../Lib/Optional.props" Condition="Exists('../Lib/Optional.props')" />
+  <Import Project="../Imp/*.props" />
+  <ItemGroup><Compile Include="../Glob/*.cs" /></ItemGroup>
   <Choose>
     <When Condition="'$(Configuration)' == 'Release'"><ItemGroup><Compile Include="../Rel/Release.cs" /></ItemGroup></When>
     <Otherwise><ItemGroup><Compile Include="../Dbg/Debug.cs" /></ItemGroup></Otherwise>
@@ -80,6 +82,9 @@ def scratch_repo(root: Path) -> None:
         "Dbg/Debug.cs": "// debug\n",
         "Directory.Unused.props": '<Project><ItemGroup><Compile Include="Other/Stray.cs" /></ItemGroup></Project>\n',
         "Other/Stray.cs": "// stray\n",
+        "Imp/Last.props": "<Project />\n",
+        "Glob/Last.cs": "// the only match of ../Glob/*.cs\n",
+        "Glob/notes.txt": "beside the glob, not covered by it\n",
     }
     for rel, text in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +169,27 @@ def main() -> int:
               "Other/Stray.cs" not in linked and not reaches(reach, "Other/Stray.cs"), str(sorted(linked)))
         check("…while the file itself stays a conservative hashing extra (an ancestor Directory.* file)",
               "Directory.Unused.props" in k0["imports"])
+
+        print("== GLOBS: deleting the last match, adding a first one (BASE ∪ HEAD, and the declared patterns)")
+        patterns = set(ev["projects"][proj].get("declaredPatterns") or [])
+        check("MSBuild imported the import glob's match and listed the Compile glob's",
+              "Imp/Last.props" in ev["projects"][proj]["imports"] and "Glob/Last.cs" in linked)
+        check("the declared glob patterns are recorded", {"Imp/*.props", "Glob/*.cs"} <= patterns, str(sorted(patterns)))
+        (repo / "Imp/Last.props").unlink()
+        (repo / "Glob/Last.cs").unlink()
+        head = evaluate(repo, proj, tmp / "head.json")
+        check("after deleting both last matches, HEAD's evaluation lists neither",
+              "Imp/Last.props" not in head["projects"][proj]["imports"]
+              and "Glob/Last.cs" not in str(head["projects"][proj]["items"]))
+        union = scope.shelf_dirs(repo, proj, [head, ev])
+        head_reach = scope.shelf_dirs(repo, proj, head)
+        for f in ("Imp/Last.props", "Glob/Last.cs"):
+            check(f"deleting the last match {f}: in the BASE ∪ HEAD reach", reaches(union, f))
+            check(f"…and HEAD alone still reaches it through the declared pattern", reaches(head_reach, f))
+        for f in ("Glob/First.cs", "Imp/First.props"):
+            check(f"a FIRST match {f} added to an emptied glob is in reach", reaches(head_reach, f))
+        check("negative control — a file in the glob's directory the pattern does not cover is NOT in reach",
+              not reaches(union, "Glob/notes.txt"))
 
     print()
     if failures:

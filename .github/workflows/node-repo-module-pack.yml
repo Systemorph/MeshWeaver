@@ -1382,15 +1382,41 @@ jobs:
         env:
           SHELF_PROJECT: ${{ inputs.module-libraries-project }}
           EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
+          # The scope's diff BASE, resolved exactly as the scope step resolves it.
+          BASE_REF: ${{ github.base_ref }}
+          QUEUE_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          PUBLICATION_BASE: ${{ inputs.publication-base }}
+          PUBLICATION_RUN: ${{ inputs.publication-run }}
+          BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
         run: |
           set -euo pipefail
           projects=()
           [ -z "${SHELF_PROJECT:-}" ] || projects+=(--project "$SHELF_PROJECT")
           [ -z "${EXTENSIONS_PROJECT:-}" ] || projects+=(--project "$EXTENSIONS_PROJECT")
+          platform=(--property "MeshWeaverRoot=$GITHUB_WORKSPACE/.msbuild-eval-platform")
           python3 build-logic/.github/scripts/msbuild-evaluate.py --root repo "${projects[@]}" \
-            --out "$RUNNER_TEMP/msbuild-evaluation.json" \
-            --property "MeshWeaverRoot=$GITHUB_WORKSPACE/.msbuild-eval-platform"
+            --out "$RUNNER_TEMP/msbuild-evaluation.json" "${platform[@]}"
           { echo "json<<MSBUILD_EVALUATION_EOF"; jq -c . "$RUNNER_TEMP/msbuild-evaluation.json"; echo "MSBUILD_EVALUATION_EOF"; } >> "$GITHUB_OUTPUT"
+          # 🚨 The scope's reach is BASE ∪ HEAD: a file the head DELETED (the last match of a glob) is
+          # listed only by the tree that still had it. Evaluate the diff base in a worktree;
+          # --skip-missing for a base that predates the project. No diff base ⇒ nothing to union.
+          if [ -z "${BASE_REF:-}" ] && [ -n "${QUEUE_BASE_REF:-}" ]; then BASE_REF="${QUEUE_BASE_REF#refs/heads/}"; fi
+          base=""
+          if [ -n "${BASE_REF:-}" ]; then
+            git -C repo fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+            base="$(git -C repo merge-base HEAD "refs/remotes/origin/$BASE_REF")"
+          elif [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+            base="$PUBLICATION_BASE"
+          fi
+          if [ -n "$base" ]; then
+            git -C repo worktree add --detach "$RUNNER_TEMP/msbuild-base-tree" "$base"
+            python3 build-logic/.github/scripts/msbuild-evaluate.py --root "$RUNNER_TEMP/msbuild-base-tree" \
+              "${projects[@]}" --skip-missing --out "$RUNNER_TEMP/msbuild-evaluation-base.json" "${platform[@]}"
+            git -C repo worktree remove --force "$RUNNER_TEMP/msbuild-base-tree"
+            echo "evaluated the diff base $base too: the scope reaches BASE ∪ HEAD"
+          else
+            echo "no diff base for this event — the scope reaches HEAD's evaluation and its declared patterns"
+          fi
           rm -rf "${GITHUB_WORKSPACE:?}/.msbuild-eval-platform"
       - name: Decide which module bundles this diff can reach
         id: scope
@@ -1429,7 +1455,11 @@ jobs:
           shelf_args=()
           [ -z "${SHELF_PROJECT:-}" ] || shelf_args=(--module-libraries-project "$SHELF_PROJECT")
           [ -z "${EXTENSIONS_PROJECT:-}" ] || shelf_args+=(--build-extensions-project "$EXTENSIONS_PROJECT")
-          [ "${#shelf_args[@]}" -eq 0 ] || shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json")
+          if [ "${#shelf_args[@]}" -gt 0 ]; then
+            shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation.json")
+            # BASE ∪ HEAD (the base tree's evaluation exists when this event has a diff base).
+            [ ! -f "$RUNNER_TEMP/msbuild-evaluation-base.json" ] || shelf_args+=(--msbuild-evaluation "$RUNNER_TEMP/msbuild-evaluation-base.json")
+          fi
           python3 build-logic/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \

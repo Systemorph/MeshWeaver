@@ -372,8 +372,9 @@ _SHELF_COMPILE = r"<Compile\s[^>]*Include=(?:\"([^\"]+)\"|'([^']+)')"
 #
 # The ONLY additions to MSBuild's answer are conservative extras for HASHING and REACH, never
 # evaluation: the implicit `Directory.*` candidates in every ancestor (a NEW one is a change), the
-# declared-but-absent import paths msbuild-evaluate.py records, and the directory of a linked item
-# outside the project (a new file beside it may join a glob).
+# declared-but-absent import paths and the declared in-repo glob patterns msbuild-evaluate.py
+# records. The scope unions HEAD's evaluation with its diff BASE's (a deletion is seen from the
+# tree that still had the file).
 _IMPLICIT_IMPORTS = ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props")
 _IMPLICIT_GLOBS = ("Directory.*.props", "Directory.*.targets")
 
@@ -435,21 +436,34 @@ def evaluated_files(evaluation: dict, rel: str) -> tuple[list[str], list[str], l
 
 
 def evaluated_reach(root: Path, evaluation: dict | None, project: str) -> set[str]:
-    """Everything a diff can touch to change what this project and its references evaluate:
-    their directories, MSBuild's imports and items, and the conservative extras above."""
+    """Everything a diff can touch to change what this project and its references evaluate in ONE
+    evaluation: their directories, MSBuild's imports and items, and the conservative extras."""
     root = root.resolve()
     reach: set[str] = set()
+    projects = (evaluation or {}).get("projects") or {}
     for rel in evaluated_closure(evaluation, project):
-        proj_dir = Path(rel).parent.as_posix()
-        reach.add(proj_dir)
+        reach.add(Path(rel).parent.as_posix())
         imports, declared, items = evaluated_files(evaluation, rel)
-        reach |= set(imports) | set(declared)
+        reach |= set(imports) | set(declared) | set(items)
+        # Declared in-repo GLOBS: a deletion of the last match, or a first match added to a glob
+        # that matches nothing yet, is a change no list of today's files can show.
+        reach |= set(projects[rel].get("declaredPatterns") or [])
         reach |= set(implicit_import_candidates(root, root / rel))
-        for item in items:
-            reach.add(item)
-            parent = Path(item).parent.as_posix()
-            if parent not in (".", proj_dir) and not parent.startswith(proj_dir + "/"):
-                reach.add(parent)  # a new file beside a linked one may join its glob
+    return reach
+
+
+def union_reach(root: Path, evaluations, project: str) -> set[str]:
+    """The reach over EVERY evaluation given: the scope passes HEAD's and its diff BASE's, so a file
+    the head no longer has (a deletion) is seen from the tree that still had it. A tree that
+    predates the project simply does not contain it; at least one evaluation must."""
+    if evaluations is None or isinstance(evaluations, dict):
+        evaluations = [evaluations]
+    holding = [e for e in evaluations if e is not None and project in (e.get("projects") or {})]
+    if not holding:
+        evaluated_closure(evaluations[0] if evaluations else None, project)  # raises, saying why
+    reach: set[str] = set()
+    for e in holding:
+        reach |= evaluated_reach(root, e, project)
     return reach
 
 
@@ -476,7 +490,7 @@ def msbuild_glob_matches(path: str, pattern: str) -> bool:
     return re.fullmatch(rx, path) is not None
 
 
-def shelf_dirs(root: Path, project: str, evaluation: dict | None = None) -> frozenset[str] | None:
+def shelf_dirs(root: Path, project: str, evaluation=None) -> frozenset[str] | None:
     """Everything a diff can touch to change the caller's shelf / build extension: the project, every
     in-repo project it references, MSBuild's imports and items for each, and the conservative extras
     (`evaluated_reach`). The SAME evaluation feeds module-build-key.py, so key and scope cannot drift.
@@ -489,7 +503,7 @@ def shelf_dirs(root: Path, project: str, evaluation: dict | None = None) -> froz
     root = root.resolve()
     if not (root / project).is_file():
         return None
-    return frozenset(evaluated_reach(root, evaluation, project))
+    return frozenset(union_reach(root, evaluation, project))
 
 
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
@@ -498,7 +512,7 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
            override: list[str] | None, say, publishing: bool = False,
            always: frozenset[str] = frozenset(), publication_base: str = "",
            publication_reach: bool = False, shelf_project: str = "",
-           extensions_project: str = "", msbuild_evaluation: dict | None = None,
+           extensions_project: str = "", msbuild_evaluation=None,
            carry: frozenset[str] = frozenset()) -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
@@ -1253,24 +1267,63 @@ def self_test() -> int:
             arg = ["--build-extensions-project", shelf_rel] + evaluation({
                 "imports": [shelf_rel, "src/Acme.Other/Ext.props"],
                 "declaredImports": ["src/Acme.Other/Ext.props", "src/Acme.Other/Optional.props"],
+                "declaredPatterns": ["src/Acme.Other/Gen/*.cs", "src/Acme.Other/Imp/*.props"],
                 "items": {"Compile": ["src/Acme.Other/Gen/Emitter.cs"],
                           "EmbeddedResource": ["src/Acme.Other/Res/a.res"]}})
             for what, path in (("an imported file (Ext.props)", "src/Acme.Other/Ext.props"),
                                ("an absent DECLARED import appearing (Optional.props)", "src/Acme.Other/Optional.props"),
                                ("a linked Compile item", "src/Acme.Other/Gen/Emitter.cs"),
                                ("a transform-produced item path", "src/Acme.Other/Res/a.res"),
-                               ("a NEW file beside a linked one (it may join the glob)", "src/Acme.Other/Gen/New.cs"),
+                               ("a NEW file the declared Compile glob covers", "src/Acme.Other/Gen/New.cs"),
+                               ("a first match of a declared IMPORT glob that matches nothing yet",
+                                "src/Acme.Other/Imp/First.props"),
                                ("a new ancestor implicit import", "src/Directory.Build.targets")):
                 got = _run(root, "modules", "pull_request", [path], extra=arg)
                 check(f"[modules] {what} changed ⇒ ALL", got["scope"] == "full" and got["count"] == 2,
                       f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
             for what, path in (("a file in the same project MSBuild did not evaluate", "src/Acme.Other/K.cs"),
+                               ("a file in the glob's directory the pattern does NOT cover", "src/Acme.Other/Gen/notes.txt"),
                                ("an UNIMPORTED Directory.Unused.props outside the ancestry",
                                 "src/Acme.Other/Directory.Unused.props")):
                 got = _run(root, "modules", "pull_request", [path], extra=arg)
                 check(f"[modules] negative control — {what} narrows",
                       got["scope"] == "narrowed" and got["count"] == 0,
                       f"scope={got['scope']} count={got['count']} — {got['reason'][:80]}")
+            # DELETION: the head no longer has the file, so only the BASE evaluation lists it. The scope
+            # unions both (--msbuild-evaluation given twice).
+            base_file = root.parent / f"{root.name}-msbuild-evaluation-base.json"
+            head_only = ["--build-extensions-project", shelf_rel] + evaluation({"imports": [shelf_rel]})
+            head_file = root.parent / f"{root.name}-msbuild-evaluation-head.json"
+            head_file.write_text(ev_file.read_text(encoding="utf-8"), encoding="utf-8")
+            evaluation({"imports": [shelf_rel, "src/Acme.Other/Imp/Last.props"],
+                        "items": {"Compile": ["src/Acme.Other/Lib/Last.cs"]}})
+            base_file.write_text(ev_file.read_text(encoding="utf-8"), encoding="utf-8")
+            union = ["--build-extensions-project", shelf_rel, "--msbuild-evaluation", str(head_file),
+                     "--msbuild-evaluation", str(base_file)]
+            try:
+                for what, path in (("the LAST match of an import glob deleted", "src/Acme.Other/Imp/Last.props"),
+                                   ("the LAST match of a Compile glob deleted", "src/Acme.Other/Lib/Last.cs")):
+                    got = _run(root, "modules", "pull_request", [path],
+                               extra=["--build-extensions-project", shelf_rel, "--msbuild-evaluation", str(head_file)])
+                    check(f"[modules] negative control — {what}: HEAD's evaluation alone no longer sees it",
+                          got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+                    got = _run(root, "modules", "pull_request", [path], extra=union)
+                    check(f"[modules] {what}: the BASE ∪ HEAD union selects ALL",
+                          got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']} count={got['count']}")
+                got = _run(root, "modules", "pull_request", ["src/Acme.Other/Lib/notes.txt"], extra=union)
+                check("[modules] negative control — an unrelated file beside the deleted one narrows under the union",
+                      got["scope"] == "narrowed" and got["count"] == 0, f"scope={got['scope']} count={got['count']}")
+                # A tree that predates the project (a new extension) contributes nothing; head still decides.
+                evaluation({}, None)
+                ev_file.write_text(json.dumps({"sdk": "10.0.200", "missing": [shelf_rel], "projects": {}}), encoding="utf-8")
+                got = _run(root, "modules", "pull_request", ["src/Acme.Beta/T.cs"],
+                           extra=["--build-extensions-project", shelf_rel, "--msbuild-evaluation", str(head_file),
+                                  "--msbuild-evaluation", str(ev_file)])
+                check("[modules] a BASE tree that predates the project is skipped, not refused",
+                      got["scope"] == "narrowed" and got["selected"] == ["Acme.Beta"], f"{got['selected']}")
+            finally:
+                base_file.unlink(missing_ok=True)
+                head_file.unlink(missing_ok=True)
             # Refusals: a named input is never scoped without MSBuild's evaluation of it.
             for what, extra, needle in (
                     ("named with NO --msbuild-evaluation", ["--build-extensions-project", shelf_rel], "--msbuild-evaluation"),
@@ -1435,9 +1488,9 @@ def main() -> int:
     p.add_argument("--build-extensions-project", default="", dest="extensions_project",
                    help="the caller's build-extension csproj (relative to --root): a diff that "
                         "touches it or a project it reaches runs the full set")
-    p.add_argument("--msbuild-evaluation", default="", dest="msbuild_evaluation",
+    p.add_argument("--msbuild-evaluation", action="append", default=[], dest="msbuild_evaluation",
                    help="the JSON msbuild-evaluate.py writes for the shelf / extension: MSBuild's own imports and "
-                        "items, required when either is named")
+                        "items, required when either is named. Repeatable: HEAD's and the diff BASE's are unioned")
     p.add_argument("--self-test", action="store_true", dest="self_test")
     args = p.parse_args()
     if args.self_test:
@@ -1461,7 +1514,7 @@ def main() -> int:
     root = Path(args.root).resolve()
     say = lambda *a: print(*a, file=sys.stderr)  # noqa: E731
     try:
-        evaluation = load_msbuild_evaluation(args.msbuild_evaluation) if args.msbuild_evaluation else None
+        evaluation = [load_msbuild_evaluation(f) for f in args.msbuild_evaluation] or None
     except ValueError as exc:
         print(f"::error title=Cannot decide the build scope::{exc}", file=sys.stderr)
         return 2
