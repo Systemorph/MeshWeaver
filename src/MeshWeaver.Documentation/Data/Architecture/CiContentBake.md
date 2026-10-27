@@ -105,6 +105,60 @@ The two concerns are now split, and they are different kinds of thing:
 — #1707 requires it, because there will always be code that never went through CI. That is
 *recovery*, not a build lane.
 
+### The bake compiles in parallel — in dependency order, with the serial bake's output
+
+`compile` used to compile its NodeTypes one at a time, and that loop was the whole cost of a gate
+shard's compile phase. It now runs them through `BakeSchedule` (`tools/MeshWeaver.PluginTester`):
+at most `--max-parallel <n>` at once (default: one per core; `1` is the serial bake), through the
+same `Cascade` `Merge(maxParallel)` gate `mw-plugin-test build` uses for packages — no semaphore,
+no thread parked on a wait.
+
+- **Order.** A type starts only after every type it is ordered behind has settled. The order is the
+  runtime's own, [`NodeTypeDependencyGraph`](/Doc/Architecture/NodeTypeCompilation): a type whose
+  source queries reach into another type's subtree (`shared=@Store/Coupon/Source`) is built after
+  that type. Edges *inside* a dependency cycle are dropped (`NodeTypeDependencyGraph.WithoutCycleEdges`)
+  — members of a cycle cannot be ordered relative to each other (#1347), and a scheduler waiting on
+  them would never start any. Edges into and out of a cycle stay.
+- **Why the order changes no bytes.** A bake compile references the framework and its modules only,
+  never another NodeType's emitted assembly (MeshWeaver.Plugins#1970: a sibling's source is compiled
+  *into* the consumer), so every compile is a pure function of the node set and the reference set.
+- **Settled, not green.** Every type reports green to the cascade whatever its verdict. A dependent
+  blocked behind a red upstream would be a type the serial bake compiled and the parallel one
+  dropped — the same exit code over a smaller denominator.
+- **Deterministic output.** A compile never writes the console; it carries its lines back and the fold
+  prints them, adds the results and the bundle entries in ordinal path order. The only new line is
+  `bake: compiled N NodeType(s) in X s wall (Y s of compile work, max-parallel=P)`.
+- **Server GC.** `mw-plugin-test` runs with `ServerGarbageCollection`. Roslyn allocates heavily, and
+  under workstation GC the parallel compiles serialise on one heap.
+
+**What "identical to the serial bake" means.** The emit is not deterministic: every compile mints a
+fresh MVID, which also moves the PE timestamp, the PDB id and the `buildMvid` recorded in the bundle
+manifest and in `dependency-edges.json`, and the bundle's zip entries carry their write time. So two
+**serial** bakes of one tree already differ in exactly those fields. `ParallelBakeTest` uses that as the
+bar: it bakes serially twice, masks exactly those fields, requires the two to agree, and then requires
+a parallel bake to agree with them. Agreement covers every output file and every bundle entry, the
+per-type verdicts and every log line except the one that reports timing. Its negative control is a
+tree whose `Leaf7` source changed: the same comparison must report `Leaf7.dll` and must not report
+`Leaf6.dll`. A second case runs a chain through the scheduler with a work item that parks until its
+dependent starts. With the edge, the dependent never starts first. With the edge withheld, it does,
+and the check catches it.
+
+Measured on the full MeshWeaver.Plugins tree (162 NodeTypes over 78 packages, no modules composed so
+63 of them fail fast, 18-core arm64 workstation). Every run produced the same 99 green types and 35
+bundles. Logs (198,748 lines) and the masked output were identical:
+
+| max-parallel | GC | wall (compile loop) | Σ compile work |
+|---|---|---|---|
+| 1 | workstation | 143.3 s | 143.3 s |
+| 4 | workstation | 65.9 s | 254.7 s |
+| 8 | workstation | 58.3 s | 421.8 s |
+| 18 | workstation | 68.2 s | 852.9 s |
+| 1 | server | 128.3 s | 128.3 s |
+| 18 | server | **27.3 s** | 299.7 s |
+
+A CI runner has fewer cores than this workstation, so expect a smaller multiple there. Read the
+`bake: compiled …` line of a shard to get the real number.
+
 ### The gate CONSUMES the bake — `--seed <dir>`
 
 `--seed` points the gate at a bake directory. The wiring is one registration and no new pipeline:
@@ -272,8 +326,9 @@ Three consequences worth carrying:
   Comparing digests of bake outputs will report differences that do not exist, on every run.
   `BakeEquivalenceTest` compares node paths, resolved source sets, dependency records and the
   emitted assemblies' type-and-member surface; that is the shape such a check has to take.
-- **The compiler-driven bake is deterministic** (query order, then ordinal by path). That is strictly
-  better and costs nothing, but it does not make the two producers byte-equal — the old lane is the
+- **The compiler-driven bake's SOURCE ORDER is deterministic** (query order, then ordinal by path).
+  Its emitted bytes are not: each compile mints a fresh MVID (see "The bake compiles in parallel"
+  above). That is strictly better and costs nothing, but it does not make the two producers byte-equal — the old lane is the
   non-deterministic one. What the surface comparison proves is that the concatenation order of
   independent top-level declarations does not affect what is emitted, which is why the old lane's
   non-determinism was survivable.
