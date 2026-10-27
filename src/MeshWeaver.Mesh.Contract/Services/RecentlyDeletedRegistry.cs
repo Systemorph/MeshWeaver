@@ -435,8 +435,70 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones, IActiveDeletio
            && path.StartsWith(root, StringComparison.OrdinalIgnoreCase)
            && (path.Length == root.Length || path[root.Length] == '/');
 
+    // ─── Writes admitted at their COMMIT (#7346) ──────────────────────────────
+    //
+    // The storage guard registers a write only when the write REACHES it. A per-node hub, though,
+    // checks the scopes (IActiveDeletionScopes) in its merge turn, commits, and stores the write only
+    // afterwards, on the commit echo. A delete opening its scope between the owner's check and the
+    // storage write found nothing registered, ran, and the write's flush was then refused — by the
+    // scope, or by the tombstone once the delete had answered — after the owner had committed and
+    // served it: the writer heard "failed" for a write that had happened, the #6953 disagreement.
+    //
+    // So the owner's check IS an admission, held from the commit to the storage write's answer: it
+    // is registered with the admitted writes (a deletion waits for it, exactly as for one the guard
+    // admitted) and, while it is held, the guard lets a write to its path through an open scope —
+    // the deletion is waiting for it, so it lands BEFORE the deletion, never after. The same
+    // register-then-test order as the guard's (see the section above) makes the two sides see each
+    // other: the write is refused at commit, or the deletion waits for it.
+    //
+    // By PATH, not by write: the commit and the storage write are different objects on different
+    // threads. A second write to the same path that reaches the guard while an admission is held
+    // passes too — and is registered by the guard, so the deletion waits for it as well. No NEW
+    // admission is granted under an open scope, so the set only shrinks while a deletion waits.
+
+    private ImmutableDictionary<long, string> _committedAdmissions = ImmutableDictionary<long, string>.Empty;
+
+    /// <inheritdoc />
+    public IDisposable? AdmitCommit(string? path, out string? deletionRoot)
+    {
+        deletionRoot = null;
+        if (string.IsNullOrEmpty(path))
+            return EmptyScope.Instance;
+        // Register FIRST, then test — the order that makes a deletion opening concurrently either
+        // refuse this write here or wait for it.
+        var id = Interlocked.Increment(ref _nextAdmittedWrite);
+        _admittedWrites[id] = [path];
+        ImmutableInterlocked.Update(ref _committedAdmissions, set => set.SetItem(id, path));
+        if (IsUnderActiveDeletion(path, out deletionRoot))
+        {
+            SettleAdmittedWrite(id);
+            return null;
+        }
+        return new AdmittedWrite(this, id);
+    }
+
+    /// <summary>
+    /// True while a write to exactly <paramref name="path"/> holds an admission taken at its commit
+    /// (<see cref="AdmitCommit"/>) — the storage guard then lets it through a scope that opened after
+    /// the admission, because that deletion is waiting for it.
+    /// </summary>
+    /// <param name="path">The path a write reaching the storage guard writes.</param>
+    /// <returns><c>true</c> when the write was admitted at its commit and must not be refused.</returns>
+    public bool IsAdmittedAtCommit(string? path)
+    {
+        var admissions = Volatile.Read(ref _committedAdmissions);
+        if (admissions.IsEmpty || string.IsNullOrEmpty(path))
+            return false;
+        foreach (var admitted in admissions.Values)
+            if (string.Equals(admitted, path, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
     private void SettleAdmittedWrite(long id)
     {
+        if (!Volatile.Read(ref _committedAdmissions).IsEmpty)
+            ImmutableInterlocked.Update(ref _committedAdmissions, set => set.Remove(id));
         if (_admittedWrites.TryRemove(id, out _))
             _admittedWriteSettled.OnNext(System.Reactive.Unit.Default);
     }

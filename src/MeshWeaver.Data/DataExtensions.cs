@@ -2714,6 +2714,17 @@ public static class DataExtensions
         // Detaches the owner-disposing NACK once the gate is claimed here (#3432) — see
         // RegisterOwnerDisposingNack's return value.
         var ownerNackDetach = new SingleAssignmentDisposable();
+        // 🚨 The write's admission against the deletion scopes, taken in the merge turn and held from
+        // the COMMIT to the durable flush's STORAGE answer (#7346) — so a delete or move that opens
+        // its scope in between waits for this write instead of refusing its flush after the owner
+        // has committed and served it. Exactly one holder at a time: the merge turn takes it, the
+        // flush leg TAKES it over on the commit echo and releases it on the flush's own terminal,
+        // and every path that commits nothing (a refusal, a no-op, a fault, an echo that never
+        // comes) releases it at once.
+        IDisposable? commitAdmission = null;
+        IDisposable? TakeCommitAdmission() => System.Threading.Interlocked.Exchange(ref commitAdmission, null);
+        void ReleaseCommitAdmission() => TakeCommitAdmission()?.Dispose();
+        var echoWatcherEnded = 0;
         // The version the entity carries once this patch is committed — minted by the merge, or the
         // live version for a patch that changed nothing. -1 until the merge turn decides.
         long committedVersion = -1;
@@ -2781,7 +2792,14 @@ public static class DataExtensions
                 // posted yet (e.g. commit emission lost in a teardown) — the caller's
                 // retry machinery takes over; never a silent hang.
                 .Timeout(TimeSpan.FromSeconds(20))
-                .Finally(postDetach.Dispose),
+                .Finally(() =>
+                {
+                    postDetach.Dispose();
+                    System.Threading.Interlocked.Exchange(ref echoWatcherEnded, 1);
+                    // The echo watcher ended. If the flush leg took the admission over it is no longer
+                    // here; otherwise nothing will flush this write, so nothing may wait for it.
+                    ReleaseCommitAdmission();
+                }),
             // Durable flush (persist + publish the cache-eviction feed event), then ack; no hook
             // registered → ack on the in-memory commit. Armed through the totality seam so a
             // stream that ENDS before the echo arrives, or a flush that ends without emitting,
@@ -2792,7 +2810,27 @@ public static class DataExtensions
                 // The echo CONTAINING this write reached the watcher: the merge committed. What
                 // follows is durability; a trail ending here names a slow or lost flush.
                 hub.NoteRequestStage(request.Id, "PATCH_ECHO_SEEN");
-                return hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!);
+                // The flush now holds this write's admission (#7346), until ITS storage write answers
+                // — not the ack, which the flush bound may post while the write is still in flight.
+                var admission = TakeCommitAdmission();
+                IObservable<bool>? durable;
+                try
+                {
+                    durable = hub.ServiceProvider.GetService<IPostCommitFlush>()?.Flush(committed.Value!);
+                }
+                catch
+                {
+                    // Rethrown, not swallowed: the watcher NACKs it (PATCH_FLUSH_FAULTED_SYNC). Nothing
+                    // will be stored, so nothing may wait for it.
+                    admission?.Dispose();
+                    throw;
+                }
+                if (durable is null)
+                {
+                    admission?.Dispose();
+                    return null;
+                }
+                return admission is null ? durable : durable.Finally(admission.Dispose);
             },
             TimeSpan.FromSeconds(10),
             AckOnce,
@@ -3036,8 +3074,14 @@ public static class DataExtensions
                         && pathValue.TryGetValue<string>(out var livePath)
                             ? livePath
                             : hub.Address.Path;
-                    if (deletionScopes is not null
-                        && deletionScopes.IsUnderActiveDeletion(patchedPath, out var deletionRoot))
+                    // 🚨 And ADMITTED here when it is not refused (#7346): the check and the storage
+                    // write are separated by the commit echo and the flush, and a delete opening its
+                    // scope in that gap must wait for this write rather than refuse its flush after it
+                    // has committed. The admission is held until the flush's storage write answers,
+                    // and released at once on every path below that commits nothing.
+                    string? deletionRoot = null;
+                    var admission = deletionScopes?.AdmitCommit(patchedPath, out deletionRoot);
+                    if (deletionScopes is not null && admission is null)
                     {
                         AckOnce(false, new MeshNodeError(
                             MeshNodeErrorCode.NotFound, hubPath,
@@ -3047,6 +3091,12 @@ public static class DataExtensions
                             + " The patch was NOT applied."));
                         return null;
                     }
+                    // Handed to the flush leg through the shared holder (a re-run turn replaces — and
+                    // releases — what an earlier one left). An echo watcher that already ended will
+                    // never hand it to a flush, so it is released at once.
+                    System.Threading.Interlocked.Exchange(ref commitAdmission, admission)?.Dispose();
+                    if (System.Threading.Volatile.Read(ref echoWatcherEnded) != 0)
+                        ReleaseCommitAdmission();
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
                         as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");
@@ -3069,6 +3119,8 @@ public static class DataExtensions
                     if (System.Text.Json.Nodes.JsonNode.DeepEquals(preMergeNode, currentNode))
                     {
                         hub.NoteRequestStage(request.Id, $"PATCH_MERGE_NOCHANGE refused={refusedKeys}");
+                        // Nothing commits, so nothing is flushed for a deletion to wait on.
+                        ReleaseCommitAdmission();
                         if (refusedKeys > 0)
                             AckOnce(false, new MeshNodeError(
                                 MeshNodeErrorCode.Conflict, hubPath,
@@ -3129,6 +3181,7 @@ public static class DataExtensions
                             hub.Address.Path, request.AccessContext, jsonOpts) is { } commitRefusal)
                     {
                         hub.NoteRequestStage(request.Id, "PATCH_COMMIT_REFUSED");
+                        ReleaseCommitAdmission();
                         AckOnce(false, new MeshNodeError(MeshNodeErrorCode.Validation, hubPath, commitRefusal));
                         return null;
                     }
@@ -3149,6 +3202,7 @@ public static class DataExtensions
                 }
                 catch (Exception ex)
                 {
+                    ReleaseCommitAdmission();
                     AckOnce(false, ClassifyPatchException(ex, hubPath));
                     return null;
                 }
@@ -3161,7 +3215,12 @@ public static class DataExtensions
                         coldLane.ReleaseHead();
                 }
             },
-            ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
+            ex =>
+            {
+                // The turn's change failed to apply: nothing committed, nothing will be flushed.
+                ReleaseCommitAdmission();
+                AckOnce(false, ClassifyPatchException(ex, hubPath));
+            });
 
         // Dispatched to the primary's executor; the next stage is recorded on that executor.
         hub.NoteRequestStage(request.Id, "PATCH_MERGE_DISPATCHED");
