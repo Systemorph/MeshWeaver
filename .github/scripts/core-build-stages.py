@@ -8,7 +8,7 @@ Core declares its suites as build-host stages, ONE declaration for both routes t
     image, staged on the host at /core-tests;
   * a pull request or trunk run (Doc/Architecture/BuildHosts → "Moving a repository's tests to the
     build server") runs `build` FIRST — the whole solution, Release, warnings as errors, as
-    dotnet-test.yml's `build` job does, restored OFFLINE from the host's prepared package cache, then
+    dotnet-test.yml's `build` job does, restored from the host's prepared package cache (the fallback folder), then
     `core-tests.py pack` of this run's tree into $MW_BUILD_OUTPUTS/core-tests — and then the same
     shard and doc-gate stages.
 
@@ -57,14 +57,24 @@ SHARD_TIMEOUT_MINUTES = 20
 # dotnet-test.yml's doc-gate job cap is 12 on a runner; a host also stages the gate's trees.
 DOC_GATE_TIMEOUT_MINUTES = 25
 SOLUTION = "MeshWeaver.slnx"
-# The `build` job, as one stage. No restore STEP: the host comes prepared, and the build resolves
-# every package from the host's read-only prepared cache (bound by `needs: nuget` as
-# NUGET_FALLBACK_PACKAGES) with that cache as its ONLY source — a package the host was not prepared
-# with is a red restore, never a download.
+# The `build` job, as one stage. No restore STEP: the host comes prepared. The build restores through
+# the repository's own nuget.config (its packageSourceMapping included) with the host's read-only
+# prepared cache bound as the FALLBACK folder (`needs: nuget` -> NUGET_FALLBACK_PACKAGES): every package
+# the cache holds is read from it and nothing is fetched. 🚨 Never `--source "$NUGET_FALLBACK_PACKAGES"`:
+# with packageSourceMapping on, a source passed on the command line is a source no pattern maps to, so
+# EVERY package is NU1100 even from a complete cache (measured: 435 x NU1100 restoring
+# MeshWeaver.Hosting.Test's closure from a warm cache; 0 errors and 0 downloads through the fallback
+# folder). A package the cache does not hold yet (a new or bumped PackageVersion) is restored into the
+# run's own writable package folder and NAMED below; the host reports it (MWPREP001) and promotes it into
+# the cache after a succeeded TRUNK build (MeshWeaver.Deploy#42), so the cache follows main.
 BUILD_COMMAND = (
     "set -euo pipefail; "
     ': "${NUGET_FALLBACK_PACKAGES:?the host bound no prepared package cache (needs: nuget)}"; '
-    f'dotnet build {SOLUTION} -c Release -p:CIRun=true -warnaserror --source "${{NUGET_FALLBACK_PACKAGES}}"; '
+    f'dotnet build {SOLUTION} -c Release -p:CIRun=true -warnaserror; '
+    'fetched=$({ find "${NUGET_PACKAGES:?the host bound no writable package folder}" -mindepth 2 -maxdepth 2 -type d '
+    "2>/dev/null || true; } | sed -E 's#.*/([^/]+)/([^/]+)$#\\1/\\2#' | sort | tr '\\n' ' '); "
+    'if [ -n "$fetched" ]; then echo "::warning::the prepared package cache did not hold: $fetched- restored for '
+    'this run; a succeeded trunk build promotes them"; else echo "every package came from the prepared cache"; fi; '
     "missing=$(comm -23 <(find test -name '*.csproj' ! -path '*/bin/*' | sort) "
     f"<(grep -oE 'test/[^\"]+\\.csproj' {SOLUTION} | sort)); "
     f'if [ -n "$missing" ]; then echo "::error::these test projects are not in {SOLUTION}, so they are never built '
@@ -87,9 +97,11 @@ OWES = [
     "deadline; the deployment route already submits one pinned run per stage, but such runs do not share one "
     "$MW_BUILD_OUTPUTS, so the shards need this run's pack through the shared cache (`needs: outputs`), which today "
     "promotes only a trunk run's content-keyed output (Actions: one `build`, then the 8-way `test` matrix)",
-    "prepared packages: the build restores ONLY from the host's prepared cache (NUGET_FALLBACK_PACKAGES); that the "
-    "cache holds core's whole restore closure, refreshed when Directory.Packages.props changes, is not established "
-    "(Actions: the `build` job's NuGet-shelf hydration and restore)",
+    "prepared packages: the build restores through the repository's nuget.config with the host's cache as the "
+    "fallback folder, and a package the cache lacks is restored for the run and named; the cache is WARMED only by "
+    "MeshWeaver.Deploy#42 (a succeeded trunk build's restored packages promoted into <cache>/nuget) - until that is on "
+    "build-latest and a trunk build of core has run there, core's restore closure is not in the cache (Actions: the "
+    "`build` job's NuGet-shelf hydration and restore)",
     "browser: the shards that run browser tests need the headless browser and the font set the `browser-fonts` job "
     "stages and each `test` shard provisions; the build-host image (MeshWeaver.Deploy deploy/build-host/Dockerfile) "
     "carries neither",
@@ -237,6 +249,7 @@ def _self_test() -> int:
     expect(all(s["command"].endswith(" --repo .") for s in doc["stages"][1:-1]),
            "every shard records and gates with the checkout's own scripts (record-host-crash.py, check-untyped-content.sh)")
     expect(doc["stages"][0]["needs"] == ["nuget"], "the build reads the host's prepared package cache, and nothing else")
+    expect("--source" not in doc["stages"][0]["command"], "the build restores through the repository's source mapping, never a --source")
     expect(doc["owes"] == OWES and "ciEquivalent" not in doc, "the debt is declared and nothing is claimed")
     print("negative controls — each must be RED:")
     expect(any("CI_SHARD_TOTAL is 9" in p for p in problems(good, "env:\n  CI_SHARD_TOTAL: 9\n")),
