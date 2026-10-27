@@ -709,8 +709,11 @@ public static class SpaceDeletion
     }
 
     /// <summary>
-    /// The partition an install record's manifest installs into — its <c>targetPartition</c>, else its
-    /// <c>id</c>, else the node's id — or <c>null</c> when the manifest cannot be read. Reads the
+    /// The partition an install record's manifest installs into — its <c>targetPartition</c>, else the
+    /// RECORD NODE's id (exactly <c>PackageInstaller.TargetPartitionOf(record.Id, manifest)</c>; the
+    /// manifest's own <c>id</c> is never consulted, because the installer, the repair service and the
+    /// teardown handler all key the fallback on the record) — or <c>null</c> when the manifest cannot
+    /// be read. Reads the
     /// manifest as JSON whatever shape it arrives in: a <see cref="JsonElement"/>, a
     /// <see cref="JsonNode"/>, or the catalog's own typed <c>PackageManifest</c>, which a
     /// <c>ContentAs</c> into any locally declared projection would answer <c>null</c> for, because a
@@ -744,48 +747,75 @@ public static class SpaceDeletion
         }
         if (manifest.ValueKind != JsonValueKind.Object)
             return null;
-        string? id = null, targetPartition = null;
+        string? targetPartition = null;
         foreach (var property in manifest.EnumerateObject())
         {
-            var isId = string.Equals(property.Name, "id", StringComparison.OrdinalIgnoreCase);
-            var isTarget = string.Equals(property.Name, "targetPartition", StringComparison.OrdinalIgnoreCase);
-            if (!isId && !isTarget)
+            if (!string.Equals(property.Name, "targetPartition", StringComparison.OrdinalIgnoreCase))
                 continue;
             if (property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
                 return null;
-            var value = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
-            if (isId)
-                id = value;
-            else
-                targetPartition = value;
+            targetPartition = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
         }
-        return !string.IsNullOrWhiteSpace(targetPartition) ? targetPartition
-            : !string.IsNullOrWhiteSpace(id) ? id
-            : record.Id;
+        return !string.IsNullOrWhiteSpace(targetPartition) ? targetPartition : record.Id;
     }
 
     /// <summary>
     /// The install records targeting <paramref name="space"/>, read AS SYSTEM — or <c>null</c> when
-    /// they could not be established (never read as "none"). The listing only DISCOVERS the record
-    /// paths: an index row's content may still name a record's previous target, so each listed
-    /// record is read from its owning stream (<see cref="ReadCurrentNode"/>), and any record that
-    /// cannot be read leaves the ledger unknown. Cold.
+    /// they could not be established (never read as "none"). The record paths are DISCOVERED from two
+    /// sources unioned: the storage seam's own child enumeration of <c>Plugins</c>, which is
+    /// authoritative and has no index lag — a record committed seconds ago is already in it — and the
+    /// query listing. A complete query frame alone never establishes that the ledger is empty: the
+    /// index trails the store, and a committed record it has not reached yet would otherwise let a
+    /// still-installed package's partition be planned for deletion (the creation lag
+    /// <c>InstallRecordPartitionTeardownHandler.RecordedInstallsTargeting</c> also accounts for).
+    /// Either source failing to answer leaves the ledger unknown. Each discovered record is then read
+    /// from its owning stream (<see cref="ReadCurrentNode"/>) — an index row's content may still name
+    /// a record's previous target — and any record that cannot be read leaves the ledger unknown. Cold.
     /// </summary>
     public static IObservable<ImmutableList<string>?> InstallRecords(IMessageHub hub, string space)
     {
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return AsSystem(hub, () => MeshReading.Read(mesh, InstallRecordsQuery()))
-            .SelectMany(reading => !reading.IsAnswer
+        return InstallRecords(hub, space, AsSystem(hub, () => MeshReading.Read(mesh, InstallRecordsQuery())));
+    }
+
+    /// <summary>
+    /// <see cref="InstallRecords(IMessageHub, string)"/> over a supplied query listing — the seam a
+    /// test uses to stand in for an index that has not yet reached a committed record. Cold.
+    /// </summary>
+    internal static IObservable<ImmutableList<string>?> InstallRecords(
+        IMessageHub hub, string space, IObservable<MeshReading> listing) =>
+        StoredInstallRecordPaths(hub)
+            .Zip(listing.Take(1).DefaultIfEmpty(new MeshReading(InstallRecordsQuery(), [], false, null, [])),
+                (stored, reading) => (stored, reading))
+            .SelectMany(both => both.stored is null || !both.reading.IsAnswer
                 ? Observable.Return<ImmutableList<string>?>(null)
-                : reading.Rows
-                    .Select(r => r.Path)
-                    .Distinct(StringComparer.Ordinal)
+                : both.stored
+                    .Concat(both.reading.Rows.Select(r => r.Path))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Select(path => ReadCurrentNode(hub, path))
                     .MergeBounded(ReadConcurrency)
                     .ToList()
                     .Select(reads => reads.Any(r => r.Node is null)
                         ? null
                         : InstallRecordsTargeting(space, reads.Select(r => r.Node!), hub.JsonSerializerOptions)));
+
+    /// <summary>
+    /// Every node path directly under <c>Plugins</c>, straight from the storage seam (authoritative,
+    /// no index lag), read AS SYSTEM — or <c>null</c> when the store could not be enumerated (no
+    /// storage adapter, a fault, a timeout or an empty completion), which is never read as "none".
+    /// Never errors. Cold.
+    /// </summary>
+    private static IObservable<ImmutableList<string>?> StoredInstallRecordPaths(IMessageHub hub)
+    {
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (storage is null)
+            return Observable.Return<ImmutableList<string>?>(null);
+        return AsSystem(hub, () => storage.ListChildPaths(InstalledPackagesPartition))
+            .Take(1)
+            .Timeout(MeshReading.DefaultBudget)
+            .Select(children => (ImmutableList<string>?)(children.NodePaths ?? []).ToImmutableList())
+            .DefaultIfEmpty(null)
+            .Catch((Exception _) => Observable.Return<ImmutableList<string>?>(null));
     }
 
     /// <summary>The listing that establishes whether the space root exists. Pure.</summary>

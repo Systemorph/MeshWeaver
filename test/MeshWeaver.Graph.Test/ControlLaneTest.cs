@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -328,6 +329,25 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             refused.Message.Should().Contain("uninstall the package through the Store").And.Contain(record);
             (await target.Exists($"{space}/Page")).Should().BeTrue();
         }
+    }
+
+    /// <summary>
+    /// #7325 review: a COMMITTED install record the query index has not reached yet still blocks the
+    /// deletion. The listing here is a complete answer that omits the record — exactly what an index
+    /// trailing the store returns — and the ledger is still read from the storage seam's own child
+    /// enumeration, so the record is found. A listing that is not an answer leaves the ledger unknown.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task InstallRecords_FindsACommittedRecordTheQueryIndexHasNotReached()
+    {
+        await target!.SeedPackageSpace("Lagged");
+        await target.SeedInstallRecord("lagged-pkg", targetPartition: "Lagged");
+        var query = SpaceDeletion.InstallRecordsQuery();
+
+        (await target.InstallRecordsOver("Lagged", new MeshReading(query, [], true, null, [])))
+            .Should().Equal(["Plugins/lagged-pkg"], "the store enumeration has no index lag");
+        (await target.InstallRecordsOver("Lagged", new MeshReading(query, [], false, null, [])))
+            .Should().BeNull("negative control: a listing that is not an answer never reads as 'no record'");
     }
 
     // ───────────────────────────── forwarded events ─────────────────────────────
@@ -748,6 +768,11 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         SpaceDeletion.InstallRecordsTargeting("retarget-pkg", [typed], options)
             .Should().BeEmpty("a declared target partition wins over the id");
         SpaceDeletion.InstallRecordsTargeting("other", [typed, json], options).Should().Equal("Plugins/other");
+        // The fallback is the RECORD's id, never the manifest's (PackageInstaller.TargetPartitionOf).
+        var renamed = Record("Installed", System.Text.Json.JsonSerializer.SerializeToElement(new { id = "Other", targetPartition = (string?)null }));
+        SpaceDeletion.InstallRecordsTargeting("Installed", [renamed], options).Should().Equal("Plugins/Installed");
+        SpaceDeletion.InstallRecordsTargeting("Other", [renamed], options)
+            .Should().BeEmpty("the manifest's own id is not where the installer put the package");
         SpaceDeletion.InstallRecordsTargeting("Retargeted", [typed, Record("broken", 42)], options)
             .Should().BeNull("a record whose target cannot be read may be the one naming this space");
         SpaceDeletion.InstallRecordsTargeting("Retargeted", [Record("empty", null)], options).Should().BeNull();
@@ -893,6 +918,10 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             });
 
         public Task Seed(MeshNode node) => AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(node));
+
+        /// <summary>The install records targeting <paramref name="space"/>, with <paramref name="listing"/> standing in for the query index.</summary>
+        public Task<ImmutableList<string>?> InstallRecordsOver(string space, MeshReading listing) =>
+            AsSystem(Mesh, () => SpaceDeletion.InstallRecords(Mesh, space, Observable.Return(listing)));
 
         public Task SeedPage(string path) =>
             AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(new MeshNode(path)
