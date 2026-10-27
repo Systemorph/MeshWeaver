@@ -104,14 +104,14 @@ public class AnIncompleteLiveRequeryRemovesNothingTest
         fault.ArrivalCount.Should().Be(1, "the fault must actually have been injected, exactly once");
 
         var removed = seen.Where(c => c.ChangeType == QueryChangeType.Removed)
-            .SelectMany(c => c.Items).Select(n => n.Id).ToList();
+            .SelectMany(c => c.Items).Select(n => n.Id).ToImmutableList();
         removed.Should().BeEmpty(
             "no row was deleted — x1 and x2 were only UNREAD by a live run whose listing faulted, and "
             + "an incomplete run must not assert the absence of what it could not read");
 
         var readded = seen.Where(c => c.ChangeType == QueryChangeType.Added)
             .SelectMany(c => c.Items).Select(n => n.Id)
-            .Where(id => id is "x1" or "x2").ToList();
+            .Where(id => id is "x1" or "x2").ToImmutableList();
         readded.Should().BeEmpty(
             "the rows an incomplete run could not read are still held, so the next complete run finds "
             + "them unchanged — re-adding them would mean they had been dropped in between");
