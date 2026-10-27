@@ -443,6 +443,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Dead-Circuit Fan-Out Storm](DeadCircuitFanOutStorm) — a closed tab's owner pushed to the corpse for 46 minutes because the only verdict the eviction acts on could not be said; the release tombstone that says it
 - [Bake Seal — NodeOps Saturation](BakeSealNodeOpsSaturation) — the mesh's ONE node-CRUD hub stops draining under a bulk burst, and every consumer then reports its own bound
 - [Live Query Re-query Cost](LiveQueryRequeryCost) — every write re-walked the security fold's permanent live queries, so one write cost more the larger the mesh; a live raw query now ignores a change whose old and new node types it can never return
+- [A Vanished Child Is Absent](AVanishedChildIsAbsent) — a child directory deleted while its parent was listed failed the whole file-system listing, and a live re-query then reported every row under the parent removed and never listed the write it was answering
 - [The /api/content 503](ContentRoute503) — three causes with different fixes, why the third wears the first's signature, and the black-box discriminator that needs no log line
 - [Refused Replies During Teardown](RefusedRepliesDuringTeardown) — every failure route answers the SENDER, which for a reply is the responder; the answer the caller is parked on is dropped with nobody told
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
