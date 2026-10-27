@@ -3871,14 +3871,19 @@ internal static class NodeTypeCompilationHelpers
     internal static IReadOnlyDictionary<string, string> ModuleVersionsOf(IMessageHub hub)
     {
         var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
         // Held per assembly by the mesh's registry: a direct module.Version read opens the file
         // every time, and this runs per activation and per content write (MeshWeaver#5799).
-        var stamps = hub.ServiceProvider.GetRequiredService<InstalledModules>();
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Resolved only once there IS a module to stamp: a hub built without a mesh (MeshBuilder
+        // registers the registry) carries no installed module, so it has nothing to read either.
+        InstalledModules? stamps = null;
         foreach (var module in modules)
         {
             var name = module.Assembly.GetName().Name;
-            if (!string.IsNullOrEmpty(name) && stamps.StampsOf(module.Assembly).Version is { Length: > 0 } version)
+            if (string.IsNullOrEmpty(name))
+                continue;
+            stamps ??= hub.ServiceProvider.GetRequiredService<InstalledModules>();
+            if (stamps.StampsOf(module.Assembly).Version is { Length: > 0 } version)
                 map[name] = version;
         }
         return map;
@@ -3892,12 +3897,16 @@ internal static class NodeTypeCompilationHelpers
     internal static IReadOnlyDictionary<string, string> ModulePackageVersionsOf(IMessageHub hub)
     {
         var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
-        var stamps = hub.ServiceProvider.GetRequiredService<InstalledModules>();
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Resolved only once there is a module to stamp — see ModuleVersionsOf.
+        InstalledModules? stamps = null;
         foreach (var module in modules)
         {
             var name = module.Assembly.GetName().Name;
-            if (!string.IsNullOrEmpty(name) && stamps.StampsOf(module.Assembly).PackageVersion is { Length: > 0 } version)
+            if (string.IsNullOrEmpty(name))
+                continue;
+            stamps ??= hub.ServiceProvider.GetRequiredService<InstalledModules>();
+            if (stamps.StampsOf(module.Assembly).PackageVersion is { Length: > 0 } version)
                 map[name] = version;
         }
         return map;
