@@ -35,6 +35,13 @@ namespace MeshWeaver.PluginTester;
 /// (compile error, failed test, load failure) stops there: every package that requires it is
 /// reported <c>blocked by &lt;it&gt;</c> and never starts — on red we break, on green we continue.</para>
 ///
+/// <para><b>Inside a package, the NodeTypes compile in parallel too</b>, through one
+/// <see cref="WorkGate"/> for the whole build (at most <see cref="Options.MaxParallel"/> Roslyn
+/// compilations at once, across every package), and are then FOLDED serially in path order — the
+/// verdict lines, bundle entries, tests and records come out exactly as the serial loop produced
+/// them. Until 2026-10-28 they compiled one after another, and one package (MeshWeaver.Plugins'
+/// <c>Hosting</c>, 48 types, 1,516.6 s) was the in-mesh lane's whole critical path.</para>
+///
 /// <para><b>Selection.</b> Naming packages selects them AND their transitive requirements inside
 /// this repo, so a single package builds on freshly built dependencies rather than on nothing.
 /// <c>all</c> (the default) is the full rebuild — the platform-rebuild case, where every package
@@ -101,7 +108,8 @@ public static class CascadeBuild
         /// <summary>Where the JSON report is written; null prints only the table.</summary>
         public string? ReportPath { get; init; }
 
-        /// <summary>Concurrency cap for package work (compile + tests).</summary>
+        /// <summary>Concurrency cap for package work (compile + tests), and — through one
+        /// <see cref="WorkGate"/> shared by every package — for the NodeType compiles inside them.</summary>
         public int MaxParallel { get; init; } = Math.Max(1, Environment.ProcessorCount);
 
         /// <summary>Hard cap per test case.</summary>
@@ -358,21 +366,24 @@ public static class CascadeBuild
         var entriesByPackage = new Dictionary<string, List<BundleWriter.AssemblyEntry>>(StringComparer.Ordinal);
         var entriesLock = new object();
 
-        return Cascade.Run<PackageBuild>(
+        // ONE gate for every NodeType compile of the build: the types of a package compile in
+        // parallel, and the cap holds across packages, so the number of concurrent Roslyn
+        // compilations never exceeds MaxParallel however many packages are in flight (WorkGate).
+        var typeGate = new WorkGate(options.MaxParallel);
+
+        return Cascade.RunObservable<PackageBuild>(
                 selection,
                 DependenciesOf,
-                (id, deps) =>
-                {
-                    var build = BuildPackage(
-                        options, id, typesByPackage.TryGetValue(id, out var types) ? types : [],
+                (id, deps) => BuildPackage(
+                        options, typeGate, id, typesByPackage.TryGetValue(id, out var types) ? types : [],
                         deps, byId, nodeSet, baseReferences, idOf, toolchainId, attribution, workDirectory, nugetResolver,
-                        entriesByPackage, entriesLock, host.ModuleAssemblyPaths);
-                    return (build, build.IsGreen);
-                },
+                        entriesByPackage, entriesLock, host.ModuleAssemblyPaths)
+                    .Select(build => (build, build.IsGreen)),
                 options.MaxParallel)
             .Select(results => Finish(options, wall, frameworkIdentity, snapshot, packages, results, entriesByPackage, workDirectory, DependenciesOf, host.Surface))
             .Finally(() =>
             {
+                typeGate.Dispose();
                 nugetResolver.Dispose();
                 ioPools.Dispose();
             });
@@ -463,8 +474,9 @@ public static class CascadeBuild
         return [.. selected.OrderBy(k => k, StringComparer.Ordinal)];
     }
 
-    private static PackageBuild BuildPackage(
+    private static IObservable<PackageBuild> BuildPackage(
         Options options,
+        WorkGate gate,
         string id,
         TreeNodeLoader.TreeNode[] types,
         IReadOnlyList<Cascade.NodeResult<PackageBuild>> deps,
@@ -521,26 +533,26 @@ public static class CascadeBuild
             + (deps.Count == 0 ? "nothing" : string.Join(", ", deps.Select(d => d.Id)))
             + (external.Length == 0 ? "" : $" (+ external: {string.Join(", ", external)})"));
 
-        var compileClock = Stopwatch.StartNew();
-        var testClock = new Stopwatch();
-        var built = ImmutableArray.CreateBuilder<TypeBuild>();
-        var emitted = ImmutableArray.CreateBuilder<string>();
+        var packageClock = Stopwatch.StartNew();
         var packageDir = Path.Combine(workDirectory, CodeConventions.SanitizeNodeName(id));
 
-        foreach (var candidate in types)
+        // ── 1. COMPILE, in parallel through the build's one gate ──────────────────────────────
+        // Every compile is a pure function of the node set and the reference set: no type of this
+        // package references a sibling's emitted assembly (#1970 above), so the order they run in
+        // changes no byte. Each carries its verdict and timing back; nothing is printed here.
+        TypeCompile CompileOne(TreeNodeLoader.TreeNode candidate)
         {
             var definition = (NodeTypeDefinition)candidate.Node.Content!;
             var resolution = nodeSet.ResolveSources(definition.Sources, definition.Tests, candidate.Node.Path);
             if (resolution.IsEstablished
                 && resolution.Sources.IsEmpty
                 && string.IsNullOrWhiteSpace(definition.Configuration))
-                continue;
+                return new TypeCompile(candidate, resolution, null, null, TimeSpan.Zero, Skipped: true);
 
             var typeClock = Stopwatch.StartNew();
-            NodeSetCompiler.CompiledNode compiled;
             try
             {
-                compiled = NodeSetCompiler.CompileWithModules(
+                var compiled = NodeSetCompiler.CompileWithModules(
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
@@ -548,26 +560,76 @@ public static class CascadeBuild
                     resolveNuGet: TreeBake.BlockingNuGetResolution(nugetResolver),
                     logger: options.Logger,
                     moduleAssemblyPaths: moduleAssemblyPaths);
+                return new TypeCompile(candidate, resolution, compiled, null, typeClock.Elapsed, Skipped: false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                typeClock.Stop();
+                return new TypeCompile(candidate, resolution, null, ex, typeClock.Elapsed, Skipped: false);
+            }
+        }
+
+        return gate.Run(types.Select(candidate => (Func<TypeCompile>)(() => CompileOne(candidate))).ToArray())
+            .Select(compiles => FoldPackage(
+                options, id, compiles, external, dependencyAssemblies, attribution,
+                entriesByPackage, entriesLock, packageClock));
+    }
+
+    /// <summary>One NodeType's compile, as the gate hands it back to the fold.</summary>
+    private sealed record TypeCompile(
+        TreeNodeLoader.TreeNode Candidate,
+        NodeSetSourceResolution Resolution,
+        NodeSetCompiler.CompiledNode? Compiled,
+        Exception? Error,
+        TimeSpan Elapsed,
+        bool Skipped);
+
+    /// <summary>
+    /// ── 2. FOLD, serially and in path order ── what the serial loop did after each compile:
+    /// the verdict line, the bundle entry, the type's tests (against the module set, the
+    /// dependency packages' assemblies and the assemblies this package emitted UP TO AND
+    /// INCLUDING the type — the same prefix the serial loop handed it), and the type's record.
+    /// The output is therefore the serial build's, line for line, whatever order the compiles
+    /// finished in.
+    /// </summary>
+    private static PackageBuild FoldPackage(
+        Options options,
+        string id,
+        ImmutableArray<TypeCompile> compiles,
+        ImmutableArray<string> external,
+        string[] dependencyAssemblies,
+        Lazy<ReferenceGapAttribution> attribution,
+        Dictionary<string, List<BundleWriter.AssemblyEntry>> entriesByPackage,
+        object entriesLock,
+        Stopwatch packageClock)
+    {
+        var testClock = new Stopwatch();
+        var built = ImmutableArray.CreateBuilder<TypeBuild>();
+        var emitted = ImmutableArray.CreateBuilder<string>();
+
+        foreach (var c in compiles)
+        {
+            if (c.Skipped)
+                continue;
+            var candidate = c.Candidate;
+            var resolution = c.Resolution;
+            if (c.Compiled is not { } compiled)
+            {
+                var message = c.Error!.Message;
                 // A reference-set gap is named in the verdict, never left reading as a content
                 // error — the same attribution TreeBake appends (#3022).
-                var gap = ReferenceGapAttribution.MayExplain(ex.Message)
-                    ? attribution.Value.Explain(ex.Message)
+                var gap = ReferenceGapAttribution.MayExplain(message)
+                    ? attribution.Value.Explain(message)
                     : null;
                 built.Add(new TypeBuild(
                     candidate.Node.Path, id,
-                    $"{ex.GetType().Name}: {ex.Message}" + (gap is null ? string.Empty : $"\n   {gap}"),
-                    typeClock.Elapsed, resolution.Sources.Length, null, null));
-                options.Output.WriteLine($"{Stamp()} [{id}]   RED {candidate.Node.Path} ({typeClock.Elapsed.TotalMilliseconds:F0} ms)");
-                options.Output.WriteLine(ex.Message);
+                    $"{c.Error.GetType().Name}: {message}" + (gap is null ? string.Empty : $"\n   {gap}"),
+                    c.Elapsed, resolution.Sources.Length, null, null));
+                options.Output.WriteLine($"{Stamp()} [{id}]   RED {candidate.Node.Path} ({c.Elapsed.TotalMilliseconds:F0} ms)");
+                options.Output.WriteLine(message);
                 if (gap is not null)
                     options.Output.WriteLine($"   {gap}");
                 continue;
             }
-            typeClock.Stop();
             emitted.Add(compiled.DllPath);
 
             var sourceVersions = resolution.Sources
@@ -616,13 +678,13 @@ public static class CascadeBuild
             }
 
             built.Add(new TypeBuild(
-                compiled.NodePath, id, null, typeClock.Elapsed, compiled.Inputs.MatchedSourcePaths.Length,
+                compiled.NodePath, id, null, c.Elapsed, compiled.Inputs.MatchedSourcePaths.Length,
                 compiled.DllPath, tests)
             {
                 Warnings = compiled.Warnings,
             });
             options.Output.WriteLine(
-                $"{Stamp()} [{id}]   ok  {compiled.NodePath} ({typeClock.Elapsed.TotalMilliseconds:F0} ms, "
+                $"{Stamp()} [{id}]   ok  {compiled.NodePath} ({c.Elapsed.TotalMilliseconds:F0} ms, "
                 + $"{compiled.Inputs.MatchedSourcePaths.Length} source(s))"
                 + (tests is null ? "" : tests.Cases.IsEmpty
                     ? " tests: no test classes in the assembly"
@@ -630,11 +692,11 @@ public static class CascadeBuild
                       + $"{tests.Skipped} skipped, {tests.NeedsMesh} needs-mesh")
                 );
         }
-        compileClock.Stop();
+        packageClock.Stop();
 
         var result = new PackageBuild(
             id, built.ToImmutable(), emitted.ToImmutable(),
-            compileClock.Elapsed - testClock.Elapsed, testClock.Elapsed, external);
+            packageClock.Elapsed - testClock.Elapsed, testClock.Elapsed, external);
         options.Output.WriteLine(
             $"{Stamp()} [{id}] {(result.IsGreen ? "GREEN" : "RED")} — compile {result.Compile.TotalSeconds:F1}s, "
             + $"tests {result.Tests.TotalSeconds:F1}s ({result.TestsPassed} passed, {result.TestsFailed} failed, "
@@ -691,6 +753,13 @@ public static class CascadeBuild
         var serial = report.Packages.Sum(p => p.Work.TotalSeconds);
         if (serial > 0)
             output.WriteLine($"build: {serial:F1}s of work in {report.Wall.TotalSeconds:F1}s wall — parallel speed-up {serial / Math.Max(0.001, report.Wall.TotalSeconds):F1}×");
+        // The NodeType compiles run in parallel INSIDE a package as well, so a package's work above
+        // is its wall, not the sum of its compiles. This line is that sum — the serial build's cost.
+        var compiled = report.Packages.Where(p => p.Result is not null).SelectMany(p => p.Result!.Types).ToArray();
+        if (compiled.Length > 0)
+            output.WriteLine(
+                $"build: {compiled.Length} NodeType compile(s), {compiled.Sum(t => t.CompileTime.TotalSeconds):F1}s of compile work "
+                + $"in {report.Wall.TotalSeconds:F1}s wall");
     }
 
     private static string Verdict(Cascade.NodeOutcome outcome) => outcome switch
