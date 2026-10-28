@@ -90,6 +90,31 @@ success.
 > human reader and names no value at all. The fail-closed branch was right to report something it
 > could not resolve; the fix was to make prose not a subject, not to loosen the classification.
 
+## The second occurrence: the Blazor sign-in redirect
+
+The same defect shipped again in the GUI, and the guard could not see it (MeshWeaver.Plugins#4448).
+A signed-out visitor who opens a page they may not read is sent to sign in by `RedirectToLogin` or
+by `NavigationService`'s anonymous gate, and both minted the target as
+`Uri.EscapeDataString(NavigationManager.Uri)`. A `NavigationManager`'s `Uri` is **absolute by
+contract**, yet it spells neither `://` nor `Request.Scheme`, so the classification above read it as
+local. The login page dropped it, and an invitee who followed an invite link to a Space signed in and
+landed on `/` instead of the Space.
+
+On an instance with a public host that is worse than a lost target, and it is why the report read as
+"sent to the marketing site". On the app host, `/` is the landing page, and a SIGNED-OUT `GET` for a
+public page there answers a `301` to the public host. A browser stores a `301` with no cache
+directive and replays it without asking the server, so after signing in the visitor's `/` went to
+the public host and the session cookie stayed on the app host. Two fixes, one per defect:
+
+- **Mint through `ReturnTarget.LocalOf(NavigationManager.Uri)`** (`MeshWeaver.Blazor`), which keeps
+  the path and query. The guard now scans the plugins repository's whole `src/` tree, Razor files
+  included, because the Blazor shell had moved out of both of its old roots. It also classifies a raw
+  `…Navigation….Uri` as absolute.
+- **The stranger's redirect is never stored** (`Cache-Control: no-store`, `Vary: Cookie` on
+  `UsePublicHostRedirect`). It stays a `301` for crawlers, but every browser asks again, so the
+  decision is made on the request it is about. A redirect decided by WHO is asking must never be
+  cacheable by a browser.
+
 ## Source references
 
 | File | Purpose |
