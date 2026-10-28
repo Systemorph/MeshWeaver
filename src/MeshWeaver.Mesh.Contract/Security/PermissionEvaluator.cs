@@ -98,7 +98,7 @@ internal static class PermissionEvaluator
         if (permission == Permission.None)
             return Observable.Return(true);
         return GetEffectivePermissions(hub, nodePath, userId)
-            .Select(p => p.HasFlag(permission));
+            .Select(p => permission.IsMetBy(p));
     }
 
     public static IObservable<Permission> GetEffectivePermissions(IMessageHub hub, string nodePath)

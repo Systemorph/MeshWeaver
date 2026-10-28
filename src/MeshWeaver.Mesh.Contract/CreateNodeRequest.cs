@@ -1171,8 +1171,9 @@ public record MoveNodeRequest(string SourcePath, string TargetPath)
 
 /// <summary>
 /// Permission attribute for <see cref="DeleteNodeRequest"/>: the demand
-/// <see cref="DeletePermission.RequiredFor"/> sets for the node being deleted — Update for ordinary
-/// content, Delete for a partition root or a governance satellite — checked on the hub's path.
+/// <see cref="DeletePermission.RequiredFor"/> sets for the node being deleted — Update or Delete for
+/// ordinary content (either suffices, <see cref="PermissionDemand.IsMetBy"/>), Delete for a partition
+/// root or a governance satellite — checked on the hub's path.
 /// </summary>
 public class DeleteNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Delete)
 {
@@ -1189,8 +1190,8 @@ public class DeleteNodePermissionAttribute() : RequiresPermissionAttribute(Permi
 /// <summary>
 /// Custom permission attribute for MoveNodeRequest. A move IS a delete at the source plus a create
 /// at the target, so it demands those two: the delete demand
-/// (<see cref="DeletePermission.RequiredFor"/>) on the source namespace and Create on the target
-/// namespace. Into ANOTHER partition the source demand is Delete itself: a move carries the node's
+/// (<see cref="DeletePermission.RequiredFor"/> — Update or Delete for ordinary content) on the source
+/// namespace and Create on the target namespace. Into ANOTHER partition the source demand is Delete itself: a move carries the node's
 /// authorship verbatim, and only an administrator of the source may carry it out of the governance
 /// that covered it.
 /// </summary>

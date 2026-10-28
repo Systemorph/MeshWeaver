@@ -61,7 +61,7 @@ public static class HubPermissionExtensions
         ArgumentNullException.ThrowIfNull(hub);
         if (permission == Permission.None)
             return Observable.Return(true);
-        return hub.GetEffectivePermissions(nodePath).Select(p => p.HasFlag(permission));
+        return hub.GetEffectivePermissions(nodePath).Select(p => permission.IsMetBy(p));
     }
 
     /// <summary>
@@ -77,7 +77,7 @@ public static class HubPermissionExtensions
         ArgumentNullException.ThrowIfNull(hub);
         if (permission == Permission.None)
             return Observable.Return(true);
-        return hub.GetEffectivePermissions(nodePath, userId).Select(p => p.HasFlag(permission));
+        return hub.GetEffectivePermissions(nodePath, userId).Select(p => permission.IsMetBy(p));
     }
 
     /// <summary>

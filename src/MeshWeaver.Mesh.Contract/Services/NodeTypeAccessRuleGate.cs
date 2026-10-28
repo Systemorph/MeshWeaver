@@ -58,6 +58,8 @@ public static class NodeTypeAccessRuleGate
         Permission.Read => NodeOperation.Read,
         Permission.Update => NodeOperation.Update,
         Permission.Delete => NodeOperation.Delete,
+        // The content-delete demand (DeletePermission.RequiredFor) asks a DELETE question.
+        PermissionDemand.UpdateOrDelete => NodeOperation.Delete,
         _ => null
     };
 

@@ -8,8 +8,12 @@ namespace MeshWeaver.Mesh.Security;
 /// source and must ask for nothing more and nothing less.
 ///
 /// <para>Deleting ordinary CONTENT is an edit of the space it lives in: it demands
-/// <see cref="Permission.Update"/>, which an <c>Editor</c> holds. Deleting what GOVERNS a space
-/// keeps demanding <see cref="Permission.Delete"/>, which only an <c>Admin</c> holds:</para>
+/// <see cref="PermissionDemand.UpdateOrDelete"/> — <see cref="Permission.Update"/>, which an
+/// <c>Editor</c> holds, OR <see cref="Permission.Delete"/>, so a role that carries Delete without
+/// Update keeps the right to delete content it always had (policy
+/// <c>delete-suffices-for-content</c>). Deleting what GOVERNS a space keeps demanding
+/// <see cref="Permission.Delete"/> alone, which only an <c>Admin</c> holds among the built-in
+/// roles:</para>
 /// <list type="bullet">
 /// <item><description>a partition root — a Space, a Partition, a user home: removing it tears the
 /// whole partition down;</description></item>
@@ -19,7 +23,8 @@ namespace MeshWeaver.Mesh.Security;
 /// </list>
 /// <para>A node type whose access rule decides Delete for itself (Space, Partition, the sync
 /// config) keeps its own demand — this rule is the DEFAULT the rule-less paths apply, never an
-/// override of a declared rule. <see cref="Role.Editor"/> and the permission numbers are unchanged:
+/// override of a declared rule. Evaluate the demand with <see cref="PermissionDemand.IsMetBy"/>,
+/// never <c>HasFlag</c>. <see cref="Role.Editor"/> and the permission numbers are unchanged:
 /// the Delete bit still distinguishes an Admin, so <c>HasFlag(Permission.All)</c> keeps meaning
 /// what it meant.</para>
 /// </summary>
@@ -32,8 +37,10 @@ public static class DeletePermission
     /// <summary>
     /// The permission deleting the node at <paramref name="path"/> demands:
     /// <see cref="Permission.Delete"/> for a partition root or anything under a
-    /// <see cref="GovernanceSegments">governance satellite</see>, <see cref="Permission.Update"/>
-    /// for every other node. An empty path is a root, so it demands Delete.
+    /// <see cref="GovernanceSegments">governance satellite</see>,
+    /// <see cref="PermissionDemand.UpdateOrDelete"/> (either bit suffices) for every other node. An
+    /// empty path is a root, so it demands Delete. Evaluate it with
+    /// <see cref="PermissionDemand.IsMetBy"/>.
     /// </summary>
     public static Permission RequiredFor(string? path)
     {
@@ -43,7 +50,7 @@ public static class DeletePermission
         foreach (var segment in segments)
             if (GovernanceSegments.Contains(segment))
                 return Permission.Delete;
-        return Permission.Update;
+        return PermissionDemand.UpdateOrDelete;
     }
 
     /// <summary>
