@@ -4955,7 +4955,7 @@ jobs:
             tests="$(dirname "$project").Test"
             [ -d "$tests" ] || continue
             mapfile -t csproj < <(find "$tests" -maxdepth 1 -name '*.csproj')
-            [ "${#csproj[@]}" -eq 1 ] || { echo "::error::$tests holds ${#csproj[@]} .csproj files — 'dotnet test $tests' needs exactly one"; exit 1; }
+            [ "${#csproj[@]}" -eq 1 ] || { echo "::error::$tests holds ${#csproj[@]} .csproj files — 'dotnet test $tests' needs exactly one" >&2; exit 1; }
             suites+=("$tests")
             echo "$GITHUB_WORKSPACE/${csproj[0]}"
           done < "$RUNNER_TEMP/projects.txt" > "$RUNNER_TEMP/suites.txt"
@@ -5439,15 +5439,16 @@ jobs:
             rc=$?
             set -e
             # 🚨 --no-build on a suite `tests-build` did not build exits 0 with NO .trx — a pass that
-            # ran nothing. A green exit counts only with a .trx that ran at least one test.
+            # ran nothing. A green exit counts only with a .trx that EXECUTED at least one test
+            # (`executed`, never `total`, which counts skipped tests too).
             trx="$RUNNER_TEMP/trx/$MODULE/ledger.trx"
             if [ "$rc" -eq 0 ]; then
-              total=$(python3 -c "import re,sys; m=re.search(r'<Counters[^>]*\\btotal=\"(\\d+)\"', open(sys.argv[1], encoding='utf-8', errors='replace').read()); print(m.group(1) if m else 0)" "$trx" 2>/dev/null || echo 0)
+              total=$(python3 -c "import re,sys; c=re.search(r'<Counters[^>]*>', open(sys.argv[1], encoding='utf-8', errors='replace').read()); m=c and (re.search(r'\\bexecuted=\"(\\d+)\"', c.group(0)) or re.search(r'\\bpassed=\"(\\d+)\"', c.group(0))); print(m.group(1) if m else 0)" "$trx" 2>/dev/null || echo 0)
               if [ "${total:-0}" -lt 1 ]; then
-                echo "::error::$MODULE: 'dotnet test --no-build' exited 0 but $( [ -f "$trx" ] && echo "its .trx counts 0 tests" || echo "wrote no .trx" ) — the suite ran nothing (did 'Module tests (build once)' build it?)"
+                echo "::error::$MODULE: 'dotnet test --no-build' exited 0 but $( [ -f "$trx" ] && echo "its .trx executed 0 tests" || echo "wrote no .trx" ) — the suite ran nothing (did 'Module tests (build once)' build it?)"
                 rc=1
               else
-                echo "$MODULE: $total test(s) in $trx"
+                echo "$MODULE: $total test(s) executed per $trx"
               fi
             fi
             if [ "$rc" -eq 0 ]; then
