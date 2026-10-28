@@ -2530,7 +2530,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // Connected now, before the first revision, so a revocation that commits before the first
             // revision arrives is still seen.
             lifetime.Add(standing.Subscribe(_ => { }, _ => { }));
-            var outcomes = standing.Select(read => read.Outcome);
 
             return shared
                 .AdmitEachRevision(
@@ -2540,12 +2539,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         // from now on re-decides it.
                         inputs.Saw(revision);
                         return DeclaredReadSubscriptionFollow.VerdictOf(
-                                outcomes,
-                                () => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
-                                    .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
-                                budget,
-                                Scheduler.Default)
-                            .CombineLatest(RuleAdmitsRevision(standing, revision, captured), (standingRead, rule) => standingRead && rule);
+                            StandingReadOf(standing, revision, captured),
+                            () => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
+                                .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
+                            budget,
+                            Scheduler.Default);
                     },
                     budget,
                     () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"))
@@ -2553,28 +2551,53 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         });
 
     /// <summary>
-    /// 🚨 A grant the type's RULE gave (the fold denied) rests on the node's own fields — a
+    /// The standing Read as it applies to ONE revision — what <see cref="DeclaredReadSubscriptionFollow.VerdictOf"/>
+    /// decides that revision on.
+    ///
+    /// <para>🚨 A grant the type's RULE gave (the fold denied) rests on the node's own fields — a
     /// satellite's <see cref="MeshNode.MainNode"/>, its <see cref="MeshNode.NodeType"/> — so it is
     /// decided on EACH revision, never carried over from the node the probe read: a satellite repointed
     /// at a MainNode the reader cannot read is refused on the revision that repoints it. Asked again on
-    /// every settled re-check of the standing Read. A fold grant does not depend on the revision.
+    /// every settled re-check of the standing Read. A fold grant does not depend on the revision.</para>
+    ///
+    /// <para>🚨 The rule's answer is part of the ONE outcome stream, never a second verdict combined
+    /// beside it (review of #7504, threads 4404991980 and 4404992100). Combined beside it, a pending
+    /// marker was filtered out ahead of the rule's switch, so a rule check started under the grant
+    /// stayed subscribed through the re-check a revocation began and could still admit the revision
+    /// on its stale answer; and a rule check that never answered was bounded by nothing once the
+    /// revision's first verdict was in. Here the pending marker reaches the switch and cancels that
+    /// check, and a rule check in flight IS a pending marker — so it shares the unresolved transition's
+    /// one deadline in <see cref="DeclaredReadSubscriptionFollow.VerdictOf"/>, and past it is a refusal.
+    /// A rule refusal is a definitive denial, handed to the type's declared point read exactly as the
+    /// admission does (<see cref="AdmittedThroughDeclaration"/>); a rule that faults or reaches no
+    /// verdict is undetermined — refused.</para>
     /// </summary>
-    private IObservable<bool> RuleAdmitsRevision(IObservable<StandingRead> standing, MeshNode revision, AccessContext captured)
+    private IObservable<PermissionCheckOutcome?> StandingReadOf(
+        IObservable<StandingRead> standing, MeshNode revision, AccessContext captured)
         => standing
-            .Where(read => read.Outcome is not null)
-            .Select(read => read.ViaRule
+            .Select(read => read.Outcome is { IsGranted: true } && read.ViaRule
                 ? Observable.Defer(() => ReadRuleVerdictOn(revision, captured))
                     .Take(1)
-                    .Select(verdict => verdict == true)
+                    .Select(verdict => verdict switch
+                    {
+                        true => PermissionCheckOutcome.Granted,
+                        false => PermissionCheckOutcome.Denied,
+                        null => PermissionCheckOutcome.Undetermined(
+                            $"the read rule reached no verdict on a revision of '{revision.Path}'"),
+                    })
                     .Catch((Exception ex) =>
                     {
                         logger.LogWarning(ex,
-                            "MeshNodeStreamCache: the read rule could not decide a revision of {Path} for {User} — refused",
+                            "MeshNodeStreamCache: the read rule could not decide a revision of {Path} for {User} — undetermined, refused",
                             revision.Path, captured.ObjectId);
-                        return Observable.Return(false);
+                        return Observable.Return(PermissionCheckOutcome.Undetermined(
+                            $"the read rule failed on a revision of '{revision.Path}' ({ex.GetType().Name})"));
                     })
-                    .DefaultIfEmpty(false)
-                : Observable.Return(true))
+                    .DefaultIfEmpty(PermissionCheckOutcome.Undetermined(
+                        $"the read rule answered nothing on a revision of '{revision.Path}'"))
+                    .Select(outcome => (PermissionCheckOutcome?)outcome)
+                    .StartWith((PermissionCheckOutcome?)null)
+                : Observable.Return(read.Outcome))
             .Switch();
 
     /// <summary>One settled (or, as <see cref="Pending"/>, in-flight) re-check of a followed standing Read.</summary>
@@ -2749,7 +2772,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             Node = node,
             AccessContext = captured
         };
-        return NodeTypeAccessRuleGate.Evaluate(rule, context, captured.ObjectId, logger)
+        // 🚨 Run AS the reader (review of #7504, thread 4404992039): setting the validation context's
+        // AccessContext does not set the ambient one, and a rule that delegates to the permission fold
+        // (SatelliteAccessRule → CheckPermission) is evaluated under the AMBIENT context — whose
+        // IsApiToken drives the API-token clamp. Asked about a revision, this runs on whatever thread
+        // delivered it (the shared stream's privileged identity), so without the switch a token
+        // reader was decided as someone else. The same scope DeclaredPointRead's standard read uses.
+        return meshHub.ServiceProvider.GetService<AccessService>()
+            .RunAs(captured, () => NodeTypeAccessRuleGate.Evaluate(rule, context, captured.ObjectId, logger))
             .Select(outcome => outcome.IsGranted ? true : outcome.IsUndetermined ? (bool?)null : false);
     }
 

@@ -2397,6 +2397,13 @@ rule is asked about each revision itself and again on every settled re-check: a 
 at a MainNode the reader cannot read is refused on that revision
 (`ACacheReadAdmittedByARule_EndsWhenTheSatelliteIsRepointed`), and a revoked grant on a MainNode in
 another partition ends the read (`ACacheReadAdmittedByARule_EndsWhenTheOffPartitionMainNodeGrantIsRevoked`).
+The rule's per-revision answer is part of the ONE standing outcome the revision is decided on,
+never a second verdict combined beside it: a rule check in flight is a pending re-check, so a
+revocation's re-check cancels a rule check started under the grant
+(`ACacheReadAdmittedByARule_ARevisionsRuleAnswerFromBeforeARevocation_NeverAdmitsIt`) and a rule
+check that never answers shares the re-check's deadline. A rule refusal is a definitive denial
+(handed to the declared point read, as at admission). The rule runs AS the reader, so the API-token
+clamp applies to it (`ACacheReadAdmittedByARule_ForAnApiToken_EndsWhenRepointedToABrowserOnlyMainNode`).
 
 A re-check in flight holds: a revision that arrives meanwhile waits for the settled verdict, bounded
 by the permission-establishment budget. A grant admits, an undetermined re-check refuses, and a
