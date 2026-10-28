@@ -147,8 +147,12 @@ project. Core keeps the *mechanism* and the module repository owns the *list*:
    tests every module instead of narrowing to none. Omitted, the tester image's shelf is used, the key is
    byte-identical to before, and nothing changes for a caller that sets nothing.
 
-   **What "a project it reaches" may NOT contain: a directory.** The scope reads every reach entry
-   as a directory prefix, so the reach must hold only what MSBuild could import. `msbuild-evaluate.py`
+   **What a declared import may NOT add to the reach: a directory.** The scope reads every reach
+   entry as a directory prefix. The reach deliberately holds the directory of each project the
+   shelf reaches (`evaluated_reach()` adds it), so an edit to any source file of that project
+   selects every module; that entry is required and must stay. A declared `<Import>` is different:
+   it names a file, so the entries it contributes must be files MSBuild could import (or glob
+   patterns), never a directory. `msbuild-evaluate.py`
    used to record an `<Import Project="$(P)">` whose property evaluates EMPTY as the importing file's
    own directory. Plugins' `src/Directory.PlatformRefs.targets` declares exactly that
    (`$(_MeshWeaverCoreRefsPath)`, empty outside a platform mount), so `src` entered the shelf's reach
