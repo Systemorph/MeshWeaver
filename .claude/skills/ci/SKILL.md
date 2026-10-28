@@ -434,7 +434,14 @@ Full reference:
 - [ ] Missing external inputs fail a `preflight` job RED, naming what to provision.
 - [ ] A lane on `schedule:`/`workflow_dispatch` routes its failure to a durable artefact (an
       issue on its own label, cleared on success) — an honest red nobody reads is the same defect as
-      a gate that cannot fail.
+      a gate that cannot fail. In core this is ENFORCED for `schedule:` by
+      `check-scheduled-lane-reporters.py` (#7416 — the rule above was prose only, and
+      `lock-pinned-digests.yml` sat red six days): the ci-failure ledger pair under the lane's own
+      label and `severity: sev:M` (tracked, not a release gate; the lane's default sev:H is a red main
+      build's), the failure half `needs:` every job and runs `always()`, and a `cause` job hands it
+      `ci-failure-ledger.py --list-failed-jobs` so each entry says whether the cause CHANGED.
+      Template: the end of `lock-pinned-digests.yml`; details: ReadingCiSignals → "A scheduled red is
+      red in an empty room".
 - [ ] Adding a `secrets.X` to a pull-request job? A preflight in the same repo asserts it
       (`check-pr-secret-preflight.py` reds otherwise), and `vars.` vs `secrets.` is the right
       namespace — only `secrets.` has a second store.

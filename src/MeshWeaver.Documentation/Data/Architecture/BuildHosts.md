@@ -31,6 +31,7 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
 | the publish-side fetch (H9) | `.github/workflows/build-host-publication.yml` + `.github/scripts/build-artifacts-fetch.py` | a host-executed run's modules, fetched by receipt and verified, checked with the publisher's own check, staged for the unchanged module publish lane; the publisher's lane and selection source on a host run (§5) |
+| the ratchet-side fetch (H9) | `.github/actions/host-gate-log` + `.github/scripts/host-gate-log.py` | a node repo's host-run gate log, fetched by receipt and verified, for the repository's own Tests-area ratchet (§2 step 7) |
 | the host runner | MeshWeaver.Deploy `.github/scripts/build-run.py`, shipped in the `mw-build-host` image (MeshWeaver.Deploy `deploy/build-host/Dockerfile`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
 | the chart | `deploy/helm/templates/build-host/` (`buildHosts.*`, gate `memex.buildHosts`) | per channel a Deployment + KEDA `ScaledObject`; one ServiceAccount, one NetworkPolicy |
 | the hand-over | MeshWeaver.Deploy `build-host.yml` (a 15-minute `schedule` that reads the sets `main-cd.yml` sealed from the registry; jobs `image`, `handover`, `report`), `build-host-stable.yml`, `build-host-announcement.py`, declared by its `.github/build-hosts.json` | the runner image per set; on every hand-over, a signed event that moves `build-latest` to the newest armed set; daily, `build-stable` to the main-passed ceiling |
@@ -89,6 +90,16 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
   can restart the stage (a lost host, a re-queue), and the restart is printed — and at
   `runTerminal` it exits with the stage's FINAL `state` (`succeeded` → 0, anything else, `not-run`
   included → 1).
+- **progress is printed even when the log is quiet**: while the stage is pending or running, the
+  log page's one-line `heartbeat` — the stage, its elapsed time, units/tests/errors, what is left of
+  it, and the run's done/total, percent and estimate (the operations instance's run board) — is
+  printed at most every 30 s (`HEARTBEAT_SECONDS`), marked `⏱` so it is never a command. An
+  instance that serves no heartbeat gets none printed; nothing is computed on the runner.
+- **the step summary carries the run's stage board** — the page's `board`, the same markdown as the
+  `build` Check Run's summary — and a link to the run's live page on the operations instance
+  (`<origin>/<runPath>`, linked only when `runPath` is `Hosting/Builds/<repo>/<id>` and the API is
+  https), on a pass and on a red alike. The admission (`build-executor.py`) links the same page in
+  its own summary the moment the run is queued.
 - **only `::error`, `::warning` and `::notice` pass through** as workflow commands (annotations on
   the Files tab). Every other `::` line is defused with a leading space: a build must not be able to
   steer the runner that prints its log (`::add-mask::`, `::stop-commands::`, …).
@@ -126,6 +137,23 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    `/cache/bundles/<h>/`, the set linked under `/cache/plugin-sets/<key>/`, and the key presented
    as `pluginsKey`. An unreadable index, an index for another framework identity, a missing key or
    a failed fetch means no claim this cycle.
+   **The index is read when a module is HANDED OVER, not on every turn.** `GET /hosts/inputs`
+   also answers `modules: {key, packages, via, at}`. The key is a digest of what the operations
+   instance's registry reconciler last read as served: a module's lane hands its bundle to the
+   registry, the registry broadcasts `module-published`, and the reconciler rewrites
+   `Plugins/_RegistryReconcileLedger`. The host reads `inputs` on every loop turn it already makes,
+   an idle one included, and reads the index only when `modules.key` moved since it staged its
+   layer. So an idle host installs a handed-over module ahead of the next build. Two cases read
+   the index although the key did not move:
+   - there is no signal (a null `modules`, unreadable inputs): the index is read on every turn;
+   - the staged layer is no longer intact on the cache (install-on-miss): it is installed again,
+     whatever the key says.
+
+   A START is not a third case. The installed layer is recorded per framework identity at
+   `/cache/plugin-sets/current-<identity digest>.json`. A restarted or new host ADOPTS that record
+   without reading the index when the layer is intact and its recorded key matches the available
+   `modules.key`. It reads the index only when a hand-over moved the key since then, which is the
+   ordinary rule above.
 2. **Claim** with `{host, channel, platformVersion, frameworkIdentity, pluginsDigest, pluginsKey,
    claimId}`. `claimId` is a fresh uuid per claim attempt; a network error or a 5xx is retried
    with the SAME claimId, so the instance answers the assignment it already made. A host keeps no
@@ -178,11 +206,53 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    `requestedStages` (empty = every declared stage) runs and plans EXACTLY those; one the
    repository does not declare is RED.
 
+   **A prepared server, never a prepared run.** A declaration whose command stages, resolves,
+   pulls or restores per run is REFUSED, and the refusal names where the step belongs:
+
+   | refused step | where it belongs |
+   |---|---|
+   | `resolve-platform.py` | the claim's set |
+   | `fetch-refs.py`, `platform-mount` | the init containers |
+   | `module-fetch` | the plugins layer |
+   | an image pull or pre-pull | the host image |
+   | `dotnet restore`, a NuGet install | the warm NuGet cache |
+   | an apt/apk/dnf, pip or npm install | the host image |
+
+   Every declaration in the fleet passes it.
+
+   **Prepared inputs.** Some inputs are built from the repository's own sources but are not the
+   run's subject: MeshWeaver.Plugins' module-libraries shelf (`MW_BUILD_MODULE_LIBS`) and its Razor
+   build extension (`MW_BUILD_EXTENSIONS`). A repository declares them beside its stages as
+   `prepared: [{name, env, key, build, timeoutMinutes}]`. Before the stages, the host runs the
+   repository's own `key` command in the sandbox and looks for the input under
+   `/cache/prepared/<repo>/<name>/<sha256(platform|key)>/`, stamped `.source-key`. Two command
+   contracts are enforced, and a run whose command misses either is RED, naming the input:
+
+   - `key` must print the source key as the FINAL line of its stdout: exactly 64 lowercase
+     hexadecimal characters (a SHA-256 of the sources the input is built from). A 40-character
+     `git rev-parse HEAD` does not qualify.
+   - `build` must write its output into `$MW_PREPARE_OUT` — at least one non-hidden entry. A build
+     that succeeds but writes only to its usual output directory does not qualify.
+
+   With the key in hand:
+
+   - **already installed:** it is bound read-only and nothing is prepared;
+   - **a trunk run, key not installed:** it is built once (`build`, against the image's platform
+     source `MW_PLATFORM_SOURCE`, which is the set's `src/`, `tools/` and root build files) and
+     installed persistently. Every push to main queues a trunk run, so the server follows main;
+   - **a pull request whose sources differ:** it is built for that run only, reported as
+     `MWPREP002`, and never installed.
+
+   A failed build, a key command that answers no key, or a missing input on a host without
+   platform source is RED, naming the input.
+
    **The run budget.** A stage's `timeoutMinutes` is a PER-STAGE CAP. The run's deadline is the
    host's `MW_BUILD_RUN_DEADLINE_SECONDS` (`buildHosts.runDeadlineSeconds`, default 7200 s, refused
    outside [600, 43200]) and must COVER the declared stages: the default fits MeshWeaver.Plugins'
    40 + 45 minutes with room for checkout, merge and hand-over. The run's effective budget is the
-   smaller of that deadline and the selected stages' summed caps + 10 minutes, and the plan
+   smaller of that deadline and the selected stages' summed caps, plus each declared prepared input's
+   build cap (its `timeoutMinutes`, default 20) and a five-minute key-command allowance — a cache
+   miss builds the input inside the run — plus 10 minutes, and the plan
    DECLARES it as `"budgetMinutes": <10..720>` — the instance sets the attempt's deadline to claim
    time + budget + 15 min. Each stage runs for at most min(its cap, the budget left). When the sum
    of the caps exceeds the deadline the run still starts (stages usually finish well inside their
@@ -193,8 +263,15 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    --unshare-user --unshare-pid --unshare-ipc --unshare-uts --clearenv` with a fresh `/proc`, the
    system directories and every cache (`/cache`, the composed host, the portal and tester trees)
    bound **read-only**, and only three writable places: the run's checkout, its outputs directory
-   (`MW_BUILD_OUTPUTS`) and a `tmpfs` scratch (`HOME`, `TMPDIR`, the writable NuGet folder; the
-   shared NuGet cache is the read-only fallback folder). There is no network namespace — a build
+   (`MW_BUILD_OUTPUTS`), a `tmpfs` scratch (`HOME`, `TMPDIR`) and the run's own NuGet package
+   folder (`NUGET_PACKAGES`, in the run's workspace so the host can see it; the shared NuGet cache
+   is the read-only fallback folder). A package a build still had to restore is reported as a
+   warning (`MWPREP001`, naming it). On a succeeded TRUNK build stage it is verified and then
+   promoted into `/cache/nuget`, so the next run restores nothing. Verification makes two
+   separate checks and requires no symlinks: the ARCHIVE's SHA-512 against `.nupkg.sha512`, and
+   NuGet's CONTENT hash (which leaves the package signature out, so a signed package's differs
+   from its archive hash) against `.nupkg.metadata`'s `contentHash`. What is promoted is rebuilt
+   from that verified archive, never copied from the files the stage could write. A pull request never writes the cache. There is no network namespace — a build
    restores packages — and the NetworkPolicy bounds where it can go.
    - **The environment is an allow-list**, set with `--setenv` after `--clearenv`: `PATH`, locale,
      the .NET switches, `MeshWeaverRefs`, the composed gate host (`MW_BUILD_GATE_HOST`,
@@ -268,6 +345,19 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    deadline passed during the hand-over") — a stage finishing near the limit never holds its claim
    past the pod's grace. The run's workspace is removed only after every receipt was
    acknowledged; a workspace whose receipts were not is kept and swept after two run deadlines.
+   On the RATCHET side, a node repository whose `gate` stage ran on a host reads that stage's
+   `gate-log/gate.log` through the composite action `.github/actions/host-gate-log` (`api-url` = the
+   build-executor lane's output, `store` = `vars.MW_ARTIFACT_STORE`, the job holding
+   `id-token: write`). It fetches the `gate` stage's receipts under the `gate-log/` unit with the same
+   `build-artifacts-fetch.py` (`--unit-dir gate-log`: the host hands over every file under
+   `$MW_BUILD_ARTIFACTS` after each successful stage, so the gate stage's receipts repeat an earlier
+   modules stage's bundles), and `host-gate-log.py` then refuses anything but ONE non-empty `gate.log`
+   whose LAST `=== mw-plugin-test summary ===` block ends in the tester's terminal verdict
+   (`ALL GREEN.` / `GREEN — …` / `GATE FAILED …`) — nothing handed over (a red host gate hands nothing
+   over), an empty, truncated or foreign log, or a second file in the unit are each RED. The repository then runs the
+   SAME `check-test-suites.py --gate-log` it runs over an Actions gate's log, so the ratchet reads the
+   tester's own console on both executors — never the host's verdict, never the declared command's
+   text. One copy for every satellite; MeshWeaver.Plugins#4482 built the same read for Plugins.
    On the publishing side, `build-host-publication.yml` (OIDC, the same gate as the log) reads
    `GET /api/builds/{repo}/{sha}/artifacts?channel=`, fetches every object by its receipt
    (`build-artifacts-fetch.py`), verifies hash AND size against the receipt, and uploads them as
@@ -520,6 +610,42 @@ A follow job that did not run, was cancelled or failed is RED in the lane — a 
 a pass. Any `executor` other than `actions` / `host` is RED. With the defaults (`actions`, no
 verdict) every lane behaves exactly as before, so a caller that passes nothing is unchanged.
 
+### Host-forced routing — red until the debt is paid (policy `build-server-routes-all-ci`)
+
+The rule above routes a repository to a host only once its stages CLAIM equivalence. The owner
+decided to route every code repository's pull requests to the build server BEFORE that, and to accept
+red until each gap is closed. That is a third executor answer, `host-forced`, and it can only ever be
+red:
+
+- **Where the decision lives.** `.github/build-routing.json` on core's DEFAULT branch, `hostForced`: a
+  list of repository names. `build-executor.py` reads it from `main` over the public raw URL, never
+  from the pull request under test, so no pull request routes itself on or off the host, and the
+  change that adds a repository is not itself routed before it merges. The operations instance must
+  ALSO answer `host` for the repository (`Hosting:Builds:HostRepos`); the list alone routes nothing.
+- **What it answers.** For a listed repository's pull request, when the instance says host and the
+  stages do not claim equivalence, `executor=host-forced`. The executor job prints each `owes` item
+  as an `::error` annotation (a repository with no declaration owes "no host stages"). When stages
+  are declared, the run is still queued on the host, so the host runs what it can; those host check
+  runs are not required contexts.
+- **Red, never green, never skipped.** Every lane and follow job that reads the executor
+  (`build-follow.yml`, `node-repo-compile-check.yml`, `node-repo-gate.yml`, `node-repo-module-pack.yml`,
+  `build-host-publication.yml`) fails its FIRST step on `host-forced`, naming the policy, and the
+  lanes' heavy jobs skip so the forced path puts no load on Actions. The context-owning jobs run
+  `always()`/`!cancelled()`, so the context is published as a FAILURE, never skipped. In core,
+  `precheck` decides with `build-executor.py --route-only` and `build` (with every leg that needs it)
+  does not run on `host-forced`; the required context, `Consolidate test results`, asks again and
+  exits 1, naming the debt.
+- **What it never touches.** Trunk runs (main's CD keeps sealing the platform sets that carry the
+  host's own fixes), `MeshWeaver.Deploy` and `Memex` (they carry the host fixes and the
+  infrastructure, and must stay mergeable). An unreadable routing file or an unanswering queue reads
+  as NOT forced: the legs run on Actions, a real verdict.
+- **What still needs per-repository wiring.** A required context produced by a repository's OWN job
+  (not a shared lane), and a repository that never calls `build-executor.py`, are not reached by
+  this file. Each such repository adds the executor lane and a guard in that job; until then its
+  context is an Actions verdict, which is real but is not routed.
+- **Leaving it.** A repository leaves `hostForced` when its stages claim equivalence (it then routes
+  as plain `host`), or when the owner reverses the decision.
+
 ### The host publication graph (module-pack on a host)
 
 A module repository's bundles reach the registry from a host run through three calls, and
@@ -647,7 +773,16 @@ would replace, and the claim is refused until that list is empty.
   lane, not red, because `build-executor.py` answers `actions` for it and every lane still runs on
   GitHub; nothing reads green that did not run.
 - **The host comes prepared.** No stage restores, stages or prepares anything per run: a stage reads
-  the host's installed platform (`$MeshWeaverRefs`, the floor), its tester and dotnet
+  the host's installed platform (`$MeshWeaverRefs`, the floor — the portal's `/app` as shipped, a
+  gate's `--app`; and `$MW_BUILD_COMPILE_REFS`, the same app plus its shared frameworks in CI's
+  `refs/` shape, prepared once per roll by the host's init container: what a compile-check's
+  `--refs` must RECEIVE (directly or through a variable assigned from it — the node-repo profile
+  checks the argument, not a mention), because the app alone carries no `System.Private.CoreLib` and
+  `compile-check.py` refuses it). That set is the PLATFORM half only: `compile-check.py` also
+  requires the module assemblies the image no longer ships (`MeshWeaver.AI`,
+  `MeshWeaver.Markdown.Collaboration`, `MeshWeaver.Maps`), which the Actions lane composes from the
+  sealed publication — on a host that is the separately declared "composed modules and the upstream
+  seed" debt, and a satellite's compile-check stays red until it is paid. Its tester and dotnet
   (`$MW_BUILD_GATE_HOST`, `$MW_BUILD_PORTAL_DOTNET`) and, with `needs: ["nuget"]`, the host's prepared
   package cache (`NUGET_FALLBACK_PACKAGES`). Core's build names that cache as its ONLY `--source`, so a
   package the host was not prepared with is a red restore, never a download.
@@ -695,7 +830,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   the red. The scripts are the checkout's own (`--repo .`, a parity marker).
 - **No suite needs a Docker daemon, and that is checked.** A host's sandbox has none (its database is
   the prepared server). Core's Postgres suites left core, and nothing in the tree references
-  `Testcontainers*` or `Docker.DotNet` or builds a container in `test/`. `core-build-stages.py --check`
+  `Testcontainers*` or `Docker.DotNet` or builds a container in `test/` (executable code only — a
+  comment or a string fixture that names one starts nothing). `core-build-stages.py --check`
   reds the day one does: such a suite either runs against the host's prepared service or re-opens
   the `containers:` debt in the same change.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at

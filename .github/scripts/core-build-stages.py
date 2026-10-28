@@ -129,7 +129,10 @@ def generate(total: int) -> dict:
     stages.append({"name": "doc-gate", "kind": "test",
                    "command": f"{RUNNER} doc-gate {ROOTS} --repo .",
                    "timeoutMinutes": DOC_GATE_TIMEOUT_MINUTES})
-    return {"$comment": COMMENT, "owes": list(OWES), "stages": stages}
+    doc = {"$comment": COMMENT, "owes": list(OWES), "stages": stages}
+    if not OWES:
+        doc["ciEquivalent"] = True  # the debt rule: owing nothing IS the claim, so the fully migrated file is reachable
+    return doc
 
 
 def _rule():
@@ -186,6 +189,103 @@ CONTAINER_CODE = re.compile(r"^\s*using\s+(DotNet\.Testcontainers|Testcontainers
                             r"|(?<![\w.])(DotNet\.)?Testcontainers\.[A-Z]\w*\.", re.M)
 
 
+def csharp_code_only(text: str) -> str:
+    """`text` with every comment and the literal text of every string and char literal blanked (newlines kept,
+    so a `^`-anchored match still sees line starts), while an interpolated string's holes stay code. The
+    container scan reads only what EXECUTES: `// Previously used new ContainerBuilder()` and a fixture string
+    that contains `using DotNet.Testcontainers.Builders;` start nothing."""
+    out: list[str] = []
+    n = len(text)
+
+    def blank(chunk: str) -> None:
+        out.append("".join(c if c == "\n" else " " for c in chunk))
+
+    def code(i: int, close: bool) -> int:
+        # Scans code from i; with `close`, stops at the `}` that ends an interpolation hole (depth 0).
+        depth = 0
+        while i < n:
+            c = text[i]
+            if text.startswith("//", i):
+                j = text.find("\n", i)
+                j = n if j < 0 else j
+                blank(text[i:j]); i = j
+            elif text.startswith("/*", i):
+                j = text.find("*/", i + 2)
+                j = n if j < 0 else j + 2
+                blank(text[i:j]); i = j
+            elif c == "'":
+                j = i + 1
+                while j < n and text[j] not in "'\n":
+                    j += 2 if text[j] == "\\" else 1
+                j = min(j + 1, n)
+                blank(text[i:j]); i = j
+            elif c in '$@"':
+                j = i
+                dollars = 0
+                verbatim = False
+                while j < n and text[j] in "$@":
+                    dollars += text[j] == "$"; verbatim |= text[j] == "@"; j += 1
+                if j >= n or text[j] != '"':  # `$`/`@` not opening a string (`@class`, a stray `$`)
+                    out.append(text[i:j]); i = j; continue
+                out.append(" " * (j - i)); i = string(j, dollars, verbatim)
+            elif c == "{":
+                depth += 1; out.append(c); i += 1
+            elif c == "}":
+                if close and depth == 0:
+                    return i
+                depth -= 1; out.append(c); i += 1
+            else:
+                out.append(c); i += 1
+        return i
+
+    def hole(i: int, braces: int) -> int:
+        # i is at the first of `braces` opening braces; the hole's expression stays code.
+        out.append(" " * braces)
+        i = code(i + braces, close=True)
+        k = 0
+        while i < n and text[i] == "}" and k < braces:
+            i += 1; k += 1
+        out.append(" " * k)
+        return i
+
+    def string(i: int, dollars: int, verbatim: bool) -> int:
+        q = 0
+        while i + q < n and text[i + q] == '"':
+            q += 1
+        if q >= 3 and not verbatim:  # raw string literal: ends at the same run of quotes; holes open with `dollars` braces
+            blank(text[i:i + q]); i += q
+            while i < n:
+                if text.startswith('"' * q, i):
+                    blank(text[i:i + q]); return i + q
+                if dollars and text.startswith("{" * dollars, i):
+                    i = hole(i, dollars); continue
+                blank(text[i]); i += 1
+            return i
+        if q == 2 and not verbatim:  # the empty string ""
+            blank('""'); return i + 2
+        blank('"'); i += 1
+        while i < n:
+            c = text[i]
+            if verbatim and text.startswith('""', i):
+                blank('""'); i += 2
+            elif c == '"':
+                blank(c); return i + 1
+            elif not verbatim and c == "\\":
+                blank(text[i:i + 2]); i += 2
+            elif dollars and text.startswith("{{", i):
+                blank("{{"); i += 2
+            elif dollars and c == "{":
+                i = hole(i, 1)
+            elif c == "\n" and not verbatim:
+                return i
+            else:
+                blank(c); i += 1
+        return i
+
+    code(0, close=False)
+    return "".join(out)
+
+
 def container_package_hit(text: str) -> str | None:
     """The first container package an MSBuild file references (None when it references none). Raises
     ValueError when the file is not XML — no verdict is ever read off a file that could not be parsed."""
@@ -239,7 +339,7 @@ def container_problems(root: str, owes: list[str] | None = None) -> list[str]:
                 if is_msbuild:
                     hit = container_package_hit(text)
                 else:
-                    m = CONTAINER_CODE.search(text)
+                    m = CONTAINER_CODE.search(csharp_code_only(text))
                     hit = m.group(0).strip() if m else None
             except (OSError, ValueError) as e:
                 out.append(f"{rel}: unreadable ({e}) — the no-container check reached no verdict on it")
@@ -280,7 +380,16 @@ def _self_test() -> int:
     expect(all(s["command"].endswith(" --repo .") for s in doc["stages"][1:-1]),
            "every shard records and gates with the checkout's own scripts (record-host-crash.py, check-untyped-content.sh)")
     expect(doc["stages"][0]["needs"] == ["nuget"], "the build reads the host's prepared package cache, and nothing else")
-    expect(doc["owes"] == OWES and "ciEquivalent" not in doc, "the debt is declared and nothing is claimed")
+    expect(doc["owes"] == OWES and doc.get("ciEquivalent") is (True if not OWES else None),
+           "the debt is declared, and the claim is made exactly when nothing is owed")
+    saved = list(OWES)
+    try:
+        OWES.clear()  # generate() reads the module list — emptied in place, restored below
+        paid = generate(8)
+        expect(paid["owes"] == [] and paid.get("ciEquivalent") is True and problems(render(paid), wf8) == [],
+               "with OWES emptied the regenerated file claims ciEquivalent and passes the rule (the migrated end state is reachable)")
+    finally:
+        OWES[:] = saved
     print("negative controls — each must be RED:")
     expect(any("CI_SHARD_TOTAL is 9" in p for p in problems(good, "env:\n  CI_SHARD_TOTAL: 9\n")),
            "CI_SHARD_TOTAL raised to 9 without regenerating")
@@ -346,6 +455,29 @@ def _self_test() -> int:
             "public class T { object B() => new DotNet.Testcontainers.Builders.TestcontainersBuilder<object>(); }\n")
         expect(any("starts a container" in p for p in container_problems(t, debt_free)),
                "RED: a fully qualified DotNet.Testcontainers builder with no using")
+        print("  the C# scan reads only what executes — comments and literal text start nothing:")
+        green_cs = {
+            "a line comment naming a builder": "using Xunit;\n// Previously used new ContainerBuilder()\n",
+            "a block comment naming the namespace": "/*\nusing DotNet.Testcontainers.Builders;\n*/\nusing Xunit;\n",
+            "a raw-string fixture holding container code":
+                'var src = """\nusing DotNet.Testcontainers.Builders;\nvar c = new ContainerBuilder();\n""";\n',
+            "a regular string": 'var s = "new ContainerBuilder() and Testcontainers.Builders.X.Y";\n',
+            "a verbatim string with an escaped quote": 'var s = @"say ""hi""\nusing Testcontainers;";\n',
+            "an interpolated string's literal text": 'var s = $"{1} new ContainerBuilder() {{literal}}";\n',
+        }
+        for what, src in green_cs.items():
+            open(os.path.join(t, "test", "A", "T.cs"), "w").write(src)
+            expect(container_problems(t, debt_free) == [], f"green: {what}")
+        red_cs = {
+            "code after a string on the same line": 'var s = "x // y"; var b = new ContainerBuilder();\n',
+            "code after a char literal": "var q = '\\''; var b = new ContainerBuilder();\n",
+            "an interpolation hole that builds one": 'var s = $"{new ContainerBuilder().Build()}";\n',
+            "a raw interpolation hole that builds one": 'var s = $$"""{ {{new ContainerBuilder()}} }""";\n',
+            "code after a raw string": 'var s = """\nx\n""";\nusing Testcontainers;\n',
+        }
+        for what, src in red_cs.items():
+            open(os.path.join(t, "test", "A", "T.cs"), "w").write(src)
+            expect(any("starts a container" in p for p in container_problems(t, debt_free)), f"RED: {what}")
         open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n")
         open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project><ItemGroup>")
         expect(any("no verdict" in p for p in container_problems(t, debt_free)), "RED: an unparseable project file reaches no verdict")

@@ -83,7 +83,8 @@ CORE_DOC_GATE_PARITY = [("core-tests.py doc-gate", "the doc and samples gates, t
 LANE_STAGE = {"node-repo-compile-check.yml": "compile-check", "node-repo-gate.yml": "gate"}
 NODE_COMPILE_CHECK_PARITY = [
     ("compile-check.py", "core's canonical compile-check, as node-repo-compile-check.yml runs it"),
-    ("${MeshWeaverRefs", "the host's installed platform as the reference set (the floor)"),
+    ("${MW_BUILD_COMPILE_REFS", "the host's PREPARED reference set — the installed platform's app plus its shared frameworks, "
+     "CI's refs/ shape (the floor); `${MeshWeaverRefs` alone is the app without System.Private.CoreLib, which compile-check.py refuses"),
     ("scripts/compile-check.allow", "the repository's compile-check debt (MW_ALLOW_FILE in the lane)"),
 ]
 NODE_GATE_PARITY = [
@@ -198,38 +199,88 @@ def core_problems(doc: dict) -> list[str]:
     return out
 
 
+# A `uses:` value, plain or quoted — quoting a workflow reference must not hide it.
+_USES = r"""uses:[ \t]*['"]?Systemorph/MeshWeaver/\.github/workflows/"""
+
+
 def lanes_called(workflow_text: str) -> list[str]:
     """The shared heavy lanes a satellite's ci.yml calls (`uses: …/<lane>@…`), in LANE_STAGE order."""
-    called = set(re.findall(r"uses:\s*Systemorph/MeshWeaver/\.github/workflows/([A-Za-z0-9._-]+\.yml)@", workflow_text))
+    called = set(re.findall(_USES + r"([A-Za-z0-9._-]+\.yml)@", workflow_text))
     return [lane for lane in LANE_STAGE if lane in called]
 
 
-def _calling_job(workflow_text: str, lane: str) -> Optional[str]:
-    """The WHOLE job block (from its `  <job>:` line to the next job's) that calls `lane` —
-    independent of whether `with:` comes before or after `uses:`, which YAML allows either way."""
-    jobs = list(re.finditer(r"^  [A-Za-z0-9_-]+:[ \t]*(?:#.*)?$", workflow_text, re.M))
-    calls = re.compile(rf"^\s+uses:\s*Systemorph/MeshWeaver/\.github/workflows/{re.escape(lane)}@\S+", re.M)
-    for i, job in enumerate(jobs):
-        block = workflow_text[job.start():jobs[i + 1].start() if i + 1 < len(jobs) else len(workflow_text)]
-        if calls.search(block):
-            return block
-    return None
+def _job_blocks(workflow_text: str) -> list[str]:
+    """Every job block under the top-level `jobs:` mapping, whatever indentation the file uses:
+    the indent of the first key under `jobs:` IS the job indent, a job runs to the next key at
+    that indent, and the mapping ends at the next top-level key."""
+    lines = workflow_text.splitlines(keepends=True)
+    blocks: list[str] = []
+    in_jobs, indent, current = False, None, None
+    for line in lines:
+        bare = line.strip()
+        meaningful = bare and not bare.startswith("#")
+        lead = len(line) - len(line.lstrip(" "))
+        if not in_jobs:
+            if re.match(r"^jobs:[ \t]*(?:#.*)?$", line.rstrip("\r\n")):
+                in_jobs = True
+            continue
+        if meaningful and lead == 0:
+            break  # the next top-level key ends `jobs:`
+        if meaningful and indent is None:
+            indent = lead
+        if meaningful and lead == indent and re.match(r"^[ ]*['\"]?[A-Za-z0-9_-]+['\"]?:[ \t]*(?:#.*)?$", line.rstrip("\r\n")):
+            if current is not None:
+                blocks.append("".join(current))
+            current = [line]
+        elif current is not None:
+            current.append(line)
+    if current is not None:
+        blocks.append("".join(current))
+    return blocks
 
 
-def _lane_input(workflow_text: str, lane: str, key: str) -> Optional[str]:
-    """`with: <key>:` of the job that calls `lane`: None when that job does not pass it, and the
-    empty string when it passes it EMPTY (`key: ''`) — which a lane reads as "none", not as its
-    default, so the two must stay apart."""
-    block = _calling_job(workflow_text, lane)
-    if block is None:
-        return None
-    v = re.search(rf"^\s+{re.escape(key)}:[ \t]*(.*)$", block, re.M)
+def _calling_jobs(workflow_text: str, lane: str) -> list[str]:
+    """The WHOLE job blocks that call `lane` — independent of whether `with:` comes before or after
+    `uses:`, which YAML allows either way."""
+    calls = re.compile(r"^\s+" + _USES + re.escape(lane) + r"@\S+", re.M)
+    return [b for b in _job_blocks(workflow_text) if calls.search(b)]
+
+
+def _block_input(block: str, key: str) -> Optional[str]:
+    """`with: <key>:` of one calling job: None when that job does not pass it, and the empty string
+    when it passes it EMPTY (`key: ''`) — which a lane reads as "none", not as its default, so the
+    two must stay apart."""
+    v = re.search(rf"^\s+(['\"]?){re.escape(key)}\1:[ \t]*(.*)$", block, re.M)
     if not v:
         return None
-    value = re.sub(r"(^|\s)#.*$", "", v.group(1)).strip()
+    value = re.sub(r"(^|\s)#.*$", "", v.group(2)).strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
         value = value[1:-1].strip()
     return value
+
+
+# A YAML alias (`with: *gate_inputs`, `- *job`), a merge key (`<<: *base`) or an anchor (`&name`) makes a
+# mapping's real content live somewhere this line reader does not look — the inputs (or a whole second
+# calling job) would read as absent. Valid YAML, so it is REFUSED by name rather than read as "none".
+_YAML_INDIRECTION = re.compile(r"(?:^\s*['\"]?<<['\"]?\s*:)|(?:(?::|^\s*-)[ \t]+[*&][A-Za-z0-9_.-]+[ \t]*(?:#.*)?$)", re.M)
+
+
+def _jobs_text(workflow_text: str) -> str:
+    return "".join(_job_blocks(workflow_text))
+
+
+def _option_problems(name: str, cmd: str, opt: str, value: str, why: str) -> list[str]:
+    """`opt value` must be passed, and EVERY `opt` must carry exactly `value` — a complete argument, never a
+    prefix (`--allow plugin-gate.allow.expanded` is another file) and never a second, different occurrence
+    (argparse keeps the last)."""
+    args = [a.strip("'\"") for a in re.findall(rf"{re.escape(opt)}(?:[ \t]+|=)(\S+?)(?=$|[\s;|&)])", cmd)]
+    bare = len(re.findall(rf"{re.escape(opt)}(?![A-Za-z0-9_-])", cmd))
+    if not args:
+        return [f"stage `{name}` no longer carries `{opt} {value}` — {why}; the host would check less than Actions"]
+    if bare != len(args) or any(a != value for a in args):
+        return [f"stage `{name}` passes `{opt}` {sorted(set(args)) or '(unreadable)'} where Actions passes exactly `{value}` — "
+                f"{why}; a different file would tolerate what Actions rejects"]
+    return []
 
 
 def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
@@ -238,6 +289,11 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
     stages = {s["name"]: s for s in _stages(doc)}
     out: list[str] = []
     lanes = lanes_called(workflow_text)
+    indirect = _YAML_INDIRECTION.search(_jobs_text(workflow_text))
+    if indirect:
+        return [f"{CI_WORKFLOW} uses a YAML anchor, alias or merge key in its jobs (`{indirect.group(0).strip()}`) — this guard "
+                "reads only literal job blocks, so an aliased `with:` (or caller) would hide the baselines the lane enforces; "
+                "write the inputs out"]
     if not lanes:
         out.append(f"{CI_WORKFLOW} calls none of {sorted(LANE_STAGE)} — there is no Actions leg a host stage could replace")
     for lane in lanes:
@@ -249,26 +305,75 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
         cmd = str(st.get("command") or "")
         if want == "compile-check":
             out += _markers(want, cmd, NODE_COMPILE_CHECK_PARITY)
+            out += compile_refs_problems(want, cmd)
         else:
+            # FAIL CLOSED: the inputs that set the parity are read from the ONE job that calls the
+            # lane. A call no job block could be found for (an unreadable layout), or a lane called
+            # from several jobs (one host stage cannot mirror two callers' inputs), is red — never
+            # read as "no inputs", which would drop the baselines from what the stage owes.
+            blocks = _calling_jobs(workflow_text, lane)
+            if len(blocks) != 1:
+                out.append(f"{CI_WORKFLOW} calls {lane} from {len(blocks)} job block(s) this guard could read — "
+                           "exactly one is required, so the stage's parity is derived from the inputs Actions really passes")
+                continue
+            block = blocks[0]
+            # FAIL CLOSED on a `with:` this line reader cannot see into: a flow mapping
+            # (`with: {warning-baseline-file: x}`) is valid YAML, but reading it as "no inputs" would drop
+            # the baselines the Actions lane enforces from what the stage owes.
+            if re.search(r"^\s+['\"]?with['\"]?:[ \t]*[{\[]", block, re.M):
+                out.append(f"{CI_WORKFLOW} passes {lane} its `with:` as a flow mapping — this guard reads only block-style "
+                           "`with:` inputs, so write them one per line (a flow mapping would hide the baselines the lane enforces)")
+                continue
             # Omitted ⇒ the lane's default; passed EMPTY ⇒ no allowlist at all, and then a stage
             # that passes one would tolerate failures the Actions leg fails on.
-            allow = _lane_input(workflow_text, lane, "allow-file")
+            allow = _block_input(block, "allow-file")
             allow = "plugin-gate.allow" if allow is None else allow
             needles = list(NODE_GATE_PARITY)
+            options: list[tuple[str, str, str]] = []
             if allow:
-                needles.append((f"--allow {allow}", "the gate's known-debt ratchet (the lane's allow-file)"))
-            elif "--allow " in cmd:
+                options.append(("--allow", allow, "the gate's known-debt ratchet (the lane's allow-file)"))
+            elif re.search(r"--allow(?![A-Za-z0-9_-])", cmd):
                 out.append(f"stage `{want}` passes `--allow` while {CI_WORKFLOW} passes the lane an EMPTY allow-file — "
                            "the host would tolerate failures the Actions leg fails on")
-            baseline = _lane_input(workflow_text, lane, "warning-baseline-file")
+            baseline = _block_input(block, "warning-baseline-file")
             if baseline:
-                needles.append((f"--warning-baseline {baseline}", "the in-mesh warning ratchet ci.yml passes the lane"))
-            dynamic = _lane_input(workflow_text, lane, "dynamic-baseline-file")
+                options.append(("--warning-baseline", baseline, "the in-mesh warning ratchet ci.yml passes the lane"))
+            dynamic = _block_input(block, "dynamic-baseline-file")
             if dynamic:
-                needles.append((f"--dynamic-baseline {dynamic}", "the dynamic-edge ratchet ci.yml passes the lane"))
+                options.append(("--dynamic-baseline", dynamic, "the dynamic-edge ratchet ci.yml passes the lane"))
             out += _markers(want, cmd, needles)
+            for opt, value, why in options:
+                out += _option_problems(want, cmd, opt, value, why)
         if HARD_CODED_HOST.search(cmd):
             out.append(f"stage `{want}` hard-codes a `/host/…` path — the runner binds only $MW_BUILD_GATE_HOST / $MeshWeaverRefs into the sandbox")
+    return out
+
+
+REFS_ARG = re.compile(r"--refs[ =]+[\"']?\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+COMPILE_REFS_VAR = "MW_BUILD_COMPILE_REFS"
+
+
+def compile_refs_problems(name: str, cmd: str) -> list[str]:
+    """The marker alone is not enough: the variable must be what `--refs` actually receives — directly, or through a
+    shell variable assigned from it (`refs="${MW_BUILD_COMPILE_REFS:?…}"; … --refs "$refs"`). Every `--refs` must."""
+    args = REFS_ARG.findall(cmd)
+    # compile-check's argparse keeps the LAST `--refs`, so EVERY occurrence must be one this rule can read: a second
+    # `--refs /literal` (or `--refs=$(…)`) that REFS_ARG does not match would otherwise win unvalidated.
+    every = re.findall(r"--refs(?![A-Za-z0-9_-])", cmd)
+    if len(every) != len(args):
+        return [f"stage `{name}` passes `--refs` {len(every)} time(s) but only {len(args)} receive a variable — compile-check "
+                f"reads the LAST one, so each must be `${COMPILE_REFS_VAR}` (or a variable assigned from it)"]
+    if not args:
+        return [f"stage `{name}` passes no `--refs \"$VAR\"` — compile-check's reference set must be the host's prepared "
+                f"`${COMPILE_REFS_VAR}`"]
+    out = []
+    for var in args:
+        if var == COMPILE_REFS_VAR:
+            continue
+        if re.search(rf"(^|[;\s]){re.escape(var)}=[\"']?\$\{{{COMPILE_REFS_VAR}[:}}]", cmd):
+            continue
+        out.append(f"stage `{name}` passes `--refs ${var}`, which is not `${COMPILE_REFS_VAR}` (nor assigned from it) — "
+                   "naming the prepared set elsewhere in the command does not make compile-check read it")
     return out
 
 
@@ -328,7 +433,7 @@ NODE_CI = """jobs:
 
 
 def _node_doc() -> dict:
-    cc = "python3 \"${MW_PLATFORM_SCRIPTS:?}/compile-check.py\" --refs \"${MeshWeaverRefs:?}\" # MW_ALLOW_FILE=scripts/compile-check.allow"
+    cc = "python3 \"${MW_PLATFORM_SCRIPTS:?}/compile-check.py\" --refs \"${MW_BUILD_COMPILE_REFS:?}\" # MW_ALLOW_FILE=scripts/compile-check.allow"
     gate = ("t=\"${MW_BUILD_GATE_HOST:?}\"; d=\"${MW_BUILD_PORTAL_DOTNET:?}\"; a=\"${MeshWeaverRefs:?}\"; \"$d\" \"$t\" compile . "
             "--allow plugin-gate.allow --output b; \"$d\" \"$t\" . --allow plugin-gate.allow --seed b | tee \"${MW_BUILD_ARTIFACTS:?}/gate-log/gate.log\"; "
             "python3 scripts/check-test-suites.py --gate-log x")
@@ -405,6 +510,19 @@ def _self_test() -> int:
     for needle, _ in NODE_GATE_PARITY + [("--allow plugin-gate.allow", "")]:
         red(mutate(node, lambda d, n=needle: d["stages"][1].update(command=d["stages"][1]["command"].replace(n, "X"))), "node-repo",
             f"`{needle}`", f"gate drops `{needle}`")
+    red(mutate(node, lambda d: d["stages"][0].update(command='test -n "${MW_BUILD_COMPILE_REFS:?}"; python3 "${MW_PLATFORM_SCRIPTS:?}/compile-check.py" '
+                                                               '--refs "${MeshWeaverRefs:?}" # MW_ALLOW_FILE=scripts/compile-check.allow')),
+        "node-repo", "which is not `$MW_BUILD_COMPILE_REFS`", "the prepared set is named but --refs receives the app alone")
+    red(mutate(node, lambda d: d["stages"][0].update(command='r="${MeshWeaverRefs:?}"; x="${MW_BUILD_COMPILE_REFS:?}"; python3 "${MW_PLATFORM_SCRIPTS:?}/compile-check.py" '
+                                                               '--refs "$r" # MW_ALLOW_FILE=scripts/compile-check.allow')),
+        "node-repo", "`--refs $r`", "--refs receives a variable assigned from the app alone")
+    expect(problems(json.dumps(mutate(node, lambda d: d["stages"][0].update(
+        command='set -e; refs="${MW_BUILD_COMPILE_REFS:?no set}"; python3 "${MW_PLATFORM_SCRIPTS:?}/compile-check.py" --refs "$refs" '
+                '# MW_ALLOW_FILE=scripts/compile-check.allow'))), "node-repo", NODE_CI)[0] == [],
+           "--refs through a variable assigned from $MW_BUILD_COMPILE_REFS is green (the satellites' shape)")
+    red(mutate(node, lambda d: d["stages"][0].update(command=d["stages"][0]["command"].replace(
+            '--refs "${MW_BUILD_COMPILE_REFS:?}"', '--refs "${MW_BUILD_COMPILE_REFS:?}" --refs /previous-complete-refs'))),
+        "node-repo", "compile-check reads the LAST one", "a second, literal --refs after the prepared set (argparse keeps the last)")
     red(mutate(node, lambda d: d["stages"][1].update(command=d["stages"][1]["command"] + "; dotnet /host/mw-plugin-test.dll .")), "node-repo",
         "hard-codes", "a hard-coded /host/ tester")
     red(mutate(node, lambda d: d["stages"].pop(1)), "node-repo", "no `gate` stage", "ci.yml calls the gate lane, no gate stage")
@@ -412,7 +530,7 @@ def _self_test() -> int:
     wb = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      warning-baseline-file: gate-warnings.allow\n  tests-ratchet")
     red(node, "node-repo", "--warning-baseline gate-warnings.allow", "ci.yml passes a warning baseline the gate stage drops", wb)
     af = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      allow-file: other-gate.allow\n  tests-ratchet")
-    red(node, "node-repo", "--allow other-gate.allow", "ci.yml passes another allow-file than the stage's", af)
+    red(node, "node-repo", "where Actions passes exactly `other-gate.allow`", "ci.yml passes another allow-file than the stage's", af)
     # `with:` BEFORE `uses:` is the same job — the inputs must still be read.
     wb_first = NODE_CI.replace(
         "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with:\n      executor: actions\n",
@@ -435,6 +553,61 @@ def _self_test() -> int:
            "an EMPTY allow-file in ci.yml and a gate stage with no --allow is green")
     red(node, "node-repo", "EMPTY allow-file", "a gate that passes --allow while ci.yml passes an EMPTY allow-file", empty_allow)
     red(no_allow, "node-repo", "--allow plugin-gate.allow", "an OMITTED allow-file still owes the lane's default allowlist")
+    # Layout must not hide a caller's inputs: four-space indentation, a quoted `uses:`, a second caller.
+    wb4 = "\n".join(("  " + l) if l.startswith("  ") else l for l in wb.split("\n"))
+    expect(wb4 != wb and "\n    test-repos:\n" in wb4, "self-test fixture: the four-space ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "--warning-baseline gate-warnings.allow",
+        "a debt-free claim whose gate drops the warning baseline a FOUR-SPACE-indented ci.yml passes", wb4)
+    expect(problems(json.dumps(node), "node-repo", "\n".join(("  " + l) if l.startswith("  ") else l for l in NODE_CI.split("\n")))[0] == [],
+           "a FOUR-SPACE-indented ci.yml with an honest declaration is green")
+    quoted = NODE_CI.replace("uses: Systemorph/MeshWeaver/.github/workflows/node-repo-compile-check.yml@main",
+                             "uses: 'Systemorph/MeshWeaver/.github/workflows/node-repo-compile-check.yml@main'")
+    expect(quoted != NODE_CI, "self-test fixture: the quoted-uses ci.yml was built")
+    red(mutate(node, lambda d: (d.update(owes=[], ciEquivalent=True), d["stages"].pop(0))), "node-repo", "no `compile-check` stage",
+        "a debt-free claim with only `gate` while a QUOTED `uses:` still calls compile-check", quoted)
+    second = wb.replace("  tests-ratchet:", "  test-repos-strict:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n"
+                                            "    with:\n      warning-baseline-file: strict-warnings.allow\n  tests-ratchet:")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "from 2 job block(s)",
+        "a lane called from a SECOND job whose inputs a single stage cannot mirror", second)
+    # A flow-style `with:` is valid YAML the line reader cannot see into — red, never "no inputs".
+    flow = NODE_CI.replace(
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with:\n      executor: actions\n",
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n"
+        "    with: {executor: actions, warning-baseline-file: gate-warnings.allow, dynamic-baseline-file: dynamic.allow}\n")
+    expect(flow != NODE_CI, "self-test fixture: the flow-style-with ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "flow mapping",
+        "a debt-free claim whose ci.yml passes the gate lane a FLOW-STYLE `with:`", flow)
+    # A quoted key is the same input.
+    qk = NODE_CI.replace("      executor: actions\n  tests-ratchet", "      executor: actions\n      \"warning-baseline-file\": gate-warnings.allow\n  tests-ratchet")
+    expect(qk != NODE_CI, "self-test fixture: the quoted-key ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "--warning-baseline gate-warnings.allow",
+        "a debt-free claim whose gate drops the warning baseline ci.yml passes under a QUOTED key", qk)
+    # An alias / merge key hides the inputs from a line reader — refused, never read as "no inputs".
+    alias = NODE_CI.replace(
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with:\n      executor: actions\n",
+        "  test-repos:\n    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main\n    with: *gate_inputs\n")
+    expect(alias != NODE_CI, "self-test fixture: the aliased-with ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "anchor, alias or merge key",
+        "a debt-free claim whose ci.yml passes the gate lane `with: *gate_inputs` (an alias carrying the warning baseline)", alias)
+    merge = NODE_CI.replace("    with:\n      executor: actions\n  tests-ratchet",
+                            "    with:\n      <<: *gate_inputs\n      executor: actions\n  tests-ratchet")
+    expect(merge != NODE_CI, "self-test fixture: the merge-key ci.yml was built")
+    red(mutate(node, lambda d: d.update(owes=[], ciEquivalent=True)), "node-repo", "anchor, alias or merge key",
+        "a debt-free claim whose ci.yml merges the gate inputs in with `<<: *gate_inputs`", merge)
+    # A complete argument, never a prefix: another file would tolerate what Actions rejects.
+    for opt, wf_input, value in (("--allow", None, "plugin-gate.allow"),
+                                 ("--warning-baseline", "warning-baseline-file", "gate-warnings.allow"),
+                                 ("--dynamic-baseline", "dynamic-baseline-file", "dynamic.allow")):
+        wf = NODE_CI if wf_input is None else NODE_CI.replace(
+            "      executor: actions\n  tests-ratchet", f"      executor: actions\n      {wf_input}: {value}\n  tests-ratchet")
+        honest = mutate(node, lambda d, o=opt, v=value: d.update(owes=[], ciEquivalent=True) or d["stages"][1].update(
+            command=d["stages"][1]["command"] if o == "--allow" else d["stages"][1]["command"] + f" {o} {v}"))
+        expect(problems(json.dumps(honest), "node-repo", wf)[0] == [], f"a gate passing exactly `{opt} {value}` is green")
+        suffixed = mutate(honest, lambda d, o=opt, v=value: d["stages"][1].update(
+            command=d["stages"][1]["command"].replace(f"{o} {v}", f"{o} {v}.expanded")))
+        red(suffixed, "node-repo", f"passes `{opt}`", f"a debt-free claim whose gate passes `{opt} {value}.expanded` (a SUFFIXED path)", wf)
+        second = mutate(honest, lambda d, o=opt: d["stages"][1].update(command=d["stages"][1]["command"] + f" {o} other.allow"))
+        red(second, "node-repo", f"passes `{opt}`", f"a debt-free claim whose gate adds a second `{opt} other.allow` (argparse keeps the last)", wf)
     red(node, "node-repo", "calls none of", "a ci.yml that calls no shared heavy lane", "jobs:\n  x:\n    runs-on: y\n")
     red(node, "node-repo", "is absent", "no ci.yml to derive the owed stages from", None)
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every breach is red, every honest declaration is green'}")

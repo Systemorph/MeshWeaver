@@ -341,8 +341,10 @@ def _script(repo: str, name: str) -> str:
     return path
 
 
-def collect_logs(work: str, bins: list[str], dest: str) -> None:
-    """dotnet-test.yml's "Collect logs" step: every bin's test-logs/*.log, flat, plus the temp-dir traces."""
+def collect_logs(work: str, bins: list[str], dest: str, tmp: str) -> None:
+    """dotnet-test.yml's "Collect logs" step: every bin's test-logs/*.log, flat, plus the temp-dir traces —
+    read from `tmp`, the temp directory THIS invocation gave its test hosts (never the process-wide one,
+    whose append-only traces another shard on the same host may have left behind)."""
     os.makedirs(dest, exist_ok=True)
     for d in bins:
         logs = os.path.join(d, "test-logs")
@@ -351,7 +353,6 @@ def collect_logs(work: str, bins: list[str], dest: str) -> None:
                 full = os.path.join(logs, n)
                 if n.endswith(".log") and os.path.isfile(full) and not os.path.islink(full):
                     shutil.copyfile(full, os.path.join(dest, n))
-    tmp = tempfile.gettempdir()
     for n in TEMP_TRACES:
         full = os.path.join(tmp, n)
         if os.path.isfile(full) and not os.path.islink(full):
@@ -422,6 +423,13 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
     collected = os.path.join(work, "collected-logs")
     if os.path.exists(collected):
         shutil.rmtree(collected)
+    # The test hosts' temp-dir traces are APPEND-only (TestTraceLog.Append) and land in
+    # Path.GetTempPath() — $TMPDIR on Unix. A temp directory shared with an earlier shard on this host
+    # would hand THAT run's trace (an unresolved-content line, a dangling TEST_START) to this run's
+    # gate: a red this run did not earn. Each invocation gets its own, empty, and collects only it.
+    host_tmp = os.path.join(work, "tmp")
+    shutil.rmtree(host_tmp, ignore_errors=True)
+    os.makedirs(host_tmp)
 
     def record(line: str) -> None:
         print(line, flush=True)
@@ -437,7 +445,7 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
 
     print(f"mw-core-tests {m['version']} ({m['coreSha'][:12]}): shard {shard}/{total}, {len(units)} unit(s)", flush=True)
     env = dict(os.environ, DOTNET_ENVIRONMENT="Development", Logging__LogLevel__Default="Warning",
-               TESTCONTAINERS_RYUK_DISABLED="true")
+               TESTCONTAINERS_RYUK_DISABLED="true", TMPDIR=host_tmp, TMP=host_tmp, TEMP=host_tmp)
     bins: dict[str, str] = {}
     failed: list[str] = []
     trx_files: list[str] = []
@@ -491,7 +499,7 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
         trx_files.append(trx_path)
         if rc != 0:
             failed.append(label)
-    collect_logs(work, sorted(set(bins.values())), collected)
+    collect_logs(work, sorted(set(bins.values())), collected, host_tmp)
     if artifacts:
         n = hand_back(work, shard, artifacts, trx_files)
         print(f"handed back {n} result file(s) as testResults-shard{shard}/ (trx, test-results.log, collected-logs)", flush=True)
@@ -754,6 +762,20 @@ def _self_test() -> int:
                           "test/Split/bin/Release/net10.0/TestResults/Split.part2.trx", "test/test-results.log"],
                f"the hand-back is the `test` job's artifact tree — THIS run's trx (not the reused directory's "
                f"A.trx / Split.part1.trx), markers, collected-logs, and no bins ({handed})")
+        expect(not os.path.exists(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log")),
+               "…the host's trace landed in the invocation's OWN temp directory, not the shared one")
+        # Successive shards on one host: an earlier run's append-only trace — in the work directory's
+        # temp from a previous invocation, or in the shared $TMPDIR — is never this run's evidence.
+        unresolved = "MeshNodeContentUnresolvedException: content for nodeType 'Demo' was NEVER resolvable on this replica\n"
+        open(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log"), "w").write(unresolved)
+        open(os.path.join(t, "wr", "tmp", "meshweaver-test-trace.log"), "a").write(unresolved)
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("pass")
+        pack(repo, img, sha, "3.1.1")
+        expect(run_shard(img, 1, 2, os.path.join(t, "wr"), dotnet, repo=repo) == 0,
+               "a passing shard after an earlier one left an unresolved-content trace (shared $TMPDIR and the reused "
+               "work directory's temp) is green — another run's trace is not this run's red")
+        expect(not os.path.exists(os.path.join(t, "wr", "collected-logs", "_meshweaver-test-trace.log")),
+               "…and no earlier run's trace reaches this run's collected-logs")
         os.remove(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log"))
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("degrade")
         pack(repo, img, sha, "3.1.1")

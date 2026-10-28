@@ -14,4 +14,3 @@ artifacts/
 Azurite/
 **/TestResults/
 **/node_modules/
-deploy/compose/data/

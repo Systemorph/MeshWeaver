@@ -21,7 +21,7 @@ sign-in — running on the **shared AKS cluster** (`<aks-cluster>` / `<aks-resou
 > `deployments/aks/example/` (in Systemorph/Memex), kept as a shape to copy — **not** as the place a real environment lives.
 
 The shared platform (cluster, ingress, Postgres server, Key Vault, ACR) is brought up once — see
-the AKS deployment sample (`deploy/aks/README.md` in the repository); this guide adds an
+the AKS deployment sample ([`deploy/aks/README.md`](https://github.com/Systemorph/MeshWeaver.Deploy/blob/main/deploy/aks/README.md) in MeshWeaver.Deploy); this guide adds an
 environment on top of it.
 
 ## Shared vs. separate
@@ -340,6 +340,6 @@ for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} " https://<host>/
 ## Related
 
 - [End Vision — Jobs, Durable Streams and Document Ingestion](/Doc/Architecture/DocumentIngestionEndVision) — how a new tenant's storage is attached to a partition and ingested (instance-settings Storage section, governed table approval, `InitializeRequest`), and the plan for building it
-- AKS deployment sample — `deploy/aks/README.md` in the repository — the one-time shared-platform bring-up (the former `DEPLOY-RUNBOOK.md` was folded into it).
+- AKS deployment sample — [`deploy/aks/README.md`](https://github.com/Systemorph/MeshWeaver.Deploy/blob/main/deploy/aks/README.md) in MeshWeaver.Deploy — the one-time shared-platform bring-up (the former `DEPLOY-RUNBOOK.md` was folded into it).
 - [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) · [Deployment Options](/Doc/Architecture/DeploymentOptions)
 - [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding) · [Feature Flags](/Doc/Architecture/FeatureFlags)
