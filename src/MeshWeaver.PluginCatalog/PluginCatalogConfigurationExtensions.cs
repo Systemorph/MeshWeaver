@@ -250,6 +250,14 @@ public static class PluginCatalogConfigurationExtensions
                 // rather than compiled against a build that lacks what it calls.
                 .AddSingleton<MeshWeaver.GitSync.ILoadedPackageModules>(sp =>
                     new LoadedPackageModuleReader(sp.GetRequiredService<ModuleLandingService>()))
+                // 🚨 MeshWeaver#6195 — the COMPILE half of the same floor: a replica that does not
+                // run what a NodeType's package requires never compiles it, so it can never stamp
+                // its own older dependency generation onto the record every replica reads as Error.
+                .AddSingleton<MeshWeaver.Graph.Configuration.INodeTypeDependencyFloor>(sp =>
+                    new NodeTypeDependencyFloorReader(
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetRequiredService<MeshWeaver.GitSync.ILoadedPackageModules>(),
+                        sp.GetService<ILogger<NodeTypeDependencyFloorReader>>()))
                 // The restart-as-activation READER (#1979): which landed modules are not loaded in
                 // THIS process. Registered beside the writer and rooted at the same resolved
                 // module root — a reader looking at a different directory than the writer is how

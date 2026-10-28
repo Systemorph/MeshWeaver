@@ -4789,7 +4789,10 @@ internal static class NodeTypeCompilationHelpers
     /// source set could not be established (<see cref="SourceDiscoveryUnavailableException"/>) or a
     /// mesh address the compile had to read was RECYCLING for the reader's whole budget
     /// (<see cref="AddressRecyclingException"/>). Both are availability facts about the mesh, never
-    /// statements about the code.
+    /// statements about the code. So is a compile THIS replica declined to run because it does not
+    /// meet the declared dependency floor of the type's package
+    /// (<see cref="DependencyFloorUnmetException"/>, #6195 — see <see cref="INodeTypeDependencyFloor"/>):
+    /// a replica that runs a satisfying dependency answers it differently.
     ///
     /// <para>🚨 One predicate, two consumers, and they MUST agree (#1701).
     /// <see cref="ApplyCompileFailure"/> uses it to stamp <see cref="CompilationStatus.Unavailable"/>
@@ -4827,7 +4830,11 @@ internal static class NodeTypeCompilationHelpers
     /// correct reading, not a hole — a bake whose process cannot emit has evaluated nothing.</para>
     /// </summary>
     internal static bool IsAvailabilityNonVerdict(Exception? error) =>
-        error is SourceDiscoveryUnavailableException or AddressRecyclingException
+        // 🚨 DependencyFloorUnmetException (#6195): THIS replica does not run what the package
+        // declares it needs, so the compile was never run — a fact about the replica, which a
+        // replica that meets the floor answers differently. Stamping it Error put one replica's
+        // module generation onto the record every replica reads.
+        error is SourceDiscoveryUnavailableException or AddressRecyclingException or DependencyFloorUnmetException
         || (error is not null
             && EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]));
 
