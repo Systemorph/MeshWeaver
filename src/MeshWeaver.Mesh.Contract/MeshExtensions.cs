@@ -6955,7 +6955,7 @@ public static class MeshExtensions
             .TakeDecisionOutsideGate()
             .Select(perms =>
             {
-                var denied = !perms.HasFlag(DeletePermission.RequiredFor(node.Path));
+                var denied = !DeletePermission.RequiredFor(node.Path).IsMetBy(perms);
                 if (denied)
                     logger.LogDebug(
                         "[DeleteNode] permission-denied for {User} on {Path} (effective={Perms})",
@@ -7497,8 +7497,10 @@ public static class MeshExtensions
     ///
     /// <para>Two conditions, both checked on the source NODE (so a node-level deny holds). First, the
     /// caller may DELETE the source — the demand <see cref="DeletePermission.RequiredFor"/> sets: Update
-    /// for ordinary content. A caller who holds that on the node could edit it in place, so carrying its
-    /// authorship within the partition grants nothing they do not already have. Second, the relocation must not
+    /// or Delete for ordinary content (policy <c>delete-suffices-for-content</c>) — and may carry its
+    /// content, which is that same Update-or-Delete on the source. A caller who holds that on the node
+    /// could edit or remove it in place, so carrying its authorship within the partition grants nothing
+    /// they do not already have. Second, the relocation must not
     /// hand the caller a node authored by someone else in a place the source's governance does not
     /// cover: <see cref="AccessContextScope"/> impersonates <see cref="MeshNode.CreatedBy"/>, so an
     /// Editor (who deletes content with Update) who could carry an administrator's authorship into a
@@ -7548,16 +7550,18 @@ public static class MeshExtensions
                 .Take(1)
                 .DefaultIfEmpty(PermissionCheckOutcome.Undetermined(
                     $"whether '{sourcePath}' may be deleted produced no answer"));
-            // 🚨 …AND the right to UPDATE the source. A type's Delete rule can grant deletion to someone
+            // 🚨 …AND the right to UPDATE OR DELETE the source. A type's Delete rule can grant deletion to someone
             // who may not edit the node (a comment's author deletes their own comment with only Comment
             // permission), and carrying a node's stamps is an authority over its content: without this,
             // such a caller could lend the node's CreatedBy to content of their own through a free-form
-            // AuthorshipFrom create. For ordinary content the delete demand already IS Update.
+            // AuthorshipFrom create. For ordinary content the delete demand already IS Update-or-Delete:
+            // a role that carries Delete without Update keeps relocating content within its partition
+            // (policy delete-suffices-for-content), while Comment alone still carries nothing.
             IObservable<PermissionCheckOutcome> And(IObservable<PermissionCheckOutcome> first, Permission next) =>
                 first.SelectMany(o => o.IsGranted
                     ? hub.CheckPermissionOutcome(sourcePath, userId, next).TakeDecisionOutsideGate()
                     : Observable.Return(o));
-            var mayCarry = And(mayDelete, Permission.Update);
+            var mayCarry = And(mayDelete, PermissionDemand.UpdateOrDelete);
             return DeletePermission.SamePartition(sourcePath, targetPath)
                 ? mayCarry
                 : And(mayCarry, Permission.Delete);
@@ -7566,9 +7570,11 @@ public static class MeshExtensions
     /// <summary>
     /// The stored node whose authorship a create may carry over (<see cref="CreateNodeRequest.AuthorshipFrom"/>),
     /// or null. Null when the request names none, or when the requester is the platform (whose
-    /// carried stamps are kept anyway). Otherwise the requester must hold Delete on the source's
-    /// namespace — the entitlement a move of it requires, the same gate
-    /// <see cref="CopyNodeRequest.PreserveAuthorship"/> applies — and the node is read from storage.
+    /// carried stamps are kept anyway). Otherwise the requester must be entitled to RELOCATE the source
+    /// with its authorship (<c>MoveEntitlement</c>) — the entitlement a move of it requires, the same
+    /// gate <see cref="CopyNodeRequest.PreserveAuthorship"/> applies: Update or Delete on the source
+    /// node (policy <c>delete-suffices-for-content</c>), plus Delete on it when the target lies in
+    /// another partition — and the node is read from storage.
     /// A refusal or an unreadable source logs and yields null, so the create records the
     /// requester: authorship is never taken from the message. Cold; emits once.
     /// </summary>
@@ -10703,9 +10709,11 @@ public static class MeshExtensions
         // let anyone who can read a node mint one, in a place they control, that owner-scoped work
         // then runs AS its author.
         //
-        // The flag exists for one operation, so it is gated on that operation's own entitlement:
-        // Delete on the source's namespace, which is what MoveNodePermissionAttribute already
-        // requires of a mover. A caller who holds it could have MOVED the node and preserved the
+        // The flag exists for one operation, so it is gated on that operation's own entitlement
+        // (MoveEntitlement): the delete demand on the source — Update or Delete for ordinary
+        // content (policy delete-suffices-for-content) — and, into another partition, Delete
+        // itself, which is what MoveNodePermissionAttribute requires of a mover. A caller who
+        // holds it could have MOVED the node and preserved the
         // stamps that way, so the flag grants nothing the platform did not already grant them; a
         // caller who does not is refused. UNDETERMINED is a refusal too, reported as unavailability
         // rather than as a denial (#974/#2742) — a fold that reached no answer must never read as

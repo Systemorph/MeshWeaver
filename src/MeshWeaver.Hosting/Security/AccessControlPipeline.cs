@@ -147,8 +147,8 @@ public static class AccessControlPipeline
             return Observable.Return(unchanged);
 
         // 🚨 A delete-shaped message is re-decided as a DELETE, whatever permission its standard check
-        // demanded: ordinary content is deleted with Update (DeletePermission.RequiredFor), and mapping
-        // that back to NodeOperation.Update would ask the type's rule the wrong question — a rule that
+        // demanded: ordinary content is deleted with Update or Delete (DeletePermission.RequiredFor), and
+        // mapping that back to NodeOperation.Update would ask the type's rule the wrong question — a rule that
         // lets a commenter delete their own comment says nothing about updating it, and a rule that
         // lets someone post into a thread says nothing about deleting it.
         var operation = CascadeRootOf(delivery.Message) is not null
@@ -599,7 +599,7 @@ public static class AccessControlPipeline
                         // question — "we could not check" must stay "we could not check".
                         //
                         // 🚨 …and for a DELETE-shaped message a GRANT is re-decided too, when the node's
-                        // type declares a Delete rule. Deleting ordinary content demands Update
+                        // type declares a Delete rule. Deleting ordinary content demands Update or Delete
                         // (DeletePermission.RequiredFor), so a scoped Editor passes the standard check on
                         // a node whose own rule demands Delete (a Partition record, a Space) — and a
                         // version-guarded ValidateDeleteRequest would then take the owner's seal without
@@ -707,10 +707,10 @@ public static class AccessControlPipeline
                                             refusal.Outcome.UndeterminedReason))
                                     : (ErrorType.Unavailable,
                                         $"Permission check unavailable for user '{effectiveUser}' on '{refusal.Path}' "
-                                        + $"({refusal.Permission}) — no verdict was reached, so this is NOT a statement "
+                                        + $"({refusal.Permission.Describe()}) — no verdict was reached, so this is NOT a statement "
                                         + $"about this user's rights. Retry shortly. Cause: {refusal.Outcome.UndeterminedReason}")
                                 : (ErrorType.Unauthorized,
-                                    $"Access denied: user '{effectiveUser}' lacks {refusal.Permission} permission on '{refusal.Path}'");
+                                    $"Access denied: user '{effectiveUser}' lacks {refusal.Permission.Describe()} permission on '{refusal.Path}'");
 
                             // Include the triggering message + sender so a denial on a rogue/reserved path
                             // (e.g. 'login') names its caller instead of being an unattributable warning.

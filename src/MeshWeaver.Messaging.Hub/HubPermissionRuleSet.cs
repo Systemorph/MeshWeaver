@@ -33,7 +33,7 @@ public record HubPermissionRuleSet
     {
         foreach (var (rulePermission, check) in Rules)
         {
-            if (rulePermission.HasFlag(permission) && check(delivery, userId))
+            if (permission.IsMetBy(rulePermission) && check(delivery, userId))
                 return true;
         }
         return false;
