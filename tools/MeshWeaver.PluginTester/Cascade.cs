@@ -206,8 +206,9 @@ public static class Cascade
                         }
                         var ordered = depResults.ToArray();
                         // The result travels back through its own subject; the work item handed
-                        // to the gate is deferred so it starts when the gate subscribes it —
-                        // that moment is 'Started', and Started - Ready is the slot wait.
+                        // to the gate is deferred so it starts when the gate's subscription runs
+                        // on the pool — that moment is 'Started', and Started - Ready is the slot
+                        // wait.
                         var result = new AsyncSubject<NodeResult<T>>();
                         var work = Observable.Defer(() =>
                             {
@@ -224,12 +225,17 @@ public static class Cascade
                                         id, NodeOutcome.Faulted, default, null,
                                         error, ready, started, clock.Elapsed);
                                 }
-                                // The work is CALLED on the pool (its synchronous prefix — all of
-                                // it, for the synchronous overload — must not run on the thread
-                                // that freed the slot), and its stream holds the slot until it
-                                // yields its one result.
-                                return Observable.Start(() => run(id, ordered), pool)
-                                    .SelectMany(stream => stream.Take(1).ToList())
+                                IObservable<(T Result, bool Green)> stream;
+                                try
+                                {
+                                    stream = run(id, ordered);
+                                }
+                                catch (Exception ex)
+                                {
+                                    return Observable.Return(Faulted($"{ex.GetType().Name}: {ex.Message}"));
+                                }
+                                // The stream holds the slot until it yields its one result.
+                                return stream.Take(1).ToList()
                                     .Select(results =>
                                     {
                                         if (results.Count == 0)
@@ -243,6 +249,14 @@ public static class Cascade
                                     })
                                     .Catch((Exception ex) => Observable.Return(Faulted($"{ex.GetType().Name}: {ex.Message}")));
                             })
+                            // 🚨 ONE scheduled action on the pool carries the fail-fast check,
+                            // 'Started' AND the call of the work. Checking at admission (on the
+                            // thread that freed the slot) and calling the work in a LATER pool
+                            // action let a node admitted before an earlier failure still run once
+                            // that failure had landed — what stopOnFirstFailure exists to prevent
+                            // (pinned by StopOnFirstFailure_ANodeAdmittedBeforeTheFailureLandsButNotYetStarted…).
+                            // It also keeps the work's synchronous prefix off the freeing thread.
+                            .SubscribeOn(pool)
                             .Do(r =>
                             {
                                 result.OnNext(r);

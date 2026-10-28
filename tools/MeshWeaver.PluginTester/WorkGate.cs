@@ -47,7 +47,8 @@ internal sealed class WorkGate : IDisposable
 
     /// <summary>
     /// One item: enqueued when the returned stream is subscribed, run when a slot is free, and its
-    /// value (or exception) emitted on the returned stream.
+    /// value (or exception) emitted on the returned stream — on the scheduler, never inside the
+    /// item's own pipeline, so a continuation the caller chains on it never occupies a slot.
     /// </summary>
     public IObservable<T> Enqueue<T>(Func<T> work)
     {
@@ -66,7 +67,11 @@ internal sealed class WorkGate : IDisposable
                 // A failed item frees its slot and leaves the gate open for the rest; the
                 // exception reaches its caller through `result`.
                 .Catch(Observable.Empty<Unit>()));
-            return result;
+            // 🚨 Delivered OFF the slot. `result` completes inside the item's own pipeline, before
+            // the gate's Merge sees that item complete, so without this boundary whatever the
+            // caller chains on the value — `mw-plugin-test build` folds a package and RUNS ITS
+            // TESTS there — would execute while still holding a compile slot.
+            return result.ObserveOn(scheduler);
         });
     }
 

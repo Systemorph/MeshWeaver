@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
+using MeshWeaver.Compiler;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginTester;
 using Xunit;
@@ -17,8 +19,8 @@ namespace MeshWeaver.PluginTester.Test;
 ///     one-slot gate never overlaps);</item>
 ///   <item>results come back in INPUT order whatever order they finished in, and one failing item
 ///     neither wedges the gate nor hides the others;</item>
-///   <item>a parallel build reports what a serial one reports — every type's verdict, every log
-///     line (times masked), every bundle byte (per-emit fields masked, as the bake's own
+///   <item>a parallel build reports what a serial one reports — every type's verdict, every test
+///     case's outcome (each run against the same emitted prefix), every log line (times masked), every bundle byte (per-emit fields masked, as the bake's own
 ///     equivalence test does) — and a tree with one changed source IS seen as different.</item>
 /// </list>
 /// </summary>
@@ -123,6 +125,63 @@ public partial class ParallelBakeTest
     }
 
     [Fact(Timeout = 60_000)]
+    public async Task WorkGate_AContinuationOnAResultDoesNotHoldTheItemsSlot()
+    {
+        // `build` folds a package — and runs its tests — in the continuation of the gate's result.
+        // That continuation must not occupy a compile slot: with ONE slot, a second item enqueued
+        // from inside the continuation has to run while the continuation is still going. Delivered
+        // inside the first item's pipeline, the slot is still held and the second item never runs.
+        var ct = TestContext.Current.CancellationToken;
+        using var gate = new WorkGate(1);
+        var secondRan = 0;
+
+        var freed = await gate.Enqueue(() => 1)
+            .Select(_ =>
+            {
+                gate.Enqueue(() =>
+                    {
+                        Volatile.Write(ref secondRan, 1);
+                        return 2;
+                    })
+                    .Subscribe(_ => { }, _ => { });
+                return SpinWait.SpinUntil(() => Volatile.Read(ref secondRan) == 1, SignalBound);
+            })
+            .Await(ct);
+
+        Assert.True(freed, "a continuation on a gate result ran while the item still held the gate's only slot");
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task StopOnFirstFailure_ANodeAdmittedBeforeTheFailureLandsButNotYetStarted_NeverRunsItsWork()
+    {
+        // Two slots, so both nodes are ADMITTED at once, before either has run; one event-loop
+        // thread, so AAA's item runs (and fails) strictly before ZZZ's. ZZZ's work has not been
+        // called when AAA's failure lands, so fail-fast must block it — the check, 'Started' and
+        // the call are one action. With the check taken at admission and the call scheduled after
+        // it, ZZZ's work ran anyway.
+        var ct = TestContext.Current.CancellationToken;
+        using var loop = new EventLoopScheduler();
+        var ran = ImmutableList<string>.Empty;
+
+        var results = await Cascade.Run<string>(
+            ["AAA", "ZZZ"], _ => [],
+            (id, _) =>
+            {
+                ImmutableInterlocked.Update(ref ran, l => l.Add(id));
+                return (id, id != "AAA");
+            },
+            maxParallel: 2,
+            scheduler: loop,
+            stopOnFirstFailure: true).Await(ct);
+
+        var byId = results.ToDictionary(r => r.Id, StringComparer.Ordinal);
+        Assert.Equal(Cascade.NodeOutcome.Red, byId["AAA"].Outcome);
+        Assert.Equal(Cascade.NodeOutcome.Blocked, byId["ZZZ"].Outcome);
+        Assert.Equal("AAA", byId["ZZZ"].BlockedBy);
+        Assert.Equal(["AAA"], Volatile.Read(ref ran)); // ZZZ's work was never called
+    }
+
+    [Fact(Timeout = 60_000)]
     public async Task Cascade_RunObservable_HoldsTheSlotUntilTheStreamYields_AndAnEmptyOrFailedStreamIsFaulted()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -165,7 +224,9 @@ public partial class ParallelBakeTest
         try
         {
             WriteTree(repo);
+            WriteTests(repo);
             WriteTree(changedRepo, leafSevenBody: "    /// <summary>A field only this tree has.</summary>\n    public int Extra { get; init; }");
+            WriteTests(changedRepo);
 
             var serial = await Build(repo, serialOut, maxParallel: 1, ct);
             var serialAgain = await Build(repo, serialAgainOut, maxParallel: 1, ct);
@@ -177,6 +238,13 @@ public partial class ParallelBakeTest
             Assert.Equal(11, types.Length);
             Assert.Equal(new[] { "Ctrl/Broken" }, types.Where(t => t.CompileError is not null).Select(t => t.NodePath));
             Assert.Contains("max-parallel=6", parallel.Log);
+
+            // The tests really ran, in BOTH builds, with the outcomes the fixtures were written to
+            // produce — including the two that pin the emitted PREFIX each type's tests run against:
+            // Leaf7 loads Leaf0's assembly (emitted before it), Leaf0 must NOT reach Leaf7's (emitted
+            // after it — on disk already in the parallel build, so only the prefix keeps it out).
+            foreach (var run in new[] { serial, parallel })
+                Assert.Equal(ExpectedCases, TestCases(run.Report).Sort(StringComparer.Ordinal));
 
             // THE BASELINE: two serial builds agree once the per-emit fields are masked.
             var serialDrift = DifferingFiles(serialOut, serialAgainOut);
@@ -217,7 +285,7 @@ public partial class ParallelBakeTest
             SourceSha = "deadbeef",
             Output = log,
             MaxParallel = maxParallel,
-            RunTests = false,
+            RunTests = true,
         }).Await(ct);
         Output.WriteLine($"── build max-parallel={maxParallel}\n{log}");
         return new BuildRun(report, log.ToString());
@@ -228,7 +296,89 @@ public partial class ParallelBakeTest
         .. report.Packages.Select(p => $"{p.Id}|{p.Outcome}|{p.BlockedBy}|{p.Error}"),
         .. report.Packages.Where(p => p.Result is not null).SelectMany(p => p.Result!.Types).Select(t =>
             $"{t.NodePath}|{t.Package}|{t.CompileError}|{t.SourceCount}|{t.DllPath is not null}|{t.Warnings.Length}"),
+        .. TestCases(report),
     ];
+
+    /// <summary>Every test case of the build, per type in fold order: name, outcome, error.</summary>
+    private static ImmutableArray<string> TestCases(CascadeBuild.Report report) =>
+    [
+        .. report.Packages.Where(p => p.Result is not null).SelectMany(p => p.Result!.Types)
+            .Where(t => t.Tests is not null)
+            .SelectMany(t => t.Tests!.Cases.Select(c => $"{t.NodePath}|{c.Name}|{c.Outcome}|{c.Error}"))
+            .Concat(report.Packages.Where(p => p.Result is not null).SelectMany(p => p.Result!.Types)
+                .Where(t => t.Tests?.LoadError is not null)
+                .Select(t => $"{t.NodePath}|load error|{t.Tests!.LoadError}")),
+    ];
+
+    private static readonly ImmutableArray<string> ExpectedCases =
+    [
+        "Ctrl/Leaf0|Leaf0Tests.AFailingCase|Failed|InvalidOperationException: Leaf0 fails on purpose",
+        "Ctrl/Leaf0|Leaf0Tests.APassingCase|Passed|",
+        "Ctrl/Leaf0|Leaf0Tests.DoesNotSeeALaterEmittedAssembly|Passed|",
+        "Ctrl/Leaf7|Leaf7Tests.SeesAnEarlierEmittedAssembly|Passed|",
+    ];
+
+    /// <summary>
+    /// Test fixtures for <see cref="WriteTree"/>'s package: a passing and a failing case, and two
+    /// cases over the EMITTED PREFIX a type's tests run against — the assemblies its package
+    /// emitted up to and including it, in path order. Leaf7's case loads Leaf0's assembly through
+    /// its own load context (emitted earlier: present); Leaf0's case asks for Leaf7's (emitted
+    /// later: must be absent, although the parallel build has already written it to disk).
+    /// </summary>
+    private static void WriteTests(string repo)
+    {
+        Write(repo, "Ctrl/Leaf0/Test/Leaf0Tests.cs",
+            $$"""
+            /// <summary>Leaf0's cases.</summary>
+            public static class Leaf0Tests
+            {
+                /// <summary>Passes.</summary>
+                public static void APassingCase()
+                {
+                    if (new Leaf0 { Name = "x" }.Name != "x")
+                        throw new System.InvalidOperationException("the record lost its value");
+                }
+
+                /// <summary>Fails, on purpose.</summary>
+                public static void AFailingCase() =>
+                    throw new System.InvalidOperationException("Leaf0 fails on purpose");
+
+                /// <summary>Leaf7 is emitted after Leaf0, so it is not in Leaf0's prefix.</summary>
+                public static void DoesNotSeeALaterEmittedAssembly()
+                {
+                    var context = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(typeof(Leaf0Tests).Assembly)!;
+                    try
+                    {
+                        context.LoadFromAssemblyName(new System.Reflection.AssemblyName("{{EmittedAssemblyName("Ctrl/Leaf7")}}"));
+                    }
+                    catch (System.IO.FileNotFoundException)
+                    {
+                        return;
+                    }
+                    throw new System.InvalidOperationException("Leaf0's tests reached Leaf7's assembly, which is emitted after it");
+                }
+            }
+            """);
+        Write(repo, "Ctrl/Leaf7/Test/Leaf7Tests.cs",
+            $$"""
+            /// <summary>Leaf7's cases.</summary>
+            public static class Leaf7Tests
+            {
+                /// <summary>Leaf0 is emitted before Leaf7, so it is in Leaf7's prefix.</summary>
+                public static void SeesAnEarlierEmittedAssembly()
+                {
+                    var context = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(typeof(Leaf7Tests).Assembly)!;
+                    var leaf0 = context.LoadFromAssemblyName(new System.Reflection.AssemblyName("{{EmittedAssemblyName("Ctrl/Leaf0")}}"));
+                    if (leaf0.GetType("Leaf0") is null)
+                        throw new System.InvalidOperationException("Leaf0's assembly loaded without the Leaf0 record");
+                }
+            }
+            """);
+    }
+
+    /// <summary>The emitted assembly's name for a NodeType path, as the compiler mints it.</summary>
+    private static string EmittedAssemblyName(string nodePath) =>
+        $"DynamicNode_{CodeConventions.SanitizeNodeName(nodePath)}";
 
     /// <summary>The log with every time, thread id, slot count and per-run directory masked, and
     /// the timing table dropped — what is left must be identical line for line.</summary>
