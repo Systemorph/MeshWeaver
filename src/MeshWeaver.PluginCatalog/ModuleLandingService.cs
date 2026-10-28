@@ -851,7 +851,9 @@ public sealed class ModuleLandingService : IDisposable
     ///
     /// <para>🚨 <b>Serving routes only.</b> Anything that DECIDES from the record — a landing,
     /// the boot, the self-updater's restart check — keeps reading <see cref="GetActivation"/>,
-    /// which is authoritative by construction.</para>
+    /// which is authoritative by construction. The one decider that reads the snapshot is the
+    /// compile half of the dependency floor (<see cref="ServedLoadedPackageModuleReader"/>): it sits
+    /// on the activation path, and a lag can only leave a module unjudged, never misjudge one.</para>
     /// </summary>
     /// <returns>The served list; emits once and completes. A failed derivation faults this read
     /// and is not cached — the next read derives again.</returns>

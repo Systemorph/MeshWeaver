@@ -4789,7 +4789,10 @@ internal static class NodeTypeCompilationHelpers
     /// source set could not be established (<see cref="SourceDiscoveryUnavailableException"/>) or a
     /// mesh address the compile had to read was RECYCLING for the reader's whole budget
     /// (<see cref="AddressRecyclingException"/>). Both are availability facts about the mesh, never
-    /// statements about the code.
+    /// statements about the code. So is a compile THIS replica declined to run because it does not
+    /// meet the declared dependency floor of the type's package
+    /// (<see cref="DependencyFloorUnmetException"/>, #6195 — see <see cref="INodeTypeDependencyFloor"/>):
+    /// a replica that runs a satisfying dependency answers it differently.
     ///
     /// <para>🚨 One predicate, two consumers, and they MUST agree (#1701).
     /// <see cref="ApplyCompileFailure"/> uses it to stamp <see cref="CompilationStatus.Unavailable"/>
@@ -4827,9 +4830,44 @@ internal static class NodeTypeCompilationHelpers
     /// correct reading, not a hole — a bake whose process cannot emit has evaluated nothing.</para>
     /// </summary>
     internal static bool IsAvailabilityNonVerdict(Exception? error) =>
-        error is SourceDiscoveryUnavailableException or AddressRecyclingException
+        // 🚨 DependencyFloorUnmetException (#6195): THIS replica does not run what the package
+        // declares it needs, so the compile was never run — a fact about the replica, which a
+        // replica that meets the floor answers differently. Stamping it Error put one replica's
+        // module generation onto the record every replica reads.
+        error is SourceDiscoveryUnavailableException or AddressRecyclingException or DependencyFloorUnmetException
         || (error is not null
             && EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]));
+
+    /// <summary>
+    /// The LEAD of a failed compile's activity-log line, and its catalog key: which failure this
+    /// was, said before the detail. "Roslyn failed" in front of a failure Roslyn never saw is the
+    /// log-line version of the #1218 bug — so each cause that is NOT a Roslyn verdict names itself.
+    /// Pure; the detail after the colon rides as the key's <c>{detail}</c> argument (#3236).
+    /// </summary>
+    /// <param name="error">The attempt's fault, or null when the compile produced no assembly.</param>
+    internal static (string Lead, string Key) CompileFailureLead(Exception? error) => error switch
+    {
+        SourceDiscoveryUnavailableException =>
+            ("Compile NOT ATTEMPTED — source set could not be established",
+                "activity.compile.notAttempted"),
+        AddressRecyclingException =>
+            ("Compile NOT SETTLED — a mesh address it reads was recycling "
+             + "for the reader's whole budget",
+                "activity.compile.notSettled"),
+        // #6195: THIS replica does not run what the type's package requires, so Roslyn never ran.
+        DependencyFloorUnmetException =>
+            ("Compile NOT ATTEMPTED — this replica does not meet the dependency floor of the "
+             + "type's package",
+                "activity.compile.notAttemptedBelowFloor"),
+        // Roslyn SUCCEEDED here; the assembly store did not keep the bytes
+        // (a full volume, memex 2026-09-08). Saying "Roslyn failed" would send
+        // the reader to the source when the cause is the disk.
+        AssemblyPublicationException =>
+            ("Assembly NOT PUBLISHED — Roslyn produced it, but the assembly "
+             + "store did not keep the bytes, so no Release was minted",
+                "activity.compile.notPublished"),
+        _ => ("Roslyn failed", "activity.compile.roslynFailed"),
+    };
 
     /// <summary>
     /// Reports a terminal compile outcome that reached NO VERDICT — the two shapes
@@ -5539,24 +5577,7 @@ internal static class NodeTypeCompilationHelpers
                         // The LEAD is the sentence this code owns, so it carries the catalog key;
                         // the detail after the colon is Roslyn's own text, which no catalog can hold
                         // and which therefore rides as an ARGUMENT (#3236).
-                        var (failureLead, failureLeadKey) = outcome.Error switch
-                        {
-                            SourceDiscoveryUnavailableException =>
-                                ("Compile NOT ATTEMPTED — source set could not be established",
-                                    "activity.compile.notAttempted"),
-                            AddressRecyclingException =>
-                                ("Compile NOT SETTLED — a mesh address it reads was recycling "
-                                 + "for the reader's whole budget",
-                                    "activity.compile.notSettled"),
-                            // Roslyn SUCCEEDED here; the assembly store did not keep the bytes
-                            // (a full volume, memex 2026-09-08). Saying "Roslyn failed" would send
-                            // the reader to the source when the cause is the disk.
-                            AssemblyPublicationException =>
-                                ("Assembly NOT PUBLISHED — Roslyn produced it, but the assembly "
-                                 + "store did not keep the bytes, so no Release was minted",
-                                    "activity.compile.notPublished"),
-                            _ => ("Roslyn failed", "activity.compile.roslynFailed")
-                        };
+                        var (failureLead, failureLeadKey) = CompileFailureLead(outcome.Error);
                         var failureDetail = outcome.Error?.Message
                             ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
                                 ? string.Join("; ", errs.Select(m => m.Message))
