@@ -164,8 +164,8 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
             NodeOperation.Read => Permission.Read,
             NodeOperation.Create => GetCreatePermission(context.Node),
             NodeOperation.Update => Permission.Update,
-            // Ordinary content is deleted with Update; a partition root or a governance satellite
-            // keeps demanding Delete — the ONE rule, DeletePermission.RequiredFor.
+            // Ordinary content is deleted with Update OR Delete; a partition root or a governance
+            // satellite keeps demanding Delete — the ONE rule, DeletePermission.RequiredFor.
             NodeOperation.Delete => DeletePermission.RequiredFor(context.Node.Path),
             _ => Permission.None
         };
@@ -439,7 +439,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
                 .Select(p => p.HasFlag(Permission.Comment) || p.HasFlag(Permission.Update) || p.HasFlag(Permission.Sync))
             : isWrite
                 ? _hub.GetEffectivePermissions(pathToCheck, effectiveUserId)
-                    .Select(p => p.HasFlag(requiredPermission) || p.HasFlag(Permission.Sync))
+                    .Select(p => requiredPermission.IsMetBy(p) || p.HasFlag(Permission.Sync))
                 : _hub.CheckPermission(pathToCheck, effectiveUserId, requiredPermission);
 
         // 🚨 TakeDecisionOutsideGate BEFORE the projection, not only at the end of Validate — the

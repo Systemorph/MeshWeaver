@@ -17,7 +17,8 @@ namespace MeshWeaver.Hosting.Test;
 /// <summary>
 /// 🚨 A MOVE IS A CREATE AT THE TARGET PLUS A DELETE AT THE SOURCE — so the fix for "an Editor on a
 /// client workspace could not move a document" is in DELETE, not in move. Deleting ordinary content
-/// is an edit of the space and demands Update (<see cref="DeletePermission.RequiredFor"/>); deleting
+/// is an edit of the space and demands Update — or Delete, which suffices on its own (policy
+/// <c>delete-suffices-for-content</c>, <see cref="DeletePermission.RequiredFor"/>); deleting
 /// what governs a space — its root, a grant, a policy, the sync wiring — keeps demanding Delete, which
 /// only an Admin holds. A move then demands exactly what its two halves demand, and its authorship
 /// travels only where the mover is entitled to carry it.
@@ -35,6 +36,19 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
     private const string SpaceAdminId = "space-admin";
     private const string CommenterId = "commenter-c";
     private static readonly AccessContext CommenterContext = new() { ObjectId = CommenterId, Name = "Commenter C" };
+
+    /// <summary>
+    /// A CUSTOM role that carries Delete but NOT Update — the shape a role defined before deleting
+    /// content became an edit could have, and which must keep the right to delete content it had.
+    /// </summary>
+    private const string RemoverRole = "Remover";
+    private const string RemoverId = "remover-r";
+    private static readonly AccessContext RemoverContext = new() { ObjectId = RemoverId, Name = "Remover R" };
+
+    /// <summary>A CUSTOM role with neither Update nor Delete — the negative control.</summary>
+    private const string CreatorRole = "Creator";
+    private const string CreatorId = "creator-c";
+    private static readonly AccessContext CreatorContext = new() { ObjectId = CreatorId, Name = "Creator C" };
 
     /// <summary>A Space whose root an Admin stores at run time; the Editor holds Editor on it.</summary>
     private const string StoredRoot = "StoredRoot";
@@ -61,15 +75,18 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
                 AssignmentNodeFactory.UserRole(EditorId, "Editor", StoredRoot),
                 AssignmentNodeFactory.UserRole(EditorId, "Editor", $"{TestPartition}/{DeniedSource}", denied: true),
                 AssignmentNodeFactory.UserRole(SpaceAdminId, "Admin", TestPartition),
-                AssignmentNodeFactory.UserRole(SpaceAdminId, "Editor", Other));
+                AssignmentNodeFactory.UserRole(SpaceAdminId, "Editor", Other),
+                AssignmentNodeFactory.UserRole(RemoverId, RemoverRole, TestPartition),
+                AssignmentNodeFactory.UserRole(RemoverId, RemoverRole, StoredRoot),
+                AssignmentNodeFactory.UserRole(CreatorId, CreatorRole, TestPartition));
 
     /// <summary>The rule itself, on the shapes that matter — no mesh needed to read it.</summary>
     [Fact]
-    public void TheDeleteDemand_IsUpdateForContent_AndDeleteForWhatGovernsASpace()
+    public void TheDeleteDemand_IsUpdateOrDeleteForContent_AndDeleteForWhatGovernsASpace()
     {
-        DeletePermission.RequiredFor("Acme/Proposal").Should().Be(Permission.Update, "ordinary content");
-        DeletePermission.RequiredFor("Acme/Folder/Proposal").Should().Be(Permission.Update, "nested content");
-        DeletePermission.RequiredFor("Acme/Proposal/_Comment/c1").Should().Be(Permission.Update, "a comment on content");
+        DeletePermission.RequiredFor("Acme/Proposal").Should().Be(PermissionDemand.UpdateOrDelete, "ordinary content");
+        DeletePermission.RequiredFor("Acme/Folder/Proposal").Should().Be(PermissionDemand.UpdateOrDelete, "nested content");
+        DeletePermission.RequiredFor("Acme/Proposal/_Comment/c1").Should().Be(PermissionDemand.UpdateOrDelete, "a comment on content");
         DeletePermission.RequiredFor("Acme").Should().Be(Permission.Delete, "a partition root tears the partition down");
         DeletePermission.RequiredFor("").Should().Be(Permission.Delete, "no path is the root");
         DeletePermission.RequiredFor("Acme/_Access/jane_Access").Should().Be(Permission.Delete, "a grant");
@@ -79,6 +96,103 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
         DeletePermission.RequiredFor("Acme/_Entitlements/jane").Should().Be(Permission.Delete, "a purchase");
         DeletePermission.SamePartition("Acme/a", "Acme/b/c").Should().BeTrue();
         DeletePermission.SamePartition("Acme/a", "Globex/a").Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The ONE predicate a demand is evaluated with: the content-delete demand is met by EITHER bit,
+    /// every other demand by all of its bits — so a role holding neither is refused, and Update alone
+    /// still does not meet the Delete a partition root or a grant demands.
+    /// </summary>
+    [Fact]
+    public void TheContentDeleteDemand_IsMetByEitherBit_AndNoOtherDemandChanges()
+    {
+        var content = DeletePermission.RequiredFor("Acme/Proposal");
+        content.IsMetBy(Permission.Read | Permission.Create | Permission.Delete).Should().BeTrue("Delete alone suffices for content");
+        content.IsMetBy(Role.Editor.Permissions).Should().BeTrue("an Editor deletes content with Update");
+        content.IsMetBy(Role.Admin.Permissions).Should().BeTrue("an Admin holds both");
+        content.IsMetBy(Permission.Read | Permission.Create | Permission.Comment).Should().BeFalse("neither Update nor Delete");
+        content.IsMetBy(Role.Viewer.Permissions).Should().BeFalse("a Viewer deletes nothing");
+
+        DeletePermission.RequiredFor("Acme").IsMetBy(Role.Editor.Permissions).Should().BeFalse("Update alone never removes a partition root");
+        DeletePermission.RequiredFor("Acme/_Access/jane_Access").IsMetBy(Role.Editor.Permissions).Should().BeFalse("nor a grant");
+        DeletePermission.RequiredFor("Acme").IsMetBy(Permission.Delete).Should().BeTrue();
+
+        (Permission.Read | Permission.Update).IsMetBy(Permission.Read).Should().BeFalse("any other demand stays ALL of its bits");
+        Permission.None.IsMetBy(Permission.None).Should().BeTrue();
+        content.Describe().Should().Be("Update or Delete");
+        Permission.Delete.Describe().Should().Be("Delete");
+    }
+
+    /// <summary>
+    /// 🚨 Issue #7414's shape: a custom role carrying Delete but not Update. Once deleting content became
+    /// an edit, a demand of Update alone silently stripped such a role of a right it had always held.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARoleWithDeleteButNotUpdate_DeletesOrdinaryContent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await DefineRoles(ct);
+        var path = await SeedAsAdmin(TestPartition, "removable", ct);
+        await HeldBy(path, RemoverId, Permission.Delete, true, ct);
+        await HeldBy(path, RemoverId, Permission.Update, false, ct);
+
+        Access.SetCircuitContext(RemoverContext);
+        var (success, error) = await Delete(path, ct);
+
+        success.Should().BeTrue(error ?? "Delete alone suffices to delete ordinary content");
+        (await StoredAt(path, ct)).Should().BeNull("the node is gone");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task ARoleWithDeleteButNotUpdate_MovesWithinThePartition()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await DefineRoles(ct);
+        var source = await SeedAsAdmin(TestPartition, "remover-within", ct);
+        var before = await ReadExisting(source, ct);
+        var target = NewPath(TestPartition, "remover-within-moved");
+        await HeldBy(source, RemoverId, Permission.Delete, true, ct);
+
+        Access.SetCircuitContext(RemoverContext);
+        var moved = await Move(source, target, ct);
+
+        moved.Success.Should().BeTrue(moved.Error ?? "a move is a delete at the source plus a create at the target, both held");
+        (await StoredAt(source, ct)).Should().BeNull("the source is gone");
+        (await ReadExisting(target, ct)).CreatedBy.Should().Be(before.CreatedBy, "within the partition the stamps travel");
+    }
+
+    /// <summary>The negative control: a role with neither Update nor Delete deletes nothing.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARoleWithNeitherUpdateNorDelete_IsRefusedADelete()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await DefineRoles(ct);
+        var path = await SeedAsAdmin(TestPartition, "kept", ct);
+        await HeldBy(path, CreatorId, Permission.Create, true, ct);
+
+        Access.SetCircuitContext(CreatorContext);
+        var (success, error) = await Delete(path, ct);
+
+        Output.WriteLine($"creator delete: success={success} error={error}");
+        success.Should().BeFalse("holding neither Update nor Delete grants no delete");
+        (await StoredAt(path, ct)).Should().NotBeNull("the refused delete leaves the node in place");
+    }
+
+    /// <summary>
+    /// The reserved cases stay Delete-only: a partition root's demand is not met by the Update an Editor
+    /// holds there, and is met by a role that carries Delete.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task APartitionRoot_StillDemandsDelete_WhichUpdateAloneDoesNotMeet()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await DefineRoles(ct);
+        var demand = DeletePermission.RequiredFor(StoredRoot);
+        demand.Should().Be(Permission.Delete);
+
+        await HeldBy(StoredRoot, EditorId, Permission.Update, true, ct);
+        await HeldBy(StoredRoot, EditorId, demand, false, ct);
+        await HeldBy(StoredRoot, RemoverId, demand, true, ct);
     }
 
     [Fact(Timeout = 60000)]
@@ -429,6 +543,39 @@ public class EditorDeletesContentTest(ITestOutputHelper output) : MonolithMeshTe
         (await ReadExisting(target, ct)).CreatedBy.Should().Be(CommenterId,
             "deleting a comment does not make its author's CreatedBy the commenter's to lend");
     }
+
+    /// <summary>
+    /// Stores the two custom roles as System. The grants naming them are seeded; the permission fold
+    /// resolves a role by id when it evaluates, so they take effect once the definitions land.
+    /// </summary>
+    private async Task DefineRoles(CancellationToken ct)
+    {
+        Role[] roles =
+        [
+            new() { Id = RemoverRole, Permissions = Permission.Read | Permission.Create | Permission.Delete | Permission.Api },
+            new() { Id = CreatorRole, Permissions = Permission.Read | Permission.Create | Permission.Comment | Permission.Api },
+        ];
+        foreach (var role in roles)
+            await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode(role.Id, TestPartition)
+                {
+                    NodeType = SecurityQueries.RoleNodeType,
+                    Name = role.Id,
+                    Content = role,
+                }))
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Waits until <paramref name="userId"/>'s fold on <paramref name="path"/> answers
+    /// <paramref name="expected"/> for <paramref name="permission"/> — the setup measures what the
+    /// test claims before the test relies on it.
+    /// </summary>
+    private Task HeldBy(string path, string userId, Permission permission, bool expected, CancellationToken ct) =>
+        Mesh.CheckPermission(path, userId, permission)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(held => held == expected,
+                $"precondition: {userId} {(expected ? "holds" : "lacks")} {permission.Describe()} on {path}",
+                cancellationToken: ct);
 
     private static string NewPath(string partition, string prefix) =>
         $"{partition}/{prefix}-{Guid.NewGuid().ToString("N")[..8]}";
