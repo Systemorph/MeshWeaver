@@ -788,8 +788,10 @@ jobs:
     # must hold the build too, and `!cancelled()` alone would read a skipped need as fine.
     # 🚨 Not on the host route: there the build host builds and tests (admission above). An admission
     # that failed or answered nothing reads as `actions` — the legs run HERE, a real verdict.
-    # 🚨 Nor on `host-forced` (precheck, policy build-server-routes-all-ci): Consolidate reds naming the debt.
-    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' && needs.admission.outputs.executor != 'host' && needs.precheck.outputs.executor != 'host-forced' }}
+    # 🚨 Nor on `host-forced` (policy build-server-routes-all-ci): Consolidate reds naming the debt. BOTH
+    # answers are read: precheck's queue read can fail (→ `actions`) and admission's succeed moments later
+    # (→ `host-forced`, the run already queued on the host) — the legs must not ALSO start here then.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' && needs.admission.outputs.executor != 'host' && needs.admission.outputs.executor != 'host-forced' && needs.precheck.outputs.executor != 'host-forced' }}
     timeout-minutes: 25
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
     # `dotnet build` of the whole solution launches a long-lived Roslyn compiler server that
@@ -4376,10 +4378,10 @@ jobs:
     # but precheck's `host-forced` already SKIPPED `build` and every leg behind it. A transient outage
     # on this second read must not clear that decision: with a reused green tree (`skip == 'true'`) the
     # suite assertions below are exempt, so nothing else would stop the required context going green.
-    - name: Precheck routed this head to the build host (no leg ran here)
-      if: github.event_name == 'pull_request' && needs.precheck.outputs.executor == 'host-forced'
+    - name: Precheck or admission routed this head to the build host (no leg ran here)
+      if: github.event_name == 'pull_request' && (needs.precheck.outputs.executor == 'host-forced' || needs.admission.outputs.executor == 'host-forced')
       run: |
-        echo "::error title=Routed to the build host::precheck answered host-forced for this head, so build and every leg behind it did NOT run on Actions — the required context stays RED until core's host stages owe nothing (policy build-server-routes-all-ci; Doc/Architecture/BuildHosts → \"Host-forced routing\")."
+        echo "::error title=Routed to the build host::precheck or admission answered host-forced for this head, so build and every leg behind it did NOT run on Actions — the required context stays RED until core's host stages owe nothing (policy build-server-routes-all-ci; Doc/Architecture/BuildHosts → \"Host-forced routing\")."
         exit 1
     # The green-tree marker below must point at the commit whose tree was TESTED — on a pull request
     # that is the fresh merge onto precheck's main sha (byte-identical: a pure function of that sha

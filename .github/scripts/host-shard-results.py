@@ -327,9 +327,12 @@ def self_test() -> int:
     check("RED: only another shard's tree", red([dict(r, unit=r["unit"].replace("shard1", "shard2")) for r in good[:4]]))
     check("RED: the receipts are another STAGE's", red([dict(r, stage="test-shard-2") for r in good]))
     check("RED: no test/test-results.log (not the `test` job's tree)", red(good[1:]))
-    check("RED: a test-results.log with no exit marker", red(
-        [rc("testResults-shard1/test/test-results.log", b"hello\n")] + good[1:4],
-        lambda s, d, n: open(d, "wb").write(b"hello\n") and None))
+    # Every OTHER receipt is served its own bytes (review of #7439): a getter writing `hello` to every file
+    # failed on the trace log's size first, so this case passed with the marker check deleted.
+    unmarked = b"hello\n"
+    blobs[hashlib.sha256(unmarked).hexdigest()] = unmarked
+    check("RED: a test-results.log with no exit marker",
+          red([rc("testResults-shard1/test/test-results.log", unmarked)] + good[1:4]))
     check("RED: a FOREIGN file in the tree (a dll is not a result)",
           red(good + [rc("testResults-shard1/test/A/bin/Release/net10.0/A.dll", trx_a)]))
     check("RED: a FOREIGN file at the tree's root", red(good + [rc("testResults-shard1/notes.txt", trx_a)]))

@@ -633,8 +633,10 @@ red:
   lanes' heavy jobs skip so the forced path puts no load on Actions. The context-owning jobs run
   `always()`/`!cancelled()`, so the context is published as a FAILURE, never skipped. In core,
   `precheck` decides with `build-executor.py --route-only` and `build` (with every leg that needs it)
-  does not run on `host-forced`; the required context, `Consolidate test results`, asks again and
-  exits 1, naming the debt.
+  does not run on `host-forced` — precheck's answer OR the admission's: precheck's queue read can fail
+  (`actions`) while the admission's succeeds moments later and queues the host run, and the legs must
+  not then start on Actions as well. The required context, `Consolidate test results`, fails on either
+  answer, asks again and exits 1, naming the debt.
 - **What it never touches.** Trunk runs (main's CD keeps sealing the platform sets that carry the
   host's own fixes), `MeshWeaver.Deploy` and `Memex` (they carry the host fixes and the
   infrastructure, and must stay mergeable). An unreadable routing file or an unanswering queue reads
@@ -857,7 +859,7 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
     run, which is RED — they are owed (`dependent legs`).
 
   `core-build-stages.py --check` holds both matrices to the declaration. Any other admission answer
-  runs every leg on Actions, as before — except precheck's `host-forced` (see "Host-forced routing"
+  runs every leg on Actions, as before — except a `host-forced` answer from precheck or the admission (see "Host-forced routing"
   above): `build` skips on either route, and on `host-forced` `Consolidate test results` is red
   naming the debt.
 
