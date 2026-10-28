@@ -321,6 +321,9 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         ((MarkdownControl)markdownControl!).Html!.ToString()
             .Should().Contain("mermaid")
             .And.Contain("FutuRe Group");
+        ((MarkdownControl)markdownControl!).ExecutesCode.Should().BeTrue(
+            "a node's own markdown body is notebook content, so its producer opts its cells in "
+            + "(MarkdownControl.ExecutesCode defaults to off)");
     }
 
     [HubFact]

@@ -21,13 +21,26 @@ namespace MeshWeaver.Markdown;
 /// same reason <c>MarkdownViewLogic.DisableKernelPlaceholder</c> refuses to embed an ownerless
 /// kernel area — an empty address is the NotFound-storm shape, not a blank space).
 /// </param>
-public class ExecutableCodeBlockExtension(string? currentNodePath = null) : IMarkdownExtension
+/// <param name="executesCode">
+/// Whether <c>--execute</c> / <c>--render</c> fences stay executable. <c>false</c> renders them as
+/// ordinary code blocks with no kernel result area — the rendering for text the viewer did not
+/// author (see <c>MarkdownControl.ExecutesCode</c>).
+/// </param>
+public class ExecutableCodeBlockExtension(string? currentNodePath, bool executesCode) : IMarkdownExtension
 {
+    /// <summary>
+    /// The executing extension — the shape every existing caller compiled against.
+    /// </summary>
+    /// <param name="currentNodePath">The path of the node the markdown belongs to, or null.</param>
+    public ExecutableCodeBlockExtension(string? currentNodePath = null) : this(currentNodePath, executesCode: true)
+    {
+    }
+
     /// <summary>The fenced-code-block parser that produces <see cref="ExecutableCodeBlock"/> nodes.</summary>
-    public ExecutableCodeBlockParser Parser { get; } = new();
+    public ExecutableCodeBlockParser Parser { get; } = new() { ExecutesCode = executesCode };
 
     /// <summary>The HTML renderer for executable code blocks.</summary>
-    public ExecutableCodeBlockRenderer Renderer { get; } = new(currentNodePath);
+    public ExecutableCodeBlockRenderer Renderer { get; } = new(currentNodePath, executesCode);
 
     /// <summary>
     /// Replaces Markdig's default fenced-code-block parser with <see cref="Parser"/>.
@@ -56,6 +69,16 @@ public class ExecutableCodeBlockExtension(string? currentNodePath = null) : IMar
 /// </summary>
 public class ExecutableCodeBlockParser : FencedCodeBlockParser
 {
+    /// <summary>
+    /// Whether the blocks this parser creates may yield a <see cref="SubmitCodeRequest"/>.
+    /// <c>false</c> is the inert pipeline's policy (<c>MarkdownExtensions.CreateInertMarkdownPipeline</c>):
+    /// it travels on every block (<see cref="ExecutableCodeBlock.ExecutesCode"/>), so no reader — the
+    /// renderer, <c>MarkdownViewLogic.ExtractCodeSubmissions</c>, a repeated
+    /// <see cref="ExecutableCodeBlock.Initialize"/> — can recreate a submission from the fence
+    /// arguments, before or after rendering.
+    /// </summary>
+    public bool ExecutesCode { get; init; } = true;
+
     /// <summary>
     /// Creates an <see cref="ExecutableCodeBlock"/> for a fenced code fence, carrying over indentation and trivia.
     /// </summary>
@@ -88,6 +111,23 @@ public class ExecutableCodeBlockParser : FencedCodeBlockParser
 public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 {
     private readonly BlockParser parser = parser;
+
+    /// <summary>
+    /// Whether this block may yield a <see cref="SubmitCode"/> at all — the policy of the parser that
+    /// created it (<see cref="ExecutableCodeBlockParser.ExecutesCode"/>). <c>false</c> makes
+    /// <see cref="GetSubmitCodeRequest"/> return null whatever the fence arguments say, so a document
+    /// parsed by the inert pipeline never yields a runnable request.
+    /// </summary>
+    public bool ExecutesCode { get; } = (parser as ExecutableCodeBlockParser)?.ExecutesCode ?? true;
+
+    /// <summary>
+    /// Whether the fence ASKS to run (<c>--execute</c> / <c>--render</c> on a code fence) —
+    /// independent of <see cref="ExecutesCode"/>, so the renderer can show an inert block as
+    /// ordinary code. Valid after <see cref="Initialize"/>.
+    /// </summary>
+    internal bool RequestsExecution =>
+        Info != "layout" && Info != PromptFence.Language
+        && (Args.ContainsKey(Execute) || Args.ContainsKey(Render));
 
     /// <summary>Fence argument name for silent execution (<c>--execute</c>).</summary>
     public const string Execute = "execute";
@@ -156,6 +196,10 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
     /// <returns>The submission to send to the kernel, or null when the block should not execute.</returns>
     public SubmitCodeRequest? GetSubmitCodeRequest()
     {
+        // The parser's policy, not the text's: an inert document yields nothing to run.
+        if (!ExecutesCode)
+            return null;
+
         if (Info == "layout")
             return null;
 

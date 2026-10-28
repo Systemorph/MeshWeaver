@@ -101,18 +101,124 @@ public static class MarkdownViewLogic
         string markdown,
         object? collection,
         string? currentNodePath)
+        => RenderWith(markdown,
+            MarkdownExtensions.CreateMarkdownPipeline(collection, currentNodePath), executesCode: true);
+
+    /// <summary>
+    /// <see cref="Render"/> for markdown whose producer did NOT opt its fences in
+    /// (<c>MarkdownControl.ExecutesCode</c> false): the result carries NO submissions and NO kernel
+    /// placeholder — every <c>--execute</c> / <c>--render</c> fence is an ordinary code block, so a
+    /// view has nothing to submit, whatever the text says and whenever it arrives. A separate name
+    /// rather than an overload, so existing <c>cref</c>s to <see cref="Render"/> stay unambiguous.
+    /// </summary>
+    /// <param name="markdown">The markdown to render.</param>
+    /// <param name="collection">The content collection used for image hrefs, or null.</param>
+    /// <param name="currentNodePath">The node path relative references resolve against, or null.</param>
+    /// <returns>The rendered HTML; never any submission.</returns>
+    public static MarkdownRenderResult RenderInert(
+        string markdown,
+        object? collection,
+        string? currentNodePath)
+        => RenderWith(markdown,
+            MarkdownExtensions.CreateInertMarkdownPipeline(collection, currentNodePath), executesCode: false);
+
+    private static MarkdownRenderResult RenderWith(
+        string markdown,
+        MarkdownPipeline pipeline,
+        bool executesCode)
     {
         if (string.IsNullOrEmpty(markdown))
             return new MarkdownRenderResult(string.Empty, null);
 
-        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(collection, currentNodePath);
         var transformed = AnnotationMarkdownExtension.TransformAnnotations(markdown);
         var document = Markdig.Markdown.Parse(transformed, pipeline);
 
-        var submissions = ExtractSubmissions(document);
+        var submissions = executesCode ? ExtractSubmissions(document) : null;
         var html = document.ToHtml(pipeline);
 
         return new MarkdownRenderResult(html, submissions);
+    }
+
+    /// <summary>
+    /// The rendering a view shows for a <c>MarkdownControl</c>, honouring its
+    /// <c>ExecutesCode</c> decision — the one place a client decides whether there is anything to
+    /// submit to a kernel. Pure.
+    /// <list type="bullet">
+    ///   <item><b>Executing</b>: the producer's pre-rendered <paramref name="html"/> and
+    ///   <paramref name="providedSubmissions"/> win; otherwise the markdown is rendered (or, for
+    ///   pre-rendered HTML that kept the kernel placeholder, its submissions re-extracted).</item>
+    ///   <item><b>Not executing</b>: no submission ever, whatever the producer supplied. The markdown
+    ///   is rendered inert; pre-rendered HTML is used only when it carries no kernel placeholder —
+    ///   one that does is re-rendered from the markdown, or, with no markdown to render, has its
+    ///   result areas replaced by the static "unavailable" notice (never a live address) and its
+    ///   cell frame, Run toolbar and editor markers stripped, so the code reads as ordinary code.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="markdown">The control's markdown, or null.</param>
+    /// <param name="html">The control's pre-rendered HTML, or null.</param>
+    /// <param name="providedSubmissions">Submissions the producer attached, or null.</param>
+    /// <param name="executesCode">The control's <c>ExecutesCode</c>.</param>
+    /// <param name="collection">The content collection used for image hrefs, or null.</param>
+    /// <param name="currentNodePath">The node path relative references resolve against, or null.</param>
+    /// <param name="locale">The viewer's language for the static notice; null is English.</param>
+    /// <returns>The HTML to show and the submissions a view may run (null when none).</returns>
+    public static MarkdownRenderResult ResolveRendering(
+        string? markdown,
+        string? html,
+        IReadOnlyList<SubmitCodeRequest>? providedSubmissions,
+        bool executesCode,
+        object? collection,
+        string? currentNodePath,
+        string? locale = null)
+    {
+        var hasKernelPlaceholder = html is not null
+                                   && html.Contains(ExecutableCodeBlockRenderer.KernelAddressPlaceholder);
+        if (executesCode)
+        {
+            if (html is null)
+            {
+                if (string.IsNullOrEmpty(markdown))
+                    return new MarkdownRenderResult(string.Empty, providedSubmissions);
+                var rendered = Render(markdown, collection, currentNodePath);
+                return new MarkdownRenderResult(rendered.Html, providedSubmissions ?? rendered.CodeSubmissions);
+            }
+            var submissions = providedSubmissions
+                              ?? (hasKernelPlaceholder && !string.IsNullOrEmpty(markdown)
+                                  ? ExtractCodeSubmissions(markdown, collection, currentNodePath)
+                                  : null);
+            return new MarkdownRenderResult(html, submissions);
+        }
+
+        if (html is not null && !hasKernelPlaceholder)
+            return new MarkdownRenderResult(html, null);
+        if (!string.IsNullOrEmpty(markdown))
+            return RenderInert(markdown, collection, currentNodePath);
+        return new MarkdownRenderResult(
+            html is null ? string.Empty : StripExecutableCellMarkup(DisableKernelPlaceholder(html, locale)), null);
+    }
+
+    /// <summary>
+    /// Turns the notebook-cell markup <see cref="ExecutableCodeBlockRenderer"/> writes for an
+    /// executable fence into ordinary markup: the Run toolbar marker is dropped, the code segment
+    /// loses the submission id / language attributes a client hydrates into an editor, and the cell
+    /// and output frames lose the classes a client keys off. The code itself stays visible. Only the
+    /// renderer's own exact emissions match — authored text inside a fence is HTML-encoded, so it can
+    /// never spell these tags.
+    /// </summary>
+    private static string StripExecutableCellMarkup(string html)
+    {
+        var toolbar = $"<div class=\"{ExecutableCodeBlockRenderer.CellToolbarClass}\" "
+                      + $"{ExecutableCodeBlockRenderer.SubmissionIdAttribute}=\"[^\"]*\" "
+                      + $"{ExecutableCodeBlockRenderer.LanguageAttribute}=\"[^\"]*\"></div>";
+        var codeSegment = $"<div class=\"{ExecutableCodeBlockRenderer.CellCodeClass}\" "
+                          + $"{ExecutableCodeBlockRenderer.SubmissionIdAttribute}=\"[^\"]*\" "
+                          + $"{ExecutableCodeBlockRenderer.LanguageAttribute}=\"[^\"]*\">";
+        html = System.Text.RegularExpressions.Regex.Replace(html, toolbar, string.Empty);
+        html = System.Text.RegularExpressions.Regex.Replace(
+            html, codeSegment, $"<div class=\"{ExecutableCodeBlockRenderer.CellCodeClass}\">");
+        return html
+            .Replace($"<div class=\"{ExecutableCodeBlockRenderer.CellOutputClass}\">", "<div>")
+            .Replace($"<div class=\"{ExecutableCodeBlockRenderer.CellClass}\">", "<div>");
     }
 
     /// <summary>

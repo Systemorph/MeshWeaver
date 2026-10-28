@@ -25,7 +25,7 @@ public static class MarkdownExtensions
     // session churn only a handful of distinct keys.
     private const int CacheCapacity = 1024;
 
-    private static readonly ConcurrentDictionary<(string?, string?), MarkdownPipeline> PipelineCache = new();
+    private static readonly ConcurrentDictionary<(string?, string?, bool), MarkdownPipeline> PipelineCache = new();
 
     /// <summary>
     /// Returns the configured Markdig pipeline for the given content collection and node path, served
@@ -37,8 +37,26 @@ public static class MarkdownExtensions
     public static MarkdownPipeline CreateMarkdownPipeline(
         object? collection,
         string? currentNodePath = null)
+        => CachedPipeline(collection, currentNodePath, executesCode: true);
+
+    /// <summary>
+    /// The pipeline <see cref="CreateMarkdownPipeline"/> builds, except that every executable fence
+    /// (<c>--execute</c> / <c>--render</c>) renders as an ordinary code block and yields no code
+    /// submission — the rendering for text the viewer did not author (see
+    /// <c>MarkdownControl.ExecutesCode</c>). A separate name rather than an overload, so existing
+    /// <c>cref</c>s to <see cref="CreateMarkdownPipeline"/> stay unambiguous (CS0419).
+    /// </summary>
+    /// <param name="collection">The content collection used to build static image hrefs, or null.</param>
+    /// <param name="currentNodePath">The current node path used to resolve relative references, or null.</param>
+    /// <returns>A cached, immutable, reusable markdown pipeline.</returns>
+    public static MarkdownPipeline CreateInertMarkdownPipeline(
+        object? collection,
+        string? currentNodePath = null)
+        => CachedPipeline(collection, currentNodePath, executesCode: false);
+
+    private static MarkdownPipeline CachedPipeline(object? collection, string? currentNodePath, bool executesCode)
     {
-        var key = (collection?.ToString(), currentNodePath);
+        var key = (collection?.ToString(), currentNodePath, executesCode);
 
         if (PipelineCache.TryGetValue(key, out var cached))
             return cached;
@@ -46,10 +64,10 @@ public static class MarkdownExtensions
         if (PipelineCache.Count >= CacheCapacity)
             PipelineCache.Clear();
 
-        return PipelineCache.GetOrAdd(key, _ => BuildPipeline(collection, currentNodePath));
+        return PipelineCache.GetOrAdd(key, _ => BuildPipeline(collection, currentNodePath, executesCode));
     }
 
-    private static MarkdownPipeline BuildPipeline(object? collection, string? currentNodePath) =>
+    private static MarkdownPipeline BuildPipeline(object? collection, string? currentNodePath, bool executesCode) =>
         new MarkdownPipelineBuilder()
             .UseMathematics()
             .UseAdvancedExtensions()
@@ -68,7 +86,7 @@ public static class MarkdownExtensions
             .Use(new LayoutAreaMarkdownExtension(currentNodePath))
             // currentNodePath: the ```prompt fence lowers to a layout area on the page node's OWN
             // hub, so the renderer needs the owner. Already part of the cache key above.
-            .Use(new ExecutableCodeBlockExtension(currentNodePath))
+            .Use(new ExecutableCodeBlockExtension(currentNodePath, executesCode))
             .Build();
 
     /// <summary>
