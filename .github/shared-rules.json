@@ -81,6 +81,18 @@
     "Systemorph/CreditReRate",
     "Systemorph/DecisionModels"
   ],
+  "pair-only-repos-note": [
+    "Repositories a `Pairs-with:` counterpart may ALSO be declared in, read only by",
+    "scripts/check-cross-repo-pair.py (never by the shared-rules gate, which reads `repos`). They",
+    "consume this repository by CHECKOUT and ProjectReference its paths, so a removal here can red",
+    "their required checks, but they are not in the shared-rule baseline. MeshWeaver#7415:",
+    "MeshWeaver.Deploy's chart guards compile against core's project paths, and before this list a",
+    "declaration naming Deploy was refused as 'not a sibling repository'. A repo added here must also",
+    "be added to the cross-repo-pair job's fleet-reader mint in dotnet-test.yml."
+  ],
+  "pair-only-repos": [
+    "Systemorph/MeshWeaver.Deploy"
+  ],
   "hubs-note": [
     "There are TWO hubs, and which one is authoritative depends on the KIND of rule. This is not",
     "a proposal — it is what the seven files already say about themselves (measured 2026-08-30):",
