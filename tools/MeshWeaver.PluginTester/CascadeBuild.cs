@@ -556,7 +556,13 @@ public static class CascadeBuild
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
-                    Path.Combine(packageDir, CodeConventions.SanitizeNodeName(candidate.Node.Path)),
+                    // 🚨 A directory of its OWN per compile attempt, as TreeBake does: the sanitized
+                    // name is not unique (`Ctrl/A_B` and `Ctrl/A/B` both sanitize to `Ctrl_A_B`, and a
+                    // case-only pair collides on a case-insensitive file system), and the types now
+                    // compile in PARALLEL — a shared directory lets two compiles overwrite each
+                    // other's DLL/PDB/XML while the other is validating or reading them.
+                    Path.Combine(packageDir, Guid.NewGuid().ToString("N"),
+                        CodeConventions.SanitizeNodeName(candidate.Node.Path)),
                     resolveNuGet: TreeBake.BlockingNuGetResolution(nugetResolver),
                     logger: options.Logger,
                     moduleAssemblyPaths: moduleAssemblyPaths);
