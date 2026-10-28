@@ -1118,13 +1118,19 @@ internal static class NodeTypeCompilationHelpers
         //   • Skips static-only types (nothing to Roslyn-compile).
         //   • ImpersonateAsSystem — a framework-internal self-heal, exactly like the other
         //     kickoffs (no inbound AccessContext → no "lacks Create" loop).
+        //   • 🚨 Eligibility-aware (#6195) — a process below the dependency floor of the type's
+        //     package skips it: its compile would be refused before Roslyn, so the flip would only
+        //     move the shared record through Pending for nothing. The kickoff of an owner that
+        //     MEETS the floor is what rebuilds a type a below-floor replica left Unavailable.
         var frameworkStaleKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
-                && def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error
-                && HasStaleFrameworkBuild(def, guards)
+                && IsSettledOnAStaleBuild(def, guards)
                 && !IsStaticOnlyNodeType(node, def)
                 && parkRegistry?.IsParked(hubPath) != true)
             .Take(1)
+            .SelectMany(node => MeetsDependencyFloorHere(hub, hubPath, "framework-stale kickoff", logger)
+                .Where(eligible => eligible)
+                .Select(_ => node))
             // 🚨 ASK THE STORE BEFORE REBUILDING. The record's CompiledFrameworkVersion says which
             // framework the LAST WRITE-BACK came from; it does not say whether bytes for OUR
             // framework exist. Those are different questions, and the assembly store answers the one
@@ -3943,6 +3949,57 @@ internal static class NodeTypeCompilationHelpers
     /// <summary>The node's content as a <see cref="NodeTypeDefinition"/>, or null.</summary>
     private static NodeTypeDefinition? DefinitionOf(IMessageHub hub, MeshNode? node) =>
         node?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+
+    /// <summary>
+    /// 🚨 The framework-stale kickoff's state predicate: a SETTLED record whose recorded build is
+    /// stale here (<see cref="HasStaleFrameworkBuild(NodeTypeDefinition, BuildGuards?)"/>).
+    ///
+    /// <para><see cref="CompilationStatus.Unavailable"/> counts as settled (#6195). A replica below
+    /// its package's dependency floor stamps it over a type's last good build and keeps that
+    /// build's coordinates — and with those coordinates present, the failed-verdict re-drive
+    /// (<see cref="HasStaleFailureVerdict"/>, which owns only the no-build case) and the
+    /// older-platform trigger (<see cref="HasFailureFromOlderPlatform"/>, <c>Error</c> only) both
+    /// decline it. Accepting only <c>Ok</c>/<c>Error</c> here left such a type on the Unavailable
+    /// overlay on every replica whose live build differs from the retained one, until a batch bake
+    /// or a person intervened. The same reasoning that admits <c>Error</c> admits it: the assembly
+    /// coordinates are written only by a SUCCESSFUL compile, so a failure carrying them is layered
+    /// on a good build.</para>
+    /// </summary>
+    /// <param name="def">The definition to judge.</param>
+    /// <param name="guards">The live build guards.</param>
+    internal static bool IsSettledOnAStaleBuild(NodeTypeDefinition def, BuildGuards? guards) =>
+        def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error or CompilationStatus.Unavailable
+        && HasStaleFrameworkBuild(def, guards);
+
+    /// <summary>
+    /// Whether THIS process meets the declared dependency floor of the package that owns
+    /// <paramref name="nodeTypePath"/> (<see cref="INodeTypeDependencyFloor"/>, #6195) — true when
+    /// no floor is registered or nothing could be judged. Cold; emits exactly once. A false answer
+    /// is logged once, naming <paramref name="what"/> was skipped.
+    /// </summary>
+    /// <param name="hub">The hub whose services carry the floor.</param>
+    /// <param name="nodeTypePath">The NodeType's path.</param>
+    /// <param name="what">What is skipped on an unmet floor, for the log line.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IObservable<bool> MeetsDependencyFloorHere(
+        IMessageHub hub, string nodeTypePath, string what, ILogger? logger)
+    {
+        if (hub.ServiceProvider.GetService<INodeTypeDependencyFloor>() is not { } floor)
+            return Observable.Return(true);
+        return floor.Unmet(nodeTypePath)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Select(unmet =>
+            {
+                if (unmet is null)
+                    return true;
+                logger?.LogInformation(
+                    "{What} of {NodeTypePath} SKIPPED on this replica — {Unmet}. A replica that meets the "
+                    + "floor rebuilds it (#6195).",
+                    what, nodeTypePath, unmet);
+                return false;
+            });
+    }
 
     // The twin of HasUsableBuild's modules-hash join (#1664 step 11): a build whose stamped
     // CompiledModulesHash differs from the live set is STALE the same way a framework mismatch

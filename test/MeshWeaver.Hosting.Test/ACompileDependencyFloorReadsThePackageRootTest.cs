@@ -168,6 +168,65 @@ public class ACompileDependencyFloorReadsThePackageRootTest(ITestOutputHelper ou
     }
 
     /// <summary>
+    /// 🚨 A NodeType reference may spell its package root in another case than the persisted root
+    /// (<c>hosting/Deployment</c> against <c>Hosting</c>), and the resolver matches paths
+    /// case-insensitively. Comparing the resolved prefix ordinally discarded that root, so the floor
+    /// abstained and a replica below it compiled anyway. POSITIVE ARM: the root is still judged.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARootSpelledInAnotherCase_IsStillJudged()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = $"FloorCase{Guid.NewGuid().ToString("N")[..8]}";
+        await NodeFactory.CreateNode(new MeshNode(root)
+        {
+            NodeType = "Space",
+            Name = "A package root named in another case",
+            State = MeshNodeState.Active,
+            Content = JsonSerializer.SerializeToElement(new
+            {
+                description = "a package root",
+                requires = new[] { "AI@^1.40.0" },
+            }),
+        }).Timeout(TestTimeouts.Convergence).Await(ct);
+        loaded.Set("AI", "MeshWeaver.AI", "1.39.8");
+
+        var unmet = await Settled(Reader.Unmet($"{root.ToLowerInvariant()}/Kind"), ct);
+        unmet.Should().NotBeNull(
+            "the resolver found the persisted root for the lower-cased reference — discarding it on "
+            + "case alone leaves the floor unjudged and the incompatible build loads");
+        unmet!.Should().Contain("AI@^1.40.0").And.Contain("1.39.8");
+    }
+
+    /// <summary>
+    /// 🚨 A reading that goes SILENT abstains within its bound. The path resolver stays silent when
+    /// its query loses the Initial snapshot (<c>PathResolutionCachePoisonTest.HungFirstQuery_DoesNotPoisonCache</c>)
+    /// and leaves recovery to its caller's bound; this reading had none, sits in front of every
+    /// compile and hydration, and so held the NodeType at <c>Compiling</c> for good.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ASilentRootRead_Abstains_WithinTheReadingsBound()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // A real hub of this mesh whose path resolver never answers — the one seam substituted.
+        var silent = Mesh.GetHostedHub(
+            new Address($"floor-silent-{Guid.NewGuid():N}"),
+            c => c.WithServices(s => s.AddSingleton<IPathResolver>(new SilentPathResolver())));
+        loaded.Set("AI", "MeshWeaver.AI", "1.39.8");
+
+        var reader = new NodeTypeDependencyFloorReader(silent, loaded, readBudget: TimeSpan.FromSeconds(1));
+        (await Settled(reader.Unmet($"{Package}/Deployment"), ct)).Should().BeNull(
+            "a reading that never answered is NOT judged — it abstains, and the compile runs");
+    }
+
+    /// <summary>A path resolver whose resolution never emits — the dropped-Initial shape.</summary>
+    private sealed class SilentPathResolver : IPathResolver
+    {
+        public IObservable<AddressResolution?> ResolvePath(string path) => Observable.Never<AddressResolution?>();
+        public IObservable<AddressResolution?> ResolveNavigationPath(string path) => Observable.Never<AddressResolution?>();
+    }
+
+    /// <summary>
     /// 🚨 The floor's module reading is taken off the landing service's maintained snapshot, so
     /// repeated readings share ONE derivation of the activation list. It sits on every hydration,
     /// and the authoritative walk of the volume measured 7–9 s per call on the fleet's share — paid

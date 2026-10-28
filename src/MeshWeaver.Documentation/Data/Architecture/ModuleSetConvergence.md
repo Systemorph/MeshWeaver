@@ -417,10 +417,30 @@ after which the floor was silently not judged. The loaded modules are read off t
 service's maintained activation snapshot (`ServedLoadedPackageModuleReader`) rather than a volume
 walk per call, which measured 7–9 s on the fleet's share. The snapshot can lag by its freshness
 bound, and a lag only leaves a module unjudged; it never misjudges one, because a generation's
-version never changes. Pinned by
-`AnUnmetDependencyFloorIsNotACompileVerdictTest` (with met-floor negative controls for the compile
-and the hydration), `ABatchBakeBelowADependencyFloorFormsNoVerdictTest` and
-`ACompileDependencyFloorReadsThePackageRootTest`.
+version never changes. The reading is BOUNDED and an expired bound abstains like a failed read: the
+path resolver stays silent when its query loses the Initial snapshot and leaves recovery to its
+caller, and nothing else encloses this read before Roslyn's own bound. The root comparison is
+case-insensitive, as the resolver's own path matching is, so a reference spelled `hosting/Deployment`
+is still judged against `Hosting`.
+
+Three rules keep a below-floor replica from doing harm while the roll is mixed, and keep the type
+recoverable afterwards. First, an instance activation on a replica below the floor never asks for a
+SHARED recompile. A hydration refused by the floor, and a framework-stale build on such a replica,
+serve the no-code-change diagnosis naming the unmet requirement and leave the record untouched. No
+compile anywhere can give the ACTIVATING replica the dependency it lacks, and routing the refusal
+through the unloadable-build self-heal rebuilt a healthy type once per cold activation. Second, the
+owner's framework-stale kickoff skips a type whose floor its own replica does not meet, for the same
+reason. Third, that kickoff treats `Unavailable` over a stale recorded build as SETTLED, like `Ok`
+and `Error`. With the build's coordinates kept, the failed-verdict re-drive (no-build case only) and
+the older-platform trigger (`Error` only) both decline such a record, so before this a type a
+below-floor replica left `Unavailable` was rebuilt by nobody until a batch bake. Now the first owner
+that meets the floor rebuilds it, and the instances' version-gated overlay re-binds on that write.
+
+Pinned by `AnUnmetDependencyFloorIsNotACompileVerdictTest` (with met-floor negative controls for the
+compile and the hydration), `ABatchBakeBelowADependencyFloorFormsNoVerdictTest`,
+`ACompileDependencyFloorReadsThePackageRootTest` (including a lower-cased reference and a silent
+resolver), `ABelowFloorReplicaRequestsNoSharedRecompileTest` and
+`AFloorRefusedTypeRecoversWhereTheFloorIsMetTest`.
 
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here
 (content-only, image-shipped, not installed) has no landed version to compare. A range it cannot

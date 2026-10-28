@@ -27,11 +27,36 @@ namespace MeshWeaver.PluginCatalog;
 /// <param name="hub">The mesh hub — reads the package root.</param>
 /// <param name="modules">What this process has loaded, per package.</param>
 /// <param name="logger">Diagnostics.</param>
+/// <param name="readBudget">How long one reading may take before it abstains;
+/// <see cref="DefaultReadBudget"/> when omitted. See <see cref="Unmet"/> for why it is bounded.</param>
 public sealed class NodeTypeDependencyFloorReader(
-    IMessageHub hub, ILoadedPackageModules modules, ILogger<NodeTypeDependencyFloorReader>? logger = null)
+    IMessageHub hub, ILoadedPackageModules modules, ILogger<NodeTypeDependencyFloorReader>? logger = null,
+    TimeSpan? readBudget = null)
     : INodeTypeDependencyFloor
 {
-    /// <inheritdoc />
+    /// <summary>
+    /// The default bound on one reading. Both reads behind it answer from memory or one indexed
+    /// query on a healthy mesh (the landing service's served snapshot, the path resolver), so the
+    /// bound expires only on a reading that went SILENT — never on a slow one.
+    /// </summary>
+    public static readonly TimeSpan DefaultReadBudget = TimeSpan.FromSeconds(30);
+
+    private readonly TimeSpan budget = readBudget ?? DefaultReadBudget;
+
+    /// <summary>
+    /// Whether this process meets the declared dependency floor of the package that owns
+    /// <paramref name="nodeTypePath"/> — see <see cref="INodeTypeDependencyFloor.Unmet"/>.
+    ///
+    /// <para>🚨 <b>Bounded, and an expired bound ABSTAINS.</b> The contract promises exactly one
+    /// emission, and neither read behind it can promise that on its own: the path resolver
+    /// documents that a resolution whose query loses its Initial snapshot stays SILENT, and that
+    /// its caller recovers through the caller's own bound (<c>PathResolutionService</c>, pinned by
+    /// <c>PathResolutionCachePoisonTest.HungFirstQuery_DoesNotPoisonCache</c>). This reading sits in
+    /// front of every compile and every hydration, and nothing encloses it before Roslyn's own
+    /// bound, so a silent read left the NodeType at <c>Compiling</c> for good. An expired bound is
+    /// the same outcome as a failed read: logged, not judged, and the compile runs.</para>
+    /// </summary>
+    /// <param name="nodeTypePath">The NodeType's own path.</param>
     public IObservable<string?> Unmet(string nodeTypePath)
     {
         if (PackageRootOf(nodeTypePath) is not { } root)
@@ -50,6 +75,9 @@ public sealed class NodeTypeDependencyFloorReader(
                     .Take(1)
                     .Select(node => Judge(root, node, loaded, hub.JsonSerializerOptions)))
             .DefaultIfEmpty(null)
+            .Take(1)
+            .Timeout(budget, Observable.Throw<string?>(new TimeoutException(
+                $"the reading did not answer within {budget.TotalSeconds:0}s")))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex,
@@ -76,7 +104,11 @@ public sealed class NodeTypeDependencyFloorReader(
             .Take(1)
             .Select(resolution => resolution is { Node: { } node }
                                   && string.IsNullOrEmpty(resolution.Remainder)
-                                  && string.Equals(resolution.Prefix.Trim('/'), root, StringComparison.Ordinal)
+                                  // Case-insensitive, as the resolver itself matches paths: a
+                                  // NodeType reference may spell its root differently from the
+                                  // persisted node (`hosting/Deployment` against `Hosting`), and
+                                  // discarding that root would leave the floor NOT JUDGED.
+                                  && string.Equals(resolution.Prefix.Trim('/'), root, StringComparison.OrdinalIgnoreCase)
                 ? node
                 : null);
 
