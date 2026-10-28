@@ -469,12 +469,31 @@ jobs:
       # use it: `build` resolves main again as the suites start (a held run is released hours later),
       # and the shards, doc-gate, platform-compat and the marker take the build's. Empty off PRs.
       main-sha: ${{ steps.fresh.outputs.main-sha }}
+      # 🚨 HOST-FORCED (policy build-server-routes-all-ci; Doc/Architecture/BuildHosts → "Host-forced routing"):
+      # `host-forced` when the owner routed core's pull requests to the build server ahead of CI equivalence.
+      # `build` (and with it every leg that needs it) then does NOT run here — the traffic leaves Actions —
+      # and `Consolidate test results` is RED naming the debt. Never empty: `actions` otherwise.
+      executor: ${{ steps.route.outputs.executor || 'actions' }}
     steps:
     - uses: actions/checkout@v7
       with:
         # Only HEAD's tree matters; the marker push in collect-results needs
         # nothing deeper either (it points the ref at github.sha).
         fetch-depth: 1
+    - name: Who runs the heavy legs (host-forced, or Actions)
+      id: route
+      if: github.event_name == 'pull_request'
+      env:
+        QUEUE_URL: ${{ vars.BUILD_WEBHOOK_URL }}
+        BUILD_API: ${{ vars.MW_BUILD_API }}
+        REPO: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        EVENT: ${{ github.event_name }}
+        REF_NAME: ${{ github.event.pull_request.head.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      # Exit 1 = host-forced (the answer is already in GITHUB_OUTPUT). This job only DECIDES; the red is
+      # carried by the required context, `Consolidate test results`, which asks again.
+      run: python3 .github/scripts/build-executor.py --route-only || true
     # 🔀 FRESH MERGE (Doc/Architecture/FreshMergeUnderTest): `refs/pull/N/merge` is the head merged onto
     # main AS IT STOOD AT THE PUSH, and every re-run tests that same old merge. Replace it with the head
     # merged onto main's CURRENT tip before anything reads the tree — the green-tree probe below then
@@ -671,7 +690,7 @@ jobs:
     # genuine workflow cancellation (where !cancelled() is false) still stops the run.
     # 🚨 `needs.stage-gate.result == 'success'` is EXPLICIT: a skipped gate (a stage-0 control red)
     # must hold the build too, and `!cancelled()` alone would read a skipped need as fine.
-    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' }}
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' && needs.precheck.outputs.executor != 'host-forced' }}
     timeout-minutes: 25
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
     # `dotnet build` of the whole solution launches a long-lived Roslyn compiler server that
@@ -4240,6 +4259,33 @@ jobs:
     - uses: actions/checkout@v7
       with:
         fetch-depth: 1
+    # 🚨 HOST-FORCED (policy build-server-routes-all-ci; Doc/Architecture/BuildHosts → "Host-forced routing"):
+    # when the owner has routed core's pull requests to the build server (core main's
+    # .github/build-routing.json names MeshWeaver AND the operations instance answers host for it) while
+    # core's host stages still owe parity, this required context is RED, naming the debt — the build host
+    # does not yet run core's suites, so no Actions green may stand in for it. Pull requests only: trunk
+    # runs stay on Actions so main's CD keeps sealing platform sets. An unreadable routing decision or an
+    # unanswering queue reads as NOT forced (the legs above ran here: a real verdict, never a false green).
+    - name: Routed to the build host? (owed legs are RED — policy build-server-routes-all-ci)
+      if: github.event_name == 'pull_request'
+      env:
+        QUEUE_URL: ${{ vars.BUILD_WEBHOOK_URL }}
+        BUILD_API: ${{ vars.MW_BUILD_API }}
+        REPO: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        EVENT: ${{ github.event_name }}
+        REF_NAME: ${{ github.event.pull_request.head.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: python3 .github/scripts/build-executor.py --route-only
+    # The re-ask above reads an unanswering queue as NOT forced — right when nothing was decided yet,
+    # but precheck's `host-forced` already SKIPPED `build` and every leg behind it. A transient outage
+    # on this second read must not clear that decision: with a reused green tree (`skip == 'true'`) the
+    # suite assertions below are exempt, so nothing else would stop the required context going green.
+    - name: Precheck routed this head to the build host (no leg ran here)
+      if: github.event_name == 'pull_request' && needs.precheck.outputs.executor == 'host-forced'
+      run: |
+        echo "::error title=Routed to the build host::precheck answered host-forced for this head, so build and every leg behind it did NOT run on Actions — the required context stays RED until core's host stages owe nothing (policy build-server-routes-all-ci; Doc/Architecture/BuildHosts → \"Host-forced routing\")."
+        exit 1
     # The green-tree marker below must point at the commit whose tree was TESTED — on a pull request
     # that is the fresh merge onto precheck's main sha (byte-identical: a pure function of that sha
     # and the head), not github.sha. Not a gate: it only re-derives the tested commit for the push.
