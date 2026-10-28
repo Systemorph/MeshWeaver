@@ -175,7 +175,9 @@ transcript entry, `activity.codeRun.failed`). The reconcile never overwrites a s
 already settled. It adds no timeout: a kernel that never answers is a defect of its own, to be fixed
 where it stalls — the deadlock above is one such stall, fixed at its root. Pinned by
 `CSharpCellKernelFaultFailsTheActivityTest` (a kernel plug-in that faults) and its control
-`CSharpCellRunKeepsTheKernelsVerdictTest` (the real kernel: success stays `Succeeded`).
+`CSharpCellRunKeepsTheKernelsVerdictTest` (the real kernel: success stays `Succeeded`, a script that
+throws and a script that does not compile both end `Failed`, settled once by the kernel with its own
+reason — the exception text or the compiler diagnostic).
 
 🚨 **A request timeout is not a verdict on the run.** The kernel's reply is the END of the execution,
 and each wait for it — the dispatcher's on the Code hub, the kernel container's on the Activity hub —
