@@ -298,9 +298,14 @@ public class CSharpCellRunKeepsTheKernelsVerdictTest(ITestOutputHelper output) :
         var log = await Terminal(activity, "the real kernel compiled a script that does not compile", ct);
 
         log.Status.Should().Be(ActivityStatus.Failed, "the script does not compile, so it cannot succeed");
-        log.Messages.Should().Contain(m => m.Message.Contains("CS0103"),
-            "the kernel records the compiler's diagnostic, so the reader sees WHY the cell failed");
-        log.Messages.Should().NotContain(m => m.Message.StartsWith("C# run failed", StringComparison.Ordinal),
-            "the kernel settled the run itself; the dispatcher's reconcile must not add a second verdict");
+        // The diagnostic must come from the KERNEL's own entry, not the dispatcher's keyed reconcile
+        // ("C# run failed: <reason>"), which would also carry CS0103 in its reason. If the kernel did
+        // not settle the run, the first terminal snapshot is the reconcile's and this fails.
+        // No negative "no second verdict" assertion here: Terminal() returns the kernel's snapshot,
+        // which precedes the dispatcher's handling of the reply, so such an assertion could not fail.
+        // Not overwriting a kernel-settled run is pinned where it can fail:
+        // CSharpCellKernelFaultFailsTheActivityTest.ARunTheKernelCancelledAndSettled_IsNotOverwrittenWithFailed.
+        log.Messages.Should().Contain(m => m.Message.Contains("CS0103") && m.MessageKey != "activity.codeRun.failed",
+            "the kernel records the compiler's diagnostic itself, so the reader sees WHY the cell failed");
     }
 }
