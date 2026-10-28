@@ -227,6 +227,40 @@ construction rather than by memory. `OwnerAnswerRecognitionGuard` calls every re
 runs the real predicate and the real classifier over what they actually say; `DisposalRaceNackTest`
 pins the same recognition on a NACK that travelled the real path.
 
+### A stream's fault is raised on the stream's own hub (#7492, #7495, #7477)
+
+Forwarding an error is half the contract. The other half is *where* the forwarded error runs.
+When a remote stream's owner answers its `SubscribeRequest` with a verdict (a NotFound, a
+refusal, a failed owner), that answer is the reply to `hub.Observe(SubscribeRequest)`. The
+SUBSCRIBING hub receives it, so its `HandleCallbacks` raises it on that hub's action block. The
+stream used to call `OnError` right there, and every reader's error continuation then ran inline
+on that block.
+
+For a node read the subscribing hub is the node-stream cache hub, `cache/{meshId}`. Every node
+read in the process subscribes through it, so one reader that blocked in its error path stopped
+every read in the process. This was measured on three memex-cloud pods. Each cache hub sat at
+`Executing(DeliveryFailure, …)` for 16 to 56 minutes with 6,000 to 9,000 deliveries queued behind
+it. Each wedge began right after a `[ROUTE] NotFound` for a node a background sweep read, and the
+last line the pod logged for that read was `[SYNC_STREAM] OnError`. After that, a chat composer, a
+document view and a Space root all timed out, each with its trail at `QUEUED queue=main`.
+
+A stream's DATA never had this problem. `RouteStreamMessage` forwards every `DataChangedEvent`
+to the stream's own `sync/{id}` hub, so a reader that is stuck on a value holds up only its own
+stream. `JsonSynchronizationStream.RaiseVerdictOnStreamHub` now sends the verdict the same way: it
+re-posts the `DeliveryFailure` to the stream's own hub, which faults its stream through its
+existing `DeliveryFailure` handler. The post carries no `RequestId`, so no callback consumes it on
+the way in. A stream with no live hub left, or a post its hub refuses, is still faulted inline, so
+the stream always gets its terminal.
+
+Pinned by `ASubscribeVerdictNeverRunsReadersOnTheCacheHubTest`. A reader of an absent node parks
+in its error callback, and while it is parked a read of a second absent node must still be
+answered. Before the fix the cache hub is the parked thread, and the second read's subscribe
+waits behind it until the read times out.
+
+What this does NOT establish is the reader that blocked in production. The sweep's own error
+path, and whatever lock or wait it reached, was not captured, because no stack was taken at the
+wedge. With this change such a reader stalls its own stream's hub, not the process.
+
 ### Long-running operations (activity → activity log)
 
 An import / compile / mirror runs as an activity. A fault must not strand the activity "Running" forever — it writes `Status = Error` with the message onto the activity node, which the activity log and any progress reader render. Persistence at the bottom of the stack never re-gates and never fail-closes a write that was already approved; it forwards. See [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) and [Activity Operations](/Doc/Architecture/ActivityOperations).
