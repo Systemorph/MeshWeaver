@@ -19,6 +19,17 @@ run 40272452328. So `cohere` withdraws reuse from every entry whose in-repo Proj
 shares a project with an entry BUILT here, repeating until nothing changes, because a withdrawn entry
 is then built and can pull in the next one. Without `--root` the closures cannot be read, so nothing
 is reused.
+
+ON A PULL REQUEST THE ENTRY MUST ALSO BE UNCHANGED SINCE THE BASELINE (Plugins Hosting/CiBuildTimeAnalysis.md #3)
+A push narrows by the publication baseline, so `test: false` there means "unchanged since the
+baseline". A pull request diffs its MERGE-BASE, so `test: false` only means "this pull request did
+not change it": main may have changed the module after the baseline published it. So on a run that
+does not narrow by the baseline (`--event` pull_request / merge_group) every annotated entry is also
+KEYED at the baseline sha and at HEAD with module-build-key.py (the ledger's content address: project
+closure, package versions, requires, every Directory.* import and global build input), plus the tree
+of every caller project named with --key-project (the shelf, the build extension), and is reused only
+when both sides agree. Anything unkeyable withdraws the reuse; a failure of the comparison itself
+keeps every normal build.
 """
 import argparse
 import json
@@ -139,6 +150,85 @@ def is_reused(entry):
     return bool(entry.get("reuse")) or entry.get("ledger", {}).get("decision") == "reuse"
 
 
+REUSE_ONLY_EVENTS = frozenset({"pull_request", "merge_group"})
+
+
+def _load_key_module():
+    """module-build-key.py beside this file — the SAME content address the ledger keys builds by."""
+    import importlib.util
+    path = Path(__file__).with_name("module-build-key.py")
+    spec = importlib.util.spec_from_file_location("module_build_key", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def build_inputs(root, entry, extra_projects, mbk):
+    """What decides this entry's bundle bytes at `root`: its content address (toolchain constants are
+    equal on both sides — the baseline resolver already proved the toolchain) and the tree of each
+    caller compiler-input project. Raises ValueError when the entry cannot be keyed there."""
+    root = Path(root)
+    extras = {}
+    for project in extra_projects:
+        if not (root / project).is_file():
+            raise ValueError(f"{project} does not exist at this tree")
+        dirs = mbk.closure_dirs(root, project)
+        extras[project] = {"closure": {d: mbk.tree_hash(root, d) for d in dirs},
+                           "imports": mbk.directory_imports(root, dirs)}
+    return {"key": mbk.compute(root, entry, "-", "-", "-")["key"], "extras": extras}
+
+
+def unchanged_since_baseline(entries, head_inputs, base_inputs):
+    """(entries, withdrawn): keep `reuse` only on an entry whose build inputs are identical at the
+    baseline and at HEAD. `head_inputs` / `base_inputs` map an entry to its inputs or raise
+    ValueError (unkeyable ⇒ withdrawn, named). Pure apart from the two callables."""
+    result, withdrawn = [], []
+    for entry in entries:
+        if entry.get("reuse"):
+            try:
+                same = head_inputs(entry) == base_inputs(entry)
+                why = "its build inputs changed between the baseline and this tree (main moved it after the baseline published)"
+            except ValueError as exc:
+                same, why = False, f"it cannot be keyed on both trees ({exc})"
+            if not same:
+                entry = {k: v for k, v in entry.items() if k != "reuse"}
+                withdrawn.append((entry["module"], why))
+        result.append(entry)
+    return result, withdrawn
+
+
+def baseline_tree_guard(root, sha, extra_projects):
+    """The `since` hook for publication_reuse on a pull request: a worktree at the baseline sha, its
+    main-owned locks materialized by the generator beside this script (the one the lane's HEAD used),
+    and every annotated entry compared on build_inputs."""
+    mbk = _load_key_module()
+
+    def since(entries):
+        if not any(e.get("reuse") for e in entries):
+            return entries
+        with tempfile.TemporaryDirectory(prefix="publication-baseline-") as tmp:
+            base = Path(tmp) / "tree"
+            subprocess.run(["git", "-C", str(root), "worktree", "add", "--detach", str(base), sha],
+                           capture_output=True, text=True, timeout=300, check=True)
+            try:
+                generator = Path(__file__).with_name("gen-manifests.py")
+                if (base / "scripts" / "gen-manifests.config.json").is_file() and generator.is_file():
+                    subprocess.run([sys.executable, str(generator), "--materialize"], capture_output=True,
+                                   text=True, timeout=600, check=True, env={**os.environ, "MW_REPO_ROOT": str(base)})
+                kept, withdrawn = unchanged_since_baseline(
+                    entries, lambda e: build_inputs(root, e, extra_projects, mbk),
+                    lambda e: build_inputs(base, e, extra_projects, mbk))
+            finally:
+                subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(base)],
+                               capture_output=True, text=True, timeout=120)
+        for module, why in withdrawn:
+            print(f"publication reuse: BUILD {module}, not reused: {why}", file=sys.stderr)
+        print(f"publication reuse: {sum(bool(e.get('reuse')) for e in kept)} entr(y/ies) unchanged since "
+              f"the baseline {sha[:12]} (keyed at both trees)", file=sys.stderr)
+        return kept
+    return since
+
+
 def cohere(entries, root, shipped=None):
     """Withdraw publication reuse from every entry that shares a riding project with a built one.
 
@@ -188,7 +278,7 @@ def cohere(entries, root, shipped=None):
     return entries, withdrawn
 
 
-def publication_reuse(entries, fetch, sha, root, shipped=None):
+def publication_reuse(entries, fetch, sha, root, shipped=None, since=None):
     """The matrix with publication reuse applied, or the matrix UNCHANGED when it cannot be.
 
     All or nothing: the annotated list is returned only once coherence has ALSO succeeded. A
@@ -199,7 +289,10 @@ def publication_reuse(entries, fetch, sha, root, shipped=None):
     """
     try:
         run, artifacts = fetch()
-        coherent, withdrawn = cohere(annotate(entries, run, sha, artifacts), root, shipped)
+        annotated = annotate(entries, run, sha, artifacts)
+        if since is not None:
+            annotated = since(annotated)
+        coherent, withdrawn = cohere(annotated, root, shipped)
     except ArtifactStoreError:
         raise
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
@@ -326,7 +419,59 @@ def self_test():
             raise AssertionError("a declared store failure must not fall back")
         except ArtifactStoreError:
             pass
-    print("publication reuse: 24 assertions passed")
+    # ON A PULL REQUEST: reuse survives only where the build inputs agree at the baseline and HEAD.
+    reused = [{"module": "Same", "reuse": {"runId": "10"}}, {"module": "Moved", "reuse": {"runId": "10"}},
+              {"module": "Ghost", "reuse": {"runId": "10"}}, {"module": "Built"}]
+
+    def head(e):
+        return {"Same": "k1", "Moved": "k2", "Ghost": "k3", "Built": "k4"}[e["module"]]
+
+    def base(e):
+        if e["module"] == "Ghost":
+            raise ValueError("no such project at the baseline")
+        return {"Same": "k1", "Moved": "OLD", "Built": "k4"}[e["module"]]
+    got, withdrawn = unchanged_since_baseline(reused, head, base)
+    assert [("reuse" in e) for e in got] == [True, False, False, False], got
+    assert [w[0] for w in withdrawn] == ["Moved", "Ghost"], withdrawn
+    assert "cannot be keyed" in withdrawn[1][1], withdrawn
+    # The hook runs BEFORE coherence, inside the all-or-nothing envelope: a hook that fails keeps
+    # every normal build, and a withdrawn entry is built (so cohere sees it as built).
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for name in ("A", "B"):
+            (root / "src" / name).mkdir(parents=True)
+            (root / "src" / name / f"{name}.csproj").write_text("<Project/>")
+        live = [{"name": "module-bundle-A"}, {"name": "module-bundle-B"}]
+        mk = lambda m: {"module": m, "project": f"src/{m}/{m}.csproj", "test": False}  # noqa: E731
+        drop_b = lambda es: [({k: v for k, v in e.items() if k != "reuse"} if e["module"] == "B" else e) for e in es]  # noqa: E731
+        got = publication_reuse([mk("A"), mk("B")], lambda: (run, live), "a" * 40, root, frozenset(), since=drop_b)
+        assert [("reuse" in e) for e in got] == [True, False], got
+
+        def broken(es):
+            raise subprocess.CalledProcessError(128, ["git", "worktree"])
+        got = publication_reuse([mk("A"), mk("B")], lambda: (run, live), "a" * 40, root, frozenset(), since=broken)
+        assert not any("reuse" in e for e in got), "a failed baseline comparison keeps every normal build"
+        # build_inputs, over the real content address: equal trees agree, a moved closure does not.
+        mbk = _load_key_module()
+        for t in ("head", "base"):
+            (root / t / "src" / "A").mkdir(parents=True)
+            (root / t / "src" / "A" / "A.csproj").write_text("<Project/>")
+            (root / t / "Pkg").mkdir()
+            (root / t / "Pkg" / "manifest.lock").write_text('{"moduleVersion": "m1"}')
+        entry = {"package": "Pkg", "module": "A", "project": "src/A/A.csproj"}
+        assert build_inputs(root / "head", entry, [], mbk) == build_inputs(root / "base", entry, [], mbk)
+        (root / "head" / "src" / "A" / "Code.cs").write_text("class C {}")
+        assert build_inputs(root / "head", entry, [], mbk) != build_inputs(root / "base", entry, [], mbk), \
+            "NEGATIVE CONTROL: a source file main added after the baseline is a different build"
+        (root / "base" / "src" / "A" / "Code.cs").write_text("class C {}")
+        (root / "head" / "src" / "Shelf").mkdir()
+        (root / "head" / "src" / "Shelf" / "Shelf.csproj").write_text("<Project/>")
+        try:
+            build_inputs(root / "base", entry, ["src/Shelf/Shelf.csproj"], mbk)
+            raise AssertionError("a key project absent at the baseline must not key on nothing")
+        except ValueError:
+            pass
+    print("publication reuse: 33 assertions passed")
 
 
 def main():
@@ -339,6 +484,10 @@ def main():
                    help="explicit named artifact store; empty/gha keeps GitHub storage, no fallback when declared")
     p.add_argument("--root", default=None,
                    help="the repository checkout the matrix projects resolve against; without it nothing is reused")
+    p.add_argument("--event", default=os.environ.get("GITHUB_EVENT_NAME", ""),
+                   help="the run's event; pull_request / merge_group also key every entry at the baseline and HEAD")
+    p.add_argument("--key-project", action="append", default=[],
+                   help="a caller compiler-input project (shelf, build extension) whose tree must also be unchanged since the baseline on a pull request; repeatable")
     p.add_argument("--self-test", action="store_true")
     p.add_argument("--expect-store-id", default=None, help="physical store identity resolved by this run's first producer")
     a = p.parse_args()
@@ -371,7 +520,11 @@ def main():
                 pages = api(f"repos/{a.repo}/actions/runs/{a.run}/artifacts?per_page=100", "--paginate", "--slurp")
                 return run, [art for page in pages for art in page["artifacts"]]
             try:
-                entries = publication_reuse(entries, fetch, a.sha, a.root)
+                since = None
+                if a.event in REUSE_ONLY_EVENTS:
+                    since = (baseline_tree_guard(Path(a.root), a.sha, [k for k in a.key_project if k])
+                             if a.root else (lambda es: [{k: v for k, v in e.items() if k != "reuse"} for e in es]))
+                entries = publication_reuse(entries, fetch, a.sha, a.root, since=since)
             except ArtifactStoreError as exc:
                 print(f"::error::{exc}", file=sys.stderr)
                 return 1
