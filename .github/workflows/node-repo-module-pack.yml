@@ -1585,6 +1585,11 @@ jobs:
           ARTIFACT_STORE: ${{ steps.store.outputs.store }}
           ARTIFACT_STORE_ID: ${{ steps.store.outputs.store-id }}
           GH_TOKEN: ${{ github.token }}
+          # A pull request diffs its merge-base, not the baseline: the script keys every reused entry
+          # at the baseline AND at HEAD (module-build-key.py) and the shelf / extension trees with it.
+          EVENT: ${{ github.event_name }}
+          SHELF_PROJECT: ${{ inputs.module-libraries-project }}
+          EXTENSIONS_PROJECT: ${{ inputs.build-extensions-project }}
         run: |
           if [ -z "$BUILD_LOGIC_REF" ]; then
             echo "modules=$MATRIX" >> "$GITHUB_OUTPUT"
@@ -1598,7 +1603,8 @@ jobs:
           # reused, MeshWeaver.Markdown.Collaboration refused at the gate).
           python3 build-logic/.github/scripts/node-repo-publication-reuse.py \
             --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE" --root repo \
-            --artifact-store "$ARTIFACT_STORE" --expect-store-id "$ARTIFACT_STORE_ID"
+            --artifact-store "$ARTIFACT_STORE" --expect-store-id "$ARTIFACT_STORE_ID" \
+            --event "$EVENT" --key-project "$SHELF_PROJECT" --key-project "$EXTENSIONS_PROJECT"
 
       # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
       # The `tests` job's matrix. The predicate is EXACTLY the one the pack job's `Ledger — this
