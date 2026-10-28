@@ -604,10 +604,18 @@ public sealed class PersistenceService : IStorageAdapter
     /// read-only providers (Embedded, Static) can neither be deleted from nor leak
     /// survivors. Errors propagate: an enumeration that fails must fail the delete
     /// loudly instead of reporting a drained subtree it never actually saw.
+    ///
+    /// <para>🚨 So does a MISSING answer (MeshWeaver#7461): the union below is SEEDED, so a provider
+    /// that completed without emitting would contribute nothing and the union would still emit —
+    /// "no answer" read as "no descendants". Each provider's enumeration is therefore required to
+    /// answer BEFORE the fold, and an empty completion faults with
+    /// <see cref="SubtreeEnumerationUnansweredException"/> naming that provider. A provider with
+    /// nothing under the root answers with an empty collection, which is an answer.</para>
     /// </summary>
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
         => _writable
-            .Select(p => p.Adapter.ListDescendantPaths(rootPath))
+            .Select(p => p.Adapter.ListDescendantPaths(rootPath)
+                .RequireAnswer(DescribeProvider(p), rootPath))
             .Merge()
             .Aggregate(
                 seed: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
