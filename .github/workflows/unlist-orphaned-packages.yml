@@ -77,7 +77,7 @@ jobs:
 
       # 🔐 Trusted Publishing: nuget.org exchanges this run's GitHub OIDC token for a short-lived
       # key, under the policy that names this repository and THIS workflow file (a policy per
-      # file — publish-packages.yml has its own). No stored NuGet secret anywhere.
+      # file — MeshWeaver.Plugins' publish-packages.yml has its own). No stored NuGet secret anywhere.
       - name: The policy owner is named
         if: inputs.apply && inputs.confirm == 'UNLIST'
         env:

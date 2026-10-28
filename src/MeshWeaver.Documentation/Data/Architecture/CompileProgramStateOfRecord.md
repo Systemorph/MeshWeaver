@@ -28,7 +28,7 @@ gone stale, and those corrections are recorded here rather than silently dropped
 | One shared compile implementation | **Implemented for NodeTypes** | all four consumers funnel into `EmitPipeline`/`GeneratorPipeline`; `NodeSetCompiler` is an orchestrator over them, and `BakeEquivalenceTest` pins the two orchestrators equal |
 | Ship the compiler as a dotnet tool | **Withdrawn 2026-09-07** | `MeshWeaver.Compiler.Cli`/`mw-compiler` was packed from `tools/MeshWeaver.PluginTester` and **no CI lane ever consumed it** — every lane in both repos runs the `mw-plugin-test` image. The opt-in is removed and the package unlisted; the image is the distribution ([NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement)) |
 
-🚨 **A correction worth keeping.** `src/MeshWeaver.Cli` is **not** the compiler tool. Its
+🚨 **A correction worth keeping.** `MeshWeaver.Cli` (now `src/MeshWeaver.Cli` in MeshWeaver.Plugins) is **not** the compiler tool. Its
 `ToolCommandName` is `memex`, it operates the mesh over the REST API, and it contains no Roslyn at
 all — its build verbs `docker run` the tester image. Anyone reasoning about the compiler tool from
 the project name will reach the wrong conclusion, as one audit of this program did.

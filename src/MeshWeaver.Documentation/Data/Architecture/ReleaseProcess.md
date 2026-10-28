@@ -417,8 +417,9 @@ closures, and satellite repositories build inside `mw-plugin-test`
 [ModuleBuildArchitecture](/Doc/Architecture/ModuleBuildArchitecture)). The packages already
 published were **retired and unlisted** on 2026-09-07 — forty-three ids, thirty-nine stalled at
 `rc13`, three at `rc8` and one at `rc7`. Exactly two packages survive, both entry points rather than platform bytes:
-`MeshWeaver.Aspire.Hosting.Memex` and `MeshWeaver.MemexTemplate`, published from
-`publish-packages.yml` on this same `v*.*.*` tag. Unlisting does not erase: existing exact-version
+`MeshWeaver.Aspire.Hosting.Memex` and `MeshWeaver.MemexTemplate` (the `memex` CLI, `MeshWeaver.Cli`,
+later rejoined them). None is published by a release tag any more: all are packed in
+MeshWeaver.Plugins, the CLI and the Aspire integration by its dispatched `publish-packages.yml`. Unlisting does not erase: existing exact-version
 pins keep resolving. See [NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement) for the
 survivor rule, the retirement tool, and why startup configuration goes on the Aspire adapter instead
 of into new packages.

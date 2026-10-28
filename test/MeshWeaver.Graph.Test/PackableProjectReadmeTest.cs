@@ -13,18 +13,19 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// What this repository still publishes to nuget.org, and the README every package needs.
 ///
-/// <para>Two assertions, one subject. <b>The set</b>: exactly one project here packs —
-/// <c>src/MeshWeaver.Cli</c> (<c>MeshWeaver.Cli</c>, policy <c>cli-thin-wrapper-own-version</c>). Everything
-/// else under the MeshWeaver prefix was retired on 2026-09-07 and the packages unlisted
-/// (<c>Doc/Architecture/NuGetPackageRetirement</c>); the other two survivors,
-/// <c>MeshWeaver.Aspire.Hosting.Memex</c> (moved from <c>memex/aspire</c> with the core-slimming carve)
-/// and <c>MeshWeaver.MemexTemplate</c>, are packed in MeshWeaver.Plugins and are out of this tree's reach.
+/// <para>Two assertions, one subject. <b>The set</b>: NO project here packs. Everything under the
+/// MeshWeaver prefix was retired on 2026-09-07 and the packages unlisted
+/// (<c>Doc/Architecture/NuGetPackageRetirement</c>); the survivors — the <c>memex</c> CLI
+/// (<c>MeshWeaver.Cli</c>, policy <c>cli-thin-wrapper-own-version</c>, moved before its first nuget.org
+/// publish), <c>MeshWeaver.Aspire.Hosting.Memex</c> (moved from <c>memex/aspire</c> with the
+/// core-slimming carve) and <c>MeshWeaver.MemexTemplate</c> — are packed in MeshWeaver.Plugins and are
+/// out of this tree's reach.
 /// <b>The README</b>: Directory.Build.props does <c>&lt;None Include="README.md" Pack="true"&gt;</c>
 /// for ALL projects and declares <c>PackageReadmeFile</c>, so a packable project without one does
 /// not merely ship a bare listing — <c>dotnet pack</c> FAILS it with <c>NU5019: File not found</c>.</para>
 ///
 /// <para>🚨 Both failures land at the worst possible moment. <c>dotnet build</c> does not pack, so
-/// CI is green, review is green, and the gap first appears when <c>publish-packages.yml</c>
+/// CI is green, review is green, and the gap first appears when a publish lane
 /// packs for a release — after the release is announced (until the Aspire integration moved to
 /// MeshWeaver.Plugins, a public <c>v*.*.*</c> tag triggered it). That is exactly how v3.0.0-rc7 went out:
 /// MeshWeaver.Speech.Contract was added without a README and the whole NuGet publish died at Pack.</para>
@@ -34,17 +35,14 @@ namespace MeshWeaver.Graph.Test;
 /// (<c>scripts/orphaned-nuget-packages.py</c>) derives "orphaned" as published MINUS packed. A
 /// project that quietly regains packability therefore SPARES its retired package from the sweep and
 /// silently re-enters the release's pack glob — neither of which any build reports. This test is
-/// what notices. Adding a package is a deliberate act: update the expected set here, and add the
-/// project to <c>.github/workflows/publish-packages.yml</c>, which asserts the same count.</para>
+/// what notices. Adding a package is a deliberate act: update the expected set here, and give the
+/// project a publish lane (this repository has none since the CLI moved to MeshWeaver.Plugins).</para>
 /// </summary>
 public class PackableProjectReadmeTest
 {
-    /// <summary>The projects in this repository that still produce a NuGet package: the <c>memex</c>
-    /// CLI (its own version, released on demand — policy <c>cli-thin-wrapper-own-version</c>).</summary>
-    private static readonly string[] ExpectedPackableProjects =
-    [
-        Path.Combine("src", "MeshWeaver.Cli", "MeshWeaver.Cli.csproj"),
-    ];
+    /// <summary>The projects in this repository that still produce a NuGet package: none — every
+    /// survivor is packed in MeshWeaver.Plugins.</summary>
+    private static readonly string[] ExpectedPackableProjects = [];
 
     [Fact]
     public void ExactlyTheDeclaredProjectsPack_AndEachCarriesAReadme()
@@ -70,7 +68,7 @@ public class PackableProjectReadmeTest
         relative.Should().Equal(ExpectedPackableProjects,
             "exactly these projects still publish to nuget.org (Doc/Architecture/"
             + "NuGetPackageRetirement). A project appearing in this list has regained packability: "
-            + "it will be packed by publish-packages.yml AND it will spare its retired package from "
+            + "it will be packed by any publish lane AND it will spare its retired package from "
             + "the unlist sweep, both silently. A project MISSING from it stops being published.");
 
         var withoutReadme = packable
