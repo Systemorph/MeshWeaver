@@ -383,6 +383,27 @@ a satisfying dependency applies the update for all of them, the same limit as th
 two records was not read from the logs; all of them go through the orchestrator. Pinned by
 `PackageDependencyFloorHoldTest`; with the gate unwired the held arms never record a hold.
 
+🚨 **The per-process limit has a COMPILE half, and it is closed (#6195).** The import and the
+installer judge the floor where SOURCES are written; once one replica that meets the floor has
+written them, every replica reads them — and a NodeType's hub is placed on whichever replica asks
+first. Measured on memex-cloud on 2026-10-28: Hosting 1.73 declares `AI@^1.40.0`; the outgoing
+generation ran AI 1.39.8 (its own import declined Hosting on that ground every ten minutes for
+hours); during the 04:49–04:57Z roll the `Hosting/Deployment` and `Hosting/PlatformBuildInbox`
+hubs (and nine more Hosting types) were placed on those replicas, compiled the stored sources
+against AI 1.39.8 and failed with `CS0246 FillOutcome` / `CS0103 NodeDescriptions` / `CS0103
+FillResult` — members AI 1.40 ships. That verdict was stamped `Error` on the ONE record every
+replica reads; the reboot watchdog declared the instance WEDGED at 05:16Z, and only the next roll's
+boot bake (05:21Z, `BatchBake: Hosting/Deployment → Compiled`) cleared it. The compilation service
+now asks `INodeTypeDependencyFloor` (PluginCatalog's `NodeTypeDependencyFloorReader`: the partition
+root's `content.requires` against the LOADED modules, the same `PackageDependencyFloorGate` rule)
+before it reads, emits or loads anything. An unmet floor ends the attempt with
+`DependencyFloorUnmetException`, an availability non-verdict: the record goes `Unavailable`, never
+`Error`; the type is not parked; and the last good build — the one a satisfying replica compiled —
+keeps its coordinates. Abstains on everything it cannot judge (no module host, a root declaring
+nothing, no loaded version, an unreadable range or root). Pinned by
+`AnUnmetDependencyFloorIsNotACompileVerdictTest` (with a met-floor negative control) and
+`ACompileDependencyFloorReadsThePackageRootTest`.
+
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here
 (content-only, image-shipped, not installed) has no landed version to compare. A range it cannot
 parse is unverifiable (`ModuleDependencyFloor.Satisfies` → null) and never refuses; the fleet's

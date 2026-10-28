@@ -344,7 +344,38 @@ internal class MeshNodeCompilationService(
 
     /// <inheritdoc />
     public IObservable<string?> GetAssemblyLocation(MeshNode node)
-        => GetAssemblyLocationWithLog(node).Select(t => t.Path);
+        => AfterDependencyFloor(node, () => GetAssemblyLocationWithLog(node).Select(t => t.Path));
+
+    /// <summary>
+    /// 🚨 The compile half of the dependency-floor rule (#6195, see <see cref="INodeTypeDependencyFloor"/>):
+    /// runs <paramref name="compile"/> only when this process meets the declared dependency floor
+    /// of the package that owns <paramref name="node"/>, and otherwise ends the attempt with
+    /// <see cref="DependencyFloorUnmetException"/> BEFORE anything is read, emitted or loaded — so a
+    /// replica running an older generation of a dependency can neither stamp a Roslyn verdict on
+    /// the shared record nor load a build compiled against members it does not have. No
+    /// <see cref="INodeTypeDependencyFloor"/> registered (a mesh without a module host) means
+    /// nothing is judged and the compile runs as before.
+    /// </summary>
+    private IObservable<T> AfterDependencyFloor<T>(MeshNode node, Func<IObservable<T>> compile)
+    {
+        if (string.IsNullOrEmpty(node.Path)
+            || hub.ServiceProvider.GetService<INodeTypeDependencyFloor>() is not { } floor)
+            return Observable.Defer(compile);
+        return floor.Unmet(node.Path)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .SelectMany(unmet =>
+            {
+                if (unmet is null)
+                    return compile();
+                logger.LogWarning(
+                    "Compile of {NodePath} NOT RUN on this replica — {Unmet}. No verdict is formed: the "
+                    + "record is stamped Unavailable, not Error, and the last good build keeps its "
+                    + "coordinates for the replicas that meet the floor (#6195).",
+                    node.Path, unmet);
+                return Observable.Throw<T>(new DependencyFloorUnmetException(node.Path, unmet));
+            });
+    }
 
     /// <summary>
     /// What one Roslyn emit produced: where the bytes landed, and the stage-1 CONTENT KEY digest
@@ -1350,7 +1381,7 @@ internal class MeshNodeCompilationService(
     public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(
         MeshNode node,
         IReadOnlyList<MeshNode>? sourcesOverride = null)
-        => GetAssemblyLocationWithLog(node, sourcesOverride).SelectMany(attempt =>
+        => AfterDependencyFloor(node, () => GetAssemblyLocationWithLog(node, sourcesOverride)).SelectMany(attempt =>
         {
             var (assemblyLocation, _, log, sources) = attempt;
             // The per-source version snapshot folds the SAME set the compile consumed
