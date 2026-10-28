@@ -283,7 +283,28 @@ public static class PrebuiltBundleRetentionLease
     /// <summary>
     /// Runs <paramref name="pass"/> only while holding the lease. A replica that does not take it runs
     /// nothing and emits nothing (<paramref name="notHeld"/> is told who holds it); the holder's pass is
-    /// cut at <see cref="PassDeadline"/> and releases the lease when it completes or faults. COLD.
+    /// cut at <see cref="PassDeadline"/>, and cut as soon as the live lease stops naming it.
+    ///
+    /// <para>🚨 <b>The lease is released ONCE, at the pass's terminal (#7459)</b> — after it COMPLETES
+    /// (an empty pass included) or FAULTS, never per result: a pass that emitted and kept working used to
+    /// release under itself, so another replica could sweep beside it, and a pass that completed empty
+    /// never released at all. The pass's results are held until the release has been attempted and are
+    /// then emitted, so a consumer that stops after the first result still finds the lease released.</para>
+    ///
+    /// <para>🚨 <b>A release that faults never costs the pass its result (#7459).</b> The sweep's outcome
+    /// is independent of the lease's cleanup: a release fault goes to <paramref name="releaseFaulted"/>,
+    /// the lease is left to lapse at its hold's end, and the results (or the pass's own fault) are
+    /// delivered as if the release had succeeded. It used to replace the result with the release's fault,
+    /// so a sweep that HAD deleted was recorded as a pass fault that "collected nothing".</para>
+    ///
+    /// <para>🚨 <b>A lost lease stops the pass (#7459).</b> A holder's verdict rests on its own claim
+    /// having been COMMITTED by the lease node's owner, and a commit is acknowledged before it is durable
+    /// (<c>DataExtensions.ArmPatchAckWatcher</c> acks on its flush bound). An owner that dies before the
+    /// claim persisted is replaced by one that reloads the LAPSED lease and grants it to another replica.
+    /// So the holder watches the live lease while its pass runs: once its own claim has been seen there,
+    /// any later state that does not carry it (lapsed, unreadable, or another pass's claim) ends the pass
+    /// with an <see cref="OperationCanceledException"/>, cancelling the pool leaf at its next step
+    /// boundary — the same cooperative bound as the deadline — and leaves the lease alone. COLD.</para>
     /// </summary>
     /// <typeparam name="TResult">The pass's result.</typeparam>
     /// <param name="hub">The hub to write the lease from.</param>
@@ -294,13 +315,17 @@ public static class PrebuiltBundleRetentionLease
     /// <param name="replica">This process's name.</param>
     /// <param name="pass">The pass — subscribed only when the lease is held.</param>
     /// <param name="notHeld">Told the settled lease when this replica does not hold it.</param>
+    /// <param name="releaseFaulted">Told the fault of a release that failed after the pass ended; the lease
+    /// then lapses at its hold's end and the pass's own outcome is delivered unchanged.</param>
     public static IObservable<TResult> RunLeased<TResult>(
         IMessageHub hub, TimeProvider clock, TimeSpan hold, string replica,
-        Func<IObservable<TResult>> pass, Action<PrebuiltBundleRetentionLeaseVerdict> notHeld)
+        Func<IObservable<TResult>> pass, Action<PrebuiltBundleRetentionLeaseVerdict> notHeld,
+        Action<Exception> releaseFaulted)
     {
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(pass);
         ArgumentNullException.ThrowIfNull(notHeld);
+        ArgumentNullException.ThrowIfNull(releaseFaulted);
         return Observable.Defer(() =>
         {
             var now = clock.GetUtcNow();
@@ -324,25 +349,73 @@ public static class PrebuiltBundleRetentionLease
                             $"taking the prebuilt-bundle retention lease outlasted half its hold ({PassDeadline(hold)}), "
                             + "so the pass did not start — its sweep could have overlapped the next holder's; "
                             + "the lease is left to lapse and the next pass re-plans"));
-                    return Observable.Defer(pass)
-                        // Unsubscribing cancels the pool leaf, so a pass past its deadline stops at
-                        // its next step boundary — with the other half of the hold to reach it.
-                        .Timeout(deadline, Observable.Throw<TResult>(new OperationCanceledException(
-                            $"the prebuilt-bundle retention pass outlived half its lease hold ({deadline}) "
-                            + "and was stopped, so no other replica's pass can overlap it; the lease is left "
-                            + "to lapse and the next pass re-plans what this one did not reach")))
-                        // A faulted pass has ended: release, then surface the fault. A cancelled one
-                        // (teardown, the deadline) may still be winding down its leaf — leave the lease
-                        // to lapse rather than hand the store over under it.
-                        .Catch<TResult, Exception>(ex => ex is OperationCanceledException
-                            ? Observable.Throw<TResult>(ex)
-                            : Release(hub, nonce)
-                                .Catch<Unit, Exception>(releaseFault =>
-                                    Observable.Throw<Unit>(new AggregateException(ex, releaseFault)))
-                                .SelectMany(_ => Observable.Throw<TResult>(ex)))
-                        .SelectMany(result => Release(hub, nonce).Select(_ => result));
+                    return ReleasedAtTerminal(
+                        WhileHeld(hub, verdict.Lease!.Claim, Observable.Defer(pass))
+                            // Unsubscribing cancels the pool leaf, so a pass past its deadline stops at
+                            // its next step boundary — with the other half of the hold to reach it.
+                            .Timeout(deadline, Observable.Throw<TResult>(new OperationCanceledException(
+                                $"the prebuilt-bundle retention pass outlived half its lease hold ({deadline}) "
+                                + "and was stopped, so no other replica's pass can overlap it; the lease is left "
+                                + "to lapse and the next pass re-plans what this one did not reach"))),
+                        Release(hub, nonce),
+                        releaseFaulted);
                 });
         });
+    }
+
+    /// <summary>
+    /// The terminal of a held pass (#7459): <paramref name="release"/> is subscribed ONCE, after
+    /// <paramref name="pass"/> COMPLETED (an empty pass included) or FAULTED — never per result, and never
+    /// after an <see cref="OperationCanceledException"/> (teardown, the deadline, a lost lease: the pass may
+    /// still be winding down its leaf, so the lease is left to lapse). The pass's results are held until
+    /// the release was attempted, then emitted; a release fault goes to <paramref name="releaseFaulted"/>
+    /// and never replaces the pass's results or its own fault. Pure composition. COLD.
+    /// </summary>
+    /// <typeparam name="TResult">The pass's result.</typeparam>
+    /// <param name="pass">The pass, already bounded.</param>
+    /// <param name="release">Releases the lease.</param>
+    /// <param name="releaseFaulted">Told a release's fault.</param>
+    internal static IObservable<TResult> ReleasedAtTerminal<TResult>(
+        IObservable<TResult> pass, IObservable<Unit> release, Action<Exception> releaseFaulted)
+    {
+        var released = release
+            .Catch<Unit, Exception>(releaseFault =>
+            {
+                releaseFaulted(releaseFault);
+                return Observable.Empty<Unit>();
+            })
+            .LastOrDefaultAsync();
+        return pass
+            .ToList()
+            .Catch<IList<TResult>, Exception>(ex => ex is OperationCanceledException
+                ? Observable.Throw<IList<TResult>>(ex)
+                : released.SelectMany(_ => Observable.Throw<IList<TResult>>(ex)))
+            .SelectMany(results => released.SelectMany(_ => results));
+    }
+
+    /// <summary>
+    /// <paramref name="pass"/>, ended with an <see cref="OperationCanceledException"/> as soon as the live
+    /// lease — once it has been seen carrying <paramref name="stampedClaim"/> — carries anything else: the
+    /// lease node's owner reloaded a lease whose claim had not persisted, or another replica holds it.
+    /// Unsubscribing the pass cancels its pool leaf at the next step boundary. As System. COLD.
+    /// </summary>
+    private static IObservable<TResult> WhileHeld<TResult>(IMessageHub hub, long stampedClaim, IObservable<TResult> pass)
+    {
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var options = hub.JsonSerializerOptions;
+        var unstamped = stampedClaim & ~StampedFlag;
+        bool Ours(PrebuiltBundleRetentionLeaseState? lease) => lease is not null && (lease.Claim == stampedClaim || lease.Claim == unstamped);
+        var lost = access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
+                .Select(node => Read(node, options)))
+            .SkipWhile(lease => !Ours(lease))
+            .Where(lease => !Ours(lease))
+            .Take(1)
+            .SelectMany(lease => Observable.Throw<TResult>(new OperationCanceledException(
+                "the prebuilt-bundle retention lease this pass held no longer names it (now: "
+                + (lease is null ? "unreadable" : lease.Claim <= 0 ? "lapsed" : $"pass {lease.Holder}")
+                + ") — its owner lost the claim or another replica took it, so this pass stops at its next "
+                + "step boundary rather than sweep beside another; the next pass re-plans what it did not reach")));
+        return pass.Publish(shared => shared.Merge(lost.TakeUntil(shared.LastOrDefaultAsync())));
     }
 
     /// <summary>
