@@ -441,6 +441,7 @@ on:
           `host-verdict`. With `host` the warm job, the workspace build, the pack legs and the tests legs
           do not run; the required `All selected bundles built` carries the HOST's verdict, green only
           when `host-verdict` is `success`. Any other value is RED, named.
+          `host-forced` (policy build-server-routes-all-ci, SHADOW until parity) runs exactly as `actions`.
         required: false
         type: string
         default: actions
@@ -1113,7 +1114,7 @@ jobs:
               fi
               echo "executor: host — select runs here; the warm job, the workspace build, the pack and tests legs run on the build host, and 'All selected bundles built' carries its followed verdict."
               echo "- 🏗️ \`executor: host\` — the pack and tests legs run on a standing build host" >> "$GITHUB_STEP_SUMMARY" ;;
-            host-forced) echo "::error title=Routed to the build host — owed::the owner routed this repository's pull requests to the build server (policy build-server-routes-all-ci) while its host stages still owe parity with this leg — RED until the debt is paid and ciEquivalent is claimed; the owed items are the ::error annotations of the run's executor/admission job and the owes list of .github/build-stages.json"; exit 1 ;;
+            host-forced) echo "::warning title=Shadow run on the build host (policy build-server-routes-all-ci)::the owner routed this repository's pull requests to the build server ahead of CI equivalence, so the host runs them in SHADOW — its build/* check runs show its real result and none of them is required — while this lane's legs run HERE on GitHub Actions and carry the required verdict, exactly as with executor 'actions'. What the host still owes is named in the run's executor/admission job and in the owes list of .github/build-stages.json"; echo "executor: host-forced — every job of this lane runs here (shadow mode)." ;;
             *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who ran this lane's work"; exit 1 ;;
           esac
       - name: Read the publication mode
@@ -1703,7 +1704,7 @@ jobs:
     needs: select
     # 🏗️ `executor != 'host'`: on a build host this warm-up is the host's (H7, header). `verify` refuses
     # a run in which this job ran anyway, so the skip is asserted, never assumed.
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && inputs.executor != 'host' && inputs.executor != 'host-forced'
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && inputs.executor != 'host'
     runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     timeout-minutes: 45
     # Deliberately inherit the caller's token permissions. `basic` callers grant only the reads
@@ -2018,7 +2019,7 @@ jobs:
   build-workspace:
     name: Build the workspace (one global build)
     needs: [select, prepare]
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && inputs.executor != 'host' && inputs.executor != 'host-forced'
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && inputs.executor != 'host'
     # `workspace-runner` (inputs): a Docker-capable label — the compiler is the platform image.
     runs-on: ${{ inputs.workspace-runner }}
     timeout-minutes: 30
@@ -2556,7 +2557,7 @@ jobs:
     # (An explicit `if:` replaces the implicit all-needs-succeeded check, so prepare's result
     # is asserted by name — a failed prepare must stop the matrix, not strand 30 jobs at their
     # artifact downloads.)
-    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && needs.build-workspace.result == 'success' && inputs.executor != 'host' && inputs.executor != 'host-forced'
+    if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success' && needs.build-workspace.result == 'success' && inputs.executor != 'host'
     strategy:
       # One leg's failure must not hide the rest — a sweep wants every verdict in one run. (Inside a
       # leg, the same rule holds per MODULE: see the batch state above.)
@@ -5085,7 +5086,7 @@ jobs:
       && !inputs.publish
       && needs.select.result == 'success'
       && needs.select.outputs.test-count != '0'
-      && inputs.executor != 'host' && inputs.executor != 'host-forced'
+      && inputs.executor != 'host'
     # `runner` — the other job that honours it; see "Where the heavy legs run" in the header. This
     # job runs no `docker` at all: a checkout, setup-dotnet, `dotnet test`, `jq`, `python3`.
     runs-on: ${{ inputs.runner }}
@@ -5807,7 +5808,7 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
       - name: Executed on Actions
         id: on-actions
-        if: inputs.executor == 'actions'
+        if: inputs.executor == 'actions' || inputs.executor == 'host-forced'
         run: echo "executed_on=actions" >> "$GITHUB_OUTPUT"
 
       # ───── ONE BUILD PER ASSEMBLY NAME, over the PUBLICATION's whole module set (#3732) ─────

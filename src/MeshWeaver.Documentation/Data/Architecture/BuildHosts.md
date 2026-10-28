@@ -607,15 +607,18 @@ publication and the green ledger would vanish on the very path where nothing run
 | `node-repo-module-pack.yml` | `executor`, `host-verdict` | `select` still runs (it is the independent selection a host run is checked against), the build ledger is not consulted; `prepare` (*Warm the shared build environment (once)*), `build-workspace`, the `pack` legs and the `tests` legs do not run; `verify` (the required `… / All selected bundles built`) is green only for `host-verdict == success`, and refuses a select that failed or a heavy job that ran anyway; outputs `executed-on: host` and `bundles-built: false` (nothing composable was uploaded into the run). A PUBLISHING host run must be `publish-mode: staged` — `select` refuses `direct`, because a host holds no publication credential |
 
 A follow job that did not run, was cancelled or failed is RED in the lane — a skipped need is never
-a pass. Any `executor` other than `actions` / `host` is RED. With the defaults (`actions`, no
+a pass. `host-forced` is the `actions` arm (see "Host-forced routing" below); any `executor` other
+than `actions` / `host` / `host-forced` is RED. With the defaults (`actions`, no
 verdict) every lane behaves exactly as before, so a caller that passes nothing is unchanged.
 
-### Host-forced routing — red until the debt is paid (policy `build-server-routes-all-ci`)
+### Host-forced routing — shadow until parity (policy `build-server-routes-all-ci`)
 
 The rule above routes a repository to a host only once its stages CLAIM equivalence. The owner
-decided to route every code repository's pull requests to the build server BEFORE that, and to accept
-red until each gap is closed. That is a third executor answer, `host-forced`, and it can only ever be
-red:
+decided to route every code repository's pull requests to the build server BEFORE that. Until a
+repository claims parity, the host runs its pull requests in **shadow**: every run goes to the host
+and its check runs stay visible, but the required verdict still comes from the GitHub Actions legs, so
+fixes can merge while the host closes its gaps one by one. That is a third executor answer,
+`host-forced`, and every lane treats it as `actions` for its own work:
 
 - **Where the decision lives.** `.github/build-routing.json` on core's DEFAULT branch, `hostForced`: a
   list of repository names. `build-executor.py` reads it from `main` over the public raw URL, never
@@ -623,30 +626,34 @@ red:
   change that adds a repository is not itself routed before it merges. The operations instance must
   ALSO answer `host` for the repository (`Hosting:Builds:HostRepos`); the list alone routes nothing.
 - **What it answers.** For a listed repository's pull request, when the instance says host and the
-  stages do not claim equivalence, `executor=host-forced`. The executor job prints each `owes` item
-  as an `::error` annotation (a repository with no declaration owes "no host stages"). When stages
-  are declared, the run is still queued on the host, so the host runs what it can; those host check
-  runs are not required contexts.
-- **Red, never green, never skipped.** Every lane and follow job that reads the executor
-  (`build-follow.yml`, `node-repo-compile-check.yml`, `node-repo-gate.yml`, `node-repo-module-pack.yml`,
-  `build-host-publication.yml`) fails its FIRST step on `host-forced`, naming the policy, and the
-  lanes' heavy jobs skip so the forced path puts no load on Actions. The context-owning jobs run
-  `always()`/`!cancelled()`, so the context is published as a FAILURE, never skipped. In core,
-  `precheck` decides with `build-executor.py --route-only` and `build` (with every leg that needs it)
-  does not run on `host-forced` — precheck's answer OR the admission's: precheck's queue read can fail
-  (`actions`) while the admission's succeeds moments later and queues the host run, and the legs must
-  not then start on Actions as well. The required context, `Consolidate test results`, fails on either
-  answer, asks again and exits 1, naming the debt.
+  stages do not claim equivalence, `executor=host-forced`. When stages are declared, the run is
+  queued on the host (one signed `build-request`, exactly as for `host`), so the host runs what it can
+  and publishes its own `build` / `build/<stage>` check runs. Those check runs are NOT required
+  contexts: they show the host's real result, red where a gap remains.
+- **The owed gap is named, never a red.** The executor job prints each `owes` item of
+  `.github/build-stages.json` as a `::warning::` annotation (a repository with no declaration owes
+  "no host stages"). In core, `Consolidate test results` repeats that as a warning pointing at the
+  executor job. Nothing on this route exits 1 because of the debt.
+- **The Actions legs carry the verdict.** Every lane that reads the executor
+  (`node-repo-compile-check.yml`, `node-repo-gate.yml`, `node-repo-module-pack.yml`,
+  `build-host-publication.yml`) runs its heavy jobs on `host-forced` exactly as on `actions`, and its
+  context-owning job judges them (`executed-on: actions`). `build-follow.yml` is a no-op success with
+  `followed=false` on `host-forced`: it does not re-stream the host stage, because that would hold a
+  runner for up to 43 minutes to mirror a verdict nobody gates on, and the host's own
+  `build/<stage>` check run already shows it. A caller's consumer therefore takes the verdict from
+  the Actions legs, as it does for `actions`. In core, `build` (and every leg behind it) runs on
+  `host-forced`, `host-follow` and `host-results` run only on plain `host`, and `Consolidate test
+  results` judges the Actions suites.
+- **Plain `host` is unchanged.** A repository whose stages claim `ciEquivalent` with nothing owed
+  routes as `host`: its heavy legs do not run on Actions, its follow jobs follow the host, and the
+  host's verdict is the required one. `build-executor.py --self-test` holds both routes, with the
+  plain-`host` case as the negative control.
 - **What it never touches.** Trunk runs (main's CD keeps sealing the platform sets that carry the
   host's own fixes), `MeshWeaver.Deploy` and `Memex` (they carry the host fixes and the
   infrastructure, and must stay mergeable). An unreadable routing file or an unanswering queue reads
   as NOT forced: the legs run on Actions, a real verdict.
-- **What still needs per-repository wiring.** A required context produced by a repository's OWN job
-  (not a shared lane), and a repository that never calls `build-executor.py`, are not reached by
-  this file. Each such repository adds the executor lane and a guard in that job; until then its
-  context is an Actions verdict, which is real but is not routed.
 - **Leaving it.** A repository leaves `hostForced` when its stages claim equivalence (it then routes
-  as plain `host`), or when the owner reverses the decision.
+  as plain `host`, and the host becomes its verdict), or when the owner reverses the decision.
 
 ### The host publication graph (module-pack on a host)
 
@@ -797,6 +804,11 @@ would replace, and the claim is refused until that list is empty.
   TRUNK build (MeshWeaver.Deploy#42), so the cache follows `main` as it moves. An offline-only restore
   could never warm it: the first trunk build that needs a new package would be red, and nothing would
   ever be promoted.
+- **Core declares the host's warm restore.** `.github/build-stages.json` carries
+  `"restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true", "timeoutMinutes": 20}`
+  — the build's own closure. The host reads it from the default branch's tip, never from a run's own tree,
+  and runs it once per restore key to fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py`
+  validates its shape and, for core, reds a restore that drifts from the build's solution and properties.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
@@ -838,6 +850,15 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `$MW_BUILD_ARTIFACTS/testResults-shard<i>/`, which the host hands over as H9 receipts. Only THEN does
   it run `check-untyped-content.sh` over `collected-logs/`, so the logs a red is decided on survive
   the red. The scripts are the checkout's own (`--repo .`, a parity marker).
+- **The test hosts' temp is OUTSIDE the checkout.** Each invocation gives its hosts a fresh
+  `$TMPDIR` under the temp directory the stage inherited (the sandbox's scratch), removed once its
+  traces are collected — never under `--work`, which defaults INTO the checkout. Tests build
+  throw-away projects under `Path.GetTempPath()`, and the csproj evaluator walks up from them to the
+  nearest `Directory.Build.props` exactly as MSBuild does: with the temp inside the checkout that is
+  core's own, and the tests evaluate core's build instead of their fixture (measured on build-latest:
+  `MeshWeaver.PluginTester.Test` 82 of 474 red on `<checkout>/src/Directory.Build.props: <Target …> is
+  not executed by this builder`, green on Actions, whose temp is outside the checkout). The runner
+  refuses an inherited temp that itself lies inside the checkout.
 - **No suite needs a Docker daemon, and that is checked.** A host's sandbox has none (its database is
   the prepared server). Core's Postgres suites left core, and nothing in the tree references
   `Testcontainers*` or `Docker.DotNet` or builds a container in `test/` (executable code only — a
@@ -859,9 +880,9 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
     run, which is RED — they are owed (`dependent legs`).
 
   `core-build-stages.py --check` holds both matrices to the declaration. Any other admission answer
-  runs every leg on Actions, as before — except a `host-forced` answer from precheck or the admission (see "Host-forced routing"
-  above): `build` skips on either route, and on `host-forced` `Consolidate test results` is red
-  naming the debt.
+  runs every leg on Actions, as before — a `host-forced` answer included (see "Host-forced routing"
+  above): the run is also queued on the host in shadow, and `Consolidate test results` names the
+  owed parity as a warning.
 
   **Core runs no job on the self-hosted pool.** Core is a public repository: it never gets the
   private `MW_RUNNER` / `MW_ARTIFACT_STORE` organisation variables, and no job of its reads the
