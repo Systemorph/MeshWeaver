@@ -349,6 +349,19 @@ every content-only pull request. Two rules let it reuse the baseline's bundles i
   group publishes nothing, so those runs cannot change what the baseline built. Before this rule,
   a single pending main run with no attestation yet forced a full build on every pull request
   (Plugins run 40629844509).
+- **The source is the newest green main publication on the pull request's OWN toolchain**
+  (`reuse_baseline`). Taking only the newest green main push, and refusing it when its toolchain
+  differed, reused nothing all day on 2026-10-28: all 62 Plugins pull-request runs printed
+  `publication toolchain changed since the baseline run`. The `latest` platform set moved five
+  times that day, and main's newest green push was always on the set before. For example, PR run
+  40743963637 resolved 3.1.11913, while its baseline, main run 40688826732, had published on
+  3.1.11899. Main run 40743626120, on 3.1.11913, was still running. The walk now reads up to ten
+  green main runs, newest first, and takes the first whose attested toolchain (platform, images,
+  set, recipe) equals the pull request's. A run of the daily `schedule` poll or a publication
+  `repository_dispatch` counts as well as a push, because each one publishes. Every candidate
+  passed over is logged with the fields that differ (`set 3.1.11899 → 3.1.11913`). A bundle is
+  therefore reused only from a run that built it against this pull request's platform. A push is
+  unchanged: it narrows by its newest green push and goes full on a moved toolchain.
 - **Every reused entry is keyed at the baseline and at HEAD** (`node-repo-publication-reuse.py
   --event`). A push narrows by the baseline, so `test: false` there means unchanged since the
   baseline. A pull request diffs its merge-base, so it means only that the pull request did not

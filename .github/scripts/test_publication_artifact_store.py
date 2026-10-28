@@ -198,6 +198,42 @@ class PublicationArtifactStoreTests(unittest.TestCase):
             code, result = self.invoke_base([self.run])
         self.assertEqual((0, ""), (code, result["sha"]))
 
+    # The 2026-10-28 shape: main's newest green run is on the previous platform set, an older one is
+    # on the pull request's. Taking only the newest refused every pull request that day.
+    def test_a_pull_request_reuses_the_newest_main_publication_on_its_own_toolchain(self):
+        self.publish(run="10")
+        self.publish(run="11", value={"platform": "p2", "logic": "l1"})
+        newer = {**self.run, "id": 11, "head_sha": "b" * 40}
+        with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
+            code, result = self.invoke_base([newer, self.run])
+        self.assertEqual((0, "a" * 40, "10"), (code, result["sha"], str(result["run"])))
+
+    def test_a_pull_request_reuses_a_daily_poll_or_dispatched_publication_on_its_toolchain(self):
+        for event in ("schedule", "repository_dispatch"):
+            with self.subTest(event=event):
+                self.publish(run="12")
+                source = {**self.run, "id": 12, "head_sha": "c" * 40, "event": event}
+                with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
+                    code, result = self.invoke_base([source, self.run])
+                self.assertEqual((0, "c" * 40, "12"), (code, result["sha"], str(result["run"])))
+
+    def test_negative_control_a_push_still_takes_only_the_newest_green_push(self):
+        # Nothing changes for a PUBLISHING run: it narrows by its newest green push, and a moved
+        # toolchain there is still a full build, whatever an older run attested.
+        self.publish(run="10")
+        self.publish(run="11", value={"platform": "p2", "logic": "l1"})
+        newer = {**self.run, "id": 11, "head_sha": "b" * 40}
+        code, result = self.invoke_base([newer, self.run])
+        self.assertEqual((0, ""), (code, result["sha"]))
+
+    def test_negative_control_no_main_publication_on_the_pull_requests_toolchain_reuses_nothing(self):
+        self.publish(run="10", value={"platform": "p0", "logic": "l1"})
+        self.publish(run="12", value={"platform": "p2", "logic": "l1"})
+        source = {**self.run, "id": 12, "head_sha": "c" * 40, "event": "repository_dispatch"}
+        with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
+            code, result = self.invoke_base([source, self.run])
+        self.assertEqual((0, ""), (code, result["sha"]))
+
     def test_negative_control_a_pull_request_with_an_unattested_baseline_reuses_nothing(self):
         with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
             code, result = self.invoke_base([self.run])
@@ -396,6 +432,55 @@ class PublicationArtifactStoreTests(unittest.TestCase):
         self.assertIn("reuse", got["Maps"])
         self.assertNotIn("reuse", got["AI"])
         self.assertIn("BUILD Collab, not reused: it shares src/Collab/Collab.csproj with AI", log)
+
+    # ── NEGATIVE CONTROL: a pull request that DOES touch module code rebuilds that module ──
+    def _pr_tree(self):
+        """A real repository: two packages, each with one module; the baseline commit, then a pull
+        request commit that edits module A's source only. Returns (root, baseline sha)."""
+        repo = self.root / "repo"
+        repo.mkdir()
+
+        def git(*args):
+            return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                                   "-c", "commit.gpgsign=false", *args],
+                                  capture_output=True, text=True, timeout=60, check=True).stdout
+        git("init", "-q")
+        for pkg, module in (("PkgA", "A"), ("PkgB", "B")):
+            (repo / pkg).mkdir()
+            (repo / pkg / "index.json").write_text("{}")
+            (repo / pkg / "manifest.lock").write_text('{"moduleVersion": "m1", "version": "1.0.0"}')
+            (repo / "src" / module).mkdir(parents=True)
+            (repo / "src" / module / f"{module}.csproj").write_text("<Project/>")
+            (repo / "src" / module / f"{module}.cs").write_text(f"class {module} {{}}")
+        git("add", "-A")
+        git("commit", "-q", "-m", "baseline")
+        sha = git("rev-parse", "HEAD").strip()
+        (repo / "src" / "A" / "A.cs").write_text("class A { int changed; }")
+        git("commit", "-q", "-am", "the pull request edits module A")
+        return repo, sha
+
+    def _pr_reuse(self, repo, sha, a_selected, guard=True):
+        entries = [{"package": "PkgA", "module": "A", "project": "src/A/A.csproj", "test": a_selected},
+                   {"package": "PkgB", "module": "B", "project": "src/B/B.csproj", "test": False}]
+        run = {**self.run, "head_sha": sha}
+        live = [{"name": "module-bundle-A"}, {"name": "module-bundle-B"}]
+        since = REUSE.baseline_tree_guard(repo, sha, []) if guard else None
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            got = REUSE.publication_reuse(entries, lambda: (run, live), sha, repo, frozenset(), since=since)
+        self.said = said.getvalue()
+        return {e["module"]: "reuse" in e for e in got}
+
+    def test_negative_control_a_pull_request_that_touches_module_code_rebuilds_it(self):
+        repo, sha = self._pr_tree()
+        # The selector marks A affected (test: true): A is built, the untouched B is still reused.
+        got = self._pr_reuse(repo, sha, a_selected=True)
+        self.assertEqual({"A": False, "B": True}, got, self.said)
+        # Even if the selector MISSED it (test: false), A's content address differs between the
+        # baseline and HEAD, so the baseline guard rebuilds it; B is still reused.
+        self.assertEqual({"A": False, "B": True}, self._pr_reuse(repo, sha, a_selected=False))
+        # …and that guard is what does it: without it, the missed A would be reused.
+        self.assertEqual({"A": True, "B": True}, self._pr_reuse(repo, sha, a_selected=False, guard=False))
 
     def test_without_a_root_nothing_is_reused(self):
         matrix = [{"module": "Maps", "project": "src/Maps/Maps.csproj", "test": False}]

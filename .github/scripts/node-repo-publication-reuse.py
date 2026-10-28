@@ -70,9 +70,15 @@ def stored_artifacts(store, repo, run_id, attempt=None, expected_store_id=None):
         raise ArtifactStoreError(f"declared artifact store failed: {detail.strip()[:600]}") from exc
 
 
+# The main runs that publish, and so may be a source: node-repo-publication-base.py's
+# REUSE_SOURCE_EVENTS. A pull request's baseline may be the daily `schedule` poll or a publication
+# `repository_dispatch` when that is the newest green main run on its own toolchain.
+SOURCE_EVENTS = frozenset({"push", "schedule", "repository_dispatch"})
+
+
 def annotate(entries, run, sha, artifacts):
     if (run.get("status") != "completed" or run.get("conclusion") != "success"
-            or run.get("event") != "push" or run.get("head_branch") != "main"
+            or run.get("event") not in SOURCE_EVENTS or run.get("head_branch") != "main"
             or run.get("head_sha") != sha or not re.fullmatch(r"[0-9a-f]{40}", sha)):
         return entries
     live = {a["name"] for a in artifacts if not a.get("expired")}
@@ -373,6 +379,19 @@ def publication_reuse(entries, fetch, sha, root, shipped=None, since=None):
     return coherent
 
 
+def _quietly(call):
+    """(call(), what it wrote to stderr). The self-test's failure cases print the same `::warning::`
+    the lane prints for a real run, and on a runner that line becomes an ANNOTATION on every run —
+    one read as the run's own verdict (\"PR runs logged 'publication artifacts unavailable'\", while the
+    run's real call had been handed no baseline at all). Captured here and asserted instead."""
+    import contextlib
+    import io
+    said = io.StringIO()
+    with contextlib.redirect_stderr(said):
+        result = call()
+    return result, said.getvalue()
+
+
 def self_test():
     entries = [{"module": "Floor", "test": False}, {"module": "Changed", "test": True}]
     run = dict(status="completed", conclusion="success", event="push", head_branch="main",
@@ -381,8 +400,11 @@ def self_test():
     got = annotate(entries, run, "a" * 40, artifacts)
     assert got[0]["reuse"]["runId"] == "10" and "reuse" not in got[1]
     for change in [dict(conclusion="failure"), dict(event="pull_request"), dict(status="in_progress"),
-                   dict(head_branch="other"), dict(head_sha="b" * 40)]:
+                   dict(head_branch="other"), dict(head_sha="b" * 40), dict(event="workflow_dispatch")]:
         assert annotate(entries, {**run, **change}, "a" * 40, artifacts) == entries
+    # The daily poll and a publication dispatch publish too, so either is a source.
+    for event in ("schedule", "repository_dispatch"):
+        assert annotate(entries, {**run, "event": event}, "a" * 40, artifacts)[0]["reuse"]["runId"] == "10"
     assert annotate(entries, run, "a" * 40, []) == entries
     assert annotate(entries, run, "a" * 40, [{**artifacts[0], "expired": True}]) == entries
     assert annotate([{**entries[0], "ledger": {"decision": "build"}}], run, "a" * 40, artifacts)[0].get("reuse") is None
@@ -472,8 +494,9 @@ def self_test():
                 raise OSError("platform witness failed")
         fetch = lambda: (run, live)
         plain = [entry("Collab", False), entry("AI", True)]
-        got = publication_reuse(plain, fetch, "a" * 40, root, Unreadable())
+        got, said = _quietly(lambda: publication_reuse(plain, fetch, "a" * 40, root, Unreadable()))
         assert not any("reuse" in e for e in got), got
+        assert "publication artifacts unavailable" in said, said
         got = publication_reuse(plain, fetch, "a" * 40, root)
         assert [("reuse" in e) for e in got] == [False, False], got
         got = publication_reuse([entry("Maps", False), entry("AI", True)], fetch, "a" * 40, root)
@@ -516,8 +539,10 @@ def self_test():
 
         def broken(es):
             raise subprocess.CalledProcessError(128, ["git", "worktree"])
-        got = publication_reuse([mk("A"), mk("B")], lambda: (run, live), "a" * 40, root, frozenset(), since=broken)
+        got, said = _quietly(lambda: publication_reuse([mk("A"), mk("B")], lambda: (run, live), "a" * 40, root,
+                                                       frozenset(), since=broken))
         assert not any("reuse" in e for e in got), "a failed baseline comparison keeps every normal build"
+        assert "publication artifacts unavailable" in said, said
         # build_inputs, over the real content address: equal trees agree, a moved closure does not,
         # and neither does an advanced release version on identical content.
         mbk = _load_key_module()
@@ -576,7 +601,7 @@ def self_test():
         assert outside_packages(detected, {"Pkg"}) == [], (
             "NEGATIVE CONTROL: with rename detection the source end vanishes, which is the defect "
             f"changed_since exists to prevent (got {detected})")
-    print("publication reuse: 42 assertions passed")
+    print("publication reuse: 47 assertions passed")
 
 
 def main():
