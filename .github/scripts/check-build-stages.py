@@ -7,11 +7,15 @@ Doc/Architecture/BuildHosts → "Moving a repository's tests to the build server
 holds the same rule as rule 7 of its own `check-build-queue-admission.py`; this file is that rule for
 core and for every satellite node repo, which run it through `node-repo-validate.yml`.
 
-A declaration is `{"stages": [...], "owes": [...], "ciEquivalent": true?}`:
+A declaration is `{"stages": [...], "owes": [...], "ciEquivalent": true?, "restore": {...}?}`:
 
   * `stages` — what a host runs, in order (the runner, MeshWeaver.Deploy `build-run.py`, validates the
     same schema: one-segment name, kind build|test, a command, `timeoutMinutes` in (0, 45], `needs`
     drawn from plugins|outputs|nuget);
+  * `restore` — optional: `{"command": "…", "timeoutMinutes": N}` (N in (0, 45], default 20), the
+    restore the host runs ONCE per restore key from the DEFAULT BRANCH's tip to warm its shared NuGet
+    cache (MeshWeaver.Deploy#68, build-run.py `validate_restore`); a run's own declaration is never
+    executed;
   * `owes` — every thing those stages still check LESS than the Actions legs they would replace,
     one sentence each, naming the Actions leg;
   * `ciEquivalent` — the claim. `build-executor.py` routes a run's heavy legs to a host ONLY on
@@ -24,7 +28,9 @@ command — so a stage cannot quietly shed a check it has:
 
   core       `build` (Release, warnings as errors, the whole solution, every test project a member,
              a restore from the host's prepared package cache as fallback folder, the test pack) first; every
-             `test-shard-<i>` and `doc-gate` run from a pack whose commit is the run's own commit.
+             `test-shard-<i>` and `doc-gate` run from a pack whose commit is the run's own commit; a
+             `restore` that warms the build's own closure (the solution, Configuration=Release, CIRun=true,
+             never a --source).
   node-repo  the stages follow the lanes `.github/workflows/ci.yml` calls: `node-repo-compile-check.yml`
              ⇒ `compile-check` (core's compile-check.py, the repository's compile-check.allow, the
              host's reference set); `node-repo-gate.yml` ⇒ `gate` (the tester and dotnet through the
@@ -69,6 +75,13 @@ CORE_BUILD_PARITY = [
     ("are not in MeshWeaver.slnx", "every test project is a solution member (the `build` job's step of that name)"),
     ("core-tests.py pack", "the shards' units packed by shard-assign.sh, the SAME assignment the matrix uses"),
     ("--sha \"${MW_BUILD_SHA", "the pack names the commit it was built from"),
+]
+# The host's default-branch restore must warm the closure the `build` stage's implicit restore reads — the same
+# solution and the same global properties — or every run restores per run again (MWPREP001).
+CORE_RESTORE_PARITY = [
+    ("dotnet restore MeshWeaver.slnx", "the whole solution, the closure the `build` stage restores"),
+    ("-p:Configuration=Release", "Release, as the build's `-c Release` restores"),
+    ("-p:CIRun=true", "the CI build switch the build passes, which conditions package references"),
 ]
 CORE_RUN_PARITY = [
     ("--require-sha \"${MW_BUILD_SHA", "the tests that run are the run's own commit's — never another set's image"),
@@ -138,7 +151,30 @@ def schema_problems(doc: object) -> list[str]:
         needs = s.get("needs", [])
         if not isinstance(needs, list) or not all(isinstance(n, str) and n in NEEDS for n in needs):
             out.append(f"stage `{name}` needs {needs!r} must be a list drawn from {sorted(NEEDS)}")
+    out += restore_schema_problems(doc)
     return out
+
+
+RESTORE_DEFAULT_TIMEOUT_MINUTES = 20
+
+
+def restore_schema_problems(doc: dict) -> list[str]:
+    """`restore`, when declared: the runner's `validate_restore` (MeshWeaver.Deploy#68). Absent is fine — the host
+    then warms nothing from the default branch and says so. A present-but-`null` value is refused here (the runner
+    reads it as absent): declare it or omit it."""
+    if "restore" not in doc:
+        return []
+    r = doc["restore"]
+    if not isinstance(r, dict) or not isinstance(r.get("command"), str) or not r["command"].strip():
+        return ["build-stages.json `restore` must be {\"command\": \"…\", \"timeoutMinutes\": N} — the restore the host runs "
+                "once per key from the default branch's tip to warm its shared NuGet cache"]
+    tmo = r.get("timeoutMinutes", RESTORE_DEFAULT_TIMEOUT_MINUTES)
+    if isinstance(tmo, bool) or not isinstance(tmo, (int, float)) or not (0 < tmo <= MAX_TIMEOUT_MINUTES):
+        return [f"build-stages.json `restore` timeoutMinutes {tmo!r} must be in (0, {MAX_TIMEOUT_MINUTES}]"]
+    unknown = sorted(set(r) - {"command", "timeoutMinutes"})
+    if unknown:
+        return [f"build-stages.json `restore` carries {unknown} — only `command` and `timeoutMinutes` are read"]
+    return []
 
 
 def debt_problems(doc: dict) -> list[str]:
@@ -201,6 +237,17 @@ def core_problems(doc: dict) -> list[str]:
         out.append("core declares no `test-shard-<i>` stage — the suite would run nowhere on a host")
     if "doc-gate" not in names:
         out.append("core declares no `doc-gate` stage — the doc and samples gates would run nowhere on a host")
+    restore = doc.get("restore")
+    if not isinstance(restore, dict):
+        out.append("core declares no `restore` — the host's shared NuGet cache is then filled only by trunk builds, which "
+                   "never reach it, so every run restores its whole closure (MWPREP001)")
+    else:
+        rcmd = str(restore.get("command") or "")
+        out += [f"`restore` no longer carries `{n}` — {why}; the warm cache would miss what the build reads"
+                for n, why in CORE_RESTORE_PARITY if n not in rcmd]
+        if "--source" in rcmd:
+            out.append("`restore` passes --source — under the repository's packageSourceMapping a command-line source maps "
+                       "no package (NU1100); restore through nuget.config")
     return out
 
 
@@ -420,7 +467,8 @@ def _core_doc(total: int = 2) -> dict:
     stages += [{"name": f"test-shard-{i}", "kind": "test", "command": f"python3 deploy/core-tests/core-tests.py run --shard {i} --total {total} {roots} --repo .",
                 "timeoutMinutes": 20} for i in range(total)]
     stages.append({"name": "doc-gate", "kind": "test", "command": f"python3 deploy/core-tests/core-tests.py doc-gate {roots} --repo .", "timeoutMinutes": 25})
-    return {"owes": ["one thing"], "stages": stages}
+    return {"owes": ["one thing"], "stages": stages,
+            "restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true", "timeoutMinutes": 20}}
 
 
 NODE_CI = """jobs:
@@ -489,6 +537,29 @@ def _self_test() -> int:
     red(mutate(node, lambda d: d["stages"][0].update(needs=["secrets"])), "node-repo", "needs", "an unknown need")
     red(mutate(node, lambda d: d["stages"].append(dict(d["stages"][0]))), "node-repo", "declared twice", "a stage declared twice")
     red(mutate(node, lambda d: d["stages"][0].update(name="Build/x")), "node-repo", "path segment", "a stage name that is not one segment")
+    print("restore (the host's default-branch NuGet warm, MeshWeaver.Deploy#68):")
+    expect(problems(json.dumps(mutate(node, lambda d: d.update(restore={"command": "dotnet restore x.slnx", "timeoutMinutes": 10}))),
+                    "node-repo", NODE_CI)[0] == [], "node-repo: a well-formed `restore` is green")
+    expect(problems(json.dumps(mutate(node, lambda d: d.update(restore={"command": "dotnet restore x.slnx"}))), "node-repo", NODE_CI)[0] == [],
+           "node-repo: a `restore` without timeoutMinutes takes the runner's default and is green")
+    red(mutate(node, lambda d: d.update(restore="dotnet restore")), "node-repo", "`restore` must be", "a `restore` that is a bare string")
+    red(mutate(node, lambda d: d.update(restore=None)), "node-repo", "`restore` must be", "a `restore` that is null")
+    red(mutate(node, lambda d: d.update(restore={"command": "  "})), "node-repo", "`restore` must be", "a `restore` with a blank command")
+    red(mutate(node, lambda d: d.update(restore={"timeoutMinutes": 10})), "node-repo", "`restore` must be", "a `restore` with no command")
+    red(mutate(node, lambda d: d.update(restore={"command": "dotnet restore", "timeoutMinutes": 90})), "node-repo",
+        "`restore` timeoutMinutes", "a `restore` cap past 45 minutes")
+    red(mutate(node, lambda d: d.update(restore={"command": "dotnet restore", "timeoutMinutes": 0})), "node-repo",
+        "`restore` timeoutMinutes", "a zero `restore` cap")
+    red(mutate(node, lambda d: d.update(restore={"command": "dotnet restore", "timeoutMinutes": True})), "node-repo",
+        "`restore` timeoutMinutes", "a boolean `restore` cap (True == 1)")
+    red(mutate(node, lambda d: d.update(restore={"command": "dotnet restore", "source": "https://x"})), "node-repo",
+        "only `command` and `timeoutMinutes`", "a `restore` carrying a key the runner never reads")
+    red(mutate(core, lambda d: d.pop("restore")), "core", "core declares no `restore`", "core without its default-branch restore")
+    for needle, _ in CORE_RESTORE_PARITY:
+        red(mutate(core, lambda d, n=needle: d["restore"].update(command=d["restore"]["command"].replace(n, "X"))), "core",
+            f"`{needle}`", f"core's restore drops `{needle}`")
+    red(mutate(core, lambda d: d["restore"].update(command=d["restore"]["command"] + " --source \"$NUGET_FALLBACK_PACKAGES\"")),
+        "core", "`restore` passes --source", "core's restore from a --source (NU1100 under packageSourceMapping)")
     expect(problems("{", "core")[0] != [], "RED: a file that is not JSON")
     expect(problems(None, "core", require=True)[0] != [], "RED: an absent declaration under --require")
     print("negative controls — core parity:")
