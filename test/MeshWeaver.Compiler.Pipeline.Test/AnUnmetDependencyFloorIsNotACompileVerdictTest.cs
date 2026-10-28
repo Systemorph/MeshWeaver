@@ -132,6 +132,46 @@ public class AnUnmetDependencyFloorIsNotACompileVerdictTest(ITestOutputHelper ou
             "the identical source compiles; only the floor differs between the two arms");
     }
 
+    /// <summary>What a hydration of an existing build ended in: its result, or the fault it raised.</summary>
+    private Task<(NodeCompilationResult? Result, Exception? Fault)> Hydrate(string location, string path, CancellationToken ct) =>
+        Compiler.GetConfigurationsFromExistingAssembly(location, path)
+            .Take(1)
+            .Select(result => (Result: result, Fault: (Exception?)null))
+            .Catch((Exception ex) => Observable.Return(((NodeCompilationResult?)null, (Exception?)ex)))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("a hydration must settle one way or the other", cancellationToken: ct);
+
+    /// <summary>
+    /// 🚨 The HYDRATION entry (<see cref="IMeshNodeCompilationService.GetConfigurationsFromExistingAssembly"/>)
+    /// is held to the same floor as the compile. It is how the contract handler adopts a published or
+    /// pinned build, so without the guard a replica below the floor loads a newer build whose
+    /// dependency members it lacks, and the reflection failure is stamped Error on the shared record.
+    /// NEGATIVE CONTROL: the very same bytes load for a type whose floor is met.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnUnmetFloor_RefusesToLoadAnExistingBuild_WhileAMetFloorLoadsTheSameBytes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (built, buildFault) = await Attempt(FreeType, ct);
+        buildFault.Should().BeNull("the bytes under test come from a replica that meets the floor");
+        var location = built!.AssemblyLocation;
+        location.Should().NotBeNullOrEmpty();
+
+        var (held, heldFault) = await Hydrate(location!, HeldType, ct);
+        held.Should().BeNull("a replica below the floor must not load the build at all");
+        heldFault.Should().BeOfType<DependencyFloorUnmetException>(
+                "hydration is the second entry to the same rule (#6195)")
+            .Which.NodeTypePath.Should().Be(HeldType);
+        NodeTypeCompilationHelpers.IsAvailabilityNonVerdict(heldFault).Should().BeTrue(
+            "the contract handler folds it into Unavailable, never Error");
+
+        var (free, freeFault) = await Hydrate(location!, FreeType, ct);
+        freeFault.Should().BeNull("the gate abstains when the floor is met");
+        free.Should().NotBeNull();
+        free!.NodeTypeConfigurations.Should().NotBeEmpty(
+            "the identical bytes load; only the floor differs between the two arms");
+    }
+
     [Fact]
     public void TheStamp_IsUnavailable_AndKeepsTheLastGoodBuild()
     {

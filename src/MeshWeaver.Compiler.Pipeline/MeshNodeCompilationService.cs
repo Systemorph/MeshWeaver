@@ -344,24 +344,30 @@ internal class MeshNodeCompilationService(
 
     /// <inheritdoc />
     public IObservable<string?> GetAssemblyLocation(MeshNode node)
-        => AfterDependencyFloor(node, () => GetAssemblyLocationWithLog(node).Select(t => t.Path));
+        => AfterDependencyFloor(node.Path, "Compile", () => GetAssemblyLocationWithLog(node).Select(t => t.Path));
 
     /// <summary>
     /// 🚨 The compile half of the dependency-floor rule (#6195, see <see cref="INodeTypeDependencyFloor"/>):
     /// runs <paramref name="compile"/> only when this process meets the declared dependency floor
-    /// of the package that owns <paramref name="node"/>, and otherwise ends the attempt with
+    /// of the package that owns <paramref name="nodePath"/>, and otherwise ends the attempt with
     /// <see cref="DependencyFloorUnmetException"/> BEFORE anything is read, emitted or loaded — so a
     /// replica running an older generation of a dependency can neither stamp a Roslyn verdict on
-    /// the shared record nor load a build compiled against members it does not have. No
+    /// the shared record nor load a build compiled against members it does not have. Both entries
+    /// go through it: the compile (<see cref="CompileAndGetConfigurations"/>,
+    /// <see cref="GetAssemblyLocation"/>) and the hydration of an existing build
+    /// (<see cref="GetConfigurationsFromExistingAssembly"/>). No
     /// <see cref="INodeTypeDependencyFloor"/> registered (a mesh without a module host) means
-    /// nothing is judged and the compile runs as before.
+    /// nothing is judged and the work runs as before.
     /// </summary>
-    private IObservable<T> AfterDependencyFloor<T>(MeshNode node, Func<IObservable<T>> compile)
+    /// <param name="nodePath">The NodeType whose package floor is judged.</param>
+    /// <param name="what">What is not run, for the log line: <c>Compile</c> or <c>Load</c>.</param>
+    /// <param name="compile">The guarded work, built only once the floor is met.</param>
+    private IObservable<T> AfterDependencyFloor<T>(string? nodePath, string what, Func<IObservable<T>> compile)
     {
-        if (string.IsNullOrEmpty(node.Path)
+        if (string.IsNullOrEmpty(nodePath)
             || hub.ServiceProvider.GetService<INodeTypeDependencyFloor>() is not { } floor)
             return Observable.Defer(compile);
-        return floor.Unmet(node.Path)
+        return floor.Unmet(nodePath)
             .Take(1)
             .DefaultIfEmpty(null)
             .SelectMany(unmet =>
@@ -369,11 +375,11 @@ internal class MeshNodeCompilationService(
                 if (unmet is null)
                     return compile();
                 logger.LogWarning(
-                    "Compile of {NodePath} NOT RUN on this replica — {Unmet}. No verdict is formed: the "
+                    "{What} of {NodePath} NOT RUN on this replica — {Unmet}. No verdict is formed: the "
                     + "record is stamped Unavailable, not Error, and the last good build keeps its "
                     + "coordinates for the replicas that meet the floor (#6195).",
-                    node.Path, unmet);
-                return Observable.Throw<T>(new DependencyFloorUnmetException(node.Path, unmet));
+                    what, nodePath, unmet);
+                return Observable.Throw<T>(new DependencyFloorUnmetException(nodePath, unmet));
             });
     }
 
@@ -1381,7 +1387,7 @@ internal class MeshNodeCompilationService(
     public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(
         MeshNode node,
         IReadOnlyList<MeshNode>? sourcesOverride = null)
-        => AfterDependencyFloor(node, () => GetAssemblyLocationWithLog(node, sourcesOverride)).SelectMany(attempt =>
+        => AfterDependencyFloor(node.Path, "Compile", () => GetAssemblyLocationWithLog(node, sourcesOverride)).SelectMany(attempt =>
         {
             var (assemblyLocation, _, log, sources) = attempt;
             // The per-source version snapshot folds the SAME set the compile consumed
@@ -1608,9 +1614,34 @@ internal class MeshNodeCompilationService(
         // (BuildPackageProbing). A build with no recorded package keeps the eager contract callers
         // rely on: the work happens when CALLED, inside the caller's pool slot. One that has to wait
         // for the resolution loads on the file-system lane once it answers.
+        //
+        // 🚨 #6195 — a build is LOADED only on a replica that meets its package's dependency floor,
+        // exactly as it is COMPILED only there: hydration is how an older replica would otherwise
+        // load a newer build whose dependency members it lacks, and the contract handler stamps the
+        // resulting reflection failure as Error on the shared record. With a floor registered the
+        // load waits for its answer and then runs on the file-system lane, never on the thread
+        // that answered; with none, the eager in-the-caller's-slot contract below is unchanged.
         var recorded = BuildPackageProbing.RecordedReferences(localPath);
+        if (string.IsNullOrEmpty(nodeTypePath)
+            || hub.ServiceProvider.GetService<INodeTypeDependencyFloor>() is null)
+            return LoadExisting(localPath, nodeTypePath, recorded, eager: true);
+        return AfterDependencyFloor(nodeTypePath, "Load", () => LoadExisting(localPath, nodeTypePath, recorded, eager: false));
+    }
+
+    /// <summary>
+    /// The hydration load itself: the recorded package closure's probing armed first when there is
+    /// one, then one assembly load and the reflection read of its configurations. <paramref name="eager"/>
+    /// keeps the historical contract for a build with no recorded package — the load happens when
+    /// CALLED, inside the caller's pool slot; otherwise it runs on the file-system lane.
+    /// </summary>
+    private IObservable<NodeCompilationResult?> LoadExisting(
+        string localPath, string nodeTypePath, IReadOnlyList<NuGetPackageReference> recorded, bool eager)
+    {
         if (recorded.Count == 0)
-            return Observable.Return(LoadExistingAssembly(localPath, nodeTypePath));
+            return eager
+                ? Observable.Return(LoadExistingAssembly(localPath, nodeTypePath))
+                // atomic-blocking-leaf: one assembly load and the reflection read of its configurations
+                : _fileSystemPool.InvokeBlocking(_ => LoadExistingAssembly(localPath, nodeTypePath));
         return ArmPackageProbing(localPath, recorded)
             // atomic-blocking-leaf: one assembly load and the reflection read of its configurations
             .SelectMany(_ => _fileSystemPool.InvokeBlocking(_ => LoadExistingAssembly(localPath, nodeTypePath)));

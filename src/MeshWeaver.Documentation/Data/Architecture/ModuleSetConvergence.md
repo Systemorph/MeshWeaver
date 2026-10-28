@@ -400,8 +400,15 @@ before it reads, emits or loads anything. An unmet floor ends the attempt with
 `DependencyFloorUnmetException`, an availability non-verdict: the record goes `Unavailable`, never
 `Error`; the type is not parked; and the last good build — the one a satisfying replica compiled —
 keeps its coordinates. Abstains on everything it cannot judge (no module host, a root declaring
-nothing, no loaded version, an unreadable range or root). Pinned by
-`AnUnmetDependencyFloorIsNotACompileVerdictTest` (with a met-floor negative control) and
+nothing, no loaded version, an unreadable range or root). The rule has two entries, and both are
+held to it. A COMPILE (`CompileAndGetConfigurations`, `GetAssemblyLocation`) is one. The HYDRATION
+of an existing build (`GetConfigurationsFromExistingAssembly`) is the other: it is how the contract
+handler adopts a published or pinned build, and without the guard an older replica loaded a newer
+build whose dependency members it lacks, and the reflection failure was stamped `Error`. The batch
+bake's REPORTED outcome reads the same non-verdict predicate as its stamp, so an unmet floor reports
+"not evaluated" and never `CompileError`, which would cascade `UpstreamFailed` to dependents. Pinned by
+`AnUnmetDependencyFloorIsNotACompileVerdictTest` (with met-floor negative controls for the compile
+and the hydration), `ABatchBakeBelowADependencyFloorFormsNoVerdictTest` and
 `ACompileDependencyFloorReadsThePackageRootTest`.
 
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here
