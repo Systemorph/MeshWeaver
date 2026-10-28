@@ -55,6 +55,7 @@ on:
           it is never SKIPPED: a skipped follow job would skip every job downstream that still reads
           `success()` (GitHub propagates a skipped ancestor — actions/runner#2205), on the path where
           nothing runs on a host at all (review of MeshWeaver.SocialMedia#254). Any other value is RED.
+          `host-forced` (policy build-server-routes-all-ci, SHADOW until parity) is the same no-op with `followed=false` — the host's own build/<stage> check run shows its result, unrequired.
         required: false
         type: string
         default: host
@@ -133,7 +134,15 @@ jobs:
               echo "followed=false" >> "$GITHUB_OUTPUT"
               echo "$STAGE runs on GitHub Actions in this run — nothing to follow (a no-op; its verdict is the Actions legs')"
               echo "- 🏗️ \`$STAGE\`: runs on Actions — nothing followed" >> "$GITHUB_STEP_SUMMARY" ;;
-            host-forced) echo "::error title=Routed to the build host — owed::the owner routed this repository's pull requests to the build server (policy build-server-routes-all-ci) while its host stages still owe parity with this leg — RED until the debt is paid and ciEquivalent is claimed; the owed items are the ::error annotations of the run's executor/admission job and the owes list of .github/build-stages.json"; exit 1 ;;
+            # 🌘 SHADOW (policy build-server-routes-all-ci): the owner routed this repository's pull requests to the
+            # build server ahead of CI equivalence. The host runs the stage and publishes its own `build/<stage>` check
+            # run — that IS the visible host verdict, never a required one. This job does not re-stream it (that would
+            # hold a runner up to 43 minutes to mirror a verdict nobody gates on): it is a no-op success with
+            # `followed=false`, so every consumer takes the verdict from the Actions legs, which ran in this run.
+            host-forced)
+              echo "followed=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Shadow run on the build host::$STAGE runs on the build host in SHADOW (policy build-server-routes-all-ci) — its real result is the host's own check run build/$STAGE (not required); the required verdict is this run's Actions legs"
+              echo "- 🌘 \`$STAGE\`: shadow run on the build host — see its \`build/$STAGE\` check run; the Actions legs carry the verdict" >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "::error title=Build follow::executor '$EXECUTOR' is neither 'host' nor 'actions' — refusing to guess"; exit 1 ;;
           esac
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
