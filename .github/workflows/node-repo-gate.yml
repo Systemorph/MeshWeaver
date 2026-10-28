@@ -1812,7 +1812,11 @@ jobs:
           # publication found under the compatibility key computed from the set name; the host just
           # composed resolves its own. A disagreement means the decision read ANOTHER identity's
           # publication — never seed from this one on that decision.
-          if [ -n "${EXPECTED_IDENTITY:-}" ] && [ "$EXPECTED_IDENTITY" != "$IDENTITY" ]; then
+          # ONLY when a record DECIDED the host (`publication` / `pin`). In `legacy` mode no record was
+          # found, the host is this run's own platform, and the identity it MEASURES is the address —
+          # a pin to a platform predating compatibility keys resolves an `s…`/`g…` identity whose
+          # publication the synthesized `c…e…` key never reaches (#7424 review).
+          if [ "${PLATFORM_MODE:-legacy}" != legacy ] && [ -n "${EXPECTED_IDENTITY:-}" ] && [ "$EXPECTED_IDENTITY" != "$IDENTITY" ]; then
             echo "::error::the platform was taken from the publication under framework identity $EXPECTED_IDENTITY (computed from set '${COMPOSED_SET:-?}' and core's platform-compatibility declaration), but the composed host resolves $IDENTITY. The two must be one key — check the declaration's epoch / breaks against the set (Doc/Architecture/PublicationNamesItsPlatform)."
             exit 1
           fi

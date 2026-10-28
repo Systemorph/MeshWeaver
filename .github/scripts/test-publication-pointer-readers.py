@@ -693,6 +693,19 @@ def main() -> int:
               proc.returncode != 0 and "c003e001" in proc.stdout and IDENTITY in proc.stdout,
               "the decision read another identity's publication", proc)
 
+        # The no-record fallback: `choose` still ADDRESSED c003e001, found no record, and kept this
+        # run's platform — whose host (a platform predating compatibility keys) measures an `s…`
+        # identity. Nothing was decided from the c-key publication, so the host's own identity is
+        # the address and the seed must proceed (#7424 review). The case above, same addresses in
+        # `publication` mode, is its negative control.
+        root = base / "legacy-identity" / "remote"
+        stage(root, pointer=GENERATION)
+        proc, bundle = run_seed(base / "legacy-identity" / "seed", root, body,
+                                platform={"EXPECTED_IDENTITY": "c003e001", "PLATFORM_MODE": "legacy"})
+        check("legacy (no record): a synthesized address beside a pre-compatibility host identity is NOT refused",
+              proc.returncode == 0 and read(bundle) == GEN_BYTES,
+              f"seeded {read(bundle)!r} — the no-record fallback was refused on an address nothing was read from", proc)
+
     print("")
     if FAILURES:
         print(f"::error title=publication-pointer readers::{len(FAILURES)} case(s) failed — "
