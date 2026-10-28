@@ -195,16 +195,23 @@ class Decision:
 
 
 def decide(run: Platform, pinned: bool, ceiling: str | None, readings: dict[str, Reading],
-           frozen: str | None = None) -> Decision:
+           frozen: str | None = None, held_by: str | None = None) -> Decision:
     """The platform this gate composes on. Pure; every branch is in the self-test.
 
     `frozen` — the caller's MW_PLATFORM_REF freeze, when the run's platform was resolved through it.
     A freeze is an INSTRUCTION (an incident), so it binds like a pin: the host stays the frozen set,
     and a publication the frozen host cannot adopt is refused by name — never silently replaced by
-    the publication's set, and never measured against the ceiling, which the freeze overrides."""
-    if frozen:
+    the publication's set, and never measured against the ceiling, which the freeze overrides.
+
+    `held_by` — WHO holds the host when it is not the caller's pin: a shard of the same attempt as the
+    run's prepared bake takes the pair that bake COMPILED against (`choose --held-by`), and a reseal
+    since the bake must not move it — that would change the handoff key and make every shard
+    compile again. It binds exactly like a pin (a publication the held host cannot adopt is RED by
+    name); only the wording names the holder."""
+    if frozen or held_by:
         pinned, ceiling = True, None
-    who = (f"the MW_PLATFORM_REF freeze '{frozen}' FROZE the host at" if frozen else "the caller PINNED")
+    who = (f"the MW_PLATFORM_REF freeze '{frozen}' FROZE the host at" if frozen else
+           f"{held_by} HELD the host at" if held_by else "the caller PINNED")
     with_record = {src: r.record for src, r in readings.items() if r.kind == "record" and r.record}
     without = [src for src, r in readings.items() if r.kind == "no-record"]
     absent = [src for src, r in readings.items() if r.kind == "absent"]
@@ -484,6 +491,11 @@ def cmd_choose(args: argparse.Namespace, reader: Reader | None = None) -> int:
         print(f"::notice title=Platform from the publication::the MW_PLATFORM_REF freeze '{frozen}' overrides "
               f"platform-ceiling {ceiling} — the host stays the frozen set")
         ceiling = None
+    held_by = (args.held_by or "").strip() or None
+    if held_by:
+        # The pair is fixed (the bake's): the freeze and the ceiling were applied when the bake
+        # decided it, so neither is consulted again.
+        pinned, frozen, ceiling = True, None, None
     upstreams = args.upstreams.split()
     if not upstreams:
         raise Refusal("--upstreams is empty — there is no publication to take a platform from")
@@ -512,7 +524,7 @@ def cmd_choose(args: argparse.Namespace, reader: Reader | None = None) -> int:
     for src, r in readings.items():
         rec = f": {r.record.text()}" if r.record else ""
         print(f"publication '{src}' @ {identity}: {r.kind}{rec} ({r.where})")
-    decision = decide(run, pinned, ceiling, readings, frozen)
+    decision = decide(run, pinned, ceiling, readings, frozen, held_by)
     for line in decision.notes:
         print(f"::notice title=Platform from the publication::{line}")
     for line in decision.warnings:
@@ -620,6 +632,19 @@ def self_test() -> int:
           d.mode == "pin" and d.platform.set == "3.1.11080" and any("TRANSITIONAL" in w and "3.1.11076" in w for w in d.warnings), d)
     why = refused(lambda: decide(Platform("3.1.11076", T[5], T[6]), pinned=True, ceiling=None, readings=race))
     check("a pin with the publication's set NAME and another build is RED", "different build" in why, why)
+    # The prepared bake's pair HOLDS a same-attempt shard (#7424 review): a reseal since the bake
+    # never moves the shard's host. NEGATIVE CONTROL: unheld, the same inputs DO move it.
+    resealed = {"plugins": rec(Platform("3.1.11080", T[5], T[6]))}
+    d = decide(new, pinned=False, ceiling=None, readings=resealed)
+    check("NEGATIVE CONTROL: unheld, a reseal on 3.1.11080 moves the host off the bake's 3.1.11076",
+          d.platform.set == "3.1.11080", d)
+    why = refused(lambda: decide(new, pinned=False, ceiling=None, readings=resealed,
+                                 held_by="the run's prepared bake"))
+    check("held by the bake: a reseal on a NEWER set is RED naming the holder and both sets",
+          "the run's prepared bake HELD the host at" in why and "3.1.11080" in why and "3.1.11076" in why, why)
+    d = decide(new, pinned=False, ceiling="3.1.11069", readings=race, held_by="the run's prepared bake")
+    check("held by the bake: the publication it compiled against passes; the ceiling is not re-applied",
+          d.platform == new and d.mode == "pin", d)
 
     print("\nthe edges:")
     d = decide(old, pinned=False, ceiling=None, readings={"plugins": Reading("no-record", None, "share")})
@@ -806,6 +831,8 @@ def main() -> int:
     c.add_argument("--pinned", choices=("true", "false"), required=True)
     c.add_argument("--ceiling", default="")
     c.add_argument("--freeze", default="")
+    c.add_argument("--held-by", default="",
+                   help="who holds the host (the run's prepared bake) — binds like a pin")
     c.add_argument("--registry-url", default="")
     c.add_argument("--targets", default="")
     v = sub.add_parser("verify")

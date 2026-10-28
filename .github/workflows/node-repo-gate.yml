@@ -255,6 +255,10 @@ on:
           platform itself (both digest inputs empty — see the header); the caller's own
           `platform-set` input when it pinned the digests and named their set; EMPTY otherwise. A shard that took a NEWER set
           on a re-run says so in its own log and summary; this is `plan`'s baseline.
+          🚨 It is NOT the set every shard composed on: with `upstream-seed` and no pin, each shard
+          composes on the set the upstream publication was sealed on (MeshWeaver#7337), at or below
+          this one, and names it in its log and step summary ("Platform — taken from the upstream
+          publication"). Read it as the set the run RESOLVED, never as the set this lane gated.
         value: ${{ jobs.plan.outputs.platform-set }}
     inputs:
       executor:
@@ -1355,6 +1359,7 @@ jobs:
               echo "platform-image-digest=${BAKE_PLATFORM_DIGEST}"
               echo "platform-set=${BAKE_SET:-}"
               echo "override=false"
+              echo "held-by=the run's prepared bake (attempt ${BAKE_ATTEMPT})"
             } >> "$GITHUB_OUTPUT"
             echo "platform for this shard: the run's prepared bake's (set '${BAKE_SET:-<not named>}', compiled in attempt $BAKE_ATTEMPT) — the shard gates exactly the platform its bake was compiled against"
             exit 0
@@ -1432,6 +1437,8 @@ jobs:
           TARGETS: ${{ inputs.bake-publish-targets }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
           GH_TOKEN: ${{ github.token }}
+          # Non-empty when the step above handed this shard the run's prepared bake's pair.
+          HELD_BY: ${{ steps.platform.outputs.held-by }}
         run: |
           set -euo pipefail
           if [ -z "${UPSTREAMS//[[:space:]]/}" ]; then
@@ -1453,8 +1460,15 @@ jobs:
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/publication-platform.py" > "$SCRIPT" \
             || { echo "::error::could not fetch publication-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched publication-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
-          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" "src/MeshWeaver.Compiler/platform-compatibility.json" > "$DECL" \
-            || { echo "::error::could not fetch the platform-compatibility declaration at ${SCRIPTS_REF} — the framework identity that addresses the publication cannot be computed"; exit 1; }
+          # 🚨 THE DECLARATION IS READ AT core `main`, NOT at scripts-ref (#7424 review). A caller on an
+          # older scripts-ref can resolve a set built AFTER an epoch bump; its stale declaration would
+          # file that set under the OLD epoch, address the old epoch's publication, and compose the host
+          # on that publication's set — an old-epoch host the identity assertion below then agrees with.
+          # The declaration is APPEND-ONLY (a break bumps `epoch` and appends an entry carrying the
+          # previous epoch's ceiling; nothing is ever rewritten), so the newest one files EVERY sealed
+          # set — old and new — under the epoch it was built in. The script stays pinned to scripts-ref.
+          "$RUNNER_TEMP/mw-core-file" main "src/MeshWeaver.Compiler/platform-compatibility.json" > "$DECL" \
+            || { echo "::error::could not fetch the platform-compatibility declaration at core main — the framework identity that addresses the publication cannot be computed"; exit 1; }
           python3 "$SCRIPT" --self-test > "${RUNNER_TEMP:-/tmp}/publication-platform-self-test.log" 2>&1 \
             || { cat "${RUNNER_TEMP:-/tmp}/publication-platform-self-test.log"; echo "::error::publication-platform.py at ${SCRIPTS_REF} fails its own self-test — refusing to decide a platform with it"; exit 1; }
           # PINNED = the caller's digests taken verbatim (`plan` resolved nothing and they are set);
@@ -1465,9 +1479,13 @@ jobs:
           # to resolve-platform.py); beside the caller's pin it was never consulted.
           FROZEN=""
           if [ "${RESOLVED:-}" = "true" ]; then FROZEN="${FREEZE:-}"; fi
+          # 🍞 HELD_BY: a shard of the same attempt as the run's prepared bake composes on the pair that
+          # bake COMPILED against (the bake exports this step's decision). A reseal since then must
+          # not move it — that would change the handoff key and make every shard compile again — so
+          # the pair binds like a pin, and a publication it cannot adopt is RED by name (#7424 review).
           python3 "$SCRIPT" choose --declaration "$DECL" --upstreams "$UPSTREAMS" \
             --run-set "${RUN_SET:-}" --run-tester "${RUN_TESTER:-}" --run-portal "${RUN_PORTAL:-}" \
-            --pinned "$PINNED" --ceiling "${CEILING:-}" --freeze "$FROZEN" \
+            --pinned "$PINNED" --ceiling "${CEILING:-}" --freeze "$FROZEN" --held-by "${HELD_BY:-}" \
             ${REGISTRY_URL:+--registry-url "$REGISTRY_URL"} ${TARGETS:+--targets "$TARGETS"}
       # ───────────── TWO IMAGES, ONE BUILD: resolve, pull, extract, compose (MeshWeaver#3022) ─────────────
       - name: Resolve the tester and the platform image
@@ -2946,11 +2964,13 @@ jobs:
     # needs more is STUCK, not slow.
     timeout-minutes: 45
     outputs:
-      # The platform the bake compiled against, for the shards of the same attempt.
+      # The platform the bake compiled against, for the shards of the same attempt — the DECIDED
+      # pair (`publication-platform`: the publication's set, or this run's), never the pre-decision
+      # `platform` step's, which the bake did not compose on when the publication named another set.
       attempt: ${{ github.run_attempt }}
-      image-digest: ${{ steps.platform.outputs.image-digest }}
-      platform-image-digest: ${{ steps.platform.outputs.platform-image-digest }}
-      platform-set: ${{ steps.platform.outputs.platform-set }}
+      image-digest: ${{ steps.publication-platform.outputs.image-digest }}
+      platform-image-digest: ${{ steps.publication-platform.outputs.platform-image-digest }}
+      platform-set: ${{ steps.publication-platform.outputs.platform-set }}
     env:
       # The shard's two runtime switches, verbatim — see the `gate` job's env for why each exists.
       DOTNET_TieredPGO: "0"
