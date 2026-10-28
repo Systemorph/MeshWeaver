@@ -182,8 +182,50 @@ def self_test() -> int:
         expect("an unreadable archive is RED", check(d, "3.0.0-ci.9", quiet) == 1)
     expect("an absent bake directory is RED", check(Path("/nonexistent-bake-dir"), "3.0.0-ci.9", quiet) == 1)
 
+    # The lane runs this gate where it can see the WHOLE publication (Copilot on #7423): the record
+    # names one set for fresh AND carried bundles, so a check that ran only before the carries would
+    # let a carried floor above that set be sealed. Read off the real workflow, never a copy.
+    lane = Path(__file__).resolve().parents[1] / "workflows" / "node-repo-publish-bake.yml"
+    expect(f"{lane.name}: a floor gate over the assembled publication runs after every carry and "
+           "before the publish", assembled_gate_problem(lane) is None)
+    print(f"  (lane ordering: {assembled_gate_problem(lane) or 'gate after every carry, before publish'})")
+    ordering = {"jobs": {"j": {"steps": [
+        {"run": "python3 x/assert-bake-floor.py --bake \"$BAKE_DIR\" --platform-version v"},
+        {"run": "x/carry-forward-bundles.sh \"$BAKE_DIR\""},
+        {"id": "publish", "run": "x/publish-bake-bundles.sh"}]}}}
+    expect("negative control: a floor gate only BEFORE the carry is refused",
+           assembled_gate_problem_doc(ordering) is not None)
+    ordering["jobs"]["j"]["steps"].insert(2, dict(ordering["jobs"]["j"]["steps"][0]))
+    expect("…and passes once it also runs between the carry and the publish",
+           assembled_gate_problem_doc(ordering) is None)
+
     print(f"{'PASS' if failures == 0 else 'FAIL'}: assert-bake-floor self-test ({failures} failure(s))")
     return 0 if failures == 0 else 1
+
+
+def assembled_gate_problem_doc(doc: dict) -> str | None:
+    """None when, in the job that publishes, a floor gate over $BAKE_DIR runs after EVERY carry step and
+    before the publish step; otherwise why not. Pure."""
+    for job in (doc.get("jobs") or {}).values():
+        steps = [st for st in (job or {}).get("steps") or [] if isinstance(st, dict)]
+        runs = [str(st.get("run") or "") for st in steps]
+        publish = [i for i, r in enumerate(runs) if "publish-bake-bundles.sh" in r and steps[i].get("id") == "publish"]
+        if not publish:
+            continue
+        last_carry = max((i for i, r in enumerate(runs) if "carry-forward-bundles.sh" in r), default=-1)
+        gates = [i for i, r in enumerate(runs) if "assert-bake-floor.py" in r and '--bake "$BAKE_DIR"' in r]
+        if not any(last_carry < g < publish[0] for g in gates):
+            return (f"no assert-bake-floor.py --bake \"$BAKE_DIR\" step between the last carry (step {last_carry}) "
+                    f"and the publish (step {publish[0]}) — carried bundles would be sealed unchecked")
+        return None
+    return "no job with an `id: publish` step running publish-bake-bundles.sh"
+
+
+def assembled_gate_problem(workflow: Path) -> str | None:
+    if not workflow.is_file():
+        return f"{workflow} is absent — the ordering cannot be checked, which is not a pass"
+    import yaml  # noqa: PLC0415 — only the self-test reads the lane
+    return assembled_gate_problem_doc(yaml.safe_load(workflow.read_text(encoding="utf-8")))
 
 
 def main() -> int:

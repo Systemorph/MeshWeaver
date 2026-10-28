@@ -568,6 +568,30 @@ registry is in the client's tenant, and the lane has no credential there and non
 granted), and it locks nothing in `cr.meshweaver.cloud`, where the answer is
 [FleetRegistryRetention](/Doc/Architecture/FleetRegistryRetention)'s.
 
+#### 📣 Why it took six days to notice — and what reports the lane now (#7416)
+
+The ten red runs went **unread**, not merely unfixed. The lane is scheduled and `main`-only, so its
+conclusion reaches no pull request, no reviewer and no check list; and the one guard that looked at
+it, `pinned-digests.yml`, asserted the lane's **configuration** (it exists, with a `schedule:`, before
+the purge) — correct on all ten failing days — never its **outcome**.
+
+Both lanes now end in the fleet's existing reporter, the ci-failure ledger
+(`node-repo-ci-failure.yml`), each under its **own** label — `ci-lock-pinned-digests-red` and
+`ci-pinned-digests-red`: one issue, a dated entry per red run, reopened rather than re-filed, closed by
+the next green, and a signed event to the control portal's triage inbox each way. The issue is a `bug` at
+**sev:M** (the lanes pass `severity: sev:M`): tracked, not a release gate — a person raises it when a
+red threatens production. For the lock lane
+only an **applying** green (the schedule, or a manual run in `apply` mode) closes it — the green
+`pause.reEnableWhen` cites is one whose locks were written, and a `push` run is report-only.
+
+🔀 **The ten reds had two causes in one job and one step** (an installation's `/api/version` timing
+out, then the undeclared registry above), so a ledger naming the step would still have read "same red
+for six days". Each entry therefore carries a **cause signature** — a hash over the failing job's
+normalised error annotations — and says whether it is the **same** as the previous red's or
+**CHANGED**. Only the hash reaches the issue: the error text can name a client estate's registry, and
+the issue is public. The mechanism and the gate that now refuses a scheduled workflow without a
+reporter are in [Reading CI Signals](/Doc/Architecture/ReadingCiSignals) ("A scheduled red is red in an empty room").
+
 ### The table is small because it was measured, not guessed
 
 Across the fleet's **twelve** deployment overlays on 2026-09-13, exactly **two** foreign hosts:

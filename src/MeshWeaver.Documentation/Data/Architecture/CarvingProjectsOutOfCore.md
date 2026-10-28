@@ -691,8 +691,14 @@ into the control instance's inbox, and memex's fan-out.
 | `deploy/aks/operator/` + its image lane | deploy (operator) | **moved** to MeshWeaver.Plugins `deploy/hosting-operator` (`hosting-operator.yml`, the ONE publisher of `hosting-operator:main`) |
 | `deploy/helm`, `deploy/helm-db`, `deploy/aks/{manifests,scripts,values.aks.yaml}`, `deploy/homebrew`, `chart-gate.yml`, `homebrew.yml`, `test-bundle-registry.py`, `scripts/check-config-key-coverage.py` | deploy (the chart and its tooling) | MeshWeaver.Deploy (seeded; later chart changes ported by a sync PR); the core delete half is a draft |
 | `deploy/aks/envs`, `deploy/aks/infra`, `deploy/aspire`, `memex/aspire/Memex.Aspire.Hosting` | deploy | delete half in flight (draft) |
-| `deploy/aca`, `deploy/compose`, `deploy/compose-ha`, `deploy/marketplace`, `memex-local.yml`, `control-always-latest.yml`, `prod-synthetic-probe.yml`, `combo-verify.yml` | deploy / operations | **owed**: no move opened yet |
-| `deploy/base-images`, `deploy/{node,python,pandas}-gate`, `deploy/{ocr,whisper,s1-extract}` and their image workflows, `edge-images.yml`, `dockerhub-mirror.yml`, `base-image-acr.yml` | build (images the product or its CI runs) | stays |
+| `deploy/{ocr,ollama,whisper,s1-extract}` and `.github/workflows/{ocr,ollama,whisper,s1-extract}-image.yml` | deploy (service images an instance MAY run beside its portal) | **moved** to MeshWeaver.Deploy (same paths) — see "The service images" below |
+| `deploy/aca`, `deploy/compose`, `deploy/compose-ha`, `deploy/marketplace`, `deploy/.env.example`, `deploy/aks/{README,SELF-UPDATE,INSTANCE-LIFECYCLE}.md` | deploy (generated targets, the env template, the AKS bring-up docs) | **moved** to MeshWeaver.Deploy (same paths) |
+| `control-always-latest.yml`, `prod-synthetic-probe.yml`, `combo-verify.yml` | operations | **owed**: no move opened yet |
+| `deploy/base-images` + `base-image-acr.yml` | build (the portal image's own base) | stays: `portal-ai` is the base `main-cd.yml` builds the product image FROM, and `dotnet-test.yml` holds CI's fonts and Playwright version to its Dockerfile |
+| `deploy/core-tests` | build (the set's fifth image, `mw-core-tests`) | stays: `main-cd.yml` packs and pushes it, `dotnet-test.yml` self-tests `core-tests.py`, `.github/build-stages.json` runs it |
+| `deploy/{node,python,pandas}-gate` | build recipes over core source | stay: each is built from the REPOSITORY ROOT and packs core's own SDK (`clients/python`, `clients/typescript`) and the one canonical `mesh.proto` — moving them would make another repository check core out at a ref to build core's bytes. No workflow builds them; they are core's language-gate reference |
+| `deploy/CHANGE-PROPAGATION.md` | the platform's own delivery cost model | stays: it measures core's CI/CD and the bake tax, and `Directory.Build.props` cites it as the cost/benefit record of the framework-identity stamp. It belongs in the doc tree rather than `deploy/` — a follow-up, not a move |
+| `edge-images.yml`, `dockerhub-mirror.yml` | build (images the product or its CI runs) | stays |
 | `build-follow.yml`, `build-host-publication.yml`, `build-follow.py`, `build-executor.py`, `build-artifacts-fetch.py`, `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `node-repo-scope.py`, `ci-artifact-store.py` | build (the CI side of a host run; helpers the runner image READS at the set's commit) | stays |
 | `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | stays: the receivers in MeshWeaver.Plugins and the records compile against it |
 
@@ -702,6 +708,43 @@ the image build (`PLATFORM_COMMIT` = the set's own commit), never vendored, so t
 empty. So a core change to a helper reaches the next set's runner, and a Deploy change to the runner reaches
 the next set too: `mw-build-host:<version>` is written ONCE per version, because the hosts are
 handed it by digest.
+
+### The service images — the sidecar move
+
+The four service images an instance may run BESIDE its portal — Tesseract OCR (`ocr`), the Ollama
+model service (`ollama`), Swiss-German whisper (`whisper-swiss-german`) and GLiNER extraction
+(`s1-extract`) — are neither the product image set nor anything core's CI runs. Each is a
+self-contained build context (its own directory, no core source), and each one's consumer is a
+deployment: the estate vendors the chart, an approved `ApplyChart` binds the immutable tag. So by
+the test above they are **deploy**, and they left with their lanes, their charts and their tests. A
+service image built only for the platform's own tests would have stayed.
+
+What made it more than a copy:
+
+1. **The images keep their names.** Same registry repository, same line tag; every tag already in
+   the registry stays valid. Only the per-build `<line>-<sha7>` changes meaning: since the move the
+   seven characters name a MeshWeaver.Deploy commit. Retention is unchanged — the line tags stay in
+   core's `.github/release-channels.json`, their writers declared with `"repo":
+   "Systemorph/MeshWeaver.Deploy"` exactly as the hosting operator's is with MeshWeaver.Plugins, so
+   `release-channels.py check` does not look for the workflows here and the pruners still protect
+   the lines.
+2. **The publishing identity is narrower.** Core's lanes signed in with a subscription and reached
+   the registry through `az acr` and `acr-login.sh` (both an ARM lookup). MeshWeaver.Deploy's ONE
+   cloud credential holds AcrPush on the registry resource and nothing else, federated to its `main`,
+   so the moved lanes sign in tenant-level and talk to the registry through its data plane
+   (`acr-data-plane.py`: `login`, and a byte-for-byte `retag` for the ollama line, which must not
+   re-upload ~25 GB). Its `service-images-guard.yml` holds every lane to that on each pull request.
+3. **Core's last overlay files left with the charts.** The four `deploy/*/helm/values.yaml` were the
+   only files in this tree that match the retention lane's overlay path filter, so this repository's
+   entry in `.github/acr-retention/instances.json` `repositories` went with them — the nightly
+   `--discover` run reds a declaration nothing answers to. `lock-pinned-digests.py --self-test`
+   ARM 35 now pins that this repository is declared exactly when its own tree carries an overlay
+   file, in both directions.
+4. **The estate checks its vendored copies against the new home.** Its `Vendored charts match core`
+   job compared its copies of the whisper, s1-extract and ollama charts with core's `main`; it is
+   repointed at MeshWeaver.Deploy (same paths) before the core copies are deleted.
+5. **Frozen, not just deleted.** `scripts/check-chart-freeze.py` freezes every moved path
+   delete-only, so a second publisher of those image names cannot grow back beside Deploy's.
 
 ## Package versions follow the projects: core pins only what core restores
 
