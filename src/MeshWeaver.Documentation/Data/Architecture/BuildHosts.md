@@ -838,10 +838,24 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   reds any drift. The runner also refuses a `--total` the image was not packed for.
 - **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
   generator's `OWES` list is the debt — `Consolidate test results` (the build API does not yet serve a
-  receipt's bytes, which the host-results job fetches), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
-  do not share a pack), the prepared package closure, the browser and font set, the legs that read
+  receipt's bytes, which the host-results job fetches), the prepared package closure, the browser and font set, the legs that read
   the build's artifacts (platform-compat,
   licence-gate), the prepared-mesh rule, and a green probe that agrees with Actions.
+- **The shards FAN OUT on one host (`"parallel": true`).** The runner (MeshWeaver.Deploy `build-run.py`)
+  runs a run's independent stages concurrently when the repository declares `parallel` and the host
+  declares stage slots (`MW_BUILD_STAGE_SLOTS`, chart `buildHosts.stageSlots`, default 8, refused at start
+  when the container's cgroup cannot give each slot 1 CPU and 2 GiB). The rules: a stage starts once every
+  stage it runs `after` finished green; a `build` stage runs ALONE (it writes the shared
+  `$MW_BUILD_OUTPUTS`, and the host promotes outputs and NuGet packages after it); each concurrent stage has
+  its own sandbox, temp, PostgreSQL socket, event route and `$MW_BUILD_ARTIFACTS` (`artifacts/<stage>/`, so
+  a red sibling's files never reach a green one's receipts); the declared budget is the schedule's critical
+  path, and a 409 on any stage kills every sibling. Core's `build` runs first, then the 8 shards and
+  `doc-gate` at once — the Actions `test` matrix on one host. Measured before (#7308 on build-latest,
+  serial): build 2 min, then 8 shards of 4-7 min one after another, about 47 min end to end; Actions ran
+  the same commit's legs in about 14 min. The one-host design was chosen over splitting a run across
+  replicas because the stages already share one checkout and one `$MW_BUILD_OUTPUTS` there: no per-run
+  cache namespace, no second trust boundary, no claim protocol change. A host with one slot, or a
+  repository that does not declare `parallel`, still runs serially.
 - **A shard checks what the `test` job checks, and hands its evidence back.** `core-tests.py run`
   writes CI's `[CI] <name> exit=N` markers to `test/test-results.log` (TIMEOUT, SIGNAL, TESTFAIL and
   MASKED classified as the shard loop does), writes every crash INTO the trx with

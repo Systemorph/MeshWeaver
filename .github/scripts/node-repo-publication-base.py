@@ -69,6 +69,22 @@ MAX_UNSETTLED = 30
 # store — full build", Plugins run 40629844509), which on a busy main is nearly always.
 REUSE_ONLY_EVENTS = frozenset({"pull_request", "merge_group"})
 
+# 🎯 …AND IT REUSES FROM THE NEWEST GREEN MAIN PUBLICATION ON ITS OWN TOOLCHAIN, of any publishing
+# event. Taking only the newest green main PUSH, then refusing it when its toolchain differed, gave
+# every Plugins pull request of 2026-10-28 no baseline at all — 62 of 62 printed "publication
+# toolchain changed since the baseline run": the `latest` platform set moved five times that day
+# (3.1.11889 → 11899 → 11909 → 11911 → 11913 → 11919) and main's newest green push was always on the
+# set before (e.g. PR run 40743963637 on 3.1.11913 against main run 40688826732 on 3.1.11899, while
+# main run 40743626120 on 3.1.11913 was still running). A pull request only REUSES, so any green main
+# run that published on its exact toolchain — a push, the daily `schedule` poll, or a publication
+# `repository_dispatch` — is a sound source, and the walk takes the newest such run, naming why each
+# newer one was not taken. The toolchain is still compared field by field (platform, images, set,
+# recipe), so a bundle is reused only from a run that built it against this run's platform.
+REUSE_SOURCE_EVENTS = frozenset({"push", "schedule", "repository_dispatch"})
+# Attestations a reuse-only walk reads before it gives up. Each costs one store read; ten covers a
+# busy day of main runs on one set and bounds a run whose toolchain no main run has used.
+MAX_REUSE_CANDIDATES = 10
+
 
 def reuse_only(event):
     """Whether a run of `event` publishes nothing, so only the baseline's own toolchain matters. Pure."""
@@ -163,6 +179,80 @@ def baseline(runs, branch, ancestor, current_run="", withheld=lambda run: False,
     return {"sha": "", "run": "", "url": "", "between": between, "carry": []}
 
 
+def _named_packages(held):
+    """`held` (a `withheld(run)` answer) as the sorted package list it names, `[]` for "published
+    everything", or None for "withheld an unknown set" — the one reading baseline() also applies."""
+    if not held and not isinstance(held, (list, tuple, set, frozenset)):
+        return []
+    if (isinstance(held, (list, tuple, set, frozenset)) and held
+            and all(isinstance(p, str) and re.fullmatch(r"[\w.-]+", p) for p in held)):
+        return sorted(set(held))
+    return None
+
+
+def reuse_baseline(runs, branch, ancestor, current_run="", withheld=lambda run: False,
+                   mismatch=lambda run: None, limit=MAX_REUSE_CANDIDATES):
+    """The baseline of a run that only REUSES (REUSE_ONLY_EVENTS): the newest successful main run of
+    a REUSE_SOURCE_EVENTS event, an ancestor of HEAD, whose `mismatch(run)` is None — its attested
+    toolchain equals this run's. Pure apart from the three callables.
+
+    `mismatch(run)` answers why a candidate's bundles are not this run's (a different toolchain, no
+    readable attestation), or None. Every candidate passed over comes back in `rejected` with that
+    reason, so the log says why no bundle was reused. A success that is not an ancestor of HEAD stops
+    the walk (history rewritten), as in baseline(); a success that withheld an unknown set is walked
+    past; a partial one is a source and its withheld packages come back as `carry`. At most `limit`
+    candidates are compared."""
+    rejected, compared = [], 0
+    for run in runs:
+        if (str(run.get("id")) == str(current_run) or run.get("head_branch") != branch
+                or run.get("event") not in REUSE_SOURCE_EVENTS):
+            continue
+        sha = run.get("head_sha", "")
+        if not (run.get("status") == "completed" and run.get("conclusion") == "success"
+                and re.fullmatch(r"[0-9a-f]{40}", sha)):
+            continue
+        if not ancestor(sha):
+            break
+        carry = _named_packages(withheld(run))
+        if carry is None:
+            rejected.append((run["id"], "it withheld its publication without naming what"))
+            continue
+        if compared >= limit:
+            rejected.append((run["id"], f"not compared — {limit} older candidates already were"))
+            break
+        compared += 1
+        reason = mismatch(run)
+        if reason is None:
+            return {"sha": sha, "run": run["id"], "url": run["html_url"], "between": [],
+                    "carry": carry, "rejected": rejected}
+        rejected.append((run["id"], reason))
+    return {"sha": "", "run": "", "url": "", "between": [], "carry": [], "rejected": rejected}
+
+
+def _short(value):
+    if value is None:
+        return "∅"
+    text = str(value)
+    if re.fullmatch(r"[0-9a-f]{40}", text):
+        return text[:9]
+    if text.startswith("sha256:"):
+        return text[:19]
+    return text
+
+
+def toolchain_difference(current, prior):
+    """None when `prior` attests this run's toolchain (as comparable() sees the two); otherwise the
+    fields that differ, each as `field prior → current`. Pure."""
+    if not isinstance(prior, dict):
+        return "it attested no toolchain"
+    mine, theirs = comparable(current, prior), comparable(prior, current)
+    if mine == theirs:
+        return None
+    fields = sorted(set(mine) | set(theirs))
+    return "toolchain differs: " + ", ".join(
+        f"{k} {_short(theirs.get(k))} → {_short(mine.get(k))}" for k in fields if mine.get(k) != theirs.get(k))
+
+
 def comparable(inputs, other):
     """`inputs` as the toolchain comparison sees it against `other`: the build-logic ref (`logic`)
     is dropped when BOTH carry the lane's `recipe` — the recipe is what of the build logic changes
@@ -179,7 +269,8 @@ def toolchain_verdict(current, prior, between):
     the baseline run attested; `between` pairs each later run with its attestation, or None when
     it never reached the scope job (no artifact — it built and published nothing)."""
     if comparable(prior, current) != comparable(current, prior):
-        return "publication toolchain changed since the baseline run — full build"
+        return (f"publication toolchain changed since the baseline run "
+                f"({toolchain_difference(current, prior)}) — full build")
     for run_id, inputs in between:
         if inputs is not None and comparable(inputs, current) != comparable(current, inputs):
             return (f"run {run_id}, after the baseline, attested a different toolchain and may have "
@@ -196,6 +287,9 @@ def self_test():
 
     yes = lambda _: True  # noqa: E731
     passed = 0
+
+    def partial_of(run_id):
+        return lambda run: ["Hosting"] if run["id"] == run_id else False
 
     def check(condition, what):
         nonlocal passed
@@ -281,6 +375,42 @@ def self_test():
     check(toolchain_verdict(same, same, [(2, same), (3, same)]) is None, "later runs on the same toolchain narrow")
     check("run 3" in (toolchain_verdict(same, same, [(2, same), (3, moved)]) or ""),
           "a later run on another toolchain is full, and names the run")
+    # REUSE SOURCE: a run that only reuses takes the newest green main publication on ITS toolchain.
+    ours = {**rec, "set": "3.1.11913"}
+    attested = {1: ours, 2: rec, 3: ours}
+
+    def differs(run):
+        return toolchain_difference(ours, attested.get(run["id"]))
+
+    got = reuse_baseline([newer(), good], "main", yes, mismatch=differs)
+    check(got["run"] == 1 and [r for r, _ in got["rejected"]] == [2]
+          and "set 3.1.9898 → 3.1.11913" in got["rejected"][0][1],
+          f"the newest green run on ANOTHER set is passed over, named with its set, for an older one on ours: {got}")
+    for event in ("schedule", "repository_dispatch"):
+        got = reuse_baseline([newer(event=event, id=3), newer()], "main", yes, mismatch=differs)
+        check(got["run"] == 3, f"a green {event} publication on our toolchain is a reuse source: {got}")
+    for change in (dict(event="workflow_dispatch"), dict(event="pull_request"), dict(head_branch="other"),
+                   dict(conclusion="failure"), dict(status="in_progress", conclusion=None), dict(head_sha="short")):
+        got = reuse_baseline([newer(id=3, **change), good], "main", yes, mismatch=differs)
+        check(got["run"] == 1 and got["rejected"] == [], f"never a reuse source, never compared: {change} {got}")
+    got = reuse_baseline([newer(), good], "main", yes, mismatch=lambda run: differs({"id": 2}))
+    check(got["run"] == "" and len(got["rejected"]) == 2,
+          f"NEGATIVE CONTROL: no main run on our toolchain reuses nothing and names every candidate: {got}")
+    got = reuse_baseline([newer(id=3), good], "main", lambda sha: sha != "b" * 40, mismatch=differs)
+    check(got["run"] == "", f"a success off HEAD's line stops the walk, never skipped over: {got}")
+    got = reuse_baseline([newer(id=3), good], "main", yes, withheld=lambda run: run["id"] == 3, mismatch=differs)
+    check(got["run"] == 1 and got["rejected"][0][0] == 3,
+          f"a run that withheld an unknown set is walked past: {got}")
+    got = reuse_baseline([newer(id=3), good], "main", yes, withheld=partial_of(3), mismatch=differs)
+    check(got["run"] == 3 and got["carry"] == ["Hosting"], f"a partial publication is a source with carry: {got}")
+    got = reuse_baseline([newer(id=4), newer(id=5), good], "main", yes, mismatch=differs, limit=2)
+    check(got["run"] == "" and len(got["rejected"]) == 3, f"at most `limit` candidates are compared: {got}")
+    check(toolchain_difference(ours, ours) is None, "the same toolchain has no difference")
+    check(toolchain_difference(ours, {**ours, "logic": "l9"}) is None,
+          "the build-logic ref is no difference when both attest the recipe")
+    check(toolchain_difference(ours, None) == "it attested no toolchain", "an unattested run is named as such")
+    check(toolchain_difference({**ours, "platform": "a" * 40}, {**ours, "platform": "b" * 40})
+          == f"toolchain differs: platform {'b' * 9} → {'a' * 9}", "a sha is shortened, field named")
     # REUSE ONLY: a run that publishes nothing reads only the baseline's own toolchain.
     check(reuse_only("pull_request") and reuse_only("merge_group"), "a pull request / merge group only reuses")
     for event in ("push", "schedule", "repository_dispatch", "workflow_dispatch", ""):
@@ -443,49 +573,66 @@ def main():
                 return False
             return True
 
-        result = baseline(runs, a.branch, lambda sha: subprocess.run(
-            ["git", "merge-base", "--is-ancestor", sha, "HEAD"], cwd=a.root,
-            capture_output=True, timeout=30).returncode == 0, os.environ.get("GITHUB_RUN_ID", ""),
-            withheld, started)
-        if skipped:
-            print(f"ignored {len(skipped)} run(s) that never started a job ({', '.join(map(str, skipped))}) "
-                  "— they published nothing", file=sys.stderr)
-        if result["carry"]:
-            print(f"baseline run {result['run']} withheld {len(result['carry'])} package(s) — carried "
-                  f"into this run's selection until published: {' '.join(result['carry'])}", file=sys.stderr)
-        if result["run"] and reuse_only(os.environ.get("GITHUB_EVENT_NAME", "")):
-            prior = attested_inputs(a.repo, result["run"], a.artifact_store, a.expect_store_id)
-            reason = toolchain_verdict(current, prior, [])
-            if reason:
-                print(reason, file=sys.stderr)
+        def ancestor(sha):
+            return subprocess.run(["git", "merge-base", "--is-ancestor", sha, "HEAD"], cwd=a.root,
+                                  capture_output=True, timeout=30).returncode == 0
+
+        event = os.environ.get("GITHUB_EVENT_NAME", "")
+        if reuse_only(event):
+            def mismatch(run):
+                try:
+                    prior = attested_inputs(a.repo, run["id"], a.artifact_store, a.expect_store_id)
+                except ArtifactStoreError:
+                    raise
+                except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+                    return f"its attestation cannot be read ({type(exc).__name__}: {str(exc)[:120]})"
+                return toolchain_difference(current, prior)
+
+            result = reuse_baseline(runs, a.branch, ancestor, os.environ.get("GITHUB_RUN_ID", ""),
+                                    withheld, mismatch)
+            for run_id, why in result.pop("rejected"):
+                print(f"main run {run_id} not a reuse source: {why}", file=sys.stderr)
+            if result["run"]:
+                print(f"this {event} run publishes nothing — it reuses from main run {result['run']}, the "
+                      "newest green main publication on this run's own toolchain", file=sys.stderr)
+            else:
+                print(f"no green main publication on this run's toolchain (set {current.get('set', '?')}) "
+                      "— every selected bundle is built", file=sys.stderr)
+            if result["carry"]:
+                print(f"baseline run {result['run']} withheld {len(result['carry'])} package(s) — carried "
+                      f"into this run's selection until published: {' '.join(result['carry'])}", file=sys.stderr)
+        else:
+            result = baseline(runs, a.branch, ancestor, os.environ.get("GITHUB_RUN_ID", ""),
+                              withheld, started)
+            if skipped:
+                print(f"ignored {len(skipped)} run(s) that never started a job ({', '.join(map(str, skipped))}) "
+                      "— they published nothing", file=sys.stderr)
+            if result["carry"]:
+                print(f"baseline run {result['run']} withheld {len(result['carry'])} package(s) — carried "
+                      f"into this run's selection until published: {' '.join(result['carry'])}", file=sys.stderr)
+            if result["run"] and len(result["between"]) > MAX_UNSETTLED:
+                print(f"{len(result['between'])} unsettled runs since the last success (more than "
+                      f"{MAX_UNSETTLED}) — full build", file=sys.stderr)
                 result = empty
-            elif result["between"]:
-                print(f"this {os.environ.get('GITHUB_EVENT_NAME')} run publishes nothing — the baseline's own "
-                      f"toolchain matches, so the {len(result['between'])} later run(s) are not consulted "
-                      "(reuse only)", file=sys.stderr)
-        elif result["run"] and len(result["between"]) > MAX_UNSETTLED:
-            print(f"{len(result['between'])} unsettled runs since the last success (more than "
-                  f"{MAX_UNSETTLED}) — full build", file=sys.stderr)
-            result = empty
-        elif result["run"]:
-            # Git source alone cannot see a repository variable overriding the platform ref.
-            # Every run attests its actual resolved inputs in this run-scoped artifact.
-            prior = attested_inputs(a.repo, result["run"], a.artifact_store, a.expect_store_id)
-            between = [(rid, attested_inputs(a.repo, rid, a.artifact_store, a.expect_store_id))
-                       for rid in result["between"]]
-            reason = toolchain_verdict(current, prior, between)
-            if own_store and any(inputs is None for _, inputs in between):
-                # An older workflow may have used GitHub storage. No own-store attestation is
-                # therefore NOT evidence that it never published, unlike the legacy single-store
-                # path. Do not read GitHub artifacts; rebuild conservatively through the chosen store.
-                reason = "a later publishing run has no attestation in the declared store — full build"
-            if reason:
-                print(reason, file=sys.stderr)
-                result = empty
-            elif result["between"]:
-                print(f"walked past {len(result['between'])} unsettled run(s) "
-                      f"({', '.join(map(str, result['between']))}) — the history union from the "
-                      "baseline carries their changes, so the next build covers them", file=sys.stderr)
+            elif result["run"]:
+                # Git source alone cannot see a repository variable overriding the platform ref.
+                # Every run attests its actual resolved inputs in this run-scoped artifact.
+                prior = attested_inputs(a.repo, result["run"], a.artifact_store, a.expect_store_id)
+                between = [(rid, attested_inputs(a.repo, rid, a.artifact_store, a.expect_store_id))
+                           for rid in result["between"]]
+                reason = toolchain_verdict(current, prior, between)
+                if own_store and any(inputs is None for _, inputs in between):
+                    # An older workflow may have used GitHub storage. No own-store attestation is
+                    # therefore NOT evidence that it never published, unlike the legacy single-store
+                    # path. Do not read GitHub artifacts; rebuild conservatively through the chosen store.
+                    reason = "a later publishing run has no attestation in the declared store — full build"
+                if reason:
+                    print(reason, file=sys.stderr)
+                    result = empty
+                elif result["between"]:
+                    print(f"walked past {len(result['between'])} unsettled run(s) "
+                          f"({', '.join(map(str, result['between']))}) — the history union from the "
+                          "baseline carries their changes, so the next build covers them", file=sys.stderr)
     except ArtifactStoreError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

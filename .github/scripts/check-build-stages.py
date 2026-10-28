@@ -7,7 +7,7 @@ Doc/Architecture/BuildHosts → "Moving a repository's tests to the build server
 holds the same rule as rule 7 of its own `check-build-queue-admission.py`; this file is that rule for
 core and for every satellite node repo, which run it through `node-repo-validate.yml`.
 
-A declaration is `{"stages": [...], "owes": [...], "ciEquivalent": true?, "restore": {...}?}`:
+A declaration is `{"stages": [...], "owes": [...], "ciEquivalent": true?, "restore": {...}?, "parallel": true?}`:
 
   * `stages` — what a host runs, in order (the runner, MeshWeaver.Deploy `build-run.py`, validates the
     same schema: one-segment name, kind build|test, a command, `timeoutMinutes` in (0, 45], `needs`
@@ -16,6 +16,9 @@ A declaration is `{"stages": [...], "owes": [...], "ciEquivalent": true?, "resto
     restore the host runs ONCE per restore key from the DEFAULT BRANCH's tip to warm its shared NuGet
     cache (MeshWeaver.Deploy#68, build-run.py `validate_restore`); a run's own declaration is never
     executed;
+  * `parallel` — optional, a bool: the repository declares its stages safe to run CONCURRENTLY on one
+    host (MeshWeaver.Deploy build-run.py, fan-out: independent stages up to the host's
+    `MW_BUILD_STAGE_SLOTS`, a `build` stage alone, each stage its own `$MW_BUILD_ARTIFACTS`);
   * `owes` — every thing those stages still check LESS than the Actions legs they would replace,
     one sentence each, naming the Actions leg;
   * `ciEquivalent` — the claim. `build-executor.py` routes a run's heavy legs to a host ONLY on
@@ -152,6 +155,8 @@ def schema_problems(doc: object) -> list[str]:
         if not isinstance(needs, list) or not all(isinstance(n, str) and n in NEEDS for n in needs):
             out.append(f"stage `{name}` needs {needs!r} must be a list drawn from {sorted(NEEDS)}")
     out += restore_schema_problems(doc)
+    if "parallel" in doc and not isinstance(doc["parallel"], bool):
+        out.append(f"build-stages.json `parallel` is {doc['parallel']!r} — true, false or absent (the runner refuses anything else)")
     return out
 
 
@@ -537,6 +542,11 @@ def _self_test() -> int:
     red(mutate(node, lambda d: d["stages"][0].update(needs=["secrets"])), "node-repo", "needs", "an unknown need")
     red(mutate(node, lambda d: d["stages"].append(dict(d["stages"][0]))), "node-repo", "declared twice", "a stage declared twice")
     red(mutate(node, lambda d: d["stages"][0].update(name="Build/x")), "node-repo", "path segment", "a stage name that is not one segment")
+    print("parallel (fan-out on one host):")
+    expect(problems(json.dumps(mutate(node, lambda d: d.update(parallel=True))), "node-repo", NODE_CI)[0] == [],
+           "node-repo: `parallel: true` is green")
+    red(mutate(node, lambda d: d.update(parallel="yes")), "node-repo", "`parallel`", "a `parallel` that is a string")
+    red(mutate(node, lambda d: d.update(parallel=1)), "node-repo", "`parallel`", "a `parallel` that is a number")
     print("restore (the host's default-branch NuGet warm, MeshWeaver.Deploy#68):")
     expect(problems(json.dumps(mutate(node, lambda d: d.update(restore={"command": "dotnet restore x.slnx", "timeoutMinutes": 10}))),
                     "node-repo", NODE_CI)[0] == [], "node-repo: a well-formed `restore` is green")

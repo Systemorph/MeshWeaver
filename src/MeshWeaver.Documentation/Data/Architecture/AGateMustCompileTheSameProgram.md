@@ -194,6 +194,43 @@ The self-test (`--self-test`) runs the script as a subprocess against fixture tr
 That includes a real git checkout one commit behind its `origin/main`. Each arm was red against the
 pre-fix script.
 
+## The sets build side by side
+
+Each distinct set is its own compilation: one generated project, one `dotnet build`, and no set
+reads another's output. Built one after another, they made the gate the longest leg of a
+MeshWeaver.Plugins pull request that touches Hosting. In run 40743963637 the `compile-check
+(Hosting)` leg spent 409 s on 48 sets, while the in-mesh lane had compiled the same NodeTypes in
+parallel since #7465.
+
+The gate now builds up to *N* sets at a time:
+
+- *N* is the usable CPUs (the affinity mask, narrowed by a cgroup v2 `cpu.max` quota).
+- It is lowered by available memory at a budget of 1.5 GiB per build.
+- It is never wider than the number of sets.
+- `MW_COMPILE_CHECK_PARALLEL` overrides it. Anything other than a positive integer is refused as a
+  usage error (exit 2), never read as one build or as the whole machine.
+
+Only the wall clock changes:
+
+- Each worker owns its own work directory (`Combined.cs`, `check.csproj`, `obj/`). It restores once
+  and passes `--no-restore` after, as the single directory used to.
+- Verdicts print in the serial order as they arrive.
+- A closing line gives the summed build time against the wall time.
+
+Measured locally on the Plugins Hosting unit against the 3.1.11919 portal image's reference set
+(48 sets, all clean):
+
+| builds at a time | wall |
+|---|---|
+| 1 | 128 s |
+| 4 | 53 s |
+| 6 | 43 s |
+| 18 | 40 s |
+
+The 48 verdict lines were identical in all four runs. The self-test asserts the serial order, no
+shared work directory, one restore per directory, and real overlap. Its negative controls (a pool
+fixed at one worker, and one yielding in completion order) both go red.
+
 ## Related
 
 - [NodeType Compilation & Releases](/Doc/Architecture/NodeTypeCompilation) — the runtime side of the
