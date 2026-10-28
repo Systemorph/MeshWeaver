@@ -26,10 +26,10 @@ public static class MoveLayoutArea
     /// </summary>
     public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
     {
-        // The same demand the server makes (DeletePermission.RequiredFor): Update for ordinary
-        // content, Delete for a partition root or a governance satellite.
+        // The same demand the server makes (DeletePermission.RequiredFor): Update or Delete for
+        // ordinary content, Delete for a partition root or a governance satellite.
         var required = DeletePermission.RequiredFor(hubPath);
-        if (!perms.HasFlag(required))
+        if (!required.IsMetBy(perms))
             return null;
         return new("Move", MeshNodeLayoutAreas.MoveArea,
             RequiredPermission: required, Order: 3,

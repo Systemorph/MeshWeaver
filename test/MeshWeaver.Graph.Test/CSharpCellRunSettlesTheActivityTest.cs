@@ -281,4 +281,31 @@ public class CSharpCellRunKeepsTheKernelsVerdictTest(ITestOutputHelper output) :
         log.Messages.Should().Contain(m => m.Message.Contains("boom from the cell"),
             "the kernel records the script's own exception");
     }
+
+    /// <summary>
+    /// A script that does not COMPILE never reaches execution: the Roslyn pass faults with a
+    /// <c>CompilationErrorException</c> before the script runs. That fault must still settle the
+    /// Activity <see cref="ActivityStatus.Failed"/> with the compiler's diagnostic — the third of the
+    /// three ways a cell ends (succeeds, throws, does not compile), and the one no test pinned.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AScriptThatDoesNotCompile_IsFailedByTheKernel_WithTheDiagnostic()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cell = await CreateCell("var answer = symbolThatDoesNotExist + 1;\nanswer", ct);
+        var activity = await Run(cell, ct);
+
+        var log = await Terminal(activity, "the real kernel compiled a script that does not compile", ct);
+
+        log.Status.Should().Be(ActivityStatus.Failed, "the script does not compile, so it cannot succeed");
+        // The diagnostic must come from the KERNEL's own entry, not the dispatcher's keyed reconcile
+        // ("C# run failed: <reason>"), which would also carry CS0103 in its reason. If the kernel did
+        // not settle the run, the first terminal snapshot is the reconcile's and this fails.
+        // No negative "no second verdict" assertion here: Terminal() returns the kernel's snapshot,
+        // which precedes the dispatcher's handling of the reply, so such an assertion could not fail.
+        // Not overwriting a kernel-settled run is pinned where it can fail:
+        // CSharpCellKernelFaultFailsTheActivityTest.ARunTheKernelCancelledAndSettled_IsNotOverwrittenWithFailed.
+        log.Messages.Should().Contain(m => m.Message.Contains("CS0103") && m.MessageKey != "activity.codeRun.failed",
+            "the kernel records the compiler's diagnostic itself, so the reader sees WHY the cell failed");
+    }
 }

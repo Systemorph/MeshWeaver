@@ -399,13 +399,21 @@ delete it?", and that has ONE answer, `DeletePermission.RequiredFor(path)`
 
 | Deleting… | Demands | Who holds it |
 |---|---|---|
-| ordinary content — any node below a partition root | `Update` | Editor and Admin |
+| ordinary content — any node below a partition root | `Update` **or** `Delete` — either suffices | Editor and Admin, and any custom role carrying either bit |
 | a partition root (a Space, a Partition, a user home) | `Delete` | Admin |
 | anything under `_Access`, `_Policy`, `_GitSync`, `_Entitlements` | `Delete` | Admin |
 | a node whose type's access rule decides Delete (Space, Partition, the sync config, …) | what the rule says | — |
 
 Deleting content is an edit of the space it lives in; deleting what GOVERNS a space — its root, its
-grants, its caps, its sync wiring, its purchases — is an administrator's call. Every rule-less delete
+grants, its caps, its sync wiring, its purchases — is an administrator's call. **Holding `Delete` alone
+also deletes ordinary content** (policy [`delete-suffices-for-content`](../PolicyNotProse)): the
+content demand is `PermissionDemand.UpdateOrDelete`, met by EITHER bit, so a custom role that carries
+`Delete` without `Update` keeps every delete right it held before deleting content became an edit —
+demanding `Update` alone silently stripped such roles, and their refusals carried the "not settled,
+retry" note because a custom role's definition is never taken as settled evidence (#7414). Evaluate a
+demand with `PermissionDemand.IsMetBy`, never `HasFlag`: it is the ONE predicate behind the hub's
+permission check, the delivery gate, `RlsNodeValidator`, the delete pre-flight and the menu, and it
+reads every other demand as ALL of its bits, exactly as before. Every rule-less delete
 path applies the same function: the `DeleteNodeRequest` / `ValidateDeleteRequest` delivery gates, the
 delete handler's per-node pre-flight (`CheckDeletePermissionByPath`), `RlsNodeValidator`, the
 `SatelliteAccessRule` fallback, `MoveNodePermissionAttribute` (the delete demand on the source
@@ -419,8 +427,8 @@ meaning what they meant, and nothing in the PostgreSQL permission projection cha
 ONE function behind the move, `CopyNodeRequest.PreserveAuthorship` and `CreateNodeRequest.AuthorshipFrom`).
 `AccessContextScope` impersonates a node's `CreatedBy`, so carrying someone else's authorship into a
 place their governance does not cover would let owner-scoped work there run as them. The stamps may
-travel when the caller may delete the SOURCE NODE (checked on the node itself, so a node-level deny
-holds) AND either the target is in the SAME partition — the node stays under the governance that
+travel when the caller may delete the SOURCE NODE and carry its content — `Update` or `Delete` on it
+(checked on the node itself, so a node-level deny holds) — AND either the target is in the SAME partition — the node stays under the governance that
 already covered it, and a caller who may edit it in place gains nothing — or the caller holds
 `Delete` on the source (an administrator). A move that may not carry them is REFUSED before it writes
 anything, never turned into a re-authoring copy: a half-landed move resumes by recognising its own
@@ -429,7 +437,7 @@ demands `Delete` on the source namespace for a move into another partition, a pr
 refused on the same terms, and `AuthorshipFrom` on a create records the requester when they are not
 entitled. The `DeleteNodeRequest` / `ValidateDeleteRequest` delivery gate re-decides a denied check
 through the node type's rule AS A DELETE (a comment's author may delete it although the standard
-demand, Update, is not held), and the delete seal's early abort is authorised by the same demand.
+demand, Update or Delete, is not held), and the delete seal's early abort is authorised by the same demand.
 Pinned by `EditorDeletesContentTest` (`test/MeshWeaver.Hosting.Test`) and
 `SatelliteDeliveryGateTest` (`test/MeshWeaver.Graph.Test`).
 
@@ -2074,7 +2082,7 @@ Both are correct in isolation and both are on the same request. The effective po
 did not apply. `SatelliteAccessRule` maps a satellite's Delete to `Permission.Update` on its
 `MainNode` — creating a satellite is a modification of its main node, and so is removing it — and
 `Role.Editor` held Update and **not** Delete, and at the time every delete demanded Delete (deleting
-ordinary content now demands Update — see "Deleting and moving" above). So an Editor could **publish a
+ordinary content now demands Update or Delete — see "Deleting and moving" above). So an Editor could **publish a
 satellite onto a node and then be refused when erasing it**: "I can turn it on but not off", the exact state a
 revocable-consent feature exists to prevent, reachable by an ordinary Editor. It surfaced only when
 someone *ran* the writer (session presence, MeshWeaver.Plugins#1031), never by reading either file.
@@ -2178,7 +2186,7 @@ reached.
 Pinned by `SatelliteDeliveryGateTest` (`test/MeshWeaver.Graph.Test`), whose cases are the verdicts
 on one mesh: an Editor's satellite pre-flight is served, a Viewer's is refused `Unauthorized` (the
 rule DENIES — consulting a rule never means granting), the same Editor at a plain `Markdown` child is
-served (no rule, and deleting ordinary content demands Update), and the same Editor at a grant under
+served (no rule, and deleting ordinary content demands Update or Delete), and the same Editor at a grant under
 `_Access` is refused (what governs a partition keeps demanding Delete — nothing widened beyond
 content).
 

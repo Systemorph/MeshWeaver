@@ -1721,7 +1721,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                             StreamId, failure.Message);
                         return delivery.Processed();
                     }
-                    logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
+                    // A subscribe verdict relayed from the subscribing hub (JsonSynchronizationStream
+                    // .RaiseVerdictOnStreamHub, #7492) is the protocol's own hand-off, and OnError
+                    // below already reports the fault: Debug, so it costs no extra Warning per read.
+                    if (delivery.Properties.ContainsKey(JsonSynchronizationStream.SubscribeVerdictProperty))
+                        logger.LogDebug("Stream {StreamId} received its subscribe verdict: {Message}", StreamId, failure.Message);
+                    else
+                        logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
                     OnError(new DeliveryFailureException(failure));
                     return delivery.Processed();
                 },

@@ -609,8 +609,9 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     private static bool WouldAuthorize(Permission held, Permission required) => required switch
     {
         Permission.Comment => held.HasFlag(Permission.Comment) || held.HasFlag(Permission.Update) || held.HasFlag(Permission.Sync),
-        Permission.Create or Permission.Update or Permission.Delete => held.HasFlag(required) || held.HasFlag(Permission.Sync),
-        _ => held.HasFlag(required),
+        Permission.Create or Permission.Update or Permission.Delete or PermissionDemand.UpdateOrDelete
+            => required.IsMetBy(held) || held.HasFlag(Permission.Sync),
+        _ => required.IsMetBy(held),
     };
 
     /// <summary>
