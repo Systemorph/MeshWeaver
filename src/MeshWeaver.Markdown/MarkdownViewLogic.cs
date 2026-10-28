@@ -150,7 +150,8 @@ public static class MarkdownViewLogic
     ///   <item><b>Not executing</b>: no submission ever, whatever the producer supplied. The markdown
     ///   is rendered inert; pre-rendered HTML is used only when it carries no kernel placeholder —
     ///   one that does is re-rendered from the markdown, or, with no markdown to render, has its
-    ///   result areas replaced by the static "unavailable" notice (never a live address).</item>
+    ///   result areas replaced by the static "unavailable" notice (never a live address) and its
+    ///   cell frame, Run toolbar and editor markers stripped, so the code reads as ordinary code.</item>
     /// </list>
     /// </summary>
     /// <param name="markdown">The control's markdown, or null.</param>
@@ -193,7 +194,31 @@ public static class MarkdownViewLogic
         if (!string.IsNullOrEmpty(markdown))
             return RenderInert(markdown, collection, currentNodePath);
         return new MarkdownRenderResult(
-            html is null ? string.Empty : DisableKernelPlaceholder(html, locale), null);
+            html is null ? string.Empty : StripExecutableCellMarkup(DisableKernelPlaceholder(html, locale)), null);
+    }
+
+    /// <summary>
+    /// Turns the notebook-cell markup <see cref="ExecutableCodeBlockRenderer"/> writes for an
+    /// executable fence into ordinary markup: the Run toolbar marker is dropped, the code segment
+    /// loses the submission id / language attributes a client hydrates into an editor, and the cell
+    /// and output frames lose the classes a client keys off. The code itself stays visible. Only the
+    /// renderer's own exact emissions match — authored text inside a fence is HTML-encoded, so it can
+    /// never spell these tags.
+    /// </summary>
+    private static string StripExecutableCellMarkup(string html)
+    {
+        var toolbar = $"<div class=\"{ExecutableCodeBlockRenderer.CellToolbarClass}\" "
+                      + $"{ExecutableCodeBlockRenderer.SubmissionIdAttribute}=\"[^\"]*\" "
+                      + $"{ExecutableCodeBlockRenderer.LanguageAttribute}=\"[^\"]*\"></div>";
+        var codeSegment = $"<div class=\"{ExecutableCodeBlockRenderer.CellCodeClass}\" "
+                          + $"{ExecutableCodeBlockRenderer.SubmissionIdAttribute}=\"[^\"]*\" "
+                          + $"{ExecutableCodeBlockRenderer.LanguageAttribute}=\"[^\"]*\">";
+        html = System.Text.RegularExpressions.Regex.Replace(html, toolbar, string.Empty);
+        html = System.Text.RegularExpressions.Regex.Replace(
+            html, codeSegment, $"<div class=\"{ExecutableCodeBlockRenderer.CellCodeClass}\">");
+        return html
+            .Replace($"<div class=\"{ExecutableCodeBlockRenderer.CellOutputClass}\">", "<div>")
+            .Replace($"<div class=\"{ExecutableCodeBlockRenderer.CellClass}\">", "<div>");
     }
 
     /// <summary>

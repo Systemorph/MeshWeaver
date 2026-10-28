@@ -125,8 +125,14 @@ So the decision belongs to the **producer**, and it is opt-in:
   `CollaborativeMarkdownControl` and is a notebook by definition.
 - Every client asks the same pure decision, `MarkdownViewLogic.ResolveRendering(...)`, and renders
   non-executing markdown with `MarkdownViewLogic.RenderInert(...)` — the pipeline
-  `MarkdownExtensions.CreateInertMarkdownPipeline(collection, nodePath)` drops the
-  submission at render time, so no client can find a cell the producer did not allow.
+  `MarkdownExtensions.CreateInertMarkdownPipeline(collection, nodePath)` carries the policy on its
+  PARSER (`ExecutableCodeBlockParser.ExecutesCode` → `ExecutableCodeBlock.ExecutesCode`), so a
+  document it parsed yields no submission to anyone — the renderer, `ExtractCodeSubmissions`, a
+  repeated `Initialize()` — before or after rendering. Pre-rendered HTML with no markdown to
+  re-render loses its cell frame, Run toolbar and editor markers as well as its result areas.
+- A client that renders on its own (the React views) applies the same rule independently: it never
+  hands a non-opted control's submissions to a kernel, and it refuses rendered HTML that still
+  carries executable-cell markup in favour of the inert source.
 
 Before this flag, the only thing keeping a comment's fence from running was render timing: the
 Blazor view submitted only on its first render, and a node-bound comment's text happened to arrive

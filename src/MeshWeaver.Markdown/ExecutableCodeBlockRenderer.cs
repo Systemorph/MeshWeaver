@@ -92,11 +92,11 @@ public class ExecutableCodeBlockRenderer(string? currentNodePath, bool executesC
         if (fenced.PromptDraft is not null && WritePromptComposer(renderer, obj, fenced.PromptDraft))
             return;
 
-        // Not executable here: the fence is shown, never run. Dropping the submission is what makes
-        // every downstream reader (ExtractSubmissions, the cell frame, the result-area placeholder)
-        // see an ordinary code block — and the plain <pre> keeps the code visible, including a
-        // silent --execute fence that would otherwise render as nothing at all.
-        if (!ExecutesCode && fenced.SubmitCode is not null)
+        // Not executable here: the fence is shown, never run. The inert parser already withheld the
+        // submission (ExecutableCodeBlock.ExecutesCode), so extraction cannot recreate it either;
+        // clearing it again covers an inert renderer over an executing parse. The plain <pre> keeps
+        // the code visible, including a silent --execute fence that would otherwise render as nothing.
+        if (!(ExecutesCode && fenced.ExecutesCode) && fenced.RequestsExecution)
         {
             fenced.SubmitCode = null;
             base.Write(renderer, obj);

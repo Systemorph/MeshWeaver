@@ -79,6 +79,54 @@ public class MarkdownExecutesCodeOptInTest
         htmlOnly.CodeSubmissions.Should().BeNull();
         htmlOnly.Html.Should().NotContain(ExecutableCodeBlockRenderer.KernelAddressPlaceholder,
             "with nothing to re-render, the result area becomes the static notice — never a live address");
+        htmlOnly.Html.Should().NotContain(ExecutableCodeBlockRenderer.CellToolbarClass,
+            "no Run affordance survives in HTML-only content that was not opted in");
+        htmlOnly.Html.Should().NotContain(ExecutableCodeBlockRenderer.SubmissionIdAttribute,
+            "no hydration marker survives for a client to turn into a Run bar or a cell editor");
+        htmlOnly.Html.Should().NotContain($"class=\"{ExecutableCodeBlockRenderer.CellClass}\"",
+            "the notebook-cell frame goes with the toolbar");
+        htmlOnly.Html.Should().Contain("answer + 1", "the --show-code fence's code stays visible");
+    }
+
+    [Fact]
+    public void ExecutingHtmlOnly_KeepsTheCellMarkup()
+    {
+        // Negative control for the strip above: the opted-in path must keep every marker.
+        var executing = MarkdownViewLogic.Render(Markdown, null, "Space/Doc");
+
+        var result = MarkdownViewLogic.ResolveRendering(
+            markdown: null, executing.Html, executing.CodeSubmissions, executesCode: true,
+            collection: null, currentNodePath: "Space/Doc");
+
+        result.Html.Should().Contain(ExecutableCodeBlockRenderer.CellToolbarClass);
+        result.Html.Should().Contain(ExecutableCodeBlockRenderer.SubmissionIdAttribute);
+    }
+
+    [Fact]
+    public void InertPipeline_YieldsNoSubmission_BeforeOrAfterRendering()
+    {
+        var pipeline = MarkdownExtensions.CreateInertMarkdownPipeline(null, "Space/Doc");
+        var document = Markdig.Markdown.Parse(Markdown, pipeline);
+
+        MarkdownViewLogic.ExtractCodeSubmissions(document).Should().BeNull(
+            "extraction re-initializes every block from its fence arguments; the inert parse must not let it recreate a request");
+
+        var html = Markdig.Markdown.ToHtml(document, pipeline);
+        html.Should().Contain("var answer = 41;");
+        MarkdownViewLogic.ExtractCodeSubmissions(document).Should().BeNull(
+            "rendering must not leave a runnable request behind either");
+    }
+
+    [Fact]
+    public void ExecutingPipeline_YieldsSubmissions_BeforeAndAfterRendering()
+    {
+        // Negative control for the inert pipeline test: the same calls on the executing pipeline do yield requests.
+        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(null, "Space/Doc");
+        var document = Markdig.Markdown.Parse(Markdown, pipeline);
+
+        MarkdownViewLogic.ExtractCodeSubmissions(document).Should().HaveCount(2);
+        Markdig.Markdown.ToHtml(document, pipeline);
+        MarkdownViewLogic.ExtractCodeSubmissions(document).Should().HaveCount(2);
     }
 
     [Fact]
