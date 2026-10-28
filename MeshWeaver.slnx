@@ -23,7 +23,6 @@
     <File Path="README.md" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
     <Project Path="src/MeshWeaver.Compiler/MeshWeaver.Compiler.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
@@ -70,7 +69,6 @@
     <File Path="test/Directory.Build.props" />
     <File Path="test/Directory.Packages.props" />
     <Project Path="test/MeshWeaver.Hosting.Monolith.TestBase/MeshWeaver.Hosting.Monolith.TestBase.csproj" />
-    <Project Path="test/MeshWeaver.Cli.Test/MeshWeaver.Cli.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Deployment.Contract.Test/MeshWeaver.Deployment.Contract.Test.csproj" />
