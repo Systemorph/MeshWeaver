@@ -373,20 +373,18 @@ public sealed class PersistenceService : IStorageAdapter
     /// and a path no writable provider held is simply absent (the same tolerance
     /// <see cref="Delete"/> has, without its read-only refusal — a bulk delete is a commit-time
     /// operation and the read-only refusal is a PRE-FLIGHT question, already answered by
-    /// <see cref="FindDeleteBlockingProvider"/>).
+    /// <see cref="FindDeleteBlockingProvider"/>). A provider that fails part-way fails the batch
+    /// with a <see cref="BatchDeletePartiallyAppliedException"/> naming every path no writable
+    /// provider still holds, so the caller can retire exactly the paths that are gone.
     /// </remarks>
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
         => paths.Count == 0
             ? Observable.Return<IReadOnlyList<string>>([])
-            : _writable
-                .Select(p => p.Adapter.DeleteMany(paths))
-                .Merge()
-                .Aggregate(
-                    ImmutableHashSet<string>.Empty,
-                    (all, removed) => all.Union(removed))
-                // Back into the caller's order: children before parents is the change-feed
-                // contract, and a HashSet has no order to preserve it with.
-                .Select(all => (IReadOnlyList<string>)paths.Where(all.Contains).ToList());
+            // A provider that fails part-way does not hide what the others removed: every provider
+            // is heard to the end, and a failure carries the union (#7396).
+            : StorageBatchDelete.Union(paths, _writable.Select(p => new BatchDeleteStore(
+                () => p.Adapter.DeleteMany(paths),
+                path => p.Adapter.Read(path, JsonSerializerOptionsCache).Select(node => node is not null))));
 
     /// <inheritdoc />
     /// <remarks>

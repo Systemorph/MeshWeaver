@@ -108,6 +108,57 @@ therefore visible in the log of every job that reads a platform file BEFORE it r
 the reset time beside it. (A job that reads no platform file does not install the reader and prints
 no reading.)
 
+## An empty budget is NO VERDICT, never a finding
+
+**The 2026-10-27 recurrence was core's own.** From 20:37 to 21:14Z every core and Plugins pull-request
+run went red on *"API rate limit exceeded for installation"* (HTTP 403) — and the gates did not say
+so. They turned the refusal into a verdict about the pull request:
+
+- `scripts/read-current-pr-body.py` printed *"Could not read the current PR body"*, and the
+  declaration gates (Closing keywords, Cross-repo pair, Interface additions, Public surface,
+  Satellite package pins, i18n mirror) failed as if the body were wrong;
+- `.github/scripts/fetch-deployed-plugin-set.sh` ran every lookup as `gh api … || continue`, so each
+  refused lookup read as "this run is not a candidate", and the ladder concluded *"the deployed plugin
+  set is not available"* over a set that existed.
+
+Three changes, all in core:
+
+1. **A rate limit, a 5xx or a dropped connection is retried, then reported as NO VERDICT.** Both
+   scripts share one REST reader (`api_get` in `read-current-pr-body.py`; shell scripts call it
+   through `.github/scripts/github-api-get.py`). It recognises a rate limit by its status (403/429)
+   together with `x-ratelimit-remaining: 0`, a `retry-after`, or "rate limit" in the message; it
+   waits as long as `retry-after` / `x-ratelimit-reset` say, within a budget that is far below the
+   job's timeout; and a wait the budget cannot cover is not slept at all. What it prints then is
+
+   ```text
+   NO VERDICT — GitHub API rate-limited until 2026-10-27T21:14:00Z; re-run after it.
+   ```
+
+   and the step is red (exit 3). Only a genuine **404** lets `fetch-deployed-plugin-set.sh` skip a
+   candidate; any other refusal (401, a non-rate-limit 403) is red at once, without retries. The
+   closing-keyword gate's label probe says the same sentence instead of *"the token cannot read
+   issues"*. Both scripts carry self-tests against a fake API (a 403 rate limit → NO VERDICT, a 404 →
+   skip, a 200 → the normal verdict) that run before the real call.
+2. **The pull-request body is read ONCE per run attempt, on an App's budget.** The `pr-body` job in
+   `dotnet-test.yml` reads it with a `fleet-reader` installation token, which has its own, larger
+   bucket than the repository's `GITHUB_TOKEN` (see [GitHub App Credentials](../GitHubAppCredentials)),
+   and hands it to the five declaration gates as an output. A gate reuses that body only when it was
+   read in the SAME run attempt for the SAME head. "Re-run failed jobs" keeps the earlier attempt's
+   outputs, so a gate re-run after the author corrected the body reads the CURRENT body itself, as
+   before. A fork pull request gets no secret, so it reads with the run's own token. That exemption
+   is written once, on the event (`head.repo.full_name == github.repository`). Every
+   same-repository pull request, Dependabot's included (both secret stores hold the App), asserts the
+   credential and is red naming it when it is missing. A failed `pr-body` holds stage 0 and fails
+   `Consolidate test results` with its own line.
+3. **Fewer calls.** Five body reads became one, and `fetch-deployed-plugin-set.sh` no longer asks for
+   the chosen run a second time: its head sha is taken from the lookup that already read the run.
+   Every listing asks for `per_page=100`.
+
+**What still spends `GITHUB_TOKEN`:** the ladder's artifact reads (`fleet-reader` has no Actions
+permission, and `meshweaver-cloud` is reserved for writes), the closing-keyword gate's issue and label
+reads (no read-only App holds Issues), and the Public-surface gate's own body read. That gate also runs
+on `merge_group`, where `pr-body` does not run. All three now answer a rate limit with NO VERDICT.
+
 ## What was NOT measured
 
 - **The limit itself was not read.** No job in the window printed `/rate_limit`; 1,000/hour is

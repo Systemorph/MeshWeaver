@@ -165,6 +165,14 @@ the node instead: moving `Admin/Tiers/pro` out of the ladder dropped an in-use p
 guard and a node-level Delete denial — `MoveNodePermissionAttribute` checks Delete only on the source's
 NAMESPACE.
 
+The delete leg retires every source path it removed: it invalidates the path's stream-cache entry
+and disposes the per-node hub activated there, as the delete commit does (#7171). That holds when the
+batch fails part-way too: `DeleteMany` then faults with a `BatchDeletePartiallyAppliedException`
+naming the rows that left storage, and the move retires exactly those before it answers `Unknown`. A
+source row the batch did not remove keeps its hub (#7396; pinned by
+`APartWayBatchDeleteRetiresWhatItRemovedTest`, see
+[Recursive Delete Drain](../RecursiveDeleteDrain) for the storage contract).
+
 `HandleMoveNodeRequest` now runs the source through the **same pre-flight a recursive delete runs**,
 before the copy writes anything:
 

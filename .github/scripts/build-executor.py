@@ -92,6 +92,17 @@ class Decision:
     api_url: str
     why: str
     lines: list[str] = field(default_factory=list)   # workflow-command lines to print
+    page_url: str = ""   # the run's live page on the operations instance (host only)
+
+
+def run_page_url(api: str, repo_name: str, sha: str) -> str:
+    """The queued run's live page: the API's origin + `Hosting/Builds/<repo>/<sha>` (a latest run's node id
+    is its sha — the only channel a build-request queues). '' when the API is not a safe URL or the
+    names are not path-shaped."""
+    if not safe_url(api) or not re.fullmatch(r"[A-Za-z0-9._-]+", repo_name or "") or not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+        return ""
+    p = urllib.parse.urlparse(api)
+    return f"{p.scheme}://{p.netloc}/Hosting/Builds/{repo_name}/{sha}"
 
 
 def safe_url(raw: str) -> str:
@@ -143,6 +154,17 @@ def declared_stages(path: str) -> tuple[list[str], str]:
     if doc.get("ciEquivalent") is not True:
         return [], (f"{path} does not claim CI equivalence (\"ciEquivalent\": true) — its stages can be probed on a "
                     f"host but do not yet check everything the Actions legs check, so CI is not routed there")
+    # 🚨 THE CLAIM IS VOID WHILE ANYTHING IS OWED (check-build-stages.py, rule 7; MeshWeaver.Plugins
+    # check-build-queue-admission.py rule 7). The declaration's own gate refuses that combination,
+    # but this is where a run is ROUTED, so it is refused here too: a declaration that reached a
+    # branch without its gate (a repository that does not run it yet, a hand edit) must still not
+    # send a run to a host that checks less than Actions.
+    owes = doc.get("owes", [])
+    if not isinstance(owes, list) or not all(isinstance(o, str) and o.strip() for o in owes):
+        return [], f"{path} carries a malformed `owes` (a list of non-empty strings) — the claim cannot be read against it"
+    if owes:
+        return [], (f"{path} claims CI equivalence but still owes {len(owes)} item(s) (first: {owes[0][:100]}) — "
+                    f"the claim is void until every item is paid")
     return names, ""
 
 
@@ -228,8 +250,10 @@ def decide(i: Inputs, get: Get, post: Post) -> Decision:
         verdict = None
     if verdict != "verified":
         return actions(f"the inbox stored the build-request but did not verify its signature (signature: {verdict!r})")
+    page = run_page_url(api, repo_name, i.sha)
     return Decision(HOST, api, f"the instance runs {repo_name}'s stages ({', '.join(stages)}) on build-{i.channel}; the run is queued", [
-        f"::notice title=Heavy legs on a build host::{repo_name}@{i.sha[:12]} is queued on build-{i.channel} — every heavy leg is followed from the host ({', '.join(stages)})"])
+        f"::notice title=Heavy legs on a build host::{repo_name}@{i.sha[:12]} is queued on build-{i.channel} — every heavy leg is followed from the host ({', '.join(stages)})"
+        + (f"; live progress: {page}" if page else "")], page)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -295,6 +319,8 @@ def emit(d: Decision, env: dict) -> None:
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(f"- 🏗️ Heavy legs: **{d.executor}** — {d.why.replace(chr(10), ' ')}\n")
+            if d.executor == HOST and d.page_url:
+                f.write(f"- 📡 Live progress of the run (stage board, what is left, log tail): {d.page_url}\n")
 
 
 def main(argv: list[str]) -> int:
@@ -327,6 +353,15 @@ def self_test() -> int:
     not_equivalent = os.path.join(tmp, "probe-only.json")
     with open(not_equivalent, "w") as fh:
         json.dump({"stages": [{"name": "compile-check"}, {"name": "gate"}]}, fh)
+    claims_with_debt = os.path.join(tmp, "claims-with-debt.json")
+    with open(claims_with_debt, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": ["the in-mesh lane"], "stages": [{"name": "gate"}]}, fh)
+    claims_bad_owes = os.path.join(tmp, "claims-bad-owes.json")
+    with open(claims_bad_owes, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": "nothing", "stages": [{"name": "gate"}]}, fh)
+    claims_paid = os.path.join(tmp, "claims-paid.json")
+    with open(claims_paid, "w") as fh:
+        json.dump({"ciEquivalent": True, "owes": [], "stages": [{"name": "gate"}]}, fh)
     base = Inputs(queue_url="https://control.example.com/api/hooks/Hosting/PlatformBuilds", secret="s3cret",
                   repo="Systemorph/MeshWeaver.Plugins", sha="a" * 40, event="pull_request", ref_name="feat/x", pr=7,
                   base_ref="main", main_sha="b" * 40, run_id=42, run_attempt=1, run_url="https://github.com/r/1",
@@ -380,6 +415,8 @@ def self_test() -> int:
     cases = [
         ("no stages declared", with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post, "declares no stages", False),
         ("stages that do not claim CI equivalence", with_(stages_file=not_equivalent), host_q, ok_post, "does not claim CI equivalence", False),
+        ("a claim with an open debt is void", with_(stages_file=claims_with_debt), host_q, ok_post, "still owes 1 item", False),
+        ("a claim beside a malformed owes is void", with_(stages_file=claims_bad_owes), host_q, ok_post, "malformed `owes`", False),
         ("no build API", with_(queue_url="", build_api=""), host_q, ok_post, "no build API", False),
         ("plain-http API refused", with_(build_api="http://control.example.com/api/builds", queue_url=""), host_q, ok_post, "no build API", False),
         ("credentials in the URL refused", with_(build_api="https://user@control.example.com/api/builds"), host_q, ok_post, "no build API", False),
@@ -409,6 +446,12 @@ def self_test() -> int:
     calls.clear()
     decide(with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post)
     check("actions/a repository with no stages asks nothing and queues nothing", calls == [], calls)
+    calls.clear()
+    decide(with_(stages_file=claims_with_debt), host_q, ok_post)
+    check("actions/a claim with an open debt asks nothing and queues nothing", calls == [], calls)
+    calls.clear()
+    d = decide(with_(stages_file=claims_paid), host_q, ok_post)
+    check("host/a claim whose debt is paid (owes: []) is routed", d.executor == HOST, d)
     for inp in (with_(build_api="https://control.example.com/api/builds", queue_url="http://inbox.example.com/x"), with_(channel="stable")):
         calls.clear()
         decide(inp, host_q, ok_post)
@@ -468,9 +511,17 @@ def self_test() -> int:
         pass
     # 6. outputs and summary
     out, summ = os.path.join(tmp, "out"), os.path.join(tmp, "summary")
-    emit(Decision(HOST, "https://control.example.com/api/builds", "queued", []), {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})
+    emit(Decision(HOST, "https://control.example.com/api/builds", "queued", [], run_page_url("https://control.example.com/api/builds", "MeshWeaver.Plugins", "a" * 40)),
+         {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})
     check("emit/outputs", open(out).read() == "executor=host\napi-url=https://control.example.com/api/builds\n", open(out).read())
     check("emit/summary says which and why", "**host** — queued" in open(summ).read())
+    check("emit/summary links the run's live page", "https://control.example.com/Hosting/Builds/MeshWeaver.Plugins/" + "a" * 40 in open(summ).read(), open(summ).read())
+    check("page/no link off an unsafe API or a non-sha", run_page_url("http://evil.example/api/builds", "R", "a" * 40) == ""
+          and run_page_url("https://control.example.com/api/builds", "R", "abc") == ""
+          and run_page_url("https://control.example.com/api/builds", "../x", "a" * 40) == "", "linked")
+    summ2 = os.path.join(tmp, "summary2")
+    emit(Decision(ACTIONS, "", "no stages", []), {"GITHUB_STEP_SUMMARY": summ2})
+    check("emit/an actions run links no page", "Live progress" not in open(summ2).read(), open(summ2).read())
     for f in failures:
         print(f"SELF-TEST FAILED: {f}")
     if failures:

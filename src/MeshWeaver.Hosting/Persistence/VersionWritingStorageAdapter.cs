@@ -233,9 +233,33 @@ internal class VersionWritingStorageAdapter(
             return inner.DeleteMany(paths);
         return PathsWithoutHistory(paths)
             .SelectMany(purge => inner.DeleteMany(paths)
-                .SelectMany(deleted => PurgeAll(purge.Where(p => deleted.Contains(p, StringComparer.OrdinalIgnoreCase)).ToArray())
-                    .Select(_ => deleted)));
+                // 🚨 The DELETE's failure is handled here, before the post-success purge is
+                // composed, so a purge fault can never be mistaken for one (#7396 review). The rows a
+                // batch removed before it failed are gone just the same, so their history is purged
+                // too, and the failure still carries them.
+                .Catch<IReadOnlyList<string>, Exception>(error =>
+                {
+                    var removed = BatchDeletePartiallyAppliedException.RemovedBy(error);
+                    return removed.Count == 0
+                        ? Observable.Throw<IReadOnlyList<string>>(error)
+                        : PurgeRemoved(purge, removed)
+                            .SelectMany(_ => Observable.Throw<IReadOnlyList<string>>(error));
+                })
+                // After a SUCCESSFUL batch every reported row is gone: a purge fault escaping here
+                // still carries them, so the caller's retirement of those paths never depends on
+                // the history purge.
+                .SelectMany(deleted => PurgeRemoved(purge, deleted).Select(_ => deleted)));
     }
+
+    /// <summary>
+    /// Purges the history of the <paramref name="removed"/> rows among <paramref name="purge"/>. Any
+    /// fault that escapes the per-path best-effort purge — including one thrown while the purge is
+    /// being composed — is raised carrying <paramref name="removed"/>, never bare.
+    /// </summary>
+    private IObservable<Unit> PurgeRemoved(IReadOnlyCollection<string> purge, IReadOnlyList<string> removed)
+        => Observable.Defer(() => PurgeAll(purge.Where(p => removed.Contains(p, StringComparer.OrdinalIgnoreCase)).ToArray()))
+            .Catch<Unit, Exception>(purgeError => Observable.Throw<Unit>(
+                BatchDeletePartiallyAppliedException.Including(purgeError, removed)));
 
     /// <summary>
     /// Whether nodes of <paramref name="nodeType"/> keep version history — the type's
@@ -435,7 +459,11 @@ internal class VersionWritingStorageAdapter(
     /// <see cref="WriteIfVersion"/> return the bare inner write when <c>versionQuery</c> is null,
     /// and the three deletes do the same.</remarks>
     private IObservable<bool> Purge(string path)
-        => versionQuery!.PurgeVersions(path)
+        // Deferred: a version store that throws while the purge is being CALLED is the same
+        // best-effort failure as one that faults on subscription — logged, history retained, the
+        // primary write or delete unaffected (#7396 review). Called eagerly, that throw escaped this
+        // Catch and failed a delete that had already removed its rows.
+        => Observable.Defer(() => versionQuery!.PurgeVersions(path))
             .Catch<bool, Exception>(ex =>
             {
                 logger?.LogWarning(ex, "Purging the version history of {Path} faulted — its history is retained", path);
@@ -448,7 +476,7 @@ internal class VersionWritingStorageAdapter(
                 if (!purged)
                     logger?.LogWarning(
                         "The version store {Store} cannot purge the history of {Path}, whose NodeType keeps no history — its snapshots are retained",
-                        versionQuery.GetType().Name, path);
+                        versionQuery!.GetType().Name, path);
             });
 
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)

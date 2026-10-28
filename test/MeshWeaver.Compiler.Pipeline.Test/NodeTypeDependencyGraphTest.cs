@@ -618,4 +618,33 @@ public class NodeTypeDependencyGraphTest
         order.Should().Equal(["Zeta", "AcycA", "AcycB"],
             "one member's external edge holds the WHOLE component back — the component is the unit");
     }
+
+    /// <summary>
+    /// The PARALLEL bake's wait map: a cycle's members wait on nothing inside it (or a scheduler
+    /// that waits on settled dependencies would stall forever), while every edge into or out of the
+    /// cycle — and every plain chain edge — survives. The control is the chain: an implementation
+    /// that simply dropped every edge would pass the cycle half and fail this one.
+    /// </summary>
+    [Fact]
+    public void WithoutCycleEdges_DropsOnlyTheEdgesInsideACycle()
+    {
+        var types = new Dictionary<string, NodeTypeDefinition?>
+        {
+            ["X"] = new NodeTypeDefinition { Sources = ["shared=@Y/Source", "shared=@Base/Source"] },
+            ["Y"] = new NodeTypeDefinition { Sources = ["shared=@X/Source"] },
+            ["Down"] = new NodeTypeDefinition { Sources = ["shared=@X/Source"] },
+            ["Base"] = new NodeTypeDefinition(),
+            ["Chain"] = new NodeTypeDefinition { Sources = ["shared=@Base/Source"] },
+        };
+
+        var wait = NodeTypeDependencyGraph.WithoutCycleEdges(NodeTypeDependencyGraph.Build(types));
+
+        wait.Keys.OrderBy(k => k, StringComparer.Ordinal).Should().Equal(["Base", "Chain", "Down", "X", "Y"],
+            "every type is a key, including the ones that wait on nothing");
+        wait["X"].OrderBy(d => d, StringComparer.Ordinal).Should().Equal(["Base"], "X ↔ Y is dropped; X's edge OUT of the cycle stays");
+        wait["Y"].Should().BeEmpty("Y's only edge is inside the cycle");
+        wait["Down"].OrderBy(d => d, StringComparer.Ordinal).Should().Equal(["X"], "an edge INTO the cycle stays — downstream still orders behind it");
+        wait["Chain"].OrderBy(d => d, StringComparer.Ordinal).Should().Equal(["Base"], "a plain chain edge is never touched");
+        wait["Base"].Should().BeEmpty();
+    }
 }

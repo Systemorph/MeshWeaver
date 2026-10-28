@@ -15,7 +15,8 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 /// <param name="Path">The NodeType's mesh path.</param>
 /// <param name="HeldFingerprint">The fingerprint its sources have NOW — the one its adopted bytes
-/// were built from.</param>
+/// were built from. Empty for a type NEW in the incoming commit (#7410): it has no sources in the
+/// partition yet, and is held only as a sharer of a held source.</param>
 /// <param name="WantedFingerprint">The fingerprint the incoming tree would produce — what a bundle
 /// must record for this hold to release.</param>
 /// <param name="Identity">The framework identity the judgement was made under. A roll makes the
@@ -285,11 +286,21 @@ public static class BundleKeyedHold
         // held, so the unheld type's own input cannot move either — and it must be held too, or its
         // fingerprint would land on a fold made of the held node's OLD text beside the tree's new
         // siblings, which no bundle carries. Iterated to a fixed point, so a chain of sharers closes.
+        //
+        // 🚨 …and the closure reaches types NEW in this commit (#7410). The candidates above come from
+        // the partition's EXISTING adopted types, so a type the commit adds is never one — yet it can
+        // read a source the hold keeps at its OLD text, and landing it compiles it against text its
+        // own sources were not written for (measured: a release added a type that called members its
+        // package's shared source gained in the same commit, and it failed `CS0117` until a roll).
+        // A new type is held only THROUGH a held source, never for being new, and only as a sharer:
+        // the root's release re-imports the commit and lands it with the source it was written for.
+        var sharers = candidates.Concat(NewTypes(partition, incomingSet, currentSet, incoming, live,
+            definitionOf, abstained, logger)).ToList();
         bool grew;
         do
         {
             grew = false;
-            foreach (var candidate in candidates)
+            foreach (var candidate in sharers)
             {
                 if (held.ContainsKey(candidate.Path))
                     continue;
@@ -297,8 +308,12 @@ public static class BundleKeyedHold
                     continue;
                 held[candidate.Path] = new BundleHeldNodeType(
                     candidate.Path, candidate.CurrentFold, candidate.IncomingFold, identity,
-                    $"shares held source '{shared}' with another held type, so its own compile input "
-                    + "cannot move either")
+                    candidate.IsNew
+                        ? $"is new in this commit and reads held source '{shared}', which stays at its old "
+                          + "text until the held type's bundle arrives — so it lands with that source, not "
+                          + "before it"
+                        : $"shares held source '{shared}' with another held type, so its own compile input "
+                          + "cannot move either")
                 {
                     // Not a release trigger: its own bundle may already be on the shelf, and
                     // re-importing for that would re-hold the same set — see BundleHeldNodeType.
@@ -334,9 +349,69 @@ public static class BundleKeyedHold
     }
 
     /// <summary>One type's readings, computed once: both folds and every source path either side
-    /// names (Space-relative).</summary>
+    /// names (Space-relative). <paramref name="IsNew"/>: the type is not in the partition yet, so it
+    /// has no current fold (<paramref name="CurrentFold"/> is empty) and can only ever be a sharer.</summary>
     private sealed record Candidate(
-        string Path, string CurrentFold, string IncomingFold, ImmutableArray<string> SourcePaths);
+        string Path, string CurrentFold, string IncomingFold, ImmutableArray<string> SourcePaths,
+        bool IsNew = false);
+
+    /// <summary>
+    /// The NodeTypes the incoming tree ADDS to the partition — not in <paramref name="live"/> — with
+    /// their incoming fold and every source path they name, so the sharing closure can hold one that
+    /// reads a held source (#7410). A new type whose definition or source queries the incoming tree
+    /// cannot establish is not judged, and says so: it imports exactly as it did before.
+    ///
+    /// <para>🚨 Its source paths are resolved over BOTH trees with its INCOMING definition (review of
+    /// #7427, thread 4392214514). A source this commit deletes or moves away, but that an existing
+    /// type's hold keeps in the partition, is absent from the incoming tree — yet the new type's
+    /// queries still reach it once it lands, beside its replacement, and it compiles both
+    /// declarations. Resolved over the incoming tree alone, that retained source never made the new
+    /// type a sharer. Its fingerprints are unaffected: none current, the wanted one from the incoming
+    /// tree.</para>
+    /// </summary>
+    private static IEnumerable<Candidate> NewTypes(
+        string partition,
+        NodeSet incomingSet,
+        NodeSet currentSet,
+        IReadOnlyList<MeshNode> incoming,
+        IReadOnlyDictionary<string, NodeTypeDefinition> live,
+        Func<MeshNode, NodeTypeDefinition?> definitionOf,
+        ImmutableList<string>.Builder abstained,
+        ILogger? logger)
+    {
+        var existing = live.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in incoming
+                     .Where(n => string.Equals(n.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal)
+                                 && n.Path is { Length: > 0 }
+                                 && !existing.Contains(n.Path))
+                     .OrderBy(n => n.Path, StringComparer.Ordinal))
+        {
+            if (definitionOf(node) is not { } definition)
+            {
+                abstained.Add(
+                    $"{node.Path}: new in this commit, and its NodeType definition could not be read, so "
+                    + "whether it reads a held source cannot be judged");
+                continue;
+            }
+            if (Fold(incomingSet, node.Path, definition, logger) is not { } incomingFold)
+            {
+                abstained.Add(
+                    $"{node.Path}: new in this commit, and the incoming tree could not establish its "
+                    + "source queries, so whether it reads a held source cannot be judged");
+                continue;
+            }
+            yield return new Candidate(
+                node.Path,
+                CurrentFold: string.Empty,
+                incomingFold,
+                [
+                    .. SourcePathsOf(currentSet, node.Path, definition, logger)
+                        .Concat(SourcePathsOf(incomingSet, node.Path, definition, logger))
+                        .Select(p => Relative(partition, p)),
+                ],
+                IsNew: true);
+        }
+    }
 
     /// <summary>
     /// One type's source fingerprint over a node set — the bake's own computation
