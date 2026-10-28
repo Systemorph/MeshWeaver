@@ -427,9 +427,39 @@ def run_shard(root: str, shard: int, total: int, work: str, dotnet: str = "dotne
     # Path.GetTempPath() — $TMPDIR on Unix. A temp directory shared with an earlier shard on this host
     # would hand THAT run's trace (an unresolved-content line, a dangling TEST_START) to this run's
     # gate: a red this run did not earn. Each invocation gets its own, empty, and collects only it.
-    host_tmp = os.path.join(work, "tmp")
-    shutil.rmtree(host_tmp, ignore_errors=True)
-    os.makedirs(host_tmp)
+    host_tmp = shard_temp_dir(repo, shard)
+    try:
+        return _run_units(m, root, shard, total, units, work, repo, dotnet, unit_timeout, artifacts,
+                          recorder, untyped_gate, results_log, collected, host_tmp)
+    finally:
+        shutil.rmtree(host_tmp, ignore_errors=True)
+
+
+def shard_temp_dir(repo: str, shard: int) -> str:
+    """A fresh, empty temp directory for one shard's test hosts — OUTSIDE the checkout.
+
+    It is created under the temp directory this runner inherited (a host stage's `$TMPDIR`, the
+    sandbox's scratch; the runner's `/tmp` on Actions), never under `--work`, which defaults INTO
+    the checkout. A test host's temp must not sit inside a source tree: tests build throw-away
+    projects under `Path.GetTempPath()` and the csproj evaluator (like MSBuild) walks UP from them
+    to the nearest `Directory.Build.props` / `Directory.Packages.props` — inside a checkout that is
+    the REPOSITORY's, and the tests then evaluate core's build instead of their own project.
+    Measured on build-latest: MeshWeaver.PluginTester.Test, 82 of 474 red on
+    `<checkout>/src/Directory.Build.props: <Target …> is not executed by this builder`, all green on
+    Actions, whose temp is outside the checkout. REFUSES when the inherited temp itself lies inside
+    the checkout — the same defect one level up, named rather than run."""
+    base = os.path.realpath(tempfile.gettempdir())
+    checkout = os.path.realpath(repo)
+    if os.path.commonpath([base, checkout]) == checkout:
+        raise Refusal(f"the temp directory {base} lies inside the checkout {checkout} — a test host's "
+                      f"Path.GetTempPath() must be outside any source tree (its throw-away projects would "
+                      f"import the checkout's Directory.Build.props); give the stage a $TMPDIR outside it")
+    return tempfile.mkdtemp(prefix=f"mw-core-tests-shard{shard}-", dir=base)
+
+
+def _run_units(m: dict, root: str, shard: int, total: int, units: list, work: str, repo: str, dotnet: str,
+               unit_timeout: int, artifacts: Optional[str], recorder: str, untyped_gate: str,
+               results_log: str, collected: str, host_tmp: str) -> int:
 
     def record(line: str) -> None:
         print(line, flush=True)
@@ -592,6 +622,8 @@ if behaviour == "degrade":
 if behaviour == "trace":
     import tempfile
     open(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log"), "w").write("TEST_START B.T1\n")
+if behaviour == "tmpdir":
+    open(os.path.join(os.getcwd(), "tmpdir.seen"), "w").write(os.environ.get("TMPDIR", ""))
 if behaviour == "spawn":
     import subprocess
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -691,6 +723,30 @@ def _self_test() -> int:
         expect(log == ["Ns.A,Ns.C"], f"part 1/2 runs every 2nd class of the SORTED list from the first ({log})")
         expect(run_shard(img, 1, 2, os.path.join(t, "w1"), dotnet, repo=repo) == 0, "shard 1/2 runs green (a helper bin is not a failure)")
 
+        print("the test hosts' temp — outside the checkout, this invocation's own, gone afterwards:")
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("tmpdir")
+        pack(repo, img, sha, "3.1.1")
+        inside = os.path.join(repo, ".core-tests", "shard-1")
+        expect(run_shard(img, 1, 2, inside, dotnet, repo=repo) == 0, "a shard whose --work lies INSIDE the checkout runs green")
+        seen = open(os.path.join(inside, "test", "B", TFM_DIR, "tmpdir.seen")).read()
+        real_repo, real_seen = os.path.realpath(repo), os.path.realpath(seen) if seen else ""
+        expect(bool(seen) and os.path.commonpath([real_seen, real_repo]) != real_repo,
+               f"…and its test host's $TMPDIR is OUTSIDE the checkout ({seen}), so a throw-away project there "
+               f"never imports the checkout's Directory.Build.props")
+        expect(bool(seen) and os.path.dirname(real_seen) == os.path.realpath(tempfile.gettempdir())
+               and os.path.basename(seen).startswith("mw-core-tests-shard1-"),
+               "…a fresh directory under the temp the runner inherited (the host stage's $TMPDIR)")
+        expect(bool(seen) and not os.path.exists(seen), "…removed once the shard's traces are collected")
+        os.environ["TMPDIR"] = tempfile.tempdir = os.path.join(repo, ".tmp")
+        os.makedirs(tempfile.tempdir)
+        try:
+            refused(lambda: run_shard(img, 1, 2, os.path.join(t, "wt"), dotnet, repo=repo), "lies inside the checkout",
+                    "an inherited $TMPDIR INSIDE the checkout (the defect one level up)")
+        finally:
+            os.environ["TMPDIR"] = tempfile.tempdir = own_tmp
+        open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("pass")
+        pack(repo, img, sha, "3.1.1")
+
         print("which pack — by commit identity:")
         other = os.path.join(t, "other")
         pack(repo, other, "b" * 40, "run-b")
@@ -768,7 +824,9 @@ def _self_test() -> int:
         # temp from a previous invocation, or in the shared $TMPDIR — is never this run's evidence.
         unresolved = "MeshNodeContentUnresolvedException: content for nodeType 'Demo' was NEVER resolvable on this replica\n"
         open(os.path.join(tempfile.gettempdir(), "meshweaver-test-trace.log"), "w").write(unresolved)
-        open(os.path.join(t, "wr", "tmp", "meshweaver-test-trace.log"), "a").write(unresolved)
+        stale_tmp = os.path.join(tempfile.gettempdir(), "mw-core-tests-shard1-stale")
+        os.makedirs(stale_tmp, exist_ok=True)
+        open(os.path.join(stale_tmp, "meshweaver-test-trace.log"), "a").write(unresolved)
         open(os.path.join(repo, "test", "B", TFM_DIR, "B.dll"), "w").write("pass")
         pack(repo, img, sha, "3.1.1")
         expect(run_shard(img, 1, 2, os.path.join(t, "wr"), dotnet, repo=repo) == 0,
