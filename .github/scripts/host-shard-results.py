@@ -45,6 +45,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -171,15 +172,32 @@ def receipts_get(url: str, token: str,
         return 0, str(e)
 
 
-def api_getter(base: str, token: str, channel: str,
+def refreshing_token(mint: Callable[[], str], refresh_seconds: float,
+                     clock: Callable[[], float] = time.monotonic) -> Callable[[], str]:
+    """The run's OIDC bearer, re-minted once it is older than `refresh_seconds` — GitHub's token is
+    short-lived and the objects are fetched one after another inside a 15-minute job, so a token
+    minted once would expire part-way and 401 a valid receipt (build-follow.py's TOKEN_REFRESH_SECONDS)."""
+    state = {"token": mint(), "at": clock()}
+
+    def current() -> str:
+        if clock() - state["at"] > refresh_seconds:
+            state["token"] = mint()
+            state["at"] = clock()
+        return state["token"]
+    return current
+
+
+def api_getter(base: str, token: str | Callable[[], str], channel: str,
                opener: urllib.request.OpenerDirector | None = None) -> Callable[[str, str, int], None]:
     """GET {base}/{sha256}?channel=… with the bearer, streamed to dest, reading at most bytes+1 so an
-    oversized body is detected without being swallowed whole."""
+    oversized body is detected without being swallowed whole. `token` is the bearer, or a provider asked
+    for it before EVERY object (refreshing_token), so a long fetch never sends an expired one."""
     op = opener or urllib.request.build_opener(_NoRedirect)
+    bearer = token if callable(token) else (lambda: token)
 
     def get(sha256: str, dest: str, size: int) -> None:
         url = f"{base}/{sha256}?" + urllib.parse.urlencode({"channel": channel})
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {bearer()}",
                                                    "Accept": "application/octet-stream"}, method="GET")
         try:
             with op.open(req, timeout=120) as resp, open(dest, "wb") as fh:
@@ -228,12 +246,16 @@ def main(argv: list[str]) -> int:
         fetch = _load("build_artifacts_fetch", "build-artifacts-fetch.py")
         p = urllib.parse.urlparse(a.api_url)
         http = bf.Http()
-        try:
-            token = bf.oidc_token(http, a.audience or f"{p.scheme}://{p.netloc}", env)
-        except bf.Failure as f:
-            raise Red(str(f))
+        audience = a.audience or f"{p.scheme}://{p.netloc}"
+
+        def mint() -> str:
+            try:
+                return bf.oidc_token(http, audience, env)
+            except bf.Failure as f:
+                raise Red(str(f))
+        token = refreshing_token(mint, bf.TOKEN_REFRESH_SECONDS)
         base = f"{a.api_url.rstrip('/')}/{urllib.parse.quote(repo, safe='')}/{sha}/artifacts"
-        status, body = receipts_get(f"{base}?" + urllib.parse.urlencode({"channel": a.channel}), token)
+        status, body = receipts_get(f"{base}?" + urllib.parse.urlencode({"channel": a.channel}), token())
         if status != 200:
             raise Red(f"the build API answered HTTP {status} for {repo}@{sha[:12]}'s receipts (403: the token's run "
                       f"is not this run's; 404: no host-executed run; 3xx: a redirect is refused)")
@@ -396,6 +418,24 @@ def self_test() -> int:
         st, bd = receipts_get(base + "/redirect/receipts?channel=latest", "tok")
         check("receipts getter: a redirect is answered as its 3xx, never followed (the bearer stays put)",
               st == 302 and len(seen) == n + 1, (st, seen[n:]))
+        # A short-lived OIDC bearer: the provider is asked before EVERY object and re-mints once stale.
+        now = [0.0]
+        minted: list[str] = []
+
+        def mint() -> str:
+            minted.append(f"t{len(minted)}")
+            return minted[-1]
+        provider = refreshing_token(mint, 240, clock=lambda: now[0])
+        served = api_getter(base + "/ok", provider, "latest")
+
+        def aging(s, d, n):
+            now[0] += 100   # each object takes 100 s: the token goes stale part-way through the tree
+            served(s, d, n)
+        n = len(seen)
+        check("https getter: a provider bearer is accepted over a full tree", not red(good, aging))
+        check("https getter: the bearer is re-minted once stale, never sent expired (refreshing_token)",
+              len(minted) >= 2 and seen[n] == "Bearer t0" and seen[-1] == f"Bearer {minted[-1]}" and minted[-1] != "t0",
+              (minted, seen[n:]))
         check("https getter: an object the API does not serve is RED",
               red([dict(good[0], sha256="f" * 64)] + good[1:4], api_getter(base + "/ok", "tok", "latest")))
     finally:

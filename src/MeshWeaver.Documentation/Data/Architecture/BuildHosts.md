@@ -872,7 +872,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   2. `GET {api}/{repo}/{sha}/artifacts/{sha256}?channel=…` — each receipt's bytes by content hash,
      written under `--out` with its relative path PRESERVED (two `.trx` of one name in two projects
      do not collide), at most the receipt's size plus one byte read, redirects refused so the bearer
-     never follows one.
+     never follows one, and the short-lived OIDC bearer re-minted once it is older than
+     `build-follow.py`'s `TOKEN_REFRESH_SECONDS`, so a long fetch never sends an expired one.
 
   It is RED, naming the file, on: no receipt for the tree, a unit escaping it or FOREIGN to the `test`
   job's shape (`test/**/*.trx`, `test/test-results.log`, `collected-logs/**`), one path with two
