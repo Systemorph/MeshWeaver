@@ -290,11 +290,18 @@ classifies the body:
 
 | Body | Reading |
 |---|---|
-| names a refusal (`Copilot was unable to review …`, or `**Files reviewed:** 0/…`) | **refused** — not landed |
+| refuses the pull request (`… unable to review this pull request …` — quota, outage) | **refused** — not landed |
+| says it reviewed zero files (`Copilot wasn't able to review any files …`, or `**Files reviewed:** 0/…`) | **refused** — not landed, UNLESS the body lists every skipped file (as many entries as its `N file(s) not reviewed` announces) and each one's reason is `Generated file`: then nothing reviewable was left out and the verdict over it is the review — **landed** |
 | any other text | **landed** |
 | no text at all | **unrecognised** — not landed |
 
 A refusal wins. Everything else the reviewer says is the review.
+
+The generated-file exception was measured, not designed: on MeshWeaver.Plugins#4507 a lockfile-only
+pull request drew `### 🟢 Approval recommended` followed by `Copilot wasn't able to review any files in
+this pull request.` and a one-entry `1 file not reviewed` list (`package-lock.json: Generated file`), and
+the gate reported that real review as UNREVIEWABLE. A skipped file with any other reason, or a list
+shorter than its count, keeps the body a refusal (fails closed).
 
 ### Provenance, not presentation — and what the other way cost
 

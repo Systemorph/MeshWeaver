@@ -235,11 +235,26 @@ REVIEWER_ACCOUNT_ID = 175728472
 INTERNAL_REVIEWER_ACCOUNT_ID = 328286035
 REVIEWER_ACCOUNT_IDS = frozenset({REVIEWER_ACCOUNT_ID, INTERNAL_REVIEWER_ACCOUNT_ID})
 REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot", "systemorph-com[bot]"})
-REFUSAL_MARKERS = (
-    re.compile(r"\bCopilot (?:was unable|wasn't able|was not able|could not|couldn't|cannot|can't) (?:to )?review\b", re.IGNORECASE),
+# A refusal OF THE PULL REQUEST (quota, outage): never a review, whatever else the body says.
+REFUSAL_OF_PR_MARKERS = (
     re.compile(r"\bunable to review this pull request\b", re.IGNORECASE),
+)
+# "Reviewed ZERO files": a refusal UNLESS every file it skipped is one Copilot itself lists as a
+# `Generated file` — then there was nothing reviewable left out, and the verdict it posted over the
+# rest (`### 🟢 Approval recommended …`) IS the review. Measured on MeshWeaver.Plugins#4507
+# (2026-10-28, reviews 5679764146 and 5680977145): a lockfile-only pull request drew an overview
+# verdict plus "Copilot wasn't able to review any files in this pull request." and a `1 file not
+# reviewed` list whose one entry was `package-lock.json: Generated file`; the first marker below read
+# that sentence as a refusal and the gate reported a real review as UNREVIEWABLE.
+REFUSAL_NO_FILES_MARKERS = (
+    re.compile(r"\bCopilot (?:was unable|wasn't able|was not able|could not|couldn't|cannot|can't) (?:to )?review\b", re.IGNORECASE),
     re.compile(r"\*\*Files reviewed:\*\*\s*0\s*/", re.IGNORECASE),
 )
+REFUSAL_MARKERS = REFUSAL_OF_PR_MARKERS + REFUSAL_NO_FILES_MARKERS
+# One entry of the reviewer's "N file(s) not reviewed" list: `<li>…<code>path</code>…: REASON</li>`.
+NOT_REVIEWED_ENTRY = re.compile(r"<li>.*?<code>[^<]+</code>.*?:\s*(?P<reason>[^<]+?)\s*</li>", re.IGNORECASE | re.DOTALL)
+NOT_REVIEWED_COUNT = re.compile(r"\b(?P<n>\d+) files? not reviewed\b", re.IGNORECASE)
+GENERATED_FILE_REASON = "generated file"
 # The reviewer-unavailable degradation (MeshWeaver.Feedback#86): the check run the internal
 # reviewer's App posts on the head commit when it could not review. Slug AND id, because a slug is
 # a display name an App owner can change and an id cannot be claimed by another App. The id was
@@ -273,6 +288,17 @@ def first_line(text: str | None) -> str:
     return "(empty body)"
 
 
+def only_generated_files_skipped(text: str) -> bool:
+    """True iff the body lists the files the reviewer did not review, the list is complete (its
+    entry count equals the `N file(s) not reviewed` it announces), and EVERY entry's reason is
+    `Generated file`. Fails closed: no list, a short list, or any other reason (a language it does
+    not support, a diff too large) keeps the zero-files body a refusal."""
+    reasons = [m.group("reason").strip().lower() for m in NOT_REVIEWED_ENTRY.finditer(text)]
+    announced = NOT_REVIEWED_COUNT.search(text)
+    return (bool(reasons) and announced is not None and int(announced.group("n")) == len(reasons)
+            and all(r == GENERATED_FILE_REASON for r in reasons))
+
+
 def classify_review_body(body: str | None) -> str:
     """'refused' | 'landed' | 'unrecognised'. A refusal wins; anything else the reviewer says is
     the review.
@@ -283,7 +309,9 @@ def classify_review_body(body: str | None) -> str:
     presentation substring cost. Only a body with no text at all is unrecognised: there is then
     nothing to read as either a review or a refusal."""
     text = body or ""
-    if any(m.search(text) for m in REFUSAL_MARKERS):
+    if any(m.search(text) for m in REFUSAL_OF_PR_MARKERS):
+        return "refused"
+    if any(m.search(text) for m in REFUSAL_NO_FILES_MARKERS) and not only_generated_files_skipped(text):
         return "refused"
     if text.strip():
         return "landed"
@@ -3034,6 +3062,18 @@ REVIEW_BODY_SEPT = "### 🟡 Changes recommended\n\n<details>\n<summary>Pull req
 REVIEW_BODY_JULY = "## Pull request overview\n\nThis PR adjusts the Distributed portal's mesh-level content-collection…"
 REFUSAL_QUOTA = "Copilot was unable to review this pull request because the user who requested the review has reached their quota limit."
 REFUSAL_NO_FILES = "### 🔵 Needs a closer look\n\n<summary>Pull request overview</summary>\n\n- **Files reviewed:** 0/4 changed files"
+# MeshWeaver.Plugins#4507 (2026-10-28), verbatim in shape: an overview verdict over a pull request
+# whose only file is one the reviewer itself classes `Generated file`. A REVIEW, not a refusal.
+REVIEW_BODY_GENERATED_ONLY = ("### 🟢 Approval recommended\n\nNo active review issues were identified for the undici "
+                              "dependency lockfile update.\n\nCopilot wasn't able to review any files in this pull request.\n"
+                              "<details>\n<summary><strong>1 file not reviewed</strong></summary>\n\n<ul>\n<li><strong><code>"
+                              "clients/portal-next/package-lock.json</code></strong>: Generated file</li>\n</ul>\n</details>\n")
+# Negative controls: the same shape with a skipped file that is NOT generated, and one whose list
+# is shorter than the count it announces — both stay refusals.
+REFUSAL_SKIPPED_UNSUPPORTED = REVIEW_BODY_GENERATED_ONLY.replace(
+    "1 file not reviewed", "2 files not reviewed").replace(
+    "</ul>", "<li><strong><code>tools/x.bin</code></strong>: Language not supported</li>\n</ul>")
+REFUSAL_SKIPPED_SHORT_LIST = REVIEW_BODY_GENERATED_ONLY.replace("1 file not reviewed", "3 files not reviewed")
 # The three bodies the reviewer actually posted on 2026-09-18 (#4725, #4728, #4721), verbatim in
 # shape: a verdict heading and a sentence or two, with NO overview block. Every one of these was a
 # real review that the pre-2026-09-18 marker rule classified as "not landed".
@@ -3140,6 +3180,19 @@ def self_test() -> int:
          Waiver(True, (_labeled(PERSON),), {"rbuergi": "maintain"}),
          never_says=("unreviewable right now", "RED — UNREVIEWABLE"))
     case("zero files reviewed is not a review", (NOT_LANDED,), _pr(0), [_review(REFUSAL_NO_FILES)], [])
+    # MeshWeaver.Plugins#4507: an overview verdict whose every skipped file is `Generated file` is a
+    # review — even after earlier quota refusals, and the reader is not told "unreviewable".
+    case("overview over generated-only files is a review (Plugins#4507)", GREEN, _pr(0),
+         [_review(REFUSAL_QUOTA, at="2026-10-28T06:32:04Z", rid=1), _review(REFUSAL_QUOTA, at="2026-10-28T08:00:01Z", rid=2),
+          _review(REVIEW_BODY_GENERATED_ONLY, at="2026-10-28T10:12:44Z", rid=3)], [],
+         mention=("automatic review landed: review 3",), never_says=("UNREVIEWABLE",))
+    case("quota refusals alone stay unreviewable (negative control for Plugins#4507)", (NOT_LANDED,), _pr(0),
+         [_review(REFUSAL_QUOTA, at="2026-10-28T06:32:04Z", rid=1), _review(REFUSAL_QUOTA, at="2026-10-28T08:00:01Z", rid=2)], [],
+         says=("RED — UNREVIEWABLE",))
+    case("zero files reviewed with a NON-generated file skipped is not a review", (NOT_LANDED,), _pr(0),
+         [_review(REFUSAL_SKIPPED_UNSUPPORTED)], [], mention=("is a refusal",))
+    case("zero files reviewed with a list shorter than its count is not a review", (NOT_LANDED,), _pr(0),
+         [_review(REFUSAL_SKIPPED_SHORT_LIST)], [], mention=("is a refusal",))
     # POLICY, changed 2026-09-18: an unfamiliar body is a NEW FORMAT, not an absence. This case
     # asserted the opposite until the reviewer dropped its overview block and six reviewed core
     # pull requests all read as "not landed" on a required context.
