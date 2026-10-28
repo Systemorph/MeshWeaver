@@ -126,7 +126,11 @@ public static class PartitionStorageHubExtensions
         // Errors are FORWARDED (unlike ListChildPaths' empty fallback): the caller is
         // the recursive-delete verifier, and an enumeration that failed must fail the
         // delete loudly — an empty answer here would falsely verify a drained subtree.
+        // An empty completion is an error too (MeshWeaver#7461): without it no response is ever
+        // posted, and the caller waits out its budget for an answer that was never coming.
         adapter.ListDescendantPaths(request.Message.RootPath)
+            .Take(1)
+            .RequireAnswer(adapter.GetType().Name, request.Message.RootPath)
             .Subscribe(
                 paths => hub.Post(
                     new ListDescendantPathsResponse(paths.ToImmutableList()),

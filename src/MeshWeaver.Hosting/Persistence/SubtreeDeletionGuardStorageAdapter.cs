@@ -278,8 +278,15 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
         => inner.ListChildPaths(parentPath);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Forwards, and — as the OUTERMOST decorator every caller resolves — refuses an inner
+    /// enumeration that completes WITHOUT an answer (MeshWeaver#7461): every recursive delete, move
+    /// and teardown plans off this, and an empty completion would otherwise read as "nothing under
+    /// the root" on a single-store mesh that has no <c>PersistenceService</c> composite to catch it.
+    /// </remarks>
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-        => inner.ListDescendantPaths(rootPath);
+        => inner.ListDescendantPaths(rootPath)
+            .RequireAnswer(inner.GetType().Name, rootPath);
 
     /// <inheritdoc />
     /// <remarks>Pure delegation — only the composite below knows its providers, and the
