@@ -224,6 +224,70 @@ public static class JsonSynchronizationStream
         };
 
     /// <summary>
+    /// Marks a <see cref="DeliveryFailure"/> that <see cref="RaiseVerdictOnStreamHub{TReduced}"/>
+    /// relayed from the subscribing hub to the stream's own hub. The relay is protocol, not news:
+    /// the sync hub's failure handler logs it at Debug, so an absent node read in a loop costs no
+    /// more Warning lines than before the relay existed.
+    /// </summary>
+    internal const string SubscribeVerdictProperty = "SubscribeVerdict";
+
+    /// <summary>
+    /// 🚨 Raises the owner's subscribe VERDICT (NotFound, a refusal, a failed owner) on the
+    /// stream's OWN <c>sync/{id}</c> hub — never on the turn of the hub that issued the
+    /// <see cref="SubscribeRequest"/> (#7492, #7495, #7477).
+    ///
+    /// <para><b>Why.</b> The verdict is the answer to <c>hub.Observe(SubscribeRequest)</c>, so the
+    /// SUBSCRIBING hub's <c>HandleCallbacks</c> delivers it, on that hub's action block. Calling
+    /// <c>reduced.OnError</c> there ran every reader's error continuation inline on that block. For
+    /// the node-stream cache the subscribing hub is <c>cache/{meshId}</c>, the ONE hub every node
+    /// read of the process subscribes through — so a single reader that blocked in its error path
+    /// held the whole process's reads behind it. Measured on memex-cloud: three cache hubs at
+    /// <c>Executing(DeliveryFailure, …)</c> for 16 to 56 minutes with 6,000–9,000 deliveries
+    /// queued, each wedge starting right after a <c>[ROUTE] NotFound</c> whose last logged line was
+    /// <c>[SYNC_STREAM] OnError</c>, and every later read (a chat composer, a document view, a
+    /// Space root) timing out with its trail at <c>QUEUED queue=main</c>.</para>
+    ///
+    /// <para>A stream's DATA never had this problem: <c>RouteStreamMessage</c> forwards each
+    /// <c>DataChangedEvent</c> to the stream's own hub, so a reader stuck on a value holds up only
+    /// its own stream. This makes the fault take the same road. The sync hub already handles an
+    /// un-awaited <see cref="DeliveryFailure"/> by faulting its stream (its
+    /// <c>WithStreamHandler&lt;DeliveryFailure&gt;</c>), and its initialization gate admits one, so
+    /// re-posting the failure there is the existing protocol rather than a new message. The relayed
+    /// delivery carries no <c>RequestId</c>, so no callback consumes it on the way in.</para>
+    ///
+    /// <para>Only a <see cref="DeliveryFailureException"/> is relayed: that is the shape the
+    /// subscribing hub's turn delivers. Anything else (a stream with no live hub left, a post the
+    /// hub refuses) is raised inline exactly as before — the stream is never left without its
+    /// terminal.</para>
+    /// </summary>
+    /// <typeparam name="TReduced">The stream's value type.</typeparam>
+    /// <param name="reduced">The stream whose subscription the owner answered.</param>
+    /// <param name="error">The verdict, as the <c>Observe</c> callback received it.</param>
+    /// <param name="logger">Where a refused relay is reported before the inline fallback.</param>
+    internal static void RaiseVerdictOnStreamHub<TReduced>(
+        ISynchronizationStream<TReduced> reduced, Exception error, ILogger logger)
+    {
+        if (error is DeliveryFailureException { Failure: { } failure }
+            && reduced.HubIfHeld() is { RunLevel: <= MessageHubRunLevel.Started } streamHub)
+        {
+            try
+            {
+                if (streamHub.Post(failure, o => o
+                        .WithTarget(streamHub.Address)
+                        .WithProperty(SubscribeVerdictProperty, true)) is not null)
+                    return;
+            }
+            catch (Exception relayFault)
+            {
+                logger.LogDebug(relayFault,
+                    "Stream {StreamId}: could not relay the subscribe verdict to {Hub}; raising it inline",
+                    reduced.StreamId, streamHub.Address);
+            }
+        }
+        reduced.OnError(error);
+    }
+
+    /// <summary>
     /// How far up the hub tree the recycle re-arm looks for the local instance of a rejecting
     /// owner (see <c>LocalInstanceOf</c>). Real trees are two or three deep — mesh → cache/client
     /// → sync — so this is only a guard against a malformed parent chain.
@@ -718,7 +782,7 @@ public static class JsonSynchronizationStream
                     logger.LogDebug(
                         "SubscribeRequest for stream {StreamId} failed — owner {Owner} unreachable: {Message}",
                         reduced.StreamId, owner, ex.Message);
-                    reduced.OnError(ex);
+                    RaiseVerdictOnStreamHub(reduced, ex, logger);
                     keepAlive.Dispose();
                 });
         // 🚨 Registered on the STREAM, and ONLY on the stream (#3432). The line that used to
@@ -1020,7 +1084,9 @@ public static class JsonSynchronizationStream
                                 // Only ShuttingDown is a promise to ride out (RidingOutAShuttingDownAddress);
                                 // a verdict faults the subscribers and stops the keep-alive, so the reader
                                 // learns "gone" now and re-asks fresh if the node ever comes back.
-                                reduced.OnError(ex);
+                                // Raised on the stream's own hub, never on the subscribing hub's
+                                // turn — see RaiseVerdictOnStreamHub (#7492).
+                                RaiseVerdictOnStreamHub(reduced, ex, logger);
                                 keepAlive.Dispose();
                             });
                 }
