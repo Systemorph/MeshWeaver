@@ -256,9 +256,18 @@ public static class JsonSynchronizationStream
     /// delivery carries no <c>RequestId</c>, so no callback consumes it on the way in.</para>
     ///
     /// <para>Only a <see cref="DeliveryFailureException"/> is relayed: that is the shape the
-    /// subscribing hub's turn delivers. Anything else (a stream with no live hub left, a post the
+    /// subscribing hub's turn delivers. Anything else (a stream with no hub left, a post the
     /// hub refuses) is raised inline exactly as before — the stream is never left without its
     /// terminal.</para>
+    ///
+    /// <para>🚨 <b>The hub's INTAKE VERDICT decides, never a run-level probe taken before the
+    /// post.</b> The sync hub can cross into teardown between any check made here and the
+    /// <c>Post</c>, and its teardown guard then hands back a <c>Failed</c> envelope having enqueued
+    /// nothing. A non-null envelope is therefore not a relay: reading it as one returned without
+    /// raising, and the stream lost its terminal for good. The decider is the one acceptance
+    /// predicate, <see cref="IMessageDelivery.WasAcceptedForDelivery"/>, which every other carrier
+    /// of a verdict reads (MeshWeaver#1174). With that deciding, a run-level probe adds nothing
+    /// but the race, so there is none.</para>
     /// </summary>
     /// <typeparam name="TReduced">The stream's value type.</typeparam>
     /// <param name="reduced">The stream whose subscription the owner answered.</param>
@@ -268,14 +277,17 @@ public static class JsonSynchronizationStream
         ISynchronizationStream<TReduced> reduced, Exception error, ILogger logger)
     {
         if (error is DeliveryFailureException { Failure: { } failure }
-            && reduced.HubIfHeld() is { RunLevel: <= MessageHubRunLevel.Started } streamHub)
+            && reduced.HubIfHeld() is { } streamHub)
         {
             try
             {
                 if (streamHub.Post(failure, o => o
                         .WithTarget(streamHub.Address)
-                        .WithProperty(SubscribeVerdictProperty, true)) is not null)
+                        .WithProperty(SubscribeVerdictProperty, true)) is { WasAcceptedForDelivery: true })
                     return;
+                logger.LogDebug(
+                    "Stream {StreamId}: {Hub} refused the subscribe verdict (RunLevel={RunLevel}); raising it inline",
+                    reduced.StreamId, streamHub.Address, streamHub.RunLevel);
             }
             catch (Exception relayFault)
             {
