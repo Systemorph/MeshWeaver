@@ -17,8 +17,20 @@ namespace MeshWeaver.Markdown;
 /// </summary>
 /// <param name="currentNodePath">The path of the node this markdown belongs to, or null. Only the
 /// ```` ```prompt ```` fence uses it — see <see cref="WritePromptComposer"/>.</param>
-public class ExecutableCodeBlockRenderer(string? currentNodePath = null) : CodeBlockRenderer
+/// <param name="executesCode">Whether <c>--execute</c> / <c>--render</c> fences render as executable
+/// cells. <c>false</c> writes them as ordinary code blocks — no cell frame, no kernel result area,
+/// no toolbar — so a client finds nothing to submit (see <c>MarkdownControl.ExecutesCode</c>).</param>
+public class ExecutableCodeBlockRenderer(string? currentNodePath, bool executesCode) : CodeBlockRenderer
 {
+    /// <summary>The executing renderer — the shape every existing caller compiled against.</summary>
+    /// <param name="currentNodePath">The path of the node this markdown belongs to, or null.</param>
+    public ExecutableCodeBlockRenderer(string? currentNodePath = null) : this(currentNodePath, executesCode: true)
+    {
+    }
+
+    /// <summary>Whether executable fences render as runnable cells (see the constructor).</summary>
+    public bool ExecutesCode { get; } = executesCode;
+
     /// <summary>Fence argument that requests the code be displayed (<c>--show-code</c>).</summary>
     public const string ShowCode = "show-code";
 
@@ -79,6 +91,17 @@ public class ExecutableCodeBlockRenderer(string? currentNodePath = null) : CodeB
 
         if (fenced.PromptDraft is not null && WritePromptComposer(renderer, obj, fenced.PromptDraft))
             return;
+
+        // Not executable here: the fence is shown, never run. The inert parser already withheld the
+        // submission (ExecutableCodeBlock.ExecutesCode), so extraction cannot recreate it either;
+        // clearing it again covers an inert renderer over an executing parse. The plain <pre> keeps
+        // the code visible, including a silent --execute fence that would otherwise render as nothing.
+        if (!(ExecutesCode && fenced.ExecutesCode) && fenced.RequestsExecution)
+        {
+            fenced.SubmitCode = null;
+            base.Write(renderer, obj);
+            return;
+        }
 
         var args = fenced.Args;
         var showsHeader = args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null

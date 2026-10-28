@@ -265,7 +265,9 @@ public static class OverviewLayoutArea
     /// </summary>
     public static UiControl? BuildMarkdownBody(LayoutAreaHost host, MeshNode? node)
         => node is not null && MarkdownBodyText(node) is { } body
-            ? new MarkdownControl(body.Markdown ?? "") { Html = body.Html, NodePath = node.Path }
+            // The node's OWN markdown body, written by those who may change the node: notebook
+            // content, so its cells run (MarkdownControl.ExecutesCode).
+            ? new MarkdownControl(body.Markdown ?? "") { Html = body.Html, NodePath = node.Path, ExecutesCode = true }
                 .WithStyle(MarkdownBodyStyle)
             : null;
 
@@ -290,7 +292,7 @@ public static class OverviewLayoutArea
 
     /// <summary>The markdown body with its bound values as POINTERS.</summary>
     internal static MarkdownControl BodyTemplate(object markdown, object? html, object style, string nodePath)
-        => new(markdown) { Html = html, NodePath = nodePath, Style = style };
+        => new(markdown) { Html = html, NodePath = nodePath, Style = style, ExecutesCode = true };
 
     /// <summary>
     /// The text <see cref="BuildMarkdownBody"/> shows — the raw markdown and the pre-rendered HTML,
