@@ -1210,6 +1210,119 @@ def compile_set(work: Path, cs_files, ref_xml: str, restored: bool, ai_available
     return errors, needs_external, infra_error
 
 
+# ── parallel builds ────────────────────────────────────────────────────────────────────────────
+# Every distinct set is its OWN compilation (one `dotnet build` of one generated project), and no
+# set reads another's output, so the sets are independent work. Built one after another they were
+# the whole critical path of a Plugins pull request that touches Hosting: 48 sets, 409 s
+# (MeshWeaver.Plugins run 40743963637, job 123031227197). The in-mesh lane compiles the same
+# NodeTypes through one shared gate since core #7465; this is the same shape for this gate.
+#
+# A set is unchanged by running beside another: each worker owns its own work directory (its own
+# Combined.cs, check.csproj and obj/), the verdicts are printed in the serial order, and every
+# number that used to be printed still is. Only the wall clock changes.
+PARALLEL_ENV = "MW_COMPILE_CHECK_PARALLEL"
+# What one concurrent `dotnet build` of a generated set is BUDGETED: its MSBuild node plus its share
+# of the shared compiler server, against the platform's ~580 reference assemblies. A conservative
+# budget, not a per-build measurement: on a developer machine the whole dotnet process tree grew by
+# under 1 GiB going from one build at a time to four on the Plugins Hosting unit. Memory only ever
+# NARROWS the width below the CPU count; it never widens it.
+PER_BUILD_BYTES = 1536 * 1024 * 1024
+
+
+def available_cpus() -> int:
+    """CPUs this process may actually use: the affinity mask, narrowed by a cgroup v2 CPU quota (a
+    runner pod's `cpu.max`). `os.cpu_count()` alone reports the NODE's CPUs inside a container."""
+    try:
+        cpus = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        cpus = os.cpu_count() or 1
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()[:2]
+        if quota != "max" and int(period) > 0:
+            cpus = min(cpus, max(1, -(-int(quota) // int(period))))
+    except (OSError, ValueError):
+        pass
+    return max(1, cpus)
+
+
+def available_memory() -> "int | None":
+    """Bytes this process may still use: the cgroup v2 limit minus what the cgroup holds, else the
+    kernel's MemAvailable. None where neither can be read (macOS): memory then does not bound."""
+    try:
+        limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+        if limit != "max":
+            used = int(Path("/sys/fs/cgroup/memory.current").read_text().strip())
+            return max(0, int(limit) - used)
+    except (OSError, ValueError):
+        pass
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def compile_parallelism(sets: int, override: "str | None", cpus: int,
+                        memory: "int | None") -> "tuple[int, str]":
+    """(builds at a time, the reason printed for it). Pure.
+
+    An explicit override wins and must be a positive integer: anything else raises ValueError,
+    which the caller refuses as a usage error, so a typo can never quietly fall back to one build
+    at a time or to the machine's whole width. Without one: one build per usable CPU, no more
+    than memory holds at PER_BUILD_BYTES each, and never more than there are sets."""
+    if override is not None and override.strip() != "":
+        if not re.fullmatch(r"[1-9][0-9]*", override.strip()):
+            raise ValueError(f"{PARALLEL_ENV}={override!r} is not a positive integer")
+        n = int(override.strip())
+        return max(1, min(n, sets)), f"{PARALLEL_ENV}={n}"
+    width, why = cpus, f"{cpus} usable CPU(s)"
+    if memory is not None:
+        by_memory = max(1, memory // PER_BUILD_BYTES)
+        if by_memory < width:
+            width, why = by_memory, (f"{memory // (1024 * 1024)} MiB available at "
+                                     f"{PER_BUILD_BYTES // (1024 * 1024)} MiB per build")
+    return max(1, min(width, sets)), why
+
+
+def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int):
+    """Yield (item, compile_set result, seconds) for each ((sources, lambda), names) item, in the
+    ORDER GIVEN, building up to `workers` sets at once. Each worker borrows one work directory for
+    the duration of a build, so two builds never share a project file or an obj/ directory; a
+    directory restores on its first build and passes `--no-restore` after, exactly as the single
+    directory of the serial loop did."""
+    import queue
+    import tempfile
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    dirs = queue.Queue()
+    restored = {}
+    for _ in range(max(1, workers)):
+        work = Path(tempfile.mkdtemp(prefix="compile-check-"))
+        restored[work] = False
+        dirs.put(work)
+
+    def build(item):
+        (sources, lam), _ = item
+        work = dirs.get()
+        try:
+            started = time.time()
+            outcome = compile_set(work, sources, ref_xml, restored[work], ai_available,
+                                  lambda_src=lam, impl_frameworks=impl_frameworks)
+            restored[work] = True
+            return outcome, time.time() - started
+        finally:
+            dirs.put(work)
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        # `map` yields in submission order as each result is ready, so the log keeps the serial
+        # order and streams while later sets are still building.
+        for item, (outcome, seconds) in zip(ordered, pool.map(build, ordered)):
+            yield item, outcome, seconds
+
+
 # ── diagnostics classification ─────────────────────────────────────────────────────────────────
 
 def _is_ai_error(err: str) -> bool:
@@ -1743,6 +1856,7 @@ def _self_test() -> int:
             failures.append(f"  report: a clean gate must read gate_fail=false with no breaks, got {got!r}")
 
     _self_test_exit_codes(failures)
+    _self_test_parallel(failures)
 
     if failures:
         print("✗ compile-check self-test FAILED:")
@@ -1753,6 +1867,9 @@ def _self_test() -> int:
           "`#nullable enable` in the FIRST file reaches the LAST; node-path order, not file-path "
           "order; no BOM mid-unit; the hoist is a move; the lambda type-checks last; every "
           "diagnostic line maps back to its authored file; and the csproj compiles exactly one file")
+    print("✓ parallel builds: the width follows CPUs, memory and the override (a non-integer override "
+          "is refused), results stream in the serial order, no two builds share a work directory, "
+          "each directory restores once, and four workers do overlap")
     print("✓ short-reference-set refusal: fires on an image set with no shared frameworks and on any "
           "set with no System.Reactive, names the refill, stays silent on a complete image cache and "
           "on a core source build — and the generated csproj restores no Rx version (#4404)")
@@ -1771,6 +1888,85 @@ def _self_test() -> int:
           f"{EXIT_REFUSED_NOTHING_JUDGED} — each with one `REFUSED` line and no GREEN line; a "
           "NodeType-less --modules unit says NOTHING TO COMPILE; GREEN only over a judged count > 0")
     return 0
+
+
+def _self_test_parallel(failures: list) -> None:
+    """Parallel builds change the wall clock and NOTHING else: verdicts come back in the serial
+    order, no two concurrent builds share a work directory, every directory restores exactly once,
+    and the width is what the inputs say — an override that is not a positive integer is refused."""
+    import threading
+    import time
+    gib = 1024 * 1024 * 1024
+    width_cases = [
+        # (sets, override, cpus, memory,      expected)
+        (48, None, 8, None,                    8),   # CPUs bound
+        (48, None, 8, 6 * gib,                 4),   # memory bounds below the CPUs
+        (48, None, 8, 0,                       1),   # no memory left still builds, one at a time
+        (3,  None, 8, None,                    3),   # never wider than the work
+        (48, "2", 8, None,                     2),   # the override wins …
+        (48, "64", 8, None,                    48),  # … but never wider than the work
+        (48, "", 8, None,                      8),   # an EMPTY variable is "not set"
+        (0,  None, 8, None,                    1),
+    ]
+    for sets, override, cpus, memory, expected in width_cases:
+        got, _ = compile_parallelism(sets, override, cpus, memory)
+        if got != expected:
+            failures.append(f"  parallelism({sets}, {override!r}, {cpus}, {memory}) = {got}, expected {expected}")
+    for bad in ("0", "-1", "two", "1.5"):
+        try:
+            compile_parallelism(48, bad, 8, None)
+            failures.append(f"  parallelism: the override {bad!r} was ACCEPTED — a typo must be refused, "
+                            "never read as one build or as the whole machine")
+        except ValueError:
+            pass
+
+    # The pool, with compile_set replaced by a fake that finishes the EARLY sets LAST, so a pool that
+    # yielded in completion order would print them out of order.
+    global compile_set
+    real = compile_set
+    lock = threading.Lock()
+    state = {"live": 0, "peak": 0, "dirs": set(), "restores": [], "clash": False}
+
+    def fake(work, sources, ref_xml, restored, ai_available, lambda_src=None, impl_frameworks=False):
+        with lock:
+            if work in state["dirs"]:
+                state["clash"] = True
+            state["dirs"].add(work)
+            state["live"] += 1
+            state["peak"] = max(state["peak"], state["live"])
+            if not restored:
+                state["restores"].append(work)
+        time.sleep(0.02 * (10 - int(lambda_src)))
+        with lock:
+            state["dirs"].discard(work)
+            state["live"] -= 1
+        return [f"E{lambda_src}"], False, None
+
+    ordered = [((frozenset(), str(i)), [f"Pkg/T{i}"]) for i in range(10)]
+    compile_set = fake
+    try:
+        got = [(item[1][0], outcome[0][0]) for item, outcome, _ in
+               compile_sets(ordered, "", True, False, 4)]
+        wide_peak, wide_restores = state["peak"], len(state["restores"])
+        state.update(live=0, peak=0, restores=[])
+        list(compile_sets(ordered, "", True, False, 1))
+        serial_peak, serial_restores = state["peak"], len(state["restores"])
+    finally:
+        compile_set = real
+    if got != [(f"Pkg/T{i}", f"E{i}") for i in range(10)]:
+        failures.append(f"  parallel: results came back out of the serial order: {got}")
+    if state["clash"]:
+        failures.append("  parallel: two concurrent builds shared ONE work directory")
+    # NEGATIVE CONTROL for the width: four workers must actually overlap, or this test would pass
+    # over a pool that silently ran serially.
+    if wide_peak < 2:
+        failures.append(f"  parallel: four workers never ran two builds at once (peak {wide_peak})")
+    if wide_restores != 4:
+        failures.append(f"  parallel: four work directories restored {wide_restores} times, expected 4")
+    if serial_peak != 1:
+        failures.append(f"  parallel: one worker ran {serial_peak} builds at once")
+    if serial_restores != 1:
+        failures.append(f"  parallel: one worker restored {serial_restores} times, expected once")
 
 
 def _self_test_exit_codes(failures: list) -> None:
@@ -2100,24 +2296,26 @@ def main() -> int:
                 empty_declared[name] = "has a Source/ folder that resolves to zero .cs files"
             # else: no sources declared and no Source folder → legitimately source-less; skip.
 
-    import tempfile
-    work = Path(tempfile.mkdtemp(prefix="compile-check-"))
-
     with_lambda = sum(1 for (_, lam) in sets if lam)
     print(f"compile-check: {len(types)} NodeType(s), {len(sets)} distinct source set(s) "
-          f"({with_lambda} with a configuration lambda), {len(refs)} ref assemblies\n")
+          f"({with_lambda} with a configuration lambda), {len(refs)} ref assemblies")
+    try:
+        workers, why = compile_parallelism(len(sets), os.environ.get(PARALLEL_ENV),
+                                           available_cpus(), available_memory())
+    except ValueError as e:
+        print(f"error: {e}")
+        return refuse(EXIT_USAGE, str(e))
+    print(f"compile-check: {workers} build(s) at a time — {why}\n")
 
     # compile each distinct set; map result back to every node sharing it
     result = {}                     # node-path -> ("ok"|"fail"|"unverifiable", [errors])
-    restored = False
     import time
     t0 = time.time()
-    for i, ((s, lam), names) in enumerate(
-            sorted(sets.items(), key=lambda kv: sorted(kv[1])[0]), 1):
-        errors, needs_external, infra_error = compile_set(
-            work, s, ref_xml, restored, ai_available, lambda_src=lam,
-            impl_frameworks=impl_frameworks)
-        restored = True
+    ordered = sorted(sets.items(), key=lambda kv: sorted(kv[1])[0])
+    work_seconds = 0.0
+    for i, (((s, lam), names), (errors, needs_external, infra_error), seconds) in enumerate(
+            compile_sets(ordered, ref_xml, ai_available, impl_frameworks, workers), 1):
+        work_seconds += seconds
         if infra_error:
             # nonzero build with no CS diagnostic (restore/SDK/MSBuild) — a real, gating failure.
             status, errors = "fail", [infra_error]
@@ -2137,6 +2335,10 @@ def main() -> int:
         print(f"  [{i}/{len(sets)}] {tag:12} {lead}{extra}"
               + (f"    {errors[0]}" if errors else ""))
     elapsed = time.time() - t0
+    if sets:
+        print(f"\ncompile-check: {len(sets)} build(s), {work_seconds:.1f}s of build work in "
+              f"{elapsed:.1f}s wall on {workers} worker(s) — parallel speed-up "
+              f"{work_seconds / elapsed if elapsed > 0 else 1.0:.1f}×")
 
     # NodeTypes that declare/expect sources but resolved to zero .cs — a real hole (never compiled),
     # so they FAIL the gate (subject to the same allowlist ratchet as compile failures).
