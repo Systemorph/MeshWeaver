@@ -363,6 +363,11 @@ every content-only pull request. Two rules let it reuse the baseline's bundles i
   either is named, any change outside the node-package directories since the baseline
   (`.github/` and `.claude/` aside) withdraws every reuse.
 
+  Both trees are keyed with HEAD's matrix entry, so the entry's compiler (`build`, `accept`)
+  reads the same on both sides even when main switched it after the baseline. That switch lives
+  in the caller's workflow, so any change under `.github/` since the baseline also withdraws every
+  reuse: a module main moved from `sdk` to `container` is never served the old SDK bundle.
+
   An entry that cannot be keyed is built, and a comparison that fails keeps every normal build.
 
 

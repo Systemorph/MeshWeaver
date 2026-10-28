@@ -29,7 +29,10 @@ KEYED at the baseline sha and at HEAD with module-build-key.py (the ledger's con
 closure, package versions, requires, every Directory.* import and global build input), plus its package's
 release version, and is reused only when both sides agree. When a caller project is named with
 --key-project (the shelf, the build extension), MSBuild-evaluated inputs no static walk can list may
-lie anywhere outside the node packages, so any change there since the baseline withdraws every reuse. Anything unkeyable withdraws the reuse; a failure of the comparison itself
+lie anywhere outside the node packages, so any change there since the baseline withdraws every reuse.
+Both trees are keyed with HEAD's matrix entry, so a compiler switch (`build` / `accept`) main made in
+its workflow after the baseline is invisible to the keys: any change under .github/ since the baseline
+therefore withdraws every reuse too. Anything unkeyable withdraws the reuse; a failure of the comparison itself
 keeps every normal build.
 """
 import argparse
@@ -192,6 +195,24 @@ def outside_packages(changed, package_dirs):
                   and p.split("/", 1)[0] not in package_dirs)
 
 
+# Each entry's `build` / `accept` (the COMPILER: sdk or container) is part of its content address, but
+# both trees above are keyed with HEAD's entry, so a compiler switch main made after the baseline is
+# invisible to that comparison. Those fields live in the caller's workflow (its `modules:` input),
+# under .github/. So on a pull request any change there since the baseline withdraws every reuse.
+MATRIX_CONFIG = (".github/",)
+
+
+def matrix_config_changed(changed):
+    """The changed paths that may define the module matrix (the caller's workflows). Pure."""
+    return sorted(p for p in changed if p and p.startswith(MATRIX_CONFIG))
+
+
+def withdraw_all(entries, why):
+    """(entries without `reuse`, [(module, why)] for each entry that carried it). Pure."""
+    withdrawn = [(e["module"], why) for e in entries if e.get("reuse")]
+    return [{k: v for k, v in e.items() if k != "reuse"} for e in entries], withdrawn
+
+
 def unchanged_since_baseline(entries, head_inputs, base_inputs):
     """(entries, withdrawn): keep `reuse` only on an entry whose build inputs are identical at the
     baseline and at HEAD. `head_inputs` / `base_inputs` map an entry to its inputs or raise
@@ -231,18 +252,27 @@ def baseline_tree_guard(root, sha, extra_projects):
                                    text=True, timeout=600, check=True, env={**os.environ, "MW_REPO_ROOT": str(base)})
                 kept, withdrawn = unchanged_since_baseline(
                     entries, lambda e: build_inputs(root, e, mbk), lambda e: build_inputs(base, e, mbk))
-                if extra_projects and any(e.get("reuse") for e in kept):
+                changed = []
+                if any(e.get("reuse") for e in kept):
                     changed = subprocess.run(["git", "-C", str(root), "diff", "--name-only", sha],
                                              capture_output=True, text=True, timeout=120, check=True).stdout.split()
+                config = matrix_config_changed(changed)
+                if config and any(e.get("reuse") for e in kept):
+                    kept, more = withdraw_all(kept, (
+                        f"{len(config)} path(s) under .github/ changed since the baseline (e.g. "
+                        f"{', '.join(config[:3])}) and could switch a module's compiler (`build` / "
+                        f"`accept`), which both trees were keyed with HEAD's value of"))
+                    withdrawn += more
+                if extra_projects and any(e.get("reuse") for e in kept):
                     packages = {d.name for t in (Path(root), base) for d in t.iterdir()
                                 if d.is_dir() and (d / "index.json").is_file()}
                     outside = outside_packages(changed, packages)
                     if outside:
-                        why = (f"{len(outside)} path(s) outside the node packages changed since the baseline "
-                               f"(e.g. {', '.join(outside[:3])}) and could be an input of "
-                               f"{', '.join(extra_projects)}")
-                        withdrawn += [(e["module"], why) for e in kept if e.get("reuse")]
-                        kept = [{k: v for k, v in e.items() if k != "reuse"} for e in kept]
+                        kept, more = withdraw_all(kept, (
+                            f"{len(outside)} path(s) outside the node packages changed since the baseline "
+                            f"(e.g. {', '.join(outside[:3])}) and could be an input of "
+                            f"{', '.join(extra_projects)}"))
+                        withdrawn += more
             finally:
                 subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(base)],
                                capture_output=True, text=True, timeout=120)
@@ -504,7 +534,14 @@ def self_test():
     assert outside_packages(["Pkg/a.md", "src/Shelf/Linked.cs", "Directory.Build.props", "tools/x.props"],
                             {"Pkg"}) == ["Directory.Build.props", "src/Shelf/Linked.cs", "tools/x.props"], \
         "NEGATIVE CONTROL: src/, root and tools/ paths may be MSBuild inputs of the shelf"
-    print("publication reuse: 36 assertions passed")
+    # The matrix rule: a compiler switch lives in the caller's workflow, which neither key sees.
+    assert matrix_config_changed(["Pkg/a.md", "src/A/A.cs", "Directory.Build.props"]) == [], \
+        "content and source changes alone do not touch the matrix configuration"
+    assert matrix_config_changed(["Pkg/a.md", ".github/workflows/ci.yml"]) == [".github/workflows/ci.yml"], \
+        "NEGATIVE CONTROL: a workflow edit since the baseline may switch an entry from sdk to container"
+    got, more = withdraw_all([{"module": "A", "reuse": {"runId": "1"}}, {"module": "B"}], "why")
+    assert not any("reuse" in e for e in got) and more == [("A", "why")], (got, more)
+    print("publication reuse: 39 assertions passed")
 
 
 def main():
