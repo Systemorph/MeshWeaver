@@ -138,10 +138,18 @@ public class ACompileDependencyFloorReadsThePackageRootTest(ITestOutputHelper ou
 
         await NodeFactory.CreateNode(new MeshNode(root)
         {
-            NodeType = "Markdown",
+            // A partition root (only a partition-owning type may sit at the top level), carrying
+            // the package's requirement list as the import writes it.
+            NodeType = "Space",
             Name = "A package root nobody has opened",
             State = MeshNodeState.Active,
-            Content = PluginRootContent("AI@^1.40.0"),
+            // `description` is a member Space declares, so the content binds; `requires` rides beside
+            // it exactly as on a package root.
+            Content = JsonSerializer.SerializeToElement(new
+            {
+                description = "a package root",
+                requires = new[] { "AI@^1.40.0" },
+            }),
         }).Timeout(TestTimeouts.Convergence).Await(ct);
         Mesh.GetHostedHub(address, HostedHubCreation.Never).Should().BeNull(
             "the precondition: creating the root does not activate its hub");

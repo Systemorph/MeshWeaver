@@ -406,7 +406,18 @@ of an existing build (`GetConfigurationsFromExistingAssembly`) is the other: it 
 handler adopts a published or pinned build, and without the guard an older replica loaded a newer
 build whose dependency members it lacks, and the reflection failure was stamped `Error`. The batch
 bake's REPORTED outcome reads the same non-verdict predicate as its stamp, so an unmet floor reports
-"not evaluated" and never `CompileError`, which would cascade `UpstreamFailed` to dependents. Pinned by
+"not evaluated" and never `CompileError`, which would cascade `UpstreamFailed` to dependents. The
+compile activity's failure line says "Compile NOT ATTEMPTED", never "Roslyn failed".
+
+Because the floor sits on the ACTIVATION path, both of its reads stay off it. The package root is
+read as PERSISTED, through the path resolver, and never through the root's own hub. A package root
+is often an instance of a type its own package defines (`Store` is a `Store/Catalog`), and reading
+it through its hub made a cold root's activation wait for itself until the read's budget ran out,
+after which the floor was silently not judged. The loaded modules are read off the landing
+service's maintained activation snapshot (`ServedLoadedPackageModuleReader`) rather than a volume
+walk per call, which measured 7–9 s on the fleet's share. The snapshot can lag by its freshness
+bound, and a lag only leaves a module unjudged; it never misjudges one, because a generation's
+version never changes. Pinned by
 `AnUnmetDependencyFloorIsNotACompileVerdictTest` (with met-floor negative controls for the compile
 and the hydration), `ABatchBakeBelowADependencyFloorFormsNoVerdictTest` and
 `ACompileDependencyFloorReadsThePackageRootTest`.
