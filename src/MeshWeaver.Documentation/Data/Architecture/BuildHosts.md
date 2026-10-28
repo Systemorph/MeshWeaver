@@ -797,6 +797,11 @@ would replace, and the claim is refused until that list is empty.
   TRUNK build (MeshWeaver.Deploy#42), so the cache follows `main` as it moves. An offline-only restore
   could never warm it: the first trunk build that needs a new package would be red, and nothing would
   ever be promoted.
+- **Core declares the host's warm restore.** `.github/build-stages.json` carries
+  `"restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true", "timeoutMinutes": 20}`
+  — the build's own closure. The host reads it from the default branch's tip, never from a run's own tree,
+  and runs it once per restore key to fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py`
+  validates its shape and, for core, reds a restore that drifts from the build's solution and properties.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
