@@ -28,13 +28,21 @@ namespace MeshWeaver.Graph.Test;
 /// hub it had just asked to dispose (still <c>Started</c>, so admitted), and <c>GetMeshNode</c> timed
 /// out after 60 s with the trail ending at <c>ROUTED onTarget=True state=Submitted</c>.</para>
 ///
+/// <para><b>The answer forks on WHY the hub went down</b>, exactly as
+/// <c>MessageService.NackThroughParent</c> does: a recycle answers the transient
+/// <see cref="ErrorType.ShuttingDown"/> (the address is coming back), a node DELETE answers the
+/// authoritative <see cref="ErrorType.NotFound"/> with <see cref="DeliveryFailure.NodeAbsent"/> (it is
+/// not — "retry" would park the reader on an address that never answers, #1029).</para>
+///
 /// <para><b>The lever</b> is the framework's evaluator seam, narrowed to one identity and one armed
 /// check (the same one <see cref="GatedWritesKeepTheSendersOrderTest"/> uses): the read's verdict is
 /// held until the test releases it, so "the hub is disposed while the verdict is in flight" is the
 /// state of the test, not a race it hopes to hit.</para>
 ///
-/// <para><b>The control</b> is the recycle itself: the same address answers a fresh read once the
-/// old activation is gone, so the NACK is about the activation, not about the node.</para>
+/// <para><b>The controls</b> are the two tests against each other: the same held read gets
+/// <see cref="ErrorType.ShuttingDown"/> under a recycle and <see cref="ErrorType.NotFound"/> under a
+/// delete, so neither answer is the pipeline's only possible one. The recycle test also reads the
+/// address again from the fresh activation, so its NACK is about the activation, not the node.</para>
 /// </summary>
 public class GatedDeliveryReleasedAtTeardownTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -76,21 +84,29 @@ public class GatedDeliveryReleasedAtTeardownTest(ITestOutputHelper output) : Mon
 
     private static AccessContext ReaderContext => new() { ObjectId = Reader, Name = Reader };
 
-    [Fact]
-    public async Task AReadWhoseVerdictIsInFlight_WhenItsHubIsRecycled_IsNackedShuttingDown()
+    /// <summary>Creates the probe node and activates its hub with an ordinary read.</summary>
+    private async Task<string> CreateActiveNode(string id)
     {
-        var id = "released-at-teardown";
         var path = $"{TestPartition}/{id}";
         await NodeFactory.CreateNode(new MeshNode(id, TestPartition) { Name = "probe", NodeType = "Markdown" })
             .Should().Emit();
         // Activate the node hub with an ordinary read, so the hold below is the only variable.
         await RequestHub.GetMeshNode(path).Where(n => n is not null)
             .Should().Within(TestTimeouts.Convergence).Emit("the node hub is active");
+        return path;
+    }
 
+    /// <summary>
+    /// Posts a gated read whose verdict is HELD, waits until it reached the gate, runs
+    /// <paramref name="teardown"/> against its hub, and returns how the read was answered.
+    /// </summary>
+    private async Task<(string Answer, DeliveryFailure? Failure)> HeldReadAnsweredAcross(
+        string path, Func<Task> teardown)
+    {
         try
         {
             Volatile.Write(ref armed, 1);
-            // From a client of its own, so the recycle's read below is not ordered behind it. A
+            // From a client of its own, so the teardown's own traffic is not ordered behind it. A
             // COLLECTION read, deliberately: it is gated by [RequiresPermission(Read)] alone, so the
             // held check is the access gate's. A MeshNodeReference read is also checked by the node
             // hub's read validator, which asks the same evaluator first and would take the hold.
@@ -99,30 +115,63 @@ public class GatedDeliveryReleasedAtTeardownTest(ITestOutputHelper output) : Mon
                     new GetDataRequest(new CollectionReference(nameof(MeshNode))),
                     o => o.WithTarget(new Address(path)).WithAccessContext(ReaderContext))
                 .Take(1)
-                .Select(r => $"answered by the old activation (error: {r.Message.Error ?? "none"})")
+                .Select(r => ($"answered by the old activation (error: {r.Message.Error ?? "none"})",
+                    (DeliveryFailure?)null))
                 .Catch((Exception ex) => Observable.Return(ex is DeliveryFailureException failure
-                    ? $"nack:{failure.Failure.ErrorType}"
-                    : $"error:{ex.GetType().Name}: {ex.Message}"))
+                    ? ($"nack:{failure.Failure.ErrorType}", (DeliveryFailure?)failure.Failure)
+                    : ($"error:{ex.GetType().Name}: {ex.Message}", (DeliveryFailure?)null)))
                 .Replay(1);
             using var connection = answer.Connect();
 
             await heldAsked.Should().Within(TestTimeouts.Convergence)
                 .Emit("the read reached the permission gate, whose verdict is now held");
 
-            await RequestHub.RecycleNode(path, reason: "GatedDeliveryReleasedAtTeardownTest: dispose the hub "
-                    + "while a gated read's verdict is in flight")
-                .Should().Within(TestTimeouts.Convergence)
-                .Emit("control: the address answers again from a fresh activation");
+            await teardown();
 
-            (await answer.Should().Within(TestTimeouts.Convergence)
-                    .Emit("the held read is owed an answer once its hub is gone"))
-                .Should().Be($"nack:{ErrorType.ShuttingDown}",
-                    "the activation that admitted the read is gone and the address is coming back, so "
-                    + "the caller must hear the transient recycling NACK and re-probe — not silence");
+            var result = await answer.Should().Within(TestTimeouts.Convergence)
+                .Emit("the held read is owed an answer once its hub is gone");
+            Output.WriteLine($"[answer] {result.Item1} nodeAbsent={result.Item2?.NodeAbsent} "
+                + $"message={result.Item2?.Message}");
+            return result;
         }
         finally
         {
             ReleaseHeldVerdict();
         }
+    }
+
+    [Fact]
+    public async Task AReadWhoseVerdictIsInFlight_WhenItsHubIsRecycled_IsNackedShuttingDown()
+    {
+        var path = await CreateActiveNode("released-at-teardown");
+
+        var (answer, failure) = await HeldReadAnsweredAcross(path, async () =>
+            await RequestHub.RecycleNode(path, reason: "GatedDeliveryReleasedAtTeardownTest: dispose the hub "
+                    + "while a gated read's verdict is in flight")
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("control: the address answers again from a fresh activation"));
+
+        answer.Should().Be($"nack:{ErrorType.ShuttingDown}",
+            "the activation that admitted the read is gone and the address is coming back, so "
+            + "the caller must hear the transient recycling NACK and re-probe — not silence");
+        failure!.NodeAbsent.Should().BeFalse("a recycled address is not absent");
+    }
+
+    [Fact]
+    public async Task AReadWhoseVerdictIsInFlight_WhenItsNodeIsDeleted_IsNackedNotFound()
+    {
+        var path = await CreateActiveNode("released-at-delete");
+
+        var (answer, failure) = await HeldReadAnsweredAcross(path, async () =>
+            await NodeFactory.DeleteNode(path)
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("the node is deleted while the read's verdict is held"));
+
+        answer.Should().Be($"nack:{ErrorType.NotFound}",
+            "the node was deleted, so the address will not reactivate — a transient ShuttingDown "
+            + "would send the reader re-probing an address that never answers (#1029)");
+        failure!.NodeAbsent.Should().BeTrue("the typed form of the delete tombstone's verdict");
+        failure.Message.Should().Contain("No node found").And.NotContain("shutting down",
+            "the wording is contract: classifiers read the transient marker off the text");
     }
 }

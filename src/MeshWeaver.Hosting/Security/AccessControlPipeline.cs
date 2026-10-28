@@ -717,11 +717,13 @@ public static class AccessControlPipeline
                             logger?.LogWarning("AccessControlPipeline: {Message} (triggered by message={MessageType} sender={Sender} hub={Hub})",
                                 message, delivery.Message.GetType().Name, delivery.Sender, hub.Address);
 
-                            PostAnswer(hub, delivery, new DeliveryFailure(delivery)
-                            {
-                                ErrorType = errorType,
-                                Message = message
-                            });
+                            hub.Post(
+                                new DeliveryFailure(delivery)
+                                {
+                                    ErrorType = errorType,
+                                    Message = message
+                                },
+                                o => o.ResponseFor(delivery));
                         },
                         ex =>
                         {
@@ -743,11 +745,13 @@ public static class AccessControlPipeline
                                 + $"user's rights. Retry shortly. Cause: {ex.GetType().Name}: {ex.Message}";
                             logger?.LogWarning(ex, "AccessControlPipeline: {Message}", message);
 
-                            PostAnswer(hub, delivery, new DeliveryFailure(delivery)
-                            {
-                                ErrorType = ErrorType.Unavailable,
-                                Message = message
-                            });
+                            hub.Post(
+                                new DeliveryFailure(delivery)
+                                {
+                                    ErrorType = ErrorType.Unavailable,
+                                    Message = message
+                                },
+                                o => o.ResponseFor(delivery));
                         },
                         logger);
 
@@ -757,45 +761,63 @@ public static class AccessControlPipeline
 
     /// <summary>
     /// Answers a gated delivery whose permission verdict this hub's disposal released before it was
-    /// acted on — as the recycling NACK (<see cref="ErrorType.ShuttingDown"/>, wording matched as
-    /// transient by every re-probe classifier), so the caller asks the fresh activation instead of
-    /// waiting out its budget for an answer nobody owes it any more.
+    /// acted on. A hub going down for a recycle answers the recycling NACK
+    /// (<see cref="ErrorType.ShuttingDown"/>, wording matched as transient by every re-probe
+    /// classifier), so the caller asks the fresh activation instead of waiting out its budget. A hub
+    /// going down because its NODE WAS DELETED answers the authoritative
+    /// <see cref="ErrorType.NotFound"/> with <see cref="DeliveryFailure.NodeAbsent"/> and
+    /// <see cref="DeletedAddressNack"/>'s wording — the same fork <c>MessageService.NackThroughParent</c>
+    /// takes — because "retry" is a lie for an address that will not reactivate (#1029).
+    ///
+    /// <para>Posted through this hub's own Post, unconditionally: past
+    /// <see cref="MessageHubRunLevel.DisposeHostedHubs"/> the post layer itself carries a correlated
+    /// answer — through a live parent, else in-process to a requester still Quiescing on it
+    /// (<c>MessageService.PostImplGeneric</c>) — so choosing a carrier here could only drop one.</para>
     /// </summary>
-    private static void AnswerReleasedAtTeardown(IMessageHub hub, IMessageDelivery delivery, ILogger? logger)
+    private static void AnswerReleasedAtTeardown(
+        IMessageHub hub, IMessageDelivery delivery, IAddressTombstones? tombstones, ILogger? logger)
     {
         var messageType = delivery.Message.GetType().Name;
+        var deleted = IsDeleted(tombstones, hub.Address.Path, logger);
         logger?.LogDebug(
             "AccessControlPipeline: {MessageType} (id={DeliveryId}) on {Hub} was still waiting for its "
-            + "permission verdict when the hub was disposed — NACKing as SHUTTING DOWN so the caller "
-            + "re-probes the fresh activation",
-            messageType, delivery.Id, hub.Address);
-        PostAnswer(hub, delivery, new DeliveryFailure(delivery)
-        {
-            ErrorType = ErrorType.ShuttingDown,
-            Message = RecyclingRefusal(hub.Address, messageType,
-                "the hub was disposed before the permission verdict for this delivery was acted on")
-        });
+            + "permission verdict when the hub was disposed — NACKing as {ErrorType}",
+            messageType, delivery.Id, hub.Address, deleted ? ErrorType.NotFound : ErrorType.ShuttingDown);
+        hub.Post(
+            deleted
+                ? new DeliveryFailure(delivery)
+                {
+                    ErrorType = ErrorType.NotFound,
+                    Message = DeletedAddressNack.Message(hub.Address.Path),
+                    NodeAbsent = true
+                }
+                : new DeliveryFailure(delivery)
+                {
+                    ErrorType = ErrorType.ShuttingDown,
+                    Message = RecyclingRefusal(hub.Address, messageType,
+                        "the hub was disposed before the permission verdict for this delivery was acted on")
+                },
+            o => o.ResponseFor(delivery));
     }
 
     /// <summary>
-    /// Posts <paramref name="failure"/> as the reply to <paramref name="delivery"/> through a carrier
-    /// that can still deliver it: this hub while its own Post is open, otherwise its PARENT — once a
-    /// hub is past <see cref="MessageHubRunLevel.DisposeHostedHubs"/> its Post refuses every
-    /// non-shutdown message, which is how an answer computed during a teardown used to be lost.
-    /// Correlation rides <c>ResponseFor</c>'s request id, never the posting hub's identity — the same
-    /// escape <c>MessageService.NackThroughParent</c> uses. During a whole-mesh teardown the parent is
-    /// past that point too and nobody is waiting.
+    /// Whether <paramref name="path"/> carries a live delete tombstone. A mesh without one (bare
+    /// messaging fixtures) or a lookup that faults mid-teardown reads as "not deleted" — the
+    /// transient classification — and never costs the sender its answer.
     /// </summary>
-    private static void PostAnswer(IMessageHub hub, IMessageDelivery delivery, DeliveryFailure failure)
+    private static bool IsDeleted(IAddressTombstones? tombstones, string path, ILogger? logger)
     {
-        if (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+        try
         {
-            hub.Post(failure, o => o.ResponseFor(delivery));
-            return;
+            return tombstones?.IsDeleted(path) ?? false;
         }
-        var parent = hub.Configuration.ParentHub;
-        if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
-            parent.Post(failure, o => o.ResponseFor(delivery));
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex,
+                "AccessControlPipeline: could not read the delete tombstone for {Path} — classifying as transient",
+                path);
+            return false;
+        }
     }
 
     /// <summary>
@@ -824,6 +846,7 @@ public static class AccessControlPipeline
         private readonly ConcurrentDictionary<string, Lane> lanes = new(StringComparer.Ordinal);
         private readonly IMessageHub hub;
         private CompositeDisposable? connections;
+        private IAddressTombstones? tombstones;
 
         /// <summary>Creates the per-hub release whose in-flight verdict connections <paramref name="hub"/> owns.</summary>
         public SenderOrderedRelease(IMessageHub hub) => this.hub = hub;
@@ -840,6 +863,10 @@ public static class AccessControlPipeline
             var existing = Volatile.Read(ref connections);
             if (existing is not null)
                 return existing;
+            // The delete tombstone answers a released delivery at TEARDOWN, when this hub's own
+            // scope may already be gone — so it is resolved here, on first use while the hub is
+            // live. It is a mesh singleton (optional: bare messaging fixtures register none).
+            Volatile.Write(ref tombstones, hub.ServiceProvider.GetService<IAddressTombstones>());
             var created = new CompositeDisposable();
             var winner = Interlocked.CompareExchange(ref connections, created, null);
             if (winner is not null)
@@ -883,7 +910,7 @@ public static class AccessControlPipeline
             {
                 if (Interlocked.Exchange(ref settled, 1) != 0)
                     return;
-                try { AnswerReleasedAtTeardown(hub, delivery, logger); }
+                try { AnswerReleasedAtTeardown(hub, delivery, Volatile.Read(ref tombstones), logger); }
                 catch (Exception ex)
                 {
                     logger?.LogError(ex, "AccessControlPipeline: answering a delivery released at teardown threw");
