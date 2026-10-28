@@ -27,7 +27,12 @@ public static class ContentLayoutArea
     private static UiControl GetControl(string path, object content, bool isPresentationMode = false)
     {
         if (content is MarkdownElement md)
-            return new MarkdownControl(md.Content) { Html = md.PrerenderedHtml, CodeSubmissions = md.CodeSubmissions };
+            // A content-collection markdown page is authored content — a notebook — so its cells run
+            // (MarkdownControl.ExecutesCode). Converted documents and plain text below stay inert.
+            return new MarkdownControl(md.Content)
+            {
+                Html = md.PrerenderedHtml, CodeSubmissions = md.CodeSubmissions, ExecutesCode = true
+            };
         if (content is string str)
         {
             return Path.GetExtension(path) switch
