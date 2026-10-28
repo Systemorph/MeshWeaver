@@ -2379,12 +2379,24 @@ ended. Now a granted read is followed for its whole life (`MeshNodeStreamCache.F
 The gate's own decision (the permission fold, else the type's read rule) is re-taken on signals,
 never on a timer:
 
-- a committed snapshot of a permission-fold input query in the cache that can reach the path
-  (global, or anchored to the path's partition), announced after the commit ends so the re-check
-  reads the new snapshot;
-- an access commit on the invalidation feed that can reach the path (`DeclaredPointRead.AffectsRead`,
-  which carries a type rule's inputs the fold's queries do not);
+- a committed snapshot of a permission-fold input query in the cache that can reach the decision
+  (global, or anchored to the path's partition, to the partition of the MainNode the newest
+  revision points at, or to `Admin`), announced after the commit ends so the re-check reads the new
+  snapshot;
+- an access commit on the invalidation feed that can reach the path or that MainNode
+  (`DeclaredPointRead.AffectsRead`, which carries a type rule's inputs the fold's queries do not);
 - every declared feed gap.
+
+Any signal from outside the path's own partition and the global inputs re-checks past the verdict
+cache, whose generation does not move with those inputs. The follow does not start from the
+admission's verdict: it attaches its signals first, then takes the verdict again, so a revocation
+that commits while the admission is still being decided is not missed
+(`ACacheRead_RevokedWhileItsAdmissionIsDecided_IsNeverServed`). A grant the type's read RULE gave
+(the fold denied, e.g. a satellite read through its MainNode) rests on the node's own fields, so the
+rule is asked about each revision itself and again on every settled re-check: a satellite repointed
+at a MainNode the reader cannot read is refused on that revision
+(`ACacheReadAdmittedByARule_EndsWhenTheSatelliteIsRepointed`), and a revoked grant on a MainNode in
+another partition ends the read (`ACacheReadAdmittedByARule_EndsWhenTheOffPartitionMainNodeGrantIsRevoked`).
 
 A re-check in flight holds: a revision that arrives meanwhile waits for the settled verdict, bounded
 by the permission-establishment budget. A grant admits, an undetermined re-check refuses, and a

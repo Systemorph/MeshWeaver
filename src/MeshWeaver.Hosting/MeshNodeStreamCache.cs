@@ -678,7 +678,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <see cref="AccessGeneration"/> that was current when its evaluation STARTED.
     /// </summary>
     private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil, AccessGeneration Generation,
-        bool Undetermined = false);
+        bool Undetermined = false, bool ViaRule = false);
 
     /// <summary>
     /// How many snapshots the permission fold's inputs have committed: the GLOBAL ones (root grants
@@ -2418,13 +2418,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     ///
     /// <list type="bullet">
     ///   <item><description><b>What re-decides it — signals, never a timer.</b> A committed snapshot of
-    ///     any permission-fold input query in this cache that can reach the path (a global one, or one
-    ///     anchored to the path's partition — <see cref="_foldInputCommits"/>, announced after the commit
-    ///     ENDED, so the re-check reads the new snapshot); an access commit on the invalidation feed that
-    ///     can reach the path (<see cref="DeclaredPointRead.AffectsRead"/> — the rule's inputs, which the
-    ///     fold's queries do not carry); and every declared feed gap. A re-check triggered by the feed
-    ///     bypasses the per-(path,user) verdict cache, whose generation does not move with a rule's
-    ///     inputs.</description></item>
+    ///     any permission-fold input query in this cache that can reach the decision (a global one, or one
+    ///     anchored to the path's partition, to the partition of the MainNode the newest revision points
+    ///     at, or to <c>Admin</c> — <see cref="_foldInputCommits"/>, announced after the commit ENDED, so
+    ///     the re-check reads the new snapshot); an access commit on the invalidation feed that can reach
+    ///     the path or that MainNode (<see cref="DeclaredPointRead.AffectsRead"/> — the rule's inputs,
+    ///     which the fold's queries do not carry); and every declared feed gap. A re-check triggered by
+    ///     anything but a global or same-partition fold commit bypasses the per-(path,user) verdict
+    ///     cache, whose generation does not move with those inputs.</description></item>
+    ///   <item><description><b>Attached before it is re-taken.</b> The follow does not start from the
+    ///     admission's verdict: it attaches its signals, then takes the verdict again (through the
+    ///     cache, a hit only while the fold's inputs are unchanged), and every revision holds until that
+    ///     answers — so a revocation that committed between the admission and the attach is not
+    ///     missed.</description></item>
+    ///   <item><description><b>A rule's grant is decided per revision.</b> When the fold denies and the
+    ///     type's read rule grants, the rule rests on the node's own fields (a satellite's MainNode), so
+    ///     it is asked about each revision itself — and again on every settled re-check — never carried
+    ///     over from the node the probe read.</description></item>
     ///   <item><description><b>A re-check in flight HOLDS</b> (the <c>null</c> marker of
     ///     <see cref="DeclaredReadSubscriptionFollow.VerdictOf"/>): a revision that arrives while it runs
     ///     waits for the settled answer, so a revision written after the revocation committed is never
@@ -2445,56 +2455,74 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var budget = (meshHub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
                 .PermissionEstablishmentBudget;
             var partition = PartitionOf(path);
-            var scopes = DeclaredPointRead.ReadScopes(path);
-            // true = the re-check must bypass the verdict cache (its generation does not carry the signal).
+            // What the decision reads beyond the path itself: the MainNode the newest revision points
+            // at (a satellite's rule reads Read THERE), tracked from the revisions as they arrive.
+            var inputs = new FollowedReadInputs(path);
+            // The signal says whether the re-check must bypass the verdict cache: the cached verdict's
+            // generation counts only the path's partition and the global inputs, so a signal from
+            // anywhere else (the MainNode's partition, Admin, a rule input on the feed) does not move it.
             var foldCommits = _foldInputCommits
-                .Where(anchor => anchor is null || string.Equals(anchor, partition, StringComparison.OrdinalIgnoreCase))
-                .Select(_ => false);
+                .Where(anchor => anchor is null
+                    || string.Equals(anchor, partition, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(anchor, inputs.MainNodePartition, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(anchor, PermissionEvaluator.AdminScope, StringComparison.OrdinalIgnoreCase))
+                .Select(anchor => anchor is not null && !string.Equals(anchor, partition, StringComparison.OrdinalIgnoreCase));
             var feed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
             var accessCommits = feed is null
                 ? Observable.Never<bool>()
                 // The filter runs as an Rx operator, so a fault in it reaches this signal's OnError
-                // (a refusal below) instead of being thrown into the feed's delivery callback.
+                // (a refusal below) instead of being thrown into the feed's delivery callback. It reads
+                // the CURRENT scopes, so a repointed MainNode's grants count from that revision on.
                 : Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
-                    .Where(change => DeclaredPointRead.AffectsRead(change, scopes))
+                    .Where(change => DeclaredPointRead.AffectsRead(change, inputs.Scopes))
                     .Select(_ => true);
             var gaps = feed is null ? Observable.Never<bool>() : feed.Gaps.Select(_ => true);
+            var signals = Observable.Merge(foldCommits, accessCommits, gaps);
 
             var lifetime = new CompositeDisposable();
-            var standing = Observable.Merge(foldCommits, accessCommits, gaps)
+            // 🚨 The admission's verdict is NOT where the follow starts: a revocation that committed
+            // after the admission's probe and before these signals were attached was never announced
+            // to them. So the signals are attached FIRST and the verdict is then taken again, through
+            // the verdict cache — a hit only while the fold's inputs are still the ones the admission
+            // read — and every revision holds until that answer.
+            var standing = Observable.Create<bool>(observer =>
+                {
+                    var attached = signals.Subscribe(observer);
+                    observer.OnNext(false);
+                    return attached;
+                })
                 .Select(bypassCache => Observable.Defer(() => ProbeEffectivePermissions(path, captured, bypassCache))
                     .Take(1)
-                    .Select(probe => probe.Permissions.HasFlag(Permission.Read)
-                        ? PermissionCheckOutcome.Granted
-                        : probe.Undetermined
-                            ? PermissionCheckOutcome.Undetermined($"the Read check on '{path}' reached no verdict")
-                            : PermissionCheckOutcome.Denied)
+                    .Select(probe => new StandingRead(
+                        probe.Permissions.HasFlag(Permission.Read)
+                            ? PermissionCheckOutcome.Granted
+                            : probe.Undetermined
+                                ? PermissionCheckOutcome.Undetermined($"the Read check on '{path}' reached no verdict")
+                                : PermissionCheckOutcome.Denied,
+                        probe.Permissions.HasFlag(Permission.Read) && probe.ViaRule))
                     .Timeout(budget)
                     .Catch((Exception ex) =>
                     {
                         logger.LogWarning(ex,
                             "MeshNodeStreamCache: the standing Read of {Path} for {User} could not be re-decided — undetermined, refused",
                             path, captured.ObjectId);
-                        return Observable.Return(PermissionCheckOutcome.Undetermined(
-                            $"the Read check on '{path}' failed ({ex.GetType().Name})"));
+                        return Observable.Return(new StandingRead(PermissionCheckOutcome.Undetermined(
+                            $"the Read check on '{path}' failed ({ex.GetType().Name})"), false));
                     })
-                    .DefaultIfEmpty(PermissionCheckOutcome.Undetermined($"the Read check on '{path}' answered nothing"))
-                    .Select(outcome => (PermissionCheckOutcome?)outcome)
+                    .DefaultIfEmpty(new StandingRead(PermissionCheckOutcome.Undetermined($"the Read check on '{path}' answered nothing"), false))
                     // Off the signalling thread (a fold-input commit announces from inside the query's
                     // delivery); the pending marker is emitted ON it, so a revision that arrives after
                     // the commit already waits for the re-check.
                     .SubscribeOn(Scheduler.Default)
-                    .StartWith((PermissionCheckOutcome?)null))
+                    .StartWith(StandingRead.Pending))
                 .Switch()
-                // The admission's own verdict is where the follow starts.
-                .StartWith((PermissionCheckOutcome?)PermissionCheckOutcome.Granted)
                 .Catch((Exception ex) =>
                 {
                     logger.LogWarning(ex,
                         "MeshNodeStreamCache: a signal of the standing Read of {Path} for {User} faulted — undetermined, refused",
                         path, captured.ObjectId);
-                    return Observable.Return((PermissionCheckOutcome?)PermissionCheckOutcome.Undetermined(
-                        $"the Read check on '{path}' lost its signals ({ex.GetType().Name})"));
+                    return Observable.Return(new StandingRead(PermissionCheckOutcome.Undetermined(
+                        $"the Read check on '{path}' lost its signals ({ex.GetType().Name})"), false));
                 })
                 .Replay(1)
                 // Owned by THIS reader's subscription, released when it ends however it ends.
@@ -2502,19 +2530,85 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // Connected now, before the first revision, so a revocation that commits before the first
             // revision arrives is still seen.
             lifetime.Add(standing.Subscribe(_ => { }, _ => { }));
+            var outcomes = standing.Select(read => read.Outcome);
 
             return shared
                 .AdmitEachRevision(
-                    revision => DeclaredReadSubscriptionFollow.VerdictOf(
-                        standing,
-                        () => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
-                            .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
-                        budget,
-                        Scheduler.Default),
+                    revision =>
+                    {
+                        // Before the revision's verdict is taken, so a commit on its MainNode's scopes
+                        // from now on re-decides it.
+                        inputs.Saw(revision);
+                        return DeclaredReadSubscriptionFollow.VerdictOf(
+                                outcomes,
+                                () => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
+                                    .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
+                                budget,
+                                Scheduler.Default)
+                            .CombineLatest(RuleAdmitsRevision(standing, revision, captured), (standingRead, rule) => standingRead && rule);
+                    },
                     budget,
                     () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"))
                 .Finally(lifetime.Dispose);
         });
+
+    /// <summary>
+    /// 🚨 A grant the type's RULE gave (the fold denied) rests on the node's own fields — a
+    /// satellite's <see cref="MeshNode.MainNode"/>, its <see cref="MeshNode.NodeType"/> — so it is
+    /// decided on EACH revision, never carried over from the node the probe read: a satellite repointed
+    /// at a MainNode the reader cannot read is refused on the revision that repoints it. Asked again on
+    /// every settled re-check of the standing Read. A fold grant does not depend on the revision.
+    /// </summary>
+    private IObservable<bool> RuleAdmitsRevision(IObservable<StandingRead> standing, MeshNode revision, AccessContext captured)
+        => standing
+            .Where(read => read.Outcome is not null)
+            .Select(read => read.ViaRule
+                ? Observable.Defer(() => ReadRuleVerdictOn(revision, captured))
+                    .Take(1)
+                    .Select(verdict => verdict == true)
+                    .Catch((Exception ex) =>
+                    {
+                        logger.LogWarning(ex,
+                            "MeshNodeStreamCache: the read rule could not decide a revision of {Path} for {User} — refused",
+                            revision.Path, captured.ObjectId);
+                        return Observable.Return(false);
+                    })
+                    .DefaultIfEmpty(false)
+                : Observable.Return(true))
+            .Switch();
+
+    /// <summary>One settled (or, as <see cref="Pending"/>, in-flight) re-check of a followed standing Read.</summary>
+    /// <param name="Outcome">The verdict; <c>null</c> while a re-check is in flight.</param>
+    /// <param name="ViaRule">Whether the grant came from the node type's read rule rather than the permission fold.</param>
+    private sealed record StandingRead(PermissionCheckOutcome? Outcome, bool ViaRule)
+    {
+        public static readonly StandingRead Pending = new(null, false);
+    }
+
+    /// <summary>
+    /// The inputs of ONE followed read beyond its path: the scopes whose access commits can move it and
+    /// the partition of the MainNode the newest revision points at. Written from the revision pipeline,
+    /// read from the signal filters on whatever thread a signal arrives.
+    /// </summary>
+    private sealed class FollowedReadInputs(string path)
+    {
+        private volatile Holder current = new(null, DeclaredPointRead.ReadScopes(path), null);
+
+        private sealed record Holder(string? MainNode, ImmutableHashSet<string> Scopes, string? MainNodePartition);
+
+        public ImmutableHashSet<string> Scopes => current.Scopes;
+
+        public string? MainNodePartition => current.MainNodePartition;
+
+        public void Saw(MeshNode revision)
+        {
+            var mainNode = string.IsNullOrEmpty(revision.MainNode) ? null : revision.MainNode.Trim('/');
+            if (string.Equals(current.MainNode, mainNode, StringComparison.OrdinalIgnoreCase))
+                return;
+            current = new Holder(mainNode, DeclaredPointRead.ReadScopes(path, mainNode),
+                mainNode is null ? null : PartitionOf(mainNode));
+        }
+    }
 
     private static IObservable<MeshNode> GateOnRead(
         Permission perms, IObservable<MeshNode> shared, string path, AccessContext user)
@@ -2536,7 +2630,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// node, so a satellite / cell sub-path with no hub of its own can never wedge
     /// the gate.
     /// </summary>
-    private IObservable<(Permission Permissions, bool Undetermined)> ProbeEffectivePermissions(
+    private IObservable<(Permission Permissions, bool Undetermined, bool ViaRule)> ProbeEffectivePermissions(
         string path, AccessContext captured, bool bypassCache = false)
     {
         var key = BuildAccessCacheKey(path, captured);
@@ -2558,7 +2652,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 && cached.Generation == generation
                 && cached.ValidUntil > DateTimeOffset.UtcNow)
             {
-                return Observable.Return((cached.Permissions, cached.Undetermined));
+                return Observable.Return((cached.Permissions, cached.Undetermined, cached.ViaRule));
             }
 
             // Miss ⇒ evaluate the user's effective permissions LOCALLY via the
@@ -2598,16 +2692,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     // must not answer differently. Asked ONLY on a fold denial, so a granted read
                     // never pays for the node read.
                     .SelectMany(perms => perms.HasFlag(Permission.Read)
-                        ? Observable.Return((Permissions: perms, Undetermined: false))
+                        ? Observable.Return((Permissions: perms, Undetermined: false, ViaRule: false))
                         : ReconsiderReadThroughNodeTypeRule(path, captured)
                             .Select(verdict => verdict == true
-                                ? (Permissions: perms | Permission.Read, Undetermined: false)
-                                : (Permissions: perms, Undetermined: verdict is null)))
+                                ? (Permissions: perms | Permission.Read, Undetermined: false, ViaRule: true)
+                                : (Permissions: perms, Undetermined: verdict is null, ViaRule: false)))
                     .Do(probe =>
                     {
                         if (cacheable)
                             _access[key] = new AccessEntry(
-                                probe.Permissions, DateTimeOffset.UtcNow + AccessTtl, generation, probe.Undetermined);
+                                probe.Permissions, DateTimeOffset.UtcNow + AccessTtl, generation, probe.Undetermined, probe.ViaRule);
                     });
             }
         });
@@ -2629,20 +2723,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     private IObservable<bool?> ReconsiderReadThroughNodeTypeRule(string path, AccessContext captured)
         => NodeTypeAccessRuleGate.ReadSubjectNode(meshHub, path)
-            .SelectMany(node =>
-            {
-                if (node is null
-                    || NodeTypeAccessRuleGate.Find(meshHub, node.NodeType, NodeOperation.Read) is not { } rule)
-                    return Observable.Return<bool?>(false);
-                var context = new NodeValidationContext
-                {
-                    Operation = NodeOperation.Read,
-                    Node = node,
-                    AccessContext = captured
-                };
-                return NodeTypeAccessRuleGate.Evaluate(rule, context, captured.ObjectId, logger)
-                    .Select(outcome => outcome.IsGranted ? true : outcome.IsUndetermined ? (bool?)null : false);
-            })
+            .SelectMany(node => ReadRuleVerdictOn(node, captured))
             .Catch((Exception ex) =>
             {
                 logger.LogDebug(ex,
@@ -2650,6 +2731,27 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     path);
                 return Observable.Return<bool?>(null);
             });
+
+    /// <summary>
+    /// The node type's <see cref="NodeOperation.Read"/> rule asked about ONE node — a stored one
+    /// (<see cref="ReconsiderReadThroughNodeTypeRule"/>) or a revision about to be forwarded
+    /// (<see cref="FollowStandingRead"/>). <c>true</c> on a grant; <c>false</c> for no node, no rule or
+    /// a refusal; <c>null</c> when the rule reached no verdict.
+    /// </summary>
+    private IObservable<bool?> ReadRuleVerdictOn(MeshNode? node, AccessContext captured)
+    {
+        if (node is null
+            || NodeTypeAccessRuleGate.Find(meshHub, node.NodeType, NodeOperation.Read) is not { } rule)
+            return Observable.Return<bool?>(false);
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Read,
+            Node = node,
+            AccessContext = captured
+        };
+        return NodeTypeAccessRuleGate.Evaluate(rule, context, captured.ObjectId, logger)
+            .Select(outcome => outcome.IsGranted ? true : outcome.IsUndetermined ? (bool?)null : false);
+    }
 
     // 🚨 PRIVATE raw write — does NOT deserialize JsonElement Content before the
     // lambda. The interface no longer exposes a bare Update(path, fn): callers
