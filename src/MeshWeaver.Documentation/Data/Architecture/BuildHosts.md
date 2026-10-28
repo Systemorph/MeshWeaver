@@ -845,6 +845,15 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `$MW_BUILD_ARTIFACTS/testResults-shard<i>/`, which the host hands over as H9 receipts. Only THEN does
   it run `check-untyped-content.sh` over `collected-logs/`, so the logs a red is decided on survive
   the red. The scripts are the checkout's own (`--repo .`, a parity marker).
+- **The test hosts' temp is OUTSIDE the checkout.** Each invocation gives its hosts a fresh
+  `$TMPDIR` under the temp directory the stage inherited (the sandbox's scratch), removed once its
+  traces are collected — never under `--work`, which defaults INTO the checkout. Tests build
+  throw-away projects under `Path.GetTempPath()`, and the csproj evaluator walks up from them to the
+  nearest `Directory.Build.props` exactly as MSBuild does: with the temp inside the checkout that is
+  core's own, and the tests evaluate core's build instead of their fixture (measured on build-latest:
+  `MeshWeaver.PluginTester.Test` 82 of 474 red on `<checkout>/src/Directory.Build.props: <Target …> is
+  not executed by this builder`, green on Actions, whose temp is outside the checkout). The runner
+  refuses an inherited temp that itself lies inside the checkout.
 - **No suite needs a Docker daemon, and that is checked.** A host's sandbox has none (its database is
   the prepared server). Core's Postgres suites left core, and nothing in the tree references
   `Testcontainers*` or `Docker.DotNet` or builds a container in `test/` (executable code only — a
