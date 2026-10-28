@@ -21,13 +21,26 @@ namespace MeshWeaver.Markdown;
 /// same reason <c>MarkdownViewLogic.DisableKernelPlaceholder</c> refuses to embed an ownerless
 /// kernel area — an empty address is the NotFound-storm shape, not a blank space).
 /// </param>
-public class ExecutableCodeBlockExtension(string? currentNodePath = null) : IMarkdownExtension
+/// <param name="executesCode">
+/// Whether <c>--execute</c> / <c>--render</c> fences stay executable. <c>false</c> renders them as
+/// ordinary code blocks with no kernel result area — the rendering for text the viewer did not
+/// author (see <c>MarkdownControl.ExecutesCode</c>).
+/// </param>
+public class ExecutableCodeBlockExtension(string? currentNodePath, bool executesCode) : IMarkdownExtension
 {
+    /// <summary>
+    /// The executing extension — the shape every existing caller compiled against.
+    /// </summary>
+    /// <param name="currentNodePath">The path of the node the markdown belongs to, or null.</param>
+    public ExecutableCodeBlockExtension(string? currentNodePath = null) : this(currentNodePath, executesCode: true)
+    {
+    }
+
     /// <summary>The fenced-code-block parser that produces <see cref="ExecutableCodeBlock"/> nodes.</summary>
     public ExecutableCodeBlockParser Parser { get; } = new();
 
     /// <summary>The HTML renderer for executable code blocks.</summary>
-    public ExecutableCodeBlockRenderer Renderer { get; } = new(currentNodePath);
+    public ExecutableCodeBlockRenderer Renderer { get; } = new(currentNodePath, executesCode);
 
     /// <summary>
     /// Replaces Markdig's default fenced-code-block parser with <see cref="Parser"/>.

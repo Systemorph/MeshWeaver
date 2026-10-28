@@ -103,6 +103,36 @@ marker so an un-hydrated client still shows the text. The ```` ```prompt ```` fe
 worked example of the second — the marker carries the read-only fenced block as its children, which a
 hydrating client drops on its way to mounting the live area.
 
+## 🚨 Who may make a fence run
+
+An executable fence (```` ```csharp --execute ```` / ```` ```csharp --render X ````) runs in a kernel
+the VIEWING user's view creates, under the VIEWER's identity — not the identity of whoever wrote the
+text. That is the notebook feature: an author writes a page, every reader sees its cells run. It also
+means that whether a fence runs cannot be left to the text. A markdown control shows plenty of text
+the viewer did not write and its author may not be trusted to run code as that viewer: chat and
+thread messages (including an agent's reply, which anything the agent read can steer), comments,
+document summaries, descriptions, error messages.
+
+So the decision belongs to the **producer**, and it is opt-in:
+
+- `MarkdownControl.ExecutesCode` defaults to `false`. A non-executing control renders every
+  executable fence as an ordinary code block — the code stays visible, there is no cell frame, no
+  result area and no Run affordance, and a client finds nothing to submit. Submissions a producer
+  attached are ignored.
+- A producer sets it (`WithExecutesCode()`) only for notebook content: a node's own markdown body
+  (`OverviewLayoutArea`), a content-collection markdown page (`ContentLayoutArea`), a Space body.
+  Their authors are the people who may change that node. A markdown node's page is a
+  `CollaborativeMarkdownControl` and is a notebook by definition.
+- Every client asks the same pure decision, `MarkdownViewLogic.ResolveRendering(...)`, and renders
+  non-executing markdown with `MarkdownViewLogic.RenderInert(...)` — the pipeline
+  `MarkdownExtensions.CreateInertMarkdownPipeline(collection, nodePath)` drops the
+  submission at render time, so no client can find a cell the producer did not allow.
+
+Before this flag, the only thing keeping a comment's fence from running was render timing: the
+Blazor view submitted only on its first render, and a node-bound comment's text happened to arrive
+after it. Text that was present at first render — every message of a thread opened after the fact —
+ran. Timing is not a permission, which is why the decision moved to the producer.
+
 ## Worked example: the `prompt` fence (#2511)
 
 Course pages author suggested AI prompts as ```` ```prompt ```` fences. They used to render as static

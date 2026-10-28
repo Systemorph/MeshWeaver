@@ -56,4 +56,26 @@ public record MarkdownControl(object Markdown)
     /// <param name="canEdit">True when the viewer holds <c>Permission.Update</c> on <see cref="NodePath"/>.</param>
     /// <returns>A new instance with the updated CanEdit.</returns>
     public MarkdownControl WithCanEdit(bool canEdit) => this with { CanEdit = canEdit };
+
+    /// <summary>
+    /// Whether the markdown's executable fences (<c>```csharp --execute</c> /
+    /// <c>```csharp --render X</c>) run in the interactive kernel when the control is shown.
+    /// <c>false</c> — the default — renders every such fence as an ordinary, inert code block: no
+    /// code submission, no kernel, no result area.
+    ///
+    /// <para>🚨 Executable cells run AS THE VIEWER, not as whoever wrote the text. So a producer
+    /// opts in only when the markdown is authored content the platform treats as a notebook — a
+    /// node's own markdown body, a content-collection page — whose authors hold the right to change
+    /// that node. Text written by somebody else and shown to the viewer (chat and thread messages,
+    /// comments, summaries, descriptions, error messages) never opts in, because rendering it would
+    /// otherwise run that person's code under the viewer's identity. A producer that does not know
+    /// does not get to guess: the default is off. See <c>Doc/Architecture/MarkdownFenceExtensions</c>
+    /// → "Who may make a fence run".</para>
+    /// </summary>
+    public bool ExecutesCode { get; init; }
+
+    /// <summary>Returns a copy whose executable fences run per <paramref name="executesCode"/>.</summary>
+    /// <param name="executesCode">True only for notebook content — see <see cref="ExecutesCode"/>.</param>
+    /// <returns>A new instance with the updated ExecutesCode.</returns>
+    public MarkdownControl WithExecutesCode(bool executesCode = true) => this with { ExecutesCode = executesCode };
 }
