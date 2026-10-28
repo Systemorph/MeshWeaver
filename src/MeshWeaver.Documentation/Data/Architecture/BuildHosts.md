@@ -784,8 +784,17 @@ would replace, and the claim is refused until that list is empty.
   sealed publication — on a host that is the separately declared "composed modules and the upstream
   seed" debt, and a satellite's compile-check stays red until it is paid. Its tester and dotnet
   (`$MW_BUILD_GATE_HOST`, `$MW_BUILD_PORTAL_DOTNET`) and, with `needs: ["nuget"]`, the host's prepared
-  package cache (`NUGET_FALLBACK_PACKAGES`). Core's build names that cache as its ONLY `--source`, so a
-  package the host was not prepared with is a red restore, never a download.
+  package cache (`NUGET_FALLBACK_PACKAGES`). Core's build restores through its own `nuget.config` with
+  that cache as the FALLBACK folder: every package the cache holds is read from it, nothing is fetched.
+  🚨 Never `--source "$NUGET_FALLBACK_PACKAGES"`: under the repository's `packageSourceMapping` a
+  command-line source maps no package, so EVERY package is NU1100 even from a complete cache (measured:
+  435 × NU1100 restoring `MeshWeaver.Hosting.Test`'s closure from a warm cache, against 0 errors and 0
+  downloads through the fallback folder; `check-build-stages.py` reds a `--source`). A package the cache
+  does not hold yet — a new or bumped `PackageVersion` — is restored for that run and NAMED in a
+  `::warning::`; the host reports it (`MWPREP001`) and promotes it into the cache after a succeeded
+  TRUNK build (MeshWeaver.Deploy#42), so the cache follows `main` as it moves. An offline-only restore
+  could never warm it: the first trunk build that needs a new package would be red, and nothing would
+  ever be promoted.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
@@ -793,7 +802,7 @@ would replace, and the claim is refused until that list is empty.
 per shard of `dotnet-test.yml`'s suite (N = `CI_SHARD_TOTAL`), and `doc-gate`. A deployment (the
 deploy-test-switch shape, the design page in core PR #7182, P4) submits one pinned run per shard and
 doc-gate stage and reads the set's image; a pull-request or trunk run on a host would run `build`
-first — the whole solution, Release, `-warnaserror`, offline from the prepared package cache, every
+first — the whole solution, Release, `-warnaserror`, from the prepared package cache, every
 test project a solution member, then `core-tests.py pack` of THIS run's tree into
 `$MW_BUILD_OUTPUTS/core-tests`. Every shard and the doc gate name both packs and
 `--require-sha "$MW_BUILD_SHA"`: `core-tests.py` takes the first pack whose manifest names the run's
@@ -814,9 +823,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
   reds any drift. The runner also refuses a `--total` the image was not packed for.
 - **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
-  generator's `OWES` list is the debt — the route (`dotnet-test.yml` calls no admission and no follow
-  job), `Consolidate test results` (collect-results does not yet fetch a host run's handed-back
-  results), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
+  generator's `OWES` list is the debt — `Consolidate test results` (the build API does not yet serve a
+  receipt's bytes, which the host-results job fetches), the fan-out (one run's stages run serially, past the deadline, and pinned per-stage runs
   do not share a pack), the prepared package closure, the browser and font set, the legs that read
   the build's artifacts (platform-compat,
   licence-gate), the prepared-mesh rule, and a green probe that agrees with Actions.
@@ -834,6 +842,48 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   comment or a string fixture that names one starts nothing). `core-build-stages.py --check`
   reds the day one does: such a suite either runs against the host's prepared service or re-opens
   the `containers:` debt in the same change.
+- **Core's own route** (`dotnet-test.yml`). Job `admission` calls `node-repo-build-executor.yml` (the
+  base tip = precheck's main, `BUILD_WEBHOOK_SECRET` signs the request) exactly when `build` would
+  run. With `host`:
+  - `build` does not run here, and with it `test`, `doc-gate`, `platform-compat` and `licence-gate`;
+  - `host-follow` follows EVERY declared stage (`build`, each `test-shard-<i>`, `doc-gate`) with
+    `build-follow.yml`;
+  - `host-results` fetches each shard's handed-back results tree over HTTPS by receipt
+    (`host-shard-results.py`, below) and uploads it under the `test` matrix's own artifact name
+    `testResults-shard<i>-attempt<a>`, so `collect-results` consolidates a host run unchanged (download,
+    attempt resolution, the coverage count, the trx and exit-marker gates);
+  - `collect-results` reds a failed admission, a host stage that did not succeed and a shard whose
+    results were not brought back; on the host route `platform-compat` and `licence-gate` read as not
+    run, which is RED — they are owed (`dependent legs`).
+
+  `core-build-stages.py --check` holds both matrices to the declaration. Any other admission answer
+  runs every leg on Actions, as before — except precheck's `host-forced` (see "Host-forced routing"
+  above): `build` skips on either route, and on `host-forced` `Consolidate test results` is red
+  naming the debt.
+
+  **Core runs no job on the self-hosted pool.** Core is a public repository: it never gets the
+  private `MW_RUNNER` / `MW_ARTIFACT_STORE` organisation variables, and no job of its reads the
+  runners' shared store. `host-results` therefore runs on `ubuntu-latest` and takes everything from the
+  build API over HTTPS with the run's own GitHub OIDC token (`permissions: id-token: write`) —
+  `host-shard-results.py`:
+  1. `GET {api}/{repo}/{sha}/artifacts?channel=…` — the receipts, read and shape-checked by
+     `build-artifacts-fetch.py`'s reader, kept for the shard's own stage `test-shard-<i>` and its unit
+     directory `testResults-shard<i>/`;
+  2. `GET {api}/{repo}/{sha}/artifacts/{sha256}?channel=…` — each receipt's bytes by content hash,
+     written under `--out` with its relative path PRESERVED (two `.trx` of one name in two projects
+     do not collide), at most the receipt's size plus one byte read, redirects refused so the bearer
+     never follows one, and the short-lived OIDC bearer re-minted once it is older than
+     `build-follow.py`'s `TOKEN_REFRESH_SECONDS`, so a long fetch never sends an expired one.
+
+  It is RED, naming the file, on: no receipt for the tree, a unit escaping it or FOREIGN to the `test`
+  job's shape (`test/**/*.trx`, `test/test-results.log`, `collected-logs/**`), one path with two
+  contents, a missing `test/test-results.log` or one with no `[CI] <project> exit=<n>` marker, a
+  refused fetch, a body whose size or sha256 differs from its receipt (TRUNCATED or padded), and a
+  written tree that is not exactly the receipts' set. 🚨 **Owed outside core:** the build API
+  (MeshWeaver.Plugins `BuildHostEndpoints`) serves the receipts but not yet the object route in step 2,
+  so on the host route `host-results` is RED with a 404 naming it until that lands — and the
+  `Consolidate test results` owes entry is paid only when collect-results consolidates results
+  fetched this way.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
