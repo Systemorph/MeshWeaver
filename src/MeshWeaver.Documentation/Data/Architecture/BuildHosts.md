@@ -838,7 +838,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   the red. The scripts are the checkout's own (`--repo .`, a parity marker).
 - **No suite needs a Docker daemon, and that is checked.** A host's sandbox has none (its database is
   the prepared server). Core's Postgres suites left core, and nothing in the tree references
-  `Testcontainers*` or `Docker.DotNet` or builds a container in `test/`. `core-build-stages.py --check`
+  `Testcontainers*` or `Docker.DotNet` or builds a container in `test/` (executable code only — a
+  comment or a string fixture that names one starts nothing). `core-build-stages.py --check`
   reds the day one does: such a suite either runs against the host's prepared service or re-opens
   the `containers:` debt in the same change.
 - **Core's own route** (`dotnet-test.yml`). Job `admission` calls `node-repo-build-executor.yml` (the
@@ -856,7 +857,9 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
     run, which is RED — they are owed (`dependent legs`).
 
   `core-build-stages.py --check` holds both matrices to the declaration. Any other admission answer
-  runs every leg on Actions, as before.
+  runs every leg on Actions, as before — except precheck's `host-forced` (see "Host-forced routing"
+  above): `build` skips on either route, and on `host-forced` `Consolidate test results` is red
+  naming the debt.
 
   **Core runs no job on the self-hosted pool.** Core is a public repository: it never gets the
   private `MW_RUNNER` / `MW_ARTIFACT_STORE` organisation variables, and no job of its reads the
