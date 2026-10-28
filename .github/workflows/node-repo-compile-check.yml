@@ -307,6 +307,7 @@ jobs:
         run: |
           case "$EXECUTOR" in
             actions|host) echo "executor: $EXECUTOR" ;;
+            host-forced) echo "::error title=Routed to the build host — owed::the owner routed this repository's pull requests to the build server (policy build-server-routes-all-ci) while its host stages still owe parity with this leg — RED until the debt is paid and ciEquivalent is claimed; the owed items are the ::error annotations of the run's executor/admission job and the owes list of .github/build-stages.json"; exit 1 ;;
             *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who ran this lane's work"; exit 1 ;;
           esac
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
