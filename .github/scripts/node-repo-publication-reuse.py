@@ -207,6 +207,19 @@ def matrix_config_changed(changed):
     return sorted(p for p in changed if p and p.startswith(MATRIX_CONFIG))
 
 
+def changed_since(root, sha):
+    """The paths changed between `sha` and the working tree at `root`, renames DECOMPOSED.
+
+    `--no-renames` is selection logic, not formatting: with rename detection `--name-only` prints
+    only the DESTINATION, so a shelf / extension input moved from tools/ into a node package would
+    name only the package path and slip past `outside_packages` while its old location (an MSBuild
+    input) changed. `-z` keeps a path containing whitespace whole. Same shape as
+    node-repo-scope.py's `changed_files`."""
+    out = subprocess.run(["git", "-C", str(root), "diff", "-z", "--no-renames", "--name-only", sha],
+                         capture_output=True, text=True, timeout=120, check=True).stdout
+    return [p for p in out.split("\0") if p]
+
+
 def withdraw_all(entries, why):
     """(entries without `reuse`, [(module, why)] for each entry that carried it). Pure."""
     withdrawn = [(e["module"], why) for e in entries if e.get("reuse")]
@@ -254,8 +267,7 @@ def baseline_tree_guard(root, sha, extra_projects):
                     entries, lambda e: build_inputs(root, e, mbk), lambda e: build_inputs(base, e, mbk))
                 changed = []
                 if any(e.get("reuse") for e in kept):
-                    changed = subprocess.run(["git", "-C", str(root), "diff", "--name-only", sha],
-                                             capture_output=True, text=True, timeout=120, check=True).stdout.split()
+                    changed = changed_since(root, sha)
                 config = matrix_config_changed(changed)
                 if config and any(e.get("reuse") for e in kept):
                     kept, more = withdraw_all(kept, (
@@ -541,7 +553,30 @@ def self_test():
         "NEGATIVE CONTROL: a workflow edit since the baseline may switch an entry from sdk to container"
     got, more = withdraw_all([{"module": "A", "reuse": {"runId": "1"}}, {"module": "B"}], "why")
     assert not any("reuse" in e for e in got) and more == [("A", "why")], (got, more)
-    print("publication reuse: 39 assertions passed")
+    # The rename rule, on a real repository: a move from tools/ into a package names BOTH ends.
+    with tempfile.TemporaryDirectory(prefix="publication-rename-") as tmp:
+        def git(*args):
+            return subprocess.run(["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@t",
+                                   "-c", "commit.gpgsign=false", *args],
+                                  capture_output=True, text=True, timeout=60, check=True).stdout
+        git("init", "-q")
+        (Path(tmp) / "tools").mkdir()
+        (Path(tmp) / "Pkg").mkdir()
+        (Path(tmp) / "Pkg" / "index.json").write_text("{}\n")
+        (Path(tmp) / "tools" / "Shelf Linked.props").write_text("<Project>\n" + "<!-- body -->\n" * 20 + "</Project>\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "baseline")
+        baseline = git("rev-parse", "HEAD").strip()
+        git("mv", "tools/Shelf Linked.props", "Pkg/Shelf Linked.props")
+        moved = changed_since(tmp, baseline)
+        assert sorted(moved) == ["Pkg/Shelf Linked.props", "tools/Shelf Linked.props"], moved
+        assert outside_packages(moved, {"Pkg"}) == ["tools/Shelf Linked.props"], \
+            "a shelf input moved INTO a package still changed outside the packages"
+        detected = git("diff", "-M", "--name-only", baseline).split("\n")
+        assert outside_packages(detected, {"Pkg"}) == [], (
+            "NEGATIVE CONTROL: with rename detection the source end vanishes, which is the defect "
+            f"changed_since exists to prevent (got {detected})")
+    print("publication reuse: 42 assertions passed")
 
 
 def main():
