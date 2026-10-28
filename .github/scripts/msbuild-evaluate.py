@@ -98,7 +98,18 @@ def _declared_path(root: Path, value: str, plain_base: Path, this_dir: Path, pro
     value = _PROPERTY.sub(lambda m: properties.get(m.group(1), m.group(0)), value).replace("\\", "/")
     if "$(" in value:
         return "?"  # a property function, or a property only a target sets: not evaluable here
-    return _in_repo(root, value if value.startswith("/") else str(base / value))
+    # 🚨 A path that MSBuild's own property values make EMPTY, or that resolves to a DIRECTORY, names
+    # no file MSBuild could import. Kept, it became the importing file's directory, and the scope
+    # reads a reach entry as a directory PREFIX: `<Import Project="$(_MeshWeaverCoreRefsPath)">` in
+    # a caller's src/Directory.PlatformRefs.targets (the property is empty outside a platform mount)
+    # put `src` into the shelf's reach, so EVERY src/ edit (a test-only project the shelf never
+    # reaches included) ran the whole module catalog. A directory is never an import target.
+    if not value.strip():
+        return None
+    hit = _in_repo(root, value if value.startswith("/") else str(base / value))
+    if hit is not None and not _is_glob(hit) and (root / hit).is_dir():
+        return None
+    return hit
 
 
 def _referenced_properties(root: Path, files: list[str]) -> list[str]:
@@ -594,10 +605,42 @@ def self_test() -> int:
                                    f"want {sorted(want_files)} {sorted(want_patterns)}"))
             if not ok:
                 failures.append(label)
+        # declared(): the `<Import Project>` paths kept for reach. A reach entry is read as a
+        # directory PREFIX by node-repo-scope.py, so an import that resolves to a directory would
+        # make every file under it "reach" the project (the empty-property shape put `src` into the
+        # Plugins shelf's reach and widened every src/ edit to the full module catalog).
+        (root / "Lib" / "Imports.targets").write_text(
+            '<Project>\n'
+            '  <Import Project="$(EmptyPath)" Condition="Exists(\'$(EmptyPath)\')" />\n'
+            '  <Import Project="$(MSBuildThisFileDirectory)" Condition="false" />\n'
+            '  <Import Project="$(LibDir)" Condition="false" />\n'
+            '  <Import Project="$(MSBuildThisFileDirectory)Optional.props" Condition="Exists(\'x\')" />\n'
+            '  <Import Project="$(MSBuildThisFileDirectory)Beside.props" />\n'
+            '  <Import Project="$(MSBuildThisFileDirectory)../Shared/*.props" />\n'
+            '</Project>\n', encoding="utf-8")
+        got_imports, got_patterns, got_unknown = declared(
+            root, ["Lib/Imports.targets"], "Proj", {"EmptyPath": "", "LibDir": str(root / "Libs")})
+        cases = (
+            ("NEGATIVE: an import whose property is EMPTY names no file (not the importing directory)",
+             "Lib" not in got_imports),
+            ("NEGATIVE: an import that resolves to a DIRECTORY names no file", "Libs" not in got_imports),
+            ("NEGATIVE: $(MSBuildThisFileDirectory) alone names no file", "Lib" not in got_imports),
+            ("CONTROL: an absent Exists()-guarded import is still declared (its appearance is a change)",
+             "Lib/Optional.props" in got_imports),
+            ("CONTROL: a present import is still declared", "Lib/Beside.props" in got_imports),
+            ("CONTROL: a glob import is still a pattern", got_patterns == ["Shared/*.props"]),
+            ("CONTROL: nothing above is unknown", got_unknown == []),
+        )
+        for label, ok in cases:
+            print(f"  {'✓' if ok else '✗'} {label}"
+                  + ("" if ok else f" → imports {got_imports} patterns {got_patterns} unknown {got_unknown}"))
+            if not ok:
+                failures.append(label)
     if failures:
         print(f"\n::error title=msbuild-evaluate self-test failed::{len(failures)} case(s): " + "; ".join(failures))
         return 1
-    print(f"\n✓ msbuild-evaluate self-test: {len(table)} path spellings resolve as the table says")
+    print(f"\n✓ msbuild-evaluate self-test: {len(table)} path spellings resolve as the table says, "
+          f"{len(cases)} declared-import cases hold")
     return 0
 
 

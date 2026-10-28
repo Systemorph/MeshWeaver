@@ -659,8 +659,12 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         touched = [f for f in files
                    if any(f.startswith(d + "/") or msbuild_glob_matches(f, d) for d in dirs_)]
         if touched:
+            # Name the reach entry that matched: "first: <a test file>" alone could not say WHY a file
+            # the shelf never compiles counted (an import that resolved to the `src` directory did).
+            via = sorted(d for d in dirs_ if touched[0].startswith(d + "/") or msbuild_glob_matches(touched[0], d))
             return full(f"{len(touched)} changed file(s) are in the caller's {label} "
-                        f"({project} and the projects it reaches) — first: {touched[0]}. "
+                        f"({project} and the projects it reaches) — first: {touched[0]} "
+                        f"(reached through {', '.join(via[:3])}). "
                         f"{consequence[0].upper() + consequence[1:]}, so every module is rebuilt and tested.")
 
     packages = node_packages(root)

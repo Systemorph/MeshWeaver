@@ -146,6 +146,22 @@ project. Core keeps the *mechanism* and the module repository owns the *list*:
    shelf too: no module references it, so a diff touching it or a project it reaches runs and
    tests every module instead of narrowing to none. Omitted, the tester image's shelf is used, the key is
    byte-identical to before, and nothing changes for a caller that sets nothing.
+
+   **What "a project it reaches" may NOT contain: a directory.** The scope reads every reach entry
+   as a directory prefix, so the reach must hold only what MSBuild could import. `msbuild-evaluate.py`
+   used to record an `<Import Project="$(P)">` whose property evaluates EMPTY as the importing file's
+   own directory. Plugins' `src/Directory.PlatformRefs.targets` declares exactly that
+   (`$(_MeshWeaverCoreRefsPath)`, empty outside a platform mount), so `src` entered the shelf's reach
+   and every `src/` edit — a test-only project no module references included — selected all 42
+   modules. Measured on Plugins pull-request runs of 2026-10-28 (40668273479, 40665824665,
+   40674560066, 40680719397, 40657781491): each printed `scope: full — … in the caller's
+   module-libraries shelf … first: src/<a .Test project>/…` and built eight pack legs; a
+   Hosting-only diff in the same window (40743963637) selected 8. An import path that is empty or
+   resolves to a directory is now no declared import (self-test: three negative cases, and controls
+   that an absent `Exists()`-guarded import and a glob import are still kept). On the Plugins tree the
+   same test-only diff now selects the 7 always-composed modules, a `src/MeshWeaver.Maps` edit 11, and
+   `src/Directory.Packages.Plugins.props` still all 42. The FULL reason now names the reach entry that
+   matched, so the next such entry is visible in the log.
 2. **Plugins — in place.** `src/MeshWeaver.ModuleLibraries` carries every entry only Plugins
    modules use (Plugins#4303), `src/Directory.Packages.Plugins.props` pins them — members of a
    family core still pins part of take their version from that sibling — and the module-pack call
