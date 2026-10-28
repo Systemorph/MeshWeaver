@@ -389,11 +389,17 @@ public interface IStorageAdapter
     /// each level are collected, and BOTH node paths and directory paths are recursed
     /// into (a node can have children of its own; a directory is a node-less
     /// intermediate level that still anchors real descendants).
+    ///
+    /// <para>🚨 A level whose <see cref="ListChildPaths"/> completes WITHOUT emitting faults the walk
+    /// with <see cref="SubtreeEnumerationUnansweredException"/> (MeshWeaver#7461): the per-level fold
+    /// below is seeded, so an unanswered level would otherwise drop its whole subtree from the
+    /// enumeration silently. A level with no children answers with empty listings.</para>
     /// </summary>
     private static IObservable<System.Collections.Immutable.ImmutableHashSet<string>> WalkDescendantPaths(
         IStorageAdapter adapter, string parentPath)
         => System.Reactive.Linq.Observable.SelectMany(
-            System.Reactive.Linq.Observable.Take(adapter.ListChildPaths(parentPath), 1),
+            System.Reactive.Linq.Observable.Take(adapter.ListChildPaths(parentPath), 1)
+                .RequireAnswer($"{adapter.GetType().Name}.{nameof(ListChildPaths)}", parentPath),
             level =>
             {
                 var nodes = (level.NodePaths ?? Enumerable.Empty<string>())

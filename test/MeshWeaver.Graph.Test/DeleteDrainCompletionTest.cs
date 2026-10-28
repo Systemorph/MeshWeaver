@@ -282,9 +282,28 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
         ListChildPaths(string? parentPath)
         => inner.ListChildPaths(parentPath);
 
+    /// <summary>
+    /// When set, <see cref="ListDescendantPaths"/> for exactly this root COMPLETES WITHOUT EMITTING —
+    /// a store that breaches "emits one complete snapshot and completes" (MeshWeaver#7461). <c>null</c>
+    /// ⇒ every enumeration answers, which is what every other test in this file relies on.
+    /// </summary>
+    public string? UnansweredEnumerationRoot { get; set; }
+
+    /// <summary>How many enumerations of <see cref="UnansweredEnumerationRoot"/> went unanswered.</summary>
+    public int UnansweredEnumerations => Volatile.Read(ref _unansweredEnumerations);
+
+    private int _unansweredEnumerations;
+
     /// <inheritdoc />
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-        => inner.ListDescendantPaths(rootPath);
+        => UnansweredEnumerationRoot is { } silent
+           && string.Equals(rootPath, silent, StringComparison.OrdinalIgnoreCase)
+            ? Observable.Defer(() =>
+            {
+                Interlocked.Increment(ref _unansweredEnumerations);
+                return Observable.Empty<IReadOnlyCollection<string>>();
+            })
+            : inner.ListDescendantPaths(rootPath);
 
     /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
