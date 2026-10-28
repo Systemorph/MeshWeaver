@@ -71,7 +71,7 @@ on:
         required: false
     outputs:
       executor:
-        description: "`host` or `actions` — never empty once this job ran."
+        description: "`host`, `actions`, or `host-forced` (a pull request routed to the build host in SHADOW until parity — every lane treats it as `actions`, policy build-server-routes-all-ci) — never empty once this job ran."
         value: ${{ jobs.executor.outputs.executor }}
       api-url:
         description: The build API base the follow jobs read (https://<instance>/api/builds); empty with `actions` when none is configured.

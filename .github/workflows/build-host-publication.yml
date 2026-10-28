@@ -76,6 +76,7 @@ on:
           host's receipts) or `actions` (the pack call's own legs built and staged them; this lane only
           hands the pack call's outputs through, and needs `declared`). Pass the pack call's
           `executor` verbatim. Any other value is RED.
+          `host-forced` (policy build-server-routes-all-ci, SHADOW until parity) runs exactly as `actions`.
         required: false
         type: string
         default: host
@@ -185,10 +186,12 @@ jobs:
           set -euo pipefail
           [ -n "${LANE:-}" ] || { echo "::error::lane is empty — every staged record carries the lane of the pack call that produced it, and artifacts are RUN-WIDE; without it a sibling call's bytes could answer this publication"; exit 1; }
           case "$EXECUTOR" in
-            actions)
-              [ -n "${DECLARED:-}" ] || { echo "::error::executor 'actions' is the host-graph contract's no-op arm and needs the pack call's 'declared' output — the original contract only ever fetches from a host"; exit 1; }
+            # `host-forced` (policy build-server-routes-all-ci, SHADOW until parity): the pack call's own
+            # legs ran on Actions and staged the bytes, so it is the `actions` arm.
+            actions|host-forced)
+              [ -n "${DECLARED:-}" ] || { echo "::error::executor '$EXECUTOR' is the host-graph contract's no-op arm and needs the pack call's 'declared' output — the original contract only ever fetches from a host"; exit 1; }
               echo "fetch=false" >> "$GITHUB_OUTPUT"
-              echo "executor: actions — the pack call's own legs built and staged the bytes; handing its outputs through, fetching nothing." ;;
+              echo "executor: $EXECUTOR — the pack call's own legs built and staged the bytes; handing its outputs through, fetching nothing." ;;
             host)
               if [ -n "${DECLARED:-}" ] && [ -z "$(printf '%s' "${SELECTED:-}" | tr -d '[:space:]')" ]; then
                 echo "fetch=false" >> "$GITHUB_OUTPUT"
@@ -197,7 +200,6 @@ jobs:
                 echo "fetch=true" >> "$GITHUB_OUTPUT"
                 echo "executor: host — fetching the host run's receipts for lane $LANE."
               fi ;;
-            host-forced) echo "::error title=Routed to the build host — owed::the owner routed this repository's pull requests to the build server (policy build-server-routes-all-ci) while its host stages still owe parity with this leg — RED until the debt is paid and ciEquivalent is claimed; the owed items are the ::error annotations of the run's executor/admission job and the owes list of .github/build-stages.json"; exit 1 ;;
             *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who built the bundles"; exit 1 ;;
           esac
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
