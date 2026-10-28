@@ -53,6 +53,13 @@ namespace MeshWeaver.Hosting.Persistence;
 /// removes anything. In-process, every write under the root is therefore refused or committed
 /// BEFORE the delete, never after it.</para>
 ///
+/// <para><b>Nor is a registration at the guard enough on its own (#7346).</b> A per-node hub checks
+/// the scopes when it COMMITS a write and stores it only afterwards; a delete opening its scope in
+/// between found nothing registered here yet. The owner's check is therefore an admission too
+/// (<see cref="RecentlyDeletedRegistry.AdmitCommit"/>), held until the write's storage write answers:
+/// the deletion waits for it, and this guard lets its write through the scope
+/// (<see cref="RecentlyDeletedRegistry.IsAdmittedAtCommit"/>).</para>
+///
 /// <para>Pass-through when no <see cref="RecentlyDeletedRegistry"/> is registered (meshes
 /// without Graph) and O(active deletions) — i.e. effectively free — on the write hot path.</para>
 /// </summary>
@@ -210,7 +217,10 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
         {
             var admission = registry!.AdmitWrite(paths);
             foreach (var path in paths)
-                if (registry.IsUnderActiveDeletion(path, out var root))
+                // A write its owner ADMITTED AT COMMIT before the scope opened is let through (#7346):
+                // the deletion behind the scope waits for it, so it lands before the deletion — and
+                // refusing it now would refuse a write the owner has already committed and served.
+                if (registry.IsUnderActiveDeletion(path, out var root) && !registry.IsAdmittedAtCommit(path))
                 {
                     admission.Dispose();
                     return refuse(path, root).Subscribe(observer);

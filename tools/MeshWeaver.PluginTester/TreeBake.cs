@@ -113,6 +113,14 @@ public static class TreeBake
         /// a pod's readiness and stall a rollout. The policy lives HERE, in the gate.</para>
         /// </summary>
         public WarningBaseline Warnings { get; init; } = WarningBaseline.ObserveOnly;
+
+        /// <summary>
+        /// How many NodeTypes compile at once — default one per core. Every compile is a pure
+        /// function of the node set and the reference set, and the results are folded back in path
+        /// order, so the bundles, the edge file, the warning inventory and the per-type log lines
+        /// are the same at every value; <c>1</c> is the serial bake (see <see cref="BakeSchedule"/>).
+        /// </summary>
+        public int MaxParallel { get; init; } = Math.Max(1, Environment.ProcessorCount);
     }
 
     /// <summary>One NodeType's outcome.</summary>
@@ -199,36 +207,73 @@ public static class TreeBake
     /// contract as the mesh-driven bake's, because CI reads it either way.</summary>
     public const string FrameworkMvidFile = BakeOutput.FrameworkMvidFile;
 
-    /// <summary>Runs the bake. Synchronous — this is a build step at a console boundary.</summary>
+    /// <summary>Runs the bake. Synchronous — this is a build step at a console boundary, and this
+    /// is its ONE wait on the pipeline <see cref="Bake"/> composes.</summary>
     /// <param name="options">What to bake, and where to.</param>
-    public static Report Run(Options options)
+    public static Report Run(Options options) => Bake(options).Wait();
+
+    /// <summary>
+    /// The bake as a cold pipeline: load the tree, resolve the host, then compile every NodeType
+    /// through <see cref="BakeSchedule"/> — in parallel up to <see cref="Options.MaxParallel"/>,
+    /// each type after the types it is ordered behind — and fold the results back in path order.
+    /// </summary>
+    /// <param name="options">What to bake, and where to.</param>
+    public static IObservable<Report> Bake(Options options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        // Cold end to end: the snapshot is read per SUBSCRIPTION, so each subscription bakes the
+        // tree as it is when it subscribes — never one read when the pipeline was composed.
+        return Observable.Defer(() => BakeOnSubscribe(options));
+    }
+
+    /// <summary>
+    /// The DEPENDENCY ORDER of the bake's work items: one item per path, and every definition the
+    /// tree carries for that path contributes — a path carried twice is compiled twice inside its
+    /// one item, so each compile's dependencies must have finished before it starts.
+    /// </summary>
+    /// <param name="byPath">Each path's definitions, in tree order.</param>
+    internal static ImmutableDictionary<string, ImmutableArray<string>> ScheduleOf(
+        IEnumerable<ImmutableArray<(string Path, NodeTypeDefinition? Definition)>> byPath) =>
+        BakeSchedule.BuildAfter(byPath.SelectMany(g => g));
+
+    private static IObservable<Report> BakeOnSubscribe(Options options)
+    {
         // The identity a report carries when the bake stops BEFORE its host is resolved — this
         // process's own, the only one known at that point. Every bundle is keyed to the HOST's.
         var processIdentity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
         if (options.AppDirectory is not null && options.SharedFrameworksRoot is null)
-            return new Report(processIdentity, [], [],
+            return Observable.Return(new Report(processIdentity, [], [],
                 "AppDirectory was given without SharedFrameworksRoot — the platform host's shared "
                 + "frameworks are part of its reference set and are never inferred from the running "
-                + "runtime (pass --shared-frameworks <dotnet root>/shared).");
+                + "runtime (pass --shared-frameworks <dotnet root>/shared)."));
 
         RepoSnapshot snapshot;
-        IReadOnlyList<PackageManifest> packages;
         try
         {
             snapshot = LocalNodeRepo.LoadSync(options.RepoRoot);
-            packages = LocalNodeRepo.DiscoverPackages(snapshot).Wait();
         }
         catch (Exception ex)
         {
-            return new Report(processIdentity, [], [],
-                $"{ex.GetType().Name}: {ex.Message}");
+            return Observable.Return(new Report(processIdentity, [], [],
+                $"{ex.GetType().Name}: {ex.Message}"));
         }
+        return Observable.Defer(() => LocalNodeRepo.DiscoverPackages(snapshot))
+            .LastAsync()
+            .Select(packages => (Packages: packages, Error: (string?)null))
+            .Catch((Exception ex) => Observable.Return(
+                (Packages: (IReadOnlyList<PackageManifest>)[], Error: (string?)$"{ex.GetType().Name}: {ex.Message}")))
+            .SelectMany(loaded => loaded.Error is { } error
+                ? Observable.Return(new Report(processIdentity, [], [], error))
+                : BakePackages(options, processIdentity, snapshot, loaded.Packages));
+    }
+
+    private static IObservable<Report> BakePackages(
+        Options options, string processIdentity, RepoSnapshot snapshot, IReadOnlyList<PackageManifest> packages)
+    {
         if (packages.Count == 0)
-            return new Report(processIdentity, [], [],
+            return Observable.Return(new Report(processIdentity, [], [],
                 $"No node-repo packages (top-level folders with an index.json root) found under "
-                + $"'{Path.GetFullPath(options.RepoRoot)}'.");
+                + $"'{Path.GetFullPath(options.RepoRoot)}'."));
 
         // 🚨 ONE node set across EVERY package. A `shared=@Other/Lib/Source` query crosses package
         // boundaries and the runtime resolves it against the whole mesh; a per-package set would
@@ -282,7 +327,7 @@ public static class TreeBake
         }
         catch (InvalidOperationException refusal)
         {
-            return new Report(processIdentity, [], [], refusal.Message);
+            return Observable.Return(new Report(processIdentity, [], [], refusal.Message));
         }
         // 🚨 …and against the PLATFORM HOST's assemblies, not this process's (#3022). The tester
         // image's /app is a strict SUBSET of the portal's (measured on rc9.ci.7534: 88 vs 219
@@ -301,7 +346,7 @@ public static class TreeBake
                 : ((BakeHost?)BakeHost.InProcess(modules), (string?)null)
             : BakeHost.ResolveDirectory(options.AppDirectory, options.SharedFrameworksRoot!, modules);
         if (host is null)
-            return new Report(processIdentity, [], [], hostProblem);
+            return Observable.Return(new Report(processIdentity, [], [], hostProblem));
         options.Output.WriteLine(
             $"bake: {treeNodes.Length} node(s) from {packages.Count} package(s); "
             + $"framework={host.FrameworkIdentity}");
@@ -319,21 +364,26 @@ public static class TreeBake
         // out. There is no mesh in this process, so the bake owns the pool registry a mesh would:
         // the resolver gets the same bounded Http and PackageCache lanes it gets in a portal, and
         // both are disposed with the bake.
-        using var ioPools = new IoPoolRegistry();
-        using var nugetResolver = new NuGetAssemblyResolver(
+        // Both are disposed, and the work directory removed, once the pipeline below has
+        // terminated — on completion, on error and on unsubscription alike — AND every compile it
+        // started has returned. Disposing the cascade does not interrupt a compile already running
+        // on the pool, so cleanup at termination alone could dispose the resolver under a running
+        // compile or delete the directory it is writing into (BakeLifetime). Termination cancels
+        // the compiles cooperatively, and no compile starts after it.
+        var ioPools = new IoPoolRegistry();
+        var nugetResolver = new NuGetAssemblyResolver(
             options.LoggerFactory?.CreateLogger<NuGetAssemblyResolver>()
             ?? NullLogger<NuGetAssemblyResolver>.Instance,
             ioPools);
 
         var workDirectory = Path.Combine(
             Path.GetTempPath(), $"mw-compiler-bake-{Environment.ProcessId}-{Guid.NewGuid():N}");
-        try
+        var cancellation = new CancellationTokenSource();
+        var lifetime = new BakeLifetime(cancellation, () =>
         {
-            return BakeAll(
-                options, treeNodes, nodeSet, packages, snapshot, host, workDirectory, nugetResolver);
-        }
-        finally
-        {
+            nugetResolver.Dispose();
+            ioPools.Dispose();
+            cancellation.Dispose();
             try
             {
                 if (Directory.Exists(workDirectory))
@@ -343,6 +393,96 @@ public static class TreeBake
             {
                 // A leftover temp directory costs disk, never correctness.
             }
+        });
+        return Observable.Defer(() => BakeAll(
+                options, treeNodes, nodeSet, packages, snapshot, host, workDirectory, nugetResolver, lifetime))
+            .Finally(lifetime.Terminate);
+    }
+
+    /// <summary>
+    /// Ties the bake's shared resources to the compiles that use them. A compile
+    /// <see cref="TryEnter">enters</see> before it touches the resolver or the work directory and
+    /// <see cref="Exit">exits</see> when it returns; <see cref="Terminate"/> (the pipeline ended)
+    /// cancels the running compiles and refuses new ones. The cleanup runs ONCE, when the pipeline
+    /// has terminated and no compile is inside — whichever of the two happens last runs it.
+    /// The count and the termination flag live in ONE word, so "nobody inside and terminated" is
+    /// read by a single atomic operation — the result of the decrement itself. Reading the flag
+    /// after a separate decrement would let a stale zero clean up under a compile that entered
+    /// in between, or under a <c>Cancel()</c> still running.
+    /// </summary>
+    internal sealed class BakeLifetime(CancellationTokenSource cancellation, Action cleanup, Action? afterExitDecrement = null)
+    {
+        private const int TerminatedBit = 1 << 30;
+        private int state; // TerminatedBit | number of users inside
+        private int cleaned;
+
+        /// <summary>Cancelled when the pipeline terminates.</summary>
+        public CancellationToken Token { get; } = cancellation.Token;
+
+        /// <summary>Enters a compile; false once the pipeline has terminated (nothing was entered).</summary>
+        public bool TryEnter()
+        {
+            if ((Interlocked.Increment(ref state) & TerminatedBit) == 0)
+                return true;
+            Exit();
+            return false;
+        }
+
+        /// <summary>Leaves a compile entered by <see cref="TryEnter"/>.</summary>
+        public void Exit()
+        {
+            var after = Interlocked.Decrement(ref state);
+            afterExitDecrement?.Invoke();
+            if (after == TerminatedBit)
+                Clean();
+        }
+
+        /// <summary>
+        /// Runs <paramref name="body"/> entered: the shared resources outlive it even when the
+        /// pipeline terminates while it runs. Throws <see cref="OperationCanceledException"/>
+        /// (nothing run) once the pipeline has terminated.
+        /// </summary>
+        public T Run<T>(Func<T> body)
+        {
+            if (!TryEnter())
+                throw new OperationCanceledException(Token);
+            try
+            {
+                return body();
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        /// <summary>
+        /// The pipeline terminated: cancel what runs, refuse what would start. Termination itself
+        /// counts as one user until <c>Cancel()</c> has returned, so a last compile leaving in
+        /// between cannot run the cleanup — which disposes the cancellation source — under it.
+        /// </summary>
+        public void Terminate()
+        {
+            Interlocked.Increment(ref state);
+            if ((Interlocked.Or(ref state, TerminatedBit) & TerminatedBit) != 0)
+            {
+                Exit();
+                return;
+            }
+            try
+            {
+                cancellation.Cancel();
+            }
+            finally
+            {
+                Exit();
+            }
+        }
+
+        private void Clean()
+        {
+            if (Interlocked.Exchange(ref cleaned, 1) == 0)
+                cleanup();
         }
     }
 
@@ -495,7 +635,7 @@ public static class TreeBake
         return name => map.TryGetValue(name, out var version) ? version : null;
     }
 
-    private static Report BakeAll(
+    private static IObservable<Report> BakeAll(
         Options options,
         ImmutableArray<TreeNodeLoader.TreeNode> treeNodes,
         NodeSet nodeSet,
@@ -503,7 +643,8 @@ public static class TreeBake
         RepoSnapshot snapshot,
         BakeHost host,
         string workDirectory,
-        INuGetAssemblyResolver nugetResolver)
+        INuGetAssemblyResolver nugetResolver,
+        BakeLifetime lifetime)
     {
         var frameworkIdentity = host.FrameworkIdentity;
         var idOf = host.IdOf;
@@ -513,18 +654,38 @@ public static class TreeBake
         // reference set), and never on the success path. A CS0234/CS0246 that the reference set
         // explains is named as a REFERENCE-SET gap in the verdict itself — the thing four RED
         // NodeTypes never said while a whole release wave waited behind them (#3022).
+        // Compiles run concurrently now, so the first reference-shaped failure on ANY of them
+        // builds it, once, and every other one reads that instance.
         var attribution = new Lazy<ReferenceGapAttribution>(
-            () => ReferenceGapAttribution.Create(references, host.AppDirectory));
-        var results = ImmutableArray.CreateBuilder<TypeResult>();
-        var entriesByPackage = new Dictionary<string, List<BundleWriter.AssemblyEntry>>(StringComparer.Ordinal);
+            () => ReferenceGapAttribution.Create(references, host.AppDirectory),
+            LazyThreadSafetyMode.ExecutionAndPublication);
 
         var compilable = treeNodes
             .Where(t => t.Node.Content is NodeTypeDefinition)
             .OrderBy(t => t.Node.Path, StringComparer.Ordinal)
             .ToList();
+        // One cascade id per PATH. A path the tree carries twice is compiled twice, in tree order,
+        // inside its one work item — exactly what the serial loop did — so the denominator cannot
+        // shrink by deduplication.
+        var byPath = compilable
+            .GroupBy(t => t.Node.Path, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.ToImmutableArray(), StringComparer.Ordinal);
+        var buildAfter = ScheduleOf(byPath.Values
+            .Select(g => g.Select(t => (t.Node.Path, t.Node.Content as NodeTypeDefinition)).ToImmutableArray()));
 
-        foreach (var candidate in compilable)
+        // 🚨 A compile never WRITES the console. It carries its lines back in its outcome and the
+        // fold below prints them in path order, so the log of a parallel bake is the serial bake's
+        // log line for line, whatever order the compiles finished in.
+        TypeOutcome? CompileOne(TreeNodeLoader.TreeNode candidate)
         {
+            // The pipeline ended (an unsubscription): start nothing that would touch the resolver
+            // or the work directory after their cleanup could have run.
+            return lifetime.Run(() => CompileEntered(candidate));
+        }
+
+        TypeOutcome? CompileEntered(TreeNodeLoader.TreeNode candidate)
+        {
+            var log = ImmutableArray.CreateBuilder<string>();
             var definition = (NodeTypeDefinition)candidate.Node.Content!;
             var resolution = nodeSet.ResolveSources(
                 definition.Sources, definition.Tests, candidate.Node.Path);
@@ -543,7 +704,7 @@ public static class TreeBake
             if (resolution.IsEstablished
                 && resolution.Sources.IsEmpty
                 && string.IsNullOrWhiteSpace(definition.Configuration))
-                continue;
+                return null;
 
             try
             {
@@ -551,13 +712,20 @@ public static class TreeBake
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
-                    Path.Combine(workDirectory, CodeConventions.SanitizeNodeName(candidate.Node.Path)),
+                    // 🚨 A directory of its OWN per compile attempt. The sanitized name is not
+                    // unique — `Ctrl/A_B` and `Ctrl/A/B` both sanitize to `Ctrl_A_B`, and a
+                    // case-only pair collides on a case-insensitive file system — and the bundle
+                    // entry reads its bytes back from this path later, so a shared directory hands
+                    // one type the other's DLL, and two parallel compiles overwrite each other.
+                    Path.Combine(workDirectory, Guid.NewGuid().ToString("N"),
+                        CodeConventions.SanitizeNodeName(candidate.Node.Path)),
                     // The ONE Task bridge in the bake, at a console build step — never on a hub
                     // scheduler. NuGet restore is genuine network IO with no reactive surface;
                     // the runtime bridges it through the IoPool for the same reason.
                     resolveNuGet: BlockingNuGetResolution(nugetResolver),
                     logger: options.Logger,
-                    moduleAssemblyPaths: host.ModuleAssemblyPaths);
+                    moduleAssemblyPaths: host.ModuleAssemblyPaths,
+                    ct: lifetime.Token);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake
                 // writes `NodeTypeDefinition.CompiledSources`, which DiscoverSourceVersionSnapshot
@@ -574,9 +742,7 @@ public static class TreeBake
                 var sourceVersions = resolution.Sources
                     .Select(n => n.Path)
                     .ToImmutableSortedDictionary(p => p, _ => 0L, StringComparer.Ordinal);
-                if (!entriesByPackage.TryGetValue(candidate.Package, out var entries))
-                    entriesByPackage[candidate.Package] = entries = [];
-                entries.Add(new BundleWriter.AssemblyEntry(
+                var entry = new BundleWriter.AssemblyEntry(
                     compiled.NodePath,
                     () => File.OpenRead(compiled.DllPath),
                     compiled.PdbPath is null ? null : () => File.OpenRead(compiled.PdbPath),
@@ -599,9 +765,15 @@ public static class TreeBake
                     // #4280 — WHICH includes, beside the query-resolved key set above, so the
                     // consumer can tell an include still landing from a source that moved.
                     SourceIncludes = NodeTypeSourceFingerprint.IncludePathsOf(compiled.Inputs.ResolvedIncludes),
-                });
+                    // The edges this compile read, carried in the bundle so an ADOPTING mesh (which
+                    // compiles nothing) can write them for the build it serves
+                    // (Doc/Architecture/DependencyGraph → adopted prebuilts).
+                    DependencyEdges = compiled.DependencyEdges is { } edges
+                        ? DependencyEdgesFile.ToBundleJson(edges, options.SourceSha ?? snapshot.CommitSha)
+                        : null,
+                };
 
-                results.Add(new TypeResult(
+                var result = new TypeResult(
                     compiled.NodePath, candidate.Package, null, compiled.Inputs.MatchedSourcePaths)
                 {
                     ResolvedIncludePaths = [.. compiled.Inputs.ResolvedIncludes.Keys],
@@ -610,15 +782,16 @@ public static class TreeBake
                     // per NodeType that includes it. They are folded across the whole bake below.
                     Warnings = compiled.Warnings,
                     DependencyEdges = compiled.DependencyEdges,
-                });
+                };
                 // One line per compiled type only under MW_LOG_LEVEL (GateVerbosity): a full bake
                 // is ~1,100 of them, and the verdict is the per-package `bake: … → N assembly(ies)`
                 // line plus every FAILED type, which are printed regardless.
                 if (GateVerbosity.Verbose)
-                    options.Output.WriteLine(
+                    log.Add(
                         $"   ok  {compiled.NodePath} "
                         + $"[{compiled.Inputs.MatchedSourcePaths.Length} source(s), "
                         + $"{compiled.Dependencies.Count} dependency record entr(ies)]");
+                return new TypeOutcome(result, candidate.Package, entry, log.ToImmutable());
             }
             // 🚨 A FAILING TYPE FAILS THAT TYPE — never the whole bake. The catch used to name
             // exactly two exception types, and anything else escaped BakeAll, unwound past the
@@ -641,16 +814,80 @@ public static class TreeBake
                 var gap = ReferenceGapAttribution.MayExplain(ex.Message)
                     ? attribution.Value.Explain(ex.Message)
                     : null;
-                results.Add(new TypeResult(
-                    candidate.Node.Path, candidate.Package,
-                    $"{ex.GetType().Name}: {ex.Message}" + (gap is null ? string.Empty : $"\n   {gap}"),
-                    []));
-                options.Output.WriteLine($"   RED {candidate.Node.Path}");
-                options.Output.WriteLine(ex.Message);
+                log.Add($"   RED {candidate.Node.Path}");
+                log.Add(ex.Message);
                 if (gap is not null)
-                    options.Output.WriteLine($"   {gap}");
+                    log.Add($"   {gap}");
+                return new TypeOutcome(
+                    new TypeResult(
+                        candidate.Node.Path, candidate.Package,
+                        $"{ex.GetType().Name}: {ex.Message}" + (gap is null ? string.Empty : $"\n   {gap}"),
+                        []),
+                    candidate.Package, null, log.ToImmutable());
             }
         }
+
+        var wall = System.Diagnostics.Stopwatch.StartNew();
+        return BakeSchedule.Run(
+                byPath.Keys.ToImmutableArray(),
+                buildAfter,
+                path => byPath[path].Select(CompileOne).OfType<TypeOutcome>().ToImmutableArray(),
+                options.MaxParallel)
+            // The fold writes the bundles, which read the compiled DLL/PDB files out of the work
+            // directory lazily — so it is entered too, and an unsubscription during it cannot
+            // delete that directory under a bundle being written.
+            .Select(settled => lifetime.Run(() => Fold(
+                options, packages, snapshot, host, settled, wall.Elapsed)));
+    }
+
+    /// <summary>One attempted compile: its verdict, its bundle entry when it produced bytes, and
+    /// the lines it would have printed — printed by <see cref="Fold"/>, in path order.</summary>
+    private sealed record TypeOutcome(
+        TypeResult Result, string Package, BundleWriter.AssemblyEntry? Entry, ImmutableArray<string> Log);
+
+    /// <summary>
+    /// Folds the settled compiles back into the serial bake's shape — results, bundle entries and
+    /// log lines in ordinal path order — then writes the bundles, the edge file and the warning
+    /// verdict exactly as before.
+    /// </summary>
+    private static Report Fold(
+        Options options,
+        IReadOnlyList<PackageManifest> packages,
+        RepoSnapshot snapshot,
+        BakeHost host,
+        ImmutableArray<Cascade.NodeResult<ImmutableArray<TypeOutcome>>> settled,
+        TimeSpan wall)
+    {
+        var frameworkIdentity = host.FrameworkIdentity;
+        var results = ImmutableArray.CreateBuilder<TypeResult>();
+        var entriesByPackage = new Dictionary<string, List<BundleWriter.AssemblyEntry>>(StringComparer.Ordinal);
+        // The cascade emits its results ordinal by id — the order the serial loop visited them.
+        foreach (var node in settled.OrderBy(n => n.Id, StringComparer.Ordinal))
+        {
+            // Every type reports green to the cascade (BakeSchedule), and CompileOne turns every
+            // failure but cancellation into its own verdict — so a non-green node here is a
+            // cancellation or a defect in the fold, and either stops the bake rather than
+            // dropping a type from it.
+            if (node.Outcome != Cascade.NodeOutcome.Green)
+                throw new InvalidOperationException(
+                    $"bake: compiling '{node.Id}' did not settle ({node.Outcome}): {node.Error ?? node.BlockedBy}");
+            foreach (var outcome in node.Result)
+            {
+                foreach (var line in outcome.Log)
+                    options.Output.WriteLine(line);
+                results.Add(outcome.Result);
+                if (outcome.Entry is { } entry)
+                {
+                    if (!entriesByPackage.TryGetValue(outcome.Package, out var entries))
+                        entriesByPackage[outcome.Package] = entries = [];
+                    entries.Add(entry);
+                }
+            }
+        }
+        var work = settled.Aggregate(TimeSpan.Zero, (sum, n) => sum + n.Work);
+        options.Output.WriteLine(
+            $"bake: compiled {results.Count} NodeType(s) in {wall.TotalSeconds:F1} s wall "
+            + $"({work.TotalSeconds:F1} s of compile work, max-parallel={options.MaxParallel})");
 
         var bundles = WriteBundles(
             options, packages, snapshot, frameworkIdentity, entriesByPackage, host.Surface);

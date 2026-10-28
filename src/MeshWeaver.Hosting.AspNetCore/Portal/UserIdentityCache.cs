@@ -548,7 +548,7 @@ public sealed class UserIdentityCache : IDisposable
     /// <summary>
     /// Re-opens the directory read when the last one TERMINATED; a no-op while a read is live.
     /// <see cref="Lookup"/> calls it on every question, and readiness
-    /// (<see cref="UserDirectoryReadiness"/>) calls it on every probe — a pod held out of the
+    /// (<c>UserDirectoryReadiness</c> (MeshWeaver.Plugins)) calls it on every probe — a pod held out of the
     /// Service receives no lookups, so without the probe a read that failed before its first
     /// snapshot would never be retried. No timer and no retry loop: a caller is the trigger.
     /// </summary>
@@ -560,7 +560,7 @@ public sealed class UserIdentityCache : IDisposable
 
     /// <summary>
     /// What the directory can answer RIGHT NOW, as one consistent reading — for readiness
-    /// (<see cref="UserDirectoryReadiness"/>), never for a lookup decision: a caller resolving a user
+    /// (<c>UserDirectoryReadiness</c> (MeshWeaver.Plugins)), never for a lookup decision: a caller resolving a user
     /// asks <see cref="Lookup"/>, which classifies the same fields per question.
     /// </summary>
     public UserDirectoryReading Reading => new(

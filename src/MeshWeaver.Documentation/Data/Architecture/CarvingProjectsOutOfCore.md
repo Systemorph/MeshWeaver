@@ -213,8 +213,8 @@ the departing types, and which of the three answers each of them gets.
 | `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
 | `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
 | `Testcontainers` | 385 | no | nothing: its two consumers (`Memex.Portal.Shared.Test`, `MeshWeaver.Testcontainers.Test`) were already in plugins | moved out — free |
-| `Hosting.AspNetCore` | 3 970 | no | `memex/aspire/Memex.Portal.ServiceDefaults` (leaving with #7297); **the satellite MeshWeaver.SocialMedia**, whose compiled module `MeshWeaver.Social` derives from `MeshEndpointProviderAttribute` and compiles against core SOURCE | **stays** for now — a move makes a satellite depend on plugins (see below) |
-| `Markdown.Export.Contract` | 355 | no | `Hosting.AspNetCore` (`PortalApplication`) | stays while `Hosting.AspNetCore` does |
+| `Hosting.AspNetCore` | 3 970 | no | a satellite's compiled module (the endpoint hook); seven Plugins modules' published bytes (`PortalApplication` and three more) | **split** — the host-only half of `Portal/` moved out (see below); the rest stays |
+| `Markdown.Export.Contract` | 355 | no | `PortalApplication`, which stays | **stays** |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
 and NuGet resolution, packaging.
@@ -234,8 +234,8 @@ in core's `src/`, `test/` or `tools/` references it, so it looked free. Two cons
   [Repository Dependency Direction](../RepositoryDependencyDirection)); none checks out
   MeshWeaver.Plugins. Moving the project would leave that module with no source to compile against.
 
-So `Hosting.AspNetCore` stays until the hook is split from the portal infrastructure in `Portal/`:
-the hook (`MeshEndpointProviderAttribute`, `ModuleEndpointDataSource`, the endpoint and static-asset
+That is why `Hosting.AspNetCore` was split rather than moved (see "Splitting `Hosting.AspNetCore`"
+below): the hook (`MeshEndpointProviderAttribute`, `ModuleEndpointDataSource`, the endpoint and static-asset
 extensions) is a platform extension point, and `Portal/` is host code. That split changes which
 assembly declares public types, so it needs type forwarders and is a design change, not a move.
 `Markdown.Export.Contract` is pinned by `Hosting.AspNetCore` alone (`PortalApplication`), so it waits
@@ -258,6 +258,65 @@ meshes compile that sample.
 **So neither direction of the `.csproj` graph can be trusted here.** A reference may be dead weight,
 and a live consumer may have no reference at all. Check both: a warnings-as-errors build of the
 consumer settles the first; the content trees and the node JSON settle the second.
+
+## Splitting `Hosting.AspNetCore`: what published bytes bind decides what stays
+
+`MeshWeaver.Hosting.AspNetCore` is outside the content surface, but it is not free to move. The
+satellite MeshWeaver.SocialMedia compiles its module `MeshWeaver.Social` against it from core source,
+because that module declares its endpoints with `MeshEndpointProviderAttribute`. So the project was
+split instead of moved, and the split followed one test: **can every published plugin or satellite
+byte still link?**
+
+A `[TypeForwardedTo]` only points toward an assembly the forwarding assembly references, and core
+never references MeshWeaver.Plugins. So a type that leaves core for Plugins gets no forwarder, and it
+may leave only if no published binary binds it by assembly name. The answer was MEASURED, not
+grepped. Every registry module of MeshWeaver.Plugins (42 module DLLs) was built, and the `TypeRef`s it
+holds into `MeshWeaver.Hosting.AspNetCore` were read from the metadata:
+
+| Bound by published module bytes | Modules |
+|---|---|
+| `MeshEndpointProviderAttribute` | Courses, Mail.Gmail, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp (and the satellite's `MeshWeaver.Social`) |
+| `McpConfiguration`, `SessionHubResolver` | Mcp |
+| `Portal.PortalApplication` | AppleMessages, Blazor.Chat, Courses, Mail.Gmail, Mail.MicrosoftGraph, Teams, WhatsApp |
+| `Portal.PortalErrorSink` | Blazor.Chat |
+| `Portal.UserIdentityCache`, `Portal.UserIdentityLookup` | Mail.MicrosoftGraph |
+
+Those types stay, together with what their public signatures name (`ICircuitContextAccessor`,
+`UserDirectoryReading`, `PortalErrorReporting`) and the one package `PortalApplication` needs,
+`MeshWeaver.Markdown.Export.Contract`. The text search for the namespace finds more. Courses and Mcp
+mention `UserContextMiddleware` in comments, for instance. But a comment is not a `TypeRef`, so a text
+search over-counts.
+
+**What moved** to MeshWeaver.Plugins as `MeshWeaver.Hosting.AspNetCore.PortalHost`, under that NEW
+namespace, is host code that no published binary binds: `UserContextMiddleware`, `ValidatedTokenCache`,
+`MeshUserProjection`, `VUserHelper`, `UserDirectoryReadiness`, `RequestNamingExceptionHandling` and
+`RequestName`, `NonfileRouteConstraint` and its extensions, `ArticleExtensions`, and
+`Authentication/AuthenticationOptions` with its two companions. Their consumers are the portal hosts
+and the Blazor host libraries, which are rebuilt with every image. `scripts/type-forwards.allow` names
+each one, and every entry is a statement this measurement backs.
+
+**The transition: a new namespace, because the module build never sees a checkout.** The first
+attempt kept the namespace and switched on the pinned platform CHECKOUT: while it still carried
+`Portal/UserContextMiddleware.cs`, the Plugins copy compiled nothing. The module bundles'
+one-workspace build defeated it. That build (`mw-plugin-test build-project` inside the sealed portal
+image) compiles against the image's `/app` and has no platform checkout, so the switch read "moved"
+and compiled the copy next to an assembly still exporting the same full names: CS0436 on every type.
+Reproduced locally with the tester inside a portal image that predates the delete: 6 CS0436, the
+same as CI.
+
+A switch on a path cannot answer a question about an assembly, so the moved types took a new
+namespace, `MeshWeaver.Hosting.AspNetCore.PortalHost`. That copy never shares a full name with the
+platform's assembly, whichever platform set a build resolves. The consumers switch in the same change.
+A file that also uses a type the platform kept aliases each moved type it uses, so the simple name is
+never ambiguous while the platform still carries its copy. The platform then deletes its copy with no
+consumer left. The same 39-entry workspace build is GREEN, 52 of 52 projects, against the same
+image. **When a moved type's old full name stays exported anywhere a build path can see it, prefer a
+new namespace to any switch.**
+
+**What it does not cover.** The measurement covers the registry modules MeshWeaver.Plugins builds
+today, plus a source search of every Systemorph repository for the namespace (only
+MeshWeaver.SocialMedia uses it, and only the endpoint hook). A module that some other estate built and
+published from a private fork would not be seen.
 
 ## Feature folders inside content-surface projects
 
@@ -705,8 +764,14 @@ into the control instance's inbox, and memex's fan-out.
 | `deploy/aks/operator/` + its image lane | deploy (operator) | **moved** to MeshWeaver.Plugins `deploy/hosting-operator` (`hosting-operator.yml`, the ONE publisher of `hosting-operator:main`) |
 | `deploy/helm`, `deploy/helm-db`, `deploy/aks/{manifests,scripts,values.aks.yaml}`, `deploy/homebrew`, `chart-gate.yml`, `homebrew.yml`, `test-bundle-registry.py`, `scripts/check-config-key-coverage.py` | deploy (the chart and its tooling) | MeshWeaver.Deploy (seeded; later chart changes ported by a sync PR); the core delete half is a draft |
 | `deploy/aks/envs`, `deploy/aks/infra`, `deploy/aspire`, `memex/aspire/Memex.Aspire.Hosting` | deploy | delete half in flight (draft) |
-| `deploy/aca`, `deploy/compose`, `deploy/compose-ha`, `deploy/marketplace`, `memex-local.yml`, `control-always-latest.yml`, `prod-synthetic-probe.yml`, `combo-verify.yml` | deploy / operations | **owed**: no move opened yet |
-| `deploy/base-images`, `deploy/{node,python,pandas}-gate`, `deploy/{ocr,whisper,s1-extract}` and their image workflows, `edge-images.yml`, `dockerhub-mirror.yml`, `base-image-acr.yml` | build (images the product or its CI runs) | stays |
+| `deploy/{ocr,ollama,whisper,s1-extract}` and `.github/workflows/{ocr,ollama,whisper,s1-extract}-image.yml` | deploy (service images an instance MAY run beside its portal) | **moved** to MeshWeaver.Deploy (same paths) — see "The service images" below |
+| `deploy/aca`, `deploy/compose`, `deploy/compose-ha`, `deploy/marketplace`, `deploy/.env.example`, `deploy/aks/{README,SELF-UPDATE,INSTANCE-LIFECYCLE}.md` | deploy (generated targets, the env template, the AKS bring-up docs) | **moved** to MeshWeaver.Deploy (same paths) |
+| `control-always-latest.yml`, `prod-synthetic-probe.yml`, `combo-verify.yml` | operations | **owed**: no move opened yet |
+| `deploy/base-images` + `base-image-acr.yml` | build (the portal image's own base) | stays: `portal-ai` is the base `main-cd.yml` builds the product image FROM, and `dotnet-test.yml` holds CI's fonts and Playwright version to its Dockerfile |
+| `deploy/core-tests` | build (the set's fifth image, `mw-core-tests`) | stays: `main-cd.yml` packs and pushes it, `dotnet-test.yml` self-tests `core-tests.py`, `.github/build-stages.json` runs it |
+| `deploy/{node,python,pandas}-gate` | build recipes over core source | stay: each is built from the REPOSITORY ROOT and packs core's own SDK (`clients/python`, `clients/typescript`) and the one canonical `mesh.proto` — moving them would make another repository check core out at a ref to build core's bytes. No workflow builds them; they are core's language-gate reference |
+| `deploy/CHANGE-PROPAGATION.md` | the platform's own delivery cost model | stays: it measures core's CI/CD and the bake tax, and `Directory.Build.props` cites it as the cost/benefit record of the framework-identity stamp. It belongs in the doc tree rather than `deploy/` — a follow-up, not a move |
+| `edge-images.yml`, `dockerhub-mirror.yml` | build (images the product or its CI runs) | stays |
 | `build-follow.yml`, `build-host-publication.yml`, `build-follow.py`, `build-executor.py`, `build-artifacts-fetch.py`, `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `node-repo-scope.py`, `ci-artifact-store.py` | build (the CI side of a host run; helpers the runner image READS at the set's commit) | stays |
 | `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | stays: the receivers in MeshWeaver.Plugins and the records compile against it |
 
@@ -716,6 +781,43 @@ the image build (`PLATFORM_COMMIT` = the set's own commit), never vendored, so t
 empty. So a core change to a helper reaches the next set's runner, and a Deploy change to the runner reaches
 the next set too: `mw-build-host:<version>` is written ONCE per version, because the hosts are
 handed it by digest.
+
+### The service images — the sidecar move
+
+The four service images an instance may run BESIDE its portal — Tesseract OCR (`ocr`), the Ollama
+model service (`ollama`), Swiss-German whisper (`whisper-swiss-german`) and GLiNER extraction
+(`s1-extract`) — are neither the product image set nor anything core's CI runs. Each is a
+self-contained build context (its own directory, no core source), and each one's consumer is a
+deployment: the estate vendors the chart, an approved `ApplyChart` binds the immutable tag. So by
+the test above they are **deploy**, and they left with their lanes, their charts and their tests. A
+service image built only for the platform's own tests would have stayed.
+
+What made it more than a copy:
+
+1. **The images keep their names.** Same registry repository, same line tag; every tag already in
+   the registry stays valid. Only the per-build `<line>-<sha7>` changes meaning: since the move the
+   seven characters name a MeshWeaver.Deploy commit. Retention is unchanged — the line tags stay in
+   core's `.github/release-channels.json`, their writers declared with `"repo":
+   "Systemorph/MeshWeaver.Deploy"` exactly as the hosting operator's is with MeshWeaver.Plugins, so
+   `release-channels.py check` does not look for the workflows here and the pruners still protect
+   the lines.
+2. **The publishing identity is narrower.** Core's lanes signed in with a subscription and reached
+   the registry through `az acr` and `acr-login.sh` (both an ARM lookup). MeshWeaver.Deploy's ONE
+   cloud credential holds AcrPush on the registry resource and nothing else, federated to its `main`,
+   so the moved lanes sign in tenant-level and talk to the registry through its data plane
+   (`acr-data-plane.py`: `login`, and a byte-for-byte `retag` for the ollama line, which must not
+   re-upload ~25 GB). Its `service-images-guard.yml` holds every lane to that on each pull request.
+3. **Core's last overlay files left with the charts.** The four `deploy/*/helm/values.yaml` were the
+   only files in this tree that match the retention lane's overlay path filter, so this repository's
+   entry in `.github/acr-retention/instances.json` `repositories` went with them — the nightly
+   `--discover` run reds a declaration nothing answers to. `lock-pinned-digests.py --self-test`
+   ARM 35 now pins that this repository is declared exactly when its own tree carries an overlay
+   file, in both directions.
+4. **The estate checks its vendored copies against the new home.** Its `Vendored charts match core`
+   job compared its copies of the whisper, s1-extract and ollama charts with core's `main`; it is
+   repointed at MeshWeaver.Deploy (same paths) before the core copies are deleted.
+5. **Frozen, not just deleted.** `scripts/check-chart-freeze.py` freezes every moved path
+   delete-only, so a second publisher of those image names cannot grow back beside Deploy's.
 
 ## Package versions follow the projects: core pins only what core restores
 
@@ -740,6 +842,12 @@ needed only transitively. Restore the whole solution and read every `obj/project
 The first pass found 67 pins with no direct core reference. 12 were transitive and stayed. 48 moved
 to Plugins at the versions core carried, with their comments, including security overrides such as
 `MessagePack` and `SQLitePCLRaw.lib.e_sqlite3`.
+
+A second pass, after the Razor extension, the module-libraries shelf, `MeshModulesPublish.targets` and
+`Memex.Portal.ServiceDefaults` had left, found five more: the Roslynator analyzers. They appeared in
+no graph because the only reference was a `PackageReference Update=` block in
+`MeshWeaver.Layout.csproj`, and an `Update` with no matching `Include` adds nothing. Both were
+deleted. Every satellite that runs Roslynator pins it in its own list.
 
 **🚨 "Nothing in core calls it" is not the test for a DIRECT reference either.** A third-party
 assembly that core's graph carries anyway is part of the platform image's `/app`, and the copy there

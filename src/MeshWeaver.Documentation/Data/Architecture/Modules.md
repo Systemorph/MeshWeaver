@@ -521,7 +521,7 @@ then falls back to the app folder.
 
 ## The `modules/` publish layout (#1644)
 
-Both hosts import `memex/MeshModulesPublish.targets`: publishing lays every listed module out
+Both hosts import MeshWeaver.Plugins `src/MeshModulesPublish.targets`: publishing lays every listed module out
 under `modules/<Name>/` beside the app, pruning same-identity files the app output already
 carries. While a module still ALSO rides a `ProjectReference` (the transition state), its folder
 prunes to empty and the loader falls back to the app folder — byte-for-byte the classic image.

@@ -1,7 +1,7 @@
 ---
 Name: Local Model Service — Ollama in the cluster
 Category: Architecture
-Description: The fleet's self-hosted model service is one Ollama pod per instance (core deploy/ollama) with qwen3.6 (image recognition and OCR, translation, summaries) and bge-m3 (embeddings) baked into its image, OpenAI-compatible at /v1, no egress, and a chart that renders nothing until an instance's deployment record turns it on. The page covers the models and why, the capacity it needs, the configuration each consumer sets, worked examples for every job, and how to enable it.
+Description: The fleet's self-hosted model service is one Ollama pod per instance (MeshWeaver.Deploy deploy/ollama) with qwen3.6 (image recognition and OCR, translation, summaries) and bge-m3 (embeddings) baked into its image, OpenAI-compatible at /v1, no egress, and a chart that renders nothing until an instance's deployment record turns it on. The page covers the models and why, the capacity it needs, the configuration each consumer sets, worked examples for every job, and how to enable it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>
 ---
 
@@ -10,7 +10,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 *"We should have all services like image recognition, translation, summary, … running on local
 ollama"* and *"also vector embeddings"* (maintainer, 2026-10-25). This page is the design that
 answers both. Each instance runs **one** self-hosted model service. It is an Ollama pod built from
-core's `deploy/ollama`, and it serves every AI job that does not need a frontier model:
+[`deploy/ollama`](https://github.com/Systemorph/MeshWeaver.Deploy/tree/main/deploy/ollama) in the public MeshWeaver.Deploy repository, and it serves every AI job that does not need a frontier model:
 
 | Job | Model | Called as |
 |---|---|---|
@@ -20,7 +20,8 @@ core's `deploy/ollama`, and it serves every AI job that does not need a frontier
 | Vector embeddings (search, chunk retrieval) | `bge-m3` (567M, **1024** dimensions, multilingual) | `POST /v1/embeddings` |
 
 It is built and shipped the same way as the services that came before it,
-[`deploy/whisper`](../CentralizedSpeech) and [`deploy/ocr`](../OcrService):
+[`deploy/whisper`](../CentralizedSpeech) and [`deploy/ocr`](../OcrService) (all three in
+MeshWeaver.Deploy, which builds and pushes their images):
 
 - the weights are **baked into the image** and pinned by manifest digest;
 - CI builds the image and pushes it to the fleet registry;
@@ -327,7 +328,7 @@ a background job of tens of minutes, not something a user waits for.
    unrelated German sentence, by a clear margin (measured: 0.93 / 0.92 against 0.43 / 0.39). The
    swapped pair must fail the same check.
 
-**In CI** (`.github/workflows/ollama-image.yml`, pull requests that touch it):
+**In CI** (MeshWeaver.Deploy `.github/workflows/ollama-image.yml`, pull requests that touch it):
 
 - the image's own `CMD` runs as uid 10001 on a read-only root with no capabilities. It is called
   from a sibling container on an internal network, exactly as the portal calls the Service;
@@ -379,7 +380,7 @@ instance's cluster runs and which model reads its documents, so it is a **deploy
 the owner approves**. It is never a hand `helm install`. In the estate's deployment repository,
 follow the whisper and OCR precedents:
 
-1. **Vendor the chart.** Copy `deploy/ollama/helm` to `deployments/aks/<env>/ollama/helm`. The
+1. **Vendor the chart.** Copy MeshWeaver.Deploy's `deploy/ollama/helm` to `deployments/aks/<env>/ollama/helm`. The
    chart check holds it byte-identical.
 2. **Write the values overlay.** Set `enabled: true`, `image.repository:
    meshweaver.azurecr.io/ollama`, the **immutable** `image.tag` printed in the publishing run's

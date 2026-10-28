@@ -172,6 +172,10 @@ public static class BundleReader
         /// that recorded none.</summary>
         public IReadOnlyList<string>? SourceIncludes { get; init; }
 
+        /// <summary>The producer's forward dependency edges for these bytes, as JSON —
+        /// <c>BundleWriter.AssemblyEntry.DependencyEdges</c>. Null for a producer that recorded none.</summary>
+        public JsonElement? DependencyEdges { get; init; }
+
         /// <summary>The module version THESE bytes were built at, when the producer states it per
         /// assembly (MeshWeaver#6831) — see <see cref="Manifest.ModuleVersionPerAssembly"/>. Null
         /// from a producer that states only the bundle's <see cref="Manifest.Version"/>.</summary>
@@ -290,6 +294,14 @@ public static class BundleReader
         /// exactly as on the paths. Null for a legacy bundle: the owner then judges without it.
         /// </summary>
         public IReadOnlyList<string>? SourceIncludes { get; init; }
+
+        /// <summary>
+        /// The forward dependency edges the producer's compile read for these bytes (a
+        /// <c>DependencyEdgeSet</c> as JSON). An adoption compiles nothing, so this is the only
+        /// edge set the adopting mesh can have for the build — <c>PrebuiltAssemblySeeder.WithAdoptedEdges</c>
+        /// writes it once the record serves these bytes. Null for a producer that recorded none.
+        /// </summary>
+        public JsonElement? DependencyEdges { get; init; }
 
         /// <summary>
         /// 🚨 The module version these bytes were built at (MeshWeaver#6831), resolved by
@@ -413,6 +425,8 @@ public static class BundleReader
                 SourceIncludes = reference.SourceIncludes is { Count: > 0 } includes
                     ? includes.OrderBy(k => k, StringComparer.Ordinal).ToList()
                     : null,
+                // The producer's dependency edges, carried verbatim for the adopting consumer.
+                DependencyEdges = reference.DependencyEdges,
                 // #6831 — the version of THESE bytes, never assumed from the bundle's label.
                 ModuleVersion = manifest.ModuleVersionOf(reference),
             });

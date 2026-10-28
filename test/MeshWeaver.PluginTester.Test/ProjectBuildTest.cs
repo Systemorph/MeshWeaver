@@ -238,12 +238,52 @@ public class ProjectBuildTest : IDisposable
         document.Failed.Should().BeEmpty();
         report.Projects.Single(p => p.Result!.AssemblyName == "App").Result!.UsedReferences
             .Should().Contain("Used").And.NotContain("Unused");
+        // The build records its own EVALUATED declarations, so a reconciliation never re-reads raw XML.
+        document.Has(DependencyEdgesFile.Measures.Declarations).Should().BeTrue();
+        document.Declarations["App"].ProjectReferences.Should().Equal("Unused", "Used");
 
         // Negative control: off by default — no file, no second binding pass.
         Directory.Delete(Path.Combine(_root, "out"), recursive: true);
         var plain = await Build(OptionsFor(app));
         plain.ExitCode.Should().Be(0, plain.FatalError ?? "");
         File.Exists(path).Should().BeFalse("the option is off by default");
+    }
+
+    /// <summary>
+    /// A module workspace build records PLATFORM edges (a bound <c>MeshWeaver.*</c> container
+    /// assembly) and DYNAMIC ones, beside the in-tree Module edges; the negative control (no edges
+    /// when the option is off) is the test above.
+    /// </summary>
+    [Fact]
+    public async Task DependencyEdges_RecordPlatformAndDynamicEdges_ForAModuleWorkspace()
+    {
+        Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
+        Write("Mod/Mod.csproj", LibraryProject);
+        Write("Mod/Entry.cs", """
+            using MeshWeaver.ShortGuid;
+            namespace Mod;
+            /// <summary>Binds a platform type, and resolves one by name.</summary>
+            public static class Entry
+            {
+                /// <summary>A short id.</summary>
+                /// <returns>The id.</returns>
+                public static string Id() => Guid.NewGuid().AsString();
+                /// <summary>A platform type, by name.</summary>
+                /// <returns>The type, or null.</returns>
+                public static Type? Home() => Type.GetType("MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph");
+            }
+            """);
+        WithCompatibilityAnchor(AppDirectory());
+        var report = await Build(OptionsFor(Path.Combine(_root, "Mod", "Mod.csproj")) with { DependencyEdges = true });
+        report.ExitCode.Should().Be(0, report.FatalError ?? "");
+
+        var document = DependencyEdgesFile.Deserialize(
+            File.ReadAllText(Path.Combine(_root, "out", DependencyEdgesFile.FileName)))!;
+        var edges = document.Sets.Single(s => s.Source == "Mod").Edges;
+        edges.Should().Contain(e => e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Platform && e.Target == "MeshWeaver.ShortGuid");
+        edges.Should().Contain(e => e.Kind == MeshWeaver.Mesh.DependencyEdgeKinds.Dynamic
+                                    && e.Target == "MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph");
+        edges.Select(e => e.Target).Should().OnlyHaveUniqueItems();
     }
 
     /// <summary>

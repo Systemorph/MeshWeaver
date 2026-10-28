@@ -364,6 +364,24 @@ on:
         required: false
         type: string
         default: ''
+      dynamic-baseline-file:
+        description: >-
+          The dynamic-edge debt this repo carries, passed as --dynamic-baseline (repo-relative):
+          reflection bindings INTO CORE (Type.GetType / Assembly.Load / Activator / a type-registry
+          lookup BY NAME whose target is a MeshWeaver platform assembly, or cannot be told). Lines
+          are `<source> <Dynamic|DynamicUnresolved> <target>`; an unlisted edge fails the bake and a
+          listed one whose source compiled without it is stale and fails it too, so the debt can
+          only shrink. Pass the SAME file to node-repo-gate.yml and node-repo-publish-bake.yml. See
+          Doc/Architecture/DependencyGraph → "The ratchet" in the platform repo.
+
+          EMPTY (the default) is OBSERVE-ONLY: the bake still writes dependency-report.json and the
+          lane prints, by name, that this repository has not adopted the ratchet. Adopting needs a
+          pinned tester that knows `--dynamic-baseline` (an older one refuses the flag — exit 2, red,
+          never a silent pass). To adopt: run one bake, paste its `dependencies: baseline …` lines
+          into a file (an EMPTY file when there are none), commit it and name it here.
+        required: false
+        type: string
+        default: ''
       publication-layout:
         description: >-
           Where a publication is written under
@@ -1925,6 +1943,7 @@ jobs:
           STAGE_PROVIDED: ${{ steps.stage.outputs.provided }}
           ALLOW_FILE: ${{ inputs.allow-file }}
           WARNING_BASELINE_FILE: ${{ inputs.warning-baseline-file }}
+          DYNAMIC_BASELINE_FILE: ${{ inputs.dynamic-baseline-file }}
           BAKE_SCOPE: ${{ steps.scope.outputs.scope || 'full' }}
           BAKE_MODULES: ${{ steps.scope.outputs.mount }}
           HOST_DIR: ${{ steps.host.outputs.dir }}
@@ -1988,6 +2007,13 @@ jobs:
               mkdir -p "$NARROW/$(dirname "$WARNING_BASELINE_FILE")"
               cp "$GITHUB_WORKSPACE/$WARNING_BASELINE_FILE" "$NARROW/$WARNING_BASELINE_FILE"
             fi
+            # The dynamic-edge baseline travels for the same reason, at the same relative path (a
+            # narrowed run whose baseline is missing would be refused, exit 2). Not narrowed in
+            # content either: an entry for a type this run did not bake is unverifiable, never stale.
+            if [ -n "${DYNAMIC_BASELINE_FILE:-}" ] && [ -f "$GITHUB_WORKSPACE/$DYNAMIC_BASELINE_FILE" ]; then
+              mkdir -p "$NARROW/$(dirname "$DYNAMIC_BASELINE_FILE")"
+              cp "$GITHUB_WORKSPACE/$DYNAMIC_BASELINE_FILE" "$NARROW/$DYNAMIC_BASELINE_FILE"
+            fi
             REPO_MOUNT="$NARROW"
             echo "narrowed bake: $BAKE_MODULES"
           else
@@ -2011,6 +2037,15 @@ jobs:
           WARN_ARGS=()
           if [ -n "${WARNING_BASELINE_FILE:-}" ]; then
             WARN_ARGS=(--warning-baseline "/repo/${WARNING_BASELINE_FILE}")
+          fi
+          # The dynamic-edge ratchet (Doc/Architecture/DependencyGraph → "The ratchet"). Absent =
+          # OBSERVE-ONLY, and the lane SAYS so by name — the flag is passed only when adopted, so a
+          # pinned tester that predates it is never handed an option it would refuse.
+          DYN_ARGS=()
+          if [ -n "${DYNAMIC_BASELINE_FILE:-}" ]; then
+            DYN_ARGS=(--dynamic-baseline "/repo/${DYNAMIC_BASELINE_FILE}")
+          else
+            echo "::notice::dynamic-edge ratchet OBSERVE-ONLY — $GITHUB_REPOSITORY has not adopted it (no dynamic-baseline-file input). Reflection bindings into core are measured in dependency-report.json and enforced nowhere."
           fi
           # `--init` for the same reason as the gate's run (#1741): as a container's PID 1 the
           # tester cannot be killed by the SIGABRT its own runtime raises on a crash — the kernel
@@ -2042,7 +2077,7 @@ jobs:
             -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll compile /repo \
             --app /app --shared-frameworks /usr/share/dotnet/shared \
-            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
+            "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" "${DYN_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
             --output /bake --source-sha "${{ steps.content.outputs.sha }}"
 
           # ══ 2. THE GATE — a mesh RUNNING AS THE PORTAL, CONSUMING the bake above ════════════
@@ -2153,7 +2188,11 @@ jobs:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
           expected-store-id: ${{ steps.store.outputs.store-id }}
           name: dependency-edges-${{ steps.identity.outputs.identity }}
-          path: ${{ env.BAKE_DIR }}/dependency-edges.json
+          # dependency-report.json (the reconciliation, Doc/Architecture/DependencyGraph) rides the
+          # same artifact; a tester that predates it writes none, which the warn below covers.
+          path: |
+            ${{ env.BAKE_DIR }}/dependency-edges.json
+            ${{ env.BAKE_DIR }}/dependency-report.json
           if-no-files-found: warn
           retention-days: 30
       - name: "Gate: no bundle stamps a platform floor above the portal this publication names"
@@ -2358,6 +2397,17 @@ jobs:
           python3 mw-platform-gate/.github/scripts/seal-packages.py listing
           --bake "$BAKE_DIR" --content "$GITHUB_WORKSPACE" --commit "$CONTENT_SHA"
           --withhold "$WITHHOLD_PACKAGES" --state "${{ runner.temp }}/bake-scope"
+      # 🚨 THE FLOOR GATE AGAIN, over the ASSEMBLED publication (Copilot on #7423). The gate above runs
+      # on this bake's fresh bundles, before the carries; the platform record names ONE set for the
+      # WHOLE publication, carried bundles included. A bake frozen to an older set inside the same
+      # compatibility epoch can carry a bundle whose floor is newer than the set it records, and every
+      # consumer composing its host on the record would decline it despite a successful seal. So the
+      # set that is about to be sealed — fresh and carried — is checked against the set it will name.
+      - name: "Gate: no bundle of the assembled publication (fresh and carried) stamps a floor above the portal it names"
+        if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
+        env:
+          PLATFORM_VERSION: ${{ steps.platform-version.outputs.version }}
+        run: python3 mw-platform-gate/.github/scripts/assert-bake-floor.py --bake "$BAKE_DIR" --platform-version "$PLATFORM_VERSION"
       - name: Publish bundles to every portal target
         id: publish
         if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
@@ -2394,6 +2444,14 @@ jobs:
           # The exact publication, materialised locally AFTER every share sealed — the directory
           # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
+          # 🚨 THE PLATFORM RECORD (MeshWeaver#7337): the set this publication is sealed on — the
+          # portal image's own version (the same value every bundle's floor was checked against in
+          # "Gate: no bundle stamps a platform floor above …") and the two image references this
+          # bake composed, by digest. Written into the publication as platform-set.json; a consumer
+          # gate composes its host on exactly that set (Doc/Architecture/PublicationNamesItsPlatform).
+          BAKE_PLATFORM_SET: ${{ steps.platform-version.outputs.version }}
+          BAKE_TESTER_REF: ${{ steps.image.outputs.ref }}
+          BAKE_PORTAL_REF: ${{ steps.platform.outputs.ref }}
           # BAKE_PUBLISH_LOCK_HOLDER and PUBLISH_BAKE_PYTHON arrive through GITHUB_ENV from the
           # re-bind step when it ran: the script then PROVES it holds every target's lock instead
           # of acquiring, and reuses the venv. Without it the script takes the lock itself.

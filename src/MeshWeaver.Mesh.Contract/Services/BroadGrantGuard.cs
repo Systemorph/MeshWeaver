@@ -31,6 +31,9 @@ namespace MeshWeaver.Mesh.Services;
 ///     passes; a sweep, a backfill or an admin enrolling somebody else does not.</item>
 ///   <item><see cref="BroadGrantKind.AccessPolicy"/> — a <c>PartitionAccessPolicy</c>
 ///     (<c>{scope}/_Policy</c>) written by anyone: it caps or opens a whole partition at once.</item>
+///   <item><see cref="BroadGrantKind.GrantRule"/> — a <see cref="GrantRule"/>
+///     (<c>Admin/_GrantRule/{id}</c>) written by anyone: it grants a role on every partition whose
+///     root matches, including partitions that do not exist yet.</item>
 /// </list>
 ///
 /// <para><b>The one way through.</b> The governance executor stamps
@@ -95,7 +98,18 @@ public static class BroadGrantGuard
         // group.scoped-create (MeshWeaver.Plugins Governance): a group holding ONE non-Admin role at
         // ONE path — its one grant names the group and is written as System, and its proposer gets
         // Admin on the group node alone; the executor re-checks proposer and signer as the caller.
-        "group.scoped-create");
+        "group.scoped-create",
+        // access.grant-rule: ONE declared type-scoped grant (Admin/_GrantRule/{id}) — every
+        // partition whose root is of a node type (optionally filtered by a content field) grants a
+        // named subject one role. Computed by the permission fold, never materialised.
+        "access.grant-rule",
+        // The client-name gate's two caller grants (MeshWeaver.Plugins Governance/ClientNameGate):
+        // each writes ONE AccessAssignment as System for ONE service identity (svc-…) — the
+        // NameCheckCaller role on a scope the standard FIXES (Governance/NameChecks for a build's
+        // name check, Governance/PublicationChecks for the control instance's triage). Only the
+        // service id is an input, so the grant is narrow; it is a SystemForOther shape only
+        // because the subject is not the writer.
+        "namecheck.caller.grant", "publicationcheck.caller.grant");
 
     /// <summary>The allowlist in effect: <see cref="StandardsKey"/> when set, else the default.</summary>
     public static ImmutableHashSet<string> GovernedStandards(IConfiguration? configuration)
@@ -122,12 +136,31 @@ public static class BroadGrantGuard
     /// <param name="assignment">Its content through the typed accessor, when it is an AccessAssignment.</param>
     /// <param name="writer">The context the write is made under.</param>
     public static BroadGrantFinding? Evaluate(MeshNode? node, AccessAssignment? assignment, AccessContext? writer)
+        => EvaluateWrite(node, assignment, writer, options: null);
+
+    /// <summary>
+    /// <see cref="Evaluate"/>, reading a grant rule's
+    /// subject for the finding through the boundary's serializer options (every content shape).
+    /// </summary>
+    /// <param name="node">The node being written, already normalised.</param>
+    /// <param name="assignment">Its content through the typed accessor, when it is an AccessAssignment.</param>
+    /// <param name="writer">The context the write is made under.</param>
+    /// <param name="options">The boundary's serializer options; null reads a typed rule only.</param>
+    public static BroadGrantFinding? EvaluateWrite(MeshNode? node, AccessAssignment? assignment, AccessContext? writer,
+        System.Text.Json.JsonSerializerOptions? options)
     {
         if (node is null)
             return null;
 
         if (string.Equals(node.NodeType, AccessPolicyNodeType, StringComparison.OrdinalIgnoreCase))
             return new BroadGrantFinding(BroadGrantKind.AccessPolicy, node.Path, Subject: null, Writer(writer));
+
+        // A declared type-scoped grant reaches every partition whose root matches — present and
+        // future — so it is broad by construction, whatever subject or role it names.
+        if (string.Equals(node.NodeType, GrantRule.NodeTypeName, StringComparison.OrdinalIgnoreCase))
+            return new BroadGrantFinding(BroadGrantKind.GrantRule, node.Path,
+                options is null ? (node.Content as GrantRule)?.AccessObject : node.ContentAs<GrantRule>(options)?.AccessObject,
+                Writer(writer));
 
         if (!string.Equals(node.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType, StringComparison.OrdinalIgnoreCase)
             || AccessAssignmentGuard.ScopeFromPath(node.Path) is null
@@ -289,6 +322,9 @@ public enum BroadGrantKind
 
     /// <summary>A partition access policy.</summary>
     AccessPolicy,
+
+    /// <summary>A declared type-scoped grant rule (<see cref="Security.GrantRule"/>) — one node that grants on every matching partition.</summary>
+    GrantRule,
 }
 
 /// <summary>One finding of the broad-grant guard.</summary>

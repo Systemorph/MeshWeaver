@@ -1640,15 +1640,18 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // no _ioPool.Run / await-foreach bridge that re-entered the single-threaded
             // hub pump and deadlocked under bulk fan-out. useSecurityFilter selects the
             // RLS-filtered (IMeshQueryProvider) vs raw (IMeshQueryCore) read.
-            // 🚨 ONE sink per subscription (MeshWeaver#1186): every read behind every RunQuery() on
-            // this stream records a dropped read here, and the Initial below carries the verdict.
-            // Per-subscription, never a field — see ReadCompleteness for why a field would mark
-            // every other concurrent caller's snapshot incomplete and never clear.
+            // 🚨 ONE sink per RUN, never a field (MeshWeaver#1186, #7399): every read behind a run
+            // records a dropped read on that run's sink, and the run's frame carries the verdict —
+            // the Initial as SnapshotIncomplete, a live re-query as the `Complete` ProcessBatch must
+            // see before it may assert a removal. A sink shared across runs is monotone and could not
+            // say WHICH live run was short; a field would mark every other concurrent caller's
+            // snapshot incomplete and never clear (see ReadCompleteness).
             var completeness = new ReadCompleteness();
-            IObservable<(List<(string? Path, T Item)> Rows, List<double>? Scores)> RunQuery() =>
+            IObservable<(List<(string? Path, T Item)> Rows, List<double>? Scores, bool Complete)> RunQuery(
+                ReadCompleteness runCompleteness) =>
                 RunRankedQueryNodes(request, options, useSecurityFilter,
                         projectSelect: typeof(T) != typeof(MeshNode),
-                        completeness: completeness)
+                        completeness: runCompleteness)
                     .Select(ranked =>
                     {
                         var results = new List<(string?, T)>();
@@ -1661,7 +1664,9 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             results.Add((GetItemPath(typed), typed));
                             scores?.Add(ranked.Scores![i]);
                         }
-                        return (results, scores);
+                        // Read AFTER the run's reads have all answered — RunRankedQueryNodes emits
+                        // once, over the collected walk — so the verdict is final for this run.
+                        return (results, scores, !runCompleteness.AnyReadDropped);
                     });
 
             // Subscribe to persistence.Changes BEFORE running the initial query so
@@ -1747,7 +1752,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 .Subscribe(gap => Route(gap.ToRequeryTrigger())));
 
             disposables.Add(
-                RunQuery().Subscribe(
+                RunQuery(completeness).Subscribe(
                     initial =>
                     {
                         var initialItems = new List<T>();
@@ -1833,9 +1838,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         //    documents in MeshQuery.TryFilterDuplicateLiveChange.
                         disposables.Add(
                             changeBuffer
-                                .CoalesceWhileRunning(RunQuery)
+                                .CoalesceWhileRunning(() => RunQuery(new ReadCompleteness()))
                                 .Subscribe(
-                                    newResults => ProcessBatch(newResults.Rows, currentItems, parsedQuery, observer),
+                                    newResults => ProcessBatch(
+                                        newResults.Rows, newResults.Complete, currentItems, parsedQuery, observer),
                                     ex => observer.OnError(ex)));
 
                         // Publish the live buffer and flip the gate in ONE critical section, so
@@ -1899,9 +1905,20 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// Removed deltas. <b>The re-query is the ONLY source of result rows</b> — see the note on the
     /// live pipeline in <see cref="ObserveQueryInternal{T}"/> for why the change notification's raw
     /// entity is deliberately not admitted here (#1250).
+    ///
+    /// <para>🚨 <b>An INCOMPLETE run removes nothing</b> (MeshWeaver#7399). When
+    /// <paramref name="complete"/> is false a read behind this run was caught and its rows dropped,
+    /// so a row missing from <paramref name="newResults"/> may be a row the run could not READ — not
+    /// one that is gone. Diffing it as complete emitted <c>Removed</c> for every such row, and with no
+    /// write left to re-trigger the query the live result stayed wrong (measured: a listing of 174
+    /// rows went to 0 and stayed there). Such a run asserts only what it read — additions and updates
+    /// — and keeps every held row it did not see; the next COMPLETE run, on the next trigger under the
+    /// scope, settles the removals. Deliberately no retry here: a persistent fault would turn every
+    /// trigger into a storm of re-reads (Doc/Architecture/LiveQueryRequeryCost).</para>
     /// </summary>
     private void ProcessBatch<T>(
         List<(string? Path, T Item)> newResults,
+        bool complete,
         Dictionary<string, T> currentItems,
         ParsedQuery parsedQuery,
         IObserver<QueryResultChange<T>> observer)
@@ -1927,13 +1944,24 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 addedItems.Add(item);
             }
         }
-        foreach (var (path, item) in currentItems)
+        if (complete)
         {
-            if (!newItems.ContainsKey(path))
-                removedItems.Add(item);
+            foreach (var (path, item) in currentItems)
+            {
+                if (!newItems.ContainsKey(path))
+                    removedItems.Add(item);
+            }
+            currentItems.Clear();
+        }
+        else if (currentItems.Keys.Any(path => !newItems.ContainsKey(path)))
+        {
+            logger?.LogWarning(
+                "[StorageAdapterMeshQueryProvider.ProcessBatch] live re-query was INCOMPLETE (a read was dropped) — "
+                + "kept {Kept} held row(s) it did not read instead of removing them; the next complete run settles removals",
+                currentItems.Keys.Count(path => !newItems.ContainsKey(path)));
         }
 
-        currentItems.Clear();
+        // An incomplete run overlays what it READ onto the rows already held; a complete one replaces them.
         foreach (var (p, v) in newItems) currentItems[p] = v;
 
         void Emit(QueryChangeType type, IReadOnlyList<T> items)

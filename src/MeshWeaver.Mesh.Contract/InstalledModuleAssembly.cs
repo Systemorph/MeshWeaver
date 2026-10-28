@@ -117,7 +117,10 @@ public sealed record InstalledModuleAssembly(Assembly Assembly)
     ///
     /// <para>The cost is one PE open per call rather than a cached reflection lookup. Deliberately
     /// NOT memoised on the record: record equality is over instance fields, so a cache field would
-    /// make two <c>InstalledModuleAssembly</c> values over one assembly compare unequal.</para>
+    /// make two <c>InstalledModuleAssembly</c> values over one assembly compare unequal. 🚨 A reader
+    /// that runs more than once per assembly — per activation, per write — goes through
+    /// <see cref="InstalledModules.StampsOf"/>, which holds the stamps per loaded assembly
+    /// (MeshWeaver#5799).</para>
     /// </summary>
     private static string? InformationalVersionOf(Assembly assembly)
     {
@@ -198,6 +201,13 @@ public sealed record InstalledModuleAssembly(Assembly Assembly)
         return null;
     }
 
+    /// <summary>Both stamps of <paramref name="assembly"/>, read from its own metadata — what
+    /// <see cref="InstalledModules.StampsOf"/> holds per loaded assembly.</summary>
+    /// <param name="assembly">The module assembly.</param>
+    /// <returns>Its ordered version and its package version, either of which may be null.</returns>
+    public static InstalledModuleStamps ReadStamps(Assembly assembly) =>
+        new(VersionOf(assembly), PackageVersionOf(assembly));
+
     /// <summary>The namespace of <see cref="AssemblyInformationalVersionAttribute"/>, spelled out
     /// because the metadata read compares names and never resolves the type.</summary>
     private const string InformationalVersionNamespace = "System.Reflection";
@@ -205,3 +215,8 @@ public sealed record InstalledModuleAssembly(Assembly Assembly)
     /// <summary>The two-byte prolog every custom-attribute value blob opens with (ECMA-335 II.23.3).</summary>
     private const ushort CustomAttributeProlog = 0x0001;
 }
+
+/// <summary>The two version stamps of one loaded module assembly.</summary>
+/// <param name="Version">See <see cref="InstalledModuleAssembly.Version"/>.</param>
+/// <param name="PackageVersion">See <see cref="InstalledModuleAssembly.PackageVersion"/>.</param>
+public sealed record InstalledModuleStamps(string? Version, string? PackageVersion);
