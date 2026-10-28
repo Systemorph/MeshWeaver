@@ -44,8 +44,10 @@ class PublicationArtifactStoreTests(unittest.TestCase):
                     "html_url": "https://example.test/runs/10", "run_attempt": 3}
         # Deliberately unlike the source run's third attempt. The consumer's first attempt must
         # still read the source's newest manifest, or its successful earlier producer when absent.
+        # GITHUB_EVENT_NAME pinned to a PUBLISHING event: the suite runs inside pull_request CI,
+        # whose own event would otherwise switch every case below to the reuse-only path.
         env = patch.dict(os.environ, GITHUB_RUN_ID="20", GITHUB_RUN_ATTEMPT="1",
-                         GITHUB_REPOSITORY=self.repo)
+                         GITHUB_REPOSITORY=self.repo, GITHUB_EVENT_NAME="push")
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("GITHUB_OUTPUT", None)
@@ -179,6 +181,27 @@ class PublicationArtifactStoreTests(unittest.TestCase):
         code, result = self.invoke_base([flight, self.run], jobs={11: 0})
         self.assertEqual(0, code)
         self.assertEqual("", result["sha"])
+
+    # ── a run that publishes nothing (pull_request / merge_group) only REUSES ──
+    def test_a_pull_request_reuses_the_baseline_although_a_later_main_run_has_no_attestation(self):
+        self.publish()
+        flight = {**self.run, "id": 11, "head_sha": "b" * 40, "status": "in_progress", "conclusion": None}
+        for event in ("pull_request", "merge_group"):
+            with self.subTest(event=event), patch.dict(os.environ, GITHUB_EVENT_NAME=event):
+                code, result = self.invoke_base([flight, self.run], jobs={11: 0})
+                self.assertEqual(0, code)
+                self.assertEqual(("a" * 40, "10"), (result["sha"], str(result["run"])))
+
+    def test_negative_control_a_pull_request_on_another_toolchain_than_the_baseline_reuses_nothing(self):
+        self.publish(value={"platform": "p2", "logic": "l1"})
+        with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
+            code, result = self.invoke_base([self.run])
+        self.assertEqual((0, ""), (code, result["sha"]))
+
+    def test_negative_control_a_pull_request_with_an_unattested_baseline_reuses_nothing(self):
+        with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
+            code, result = self.invoke_base([self.run])
+        self.assertEqual((0, ""), (code, result["sha"]))
 
     # ── a PARTIAL publication is a baseline that CARRIES what it withheld ──
     def mark(self, value, run="10"):
