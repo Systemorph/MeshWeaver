@@ -50,6 +50,29 @@ Features__Onboarding__InvitationOnly=true
    own-directory exemption holds for this sign-in (below), in which case the form is shown and the
    user is created without an invitation.
 
+### One node per email, many invitations over its life
+
+The node is keyed by the **email** (it is the onboarding allowlist), so every Space invite to a
+not-yet-registered address — `SpaceInviteService.GrantOrScheduleAccess`, the Space invite and the
+Access Control "grant by email" alike — **overwrites** it with a new `Invitation`: a fresh `Id`, its
+own `SpacePath` and `Note`, `EmailSentAt` cleared. The deferred grants do not share it: each
+(email, node) pair has its own `EventSubscription`, so every scheduled grant lands on sign-up.
+
+`InvitationEmailSender` therefore treats the invitation's **`Id`**, not the node path, as the unit it
+emails (MeshWeaver#7481). Two rules follow, and breaking either loses an email silently:
+
+- **The claim is a fold on the node's CURRENT content**, through `GetMeshNodeStream(path).Update`,
+  and stamps `EmailSentAt` only when the current invitation is the one it was offered. It used to
+  write the whole node back from the query snapshot it was offered; the query lags the store, so a
+  claim for the first of two back-to-back invites restored the first Space over the second, and the
+  second was never announced. That is the CQRS rule — never decide or write content from a query.
+- **The in-process de-dup is keyed per invitation (`{path}#{Id}`)**, never per path. Keyed by path,
+  the first email for an address suppressed every later invitation to it until the process restarted.
+
+An offer the node has already moved past (a newer invite overwrote it before the claim ran) is still
+emailed, unstamped: it was a real invite and its Space is announced nowhere else. Back-to-back invites
+to two Spaces therefore produce two emails, one per Space.
+
 ---
 
 ## Where invitations live
