@@ -96,6 +96,19 @@ computed from the set name (the major) and core's declaration
 `src/MeshWeaver.Compiler/platform-compatibility.json` (the current epoch, and each declared break's
 `previousEpochCeiling` for the sets before it). The seed step then asserts that the composed host
 resolves the same key; a disagreement is RED by name, never a seed read for another identity.
+The declaration is read at core `main`, never at the lane's `scripts-ref`: it is append-only, so
+the newest copy files every sealed set under the epoch it was built in, while an older copy would
+file a set built after an epoch bump under the old epoch — the run would then address the old
+epoch's publication and compose an old-epoch host that the identity assertion agrees with.
+
+**A same-attempt shard keeps the bake's pair.** With more than one shard the run's prepared bake
+decides the platform once and exports the pair it composed on; every shard of the same attempt
+takes that pair and holds it like a pin (`choose --held-by`). A reseal after the bake therefore
+never moves a shard's host (which would change the handoff key and make each shard compile
+again): a publication the held pair cannot adopt is RED naming both.
+
+**The lane's `platform-set` output is the set the run RESOLVED**, not the one a shard composed on;
+each shard names the latter in its log and step summary.
 
 **The seed re-checks.** When the seed step reads each publication (`publication-platform.py verify`,
 on every read including a re-read after a reseal mid-fetch), the record must still name the host
@@ -129,6 +142,11 @@ publication's set is RED from the start: that is exactly the declined case.
   publications name; a container-mode runner pulls it by digest.
 - The module set the gate composes (`registry-modules`) is read from the same publication by
   identity; on the registry route it is not pinned to the generation the seed read.
+- The ceiling a pull request reads (`main_passed_ceiling` in `resolve-platform.py`) is the set the
+  caller's preflight RESOLVED on a passing `main` run. A `main` run that passes no digests gates on
+  the publication's set, at or below that one; the ceiling stays the preflight's set, which every
+  other suite of that run did pass, and the publication a later pull request composes on was
+  sealed by its upstream's own gate on that set.
 
 ## Where it lives
 

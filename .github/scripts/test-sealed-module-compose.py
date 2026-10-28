@@ -219,10 +219,18 @@ def seed(state: Registry, runner_temp: Path, script: Path) -> subprocess.Complet
     thread.start()
     try:
         env = dict(os.environ)
+        # The step before the seed (`publication-platform`, MeshWeaver#7337) fetched this script; the
+        # seed re-checks each index it reads against the host. `legacy` with no recorded platform is
+        # the shape this harness's publications have, so the reseal cases below are unchanged.
+        runner_temp.mkdir(parents=True, exist_ok=True)
+        (runner_temp / "publication-platform.py").write_bytes(
+            (Path(__file__).resolve().parent / "publication-platform.py").read_bytes())
         env.update(
             UPSTREAMS=SOURCE, IDENTITY=IDENTITY, TARGETS="",
             REGISTRY_URL=f"http://127.0.0.1:{server.server_port}", REGISTRY_KEY="mwi_stub",
-            RUNNER_TEMP=str(runner_temp), GITHUB_OUTPUT=str(runner_temp / "outputs"))
+            RUNNER_TEMP=str(runner_temp), GITHUB_OUTPUT=str(runner_temp / "outputs"),
+            EXPECTED_IDENTITY="", PLATFORM_MODE="legacy",
+            COMPOSED_SET="", COMPOSED_TESTER="", COMPOSED_PORTAL="")
         return subprocess.run(["bash", str(script)], capture_output=True, text=True,
                               timeout=180, check=False, env=env)
     finally:
