@@ -4847,6 +4847,167 @@ jobs:
           set -euo pipefail
           python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
 
+  # ─────────────────── THE MODULE SUITES, BUILT ONCE ───────────────────
+  # "it takes awfully long. we have to compact test runs" (maintainer, 2026-10-27). Each `tests`
+  # leg used to run `dotnet test` WITHOUT --no-build, so every leg compiled the platform closure
+  # from the $(MeshWeaverRoot) checkout before its suites ran. Measured on Plugins run 40484519302
+  # (Plugins Hosting/CiBuildTimeAnalysis.md, item 6): 8.2-9.6 min of build per leg against
+  # 0.8-4.6 min of tests, 68.8 build vs 20.3 test runner-minutes over 9 legs.
+  #
+  # So the suites are built HERE, once, as ONE MSBuild graph (the shared closure compiles once), and
+  # handed to the legs as a content-addressed store (dedupe-tree.py: one copy per unique file; the
+  # suites' bin/ trees are mostly the same DLLs). The legs restore it and run `dotnet test
+  # --no-build`. Core's own dotnet-test.yml has the same shape ("Build solution (once)").
+  #
+  # 🚨 --no-build against a project that was never built exits 0 with no .trx: a pass that ran
+  # nothing. Two guards: this job reds when the graph does not build and names every suite with no
+  # output, and each leg asserts that its suite wrote a .trx with at least one test.
+  # 🚨 A suite that did not compile still lets the others run. The build continues past a red
+  # project and the store carries whatever built, so each leg can give its own suites a verdict.
+  # This job then fails, and the leg of the unbuilt suite fails on its missing .trx.
+  tests-build:
+    name: Module tests (build once)
+    needs: select
+    if: >-
+      !inputs.publish
+      && needs.select.result == 'success'
+      && needs.select.outputs.test-count != '0'
+      && inputs.executor != 'host'
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    env:
+      DOTNET_TieredPGO: "0"
+      DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
+      DEDUPE_TREE: ${{ github.workspace }}/build-logic/.github/scripts/dedupe-tree.py
+    steps:
+      - name: Resolve the content repository's credential
+        id: content-repo
+        if: inputs.content-repository != ''
+        env:
+          REPO: ${{ inputs.content-repository }}
+          APP_ID: ${{ secrets.content-app-id }}
+          APP_KEY: ${{ secrets.content-app-private-key }}
+        run: |
+          set -euo pipefail
+          [ -n "$APP_ID" ]  || { echo "::error::content-repository is '$REPO' but secrets.content-app-id is empty — the caller's GITHUB_TOKEN cannot read another repository, so the checkout would 404. Pass a GitHub App installed on '$REPO' with Contents: Read."; exit 1; }
+          [ -n "$APP_KEY" ] || { echo "::error::content-repository is '$REPO' but secrets.content-app-private-key is empty — see content-app-id."; exit 1; }
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO#*/}"   >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the content repository
+        id: content-token
+        if: inputs.content-repository != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.content-app-id }}
+          private-key: ${{ secrets.content-app-private-key }}
+          owner: ${{ steps.content-repo.outputs.owner }}
+          repositories: ${{ steps.content-repo.outputs.name }}
+          permission-contents: read
+      # The SAME tree the legs check out (content ref + the fresh merge onto select's main), so the
+      # bin/ and obj/ this job ships describe exactly the sources each leg evaluates.
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.content-repository || github.repository }}
+          ref: ${{ inputs.content-ref || github.sha }}
+          token: ${{ steps.content-token.outputs.token || github.token }}
+      - name: Merge the head onto the base tip `select` tested
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        with:
+          main-sha: ${{ needs.select.outputs.merge-main-sha }}
+          content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      - name: Check out the build helpers at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          generator: build-logic/.github/scripts/gen-manifests.py
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build every owed suite (one graph, Release)
+        env:
+          BATCHES: ${{ needs.select.outputs.test-batches }}
+        run: |
+          set -euo pipefail
+          python3 "$DEDUPE_TREE" --self-test > /dev/null
+          # The runner choice and working directory are the legs' own (see their run step): a
+          # global.json is read walking UP from the cwd, and -warnaserror is the VSTest legs' flag.
+          build_uses_mtp() {
+            [ -f "$1/global.json" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get('test',{}).get('runner') == 'Microsoft.Testing.Platform' else 1)" "$1/global.json"
+          }
+          TEST_CWD="$PWD"; warn=(-warnaserror)
+          if build_uses_mtp "$PWD"; then warn=()
+          elif build_uses_mtp "$GITHUB_WORKSPACE/meshweaver"; then warn=(); TEST_CWD="$GITHUB_WORKSPACE/meshweaver"
+          fi
+          printf '%s' "$BATCHES" | jq -r '.[].entries[].project' | sort -u > "$RUNNER_TEMP/projects.txt"
+          suites=()
+          while IFS= read -r project; do
+            tests="$(dirname "$project").Test"
+            [ -d "$tests" ] || continue
+            mapfile -t csproj < <(find "$tests" -maxdepth 1 -name '*.csproj')
+            [ "${#csproj[@]}" -eq 1 ] || { echo "::error::$tests holds ${#csproj[@]} .csproj files — 'dotnet test $tests' needs exactly one" >&2; exit 1; }
+            suites+=("$tests")
+            echo "$GITHUB_WORKSPACE/${csproj[0]}"
+          done < "$RUNNER_TEMP/projects.txt" > "$RUNNER_TEMP/suites.txt"
+          if [ "${#suites[@]}" -eq 0 ]; then
+            echo "no selected module ships a test project — nothing to build; every leg records 'suite=absent'"
+            mkdir -p "$RUNNER_TEMP/tests-bin" && echo none > "$RUNNER_TEMP/tests-bin/none"
+            echo "BUILD_RC=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          sln="$RUNNER_TEMP/suites.slnx"
+          { echo '<Solution>'; sed 's|.*|  <Project Path="&" />|' "$RUNNER_TEMP/suites.txt"; echo '</Solution>'; } > "$sln"
+          echo "building ${#suites[@]} suite(s) as one graph: ${suites[*]}"
+          # 🚨 ShouldUnsetParentConfigurationAndPlatform=false, or the solution build hands every
+          # project it does not list (the modules, the platform closure) its DEFAULT configuration,
+          # Debug, while the suites build Release.
+          t0=$(date +%s); rc=0
+          ( cd "$TEST_CWD" && dotnet build "$sln" -c Release ${warn[@]+"${warn[@]}"} \
+              -p:ShouldUnsetParentConfigurationAndPlatform=false \
+              -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" ) || rc=$?
+          echo "one-graph build: exit $rc in $(( $(date +%s) - t0 )) s"
+          built=(); missing=()
+          for tests in "${suites[@]}"; do
+            if [ -d "$tests/bin" ] && [ -d "$tests/obj" ]; then built+=("$tests/bin" "$tests/obj"); else missing+=("$tests"); fi
+          done
+          for tests in ${missing[@]+"${missing[@]}"}; do
+            echo "::error::$tests did not build — its leg will find no output and fail on the missing .trx"
+          done
+          if [ "${#built[@]}" -gt 0 ]; then
+            python3 "$DEDUPE_TREE" pack --out "$RUNNER_TEMP/tests-bin" "${built[@]}"
+            echo "store: $(du -sh "$RUNNER_TEMP/tests-bin" | cut -f1) (raw $(du -shc "${built[@]}" | tail -1 | cut -f1))"
+          else
+            mkdir -p "$RUNNER_TEMP/tests-bin" && echo none > "$RUNNER_TEMP/tests-bin/none"
+          fi
+          echo "BUILD_RC=$rc" >> "$GITHUB_ENV"
+      - name: Hand the suites' build output to the legs
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
+          name: module-tests-bin-${{ needs.select.outputs.lane }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/tests-bin
+          retention-days: 1
+          compression-level: 1
+          if-no-files-found: error
+          # TRANSPORT, superseded the moment it is rebuilt: a re-run replaces the name, so a leg can
+          # never read the previous attempt's build (dotnet-test.yml's build-output rule, #4303).
+          overwrite: true
+      - name: The graph built
+        run: |
+          [ "${BUILD_RC:-1}" = 0 ] || { echo "::error::the one-graph build of the module suites failed (exit ${BUILD_RC:-unset}; the compiler output is in the build step). The suites that built still run in their legs."; exit 1; }
+
   # ════════ THE MODULE SUITES — A LANE OF THEIR OWN ON A NON-PUBLISHING RUN ════════
   # 🚨 THE MEASUREMENT THIS JOB EXISTS FOR (MeshWeaver.Plugins run 33656010754, a 39-minute PR):
   #
@@ -4904,13 +5065,18 @@ jobs:
     # against the content checkout with `-p:MeshWeaverRoot=<the platform checkout>`; it consumes
     # no platform image, no workspace build and no bundle. Depending on any of them would put it
     # back on the very chain this job exists to run beside.
-    needs: select
+    # `tests-build` compiles the suites ONCE (see that job); a leg only restores and runs them.
+    needs: [select, tests-build]
     # 🚨 The exact COMPLEMENT of the inline step's `inputs.publish &&`, on the same input. A
     # matrix with zero vectors does not evaluate, so `test-count` is asserted the way `pack`
     # asserts `count` — and `verify` runs unconditionally and refuses the pairing when a
     # delegated suite produced no receipt, which is what keeps this from being a skip-trapdoor.
+    # `!cancelled()`: a suite that did not compile reds `tests-build`, and the OTHER suites must
+    # still get their verdicts; the unbuilt suite's leg fails on its missing .trx.
     if: >-
-      !inputs.publish
+      !cancelled()
+      && needs.tests-build.result != 'skipped'
+      && !inputs.publish
       && needs.select.result == 'success'
       && needs.select.outputs.test-count != '0'
       && inputs.executor != 'host' && inputs.executor != 'host-forced'
@@ -5050,6 +5216,18 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
+      - name: Fetch the suites `tests-build` compiled
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        with:
+          store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.select.outputs.artifact-store-id }}
+          name: module-tests-bin-${{ needs.select.outputs.lane }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/tests-bin
+      - name: Restore them into the checkout (bin/ + obj/, what --no-build evaluates)
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/tests-bin/none" ]; then echo "tests-build shipped no suite output"; exit 0; fi
+          python3 build-logic/.github/scripts/dedupe-tree.py unpack --from "$RUNNER_TEMP/tests-bin"
       # ─────── A HEADLESS BROWSER — SELF-HOSTED RUNNERS ONLY (interim: Memex#323) ───────
       # 🚨 INTERIM, and it has a named end: Systemorph/Memex#323 ("bake the toolchain into our own
       # runner image") puts a browser in the image the ARC scale sets run, and DELETES this step
@@ -5221,6 +5399,26 @@ jobs:
               echo "no test project at $tests — nothing to run"
               continue
             fi
+            # The restored obj/ points at the NuGet cache for the test SDK's props and targets
+            # (xunit, Microsoft.Testing.Platform), and --no-build implies --no-restore: a clean
+            # runner's cache has none of them. Restore (no compile) fills it — BOUNDED by the same
+            # suite window (at most 10 min), and the window is recomputed after it, so a slow restore
+            # can neither eat the evidence reserve nor run into the job cap with its log unkept.
+            left="$(suite_deadline)"
+            if [ "$left" -ge "$MIN_SUITE_SECONDS" ]; then
+              cap=$(( left - MIN_SUITE_SECONDS )); [ "$cap" -le 600 ] || cap=600; [ "$cap" -ge 30 ] || cap=30
+              set +e
+              timeout "${cap}s" dotnet restore "$tests" -p:MeshWeaverRoot="$GITHUB_WORKSPACE/meshweaver" > "$RUNNER_TEMP/restore-$MODULE.log" 2>&1
+              rrc=$?
+              set -e
+              if [ "$rrc" -ne 0 ]; then
+                tail -60 "$RUNNER_TEMP/restore-$MODULE.log"
+                restore_why="restoring the suite's packages failed (exit $rrc; the log's tail is above), so it could not run"
+                [ "$rrc" -eq 124 ] && restore_why="restoring the suite's packages did not finish within ${cap}s (exit 124), so it could not run"
+                MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "$restore_why"
+                continue
+              fi
+            fi
             left="$(suite_deadline)"
             if [ "$left" -lt "$MIN_SUITE_SECONDS" ]; then
               MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "the module's suite was NOT STARTED: the job's suite window was spent (${left}s left before the evidence reserve) — it was never run, which is not a pass"
@@ -5236,11 +5434,24 @@ jobs:
               cd "$TEST_CWD"
               "$(dirname "$MODULE_PACK_BATCH")/run-bounded-suite.sh" \
                 --deadline "$left" --label "$MODULE" --dump-dir /tmp/coredumps -- \
-                dotnet test "$tests" -c Release \
+                dotnet test "$tests" -c Release --no-build \
                 -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver "${flags[@]}"
             )
             rc=$?
             set -e
+            # 🚨 --no-build on a suite `tests-build` did not build exits 0 with NO .trx — a pass that
+            # ran nothing. A green exit counts only with a .trx that EXECUTED at least one test
+            # (`executed`, never `total`, which counts skipped tests too).
+            trx="$RUNNER_TEMP/trx/$MODULE/ledger.trx"
+            if [ "$rc" -eq 0 ]; then
+              total=$(python3 -c "import re,sys; c=re.search(r'<Counters[^>]*>', open(sys.argv[1], encoding='utf-8', errors='replace').read()); m=c and (re.search(r'\\bexecuted=\"(\\d+)\"', c.group(0)) or re.search(r'\\bpassed=\"(\\d+)\"', c.group(0))); print(m.group(1) if m else 0)" "$trx" 2>/dev/null || echo 0)
+              if [ "${total:-0}" -lt 1 ]; then
+                echo "::error::$MODULE: 'dotnet test --no-build' exited 0 but $( [ -f "$trx" ] && echo "its .trx executed 0 tests" || echo "wrote no .trx" ) — the suite ran nothing (did 'Module tests (build once)' build it?)"
+                rc=1
+              else
+                echo "$MODULE: $total test(s) executed per $trx"
+              fi
+            fi
             if [ "$rc" -eq 0 ]; then
               bk set --module "$MODULE" tested=true
             else
@@ -5410,7 +5621,7 @@ jobs:
     name: All selected bundles built
     # `prepare` and `build-workspace` are here for the host arm alone: on a build host it must SEE that
     # they did not run (a skip asserted, never assumed). The Actions arm reads them through `pack`.
-    needs: [select, prepare, build-workspace, pack, tests]
+    needs: [select, prepare, build-workspace, pack, tests-build, tests]
     if: always()
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
@@ -5434,6 +5645,7 @@ jobs:
           WORKSPACE_RESULT: ${{ needs.build-workspace.result }}
           PACK_RESULT: ${{ needs.pack.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
+          TESTS_BUILD_RESULT: ${{ needs.tests-build.result }}
         run: |
           set -euo pipefail
           echo "bundles_built=false" >> "$GITHUB_OUTPUT"
@@ -5442,7 +5654,7 @@ jobs:
             echo "::error title=Module bundles incomplete::the selection job reported '${SELECT_RESULT:-<nothing>}' (lane '${LANE:-<none>}') — on a build host the selection is still made here and is what the host's records are checked against; without it nothing says what the host owed."
             problems=1
           fi
-          for pair in "prepare=$PREPARE_RESULT" "build-workspace=$WORKSPACE_RESULT" "pack=$PACK_RESULT" "tests=$TESTS_RESULT"; do
+          for pair in "prepare=$PREPARE_RESULT" "build-workspace=$WORKSPACE_RESULT" "pack=$PACK_RESULT" "tests-build=$TESTS_BUILD_RESULT" "tests=$TESTS_RESULT"; do
             if [ "${pair#*=}" != "skipped" ]; then
               echo "::error title=Build executor::executor is 'host' but this lane's ${pair%%=*} job reported '${pair#*=}' — the two executors disagree about who built this run; refusing to answer"
               problems=1
@@ -5520,12 +5732,21 @@ jobs:
           EXPECTED: ${{ needs.select.outputs.selected }}
           PACK_RESULT: ${{ needs.pack.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
+          TESTS_BUILD_RESULT: ${{ needs.tests-build.result }}
           SCOPE: ${{ needs.select.outputs.scope }}
           COUNT: ${{ needs.select.outputs.count }}
           DECLARED: ${{ inputs.modules }}
           LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
+          # The legs run even after `tests-build` failed (so the suites that built still get a
+          # verdict), so green legs can coexist with a red build. The build's red is the lane's red,
+          # folded in BEFORE the line below, whose shape retry-known-transients.py parses.
+          case "$TESTS_BUILD_RESULT" in
+            failure|cancelled)
+              echo "::error title=Module suites did not build::Module tests (build once) = $TESTS_BUILD_RESULT — read that job for the suites that did not compile"
+              TESTS_RESULT=failure ;;
+          esac
           echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT, tests lane: $TESTS_RESULT"
           # 🚨 An INDEPENDENT recount, because the count and the selection come from the same
           # call and therefore agree by construction — they cannot catch a selection that is
