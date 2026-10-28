@@ -72,8 +72,24 @@ public static class PackageDependencyFloorGate
         PackageManifest candidate, IReadOnlyDictionary<string, LoadedPackageModule> loaded)
     {
         ArgumentNullException.ThrowIfNull(candidate);
+        return FirstUnmet(candidate.Requires, loaded);
+    }
+
+    /// <summary>
+    /// The first of <paramref name="requires"/> that the loaded modules do not meet, or null when
+    /// every judged requirement is met — the rule <see cref="Unmet"/> applies to a candidate's
+    /// manifest, over a bare requirement list (the compile half reads it off a package root's
+    /// content, #6195). A distinct name rather than an overload of <see cref="Unmet"/>: dependents
+    /// cite it in <c>cref</c>s, and an added overload would make each one CS0419. Pure.
+    /// </summary>
+    /// <param name="requires">Requirement entries (<c>AI@^1.40.0</c>).</param>
+    /// <param name="loaded">Package id → the module this process has loaded for it.</param>
+    public static UnmetPackageDependency? FirstUnmet(
+        IEnumerable<string> requires, IReadOnlyDictionary<string, LoadedPackageModule> loaded)
+    {
+        ArgumentNullException.ThrowIfNull(requires);
         ArgumentNullException.ThrowIfNull(loaded);
-        foreach (var requirement in candidate.Requires)
+        foreach (var requirement in requires)
         {
             var dependency = PackageRequirement.DependencyId(requirement);
             if (dependency.Length == 0 || LoadedOf(loaded, dependency) is not { } module)
