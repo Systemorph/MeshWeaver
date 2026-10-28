@@ -729,7 +729,7 @@ static int RunPlatformSurface(string[] args)
             return 2;
         }
         identity ??= MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        surface = MeshWeaver.Mesh.ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory);
+        surface = MeshWeaver.Mesh.ModulePlatformSurface.OfRunningPlatform(AppContext.BaseDirectory);
     }
     else
     {
