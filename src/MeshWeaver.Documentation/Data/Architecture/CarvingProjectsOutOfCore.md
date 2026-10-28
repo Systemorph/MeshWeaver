@@ -213,8 +213,8 @@ the departing types, and which of the three answers each of them gets.
 | `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
 | `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
 | `Testcontainers` | 385 | no | nothing: its two consumers (`Memex.Portal.Shared.Test`, `MeshWeaver.Testcontainers.Test`) were already in plugins | moved out — free |
-| `Hosting.AspNetCore` | 3 970 | no | `memex/aspire/Memex.Portal.ServiceDefaults` (leaving with #7297); **the satellite MeshWeaver.SocialMedia**, whose compiled module `MeshWeaver.Social` derives from `MeshEndpointProviderAttribute` and compiles against core SOURCE | **stays** for now — a move makes a satellite depend on plugins (see below) |
-| `Markdown.Export.Contract` | 355 | no | `Hosting.AspNetCore` (`PortalApplication`) | stays while `Hosting.AspNetCore` does |
+| `Hosting.AspNetCore` | 3 970 | no | a satellite's compiled module (the endpoint hook); seven Plugins modules' published bytes (`PortalApplication` and three more) | **split** — the host-only half of `Portal/` moved out (see below); the rest stays |
+| `Markdown.Export.Contract` | 355 | no | `PortalApplication`, which stays | **stays** |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
 and NuGet resolution, packaging.
@@ -234,8 +234,8 @@ in core's `src/`, `test/` or `tools/` references it, so it looked free. Two cons
   [Repository Dependency Direction](../RepositoryDependencyDirection)); none checks out
   MeshWeaver.Plugins. Moving the project would leave that module with no source to compile against.
 
-So `Hosting.AspNetCore` stays until the hook is split from the portal infrastructure in `Portal/`:
-the hook (`MeshEndpointProviderAttribute`, `ModuleEndpointDataSource`, the endpoint and static-asset
+That is why `Hosting.AspNetCore` was split rather than moved (see "Splitting `Hosting.AspNetCore`"
+below): the hook (`MeshEndpointProviderAttribute`, `ModuleEndpointDataSource`, the endpoint and static-asset
 extensions) is a platform extension point, and `Portal/` is host code. That split changes which
 assembly declares public types, so it needs type forwarders and is a design change, not a move.
 `Markdown.Export.Contract` is pinned by `Hosting.AspNetCore` alone (`PortalApplication`), so it waits
@@ -258,6 +258,65 @@ meshes compile that sample.
 **So neither direction of the `.csproj` graph can be trusted here.** A reference may be dead weight,
 and a live consumer may have no reference at all. Check both: a warnings-as-errors build of the
 consumer settles the first; the content trees and the node JSON settle the second.
+
+## Splitting `Hosting.AspNetCore`: what published bytes bind decides what stays
+
+`MeshWeaver.Hosting.AspNetCore` is outside the content surface, but it is not free to move. The
+satellite MeshWeaver.SocialMedia compiles its module `MeshWeaver.Social` against it from core source,
+because that module declares its endpoints with `MeshEndpointProviderAttribute`. So the project was
+split instead of moved, and the split followed one test: **can every published plugin or satellite
+byte still link?**
+
+A `[TypeForwardedTo]` only points toward an assembly the forwarding assembly references, and core
+never references MeshWeaver.Plugins. So a type that leaves core for Plugins gets no forwarder, and it
+may leave only if no published binary binds it by assembly name. The answer was MEASURED, not
+grepped. Every registry module of MeshWeaver.Plugins (42 module DLLs) was built, and the `TypeRef`s it
+holds into `MeshWeaver.Hosting.AspNetCore` were read from the metadata:
+
+| Bound by published module bytes | Modules |
+|---|---|
+| `MeshEndpointProviderAttribute` | Courses, Mail.Gmail, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp (and the satellite's `MeshWeaver.Social`) |
+| `McpConfiguration`, `SessionHubResolver` | Mcp |
+| `Portal.PortalApplication` | AppleMessages, Blazor.Chat, Courses, Mail.Gmail, Mail.MicrosoftGraph, Teams, WhatsApp |
+| `Portal.PortalErrorSink` | Blazor.Chat |
+| `Portal.UserIdentityCache`, `Portal.UserIdentityLookup` | Mail.MicrosoftGraph |
+
+Those types stay, together with what their public signatures name (`ICircuitContextAccessor`,
+`UserDirectoryReading`, `PortalErrorReporting`) and the one package `PortalApplication` needs,
+`MeshWeaver.Markdown.Export.Contract`. The text search for the namespace finds more. Courses and Mcp
+mention `UserContextMiddleware` in comments, for instance. But a comment is not a `TypeRef`, so a text
+search over-counts.
+
+**What moved** to MeshWeaver.Plugins as `MeshWeaver.Hosting.AspNetCore.PortalHost`, under that NEW
+namespace, is host code that no published binary binds: `UserContextMiddleware`, `ValidatedTokenCache`,
+`MeshUserProjection`, `VUserHelper`, `UserDirectoryReadiness`, `RequestNamingExceptionHandling` and
+`RequestName`, `NonfileRouteConstraint` and its extensions, `ArticleExtensions`, and
+`Authentication/AuthenticationOptions` with its two companions. Their consumers are the portal hosts
+and the Blazor host libraries, which are rebuilt with every image. `scripts/type-forwards.allow` names
+each one, and every entry is a statement this measurement backs.
+
+**The transition: a new namespace, because the module build never sees a checkout.** The first
+attempt kept the namespace and switched on the pinned platform CHECKOUT: while it still carried
+`Portal/UserContextMiddleware.cs`, the Plugins copy compiled nothing. The module bundles'
+one-workspace build defeated it. That build (`mw-plugin-test build-project` inside the sealed portal
+image) compiles against the image's `/app` and has no platform checkout, so the switch read "moved"
+and compiled the copy next to an assembly still exporting the same full names: CS0436 on every type.
+Reproduced locally with the tester inside a portal image that predates the delete: 6 CS0436, the
+same as CI.
+
+A switch on a path cannot answer a question about an assembly, so the moved types took a new
+namespace, `MeshWeaver.Hosting.AspNetCore.PortalHost`. That copy never shares a full name with the
+platform's assembly, whichever platform set a build resolves. The consumers switch in the same change.
+A file that also uses a type the platform kept aliases each moved type it uses, so the simple name is
+never ambiguous while the platform still carries its copy. The platform then deletes its copy with no
+consumer left. The same 39-entry workspace build is GREEN, 52 of 52 projects, against the same
+image. **When a moved type's old full name stays exported anywhere a build path can see it, prefer a
+new namespace to any switch.**
+
+**What it does not cover.** The measurement covers the registry modules MeshWeaver.Plugins builds
+today, plus a source search of every Systemorph repository for the namespace (only
+MeshWeaver.SocialMedia uses it, and only the endpoint hook). A module that some other estate built and
+published from a private fork would not be seen.
 
 ## Feature folders inside content-surface projects
 
