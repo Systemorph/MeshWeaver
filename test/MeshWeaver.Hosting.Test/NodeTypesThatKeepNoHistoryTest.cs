@@ -305,6 +305,40 @@ public sealed class NodeTypesThatKeepNoHistoryTest : IDisposable
         (await none.PurgeVersions("x").Timeout(Budget).Await()).Should().BeTrue("a store that retains nothing holds nothing to purge");
     }
 
+    /// <summary>Review finding on #7421: a version store whose purge THROWS while it is being called
+    /// (rather than faulting on subscription) escaped the best-effort purge's Catch, so a batch delete
+    /// that had already removed its rows failed with a bare fault — and its caller, told nothing was
+    /// removed, could not retire the hubs at those paths. The purge is best-effort: the delete answers
+    /// its removed set.</summary>
+    [Fact]
+    public async Task A_purge_that_throws_when_called_never_fails_a_batch_delete_that_removed_its_rows()
+    {
+        await DeclareInMeshType(EphemeralType, keepsHistory: false).Timeout(Budget).Await();
+        const string path = "Governance/Requests/thrown";
+        await store.Write(Instance(path, EphemeralType, 1, "x"), Options).Timeout(Budget).Await();
+        var throwing = new ThrowsWhenPurgeIsCalled();
+        var deleting = new VersionWritingStorageAdapter(store, throwing, readOptions: () => Options);
+
+        var removed = await deleting.DeleteMany([path]).Timeout(Budget).Await();
+
+        throwing.PurgeCalls.Should().Be(1, "precondition: the no-history type's purge was attempted");
+        removed.Should().Equal([path], "the batch removed the row, and the caller must be told so");
+        (await store.Read(path, Options).Timeout(Budget).Await()).Should().BeNull("the delete ran");
+    }
+
+    private sealed class ThrowsWhenPurgeIsCalled : IVersionQuery
+    {
+        public int PurgeCalls { get; private set; }
+        public IObservable<MeshNodeVersion> GetVersions(string path) => Observable.Empty<MeshNodeVersion>();
+        public IObservable<MeshNode?> GetVersion(string path, long version, JsonSerializerOptions options) => Observable.Return<MeshNode?>(null);
+        public IObservable<MeshNode?> GetVersionBefore(string path, long beforeVersion, JsonSerializerOptions options) => Observable.Return<MeshNode?>(null);
+        public IObservable<bool> PurgeVersions(string path)
+        {
+            PurgeCalls++;
+            throw new InvalidOperationException("the version store threw while the purge was being called");
+        }
+    }
+
     private sealed class RetainingWithoutPurge : IVersionQuery
     {
         public IObservable<MeshNodeVersion> GetVersions(string path) => Observable.Empty<MeshNodeVersion>();

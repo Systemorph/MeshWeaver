@@ -30,4 +30,26 @@ public interface IActiveDeletionScopes
     /// <param name="deletionRoot">The root of the deletion in flight, or null.</param>
     /// <returns><c>true</c> when a write to <paramref name="path"/> must be refused now.</returns>
     bool IsUnderActiveDeletion(string? path, out string? deletionRoot);
+
+    /// <summary>
+    /// ADMITS a write that is about to commit to <paramref name="path"/>, or refuses it
+    /// (Systemorph/MeshWeaver#7346). Refused — null, with <paramref name="deletionRoot"/> naming the
+    /// deletion in flight — exactly when <see cref="IsUnderActiveDeletion"/> would answer true.
+    /// Admitted, the returned handle carries the write from its commit to its STORAGE write: a
+    /// deletion (or move) whose scope opens after this call waits for the write — whose storage
+    /// write is let through the guard under that scope — instead of refusing it at its flush after
+    /// the owner had already committed and served it. Dispose the handle exactly when the write's
+    /// storage write has answered (success or failure), or at once when the write does not commit.
+    ///
+    /// <para>The default answers from <see cref="IsUnderActiveDeletion"/> alone and admits nothing
+    /// to wait for: a host whose scopes carry no admissions keeps the commit-time refusal and
+    /// nothing more.</para>
+    /// </summary>
+    /// <param name="path">The node path the write is about to commit to.</param>
+    /// <param name="deletionRoot">The root of the deletion in flight when refused, otherwise null.</param>
+    /// <returns>The admission to dispose at the storage write's answer, or null when refused.</returns>
+    IDisposable? AdmitCommit(string? path, out string? deletionRoot)
+        => IsUnderActiveDeletion(path, out deletionRoot)
+            ? null
+            : System.Reactive.Disposables.Disposable.Empty;
 }

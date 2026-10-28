@@ -688,7 +688,7 @@ jobs:
     # 🏗️ Not on a build host (H7): with `executor: host` the gate stage runs on the host and the
     # caller follows it; `verify` below carries that verdict. Not a skip-trapdoor — `verify` runs
     # always and is RED unless the followed verdict is `success`.
-    if: inputs.executor != 'host'
+    if: inputs.executor != 'host' && inputs.executor != 'host-forced'
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
@@ -1056,13 +1056,19 @@ jobs:
   # ─────────────────────────── 2. THE GATE, one job per shard ───────────────────────────
   gate:
     name: Gate shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }}
-    needs: plan
+    needs: [plan, bake]
     # 🚨 A MODE SWITCH on the plan's own output, never a skip-trapdoor: an empty matrix cannot be
     # expressed any other way, and `verify` below runs unconditionally and refuses a skipped gate
     # the plan did not predict. `plan.result` is asserted by name too — a FAILED plan emits no
     # matrix at all, and `fromJson('')` would fail the matrix evaluation instead of letting
     # `verify` name the real cause.
-    if: needs.plan.result == 'success' && needs.plan.outputs.nothing-to-gate != 'true'
+    # 🍞 `bake` (below) compiles the run's bake ONCE when there is more than one shard; a shard
+    # runs only on its success, or on its skip when the plan made exactly one shard (that shard
+    # compiles its own bake, byte-for-byte the pre-`bake` lane). A FAILED or cancelled bake runs
+    # no shard: its compile verdict is the run's verdict, and `verify` names it.
+    if: >-
+      ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.nothing-to-gate != 'true'
+      && (needs.bake.result == 'success' || (needs.bake.result == 'skipped' && needs.plan.outputs.shards == '1')) }}
     strategy:
       # 🚨 NEVER fail-fast. A cancelled sibling reports `cancelled`, which is the exact unreadable
       # verdict this whole fan-out exists to remove — and a sweep wants every shard's verdict in
@@ -1081,6 +1087,11 @@ jobs:
     # further: 45 is the ceiling `check-workflow-timeouts.py` refuses to exceed, so a job that
     # needs more is STUCK, not slow.
     timeout-minutes: 45
+    # `&gate-steps`: the `bake` job below runs THESE steps (a YAML alias, not a copy), so the bake
+    # and the shards cannot disagree about how a platform is resolved, composed or compiled against.
+    # The steps branch on `env.GATE_ROLE` where the two differ, and read the bake's results only
+    # through the env below — never `needs.bake` inside a step, which the bake job itself does not
+    # have.
     env:
       # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
       # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
@@ -1093,10 +1104,18 @@ jobs:
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       # No step here runs setup-dotnet today; the line is the rule, uniform with module-pack.
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
+      # 🍞 The run's prepared bake, as this shard sees it: `bake`'s result, the attempt it ran in
+      # and the platform it compiled against (all empty on a one-shard run, where no `bake` ran).
+      GATE_ROLE: shard
+      BAKE_RESULT: ${{ needs.bake.result }}
+      BAKE_ATTEMPT: ${{ needs.bake.outputs.attempt }}
+      BAKE_IMAGE_DIGEST: ${{ needs.bake.outputs.image-digest }}
+      BAKE_PLATFORM_DIGEST: ${{ needs.bake.outputs.platform-image-digest }}
+      BAKE_SET: ${{ needs.bake.outputs.platform-set }}
     permissions:
       contents: read
       id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
-    steps:
+    steps: &gate-steps
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - uses: actions/checkout@v7
@@ -1269,8 +1288,33 @@ jobs:
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           FREEZE: ${{ vars.MW_PLATFORM_REF }}    # the CALLER's variable — see `plan`
+          # 🍞 BAKE_ATTEMPT/BAKE_*: the job env (empty in the bake job and on a one-shard run).
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          # 🍞 A shard of the SAME attempt as the run's bake gates the set that bake was compiled
+          # against — never a newer one it re-resolves 30 minutes later, which would make the
+          # prepared bake stale and the shard compile its own: one compile's wall time on top of
+          # the bake's, past the 45-minute cap on exactly the runs where a set was sealed mid-bake.
+          # A shard of a LATER attempt ("Re-run failed jobs" keeps the earlier attempt's bake)
+          # re-resolves below as before (Education#320); a newer set then makes the bake stale and
+          # the shard refreshes it — named, in the gate step.
+          # Only a LANE-RESOLVED platform is replayed: a caller's pins, or `allow-unpinned` tags
+          # (plan then hands every shard EMPTY digests, and the bake keeps them empty), are not
+          # re-resolved anyway — the "as called" branch below echoes exactly what the bake used,
+          # and the bake key decides whether adopting it is safe.
+          if [ "${RESOLVED:-}" = "true" ] && [ -n "${BAKE_ATTEMPT:-}" ] && [ "$BAKE_ATTEMPT" = "$RUN_ATTEMPT" ]; then
+            [ -n "${BAKE_IMAGE_DIGEST:-}" ] && [ -n "${BAKE_PLATFORM_DIGEST:-}" ] \
+              || { echo "::error::the run's bake succeeded in attempt $BAKE_ATTEMPT but handed this shard no platform digests — the bake job and the shard disagree about their contract"; exit 1; }
+            {
+              echo "image-digest=${BAKE_IMAGE_DIGEST}"
+              echo "platform-image-digest=${BAKE_PLATFORM_DIGEST}"
+              echo "platform-set=${BAKE_SET:-}"
+              echo "override=false"
+            } >> "$GITHUB_OUTPUT"
+            echo "platform for this shard: the run's prepared bake's (set '${BAKE_SET:-<not named>}', compiled in attempt $BAKE_ATTEMPT) — the shard gates exactly the platform its bake was compiled against"
+            exit 0
+          fi
           if [ "${RESOLVED:-}" != "true" ]; then
             {
               echo "image-digest=${IMAGE_DIGEST}"
@@ -2207,9 +2251,27 @@ jobs:
           echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s), $NATIVE_MODULES carrying native payloads, $NATIVE_FILES native file(s) landed module-relative under /ext/modules/<module>/"
           echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
           echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
+      # 🍞 THE RUN'S PREPARED BAKE (Doc/Architecture/NodeRepoGateSharding → "The prepared bake"). A shard of a multi-shard run
+      # does not compile: the `bake` job did, once, and handed it over through the run's artifact
+      # store. No `continue-on-error`: a bake that succeeded and cannot be fetched is RED here,
+      # never "compile instead" — the gate step adopts it (verified), refreshes it (stale, named)
+      # or refuses it (damaged), and there is no fourth, silent outcome.
+      - name: Fetch the run's prepared bake
+        if: env.GATE_ROLE == 'shard' && env.BAKE_RESULT == 'success'
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
+          name: gate-prepared-bake-${{ github.sha }}-${{ env.BAKE_ATTEMPT }}
+          path: ${{ runner.temp }}/prepared-bake
       - name: Import + compile + render + run tests for each node repo
         id: gate
         env:
+          # 🍞 `bake`: compile, seal the hand-off, stop — no gate. `shard`: adopt the run's prepared
+          # bake when one was fetched (PREPARED_DIR), else compile its own (the one-shard lane).
+          ROLE: ${{ env.GATE_ROLE }}
+          PREPARED_DIR: ${{ (env.GATE_ROLE == 'shard' && env.BAKE_RESULT == 'success') && format('{0}/prepared-bake', runner.temp) || '' }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
           MODE: ${{ steps.platform-source.outputs.mode }}
           DOTNET: ${{ steps.dotnet.outputs.dotnet }}
           RUNNER_SHARED_FRAMEWORKS: ${{ steps.dotnet.outputs.shared }}
@@ -2413,13 +2475,58 @@ jobs:
           # the bake to the portal's identity. Same shape as node-repo-publish-bake.yml, on
           # purpose: the gate and the bake must not disagree about what a portal contains.
           TESTER_MOUNTS=(-v "$OWN_BAKE:/bake")
+          # ── 🍞 THE PREPARED BAKE (Doc/Architecture/NodeRepoGateSharding → "The prepared bake") ─────────────────────────────
+          # Every shard used to run the compile below over the SAME mount, sha and identity, then
+          # gate a quarter of it — the compile was 75-93 % of each shard's job (MeshWeaver.Plugins,
+          # 4 × 538-1954 s per run, measured 2026-10-25..27). So a multi-shard run compiles ONCE, in
+          # `bake`, and each shard ADOPTS a verified copy of it. The key is taken HERE, after the
+          # mount is staged and before anything compiles, over everything the compile reads: the
+          # composed host (the portal's /app + the tester), the staged repository tree, the external
+          # modules, the shared frameworks (volume mode), the identity, the platform reference, the
+          # source sha and the compile arguments. Equal key ⇒ adopt; any difference ⇒ the shard's
+          # own compile, with the differing inputs NAMED; a damaged hand-off ⇒ RED.
+          HANDOFF_PY="${RUNNER_TEMP:-/tmp}/gate-bake-handoff.py"
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/gate-bake-handoff.py" > "$HANDOFF_PY" \
+            || { echo "::error::could not fetch gate-bake-handoff.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 400 "$HANDOFF_PY" | grep -q 'gate-bake-handoff.py' || { echo "::error::the fetched gate-bake-handoff.py at ${SCRIPTS_REF} does not name itself (starts: $(head -c 60 "$HANDOFF_PY" | tr -d '\n'))"; exit 1; }
+          KEY_DOC="${RUNNER_TEMP:-/tmp}/gate-bake-key.json"
+          KEY_ARGS=(--value "identity=$TARGET_IDENTITY" --value "mode=$MODE" --value "platform-ref=$PLATFORM_REF"
+            --value "source-sha=$GITHUB_SHA" --value "repo-path=$P_REPO"
+            --value "compile-args=--app $P_APP --shared-frameworks $P_SHARED ${ALLOW_ARGS[*]} ${WARN_ARGS[*]} ${DYN_ARGS[*]} ${MODULE_ARGS:-}"
+            --tree "host=$HOST_DIR" --tree "repo=$REPO_MOUNT")
+          if [ -n "${EXT_MODULES_DIR:-}" ]; then KEY_ARGS+=(--tree "modules=$EXT_MODULES_DIR"); fi
+          if [ "$MODE" = volume ]; then KEY_ARGS+=(--listing "shared=$P_SHARED"); fi
+          python3 "$HANDOFF_PY" key --out "$KEY_DOC" "${KEY_ARGS[@]}"
+          ADOPTED=false
+          if [ "$ROLE" = shard ] && [ -n "${PREPARED_DIR:-}" ]; then
+            set +e
+            python3 "$HANDOFF_PY" adopt --handoff "$PREPARED_DIR" --key-doc "$KEY_DOC" --identity "$TARGET_IDENTITY" --into "$OWN_BAKE"
+            adopt_rc=$?
+            set -e
+            case "$adopt_rc" in
+              0) ADOPTED=true ;;
+              3) echo "::warning title=Prepared bake refreshed::the run's prepared bake was compiled from other inputs than this shard's (named above), so this shard compiles its own — correct, and one compile slower" ;;
+              *) echo "::error title=Prepared bake refused::the run's prepared bake failed verification (exit $adopt_rc, reason above) — refusing it rather than compiling around a damaged hand-off"; exit 1 ;;
+            esac
+          fi
+          if [ "$ADOPTED" != true ]; then
           # shellcheck disable=SC2086  # MODULE_ARGS is a flag list; word-splitting is the point
           run_tester compile "$P_REPO" \
             --app "$P_APP" --shared-frameworks "$P_SHARED" \
             "${ALLOW_ARGS[@]}" "${WARN_ARGS[@]}" "${DYN_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
+          fi
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           baked="$(tr -d '[:space:]' < "$OWN_BAKE/framework-mvid.txt")"
           [ "$baked" = "$TARGET_IDENTITY" ] || { echo "::error::the run's own bake is keyed to '$baked' but the portal's /app resolves '$TARGET_IDENTITY' — the compile did not run against the platform host (is --app set to the portal's /app?)"; exit 1; }
+          if [ "$ROLE" = bake ]; then
+            # The bake job's whole job: hand the compiled bake over, sealed with its key, and stop.
+            # No seed is mixed in (shards add their own), and no gate runs here.
+            HANDOFF_DIR="${RUNNER_TEMP:-/tmp}/prepared-handoff"
+            python3 "$HANDOFF_PY" seal --bake "$OWN_BAKE" --key-doc "$KEY_DOC" --out "$HANDOFF_DIR"
+            echo "PREPARED_HANDOFF=$HANDOFF_DIR" >> "$GITHUB_ENV"
+            echo "### 🍞 Prepared bake: compiled once for $(echo "${SHARD:-}" | cut -d/ -f2) shard(s), identity \`$baked\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           # Gate on the bake: own bundles AND the upstream seed together in one seed directory.
           if [ -n "${SEED_DIR:-}" ]; then cp "$SEED_DIR"/*.zip "$OWN_BAKE"/ 2>/dev/null || true; fi
           # The tester's stdout is ALSO the gate log a caller's own ratchets read (MeshWeaver.Manufacturing's
@@ -2483,6 +2590,22 @@ jobs:
           fi
           echo "OWN_BAKE=$OWN_BAKE" >> "$GITHUB_ENV"
           echo "bake identity: $(cat "$OWN_BAKE/framework-mvid.txt") — $(ls "$OWN_BAKE"/*.zip | wc -l | tr -d ' ') bundle(s), gated on their own bytes"
+      # 🍞 The bake job's hand-off to its shards. Named per sha AND attempt: a later attempt's bake
+      # never overwrites the one an earlier attempt's shards were promised. Retention 3 for the same
+      # reason as the gate log below (a shard may sit queued ≤ 24 h behind its bake).
+      - name: Hand the prepared bake to the shards
+        if: env.GATE_ROLE == 'bake'
+        uses: Systemorph/MeshWeaver/.github/actions/upload-artifact@main
+        with:
+          store: ${{ needs.plan.outputs.artifact-store || 'unresolved' }}
+          expected-store-id: ${{ needs.plan.outputs.artifact-store-id }}
+          name: gate-prepared-bake-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ env.PREPARED_HANDOFF }}
+          # Every file the manifest lists travels: a dropped dotfile would make each shard's
+          # verification refuse the hand-off as "missing".
+          include-hidden-files: true
+          retention-days: 3
+          if-no-files-found: error
       # 🚨 In CONTAINER mode the dump is written by the container, which runs as root, so the file
       # lands owned by root with a restrictive mode — a core dump can contain anything that was in
       # memory, so the runtime writes it 0600 on purpose. `chmod 0777` on the mount DIRECTORY
@@ -2596,9 +2719,48 @@ jobs:
   # not a DISJOINT COVER of that total. That is what makes a fan-out safe to require: "shard 3 never
   # ran" and "shard 3 passed" are otherwise the same green wall, and GitHub paints a skipped matrix
   # leg exactly like a passed one.
+  # 🍞 THE PREPARED BAKE — compiled ONCE per run, handed to every shard (Doc/Architecture/NodeRepoGateSharding → "The prepared bake").
+  # Measured before it existed (MeshWeaver.Plugins main, REST job logs): every shard compiled the
+  # identical bake — 4 × 538-548 s on 2026-10-26, 4 × 1647-1954 s on 2026-10-27 — and gated its
+  # slice in 17-323 s after it. This job runs the SAME steps as a shard (`*gate-steps`, an alias,
+  # not a copy) with `matrix.shard: bake`: it resolves and composes the platform, stages the mount
+  # and the modules, compiles, seals the bake with the key of everything the compile read, and
+  # uploads it. It gates nothing.
+  #
+  # Only when the plan made MORE than one shard: one shard compiling its own bake is the same
+  # single compile, without a hand-off. That is a mode switch on the plan's own output, like the
+  # gate's — never a skip on a missing input; `gate` runs on exactly this job's success or this
+  # skip, and `verify` names this job when it is why no shard ran.
+  bake:
+    name: Bake once for every shard
+    needs: plan
+    if: needs.plan.result == 'success' && needs.plan.outputs.nothing-to-gate != 'true' && needs.plan.outputs.shards != '1'
+    strategy:
+      matrix:
+        shard: [bake]
+    runs-on: ${{ inputs.runner }}
+    # The shard's budget and the shard's reason (the platform wait + the compile); a bake that
+    # needs more is STUCK, not slow.
+    timeout-minutes: 45
+    outputs:
+      # The platform the bake compiled against, for the shards of the same attempt.
+      attempt: ${{ github.run_attempt }}
+      image-digest: ${{ steps.platform.outputs.image-digest }}
+      platform-image-digest: ${{ steps.platform.outputs.platform-image-digest }}
+      platform-set: ${{ steps.platform.outputs.platform-set }}
+    env:
+      # The shard's two runtime switches, verbatim — see the `gate` job's env for why each exists.
+      DOTNET_TieredPGO: "0"
+      DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
+      GATE_ROLE: bake
+    permissions:
+      contents: read
+      id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
+    steps: *gate-steps
+
   verify:
     name: Compile + render node repos (MeshWeaver from ACR)
-    needs: [plan, gate]
+    needs: [plan, bake, gate]
     # always(): a red or CANCELLED shard must still be folded and NAMED here, never leave this
     # context skipped — a skipped required check reads as satisfied (ReadingCiSignals).
     if: always()
@@ -2615,6 +2777,7 @@ jobs:
         run: |
           case "$EXECUTOR" in
             actions|host) echo "executed-on=$EXECUTOR" >> "$GITHUB_OUTPUT"; echo "executor: $EXECUTOR" ;;
+            host-forced) echo "::error title=Routed to the build host — owed::the owner routed this repository's pull requests to the build server (policy build-server-routes-all-ci) while its host stages still owe parity with this leg — RED until the debt is paid and ciEquivalent is claimed; the owed items are the ::error annotations of the run's executor/admission job and the owes list of .github/build-stages.json"; exit 1 ;;
             *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who ran this lane's work"; exit 1 ;;
           esac
       # 🏗️ ON A BUILD HOST (H7): no plan, no shard ran here — the gate stage ran on the host and the
@@ -2625,11 +2788,12 @@ jobs:
         env:
           HOST_VERDICT: ${{ inputs.host-verdict }}
           PLAN_RESULT: ${{ needs.plan.result }}
+          BAKE_RESULT: ${{ needs.bake.result }}
           GATE_RESULT: ${{ needs.gate.result }}
         run: |
           set -euo pipefail
-          if [ "$PLAN_RESULT" != "skipped" ] || [ "$GATE_RESULT" != "skipped" ]; then
-            echo "::error title=Build host::executor is 'host' but this lane's plan reported '$PLAN_RESULT' and its shards '$GATE_RESULT' — the two executors disagree; refusing to answer"
+          if [ "$PLAN_RESULT" != "skipped" ] || [ "$BAKE_RESULT" != "skipped" ] || [ "$GATE_RESULT" != "skipped" ]; then
+            echo "::error title=Build host::executor is 'host' but this lane's plan reported '$PLAN_RESULT', its bake '$BAKE_RESULT' and its shards '$GATE_RESULT' — the two executors disagree; refusing to answer"
             exit 1
           fi
           if [ "$HOST_VERDICT" != "success" ]; then
@@ -2661,6 +2825,7 @@ jobs:
         id: expect
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
+          BAKE_RESULT: ${{ needs.bake.result }}
           GATE_RESULT: ${{ needs.gate.result }}
           NOTHING_TO_GATE: ${{ needs.plan.outputs.nothing-to-gate }}
           SHARDS: ${{ needs.plan.outputs.shards }}
@@ -2678,6 +2843,11 @@ jobs:
             echo "fold=false" >> "$GITHUB_OUTPUT"
             echo "this run's diff reaches no module content — the plan said so, and the gate correctly did not run. No gate log to hand back."
             exit 0
+          fi
+          # 🍞 The prepared bake: on a multi-shard run every shard waits for it, so a bake that did
+          # not succeed is WHY no shard ran — named here, before the fan-out's own verdict.
+          if [ "$SHARDS" != "1" ] && [ "$BAKE_RESULT" != "success" ]; then
+            echo "::error::the run's prepared bake (job 'Bake once for every shard') reported '$BAKE_RESULT', so none of the $SHARDS shard(s) could start — its compile verdict is in that job's log."
           fi
           if [ "$GATE_RESULT" != "success" ]; then
             echo "::error::the gate fan-out reported '$GATE_RESULT' across its $SHARDS shard(s) — at least one shard failed, was cancelled, or never ran. Its verdict is in that shard's own job log and its gate-log artifact."

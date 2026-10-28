@@ -213,6 +213,12 @@ the inbox watcher, registration and broadcast in the Hosting module's `PlatformB
 under `.github/workflows` — there is no ledger — and
 `UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody` pins the lane's call.
 
+- **A `release-channels.json` writer that names another repository** (`"repo"`: the hosting
+  operator's in MeshWeaver.Plugins, the four service images' — `ocr`, `ollama`, `whisper`,
+  `s1-extract` — in MeshWeaver.Deploy). It is a DECLARATION core's pruners read so those line tags
+  stay protected; `release-channels.py check` deliberately does not open that repository, and
+  nothing in core runs, waits on or reads the publishing lane
+  ([Carving Projects Out Of Core](../CarvingProjectsOutOfCore) → "The service images").
 - **`scripts/check-type-forwards.py --sibling`** — the flag can resolve a departed type against a
   sibling checkout, and CI deliberately does NOT pass it (`dotnet-test.yml`): without the flag the
   gate is the conservative one, and passing it would make a core verdict depend on another repo's

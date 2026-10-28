@@ -14,13 +14,13 @@ public static class DependencyEdgeKinds
     /// compiled in through a <c>shared=</c> source query or an <c>@@</c> include).</summary>
     public const string NodeType = "NodeType";
 
-    /// <summary>The source's compilation USED an installed module assembly
-    /// (<c>Compilation.GetUsedAssemblyReferences()</c>).</summary>
+    /// <summary>The source's compilation BOUND an installed module assembly — read off the emitted
+    /// image's <c>AssemblyRef</c> table, like <see cref="Platform"/>.</summary>
     public const string Module = "Module";
 
     /// <summary>The source's compilation USED a MeshWeaver PLATFORM assembly — one of the host's
-    /// own <c>MeshWeaver.*</c> assemblies that is neither an installed module nor a package
-    /// (<c>Compilation.GetUsedAssemblyReferences()</c>). The target is the assembly's simple name.
+    /// own <c>MeshWeaver.*</c> assemblies that is neither an installed module nor a package — read
+    /// off the emitted image's <c>AssemblyRef</c> table. The target is the assembly's simple name.
     /// This is the edge a core carve-out reads: which in-mesh code binds <c>MeshWeaver.Graph</c>.
     /// Base-class-library and other third-party host assemblies are NOT recorded (see
     /// <c>Doc/Architecture/DependencyGraph</c> → <i>Why the BCL is not an edge</i>).</summary>

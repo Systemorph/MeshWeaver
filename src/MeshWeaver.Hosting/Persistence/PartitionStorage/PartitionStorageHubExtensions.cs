@@ -83,8 +83,10 @@ public static class PartitionStorageHubExtensions
                 deleted => hub.Post(
                     new DeleteBatchResponse(deleted.ToImmutableList()),
                     o => o.ResponseFor(request)),
+                // A batch that failed part-way still names the rows it removed (#7396).
                 ex => hub.Post(
-                    new DeleteBatchResponse(ImmutableList<string>.Empty, Error: ex.Message),
+                    new DeleteBatchResponse(
+                        BatchDeletePartiallyAppliedException.RemovedBy(ex).ToImmutableList(), Error: ex.Message),
                     o => o.ResponseFor(request)));
 
         return request.Processed();

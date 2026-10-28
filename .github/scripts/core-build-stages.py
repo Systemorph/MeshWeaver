@@ -93,8 +93,6 @@ OWES = [
     "browser: the shards that run browser tests need the headless browser and the font set the `browser-fonts` job "
     "stages and each `test` shard provisions; the build-host image (MeshWeaver.Deploy deploy/build-host/Dockerfile) "
     "carries neither",
-    "containers: the shards' Testcontainers projects start a database in Docker; a host's sandbox has no Docker "
-    "daemon (its database is sandbox-postgres.sh), so those projects cannot run there as they run in the `test` job",
     "dependent legs: platform-compat and licence-gate read the `build` job's artifacts (shard 0's output, the licence "
     "evidence); with the build on a host they need its outputs handed back",
     "prepared mesh: on a host no test may install a mesh from scratch — a prepared mesh snapshot is cloned per run; "
@@ -131,7 +129,10 @@ def generate(total: int) -> dict:
     stages.append({"name": "doc-gate", "kind": "test",
                    "command": f"{RUNNER} doc-gate {ROOTS} --repo .",
                    "timeoutMinutes": DOC_GATE_TIMEOUT_MINUTES})
-    return {"$comment": COMMENT, "owes": list(OWES), "stages": stages}
+    doc = {"$comment": COMMENT, "owes": list(OWES), "stages": stages}
+    if not OWES:
+        doc["ciEquivalent"] = True  # the debt rule: owing nothing IS the claim, so the fully migrated file is reachable
+    return doc
 
 
 def _rule():
@@ -173,6 +174,183 @@ def problems(committed_text: str | None, workflow_text: str) -> list[str]:
     return out
 
 
+# A host stage's sandbox has no Docker daemon (Doc/Architecture/BuildHosts §2 step 5; its database is a
+# prepared server, host-postgres.sh / sandbox-postgres.sh). Core's suites need none: the Postgres suites
+# left core (#2847 and its successors) and the `test` job pulls no image. That is a FACT about the tree,
+# so it is checked, not assumed — a suite that starts a container again reds here, and either moves to
+# the host's prepared service or re-opens the debt (`containers:` in OWES) in the same change.
+# The package check reads the MSBuild XML itself — PackageReference / PackageVersion /
+# GlobalPackageReference elements, any quoting, comments ignored — so a `<Compile Include="Testcontainers…cs"/>`
+# or a commented-out reference is not a dependency, and the legacy `DotNet.Testcontainers` package is one.
+CONTAINER_PACKAGE_ITEMS = {"PackageReference", "PackageVersion", "GlobalPackageReference"}
+CONTAINER_PACKAGE_NAME = re.compile(r"^\s*(Testcontainers|DotNet\.Testcontainers|Docker\.DotNet)(\.|\s*$)", re.I)
+# Code: a using of either namespace, a ContainerBuilder, or a fully qualified (DotNet.)Testcontainers.<Type> use.
+CONTAINER_CODE = re.compile(r"^\s*using\s+(DotNet\.Testcontainers|Testcontainers)\b|new\s+ContainerBuilder\b"
+                            r"|(?<![\w.])(DotNet\.)?Testcontainers\.[A-Z]\w*\.", re.M)
+
+
+def csharp_code_only(text: str) -> str:
+    """`text` with every comment and the literal text of every string and char literal blanked (newlines kept,
+    so a `^`-anchored match still sees line starts), while an interpolated string's holes stay code. The
+    container scan reads only what EXECUTES: `// Previously used new ContainerBuilder()` and a fixture string
+    that contains `using DotNet.Testcontainers.Builders;` start nothing."""
+    out: list[str] = []
+    n = len(text)
+
+    def blank(chunk: str) -> None:
+        out.append("".join(c if c == "\n" else " " for c in chunk))
+
+    def code(i: int, close: bool) -> int:
+        # Scans code from i; with `close`, stops at the `}` that ends an interpolation hole (depth 0).
+        depth = 0
+        while i < n:
+            c = text[i]
+            if text.startswith("//", i):
+                j = text.find("\n", i)
+                j = n if j < 0 else j
+                blank(text[i:j]); i = j
+            elif text.startswith("/*", i):
+                j = text.find("*/", i + 2)
+                j = n if j < 0 else j + 2
+                blank(text[i:j]); i = j
+            elif c == "'":
+                j = i + 1
+                while j < n and text[j] not in "'\n":
+                    j += 2 if text[j] == "\\" else 1
+                j = min(j + 1, n)
+                blank(text[i:j]); i = j
+            elif c in '$@"':
+                j = i
+                dollars = 0
+                verbatim = False
+                while j < n and text[j] in "$@":
+                    dollars += text[j] == "$"; verbatim |= text[j] == "@"; j += 1
+                if j >= n or text[j] != '"':  # `$`/`@` not opening a string (`@class`, a stray `$`)
+                    out.append(text[i:j]); i = j; continue
+                out.append(" " * (j - i)); i = string(j, dollars, verbatim)
+            elif c == "{":
+                depth += 1; out.append(c); i += 1
+            elif c == "}":
+                if close and depth == 0:
+                    return i
+                depth -= 1; out.append(c); i += 1
+            else:
+                out.append(c); i += 1
+        return i
+
+    def hole(i: int, braces: int) -> int:
+        # i is at the first of `braces` opening braces; the hole's expression stays code.
+        out.append(" " * braces)
+        i = code(i + braces, close=True)
+        k = 0
+        while i < n and text[i] == "}" and k < braces:
+            i += 1; k += 1
+        out.append(" " * k)
+        return i
+
+    def string(i: int, dollars: int, verbatim: bool) -> int:
+        q = 0
+        while i + q < n and text[i + q] == '"':
+            q += 1
+        if q >= 3 and not verbatim:  # raw string literal: ends at the same run of quotes; holes open with `dollars` braces
+            blank(text[i:i + q]); i += q
+            while i < n:
+                if text.startswith('"' * q, i):
+                    blank(text[i:i + q]); return i + q
+                if dollars and text.startswith("{" * dollars, i):
+                    i = hole(i, dollars); continue
+                blank(text[i]); i += 1
+            return i
+        if q == 2 and not verbatim:  # the empty string ""
+            blank('""'); return i + 2
+        blank('"'); i += 1
+        while i < n:
+            c = text[i]
+            if verbatim and text.startswith('""', i):
+                blank('""'); i += 2
+            elif c == '"':
+                blank(c); return i + 1
+            elif not verbatim and c == "\\":
+                blank(text[i:i + 2]); i += 2
+            elif dollars and text.startswith("{{", i):
+                blank("{{"); i += 2
+            elif dollars and c == "{":
+                i = hole(i, 1)
+            elif c == "\n" and not verbatim:
+                return i
+            else:
+                blank(c); i += 1
+        return i
+
+    code(0, close=False)
+    return "".join(out)
+
+
+def container_package_hit(text: str) -> str | None:
+    """The first container package an MSBuild file references (None when it references none). Raises
+    ValueError when the file is not XML — no verdict is ever read off a file that could not be parsed."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        raise ValueError(f"not parseable as MSBuild XML: {e}") from e
+    for el in root.iter():
+        tag = el.tag.rsplit("}", 1)[-1] if isinstance(el.tag, str) else ""
+        if tag not in CONTAINER_PACKAGE_ITEMS:
+            continue
+        for attr in ("Include", "Update"):
+            value = el.get(attr) or ""
+            for item in value.split(";"):
+                if CONTAINER_PACKAGE_NAME.match(item):
+                    return f'<{tag} {attr}="{item.strip()}">'
+    return None
+
+
+SKIP_DIRS = {"bin", "obj", "node_modules", ".git", ".core-tests"}
+
+
+def container_debt_open(owes: list[str]) -> bool:
+    """The `containers:` debt re-opened in OWES — then a Docker-dependent suite is DECLARED unmet, the
+    ciEquivalent rule keeps every run on Actions, and the scan is not a second, contradicting gate."""
+    return any(str(o).startswith("containers:") for o in owes)
+
+
+def container_problems(root: str, owes: list[str] | None = None) -> list[str]:
+    """Every place in core's build that would make a shard start a container (nothing while the
+    `containers:` debt is declared open)."""
+    if container_debt_open(OWES if owes is None else owes):
+        return []
+    out: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        rel_dir = os.path.relpath(dirpath, root)
+        for n in sorted(filenames):
+            rel = os.path.normpath(os.path.join(rel_dir, n))
+            is_msbuild = n.endswith((".csproj", ".props", ".targets"))
+            if is_msbuild:
+                what = "references a container package"
+            elif n.endswith(".cs") and (rel.startswith("test" + os.sep) or rel == "test"):
+                what = "starts a container"
+            else:
+                continue
+            try:
+                with open(os.path.join(dirpath, n), encoding="utf-8-sig", errors="replace") as fh:
+                    text = fh.read()
+                if is_msbuild:
+                    hit = container_package_hit(text)
+                else:
+                    m = CONTAINER_CODE.search(csharp_code_only(text))
+                    hit = m.group(0).strip() if m else None
+            except (OSError, ValueError) as e:
+                out.append(f"{rel}: unreadable ({e}) — the no-container check reached no verdict on it")
+                continue
+            if hit:
+                out.append(f"{rel} {what} ({hit[:80]}) — a build host's sandbox has no Docker daemon; "
+                           f"run the suite against the host's prepared service, or re-open the `containers:` debt in "
+                           f"core-build-stages.py OWES in this change")
+    return out
+
+
 def _read(path: str) -> str | None:
     try:
         with open(path) as fh:
@@ -202,7 +380,16 @@ def _self_test() -> int:
     expect(all(s["command"].endswith(" --repo .") for s in doc["stages"][1:-1]),
            "every shard records and gates with the checkout's own scripts (record-host-crash.py, check-untyped-content.sh)")
     expect(doc["stages"][0]["needs"] == ["nuget"], "the build reads the host's prepared package cache, and nothing else")
-    expect(doc["owes"] == OWES and "ciEquivalent" not in doc, "the debt is declared and nothing is claimed")
+    expect(doc["owes"] == OWES and doc.get("ciEquivalent") is (True if not OWES else None),
+           "the debt is declared, and the claim is made exactly when nothing is owed")
+    saved = list(OWES)
+    try:
+        OWES.clear()  # generate() reads the module list — emptied in place, restored below
+        paid = generate(8)
+        expect(paid["owes"] == [] and paid.get("ciEquivalent") is True and problems(render(paid), wf8) == [],
+               "with OWES emptied the regenerated file claims ciEquivalent and passes the rule (the migrated end state is reachable)")
+    finally:
+        OWES[:] = saved
     print("negative controls — each must be RED:")
     expect(any("CI_SHARD_TOTAL is 9" in p for p in problems(good, "env:\n  CI_SHARD_TOTAL: 9\n")),
            "CI_SHARD_TOTAL raised to 9 without regenerating")
@@ -227,6 +414,73 @@ def _self_test() -> int:
         expect(False, "a workflow with no CI_SHARD_TOTAL is refused")
     except SystemExit:
         expect(True, "a workflow with no CI_SHARD_TOTAL is refused")
+    print("no container — core's suites need no Docker daemon:")
+    import tempfile
+    # The scan's controls run against an explicit DEBT-FREE list, never the live OWES: re-opening
+    # `containers:` in OWES (the documented route) must not turn the self-test red.
+    debt_free = [o for o in OWES if not str(o).startswith("containers:")]
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(os.path.join(t, "test", "A"))
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write('<Project><ItemGroup><PackageReference Include="xunit.v3" /></ItemGroup></Project>')
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n// mentions Testcontainers in a comment only\n")
+        expect(container_problems(t, debt_free) == [], "a tree with no container package and no container code is green")
+        open(os.path.join(t, "Directory.Packages.props"), "w").write('<PackageVersion Include="Testcontainers.PostgreSql" Version="4.0.0" />')
+        expect(any("container package" in p for p in container_problems(t, debt_free)), "RED: Testcontainers.PostgreSql pinned centrally")
+        open(os.path.join(t, "Directory.Packages.props"), "w").write("<PackageVersion Include = 'Testcontainers.PostgreSql' Version='4.0.0' />")
+        expect(any("container package" in p for p in container_problems(t, debt_free)), "RED: the same pin single-quoted with spaces around =")
+        expect(container_problems(t, debt_free + ["containers: a suite starts a database in Docker"]) == [],
+               "a re-opened `containers:` debt declares it unmet — the scan does not contradict the declaration")
+        expect(any("container package" in p for p in container_problems(t, debt_free)),
+               "…and without that debt the same tree is RED again")
+        os.remove(os.path.join(t, "Directory.Packages.props"))
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<PackageReference Include='Docker.DotNet' />")
+        expect(any("container package" in p for p in container_problems(t, debt_free)), "RED: a test project referencing Docker.DotNet")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project/>")
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write("using DotNet.Testcontainers.Builders;\n")
+        expect(any("starts a container" in p for p in container_problems(t, debt_free)), "RED: a test that builds a container")
+        os.makedirs(os.path.join(t, "test", "A", "bin"))
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n")
+        open(os.path.join(t, "test", "A", "bin", "X.props"), "w").write('<PackageReference Include="Testcontainers" />')
+        expect(container_problems(t, debt_free) == [], "build output (bin/) is not the tree")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write(
+            '<Project><ItemGroup><Compile Include="TestcontainersPolicyTest.cs" />'
+            '<!-- <PackageReference Include="Docker.DotNet" /> --></ItemGroup></Project>')
+        expect(container_problems(t, debt_free) == [],
+               "a Compile item named Testcontainers… and a commented-out Docker.DotNet reference are no dependency")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write(
+            '<Project><ItemGroup><PackageReference Include="DotNet.Testcontainers" Version="1.6.0" /></ItemGroup></Project>')
+        expect(any("container package" in p for p in container_problems(t, debt_free)), "RED: the legacy DotNet.Testcontainers package")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project/>")
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write(
+            "public class T { object B() => new DotNet.Testcontainers.Builders.TestcontainersBuilder<object>(); }\n")
+        expect(any("starts a container" in p for p in container_problems(t, debt_free)),
+               "RED: a fully qualified DotNet.Testcontainers builder with no using")
+        print("  the C# scan reads only what executes — comments and literal text start nothing:")
+        green_cs = {
+            "a line comment naming a builder": "using Xunit;\n// Previously used new ContainerBuilder()\n",
+            "a block comment naming the namespace": "/*\nusing DotNet.Testcontainers.Builders;\n*/\nusing Xunit;\n",
+            "a raw-string fixture holding container code":
+                'var src = """\nusing DotNet.Testcontainers.Builders;\nvar c = new ContainerBuilder();\n""";\n',
+            "a regular string": 'var s = "new ContainerBuilder() and Testcontainers.Builders.X.Y";\n',
+            "a verbatim string with an escaped quote": 'var s = @"say ""hi""\nusing Testcontainers;";\n',
+            "an interpolated string's literal text": 'var s = $"{1} new ContainerBuilder() {{literal}}";\n',
+        }
+        for what, src in green_cs.items():
+            open(os.path.join(t, "test", "A", "T.cs"), "w").write(src)
+            expect(container_problems(t, debt_free) == [], f"green: {what}")
+        red_cs = {
+            "code after a string on the same line": 'var s = "x // y"; var b = new ContainerBuilder();\n',
+            "code after a char literal": "var q = '\\''; var b = new ContainerBuilder();\n",
+            "an interpolation hole that builds one": 'var s = $"{new ContainerBuilder().Build()}";\n',
+            "a raw interpolation hole that builds one": 'var s = $$"""{ {{new ContainerBuilder()}} }""";\n',
+            "code after a raw string": 'var s = """\nx\n""";\nusing Testcontainers;\n',
+        }
+        for what, src in red_cs.items():
+            open(os.path.join(t, "test", "A", "T.cs"), "w").write(src)
+            expect(any("starts a container" in p for p in container_problems(t, debt_free)), f"RED: {what}")
+        open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n")
+        open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project><ItemGroup>")
+        expect(any("no verdict" in p for p in container_problems(t, debt_free)), "RED: an unparseable project file reaches no verdict")
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every drift is red, the generated file is green'}")
     return 1 if fails else 0
 
@@ -245,7 +499,7 @@ def main(argv: list[str]) -> int:
         print(f"wrote {STAGES} for CI_SHARD_TOTAL={read_shard_total(workflow)}")
         return 0
     if argv == ["--check"]:
-        found = problems(_read(os.path.join(root, STAGES)), workflow)
+        found = problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root)
         for p in found:
             print(f"::error::{p}")
         if not found:
