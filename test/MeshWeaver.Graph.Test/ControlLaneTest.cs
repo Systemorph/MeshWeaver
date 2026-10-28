@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -9,11 +10,13 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.ControlLane;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -285,6 +288,111 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var refused = await Terminal(admin, ct);
         refused.Status.Should().Be(ControlLaneStatus.Refused);
         refused.Message.Should().Contain("system or fleet partition");
+    }
+
+    /// <summary>
+    /// #7325: a space whose root is a <c>Store/Plugin</c> but which NO install record targets — a
+    /// Store/Provision install — has no other governed removal path (the Store uninstall refuses for
+    /// want of a <c>Plugins/{id}</c> record), and nothing re-installs it. It is planned like any space.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task DeleteSpace_OfAPackagePartitionNoInstallRecordTargets_IsPlanned()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await target!.SeedPackageSpace("Provisioned");
+
+        var dry = Request(ControlLaneOperation.DeleteSpace, "Provisioned", dryRun: true);
+        (await Send(dry, ct)).Verdict.Should().Be(ControlLaneVerdict.Accepted);
+        var planned = await Terminal(dry, ct);
+        planned.Status.Should().Be(ControlLaneStatus.Planned,
+            "with no install record the Store uninstall cannot remove the space and nothing re-installs it — " + planned.Message);
+        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Tear down the partition");
+    }
+
+    /// <summary>
+    /// #7325, the other half: while an install record targets the space — by its id, or by a declared
+    /// target partition — the Store uninstall IS the path, and the deletion is refused naming the record.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task DeleteSpace_OfAPackagePartitionAnInstallRecordTargets_IsRefused_NamingTheRecord()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await target!.SeedPackageSpace("Installed");
+        await target.SeedPackageSpace("Retargeted");
+        await target.SeedInstallRecord("Installed", targetPartition: null);
+        await target.SeedInstallRecord("retarget-pkg", targetPartition: "Retargeted");
+
+        foreach (var (space, record) in new[] { ("Installed", "Plugins/Installed"), ("Retargeted", "Plugins/retarget-pkg") })
+        {
+            var dry = Request(ControlLaneOperation.DeleteSpace, space, dryRun: true);
+            (await Send(dry, ct)).Verdict.Should().Be(ControlLaneVerdict.Accepted);
+            var refused = await Terminal(dry, ct);
+            refused.Status.Should().Be(ControlLaneStatus.Refused, refused.Message);
+            refused.Message.Should().Contain("uninstall the package through the Store").And.Contain(record);
+            (await target.Exists($"{space}/Page")).Should().BeTrue();
+        }
+    }
+
+    /// <summary>
+    /// #7325 review: a COMMITTED install record the query index has not reached yet still blocks the
+    /// deletion. The listing here is a complete answer that omits the record — exactly what an index
+    /// trailing the store returns — and the ledger is still read from the storage seam's own child
+    /// enumeration, so the record is found. A listing that is not an answer leaves the ledger unknown.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task InstallRecords_FindsACommittedRecordTheQueryIndexHasNotReached()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        await target!.SeedPackageSpace("Lagged");
+        await target.SeedInstallRecord("lagged-pkg", targetPartition: "Lagged");
+        var query = SpaceDeletion.InstallRecordsQuery();
+
+        (await target.InstallRecordsOver("Lagged", new MeshReading(query, [], true, null, [])))
+            .Should().Equal(["Plugins/lagged-pkg"], "the store enumeration has no index lag");
+        (await target.InstallRecordsOver("Lagged", new MeshReading(query, [], false, null, [])))
+            .Should().BeNull("negative control: a listing that is not an answer never reads as 'no record'");
+    }
+
+    /// <summary>
+    /// #7325 review: a STORAGE FAULT on the ledger's enumeration leaves the ledger unknown, even when
+    /// the query listing is a complete answer that omits the record (an index trailing the store). The
+    /// store is read through the production composite (<see cref="PersistenceService"/>) with the fault
+    /// injected under it — the layer whose child listing turns a provider fault into an EMPTY listing.
+    /// Controls: the same composite answers <c>ListChildPaths</c> with nothing while the fault is armed
+    /// (the swallow the ledger must not read through), the fault is proven injected by its arrivals,
+    /// and with the fault released the very same composite finds the committed record.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task InstallRecords_AStorageFaultWithACompleteButEmptyListing_LeavesTheLedgerUnknown()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        await target!.SeedPackageSpace("Faulted");
+        await target.SeedInstallRecord("faulted-pkg", targetPartition: "Faulted");
+        var completeButEmpty = new MeshReading(SpaceDeletion.InstallRecordsQuery(), [], true, null, []);
+        var injector = new FaultInjectingStorageAdapter(target.Hub.ServiceProvider.GetRequiredService<IStorageAdapter>(), "ledger");
+        IStorageAdapter composite = new PersistenceService([new WritableProvider(injector)]);
+
+        using (var fault = injector.FailOperations(SpaceDeletion.InstalledPackagesPartition, StorageLegs.Enumerate))
+        {
+            (await target.InstallRecordsOver("Faulted", composite, completeButEmpty))
+                .Should().BeNull("a store that could not be enumerated never reads as 'no install record'");
+            fault.ArrivalCount.Should().BeGreaterThan(0, "the fault must actually have been injected");
+            var swallowed = await composite.ListChildPaths(SpaceDeletion.InstalledPackagesPartition).Take(1)
+                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+            swallowed.NodePaths.Should().BeEmpty(
+                "negative control: the composite's child listing swallows the same fault into an empty answer");
+        }
+
+        (await target.InstallRecordsOver("Faulted", composite, completeButEmpty))
+            .Should().Equal(["Plugins/faulted-pkg"], "positive control: the same composite, unfaulted, finds the record");
+    }
+
+    /// <summary>A writable partition provider over one adapter — the composite's input.</summary>
+    private sealed class WritableProvider(IStorageAdapter adapter) : IPartitionStorageProvider
+    {
+        public string Name => "ledger";
+        public bool IsReadOnly => false;
+        public IStorageAdapter Adapter => adapter;
     }
 
     // ───────────────────────────── forwarded events ─────────────────────────────
@@ -684,6 +792,61 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         SpaceDeletion.InventoryQueries("LiveInventory").First().Should().Be(SpaceDeletion.RootQuery("LiveInventory"));
     }
 
+    /// <summary>
+    /// #7325 review: an install record's manifest is matched whatever shape its content arrives in.
+    /// The catalog writes a TYPED manifest, and a <c>ContentAs</c> into a differently-named local
+    /// projection answers null for it — which ignored the declared target and let the space of a
+    /// retargeted package read as "no record targets it". An unreadable manifest leaves the whole
+    /// ledger unknown (null), never "not this one".
+    /// </summary>
+    [Fact]
+    public void InstallRecordsTargeting_ReadsATypedManifest_AndAnUnreadableOneLeavesTheLedgerUnknown()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        MeshNode Record(string id, object? content) => new(id, "Plugins") { NodeType = "Package", Content = content };
+        var typed = Record("retarget-pkg", new TypedManifest { Id = "retarget-pkg", TargetPartition = "Retargeted" });
+        var json = Record("other", System.Text.Json.JsonSerializer.SerializeToElement(new { id = "other", targetPartition = (string?)null }));
+        var node = Record("noded", System.Text.Json.Nodes.JsonNode.Parse("""{"Id":"noded","TargetPartition":"Retargeted"}"""));
+
+        SpaceDeletion.InstallRecordsTargeting("Retargeted", [typed, json, node], options)
+            .Should().Equal("Plugins/noded", "Plugins/retarget-pkg");
+        SpaceDeletion.InstallRecordsTargeting("retarget-pkg", [typed], options)
+            .Should().BeEmpty("a declared target partition wins over the id");
+        SpaceDeletion.InstallRecordsTargeting("other", [typed, json], options).Should().Equal("Plugins/other");
+        // The fallback is the RECORD's id, never the manifest's (PackageInstaller.TargetPartitionOf).
+        var renamed = Record("Installed", System.Text.Json.JsonSerializer.SerializeToElement(new { id = "Other", targetPartition = (string?)null }));
+        SpaceDeletion.InstallRecordsTargeting("Installed", [renamed], options).Should().Equal("Plugins/Installed");
+        SpaceDeletion.InstallRecordsTargeting("Other", [renamed], options)
+            .Should().BeEmpty("the manifest's own id is not where the installer put the package");
+        SpaceDeletion.InstallRecordsTargeting("Retargeted", [typed, Record("broken", 42)], options)
+            .Should().BeNull("a record whose target cannot be read may be the one naming this space");
+        SpaceDeletion.InstallRecordsTargeting("Retargeted", [Record("empty", null)], options).Should().BeNull();
+        new MeshNode("x") { Content = new TypedManifest { Id = "x", TargetPartition = "Retargeted" } }
+            .ContentAs<TypedManifestProbe>(options)
+            .Should().BeNull("negative control: a differently-named CLR type is never recovered by ContentAs");
+    }
+
+    /// <summary>A typed manifest, as the catalog materializes one (a CLR type the Graph assembly does not know).</summary>
+    private sealed record TypedManifest
+    {
+        public string Id { get; init; } = "";
+        public string? TargetPartition { get; init; }
+    }
+
+    /// <summary>The install manifest the target mesh's records carry — a stand-in for the PluginCatalog's own type, registered under the same name.</summary>
+    public sealed record PackageManifest
+    {
+        public string Id { get; init; } = "";
+        public string? TargetPartition { get; init; }
+    }
+
+    /// <summary>A differently-named projection with the same fields — the shape the previous code read through.</summary>
+    private sealed record TypedManifestProbe
+    {
+        public string? Id { get; init; }
+        public string? TargetPartition { get; init; }
+    }
+
     // ───────────────────────────── helpers ─────────────────────────────
 
     private static string Sha(string text) =>
@@ -774,6 +937,11 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             => base.ConfigureMesh(builder)
                 .AddWebhookInbox()
                 .AddControlLane()
+                // The two NodeTypes a package partition and its install record carry (#7325).
+                .AddMeshNodes(
+                    new MeshNode("Plugin", "Store") { Name = "Plugin" },
+                    new MeshNode("Package") { Name = "Package" })
+                .ConfigureHub(config => config.WithType<PackageManifest>(nameof(PackageManifest)))
                 .ConfigureServices(services => services
                     .AddSingleton(TargetConfiguration())
                     .AddSingleton<IControlLaneReportSink>(new InboxSink(control)));
@@ -786,7 +954,36 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             await SeedPage($"{space}/Page");
         }
 
+        /// <summary>A space rooted in a <c>Store/Plugin</c> (a package partition), with one page.</summary>
+        public async Task SeedPackageSpace(string space)
+        {
+            await SeedTopLevel(new MeshNode(space) { Name = space, NodeType = SpaceDeletion.PackageRootNodeType });
+            await SeedPage($"{space}/Page");
+        }
+
+        /// <summary>
+        /// An install record <c>Plugins/{id}</c>, carrying a TYPED, REGISTERED manifest as the
+        /// PluginCatalog writes one. Never an untyped JSON element: the record is read from its
+        /// owning stream, and content no registered type can read degrades there (the shard gate
+        /// <c>check-untyped-content.sh</c> reports it), which is not the shape production writes.
+        /// </summary>
+        public Task SeedInstallRecord(string id, string? targetPartition) =>
+            Seed(new MeshNode(id, "Plugins")
+            {
+                Name = id,
+                NodeType = "Package",
+                Content = new PackageManifest { Id = id, TargetPartition = targetPartition },
+            });
+
         public Task Seed(MeshNode node) => AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(node));
+
+        /// <summary>The install records targeting <paramref name="space"/>, with <paramref name="listing"/> standing in for the query index.</summary>
+        public Task<ImmutableList<string>?> InstallRecordsOver(string space, MeshReading listing) =>
+            AsSystem(Mesh, () => SpaceDeletion.InstallRecords(Mesh, space, Observable.Return(listing)));
+
+        /// <summary>As above, enumerating the ledger through <paramref name="storage"/>.</summary>
+        public Task<ImmutableList<string>?> InstallRecordsOver(string space, IStorageAdapter storage, MeshReading listing) =>
+            AsSystem(Mesh, () => SpaceDeletion.InstallRecords(Mesh, space, storage, Observable.Return(listing)));
 
         public Task SeedPage(string path) =>
             AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(new MeshNode(path)
