@@ -198,6 +198,42 @@ class PublicationArtifactStoreTests(unittest.TestCase):
             code, result = self.invoke_base([self.run])
         self.assertEqual((0, ""), (code, result["sha"]))
 
+    # The 2026-10-28 shape: main's newest green run is on the previous platform set, an older one is
+    # on the pull request's. Taking only the newest refused every pull request that day.
+    def test_a_pull_request_reuses_the_newest_main_publication_on_its_own_toolchain(self):
+        self.publish(run="10")
+        self.publish(run="11", value={"platform": "p2", "logic": "l1"})
+        newer = {**self.run, "id": 11, "head_sha": "b" * 40}
+        with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
+            code, result = self.invoke_base([newer, self.run])
+        self.assertEqual((0, "a" * 40, "10"), (code, result["sha"], str(result["run"])))
+
+    def test_a_pull_request_reuses_a_daily_poll_or_dispatched_publication_on_its_toolchain(self):
+        for event in ("schedule", "repository_dispatch"):
+            with self.subTest(event=event):
+                self.publish(run="12")
+                source = {**self.run, "id": 12, "head_sha": "c" * 40, "event": event}
+                with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
+                    code, result = self.invoke_base([source, self.run])
+                self.assertEqual((0, "c" * 40, "12"), (code, result["sha"], str(result["run"])))
+
+    def test_negative_control_a_push_still_takes_only_the_newest_green_push(self):
+        # Nothing changes for a PUBLISHING run: it narrows by its newest green push, and a moved
+        # toolchain there is still a full build, whatever an older run attested.
+        self.publish(run="10")
+        self.publish(run="11", value={"platform": "p2", "logic": "l1"})
+        newer = {**self.run, "id": 11, "head_sha": "b" * 40}
+        code, result = self.invoke_base([newer, self.run])
+        self.assertEqual((0, ""), (code, result["sha"]))
+
+    def test_negative_control_no_main_publication_on_the_pull_requests_toolchain_reuses_nothing(self):
+        self.publish(run="10", value={"platform": "p0", "logic": "l1"})
+        self.publish(run="12", value={"platform": "p2", "logic": "l1"})
+        source = {**self.run, "id": 12, "head_sha": "c" * 40, "event": "repository_dispatch"}
+        with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
+            code, result = self.invoke_base([source, self.run])
+        self.assertEqual((0, ""), (code, result["sha"]))
+
     def test_negative_control_a_pull_request_with_an_unattested_baseline_reuses_nothing(self):
         with patch.dict(os.environ, GITHUB_EVENT_NAME="pull_request"):
             code, result = self.invoke_base([self.run])
