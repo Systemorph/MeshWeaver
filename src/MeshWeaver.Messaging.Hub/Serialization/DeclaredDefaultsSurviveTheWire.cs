@@ -58,6 +58,14 @@ namespace MeshWeaver.Messaging.Serialization;
 /// A child that omits nothing (every candidate always written, or marked
 /// <c>[JsonIgnore(Condition = JsonIgnoreCondition.Never)]</c>) may be populated. The proof itself
 /// never throws.</para>
+/// <para><b>The factory and the layout.</b> The constructor IL is a proof of the read only when the
+/// reader actually runs that constructor and when a store names ONE member. So nothing is proven when
+/// a resolver modifier may have replaced <see cref="JsonTypeInfo.CreateObject"/> before this rule ran
+/// (the caller says whether its factory is the resolver's own; a replaced factory is never invoked to
+/// find out), a proven member is written anyway when the factory differs at write time from the one
+/// the proof saw (a modifier that ran AFTER the rule), and a type whose hierarchy has an explicit
+/// layout (<c>[FieldOffset]</c>, where one store can initialize an overlapping field) has every
+/// candidate written.</para>
 /// </summary>
 internal static class DeclaredDefaultsSurviveTheWire
 {
@@ -67,20 +75,23 @@ internal static class DeclaredDefaultsSurviveTheWire
     /// <param name="probe">Builds fresh, uncached metadata of another type exactly as the resolver
     /// would before this rule runs; used to refuse a property that populates an object whose values
     /// would be omitted. Null skips that check.</param>
+    /// <param name="factoryIsResolvers">True only when no resolver modifier ran before this rule, so a
+    /// non-null <see cref="JsonTypeInfo.CreateObject"/> is the resolver's own constructor call. False
+    /// makes every candidate written.</param>
     /// <exception cref="InvalidOperationException">A property of <paramref name="typeInfo"/> can
     /// populate an object whose metadata omits values: an omitted value would read back as the
     /// holder's.</exception>
-    public static void Apply(JsonTypeInfo typeInfo, ILogger? logger, Func<Type, JsonTypeInfo>? probe = null)
+    public static void Apply(JsonTypeInfo typeInfo, ILogger? logger, Func<Type, JsonTypeInfo>? probe = null, bool factoryIsResolvers = true)
     {
         if (typeInfo.Kind != JsonTypeInfoKind.Object)
             return;
         if (probe is not null)
-            RefusePopulatingAnOmittingObject(typeInfo, probe, logger);
-        ApplyOmission(typeInfo, logger);
+            RefusePopulatingAnOmittingObject(typeInfo, probe, factoryIsResolvers, logger);
+        ApplyOmission(typeInfo, factoryIsResolvers, logger);
     }
 
     /// <summary>The omission rule; true when some member may still be omitted at its CLR default.</summary>
-    private static bool ApplyOmission(JsonTypeInfo typeInfo, ILogger? logger)
+    private static bool ApplyOmission(JsonTypeInfo typeInfo, bool factoryIsResolvers, ILogger? logger)
     {
         if (typeInfo.Kind != JsonTypeInfoKind.Object || typeInfo.Type.IsAbstract || typeInfo.Type.IsInterface)
             return false;
@@ -104,19 +115,46 @@ internal static class DeclaredDefaultsSurviveTheWire
         // populate one a holder already has — and when nothing else writes during the read: an
         // OnDeserializing callback runs after construction, and a hand-written setter of any member
         // it sets can store anywhere.
+        // It is also a proof only of the constructor the reader RUNS — never of a factory a modifier
+        // installed — and only when a store names one member: an explicit layout can overlap fields.
         var stores = typeInfo.Options.PreferredObjectCreationHandling != JsonObjectCreationHandling.Populate
-            && typeInfo.OnDeserializing is null && SettersAreContained(typeInfo, candidates, logger)
+            && typeInfo.OnDeserializing is null
+            && factoryIsResolvers
+            && !HasExplicitLayout(typeInfo.Type, logger)
+            && SettersAreContained(typeInfo, candidates, logger)
             ? ConstructorStores.Read(typeInfo, logger)
             : null;
+        // A modifier that runs after this rule can still replace the factory; the proof then no
+        // longer describes the reader, so a proven member is written whenever the factory differs.
+        var provenFactory = typeInfo.CreateObject;
         var omits = false;
         foreach (var property in candidates)
         {
             if (stores is null || !ProvenClrDefault(property, stores))
+            {
                 property.ShouldSerialize = static (_, _) => true;
-            else
-                omits = true;
+                continue;
+            }
+            var clrDefault = ClrDefault(property.PropertyType);
+            property.ShouldSerialize = (_, value) =>
+                !ReferenceEquals(typeInfo.CreateObject, provenFactory) || !Equals(value, clrDefault);
+            omits = true;
         }
         return omits;
+    }
+
+    private static bool HasExplicitLayout(Type type, ILogger? logger)
+    {
+        for (var current = type; current is not null && current != typeof(object); current = current.BaseType)
+        {
+            if (!current.IsExplicitLayout)
+                continue;
+            logger?.LogDebug(
+                "{Type} has an explicit layout (in {Declaring}); fields may overlap, so its scalar members are always written",
+                type.FullName, current.FullName);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -124,7 +162,7 @@ internal static class DeclaredDefaultsSurviveTheWire
     /// omits values (or whose runtime type is unknown: abstract or interface): the reader would keep
     /// the holder's initialized value for every omitted member.
     /// </summary>
-    private static void RefusePopulatingAnOmittingObject(JsonTypeInfo holder, Func<Type, JsonTypeInfo> probe, ILogger? logger)
+    private static void RefusePopulatingAnOmittingObject(JsonTypeInfo holder, Func<Type, JsonTypeInfo> probe, bool factoryIsResolvers, ILogger? logger)
     {
         // STJ populates only through a holder it constructs with no constructor parameters.
         if (UsesParameterizedConstructor(holder))
@@ -142,7 +180,7 @@ internal static class DeclaredDefaultsSurviveTheWire
             var child = probe(property.PropertyType);
             if (child.Kind != JsonTypeInfoKind.Object)
                 continue;
-            if (!child.Type.IsAbstract && !child.Type.IsInterface && !ApplyOmission(child, logger))
+            if (!child.Type.IsAbstract && !child.Type.IsInterface && !ApplyOmission(child, factoryIsResolvers, logger))
                 continue;
             throw new InvalidOperationException(
                 $"{holder.Type.FullName}.{property.Name} populates an existing {child.Type.FullName}, whose "

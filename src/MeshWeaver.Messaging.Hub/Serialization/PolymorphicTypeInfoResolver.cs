@@ -38,7 +38,10 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
         // An explicitly stored value must never come back as the member's declared default
         // (e.g. `bool Enabled = true` stored false) — WhenWritingDefault alone would drop it.
         if (options.DefaultIgnoreCondition == JsonIgnoreCondition.WhenWritingDefault)
-            DeclaredDefaultsSurviveTheWire.Apply(jsonTypeInfo, logger, other => base.GetTypeInfo(other, options));
+            // base.GetTypeInfo has already run this resolver's Modifiers; with none, CreateObject is
+            // the resolver's own constructor call and the constructor IL describes the reader.
+            DeclaredDefaultsSurviveTheWire.Apply(jsonTypeInfo, logger, other => base.GetTypeInfo(other, options),
+                factoryIsResolvers: Modifiers.Count == 0);
         // Only configure polymorphism for supported types that need it
         if (ShouldConfigurePolymorphism(type) && CanConfigurePolymorphism(jsonTypeInfo))
         {

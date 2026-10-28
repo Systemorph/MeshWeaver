@@ -185,6 +185,17 @@ with these settings:
 > stays allowed. Guard: `A_populated_child_never_loses_an_explicit_false`, with its negative
 > control over options without the rule.
 >
+> **The proof is of the constructor the reader RUNS, and of fields that do not overlap.** A resolver
+> modifier can replace `JsonTypeInfo.CreateObject` with a factory that sets members the constructor
+> never touches (`() => new Flags { Enabled = true }`). The factory is never invoked to find out:
+> when the resolver has any modifier (they run before the rule), nothing is proven and every
+> candidate is written; and a proven member is still written whenever the type's factory at write
+> time is not the one the proof saw (a modifier added outside, which runs after the rule). An
+> explicit layout (`[StructLayout(LayoutKind.Explicit)]` anywhere in the hierarchy) can place a
+> candidate at the same `[FieldOffset]` as an initialized field, so one store initializes both;
+> such a type has every candidate written. Guards: `A_replaced_factory_never_loses_an_explicit_false`
+> and `An_overlapping_field_keeps_an_explicit_false`, each with a negative control.
+>
 > **Nothing is constructed and nothing is cached per instance.** The verdict is a constant per
 > member, fixed at metadata resolution; no constructor, initializer or getter runs to decide it,
 > during resolution or during a write. An earlier design rebuilt each instance through its

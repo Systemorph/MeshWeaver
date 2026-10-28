@@ -3,9 +3,11 @@
 using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using System.Threading.Tasks;
 using MeshWeaver.ActionLinks;
 using MeshWeaver.Fixture;
@@ -13,6 +15,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -266,6 +269,41 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
     {
         public PopulatedFlags Flags { get; set; } = new() { Enabled = true };
     }
+
+    /// <summary>Review round 9: an explicit layout overlaps a candidate field with an ignored, initialized one.</summary>
+    [StructLayout(LayoutKind.Explicit)]
+    public sealed class OverlappingFields
+    {
+        [FieldOffset(0)] public bool Flag;
+        [FieldOffset(0)] [JsonIgnore] public bool Seed = true;
+    }
+
+    /// <summary>Review round 9: a child with no initializer whose factory a resolver modifier replaces.</summary>
+    public sealed class FactoryFlags
+    {
+        public bool Enabled { get; set; }
+    }
+
+    private static readonly Action<JsonTypeInfo> ArmingFactory = typeInfo =>
+    {
+        if (typeInfo.Type == typeof(FactoryFlags))
+            typeInfo.CreateObject = () => new FactoryFlags { Enabled = true };
+    };
+
+    /// <summary>The hub's options with a resolver whose own modifier replaces the factory (before the rule).</summary>
+    private JsonSerializerOptions WithModifierBeforeTheRule()
+    {
+        var resolver = new PolymorphicTypeInfoResolver(Mesh.TypeRegistry);
+        resolver.Modifiers.Add(ArmingFactory);
+        return new JsonSerializerOptions(Mesh.JsonSerializerOptions) { TypeInfoResolver = resolver };
+    }
+
+    /// <summary>The hub's options with the factory replaced by an outer modifier (after the rule).</summary>
+    private JsonSerializerOptions WithModifierAfterTheRule() =>
+        new(Mesh.JsonSerializerOptions)
+        {
+            TypeInfoResolver = new PolymorphicTypeInfoResolver(Mesh.TypeRegistry).WithAddedModifier(ArmingFactory),
+        };
 
     private static JsonSerializerOptions WithoutTheFix() => new()
     {
@@ -678,5 +716,60 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
         var preferring = new JsonSerializerOptions(options) { PreferredObjectCreationHandling = JsonObjectCreationHandling.Populate };
         RoundTrip(new PreferringParent { Flags = new() { Enabled = false } }, preferring).Flags.Enabled.Should().BeTrue(
             "if this ever fails, the options-preference case no longer exercises the trap");
+    }
+
+    /// <summary>
+    /// Review round 9: with an explicit layout one store can initialize an overlapping field, so "the
+    /// constructor never stores Flag" proves nothing. Every candidate of such a type is written.
+    /// </summary>
+    [Fact]
+    public void An_overlapping_field_keeps_an_explicit_false()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var json = JsonSerializer.Serialize(new OverlappingFields { Flag = false }, options);
+        json.Should().Contain("\"flag\":false");
+        JsonSerializer.Deserialize<OverlappingFields>(json, options)!.Flag.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_an_overlapping_field_reads_the_seed()
+    {
+        var options = new JsonSerializerOptions(WithoutTheFix()) { IncludeFields = true };
+        RoundTrip(new OverlappingFields { Flag = false }, options).Flag.Should().BeTrue(
+            "if this ever fails, the overlapping-field case no longer exercises the trap");
+    }
+
+    /// <summary>
+    /// Review round 9: the constructor IL describes the reader only when the reader runs that
+    /// constructor. A factory a modifier installed — before the rule or after it — is never invoked to
+    /// find out; the member is written instead.
+    /// </summary>
+    [Fact]
+    public void A_replaced_factory_never_loses_an_explicit_false()
+    {
+        foreach (var options in new[] { WithModifierBeforeTheRule(), WithModifierAfterTheRule() })
+        {
+            var json = JsonSerializer.Serialize(new FactoryFlags { Enabled = false }, options);
+            json.Should().Contain("\"enabled\":false");
+            JsonSerializer.Deserialize<FactoryFlags>(json, options)!.Enabled.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public void Without_a_modifier_the_proven_clr_default_stays_omitted()
+    {
+        JsonSerializer.Serialize(new FactoryFlags { Enabled = false }, Mesh.JsonSerializerOptions)
+            .Should().NotContain("enabled");
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_a_replaced_factory_reads_its_own_value()
+    {
+        var options = new JsonSerializerOptions(WithoutTheFix())
+        {
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver().WithAddedModifier(ArmingFactory),
+        };
+        RoundTrip(new FactoryFlags { Enabled = false }, options).Enabled.Should().BeTrue(
+            "if this ever fails, the replaced-factory case no longer exercises the trap");
     }
 }
