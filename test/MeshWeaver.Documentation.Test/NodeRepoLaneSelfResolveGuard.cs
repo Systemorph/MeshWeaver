@@ -53,7 +53,13 @@ public class NodeRepoLaneSelfResolveGuard
         Assert.Matches(
             new Regex(@"FREEZE: \$\{\{ (needs\.epoch-leg\.outputs\.ceiling \|\| )?vars\.MW_PLATFORM_REF \}\}"),
             lines);
-        Assert.Contains("${FREEZE:+--freeze \"$FREEZE\"}", lines, StringComparison.Ordinal);
+        // The gate passes it through SELECT since MeshWeaver#7337: the freeze FIRST, the caller's
+        // platform-ceiling only when there is no freeze — so the freeze still always reaches the resolver.
+        Assert.True(
+            lines.Contains("${FREEZE:+--freeze \"$FREEZE\"}", StringComparison.Ordinal)
+            || (lines.Contains("SELECT=\"${FREEZE:-${CEILING:-}}\"", StringComparison.Ordinal)
+                && lines.Contains("${SELECT:+--freeze \"$SELECT\"}", StringComparison.Ordinal)),
+            $"{workflow}: the caller's MW_PLATFORM_REF freeze must be passed to resolve-platform.py (directly, or as SELECT with the freeze first)");
         // A half-pin is refused by name, never composed.
         Assert.Contains("a half-pin would compose two CD waves", lines, StringComparison.Ordinal);
     }
@@ -73,9 +79,17 @@ public class NodeRepoLaneSelfResolveGuard
         // test the newest set) …
         Assert.Contains("PLATFORM_BASELINE: ${{ needs.plan.outputs.baseline }}", lines, StringComparison.Ordinal);
         // … and the image step reads the SHARD's answer, never the raw inputs.
+        // Since MeshWeaver#7337 the shard's answer passes through `publication-platform` (the set the
+        // upstream publication was sealed on, or the shard's own when there is none), which reads
+        // `steps.platform` — so the chain stays shard-resolved and never touches the raw inputs.
         var images = StepBlock(text, "id: images");
-        Assert.Contains("IMAGE_DIGEST: ${{ steps.platform.outputs.image-digest }}", images, StringComparison.Ordinal);
-        Assert.Contains("PLATFORM_DIGEST: ${{ steps.platform.outputs.platform-image-digest }}", images, StringComparison.Ordinal);
+        Assert.Contains("IMAGE_DIGEST: ${{ steps.publication-platform.outputs.image-digest }}", images, StringComparison.Ordinal);
+        Assert.Contains("PLATFORM_DIGEST: ${{ steps.publication-platform.outputs.platform-image-digest }}", images, StringComparison.Ordinal);
+        var decided = StepBlock(text, "id: publication-platform");
+        Assert.Contains("RUN_TESTER: ${{ steps.platform.outputs.image-digest }}", decided, StringComparison.Ordinal);
+        Assert.Contains("RUN_PORTAL: ${{ steps.platform.outputs.platform-image-digest }}", decided, StringComparison.Ordinal);
+        Assert.DoesNotContain("${{ inputs.image-digest }}", decided, StringComparison.Ordinal);
+        Assert.DoesNotContain("${{ inputs.platform-image-digest }}", decided, StringComparison.Ordinal);
         Assert.DoesNotContain("${{ inputs.image-digest }}", images, StringComparison.Ordinal);
         Assert.DoesNotContain("${{ inputs.platform-image-digest }}", images, StringComparison.Ordinal);
 

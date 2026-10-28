@@ -131,16 +131,16 @@ The maintainer's shape for a CI job, in four lines:
 
 ```yaml
 - uses: actions/checkout@v7                                   # 0. checkout git
-- run: dotnet run --project <meshweaver>/src/MeshWeaver.Cli \  # 1. the CLI, from source
-    -- build plugin <path>                                    # 2. pull them, run in them, build + test
+- run: dotnet tool install -g MeshWeaver.Cli                  # 1. the CLI
+- run: memex build plugin <path> \                            # 2. pull them, run in them, build + test
        --image <tester> --platform-image <portal>
 ```
 
-🚨 **The CLI is not installed from a feed.** `MeshWeaver.Cli` is not published
-([NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement)); a lane either runs it from a
-platform checkout, as above, or — as every lane in this fleet actually does — invokes the
-`mw-plugin-test` image's entrypoint directly, the `memex build` verb being only the trip into the
-container.
+🚨 **No lane in this fleet installs the CLI.** `MeshWeaver.Cli` lives in `Systemorph/MeshWeaver.Plugins`
+(`src/MeshWeaver.Cli`) and its first stable release, `3.1.0`, is not on nuget.org yet
+([NuGet Package Retirement §1a](/Doc/Architecture/NuGetPackageRetirement)); every lane here invokes
+the `mw-plugin-test` image's entrypoint directly, the `memex build` verb being only the trip into the
+container. The tool is for build servers outside the fleet.
 
 **`memex build plugin <path> --image <tester> --platform-image <portal>` is the whole contract.** A
 workflow says *which plugin this job is about* and *which images to build it against*; the tool pulls

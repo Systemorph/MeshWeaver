@@ -25,7 +25,13 @@ mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out
    streams of the packages it `requires` and starts itself the moment the last one completes
    green. No level table, no topological list: the graph is the schedule, so packages with no
    edge between them build at the same time (bounded by `--max-parallel`), and a package with
-   three dependencies starts the instant the slowest lands.
+   three dependencies starts the instant the slowest lands. **Inside a package the NodeTypes
+   compile in parallel as well**, through one gate for the whole build (at most `--max-parallel`
+   compilations at once, across every package), and are folded back serially in path order, so the
+   verdicts, bundle entries, tests and log lines are the serial loop's. Until 2026-10-28 they
+   compiled one after another, and one package — MeshWeaver.Plugins' `Hosting`, 48 types,
+   `compile 1516.6s` of a 1,749.7 s lane (run 40614698191) — was the in-mesh lane's whole
+   critical path. Locally (18 cores) the same package went from 216.5 s to 36.9 s.
 3. **On red we break; on green we continue.** A package whose dependency did not end green never
    starts: it completes at once as *blocked by \<dependency\>*, and that verdict cascades. A failure
    is reported exactly once, where it happened; everything above it reads "blocked by X", never a

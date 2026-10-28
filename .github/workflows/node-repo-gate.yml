@@ -255,6 +255,10 @@ on:
           platform itself (both digest inputs empty — see the header); the caller's own
           `platform-set` input when it pinned the digests and named their set; EMPTY otherwise. A shard that took a NEWER set
           on a re-run says so in its own log and summary; this is `plan`'s baseline.
+          🚨 It is NOT the set every shard composed on: with `upstream-seed` and no pin, each shard
+          composes on the set the upstream publication was sealed on (MeshWeaver#7337), at or below
+          this one, and names it in its log and step summary ("Platform — taken from the upstream
+          publication"). Read it as the set the run RESOLVED, never as the set this lane gated.
         value: ${{ jobs.plan.outputs.platform-set }}
     inputs:
       executor:
@@ -358,6 +362,18 @@ on:
           next tick (measured 2026-09-15, MeshWeaver.Crm#108: 3.0.0-ci.8687 sealed 17:43:27Z, shard
           17:50Z, "carries no set for tester digest … passed no --set"). Refused unless it has the
           set shape, and refused without a pin (the lane then resolves, and names, its own set).
+        required: false
+        type: string
+        default: ''
+      platform-ceiling:
+        description: >-
+          The NEWEST platform set this run may compose on (a set name — on a pull request, the set
+          this repository's main has passed; the caller's preflight `set`). Only with BOTH digests
+          EMPTY: the lane then resolves exactly this set, and — with upstream-seed — takes its host
+          from the set the upstream publication was sealed on, REFUSING BY NAME a publication sealed
+          on a newer set than this ceiling (MeshWeaver#7337, Doc/Architecture/PublicationNamesItsPlatform).
+          Refused beside a pin: a pin and a ceiling are two answers to one question. Empty = no
+          ceiling (the newest sealed set; main, the release dispatch, the daily poll).
         required: false
         type: string
         default: ''
@@ -473,6 +489,12 @@ on:
           Fails RED — never skips — when a named upstream has no sealed publication for this
           identity: a gate that silently compiled its upstream is indistinguishable from one
           that installed it.
+
+          🚨 THE PUBLICATION NAMES THE PLATFORM (MeshWeaver#7337): a publication records the set
+          it was sealed on, and each shard composes its host on THAT set — read before anything is
+          composed, re-checked when the seed is fetched — so host and seed are one set identity.
+          To take it, pass NO digests (and `platform-ceiling` on a pull request); a pin OLDER than
+          the publication's set is RED naming both. Doc/Architecture/PublicationNamesItsPlatform.
         required: false
         type: string
         default: ''
@@ -958,6 +980,7 @@ jobs:
           IMAGE_DIGEST: ${{ inputs.image-digest }}
           PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
           PINNED_SET: ${{ inputs.platform-set }}
+          CEILING: ${{ inputs.platform-ceiling }}
           ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
           TEST_IMAGE: ${{ inputs.test-image }}
           PLATFORM_IMAGE: ${{ inputs.platform-image }}
@@ -992,6 +1015,28 @@ jobs:
             # specific refusal below rather than being misdescribed as "none".
             if [ -z "${IMAGE_DIGEST:-}" ] && [ -z "${PLATFORM_DIGEST:-}" ]; then
               echo "::error::platform-set '${PINNED_SET}' names the set of PINNED digests, and none are pinned — with no pin this lane resolves (and names) its own set; drop the input or pin both digests"
+              exit 1
+            fi
+          fi
+          # 🚨 THE CEILING (MeshWeaver#7337): the newest set this run may compose on — a pull request's
+          # main-passed set. Only beside EMPTY digests (a pin and a ceiling are two answers), and of
+          # the set shape the resolver reads. With it the lane resolves EXACTLY that set (it is the
+          # freeze path's selection: that set, sealed, images present — or RED), and the shards take
+          # the upstream publication's set when it is at or below it.
+          if [ -n "${CEILING:-}" ]; then
+            if [ -n "${IMAGE_DIGEST:-}" ] || [ -n "${PLATFORM_DIGEST:-}" ]; then
+              echo "::error::platform-ceiling '${CEILING}' was passed beside pinned digests — a pin and a ceiling are two answers to one question. Pass the ceiling with BOTH digests empty (the lane then composes on the set the upstream publication names, at or below it), or pin and drop the ceiling."
+              exit 1
+            fi
+            # allow-unpinned follows the image TAGS verbatim and resolves no set, so nothing would
+            # ever hold the run to the ceiling: with no upstream record (or none seeded) the shard
+            # would compose on whatever the tags point at — possibly above the ceiling. Refused.
+            if [ "${ALLOW_UNPINNED:-}" = "true" ]; then
+              echo "::error::platform-ceiling '${CEILING}' was passed with allow-unpinned — allow-unpinned follows the image tags verbatim and resolves no set, so the ceiling could never be enforced (the run could compose above it). Drop allow-unpinned so the lane resolves the ceiling set, or drop the ceiling."
+              exit 1
+            fi
+            if ! [[ "$CEILING" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?[.-]ci\.[0-9]+$ || "$CEILING" =~ ^[0-9]+\.[0-9]+\.[1-9][0-9]*$ ]]; then
+              echo "::error::platform-ceiling '${CEILING}' is not a set name (X.Y.Z[-prerelease]-ci.N, or <major>.<minor>.N from 3.1 on) — pass the caller's resolved \`set\`, or nothing"
               exit 1
             fi
           fi
@@ -1037,8 +1082,10 @@ jobs:
           # they are captured and re-keyed to this lane's, and the whole row travels to the shards
           # as their baseline (JSON, one line).
           ROWS="${RUNNER_TEMP:-/tmp}/platform-rows.txt"; : > "$ROWS"
-          echo "platform: no pin from the caller — resolving the newest platform-sealed set (freeze: '${FREEZE:-none}')"
-          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${FREEZE:+--freeze "$FREEZE"}
+          # A FREEZE (the incident instruction) wins over the ceiling; the ceiling selects its own set.
+          SELECT="${FREEZE:-${CEILING:-}}"
+          echo "platform: no pin from the caller — resolving $([ -n "${CEILING:-}" ] && [ -z "${FREEZE:-}" ] && echo "the ceiling set ${CEILING}" || echo "the newest platform-sealed set") (freeze: '${FREEZE:-none}')"
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
           python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
           import json, sys
           rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
@@ -1288,6 +1335,7 @@ jobs:
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
           FREEZE: ${{ vars.MW_PLATFORM_REF }}    # the CALLER's variable — see `plan`
+          CEILING: ${{ inputs.platform-ceiling }}  # validated in `plan`; selects exactly that set
           # 🍞 BAKE_ATTEMPT/BAKE_*: the job env (empty in the bake job and on a one-shard run).
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -1311,6 +1359,7 @@ jobs:
               echo "platform-image-digest=${BAKE_PLATFORM_DIGEST}"
               echo "platform-set=${BAKE_SET:-}"
               echo "override=false"
+              echo "held-by=the run's prepared bake (attempt ${BAKE_ATTEMPT})"
             } >> "$GITHUB_OUTPUT"
             echo "platform for this shard: the run's prepared bake's (set '${BAKE_SET:-<not named>}', compiled in attempt $BAKE_ATTEMPT) — the shard gates exactly the platform its bake was compiled against"
             exit 0
@@ -1336,8 +1385,10 @@ jobs:
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           ROWS="${RUNNER_TEMP:-/tmp}/platform-rows.txt"; : > "$ROWS"
           # With PLATFORM_BASELINE set the resolver never fails the job on its own re-resolution:
-          # the baseline is a valid answer (see the script's FRESHNESS section).
-          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${FREEZE:+--freeze "$FREEZE"}
+          # the baseline is a valid answer (see the script's FRESHNESS section). The CEILING selects
+          # its own set exactly as in `plan`, so a refresh can never move a pull request past it.
+          SELECT="${FREEZE:-${CEILING:-}}"
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${SELECT:+--freeze "$SELECT"}
           python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
@@ -1350,14 +1401,101 @@ jobs:
           print(f"override={rows.get('override', 'false')}")
           PY
           echo "platform for this shard: $(grep '^set=' "$ROWS" | cut -d= -f2-) (override=$(grep '^override=' "$ROWS" | cut -d= -f2-))"
+      # ───────────── THE PUBLICATION NAMES THE PLATFORM (MeshWeaver#7337) ─────────────
+      # 🚨 ONE SET IDENTITY FOR HOST AND SEED. The seed is the upstream's CURRENT sealed publication,
+      # whose bundles are floored at the set it was baked on; the host used to be resolved
+      # independently (the caller's preflight, or the step above), so an upstream that resealed on a
+      # NEWER set between the two reads had every bundle DECLINED and the gate failed `bake
+      # consumption` on bytes no diff touched (MeshWeaver.Reinsurance PR #264, run 39025974143). The
+      # publication now RECORDS the set it was sealed on (`platform-set.json`, the registry index's
+      # `platform`), and this step reads it BEFORE anything is composed:
+      #   * nothing pinned  → the host IS the publication's set; with `platform-ceiling` a
+      #                       publication sealed above the ceiling is RED by name;
+      #   * pinned          → a pin OLDER than the publication's set is RED naming both; a NEWER one
+      #                       composes as pinned with a warning naming both (transitional);
+      #   * no record       → this run's platform, and the log says the race stays open for it.
+      # The publication is ADDRESSED by the compatibility key computed from the set name and core's
+      # declaration (the host does not exist yet); the identity step below must resolve the same
+      # key, and the seed step asserts it. Not an input-shaped `if:`: it always runs, and with no
+      # upstream-seed it hands the step above's platform through, saying so.
+      # Doc/Architecture/PublicationNamesItsPlatform.
+      - name: "The platform the upstream publication was sealed on (MeshWeaver#7337)"
+        id: publication-platform
+        env:
+          UPSTREAMS: ${{ inputs.upstream-seed }}
+          RESOLVED: ${{ needs.plan.outputs.resolved }}
+          RUN_TESTER: ${{ steps.platform.outputs.image-digest }}
+          RUN_PORTAL: ${{ steps.platform.outputs.platform-image-digest }}
+          RUN_SET: ${{ steps.platform.outputs.platform-set }}
+          CEILING: ${{ inputs.platform-ceiling }}
+          # The freeze the step above resolved through (the CALLER's variable). A freeze is an
+          # incident instruction: it binds like a pin here and overrides the ceiling, so the
+          # publication can never silently replace the frozen set (refused by name instead).
+          FREEZE: ${{ vars.MW_PLATFORM_REF }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
+          TARGETS: ${{ inputs.bake-publish-targets }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          GH_TOKEN: ${{ github.token }}
+          # Non-empty when the step above handed this shard the run's prepared bake's pair.
+          HELD_BY: ${{ steps.platform.outputs.held-by }}
+        run: |
+          set -euo pipefail
+          if [ -z "${UPSTREAMS//[[:space:]]/}" ]; then
+            {
+              echo "image-digest=${RUN_TESTER}"
+              echo "platform-image-digest=${RUN_PORTAL}"
+              echo "platform-set=${RUN_SET}"
+              echo "identity="
+              echo "mode=legacy"
+              echo "recorded-sources="
+            } >> "$GITHUB_OUTPUT"
+            echo "platform: no upstream-seed — nothing is seeded, so the platform above is the host (no publication to take it from)"
+            exit 0
+          fi
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — publication-platform.py has no ref to be fetched at"; exit 1; }
+          SCRIPT="${RUNNER_TEMP:-/tmp}/publication-platform.py"
+          DECL="${RUNNER_TEMP:-/tmp}/platform-compatibility.json"
+          # The git reader, as for every script this job fetches (header, "Where the heavy legs run").
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/publication-platform.py" > "$SCRIPT" \
+            || { echo "::error::could not fetch publication-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched publication-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          # 🚨 THE DECLARATION IS READ AT core `main`, NOT at scripts-ref (#7424 review). A caller on an
+          # older scripts-ref can resolve a set built AFTER an epoch bump; its stale declaration would
+          # file that set under the OLD epoch, address the old epoch's publication, and compose the host
+          # on that publication's set — an old-epoch host the identity assertion below then agrees with.
+          # The declaration is APPEND-ONLY (a break bumps `epoch` and appends an entry carrying the
+          # previous epoch's ceiling; nothing is ever rewritten), so the newest one files EVERY sealed
+          # set — old and new — under the epoch it was built in. The script stays pinned to scripts-ref.
+          "$RUNNER_TEMP/mw-core-file" main "src/MeshWeaver.Compiler/platform-compatibility.json" > "$DECL" \
+            || { echo "::error::could not fetch the platform-compatibility declaration at core main — the framework identity that addresses the publication cannot be computed"; exit 1; }
+          python3 "$SCRIPT" --self-test > "${RUNNER_TEMP:-/tmp}/publication-platform-self-test.log" 2>&1 \
+            || { cat "${RUNNER_TEMP:-/tmp}/publication-platform-self-test.log"; echo "::error::publication-platform.py at ${SCRIPTS_REF} fails its own self-test — refusing to decide a platform with it"; exit 1; }
+          # PINNED = the caller's digests taken verbatim (`plan` resolved nothing and they are set);
+          # empty digests under allow-unpinned are not a pin.
+          PINNED=false
+          if [ "${RESOLVED:-}" != "true" ] && [ -n "${RUN_TESTER:-}" ] && [ -n "${RUN_PORTAL:-}" ]; then PINNED=true; fi
+          # The freeze applies only where this lane RESOLVED the platform (the step above passed it
+          # to resolve-platform.py); beside the caller's pin it was never consulted.
+          FROZEN=""
+          if [ "${RESOLVED:-}" = "true" ]; then FROZEN="${FREEZE:-}"; fi
+          # 🍞 HELD_BY: a shard of the same attempt as the run's prepared bake composes on the pair that
+          # bake COMPILED against (the bake exports this step's decision). A reseal since then must
+          # not move it — that would change the handoff key and make every shard compile again — so
+          # the pair binds like a pin, and a publication it cannot adopt is RED by name (#7424 review).
+          python3 "$SCRIPT" choose --declaration "$DECL" --upstreams "$UPSTREAMS" \
+            --run-set "${RUN_SET:-}" --run-tester "${RUN_TESTER:-}" --run-portal "${RUN_PORTAL:-}" \
+            --pinned "$PINNED" --ceiling "${CEILING:-}" --freeze "$FROZEN" --held-by "${HELD_BY:-}" \
+            ${REGISTRY_URL:+--registry-url "$REGISTRY_URL"} ${TARGETS:+--targets "$TARGETS"}
       # ───────────── TWO IMAGES, ONE BUILD: resolve, pull, extract, compose (MeshWeaver#3022) ─────────────
       - name: Resolve the tester and the platform image
         id: images
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
-          IMAGE_DIGEST: ${{ steps.platform.outputs.image-digest }}
+          # The DECIDED platform — the publication's set, or this run's (see the step above).
+          IMAGE_DIGEST: ${{ steps.publication-platform.outputs.image-digest }}
           PLATFORM_IMAGE: ${{ inputs.platform-image }}
-          PLATFORM_DIGEST: ${{ steps.platform.outputs.platform-image-digest }}
+          PLATFORM_DIGEST: ${{ steps.publication-platform.outputs.platform-image-digest }}
           ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
         run: |
           set -euo pipefail
@@ -1414,8 +1552,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           # The EFFECTIVE pins — the caller's, or the set `platform` resolved for this shard — not
           # `inputs.*`, which are empty for a caller that pins nothing (MeshWeaver#4099).
-          TESTER_DIGEST: ${{ steps.platform.outputs.image-digest }}
-          PLATFORM_DIGEST: ${{ steps.platform.outputs.platform-image-digest }}
+          TESTER_DIGEST: ${{ steps.publication-platform.outputs.image-digest }}
+          PLATFORM_DIGEST: ${{ steps.publication-platform.outputs.platform-image-digest }}
           # 🚨 The SET NAME is what lets the script tell the three absences apart (#4281): a set the
           # volume has not REACHED yet is waited out, one it has moved PAST is red at once. Without
           # it only "an install is in flight" is visible and the other two are indistinguishable —
@@ -1426,7 +1564,7 @@ jobs:
           # in-flight install but can no longer tell "the volume has not reached this set" from
           # "the volume has moved past it", so the AHEAD case goes red at once and the wait this
           # change exists to add never happens for it.
-          PLATFORM_SET: ${{ steps.platform.outputs.platform-set }}
+          PLATFORM_SET: ${{ steps.publication-platform.outputs.platform-set }}
           RUNNER_LABEL: ${{ inputs.runner }}
           PLATFORM_VOLUME: /opt/platform
         run: |
@@ -1656,10 +1794,43 @@ jobs:
           TARGETS: ${{ inputs.bake-publish-targets }}
           REGISTRY_URL: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
+          # What `publication-platform` decided (MeshWeaver#7337): the identity it ADDRESSED the
+          # publication by, the host it chose, and why (publication | pin | legacy).
+          EXPECTED_IDENTITY: ${{ steps.publication-platform.outputs.identity }}
+          PLATFORM_MODE: ${{ steps.publication-platform.outputs.mode }}
+          # The upstreams that carried a platform record when the host was chosen: only for these is
+          # a vanished record a reseal (a legacy upstream beside a recorded one is the fallback).
+          RECORDED_SOURCES: ${{ steps.publication-platform.outputs.recorded-sources }}
+          COMPOSED_SET: ${{ steps.publication-platform.outputs.platform-set }}
+          COMPOSED_TESTER: ${{ steps.publication-platform.outputs.image-digest }}
+          COMPOSED_PORTAL: ${{ steps.publication-platform.outputs.platform-image-digest }}
         run: |
           set -euo pipefail
           SEED_DIR="${RUNNER_TEMP:-/tmp}/upstream-seed"
           mkdir -p "$SEED_DIR"
+          # 🚨 THE ADDRESS AND THE HOST AGREE (MeshWeaver#7337). The platform was taken from the
+          # publication found under the compatibility key computed from the set name; the host just
+          # composed resolves its own. A disagreement means the decision read ANOTHER identity's
+          # publication — never seed from this one on that decision.
+          # ONLY when a record DECIDED the host (`publication` / `pin`). In `legacy` mode no record was
+          # found, the host is this run's own platform, and the identity it MEASURES is the address —
+          # a pin to a platform predating compatibility keys resolves an `s…`/`g…` identity whose
+          # publication the synthesized `c…e…` key never reaches (#7424 review).
+          if [ "${PLATFORM_MODE:-legacy}" != legacy ] && [ -n "${EXPECTED_IDENTITY:-}" ] && [ "$EXPECTED_IDENTITY" != "$IDENTITY" ]; then
+            echo "::error::the platform was taken from the publication under framework identity $EXPECTED_IDENTITY (computed from set '${COMPOSED_SET:-?}' and core's platform-compatibility declaration), but the composed host resolves $IDENTITY. The two must be one key — check the declaration's epoch / breaks against the set (Doc/Architecture/PublicationNamesItsPlatform)."
+            exit 1
+          fi
+          PUBPLAT="${RUNNER_TEMP:-/tmp}/publication-platform.py"
+          [ -s "$PUBPLAT" ] || { echo "::error::publication-platform.py was not fetched by the step that decided this shard's platform — the seed cannot be checked against the host"; exit 1; }
+          # The seed must still be one this host can adopt: re-read at fetch time, RED by name when the
+          # upstream resealed on another set after the host was composed (a re-run takes the new one).
+          seed_matches_host() { # <src> --index <file> | --record <file> | --no-record
+            local src="$1"; shift
+            python3 "$PUBPLAT" verify --source "$src" --mode "${PLATFORM_MODE:-legacy}" \
+              --composed-set "${COMPOSED_SET:-}" --composed-tester "${COMPOSED_TESTER:-}" \
+              --composed-portal "${COMPOSED_PORTAL:-}" --identity "$IDENTITY" \
+              --recorded-sources "${RECORDED_SOURCES:-}" "$@"
+          }
 
           # 🚨 "THE UPSTREAM HAS NOT PUBLISHED FOR THIS IDENTITY" IS A WAIT, NOT A REPO DEFECT — and
           # it still fails RED, on every trigger. A gate that cannot fail is not a gate (AGENTS.md),
@@ -1794,6 +1965,9 @@ jobs:
                 echo "::error::$base answered 200 but not a publication index (starts: $(head -c 60 "$SEED_DIR/.index.json" | tr -d '\n\r')…). The registry does not serve /api/plugins/bundles/prebuilt — it runs a build without MeshWeaver#2487. Refusing to guess; retry once the registry has rolled."
                 exit 1
               fi
+              # The index this fetch reads must name the platform the host was composed on
+              # (MeshWeaver#7337) — re-checked on every (re-)read, so a reseal mid-fetch is caught too.
+              seed_matches_host "$src" --index "$SEED_DIR/.index.json" || exit 1
               # 🚨 CARRY THE GENERATION (MeshWeaver#3401). Reading the index and then each bundle
               # it names is N+1 reads of a directory the publisher may reseal underneath us: it
               # deletes the sentinel, uploads, and re-seals LAST, deliberately. Pinning the
@@ -1899,6 +2073,30 @@ jobs:
             return 0
           }
 
+          # The seal's token (`_complete`'s ETag; every reseal re-uploads the sentinel) — empty when
+          # it is gone or unreadable. And the platform record's bytes ("absent" when there is none),
+          # left at $SEED_DIR/.platform-set.json for the check; an unreadable one fails (MeshWeaver#7337).
+          seal_token() { # <dir>
+            az storage file show --account-name "$account" --share-name "$share" --path "$1/_complete" \
+              --auth-mode login --backup-intent --query properties.etag -o tsv --only-show-errors 2>/dev/null || true
+          }
+          record_snapshot() { # <dir>
+            local present
+            rm -f "$SEED_DIR/.platform-set.json"
+            present=$(az storage file exists --account-name "$account" --share-name "$share" \
+              --path "$1/platform-set.json" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors 2>/dev/null || echo unknown)
+            case "$present" in
+              false) echo absent ;;
+              true)
+                az storage file download --account-name "$account" --share-name "$share" \
+                  --path "$1/platform-set.json" --dest "$SEED_DIR/.platform-set.json" \
+                  --auth-mode login --backup-intent --only-show-errors > /dev/null \
+                  || { echo "::error::$account/$share/$1/platform-set.json exists but could not be read — an unreadable platform record is not an absent one" >&2; return 1; }
+                printf 'record:'; cksum < "$SEED_DIR/.platform-set.json" ;;
+              *) echo "::error::could not determine whether $account/$share/$1 carries platform-set.json (exists=$present) — a hold, not an absence" >&2; return 1 ;;
+            esac
+          }
+
           # The FIRST target is read — every target holds the same publication (publish-bake
           # writes them all-or-nothing), so one read is the set.
           target=$(printf '%s\n' $TARGETS | head -1)
@@ -1962,7 +2160,23 @@ jobs:
             # NOT an absent one"). Both refuse; conflating them would have sent a reader chasing an
             # upstream publication when the real fault was an unreadable share.
             case "$sealed" in
-              true) ;;
+              true)
+                # 🚨 THE SEAL'S TOKEN, taken BEFORE the record is read and compared AFTER the batch
+                # (MeshWeaver#7337). A generation directory is immutable, but a FLAT prefix is
+                # resealed IN PLACE — the publisher deletes `_complete`, uploads, and re-uploads it
+                # LAST — so a reseal between the record check and `download-batch` would seed bundles
+                # floored above the host the record just vouched for. Every reseal re-uploads the
+                # sentinel, so its ETag is the publication's token: unchanged across the batch (and the
+                # record's bytes unchanged) means the bytes seeded ARE the publication checked.
+                token_before=$(seal_token "$dir")
+                [ -n "$token_before" ] || { echo "::error::could not read the ETag of $account/$share/$dir/_complete — the publication's token cannot be held across the fetch (a hold, not an absence)"; exit 1; }
+                record_before=$(record_snapshot "$dir") || exit 1
+                # The generation this seed reads must name the platform the host was composed on
+                # (MeshWeaver#7337). Absent and unreadable are two answers here too.
+                case "$record_before" in
+                  absent) seed_matches_host "$src" --no-record || exit 1 ;;
+                  *) seed_matches_host "$src" --record "$SEED_DIR/.platform-set.json" || exit 1 ;;
+                esac ;;
               false) upstream_not_ready "$src" "$account/$share/$dir" "" ;;
               *) echo "::error::could not read $account/$share/$dir/_complete for framework identity $IDENTITY (exists=$sealed) — availability CANNOT BE DETERMINED, which is a hold and not an absence. Check the storage credential and the share, not the upstream's publication."
                  exit 1 ;;
@@ -1970,6 +2184,17 @@ jobs:
             az storage file download-batch --account-name "$account" --share-name "$share" \
               --source "$share/$dir" --destination "$SEED_DIR" --pattern '*.zip' \
               --auth-mode login --backup-intent --only-show-errors > /dev/null
+            # The same publication after the batch: the seal still there with the SAME token, and the
+            # record the host was checked against byte-identical. Anything else is a reseal DURING the
+            # fetch — the bundles just seeded may be the new publication's, floored on a set nobody
+            # checked. RED by name; a re-run reads the publication that then applies.
+            token_after=$(seal_token "$dir")
+            record_after=$(record_snapshot "$dir") || exit 1
+            rm -f "$SEED_DIR/.platform-set.json"
+            if [ "$token_after" != "$token_before" ] || [ "$record_after" != "$record_before" ]; then
+              echo "::error::the '$src' publication at $account/$share/$dir was RESEALED while this seed fetched it (seal token ${token_before} → ${token_after:-<no seal>}; platform record $([ "$record_after" = "$record_before" ] && echo unchanged || echo CHANGED)) — the bundles just downloaded may not be the publication whose platform record was checked against the host. Re-run: the gate then reads the publication that applies (MeshWeaver#7337)."
+              exit 1
+            fi
             n=$(ls "$SEED_DIR"/*.zip 2>/dev/null | wc -l | tr -d ' ')
             echo "upstream '$src': $n bundle(s) from $account/$share/$dir"
             fetched=$((fetched + n))
@@ -2743,11 +2968,13 @@ jobs:
     # needs more is STUCK, not slow.
     timeout-minutes: 45
     outputs:
-      # The platform the bake compiled against, for the shards of the same attempt.
+      # The platform the bake compiled against, for the shards of the same attempt — the DECIDED
+      # pair (`publication-platform`: the publication's set, or this run's), never the pre-decision
+      # `platform` step's, which the bake did not compose on when the publication named another set.
       attempt: ${{ github.run_attempt }}
-      image-digest: ${{ steps.platform.outputs.image-digest }}
-      platform-image-digest: ${{ steps.platform.outputs.platform-image-digest }}
-      platform-set: ${{ steps.platform.outputs.platform-set }}
+      image-digest: ${{ steps.publication-platform.outputs.image-digest }}
+      platform-image-digest: ${{ steps.publication-platform.outputs.platform-image-digest }}
+      platform-set: ${{ steps.publication-platform.outputs.platform-set }}
     env:
       # The shard's two runtime switches, verbatim — see the `gate` job's env for why each exists.
       DOTNET_TieredPGO: "0"

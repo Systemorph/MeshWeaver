@@ -337,6 +337,40 @@ it. Successful-publication reuse needs only the existing GitHub Actions read per
 index for evidence that the whole compiled catalogue was published.
 
 
+### Pull requests reuse the baseline's bundles too (2026-10-28)
+
+A pull request publishes nothing, but its lane still composes the always-built floor bundles, and
+on MeshWeaver.Plugins that meant select → warm → workspace build (6.5 min of compile) → pack on
+every content-only pull request. Two rules let it reuse the baseline's bundles instead.
+
+- **Only the baseline's own toolchain is checked** (`node-repo-publication-base.py`,
+  `reuse_only`). The runs newer than the baseline are walked on a publishing event, so a narrowed
+  push cannot miss what a later run published with another toolchain. A pull request or merge
+  group publishes nothing, so those runs cannot change what the baseline built. Before this rule,
+  a single pending main run with no attestation yet forced a full build on every pull request
+  (Plugins run 40629844509).
+- **Every reused entry is keyed at the baseline and at HEAD** (`node-repo-publication-reuse.py
+  --event`). A push narrows by the baseline, so `test: false` there means unchanged since the
+  baseline. A pull request diffs its merge-base, so it means only that the pull request did not
+  touch the entry. The reuse step therefore checks out the baseline sha in a worktree,
+  materializes its main-owned locks with the same generator, and compares two things on both
+  trees: `module-build-key.py`'s content address, and the package's release `version`. The
+  version matters because a change that main made and then reverted leaves the content equal
+  while the version has advanced. An entry is reused only when both agree.
+
+  The caller's shelf and build extension are evaluated by MSBuild. Their inputs (linked files,
+  explicit imports, property-resolved references) cannot be listed by a static walk. So when
+  either is named, any change outside the node-package directories since the baseline
+  (`.github/` and `.claude/` aside) withdraws every reuse.
+
+  Both trees are keyed with HEAD's matrix entry, so the entry's compiler (`build`, `accept`)
+  reads the same on both sides even when main switched it after the baseline. That switch lives
+  in the caller's workflow, so any change under `.github/` since the baseline also withdraws every
+  reuse: a module main moved from `sdk` to `container` is never served the old SDK bundle.
+
+  An entry that cannot be keyed is built, and a comparison that fails keeps every normal build.
+
+
 `build-logic-ref` opts the module call into these selectors at an immutable core commit, separately
 from `platform-ref` (the framework source against which compiled suites run). A workflow update
 must not silently advance that source pin. Existing callers without the new input keep their

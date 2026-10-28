@@ -187,7 +187,7 @@ public static class BakeOutput
                 // the portal's boot probe would measure is this process's own (#3651).
                 WritePlatformSurface(
                     outputDirectory, frameworkMvid,
-                    ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory));
+                    ModulePlatformSurface.OfRunningPlatform(AppContext.BaseDirectory));
                 options.Output.WriteLine(
                     $"bake: framework={frameworkMvid} source={sourceSha} "
                     + $"packages={counts.Count(c => c > 0)} assemblies={counts.Sum()} "

@@ -98,8 +98,7 @@
          not reference, so naming them is honest; adding a ProjectReference just to satisfy a using
          would be the wrong direction. -->
     <Using Include="MeshWeaver.Messaging"
-           Condition="'$(MSBuildProjectName)' != 'MeshWeaver.Cli.Test'
-                  and '$(MSBuildProjectName)' != 'MeshWeaver.Deployment.Contract.Test'
+           Condition="'$(MSBuildProjectName)' != 'MeshWeaver.Deployment.Contract.Test'
                   and '$(MSBuildProjectName)' != 'MeshWeaver.Json.Test'
                   and '$(MSBuildProjectName)' != 'MeshWeaver.PluginImage.Test'
                   and '$(MSBuildProjectName)' != 'MeshWeaver.Testing.Xunit'

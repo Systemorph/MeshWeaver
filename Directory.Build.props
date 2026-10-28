@@ -9,11 +9,11 @@
     <Authors>Systemorph</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
-    <!-- 🚨 NOTHING IN THIS REPOSITORY IS A NUGET PACKAGE UNLESS IT SAYS SO. Exactly ONE project
-         opts back in — src/MeshWeaver.Cli (MeshWeaver.Cli, policy `cli-thin-wrapper-own-version`) —
-         and both other survivors live in MeshWeaver.Plugins: MeshWeaver.MemexTemplate and the Aspire
-         integration (src/Memex.Aspire.Hosting, MeshWeaver.Aspire.Hosting.Memex, which moved there
-         from memex/aspire with the core-slimming carve). Everything
+    <!-- 🚨 NOTHING IN THIS REPOSITORY IS A NUGET PACKAGE. No project here opts back in: every
+         survivor lives in MeshWeaver.Plugins — the `memex` CLI (src/MeshWeaver.Cli, MeshWeaver.Cli,
+         policy `cli-thin-wrapper-own-version`, moved there before its first nuget.org publish), the
+         Aspire integration (src/Memex.Aspire.Hosting, MeshWeaver.Aspire.Hosting.Memex, moved there
+         from memex/aspire with the core-slimming carve) and MeshWeaver.MemexTemplate. Everything
          else under the MeshWeaver prefix is retired (maintainer, 2026-09-07: "we retire most nuget
          packages completely… we leave the dotnet new package and the aspire integration").
 
@@ -28,7 +28,7 @@
          reads a project WITHOUT IsPackable=false as packable. So a project that quietly regains
          packability silently SPARES its published package from retirement — the subtraction fails
          toward leaving a dead package listed. Opting a project back in means intending to publish
-         it, and means adding it to .github/workflows/publish-packages.yml. -->
+         it, and means adding a publish lane for it (this repository has none since the CLI moved). -->
     <IsPackable>false</IsPackable>
     <!-- 🚨 #890: every executable here runs with Tiered PGO OFF (runtimeconfig System.Runtime.TieredPGO).
          On .NET 10 linux-x64 the Tier-1 JIT, in roughly one process in three of the in-mesh compile

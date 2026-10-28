@@ -59,6 +59,21 @@ import ghrest  # noqa: E402 — the shared GitHub REST client beside this file
 # full build it would save — and that many reds in a row is itself worth a full rebuild.
 MAX_UNSETTLED = 30
 
+# 🎯 A RUN THAT PUBLISHES NOTHING ONLY REUSES (MeshWeaver.Plugins Hosting/CiBuildTimeAnalysis.md #3).
+# The runs NEWER than the baseline are walked and toolchain-checked because a publishing run that
+# narrows by the baseline must not miss what a later run may have published with another toolchain.
+# A pull request (or merge group) publishes nothing: the baseline only offers it bundles to REUSE, and
+# for that the baseline's OWN attested toolchain is the whole question — the newer runs cannot change
+# what that run built. Checking them anyway made every pull request build everything whenever ONE main
+# run was still pending (no attestation yet: "a later publishing run has no attestation in the declared
+# store — full build", Plugins run 40629844509), which on a busy main is nearly always.
+REUSE_ONLY_EVENTS = frozenset({"pull_request", "merge_group"})
+
+
+def reuse_only(event):
+    """Whether a run of `event` publishes nothing, so only the baseline's own toolchain matters. Pure."""
+    return event in REUSE_ONLY_EVENTS
+
 
 class ArtifactStoreError(RuntimeError):
     """A declared artifact store failed; this must not become a GitHub fallback or green build."""
@@ -266,6 +281,10 @@ def self_test():
     check(toolchain_verdict(same, same, [(2, same), (3, same)]) is None, "later runs on the same toolchain narrow")
     check("run 3" in (toolchain_verdict(same, same, [(2, same), (3, moved)]) or ""),
           "a later run on another toolchain is full, and names the run")
+    # REUSE ONLY: a run that publishes nothing reads only the baseline's own toolchain.
+    check(reuse_only("pull_request") and reuse_only("merge_group"), "a pull request / merge group only reuses")
+    for event in ("push", "schedule", "repository_dispatch", "workflow_dispatch", ""):
+        check(not reuse_only(event), f"NEGATIVE CONTROL: {event or 'no event'} keeps the between-run checks")
     print(f"publication baseline: {passed} assertions passed")
 
 
@@ -434,7 +453,17 @@ def main():
         if result["carry"]:
             print(f"baseline run {result['run']} withheld {len(result['carry'])} package(s) — carried "
                   f"into this run's selection until published: {' '.join(result['carry'])}", file=sys.stderr)
-        if result["run"] and len(result["between"]) > MAX_UNSETTLED:
+        if result["run"] and reuse_only(os.environ.get("GITHUB_EVENT_NAME", "")):
+            prior = attested_inputs(a.repo, result["run"], a.artifact_store, a.expect_store_id)
+            reason = toolchain_verdict(current, prior, [])
+            if reason:
+                print(reason, file=sys.stderr)
+                result = empty
+            elif result["between"]:
+                print(f"this {os.environ.get('GITHUB_EVENT_NAME')} run publishes nothing — the baseline's own "
+                      f"toolchain matches, so the {len(result['between'])} later run(s) are not consulted "
+                      "(reuse only)", file=sys.stderr)
+        elif result["run"] and len(result["between"]) > MAX_UNSETTLED:
             print(f"{len(result['between'])} unsettled runs since the last success (more than "
                   f"{MAX_UNSETTLED}) — full build", file=sys.stderr)
             result = empty

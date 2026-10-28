@@ -161,6 +161,13 @@ mw-compiler build <repo-root> [<package>... | all] [--module <dll>]... [--out <d
 - **A cascade, not a schedule.** Every package has a result stream; a package OBSERVES the
   streams of the packages it requires and starts itself the moment the last one completes green.
   Packages with no edge between them build at the same time (bounded by `--max-parallel`).
+  **Inside a package the NodeTypes compile in parallel too**, through ONE gate for the whole build
+  (`WorkGate`: at most `--max-parallel` Roslyn compilations at once across every package), and are
+  then folded serially in path order — verdict lines, bundle entries, tests (each against the
+  assemblies its package emitted up to and including it) and records exactly as the serial loop
+  produced them. The summary adds `build: N NodeType compile(s), X s of compile work in Y s wall`.
+  Measured on MeshWeaver.Plugins@4bcc0aa9d, `build … Hosting --no-tests` (21 packages, 92 types),
+  18-core arm64: Hosting 216.5 s → 36.9 s, the whole build 266.8 s → 54.9 s; peak RSS 6.7 → 8.9 GB.
   **On red we break**: a package whose dependency did not end green never starts and is reported
   `blocked by <dependency>`; **on green we continue**. A failure is reported once, where it
   happened. A cycle is refused up front and named.

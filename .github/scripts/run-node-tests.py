@@ -106,7 +106,7 @@ CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <!-- 🚨 The shared framework, so the Microsoft.Extensions.* assemblies resolve at the version
          the MeshWeaver assemblies were BUILT against (10.0.0). Without it the only copies in the
-         ref set are whatever happens to sit in some project's bin — MeshWeaver.Cli ships 9.0.0 —
+         ref set are whatever happens to sit in some project's bin — the memex CLI shipped 9.0.0 —
          and the load fails at RUN time with "Could not load file or assembly
          'Microsoft.Extensions.DependencyInjection.Abstractions, Version=10.0.0.0'".
          That failure looks exactly like a broken test: it is reported against whichever case first

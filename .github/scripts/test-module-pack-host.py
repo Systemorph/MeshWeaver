@@ -202,13 +202,13 @@ def behaviour(doc: dict, hostpub: dict) -> None:
         body = next(s for s in verify["steps"] if s.get("id") == "host")["run"]
         green = {"HOST_VERDICT": "success", "SELECT_RESULT": "success", "LANE": "catalog-481e1ec92571",
                  "COUNT": "3", "PREPARE_RESULT": "skipped", "WORKSPACE_RESULT": "skipped",
-                 "PACK_RESULT": "skipped", "TESTS_RESULT": "skipped"}
+                 "PACK_RESULT": "skipped", "TESTS_BUILD_RESULT": "skipped", "TESTS_RESULT": "skipped"}
         rc, out, outs = run_bash(body, green, tmp)
         check("a followed success with every leg skipped is GREEN, executed_on=host, bundles_built=false",
               rc == 0 and outs.get("executed_on") == "host" and outs.get("bundles_built") == "false", out)
         reds = [("HOST_VERDICT", v) for v in ("failure", "cancelled", "skipped", "")]
         reds += [("SELECT_RESULT", "failure"), ("LANE", "")]
-        reds += [(k, v) for k in ("PREPARE_RESULT", "WORKSPACE_RESULT", "PACK_RESULT", "TESTS_RESULT")
+        reds += [(k, v) for k in ("PREPARE_RESULT", "WORKSPACE_RESULT", "PACK_RESULT", "TESTS_BUILD_RESULT", "TESTS_RESULT")
                  for v in ("success", "failure")]
         for key, value in reds:
             rc, out, outs = run_bash(body, {**green, key: value}, tmp)

@@ -2639,6 +2639,14 @@ The scope is per sender, never per hub, on purpose: a verdict that needs a reply
 
 Pinned by `GatedWritesKeepTheSendersOrderTest`. The first write's verdict is held through the evaluator seam, and the second write from the same sender must not commit until the first does. The control: a write from another sender commits while the first sender's verdict is held.
 
+### 🚨 A verdict the hub's teardown releases still answers its delivery
+
+Each verdict's connection is owned by the hub, so the hub's ShutDown phase releases a verdict that is still in flight. A released connection emits nothing to whoever waits on it, so the delivery it gated got no handler, no refusal and no NACK, and its sender waited out its whole budget. The common way to get there is a recycle. `RecycleNode` posts the `DisposeRequest` and then its read. The read is admitted by the activation it just asked to dispose, because that activation still reads `Started`, and the teardown then releases the read's verdict. `GetMeshNode` timed out after 60 s, and its trail ended at `ROUTED onTarget=True state=Submitted` (`ActivityActionReferenceDurabilityTest` on CI).
+
+Each release therefore registers its own answer with the same owner. Whichever comes first settles the delivery, exactly once: the verdict is acted on, or the owner is disposed and the delivery is answered with the recycling NACK (`ErrorType.ShuttingDown`, worded so every re-probe classifier treats it as transient). The caller re-probes and lands on the fresh activation. When the hub is going down because its node was DELETED, the answer is the delete tombstone's verdict instead, the same fork `MessageService.NackThroughParent` takes: `ErrorType.NotFound`, `NodeAbsent = true` and the shared `DeletedAddressNack` sentence, because "retry" would park the reader on an address that will not reactivate. Every answer is posted through the hub's own `Post`. Past `DisposeHostedHubs` the post layer carries a correlated answer itself, through a live parent or else in-process to a requester still quiescing on it, so the pipeline never picks a carrier of its own.
+
+Pinned by `GatedDeliveryReleasedAtTeardownTest`. A read's verdict is held through the evaluator seam while its hub is recycled, and the read must be answered `ShuttingDown`; held while its node is deleted, it must be answered `NotFound` with `NodeAbsent`. The two cases are each other's control, and the recycle's own read is answered by the fresh activation.
+
 ---
 
 # Configuration
