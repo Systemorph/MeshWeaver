@@ -235,9 +235,11 @@ REVIEWER_ACCOUNT_ID = 175728472
 INTERNAL_REVIEWER_ACCOUNT_ID = 328286035
 REVIEWER_ACCOUNT_IDS = frozenset({REVIEWER_ACCOUNT_ID, INTERNAL_REVIEWER_ACCOUNT_ID})
 REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot", "systemorph-com[bot]"})
-# A refusal OF THE PULL REQUEST (quota, outage): never a review, whatever else the body says.
+# A refusal OF THE PULL REQUEST (quota, outage): never a review, whatever else the body says —
+# every spelling of it, so a `Copilot wasn't able to review this pull request because …` followed
+# by a generated-file list cannot fall through to the zero-files exception below (#7488 review).
 REFUSAL_OF_PR_MARKERS = (
-    re.compile(r"\bunable to review this pull request\b", re.IGNORECASE),
+    re.compile(r"\b(?:unable|wasn't able|was not able|could not|couldn't|cannot|can't) (?:to )?review this pull request\b", re.IGNORECASE),
 )
 # "Reviewed ZERO files": a refusal UNLESS every file it skipped is one Copilot itself lists as a
 # `Generated file` — then there was nothing reviewable left out, and the verdict it posted over the
@@ -3074,6 +3076,10 @@ REFUSAL_SKIPPED_UNSUPPORTED = REVIEW_BODY_GENERATED_ONLY.replace(
     "1 file not reviewed", "2 files not reviewed").replace(
     "</ul>", "<li><strong><code>tools/x.bin</code></strong>: Language not supported</li>\n</ul>")
 REFUSAL_SKIPPED_SHORT_LIST = REVIEW_BODY_GENERATED_ONLY.replace("1 file not reviewed", "3 files not reviewed")
+# A PR-level refusal in another spelling, followed by a complete generated-only list: still a refusal.
+REFUSAL_PR_LEVEL_WITH_GENERATED_LIST = REVIEW_BODY_GENERATED_ONLY.replace(
+    "Copilot wasn't able to review any files in this pull request.",
+    "Copilot wasn't able to review this pull request because the service is unavailable.")
 # The three bodies the reviewer actually posted on 2026-09-18 (#4725, #4728, #4721), verbatim in
 # shape: a verdict heading and a sentence or two, with NO overview block. Every one of these was a
 # real review that the pre-2026-09-18 marker rule classified as "not landed".
@@ -3193,6 +3199,8 @@ def self_test() -> int:
          [_review(REFUSAL_SKIPPED_UNSUPPORTED)], [], mention=("is a refusal",))
     case("zero files reviewed with a list shorter than its count is not a review", (NOT_LANDED,), _pr(0),
          [_review(REFUSAL_SKIPPED_SHORT_LIST)], [], mention=("is a refusal",))
+    case("a PR-level refusal stays a refusal even over a generated-only list (#7488 review)", (NOT_LANDED,), _pr(0),
+         [_review(REFUSAL_PR_LEVEL_WITH_GENERATED_LIST)], [], mention=("is a refusal",))
     # POLICY, changed 2026-09-18: an unfamiliar body is a NEW FORMAT, not an absence. This case
     # asserted the opposite until the reviewer dropped its overview block and six reviewed core
     # pull requests all read as "not landed" on a required context.
