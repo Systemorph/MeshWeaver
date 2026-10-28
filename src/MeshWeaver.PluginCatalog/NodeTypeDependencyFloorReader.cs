@@ -46,7 +46,7 @@ public sealed class NodeTypeDependencyFloorReader(
                 ? Observable.Return<string?>(null)
                 // RunAsSystem (never Observable.Using, #1790): the package root is read as
                 // infrastructure, exactly as the compile that asks reads its sources.
-                : access.RunAsSystem(() => hub.GetMeshNode(root))
+                : access.RunAsSystem(() => ReadRoot(root))
                     .Take(1)
                     .Select(node => Judge(root, node, loaded, hub.JsonSerializerOptions)))
             .DefaultIfEmpty(null)
@@ -59,6 +59,26 @@ public sealed class NodeTypeDependencyFloorReader(
                 return Observable.Return<string?>(null);
             });
     }
+
+    /// <summary>
+    /// 🚨 The package root as PERSISTED, read through the path resolver — the same authoritative,
+    /// change-feed-invalidated read routing itself resolves an address with — and NEVER through the
+    /// root's own hub. This read sits on the activation path: hydrating or compiling a NodeType is
+    /// what an instance's activation waits for, and a package root is commonly an instance of a
+    /// type its own package defines (<c>Store</c> is a <c>Store/Catalog</c>). Reading it through
+    /// its hub made activating that root wait for itself, until the read's budget ran out and the
+    /// floor was silently not judged. Emits the node, or null when the path names no node of its
+    /// own (an ancestor match, a partition-root virtual match, or nothing).
+    /// </summary>
+    /// <param name="root">The package root's path.</param>
+    private IObservable<MeshNode?> ReadRoot(string root) =>
+        hub.ServiceProvider.GetRequiredService<IPathResolver>().ResolvePath(root)
+            .Take(1)
+            .Select(resolution => resolution is { Node: { } node }
+                                  && string.IsNullOrEmpty(resolution.Remainder)
+                                  && string.Equals(resolution.Prefix.Trim('/'), root, StringComparison.Ordinal)
+                ? node
+                : null);
 
     /// <summary>
     /// The judgement over an already-read package root: its <see cref="RequiresOf"/> against what

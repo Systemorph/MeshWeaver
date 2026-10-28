@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Immutable;
+using System.IO;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -11,7 +12,9 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -107,6 +110,87 @@ public class ACompileDependencyFloorReadsThePackageRootTest(ITestOutputHelper ou
 
         (await Settled(Reader.Unmet($"{Bare}/Deployment"), ct)).Should().BeNull();
         (await Settled(Reader.Unmet(Bare), ct)).Should().BeNull("a root itself is no NodeType inside a package");
+    }
+
+    /// <summary>
+    /// 🚨 The read never ACTIVATES the package root. It sits on the activation path — hydrating or
+    /// compiling a NodeType is what an instance's activation waits for — and a package root is
+    /// commonly an instance of a type its own package defines (<c>Store</c> is a
+    /// <c>Store/Catalog</c>). Read through the root's own hub, activating a cold self-typed root
+    /// waited on itself until the read's budget ran out, and the floor was then silently not
+    /// judged. So the root is read as persisted, and its address stays cold. POSITIVE ARM in the
+    /// same test: the requirement is still read and judged from that cold root.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheRootIsJudged_WithoutActivatingIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = $"FloorCold{Guid.NewGuid().ToString("N")[..8]}";
+        var address = new Address(root);
+
+        // The activation signal itself, connected before anything is read (the subject is hot and a
+        // hub is built on the router's own turn) — see ADisposeRequestNeverInstantiatesAHubTest.
+        var built = Mesh.ServiceProvider.GetRequiredService<HostedHubsCollection>()
+            .HubAdded
+            .Where(h => (h.Address with { Host = null }).Equals(address))
+            .Replay(1);
+        using var watching = built.Connect();
+
+        await NodeFactory.CreateNode(new MeshNode(root)
+        {
+            NodeType = "Markdown",
+            Name = "A package root nobody has opened",
+            State = MeshNodeState.Active,
+            Content = PluginRootContent("AI@^1.40.0"),
+        }).Timeout(TestTimeouts.Convergence).Await(ct);
+        Mesh.GetHostedHub(address, HostedHubCreation.Never).Should().BeNull(
+            "the precondition: creating the root does not activate its hub");
+        loaded.Set("AI", "MeshWeaver.AI", "1.39.8");
+
+        var unmet = await Settled(Reader.Unmet($"{root}/Kind"), ct);
+        unmet.Should().NotBeNull("the requirement is read from the persisted root and judged");
+        unmet!.Should().Contain("AI@^1.40.0").And.Contain("1.39.8");
+
+        await built.Should().NotEmit(TestTimeouts.Quick / 4,
+            "the floor read must not activate the root: for a self-typed root that activation is the "
+            + "very one waiting for this read",
+            ct);
+        Mesh.GetHostedHub(address, HostedHubCreation.Never).Should().BeNull(
+            "…and the registry the signal is fed from agrees");
+    }
+
+    /// <summary>
+    /// 🚨 The floor's module reading is taken off the landing service's maintained snapshot, so
+    /// repeated readings share ONE derivation of the activation list. It sits on every hydration,
+    /// and the authoritative walk of the volume measured 7–9 s per call on the fleet's share — paid
+    /// per activation, and N times over for N concurrent ones.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheFloorsModuleReading_SharesOneDerivationOfTheActivationList()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "mw-floor-served-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var derivations = 0;
+        try
+        {
+            using var landing = new ModuleLandingService(baseDirectory: directory)
+            {
+                BeforeServedPublish = _ => Interlocked.Increment(ref derivations),
+            };
+            var reading = new ServedLoadedPackageModuleReader(landing);
+            for (var i = 0; i < 3; i++)
+                await reading.Read().Should().Within(TestTimeouts.Convergence)
+                    .Emit($"reading {i + 1} of the loaded modules answers", ct);
+
+            Volatile.Read(ref derivations).Should().Be(1,
+                "three readings inside the freshness bound share one derivation — a walk of the volume per "
+                + "reading is what put seconds in front of every hydration");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Theory]

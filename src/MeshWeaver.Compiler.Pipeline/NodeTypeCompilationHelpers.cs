@@ -4839,6 +4839,37 @@ internal static class NodeTypeCompilationHelpers
             && EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]));
 
     /// <summary>
+    /// The LEAD of a failed compile's activity-log line, and its catalog key: which failure this
+    /// was, said before the detail. "Roslyn failed" in front of a failure Roslyn never saw is the
+    /// log-line version of the #1218 bug — so each cause that is NOT a Roslyn verdict names itself.
+    /// Pure; the detail after the colon rides as the key's <c>{detail}</c> argument (#3236).
+    /// </summary>
+    /// <param name="error">The attempt's fault, or null when the compile produced no assembly.</param>
+    internal static (string Lead, string Key) CompileFailureLead(Exception? error) => error switch
+    {
+        SourceDiscoveryUnavailableException =>
+            ("Compile NOT ATTEMPTED — source set could not be established",
+                "activity.compile.notAttempted"),
+        AddressRecyclingException =>
+            ("Compile NOT SETTLED — a mesh address it reads was recycling "
+             + "for the reader's whole budget",
+                "activity.compile.notSettled"),
+        // #6195: THIS replica does not run what the type's package requires, so Roslyn never ran.
+        DependencyFloorUnmetException =>
+            ("Compile NOT ATTEMPTED — this replica does not meet the dependency floor of the "
+             + "type's package",
+                "activity.compile.notAttemptedBelowFloor"),
+        // Roslyn SUCCEEDED here; the assembly store did not keep the bytes
+        // (a full volume, memex 2026-09-08). Saying "Roslyn failed" would send
+        // the reader to the source when the cause is the disk.
+        AssemblyPublicationException =>
+            ("Assembly NOT PUBLISHED — Roslyn produced it, but the assembly "
+             + "store did not keep the bytes, so no Release was minted",
+                "activity.compile.notPublished"),
+        _ => ("Roslyn failed", "activity.compile.roslynFailed"),
+    };
+
+    /// <summary>
     /// Reports a terminal compile outcome that reached NO VERDICT — the two shapes
     /// <see cref="IsAvailabilityNonVerdict"/> admits, told apart because only one of them is a
     /// statement about the whole PROCESS.
@@ -5546,24 +5577,7 @@ internal static class NodeTypeCompilationHelpers
                         // The LEAD is the sentence this code owns, so it carries the catalog key;
                         // the detail after the colon is Roslyn's own text, which no catalog can hold
                         // and which therefore rides as an ARGUMENT (#3236).
-                        var (failureLead, failureLeadKey) = outcome.Error switch
-                        {
-                            SourceDiscoveryUnavailableException =>
-                                ("Compile NOT ATTEMPTED — source set could not be established",
-                                    "activity.compile.notAttempted"),
-                            AddressRecyclingException =>
-                                ("Compile NOT SETTLED — a mesh address it reads was recycling "
-                                 + "for the reader's whole budget",
-                                    "activity.compile.notSettled"),
-                            // Roslyn SUCCEEDED here; the assembly store did not keep the bytes
-                            // (a full volume, memex 2026-09-08). Saying "Roslyn failed" would send
-                            // the reader to the source when the cause is the disk.
-                            AssemblyPublicationException =>
-                                ("Assembly NOT PUBLISHED — Roslyn produced it, but the assembly "
-                                 + "store did not keep the bytes, so no Release was minted",
-                                    "activity.compile.notPublished"),
-                            _ => ("Roslyn failed", "activity.compile.roslynFailed")
-                        };
+                        var (failureLead, failureLeadKey) = CompileFailureLead(outcome.Error);
                         var failureDetail = outcome.Error?.Message
                             ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
                                 ? string.Join("; ", errs.Select(m => m.Message))

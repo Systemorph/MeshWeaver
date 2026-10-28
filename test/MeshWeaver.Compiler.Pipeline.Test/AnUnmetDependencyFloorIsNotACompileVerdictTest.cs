@@ -172,6 +172,24 @@ public class AnUnmetDependencyFloorIsNotACompileVerdictTest(ITestOutputHelper ou
             "the identical bytes load; only the floor differs between the two arms");
     }
 
+    /// <summary>
+    /// 🚨 The compile ACTIVITY says why nothing was compiled. Its failure line fell through to
+    /// "Roslyn failed" for an unmet floor, so every refusal on the watcher path told the reader the
+    /// code had been rejected when Roslyn never ran. NEGATIVE CONTROL: a Roslyn verdict keeps its
+    /// lead.
+    /// </summary>
+    [Fact]
+    public void TheActivityLine_SaysNotAttempted_NeverRoslynFailed()
+    {
+        var (lead, key) = NodeTypeCompilationHelpers.CompileFailureLead(
+            new DependencyFloorUnmetException(HeldType, Unmet));
+        key.Should().Be("activity.compile.notAttemptedBelowFloor");
+        lead.Should().Contain("NOT ATTEMPTED").And.NotContain("Roslyn");
+
+        NodeTypeCompilationHelpers.CompileFailureLead(new CompilationException(HeldType, "CS0246 FillOutcome"))
+            .Key.Should().Be("activity.compile.roslynFailed");
+    }
+
     [Fact]
     public void TheStamp_IsUnavailable_AndKeepsTheLastGoodBuild()
     {

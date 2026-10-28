@@ -253,10 +253,12 @@ public static class PluginCatalogConfigurationExtensions
                 // 🚨 MeshWeaver#6195 — the COMPILE half of the same floor: a replica that does not
                 // run what a NodeType's package requires never compiles it, so it can never stamp
                 // its own older dependency generation onto the record every replica reads as Error.
+                // It reads the loaded modules off the landing service's maintained snapshot, never a
+                // volume walk per call: it sits on every hydration, i.e. on the activation path.
                 .AddSingleton<MeshWeaver.Graph.Configuration.INodeTypeDependencyFloor>(sp =>
                     new NodeTypeDependencyFloorReader(
                         sp.GetRequiredService<IMessageHub>(),
-                        sp.GetRequiredService<MeshWeaver.GitSync.ILoadedPackageModules>(),
+                        new ServedLoadedPackageModuleReader(sp.GetRequiredService<ModuleLandingService>()),
                         sp.GetService<ILogger<NodeTypeDependencyFloorReader>>()))
                 // The restart-as-activation READER (#1979): which landed modules are not loaded in
                 // THIS process. Registered beside the writer and rooted at the same resolved
