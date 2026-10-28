@@ -71,8 +71,60 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
             Content = new NodeTypeDefinition { PointRead = Declaration },
             HubConfiguration = config => config.WithContentType<TicketContent>().AddDefaultLayoutAreas(),
         })
+        .AddMeshNodes(new MeshNode("Note", "Kiosk")
+        {
+            NodeType = "NodeType",
+            Name = SatelliteType,
+            Content = new NodeTypeDefinition(),
+        })
         // A declared type whose OWN Read rule faults: every standard Read of it is UNDETERMINED.
-        .ConfigureServices(services => services.AddSingleton<INodeTypeAccessRule>(new FaultingReadRule(FaultyType)));
+        .ConfigureServices(services => services
+            .AddSingleton<INodeTypeAccessRule>(new FaultingReadRule(FaultyType))
+            // A satellite type read through its MainNode (the shipped SatelliteAccessRule), whose next
+            // answer a test can hold.
+            .AddSingleton(sp => new HoldableReadRule(new MeshWeaver.Graph.Security.SatelliteAccessRule(
+                SatelliteType, sp.GetRequiredService<IMessageHub>())))
+            .AddSingleton<INodeTypeAccessRule>(sp => sp.GetRequiredService<HoldableReadRule>()));
+
+    private const string SatelliteType = "Kiosk/Note";
+
+    /// <summary>
+    /// A satellite read rule whose NEXT Read answer for one (path, user) can be held by the test, so a
+    /// revocation can be committed while an admission is still being decided.
+    /// </summary>
+    private sealed class HoldableReadRule(INodeTypeAccessRule inner) : INodeTypeAccessRule
+    {
+        private sealed record Hold(string Path, string UserId, IObservable<bool> Answer, AsyncSubject<Unit> Asked);
+
+        private Hold? next;
+
+        public string NodeType => inner.NodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => inner.SupportedOperations;
+
+        /// <summary>Holds the next Read answer for <paramref name="path"/> and <paramref name="userId"/>; completes once it was asked.</summary>
+        public IObservable<Unit> HoldNext(string path, string userId, IObservable<bool> answer)
+        {
+            var hold = new Hold(path, userId, answer, new AsyncSubject<Unit>());
+            Volatile.Write(ref next, hold);
+            return hold.Asked;
+        }
+
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
+        {
+            var hold = Volatile.Read(ref next);
+            if (hold is not null
+                && context.Operation == NodeOperation.Read
+                && string.Equals(context.Node.Path, hold.Path, StringComparison.Ordinal)
+                && string.Equals(userId, hold.UserId, StringComparison.Ordinal)
+                && ReferenceEquals(Interlocked.CompareExchange(ref next, null, hold), hold))
+            {
+                hold.Asked.OnNext(Unit.Default);
+                hold.Asked.OnCompleted();
+                return hold.Answer;
+            }
+            return inner.HasAccess(context, userId);
+        }
+    }
 
     private const string FaultyType = "Kiosk/Faulty";
 
@@ -437,6 +489,321 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         Assert.DoesNotContain(await grace.ToList().Should().Emit(cancellationToken: ct),
             n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2");
     }
+
+    /// <summary>
+    /// 🚨 Systemorph/MeshWeaver.Plugins#4418: a read through the NODE-STREAM CACHE — the seam every
+    /// <c>GetMeshNodeStream</c> view goes through — ends when its standing grant is revoked. The
+    /// cache's read gate decided the standard Read ONCE per <c>GetStream</c> and then returned the
+    /// shared upstream, which reads under the privileged cache identity, so the reader kept receiving
+    /// every later revision after the grant row was deleted. Measured before the fix: grace's open
+    /// cache read received <c>v3</c>, written after her grant was gone.
+    ///
+    /// <para>POSITIVE CONTROLS: an UNRELATED access commit on the same node (a third user's grant
+    /// added, which re-decides every open read of it) leaves grace's read open and serving; and henry,
+    /// reading the same node through the same shared cache entry on a grant that stays, keeps
+    /// receiving revisions after grace's revocation.</para>
+    /// </summary>
+    [HubFact]
+    public async Task ACacheRead_EndsWhenItsStandingGrantIsRevoked()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var doc = (await AsSystem(new MeshNode("cached-doc", Partition) { NodeType = "Markdown", Name = "v1" }, ct)).Path;
+        var graceGrant = (await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", doc), ct)).Path;
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", doc), ct);
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var grace = Record(access.RunAs(Grace, () => Mesh.GetMeshNodeStream(doc)));
+        var henry = Record(access.RunAs(Henry, () => Mesh.GetMeshNodeStream(doc)));
+        using var openGrace = grace.Connect();
+        using var openHenry = henry.Connect();
+        await FirstNode(grace, doc, "grace's standing grant admits her cache read", ct);
+        await FirstNode(henry, doc, "henry's standing grant admits his cache read", ct);
+
+        // POSITIVE CONTROL 1: an unrelated grant on the same node re-decides grace's read and keeps it.
+        await AsSystem(AssignmentNodeFactory.UserRole("ivy", "Viewer", doc), ct);
+        await WaitForRead("ivy", doc, granted: true, ct);
+        await AsSystemRename(doc, "v2", ct);
+        await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2",
+                "an unrelated access commit leaves a standing grant's cache read open and serving", cancellationToken: ct);
+
+        await access.RunAsSystem(() => NodeFactory.DeleteNode(graceGrant))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await WaitForRead(Grace.ObjectId, doc, granted: false, ct);
+        await AsSystemRename(doc, "v3", ct);
+
+        var end = await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext || n.Value?.Name == "v3",
+                "the cache read ends, or delivers the revision written after the revocation", cancellationToken: ct);
+        Assert.False(end.Kind == NotificationKind.OnNext, "a revision written after the grant was revoked must never reach grace");
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.IsType<UnauthorizedAccessException>(end.Exception);
+
+        // POSITIVE CONTROL 2: henry, on the same shared cache entry, keeps receiving.
+        await henry.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v3",
+                "a cache read whose grant stands keeps receiving revisions after another reader's revocation", cancellationToken: ct);
+        Assert.DoesNotContain(await grace.ToList().Should().Emit(cancellationToken: ct),
+            n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v3");
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7504 (thread 4404762360): a cache read the type's RULE admitted — a satellite read
+    /// through its MainNode, the fold denying — is decided on EACH revision. A satellite repointed from
+    /// a MainNode grace can read to one she cannot is refused on the revision that repoints it; no
+    /// access input changed, so pre-fix the standing grant admitted that revision and every later one.
+    /// NEGATIVE CONTROLS: an ordinary revision of the same satellite reaches grace before the repoint;
+    /// henry, who can read both MainNodes, receives the repointed revision.
+    /// </summary>
+    [HubFact]
+    public async Task ACacheReadAdmittedByARule_EndsWhenTheSatelliteIsRepointed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (open, secret) = await SeedSatelliteMains(ct);
+        await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", open), ct);
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", open), ct);
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", secret), ct);
+        var note = (await AsSystem(new MeshNode("repointed", SatellitePartition) { NodeType = SatelliteType, Name = "v1", MainNode = open }, ct)).Path;
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var grace = Record(access.RunAs(Grace, () => Mesh.GetMeshNodeStream(note)));
+        var henry = Record(access.RunAs(Henry, () => Mesh.GetMeshNodeStream(note)));
+        using var openGrace = grace.Connect();
+        using var openHenry = henry.Connect();
+        await FirstNode(grace, note, "grace reads the satellite through its readable MainNode", ct);
+        await FirstNode(henry, note, "henry reads the satellite through its readable MainNode", ct);
+
+        // NEGATIVE CONTROL: a revision that keeps the MainNode reaches grace.
+        await AsSystemChange(note, n => n with { Name = "v2" }, ct);
+        await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2",
+                "a rule-admitted cache read keeps serving revisions that leave its MainNode alone", cancellationToken: ct);
+
+        await AsSystemChange(note, n => n with { MainNode = secret, Name = "v3" }, ct);
+        var end = await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext || n.Value?.Name == "v3",
+                "the cache read ends, or delivers the repointed revision", cancellationToken: ct);
+        Assert.False(end.Kind == NotificationKind.OnNext, "a satellite repointed at a MainNode grace cannot read must never reach her");
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.IsType<UnauthorizedAccessException>(end.Exception);
+
+        await henry.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v3",
+                "henry, who can read the new MainNode, receives the repointed revision", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7504 (thread 4404762223): a rule-admitted cache read of a satellite whose MainNode
+    /// lives in ANOTHER partition ends when the grant on that MainNode is revoked. Pre-fix the follow
+    /// listened only to the satellite's own partition and scopes, so the revocation never re-decided
+    /// it and grace received the revision written after it. NEGATIVE CONTROL: henry, whose grant on the
+    /// same MainNode stands, receives that revision.
+    /// </summary>
+    [HubFact]
+    public async Task ACacheReadAdmittedByARule_EndsWhenTheOffPartitionMainNodeGrantIsRevoked()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (open, _) = await SeedSatelliteMains(ct);
+        var graceGrant = (await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", open), ct)).Path;
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", open), ct);
+        var note = (await AsSystem(new MeshNode("followed", SatellitePartition) { NodeType = SatelliteType, Name = "v1", MainNode = open }, ct)).Path;
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var grace = Record(access.RunAs(Grace, () => Mesh.GetMeshNodeStream(note)));
+        var henry = Record(access.RunAs(Henry, () => Mesh.GetMeshNodeStream(note)));
+        using var openGrace = grace.Connect();
+        using var openHenry = henry.Connect();
+        await FirstNode(grace, note, "grace reads the satellite through its MainNode in another partition", ct);
+        await FirstNode(henry, note, "henry reads the satellite through its MainNode in another partition", ct);
+
+        await access.RunAsSystem(() => NodeFactory.DeleteNode(graceGrant))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await WaitForRead(Grace.ObjectId, open, granted: false, ct);
+        await AsSystemChange(note, n => n with { Name = "v2" }, ct);
+
+        var end = await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext || n.Value?.Name == "v2",
+                "the cache read ends, or delivers the revision written after the MainNode grant was revoked", cancellationToken: ct);
+        Assert.False(end.Kind == NotificationKind.OnNext, "a revision written after the MainNode grant was revoked must never reach grace");
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.IsType<UnauthorizedAccessException>(end.Exception);
+
+        await henry.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2",
+                "a rule-admitted cache read whose MainNode grant stands keeps receiving", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7504 (thread 4404762287): a revocation that commits while the admission is still
+    /// being decided — after the check read its inputs, before the follow attached its signals — is
+    /// never announced to the follow. The rule's answer is HELD here until the revocation has
+    /// committed, then released as the stale grant. Pre-fix the follow started from that grant and
+    /// delivered the node to grace. NEGATIVE CONTROL: henry, opened afterwards on a grant that
+    /// stands, reads the same node.
+    /// </summary>
+    [HubFact]
+    public async Task ACacheRead_RevokedWhileItsAdmissionIsDecided_IsNeverServed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (open, _) = await SeedSatelliteMains(ct);
+        var graceGrant = (await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", open), ct)).Path;
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", open), ct);
+        var note = (await AsSystem(new MeshNode("establishing", SatellitePartition) { NodeType = SatelliteType, Name = "v1", MainNode = open }, ct)).Path;
+
+        var staleGrant = new AsyncSubject<bool>();
+        var asked = Mesh.ServiceProvider.GetRequiredService<HoldableReadRule>().HoldNext(note, Grace.ObjectId, staleGrant);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var grace = Record(access.RunAs(Grace, () => Mesh.GetMeshNodeStream(note)));
+        using var openGrace = grace.Connect();
+        await asked.Should().Within(TestTimeouts.Convergence).Emit("grace's admission asks the satellite's read rule", cancellationToken: ct);
+
+        await access.RunAsSystem(() => NodeFactory.DeleteNode(graceGrant))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await WaitForRead(Grace.ObjectId, open, granted: false, ct);
+        staleGrant.OnNext(true);
+        staleGrant.OnCompleted();
+
+        // The FIRST notification grace sees: a node delivered before the refusal is the very leak
+        // this test exists to catch, so it must not be filtered out (review of #7504, thread 4404992161).
+        var end = await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(_ => true, "the cache read ends without serving the node", cancellationToken: ct);
+        Assert.False(end.Kind == NotificationKind.OnNext, "grace's read was revoked while it was being admitted — no node may reach her");
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.IsType<UnauthorizedAccessException>(end.Exception);
+
+        var henry = Record(access.RunAs(Henry, () => Mesh.GetMeshNodeStream(note)));
+        using var openHenry = henry.Connect();
+        await FirstNode(henry, note, "henry's standing grant on the MainNode admits his cache read", ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7504 (thread 4404991980): a revision's own rule check, started under the grant,
+    /// must not admit it once a revocation has put the standing Read back into a re-check. The
+    /// revision's rule answer is HELD, the grant on the MainNode is revoked (the re-check's own rule
+    /// answer held too), and the stale grant is then released. Pre-fix the stale check stayed
+    /// subscribed through the re-check and combined with the verdict retained from before it, so
+    /// grace received the revision. NEGATIVE CONTROL: henry, whose grant stands, receives it.
+    /// </summary>
+    [HubFact]
+    public async Task ACacheReadAdmittedByARule_ARevisionsRuleAnswerFromBeforeARevocation_NeverAdmitsIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (open, _) = await SeedSatelliteMains(ct);
+        var graceGrant = (await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", open), ct)).Path;
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", open), ct);
+        var note = (await AsSystem(new MeshNode("racing", SatellitePartition) { NodeType = SatelliteType, Name = "v1", MainNode = open }, ct)).Path;
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var grace = Record(access.RunAs(Grace, () => Mesh.GetMeshNodeStream(note)));
+        var henry = Record(access.RunAs(Henry, () => Mesh.GetMeshNodeStream(note)));
+        using var openGrace = grace.Connect();
+        using var openHenry = henry.Connect();
+        await FirstNode(grace, note, "grace reads the satellite through its readable MainNode", ct);
+        await FirstNode(henry, note, "henry reads the satellite through its readable MainNode", ct);
+
+        var rule = Mesh.ServiceProvider.GetRequiredService<HoldableReadRule>();
+        var staleGrant = new AsyncSubject<bool>();
+        var revisionAsked = rule.HoldNext(note, Grace.ObjectId, staleGrant);
+        await AsSystemChange(note, n => n with { Name = "v2" }, ct);
+        await revisionAsked.Should().Within(TestTimeouts.Convergence)
+            .Emit("grace's follow asks the read rule about revision v2 under her grant", cancellationToken: ct);
+
+        var recheck = new AsyncSubject<bool>();
+        var recheckAsked = rule.HoldNext(note, Grace.ObjectId, recheck);
+        await access.RunAsSystem(() => NodeFactory.DeleteNode(graceGrant))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await recheckAsked.Should().Within(TestTimeouts.Convergence)
+            .Emit("the revocation re-decides grace's standing Read", cancellationToken: ct);
+
+        // The re-check is in flight: the revision's stale grant answers now.
+        staleGrant.OnNext(true);
+        staleGrant.OnCompleted();
+        recheck.OnNext(false);
+        recheck.OnCompleted();
+
+        var end = await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext || n.Value?.Name == "v2",
+                "the cache read ends, or delivers the revision on the rule answer from before the revocation", cancellationToken: ct);
+        Assert.False(end.Kind == NotificationKind.OnNext, "a rule answer taken before the revocation must never admit a revision once the re-check began");
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.IsType<UnauthorizedAccessException>(end.Exception);
+
+        await henry.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2",
+                "henry, whose grant on the MainNode stands, receives the revision", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7504 (thread 4404992039): the read rule asked about a REVISION runs as the reader,
+    /// so the API-token clamp applies to it. An API-token reader admitted through a MainNode its
+    /// token may read is refused the revision that repoints the satellite to a MainNode readable in a
+    /// browser only (<c>api: false</c>). NEGATIVE CONTROL: henry, a browser reader with the same
+    /// grants, receives that revision.
+    /// </summary>
+    [HubFact]
+    public async Task ACacheReadAdmittedByARule_ForAnApiToken_EndsWhenRepointedToABrowserOnlyMainNode()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (open, secret) = await SeedSatelliteMains(ct);
+        await AsSystem(AssignmentNodeFactory.Policy("s", new PartitionAccessPolicy { Api = false }), ct);
+        var token = Grace with { IsApiToken = true };
+        await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", open), ct);
+        await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", secret), ct);
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", open), ct);
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", secret), ct);
+        var note = (await AsSystem(new MeshNode("tokened", SatellitePartition) { NodeType = SatelliteType, Name = "v1", MainNode = open }, ct)).Path;
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var grace = Record(access.RunAs(token, () => Mesh.GetMeshNodeStream(note)));
+        var henry = Record(access.RunAs(Henry, () => Mesh.GetMeshNodeStream(note)));
+        using var openGrace = grace.Connect();
+        using var openHenry = henry.Connect();
+        await FirstNode(grace, note, "grace's token reads the satellite through a MainNode open to the API", ct);
+        await FirstNode(henry, note, "henry reads the satellite in a browser", ct);
+
+        await AsSystemChange(note, n => n with { MainNode = secret, Name = "v2" }, ct);
+        var end = await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext || n.Value?.Name == "v2",
+                "the token's cache read ends, or delivers the repointed revision", cancellationToken: ct);
+        Assert.False(end.Kind == NotificationKind.OnNext, "a satellite repointed at a MainNode closed to the API must never reach an API token");
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.IsType<UnauthorizedAccessException>(end.Exception);
+
+        await henry.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2",
+                "henry's browser read of the same MainNode receives the repointed revision", cancellationToken: ct);
+    }
+
+    private const string SatellitePartition = "u";
+
+    /// <summary>Seeds the satellites' partition and two MainNodes in two OTHER partitions; returns their paths.</summary>
+    private async Task<(string Open, string Secret)> SeedSatelliteMains(CancellationToken ct)
+    {
+        await SeedPartition(ct);
+        await SeedTopLevel(new MeshNode(SatellitePartition) { NodeType = "Markdown", Name = SatellitePartition });
+        await SeedTopLevel(new MeshNode("s") { NodeType = "Markdown", Name = "s" });
+        var open = (await AsSystem(new MeshNode("open-main", Partition) { NodeType = "Markdown", Name = "open" }, ct)).Path;
+        var secret = (await AsSystem(new MeshNode("secret-main", "s") { NodeType = "Markdown", Name = "secret" }, ct)).Path;
+        return (open, secret);
+    }
+
+    private Task AsSystemChange(string path, Func<MeshNode, MeshNode> change, CancellationToken ct)
+        => Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update(change))
+            .Should().Emit(cancellationToken: ct);
+
+    /// <summary>Waits until the permission fold reports <paramref name="userId"/>'s Read on <paramref name="path"/> as <paramref name="granted"/>.</summary>
+    private Task WaitForRead(string userId, string path, bool granted, CancellationToken ct)
+        => Mesh.GetEffectivePermissions(path, userId)
+            .Where(perms => perms.HasFlag(Permission.Read) == granted)
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+    private Task AsSystemRename(string path, string name, CancellationToken ct)
+        => Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update(node => node with { Name = name }))
+            .Should().Emit(cancellationToken: ct);
 
     private static readonly AccessContext Grace = new() { ObjectId = "grace", Name = "grace" };
     private static readonly AccessContext Henry = new() { ObjectId = "henry", Name = "henry" };
