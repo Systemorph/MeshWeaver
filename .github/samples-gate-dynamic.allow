@@ -1,0 +1,11 @@
+# The dynamic-edge debt the samples trees carry, for `mw-plugin-test compile --dynamic-baseline`:
+# reflection bindings INTO CORE (a Type.GetType / Assembly.Load / Activator / type-registry lookup
+# by name whose target is a MeshWeaver platform assembly, or cannot be told).
+# Format: `<source> <Dynamic|DynamicUnresolved> <target>`, the target being the rest of the line;
+# `#` comments, blanks ignored. Doc/Architecture/DependencyGraph → "The ratchet".
+#
+# ── THIS FILE IS DELIBERATELY EMPTY OF ENTRIES ─────────────────────────────────────────────────
+# Measured when the ratchet landed: the samples bake produced 0 Dynamic and 0 DynamicUnresolved
+# edges. An EMPTY file is the strictest setting — every new reflection binding into core fails the
+# bake — and it is not the same as omitting `--dynamic-baseline`, which is OBSERVE-ONLY.
+# `bake-then-gate.sh` asserts the ratchet prints ENFORCED.

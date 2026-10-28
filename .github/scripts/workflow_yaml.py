@@ -69,6 +69,11 @@ def step(workflow: Path, step_id: str, *, job_name: str | None = None) -> dict:
     owners = [(name, s) for name, j in scope.items()
               for s in (j.get("steps") or [])
               if isinstance(s, dict) and s.get("id") == step_id]
+    # A YAML alias (`steps: *gate-steps` — node-repo-gate.yml's `bake` job runs the shard's steps)
+    # makes two jobs hold the SAME step object: that is one step, not two, so it is counted once.
+    # Two distinct steps that merely share an id still refuse below.
+    seen: set[int] = set()
+    owners = [(n, s) for n, s in owners if not (id(s) in seen or seen.add(id(s)))]
     where = f"job `{job_name}` of {workflow.name}" if job_name else workflow.name
     if not owners:
         raise WorkflowYamlError(

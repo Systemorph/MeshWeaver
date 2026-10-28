@@ -239,7 +239,7 @@ The fold itself is untouched — `GetEffectivePermissions` still answers `None` 
 
 ### Deleting a space nobody may delete: the governed break-glass action
 
-A space whose owner is gone, or a stranded partition with no root at all, refuses every person's delete — the platform admin's included, by the rule above. The sanctioned way out is not a wider grant but the **`DeleteSpace`** kind of `Hosting/InstanceAction` (MeshWeaver.Plugins, `Hosting/DeleteSpaceAction`): it reads the space as system, parks with the full plan (rows per table, grants, GitSync configuration, the `Admin/Partition` record, the schema, the NodeTypes and their outside dependents), and after one approval of exactly that plan removes it through the framework's own deletes and the platform's partition teardown, verifies nothing is left and writes an audit record. It refuses the system and fleet partitions, a user's home and a package's partition by name. It is the audited, per-case elevation this page describes — never a standing permission.
+A space whose owner is gone, or a stranded partition with no root at all, refuses every person's delete — the platform admin's included, by the rule above. The sanctioned way out is not a wider grant but the **`DeleteSpace`** kind of `Hosting/InstanceAction` (MeshWeaver.Plugins, `Hosting/DeleteSpaceAction`): it reads the space as system, parks with the full plan (rows per table, grants, GitSync configuration, the `Admin/Partition` record, the schema, the NodeTypes and their outside dependents), and after one approval of exactly that plan removes it through the framework's own deletes and the platform's partition teardown, verifies nothing is left and writes an audit record. It refuses the system and fleet partitions, a user's home and a package's partition that an install record (`Plugins/{id}`) still targets by name — that package is removed through the Store uninstall. A package partition with NO install record (one a `Store/Provision` installed) is planned like any other space, since the Store uninstall cannot remove it and nothing re-installs it. It is the audited, per-case elevation this page describes — never a standing permission.
 
 ### Where the grant comes from (db-init)
 
@@ -261,10 +261,11 @@ Access that reaches many people, or that the platform writes for someone else, i
 | `PublicSubject` | a non-denied grant to `Public` or `Anonymous` | an executing governed activity wrote it |
 | `SystemForOther` | a grant written as System whose subject is not `AccessContext.OnBehalfOf` | the user acquires it themselves (`OnBehalfOf` = subject: subscription, coupon, purchase), or a governed activity wrote it |
 | `AccessPolicy` | a `PartitionAccessPolicy` (`{scope}/_Policy`) | an executing governed activity wrote it |
+| `GrantRule` | a declared type-scoped grant (`Admin/_GrantRule/{id}`, see [Declared grant rules](#declared-grant-rules-grantrule)) | an executing governed activity (`access.grant-rule`) wrote it |
 
 A `Denied` assignment only removes access and always passes; a person sharing their own space with a colleague is not a broad grant.
 
-**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.provision-set`, `package.remove`, `store.enroll`, `pr.steward.admin-access`, the public-link standards `link.publish`, `link.revoke` and `group.org-create`, and `group.scoped-create` — a group holding one non-Admin role at one path, whose one grant and whose proposer's Admin on the group node are written as System after the executor re-checks proposer and signer (`Access:BroadGrantGuard:Standards` replaces it). A public link (MeshWeaver#4306) is the one shape that grants `Anonymous`/`Public`/an org group anything, and it grants `Viewer` on the LINK node only (`l/{publicId}`); the target is served as a delegated read re-checked at every render — design of record in MeshWeaver.Plugins `Essentials/PublicLinks`.
+**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.provision-set`, `package.remove`, `store.enroll`, `pr.steward.admin-access`, the public-link standards `link.publish`, `link.revoke` and `group.org-create`, `group.scoped-create` — a group holding one non-Admin role at one path, whose one grant and whose proposer's Admin on the group node are written as System after the executor re-checks proposer and signer — `access.grant-rule`, which writes one declared grant rule, and the client-name gate's two caller grants, `namecheck.caller.grant` and `publicationcheck.caller.grant` — each writes ONE `NameCheckCaller` grant for ONE service identity (`svc-…`) on the scope the standard fixes (`Governance/NameChecks`, `Governance/PublicationChecks`), a `SystemForOther` shape that `Enforce` refused until they were listed, so triage held every post. `Access:BroadGrantGuard:Standards` REPLACES the list rather than extending it — deliberately, so a deployment can also NARROW it — which means an override must restate every standard it still wants, and a Governance standard that starts issuing a grant needs its id added to `BroadGrantGuard.DefaultGovernedStandards` in core (and to any deployment override); the Plugins package cannot add it. A public link (MeshWeaver#4306) is the one shape that grants `Anonymous`/`Public`/an org group anything, and it grants `Viewer` on the LINK node only (`l/{publicId}`); the target is served as a delegated read re-checked at every render — design of record in MeshWeaver.Plugins `Essentials/PublicLinks`.
 
 **Modes** (`Access:BroadGrantGuard:Mode`): `LogOnly` (the default for the first week after it ships), `Enforce`, `Off` (test harness only). In `LogOnly` every finding is one line, `[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject= writer= onBehalfOf= seat= governedBy=`. That grep is the inventory of legitimate writers that still have to stamp their context (the partition bootstrap's creator grant, invitation acceptance, the Store's root gating) before the mode flips to `Enforce`.
 
@@ -1190,6 +1191,103 @@ exact fold it ran before.
 > predicate, a declared public surface is readable by path but will not appear in an anonymous
 > `search`. The asymmetry is strictly in the safe direction — SQL is stricter, never looser, so it
 > cannot become a bypass — but it is a real gap, not a design choice.
+
+---
+
+# Declared grant rules (`GrantRule`)
+
+"Every partition whose ROOT is of node type T — optionally only where the root's content field F
+equals V — grants subject S the role R." A `GrantRule` declares exactly that, once, and both
+evaluators COMPUTE the grant from it on every evaluation. No `AccessAssignment` row is ever written
+for a rule, so there is nothing to sweep, reconcile, or drift: a partition created with a matching
+root is covered the moment it exists, a root retyped away from the match drops out the moment the
+retype lands, and deleting the rule removes the grant everywhere at once.
+
+```json
+{
+  "id": "sales-members-clients-editor",
+  "namespace": "Admin/_GrantRule",
+  "nodeType": "GrantRule",
+  "name": "Sales members edit every client",
+  "content": {
+    "$type": "GrantRule",
+    "nodeType": "Crm/Counterparty",
+    "contentField": "type",
+    "contentValue": "Crm/CounterpartyType/Client",
+    "accessObject": "Sales/Members",
+    "role": "Editor",
+    "description": "Sales members edit every client partition."
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `nodeType` | The node type the partition ROOT must carry. Ordinal match. |
+| `contentField` / `contentValue` | Optional. A TOP-LEVEL field of the root's content and the text it must hold. **Only a JSON string or boolean field can match** — a string as written, a boolean as `true`/`false` (the text Postgres' `content->>'field'` yields for those two kinds, so both evaluators agree). A number, array or object NEVER matches: `jsonb` re-renders those canonically, so their text need not equal what was stored, and a rule filtering on one grants nothing. A missing or null field never matches either. Omit both to match every root of the type. |
+| `accessObject` | A user id or a group path. `Public` and `Anonymous` are never honoured — a rule is for a NAMED subject. |
+| `role` | The role granted at each matching root — built-in or a custom `Role`. |
+
+## Why it is shaped like this
+
+**Instance data, not module code.** A `NodeTypeGate` is declared by the TYPE about itself and only
+ever opens Read. A grant rule names a subject that exists on ONE instance (a group of that
+deployment) over a type that ships to MANY (a package), so it cannot live in the package: it lives
+in the **Admin partition**, at `Admin/_GrantRule/{id}`, where only a global admin can write. A rule
+node placed anywhere else is inert — both evaluators read only that namespace.
+
+**A broad grant, so a governed write.** One rule grants on every matching partition, including
+ones that do not exist yet. `BroadGrantGuard` therefore treats any create or update of a
+`GrantRule` as the `GrantRule` shape (above), and the one way through is an activity executing the
+`access.grant-rule` standard. Deleting a rule only removes access and is an ordinary write by
+anyone with Delete in the Admin partition.
+
+**Not a sweep.** Materialising the rule as one `AccessAssignment` per matching partition is exactly
+the platform sweep `BroadGrantGuard` exists to refuse, and it fails the way per-instance gating
+failed (see [Why not materialise it per instance](#why-not-materialise-it-per-instance)): a sweep
+has to run to cover a new partition, has to run again to retract a retyped one, and is wrong in
+between.
+
+## A rule-derived role is a role like any other
+
+The fold adds a matching rule's role to the granted set at the partition ROOT's scope — exactly
+where an `AccessAssignment` at `{partition}/_Access` would sit — BEFORE anything else is applied:
+
+- **Group expansion** — the subject is matched against the viewer and every group they belong to,
+  transitively, through the same membership read as every other grant.
+- **Deny override** — an `AccessAssignment` that DENIES the role at the root or deeper subtracts it,
+  as it subtracts an assigned role.
+- **`_Policy`** — caps apply to it; an inheritance break BELOW the root discards it there (a break AT
+  the root keeps it, as it keeps a grant made at the root).
+- **System-owned partitions** — on a partition with a one-way `_GitSync` the repository-owned write
+  cap removes Create/Update/Delete from it like from any other role: a rule confers Read there,
+  never write.
+
+## Cost, and the evaluators
+
+**C# (`PermissionEvaluator`)** — one more fold leg, `ObserveRuleGrants`. It reads the rule set once
+per process (`$security-grant-rules`, anchored on `Admin/_GrantRule`, one schema, never a fan-out)
+and — only while at least one rule is declared — the target partition's root
+(`$security-root:{partition}`, a point read in the partition's own schema, partition-anchored so a
+teardown evicts it). A mesh that declares no rule never opens the second read. The leg is NOT
+seeded, for the reason every grant-carrying leg is not: an empty seed would be a spurious first
+denial for an entitled member.
+
+**Postgres (`rebuild_user_effective_permissions`, MeshWeaver.Plugins)** — the per-partition
+projection reads the rules from `admin.mesh_nodes` and the partition's root row, and inserts the
+rule's permissions for the subject (and every leaf member of a group subject) at the root's prefix,
+with the same deny-wins conflict rule as assignments, before the policy folds run. So a rule
+reaches `user_effective_permissions` and `partition_access` like an assignment does, and search
+lists the partition for the subject. A rule change re-projects every partition; a root whose type
+or content changes re-projects its own partition, but only when some rule names its type.
+
+> ⚠️ **One pre-existing difference between the evaluators applies here too.** The C# fold denies by
+> ROLE (a `Denied: Viewer` removes the Viewer role and nothing else), the SQL projection by
+> PERMISSION (a denied Viewer writes deny rows for Viewer's permissions, which also block an Editor's
+> Read at the same prefix). A deny of the SAME role the rule grants behaves identically in both.
+
+Pinned by `DeclaredGrantRuleTest` (MeshWeaver.Hosting.Test) on the C# side. To declare one, follow
+[Granting Access → Recipe 4](../GrantingAccess#recipe-4--a-declared-grant-rule-every-partition-of-a-type).
 
 ---
 
@@ -2190,24 +2288,38 @@ forwarded (`RevisionAdmission.AdmitEachRevision`, `MeshWeaver.Data`).
   per-node hub now registers a `ClientSubscriptionReadAdmission`
   (`DeclaredReadSubscriptionFollow`) beside its gate. A subscription the gate can have admitted
   through the declaration is followed per revision: a point-read shape, a trusted caller context,
-  and no standing Read through the fold or the type's rule (the first outcome of
-  `DeclaredPointRead.ObserveStandardRead`, as the caller). The
+  and a standing Read through the fold or the type's rule that is followed live
+  (`DeclaredPointRead.ObserveStandingRead`, as the caller): while it grants, the declaration is not
+  consulted; once it is a definitive denial, the declaration decides. The
   first refusal posts a `StreamErrorEvent` ("Access denied: …"), and the server-side stream is
   unregistered and disposed. A resubscribe then meets the gate afresh.
 
 Nothing is dropped or reordered: a revision waits behind an earlier one whose verdict is pending,
 so a patch chain stays contiguous. A verdict that stalls past the permission-establishment budget,
 faults or answers nothing is a refusal. The expiry ends the subscription at its instant with
-nothing else emitting. A standing GRANT on an open direct subscription is not followed by this
-mechanism. Withdrawing it live belongs to `ObserveStandardRead`, not to the declaration's signal,
-and an owner-side subscription does not yet follow it (still open on #4306).
+nothing else emitting.
+
+**A standing GRANT on a direct subscription is followed live too** (#7298, the residual of
+#7016). The follow's standing Read used to be the FIRST outcome of the standard read, so a grant row
+deleted after the `SubscribeRequest` was admitted never ended the subscription: the owner forwarded
+every later revision to a caller who could no longer read the node. It is now the live standard read
+(`DeclaredPointRead.ObserveStandingRead`): a grant that turns into a definitive denial hands the
+decision to the declaration, and for a node no declaration opens to that caller the subscription
+ends with the refusal. That read differs from `ObserveStandardRead` in one respect only: while a
+signal has withdrawn the verdict and its re-check has not answered, it emits `null` ("being
+re-decided") instead of an undetermined outcome. The follow HOLDS on it, admitting no new revision
+and ending nothing. Ending a subscription is terminal, and every access commit on the node's scopes
+(any group membership or role in the mesh) withdraws the verdict while it is re-checked, so ending on
+the pending marker would end subscriptions on unrelated commits. The re-check is bounded by the
+permission-establishment budget; past it the answer is undetermined, which refuses.
 Tests: `test/MeshWeaver.Graph.Test/OpenSubscriptionEndsWithTheReadTest.cs` (the revoking revision
 never delivered, on the node stream of a stored type and on a direct subscription; a direct
 subscription ended at the expiry; a link that is not revoked still streaming, as the negative
-control).
+control; `ADirectSubscription_EndsWhenItsStandingGrantIsRevoked`, a revoked Viewer grant ending the
+subscription while another reader of the same node, whose grant stays, receives the next revision).
 
 **What a follow holds belongs to its subscription, never to the node hub.** The follow's standing
-Read is decided once and replayed to every later revision of the same subscription. Its connection
+Read is shared, live, by every revision of the same subscription. Its connection
 is released when the followed sequence ends (`ClientReadFollow.Lifetime`), on a refusal, a
 completion or an unsubscribe. It used to be registered on the node hub, and a hub registration
 lives until the hub shuts down, so every open-and-close of a direct subscription on a long-lived
@@ -2251,19 +2363,40 @@ A revoked reader is not served after a recycle, and the reader who keeps the gra
 (negative control). A reader who never had Read is never served by recovery; that case already
 held before the fix.
 
-What this does NOT cover, measured on the same fixture: an OPEN subscription does not follow a
-revoked standard grant. The owner decides a `SubscribeRequest` once, at admission, and the
-node-stream cache's read gate is likewise decided once per `GetStream`. Its 30-second
-`AccessTtl` only bounds new reads. A revoked reader's open direct subscription, or open cache
-read, therefore keeps receiving revisions until it ends or a recovery re-subscribes it. Declared
-point reads are followed (above); standard grants are not yet.
+What this does NOT cover, measured on the same fixture: an open node-stream CACHE read does not
+follow a revoked standard grant. The cache's read gate is decided once per `GetStream`, and its
+30-second `AccessTtl` only bounds new reads, so a revoked reader's open cache read keeps receiving
+revisions until it ends or a recovery re-subscribes it. A direct owner-side subscription of a
+point-read shape (the node itself, a layout area) follows its standing grant live (above). Other
+shapes on a node hub (a collection, an entity reference) are admitted once, by a standing grant or
+not at all, and are not followed.
 
 **A stored type's ownership is followed live.** A stored type's declaration counts only while
 its partition is system-owned, meaning a one-way `_GitSync` that names a repository.
-`DeclarationOf` re-reads that config on every commit to it and on every feed gap. Turning the
-sync two-way, emptying it or deleting it therefore ends an open admission without any write to
-the node itself (`AnOpenSubscription_EndsWhenTheTypesPartitionStopsBeingSystemOwned`, with a
-config change that keeps ownership as the negative control).
+`DeclarationOf` reads that ownership from the sync config's OWNER, not from the store (#7298, F5).
+The store is only the existence probe, re-taken on every commit to the config and on every feed gap
+(a stale negative refuses, the closed direction). The content is the owner's current revision, then
+followed live. Turning the sync two-way, emptying it or deleting it therefore ends an open admission
+without any write to the node itself
+(`AnOpenSubscription_EndsWhenTheTypesPartitionStopsBeingSystemOwned`, with a config change that
+keeps ownership as the negative control). It also ends it before the change is persisted. The owner
+acknowledges a write before its sampled save lands, and the feed announces the change only once the
+row is written. Reading the store in that window admitted a fresh point read from the stale row and
+left an open admission open. The test holds the store's write of the sync config, so the window lasts
+as long as the test needs it, and checks the instrument first: the store still reads one-way
+(`DeclaredPointReadOwnershipAndSelfReadTest.APartitionThatStopsBeingSystemOwned_WithdrawsTheDeclaration_BeforeTheStoreHasTheRow`,
+with a second partition rewritten under the same hold but kept one-way as the positive control).
+
+**A hub's point read of its OWN path is decided locally** (#7298, F8). The declaration reads the node
+from its owner. When the deciding hub IS the owner, that is its own-node stream, with no round-trip.
+The round-trip was not just redundant there. Suppose a node hub sends a gated, declaration-only read
+to itself under a visitor's context (`hub.GetMeshNode(hub.Address.Path)`). That read is decided at
+the hub's own delivery gate, and the System probe of the owner carried the same sender. The gate
+releases deliveries in order per sender (`SenderOrderedRelease`), so the probe queued behind the very
+read whose verdict waited for it. The read timed out after the permission-establishment budget and
+was refused. Remote paths keep the owner round-trip
+(`DeclaredPointReadOwnershipAndSelfReadTest.AHubsOwnPointRead_UnderAVisitorsContext_IsDecided_NotDeadlocked`,
+with the same self-issued read of a revoked link refused beside it).
 
 **The follow runs as the subscriber, and only the follow does.** The owner hub's own work never
 takes the subscriber's identity: a watcher on the node reacts to each write as its writer (or as

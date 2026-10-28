@@ -39,7 +39,7 @@ from. Measured from the model card and the HuggingFace API on 2026-09-10 — `ca
 Attribution-NonCommercial 4.0 license."*
 
 **This was already known in one corner of the repo, and the pointer was dangling.**
-`clients/voice-gateway/README.md` has carried a "Speech model license" section all along — *"**CC BY-NC 4.0
+`clients/voice-gateway/README.md` (now in MeshWeaver.Plugins) has carried a "Speech model license" section all along — *"**CC BY-NC 4.0
 — non-commercial use only**. A personal home assistant is non-commercial use; for anything commercial, point
 the whisper container at a permissively licensed model (see `deploy/whisper/README.md`)"* — but
 `deploy/whisper/README.md`, the page it sends you to, said nothing about a licence at all. So the constraint
@@ -60,7 +60,7 @@ The commercial question above now has an answer for the container: **the default
 [`Flix-AI/flix-swissgerman-full`](https://huggingface.co/Flix-AI/flix-swissgerman-full)**, a
 whisper-large-v3 Swiss-German fine-tune under **Apache-2.0** (`cardData.license`, measured 2026-09-30),
 converted to GGML and quantized to **q8_0** inside `deploy/whisper/Dockerfile`, and CI
-(`.github/workflows/whisper-image.yml`) pushes it as `whisper-swiss-german:1.7.4-flix-large-v3-q8-<sha>`.
+(`.github/workflows/whisper-image.yml` — both in MeshWeaver.Deploy since core slimming) pushes it as `whisper-swiss-german:1.7.4-flix-large-v3-q8-<sha>`.
 
 | | |
 |---|---|
@@ -182,7 +182,8 @@ value a reader needs to compare against this page into the build log.
 
 ## Consumers — every one of them, because the last move missed two
 
-Anything that names this asset is a consumer, and a move must visit all of them **in the same change**:
+Anything that names this asset is a consumer, and a move must visit all of them **in the same change**
+(the `deploy/whisper/…` rows are in MeshWeaver.Deploy now):
 
 | Consumer | What it needs |
 |---|---|
@@ -191,8 +192,8 @@ Anything that names this asset is a consumer, and a move must visit all of them 
 | `deploy/whisper/helm/templates/deployment.yaml` | nothing at run time; the model is in the image |
 | `deploy/whisper/helm/values.yaml` | an `image.tag` whose image was built **with** a model |
 | `Systemorph/Memex` → `deployments/aks/<env>/whisper/helm/` | a **verbatim vendored copy** of the chart above — it drifts silently and must be mirrored |
-| `clients/voice-gateway/run-local.sh` + README | `gh release download` into `$WHISPER_MODEL` |
-| `.gitignore` | keeps `deploy/whisper/models/` untracked (GitHub rejects any blob over 100 MB) |
+| MeshWeaver.Plugins `clients/voice-gateway/run-local.sh` + README | `gh release download` into `$WHISPER_MODEL` |
+| MeshWeaver.Deploy `.gitignore` | keeps `deploy/whisper/models/` untracked (GitHub rejects any blob over 100 MB) |
 | MAUI `VoiceModelCatalog` | its own catalog URL — see [On-device voice](/Doc/Architecture/OnDeviceVoice) |
 
 🚨 **The Memex overlay is a COPY, not a dependency.** `deployments/aks/<env>/whisper/helm` in the

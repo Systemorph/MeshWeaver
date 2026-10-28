@@ -149,6 +149,13 @@ repos:
         lane: build-follow.yml
         grants: {contents: read, id-token: write}
         pending: lands with this repository's module-pack host adoption (draft), after core's node-repo-module-pack.yml executor/host-verdict inputs are on main
+      # ── The portal-host lane on the build host (H7) — ARRIVING. The follow job whose verdict
+      # `Build + test the portal hosts` carries when the build host ran the `portal-hosts` stage.
+      - workflow: ci.yml
+        job: portal-hosts-follow
+        lane: build-follow.yml
+        grants: {contents: read, id-token: write}
+        pending: lands with Systemorph/MeshWeaver.Plugins#4489 (the portal-hosts stage on the build host)
 
   # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
   # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core
@@ -577,6 +584,24 @@ repos:
         lane: node-repo-request-review.yml
         grants: {contents: read, pull-requests: write}
         pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
+      # ── Standing build hosts (H7) — ARRIVING: who runs the heavy legs, and the follow jobs that carry a host's verdict
+      # (the shape MeshWeaver.Reinsurance carries). The lanes demand nothing new; the rows are recorded first so the
+      # caller's validate can assert them the moment its wiring PR lands.
+      - workflow: ci.yml
+        job: build-executor
+        lane: node-repo-build-executor.yml
+        grants: {contents: read}
+        pending: the route lands in Systemorph/MeshWeaver.Crm#190
+      - workflow: ci.yml
+        job: compile-check-follow
+        lane: build-follow.yml
+        grants: {contents: read, id-token: write}
+        pending: the route lands in Systemorph/MeshWeaver.Crm#190
+      - workflow: ci.yml
+        job: gate-follow
+        lane: build-follow.yml
+        grants: {contents: read, id-token: write}
+        pending: the route lands in Systemorph/MeshWeaver.Crm#190
 
   # ── MeshWeaver.FundReporting (private content repo; stood up 2026-09-20 from Crm's caller) ─────
   Systemorph/MeshWeaver.FundReporting:
@@ -637,6 +662,24 @@ repos:
         lane: node-repo-review-answered.yml
         grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
         pending: the thin review-answered.yml caller lands in Systemorph/MeshWeaver.FundReporting#17
+      # ── Standing build hosts (H7) — ARRIVING: who runs the heavy legs, and the follow jobs that carry a host's verdict
+      # (the shape MeshWeaver.Reinsurance carries). The lanes demand nothing new; the rows are recorded first so the
+      # caller's validate can assert them the moment its wiring PR lands.
+      - workflow: ci.yml
+        job: build-executor
+        lane: node-repo-build-executor.yml
+        grants: {contents: read}
+        pending: the route lands in Systemorph/MeshWeaver.FundReporting#19
+      - workflow: ci.yml
+        job: compile-check-follow
+        lane: build-follow.yml
+        grants: {contents: read, id-token: write}
+        pending: the route lands in Systemorph/MeshWeaver.FundReporting#19
+      - workflow: ci.yml
+        job: gate-follow
+        lane: build-follow.yml
+        grants: {contents: read, id-token: write}
+        pending: the route lands in Systemorph/MeshWeaver.FundReporting#19
 
   # ── Systemorph/Memex (the private deployment-config repository) ───────────────────────────────
   # 🚨 THE ONE ROW NOTHING RE-MEASURES, AND IT SAYS SO. Memex calls exactly one platform lane —
