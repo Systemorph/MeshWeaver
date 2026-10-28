@@ -124,8 +124,10 @@ internal static class DeclaredDefaultsSurviveTheWire
             && SettersAreContained(typeInfo, candidates, logger)
             ? ConstructorStores.Read(typeInfo, logger)
             : null;
-        // A modifier that runs after this rule can still replace the factory; the proof then no
-        // longer describes the reader, so a proven member is written whenever the factory differs.
+        // A modifier that runs after this rule can still replace the factory, or install an
+        // OnDeserializing callback (which runs after construction and may set a member); the proof
+        // then no longer describes the reader, so a proven member is written whenever either differs
+        // from what was proven (the proof required no callback).
         var provenFactory = typeInfo.CreateObject;
         var omits = false;
         foreach (var property in candidates)
@@ -137,7 +139,9 @@ internal static class DeclaredDefaultsSurviveTheWire
             }
             var clrDefault = ClrDefault(property.PropertyType);
             property.ShouldSerialize = (_, value) =>
-                !ReferenceEquals(typeInfo.CreateObject, provenFactory) || !Equals(value, clrDefault);
+                !ReferenceEquals(typeInfo.CreateObject, provenFactory)
+                || typeInfo.OnDeserializing is not null
+                || !Equals(value, clrDefault);
             omits = true;
         }
         return omits;

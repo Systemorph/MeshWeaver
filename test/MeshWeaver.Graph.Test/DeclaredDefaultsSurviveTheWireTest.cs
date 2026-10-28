@@ -305,6 +305,19 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
             TypeInfoResolver = new PolymorphicTypeInfoResolver(Mesh.TypeRegistry).WithAddedModifier(ArmingFactory),
         };
 
+    private static readonly Action<JsonTypeInfo> ArmingCallback = typeInfo =>
+    {
+        if (typeInfo.Type == typeof(FactoryFlags))
+            typeInfo.OnDeserializing = instance => ((FactoryFlags)instance).Enabled = true;
+    };
+
+    /// <summary>The hub's options with an OnDeserializing callback a modifier installs AFTER the rule.</summary>
+    private JsonSerializerOptions WithCallbackAfterTheRule() =>
+        new(Mesh.JsonSerializerOptions)
+        {
+            TypeInfoResolver = new PolymorphicTypeInfoResolver(Mesh.TypeRegistry).WithAddedModifier(ArmingCallback),
+        };
+
     private static JsonSerializerOptions WithoutTheFix() => new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -753,6 +766,31 @@ public class DeclaredDefaultsSurviveTheWireTest(ITestOutputHelper output) : Mono
             json.Should().Contain("\"enabled\":false");
             JsonSerializer.Deserialize<FactoryFlags>(json, options)!.Enabled.Should().BeFalse();
         }
+    }
+
+    /// <summary>
+    /// Review round 10: a modifier after the rule can install an OnDeserializing callback without
+    /// touching the factory; the callback runs after construction, so the proof no longer describes
+    /// the read and the member is written.
+    /// </summary>
+    [Fact]
+    public void A_callback_installed_after_the_rule_never_loses_an_explicit_false()
+    {
+        var options = WithCallbackAfterTheRule();
+        var json = JsonSerializer.Serialize(new FactoryFlags { Enabled = false }, options);
+        json.Should().Contain("\"enabled\":false");
+        JsonSerializer.Deserialize<FactoryFlags>(json, options)!.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Negative_control_without_the_fix_an_after_rule_callback_reads_its_own_value()
+    {
+        var options = new JsonSerializerOptions(WithoutTheFix())
+        {
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver().WithAddedModifier(ArmingCallback),
+        };
+        RoundTrip(new FactoryFlags { Enabled = false }, options).Enabled.Should().BeTrue(
+            "if this ever fails, the after-rule callback case no longer exercises the trap");
     }
 
     [Fact]
