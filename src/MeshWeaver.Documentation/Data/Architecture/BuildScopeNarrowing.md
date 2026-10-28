@@ -354,9 +354,16 @@ every content-only pull request. Two rules let it reuse the baseline's bundles i
   baseline. A pull request diffs its merge-base, so it means only that the pull request did not
   touch the entry. The reuse step therefore checks out the baseline sha in a worktree,
   materializes its main-owned locks with the same generator, and compares two things on both
-  trees: `module-build-key.py`'s content address, and the trees of the shelf and build-extension
-  projects. An entry is reused only when both agree. An entry that cannot be keyed is built, and
-  a comparison that fails keeps every normal build.
+  trees: `module-build-key.py`'s content address, and the package's release `version`. The
+  version matters because a change that main made and then reverted leaves the content equal
+  while the version has advanced. An entry is reused only when both agree.
+
+  The caller's shelf and build extension are evaluated by MSBuild. Their inputs (linked files,
+  explicit imports, property-resolved references) cannot be listed by a static walk. So when
+  either is named, any change outside the node-package directories since the baseline
+  (`.github/` and `.claude/` aside) withdraws every reuse.
+
+  An entry that cannot be keyed is built, and a comparison that fails keeps every normal build.
 
 
 `build-logic-ref` opts the module call into these selectors at an immutable core commit, separately

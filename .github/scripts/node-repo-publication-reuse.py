@@ -26,9 +26,10 @@ baseline". A pull request diffs its MERGE-BASE, so `test: false` only means "thi
 not change it": main may have changed the module after the baseline published it. So on a run that
 does not narrow by the baseline (`--event` pull_request / merge_group) every annotated entry is also
 KEYED at the baseline sha and at HEAD with module-build-key.py (the ledger's content address: project
-closure, package versions, requires, every Directory.* import and global build input), plus the tree
-of every caller project named with --key-project (the shelf, the build extension), and is reused only
-when both sides agree. Anything unkeyable withdraws the reuse; a failure of the comparison itself
+closure, package versions, requires, every Directory.* import and global build input), plus its package's
+release version, and is reused only when both sides agree. When a caller project is named with
+--key-project (the shelf, the build extension), MSBuild-evaluated inputs no static walk can list may
+lie anywhere outside the node packages, so any change there since the baseline withdraws every reuse. Anything unkeyable withdraws the reuse; a failure of the comparison itself
 keeps every normal build.
 """
 import argparse
@@ -163,19 +164,32 @@ def _load_key_module():
     return module
 
 
-def build_inputs(root, entry, extra_projects, mbk):
-    """What decides this entry's bundle bytes at `root`: its content address (toolchain constants are
-    equal on both sides — the baseline resolver already proved the toolchain) and the tree of each
-    caller compiler-input project. Raises ValueError when the entry cannot be keyed there."""
+def build_inputs(root, entry, mbk):
+    """What decides this entry's bundle at `root`: its content address (toolchain constants are equal
+    on both sides — the baseline resolver already proved the toolchain) and the RELEASE version its
+    package's manifest.lock names (the pack lane checks the reused bundle's version against HEAD's, and
+    the content key alone cannot see a change-and-revert that advanced it). Raises ValueError when the
+    entry cannot be keyed there."""
     root = Path(root)
-    extras = {}
-    for project in extra_projects:
-        if not (root / project).is_file():
-            raise ValueError(f"{project} does not exist at this tree")
-        dirs = mbk.closure_dirs(root, project)
-        extras[project] = {"closure": {d: mbk.tree_hash(root, d) for d in dirs},
-                           "imports": mbk.directory_imports(root, dirs)}
-    return {"key": mbk.compute(root, entry, "-", "-", "-")["key"], "extras": extras}
+    lock = mbk.read_json(root / (entry.get("package") or "") / "manifest.lock")
+    version = lock.get("version") if isinstance(lock, dict) else None
+    if not isinstance(version, str) or not version:
+        raise ValueError(f"{entry.get('package')}/manifest.lock names no release version")
+    return {"key": mbk.compute(root, entry, "-", "-", "-")["key"], "version": version}
+
+
+# The caller's shelf and build extension are evaluated by MSBuild, whose inputs (linked files,
+# explicit imports, property-resolved references) no static walk can enumerate. So when either is
+# named, reuse on a pull request also demands that NOTHING outside the node packages changed since
+# the baseline: every such path could be one of their inputs. Over-approximate on purpose; the
+# directories below hold no compiler input of any project.
+NEVER_COMPILED = (".github/", ".claude/")
+
+
+def outside_packages(changed, package_dirs):
+    """The changed paths that lie outside every node package directory (and outside NEVER_COMPILED). Pure."""
+    return sorted(p for p in changed if p and not p.startswith(NEVER_COMPILED)
+                  and p.split("/", 1)[0] not in package_dirs)
 
 
 def unchanged_since_baseline(entries, head_inputs, base_inputs):
@@ -216,8 +230,19 @@ def baseline_tree_guard(root, sha, extra_projects):
                     subprocess.run([sys.executable, str(generator), "--materialize"], capture_output=True,
                                    text=True, timeout=600, check=True, env={**os.environ, "MW_REPO_ROOT": str(base)})
                 kept, withdrawn = unchanged_since_baseline(
-                    entries, lambda e: build_inputs(root, e, extra_projects, mbk),
-                    lambda e: build_inputs(base, e, extra_projects, mbk))
+                    entries, lambda e: build_inputs(root, e, mbk), lambda e: build_inputs(base, e, mbk))
+                if extra_projects and any(e.get("reuse") for e in kept):
+                    changed = subprocess.run(["git", "-C", str(root), "diff", "--name-only", sha],
+                                             capture_output=True, text=True, timeout=120, check=True).stdout.split()
+                    packages = {d.name for t in (Path(root), base) for d in t.iterdir()
+                                if d.is_dir() and (d / "index.json").is_file()}
+                    outside = outside_packages(changed, packages)
+                    if outside:
+                        why = (f"{len(outside)} path(s) outside the node packages changed since the baseline "
+                               f"(e.g. {', '.join(outside[:3])}) and could be an input of "
+                               f"{', '.join(extra_projects)}")
+                        withdrawn += [(e["module"], why) for e in kept if e.get("reuse")]
+                        kept = [{k: v for k, v in e.items() if k != "reuse"} for e in kept]
             finally:
                 subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(base)],
                                capture_output=True, text=True, timeout=120)
@@ -451,27 +476,35 @@ def self_test():
             raise subprocess.CalledProcessError(128, ["git", "worktree"])
         got = publication_reuse([mk("A"), mk("B")], lambda: (run, live), "a" * 40, root, frozenset(), since=broken)
         assert not any("reuse" in e for e in got), "a failed baseline comparison keeps every normal build"
-        # build_inputs, over the real content address: equal trees agree, a moved closure does not.
+        # build_inputs, over the real content address: equal trees agree, a moved closure does not,
+        # and neither does an advanced release version on identical content.
         mbk = _load_key_module()
         for t in ("head", "base"):
             (root / t / "src" / "A").mkdir(parents=True)
             (root / t / "src" / "A" / "A.csproj").write_text("<Project/>")
             (root / t / "Pkg").mkdir()
-            (root / t / "Pkg" / "manifest.lock").write_text('{"moduleVersion": "m1"}')
+            (root / t / "Pkg" / "manifest.lock").write_text('{"moduleVersion": "m1", "version": "1.2.3"}')
         entry = {"package": "Pkg", "module": "A", "project": "src/A/A.csproj"}
-        assert build_inputs(root / "head", entry, [], mbk) == build_inputs(root / "base", entry, [], mbk)
+        assert build_inputs(root / "head", entry, mbk) == build_inputs(root / "base", entry, mbk)
         (root / "head" / "src" / "A" / "Code.cs").write_text("class C {}")
-        assert build_inputs(root / "head", entry, [], mbk) != build_inputs(root / "base", entry, [], mbk), \
+        assert build_inputs(root / "head", entry, mbk) != build_inputs(root / "base", entry, mbk), \
             "NEGATIVE CONTROL: a source file main added after the baseline is a different build"
         (root / "base" / "src" / "A" / "Code.cs").write_text("class C {}")
-        (root / "head" / "src" / "Shelf").mkdir()
-        (root / "head" / "src" / "Shelf" / "Shelf.csproj").write_text("<Project/>")
+        (root / "head" / "Pkg" / "manifest.lock").write_text('{"moduleVersion": "m1", "version": "1.2.4"}')
+        assert build_inputs(root / "head", entry, mbk) != build_inputs(root / "base", entry, mbk), \
+            "NEGATIVE CONTROL: a change-and-revert that advanced the release version is not reused"
+        (root / "base" / "Pkg" / "manifest.lock").write_text('{"moduleVersion": "m1"}')
         try:
-            build_inputs(root / "base", entry, ["src/Shelf/Shelf.csproj"], mbk)
-            raise AssertionError("a key project absent at the baseline must not key on nothing")
+            build_inputs(root / "base", entry, mbk)
+            raise AssertionError("a lock with no release version must not key on nothing")
         except ValueError:
             pass
-    print("publication reuse: 33 assertions passed")
+    # The shelf / extension rule: only node-package content may differ since the baseline.
+    assert outside_packages(["Pkg/Guide.md", ".github/workflows/ci.yml", ".claude/x.md"], {"Pkg"}) == []
+    assert outside_packages(["Pkg/a.md", "src/Shelf/Linked.cs", "Directory.Build.props", "tools/x.props"],
+                            {"Pkg"}) == ["Directory.Build.props", "src/Shelf/Linked.cs", "tools/x.props"], \
+        "NEGATIVE CONTROL: src/, root and tools/ paths may be MSBuild inputs of the shelf"
+    print("publication reuse: 36 assertions passed")
 
 
 def main():
