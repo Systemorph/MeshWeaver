@@ -181,6 +181,27 @@ is writable-only, the same set and the same reason as `ListDescendantPaths`. It 
 or the writable-only filter is silently lost at the outermost decorator that falls back to that
 default.
 
+### An enumeration that gave NO answer is not an empty subtree (#7461)
+
+`ListDescendantPaths` "emits one complete snapshot and completes". A store that completes WITHOUT
+emitting has not said the subtree is empty — it has said nothing. The production composite
+(`PersistenceService`) folded every writable provider's answer into a SEEDED union, so a silent
+provider contributed nothing and the union still emitted; the interface's default walk had the same
+seeded fold one level down, so a nested `ListChildPaths` that completed empty dropped its whole
+subtree. Both read "no answer" as "no descendants". The planner would delete the root alone, and the
+verifier, asking the same silent store, would report the subtree drained.
+
+An empty completion is therefore a FAULT, `SubtreeEnumerationUnansweredException`, raised before any
+fold and naming who gave no answer. It is raised at four places: each provider in the composite, each
+level of the default walk, the routed `ListDescendantPathsRequest` handler (which otherwise posted no
+response at all), and the outermost storage decorator (`SubtreeDeletionGuardStorageAdapter`), which
+covers a single-store mesh that has no composite. Every caller that already failed closed on a
+fault (the delete planner and drain, the move's delete leg, `SpaceDeletion`'s install-record read,
+the partition teardown sweep) now fails closed on a missing answer too. A store with nothing under
+the root answers with an EMPTY collection, which is an answer and passes. Measured before the fix
+on a Monolith mesh, a recursive delete over a silent store did not fail. It never answered at all,
+and the caller waited out its whole budget.
+
 **What the predicate still cannot see.** A row that is re-created AFTER the final verification is
 outside any completion check by construction — that is the tombstone's job
 (`RecentlyDeletedRegistry`), not the drain's. The drain's contract is narrower and now true: at the
@@ -621,6 +642,14 @@ bound. See [Node Type Compilation](../NodeTypeCompilation), "Compile history is 
 mesh: a delete that removes plan + 1 while outliving its operation budget must SUCCEED, a root put
 back once must be drained by a follow-up pass so that success means it is gone, and a root that
 survives every pass must FAIL naming itself.
+
+`AnUnansweredSubtreeEnumerationIsNotAnEmptySubtreeTest` (MeshWeaver.Hosting.Test) pins #7461 on the
+composite, the default walk and the outermost decorator. In each, a store that completes empty must
+fault, and a store that answers with nothing must still emit an empty collection.
+`AnUnansweredSubtreeEnumerationRefusesTheDeleteTest` (MeshWeaver.Graph.Test) drives a recursive
+delete over a silent store on a real Monolith mesh. The delete must fail, name the missing answer and
+leave the child stored, and a leaf delete over an answering store must still succeed. Reverted, the
+delete never answers within 60 s.
 
 `UpdateNeverResurrectsADeletedNodeTest` (MeshWeaver.Graph.Test) pins the post-commit flush
 deterministically. A flush that arrives after the delete is refused and the node stays gone, while

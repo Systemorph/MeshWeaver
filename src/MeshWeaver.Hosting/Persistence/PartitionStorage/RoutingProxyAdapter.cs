@@ -269,7 +269,10 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
                     .SelectMany(d => d.Message.Error != null
                         ? Observable.Throw<IReadOnlyCollection<string>>(
                             new InvalidOperationException(d.Message.Error))
-                        : Observable.Return<IReadOnlyCollection<string>>(d.Message.Paths)));
+                        : Observable.Return<IReadOnlyCollection<string>>(d.Message.Paths)))
+            // A router that resolves no address at all, or a request stream that ends with no
+            // response, is NO answer — never "no descendants" (MeshWeaver#7461).
+            .RequireAnswer($"{nameof(RoutingProxyAdapter)} (routed)", rootPath);
 
     // ── Partition objects: not yet routed via hub messages. ─────────────
     //
