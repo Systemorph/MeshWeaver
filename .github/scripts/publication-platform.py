@@ -330,15 +330,34 @@ def reading_from_index(index: dict, source: str, identity: str, where: str) -> R
     return Reading("record", record_of(raw, source, identity, where), where)
 
 
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is never followed: urllib would replay ordinary headers — the registry key — to
+    whatever origin the Location names. The curl seed reader does not follow redirects either, so a
+    3xx surfaces as an HTTPError and the reader refuses it by name."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, D102
+        return None
+
+
+_REGISTRY_OPENER = urllib.request.build_opener(_RefuseRedirect)
+
+
+def _open_registry(request: urllib.request.Request, timeout: float):  # noqa: ANN202
+    return _REGISTRY_OPENER.open(request, timeout=timeout)
+
+
 def registry_reader(url: str, key: str, delays=TRANSIENT_DELAYS,
                     sleep: Callable[[float], None] = time.sleep) -> Reader:
     def read(identity: str, source: str) -> Reading:
         where = f"{url.rstrip('/')}/api/plugins/bundles/prebuilt/{identity}/{source}"
         attempt = 0
         while True:
-            request = urllib.request.Request(where, headers={"Authorization": f"Bearer {key}"})
+            request = urllib.request.Request(where)
+            # UNREDIRECTED as well as never redirected (`_RefuseRedirect`): the key reaches this
+            # registry URL and no other host, whatever a later change does to the opener.
+            request.add_unredirected_header("Authorization", f"Bearer {key}")
             try:
-                with urllib.request.urlopen(request, timeout=60) as response:
+                with _open_registry(request, timeout=60) as response:
                     body = response.read()
                 code = 200
             except urllib.error.HTTPError as error:
@@ -353,6 +372,9 @@ def registry_reader(url: str, key: str, delays=TRANSIENT_DELAYS,
                                   "does not serve the publication index")
             if code == 404:
                 return Reading("absent", None, where)
+            if 300 <= code <= 399:
+                raise Refusal(f"the registry answered {code} (a redirect) for {where} — refusing: a redirect is "
+                              "never followed, so the registry key is never sent to another host")
             if code in (401, 403):
                 raise Refusal(f"the registry refused registry-key for '{source}' ({code}) — the instance needs "
                               f"a whole-source grant '{source}/*'")
@@ -714,13 +736,54 @@ def self_test() -> int:
     def flaky(url, timeout=60):  # noqa: ANN001
         calls["n"] += 1
         raise urllib.error.HTTPError(url.full_url, 503 if calls["n"] < 3 else 404, "x", {}, None)
-    real = urllib.request.urlopen
-    urllib.request.urlopen = flaky  # type: ignore[assignment]
+    global _open_registry
+    real = _open_registry
+    _open_registry = flaky  # type: ignore[assignment]
     try:
         r = registry_reader("https://r", "k", delays=(0, 0, 0, 0), sleep=lambda s: None)("c003e001", "plugins")
     finally:
-        urllib.request.urlopen = real  # type: ignore[assignment]
+        _open_registry = real  # type: ignore[assignment]
     check("the registry reader waits out a 503 (republish window) and reads the definite answer", r.kind == "absent" and calls["n"] == 3, (r, calls))
+
+    # A REAL redirect over loopback: the registry answers 302 to a second origin; the reader must
+    # refuse it, and the second origin must never see a request — let alone the key.
+    import http.server
+    import threading
+    seen: list[str | None] = []
+
+    class Elsewhere(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            seen.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"bundles": []}')
+
+        def log_message(self, *a):  # noqa: ANN002
+            pass
+
+    other = http.server.HTTPServer(("127.0.0.1", 0), Elsewhere)
+
+    class Redirecting(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{other.server_port}/index")
+            self.end_headers()
+
+        def log_message(self, *a):  # noqa: ANN002
+            pass
+
+    registry = http.server.HTTPServer(("127.0.0.1", 0), Redirecting)
+    for server in (other, registry):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        why = refused(lambda: registry_reader(f"http://127.0.0.1:{registry.server_port}", "secret-key",
+                                              delays=(), sleep=lambda s: None)("c003e001", "plugins"))
+    finally:
+        for server in (other, registry):
+            server.shutdown()
+            server.server_close()
+    check("a registry redirect is REFUSED by name, never followed", "redirect" in why, why)
+    check("…and the redirect target never receives a request, so never the key", seen == [], seen)
 
     total = passes + len(failures)
     print(f"\npublication-platform.py self-test: {passes} passed, {len(failures)} failed, {total} assertion(s)")
