@@ -673,6 +673,13 @@ def self_test() -> int:
                  and "exit 1" in str(st.get("run", ""))]
         check("wiring/Consolidate test results fails on precheck's host-forced itself (a transient queue outage on "
               "its re-read cannot clear the decision)", len(holds) == 1, [st.get("name") for st in holds])
+        check("wiring/... and on ADMISSION's host-forced (precheck's read failed, admission's answered and queued the host)",
+              len([st for st in holds if "needs.admission.outputs.executor == 'host-forced'" in str(st.get("if", ""))]) == 1,
+              [st.get("if") for st in holds])
+        build_if = str(workflow_yaml.job(workflow_yaml.load(Path(wf)), "build", "dotnet-test.yml").get("if", ""))
+        check("wiring/the Actions build starts on NEITHER precheck's nor admission's host-forced (no duplicate heavy legs, "
+              "no bypass of the forced routing)",
+              all(f"needs.{j}.outputs.executor != 'host-forced'" in build_if for j in ("precheck", "admission")), build_if)
     # 6. outputs and summary
     out, summ = os.path.join(tmp, "out"), os.path.join(tmp, "summary")
     emit(Decision(HOST, "https://control.example.com/api/builds", "queued", [], run_page_url("https://control.example.com/api/builds", "MeshWeaver.Plugins", "a" * 40)),
