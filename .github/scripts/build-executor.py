@@ -50,7 +50,18 @@ from typing import Callable, Optional
 
 HOST = "host"
 ACTIONS = "actions"
+# 🚨 HOST-FORCED (policy `build-server-routes-all-ci`): the owner routed this repository's pull-request CI to
+# the build server BEFORE its host stages are CI-equivalent. Every lane and follow job that reads the
+# executor turns RED on it, naming the owed gap — a leg the host does not yet run with parity is red,
+# never green and never skipped. It is not `host` (that would carry a host verdict as if equivalent) and
+# not `actions` (that would let the legs run here and paint green).
+HOST_FORCED = "host-forced"
 STAGES_FILE = ".github/build-stages.json"
+# The owner's routing decision is a TRUNK policy, read from core's DEFAULT branch — never from the pull
+# request under test, so no pull request can route itself on or off the host (and the change that adds a
+# repository to it is not itself routed before it merges). Core is public: no credential is needed.
+ROUTING_URL = "https://raw.githubusercontent.com/Systemorph/MeshWeaver/main/.github/build-routing.json"
+ROUTING_POLICY = "build-server-routes-all-ci"
 TRUNK_EVENTS = ("push", "schedule", "workflow_dispatch", "repository_dispatch")
 QUEUE_TIMEOUT_SECONDS = 15
 POST_TIMEOUT_SECONDS = 30
@@ -58,6 +69,8 @@ POST_TIMEOUT_SECONDS = 30
 # (status, body-text) — status 0 is a transport failure, the text its reason.
 Get = Callable[[str], tuple[int, str]]
 Post = Callable[[str, bytes, dict], tuple[int, str]]
+# Reads the routing decision: () -> (status, body-text).
+Routing = Callable[[], tuple[int, str]]
 
 
 class BadInput(Exception):
@@ -92,6 +105,17 @@ class Decision:
     api_url: str
     why: str
     lines: list[str] = field(default_factory=list)   # workflow-command lines to print
+    page_url: str = ""   # the run's live page on the operations instance (host only)
+
+
+def run_page_url(api: str, repo_name: str, sha: str) -> str:
+    """The queued run's live page: the API's origin + `Hosting/Builds/<repo>/<sha>` (a latest run's node id
+    is its sha — the only channel a build-request queues). '' when the API is not a safe URL or the
+    names are not path-shaped."""
+    if not safe_url(api) or not re.fullmatch(r"[A-Za-z0-9._-]+", repo_name or "") or not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+        return ""
+    p = urllib.parse.urlparse(api)
+    return f"{p.scheme}://{p.netloc}/Hosting/Builds/{repo_name}/{sha}"
 
 
 def safe_url(raw: str) -> str:
@@ -157,6 +181,45 @@ def declared_stages(path: str) -> tuple[list[str], str]:
     return names, ""
 
 
+def stage_debt(path: str) -> tuple[list[str], list[str]]:
+    """(the stage names, what they still OWE) — read without judging the claim. A repository with no readable
+    declaration owes everything, said as one item. Never raises."""
+    try:
+        with open(path) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return [], [f"no host stages: {path} is absent or unreadable — the build host runs nothing for this repository"]
+    stages = doc.get("stages") if isinstance(doc, dict) else None
+    names = [s.get("name") for s in stages if isinstance(s, dict)] if isinstance(stages, list) else []
+    names = [n for n in names if isinstance(n, str) and n]
+    owes = doc.get("owes") if isinstance(doc, dict) else None
+    owes = [o for o in owes if isinstance(o, str) and o.strip()] if isinstance(owes, list) else []
+    if not names:
+        owes = [f"no host stages: {path} declares none — the build host runs nothing for this repository", *owes]
+    elif not owes:
+        owes = [f"{path} does not claim CI equivalence (\"ciEquivalent\": true) and names no `owes` — what its stages check less than the Actions legs is undeclared"]
+    return names, owes
+
+
+def forced_repos(routing: Optional[Routing]) -> tuple[frozenset, str]:
+    """The repositories the owner routed to the build server ahead of CI equivalence (`hostForced` in core's
+    `.github/build-routing.json` on main), or (empty, why not). Unreadable or malformed reads as NONE — the legs
+    then run on Actions as before, which is a real verdict, never a false green."""
+    if routing is None:
+        return frozenset(), "no routing decision was read"
+    status, text = routing()
+    if status != 200:
+        return frozenset(), f"the routing decision could not be read ({'transport: ' + text if status == 0 else f'HTTP {status}'})"
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return frozenset(), "the routing decision is not JSON"
+    repos = doc.get("hostForced") if isinstance(doc, dict) else None
+    if not isinstance(repos, list) or not all(isinstance(r, str) and r for r in repos):
+        return frozenset(), "the routing decision's hostForced is not a list of repository names"
+    return frozenset(repos), ""
+
+
 def is_trunk(i: Inputs) -> bool:
     return i.event in TRUNK_EVENTS and i.ref_name == i.default_branch
 
@@ -184,7 +247,7 @@ def sign(secret: str, payload: bytes) -> str:
     return "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
-def decide(i: Inputs, get: Get, post: Post) -> Decision:
+def decide(i: Inputs, get: Get, post: Post, routing: Optional[Routing] = None, route_only: bool = False) -> Decision:
     """The executor for this run. Pure but for the two injected calls."""
     if not re.fullmatch(r"[0-9a-f]{40}", i.sha or ""):
         raise BadInput(f"HEAD_SHA {i.sha!r} is not a 40-hex commit")
@@ -207,7 +270,16 @@ def decide(i: Inputs, get: Get, post: Post) -> Decision:
     if not (i.event == "pull_request" and i.pr) and not is_trunk(i):
         return actions(f"a {i.event or 'unknown'} run on {i.ref_name or '?'} is neither a pull request nor trunk — the host would test a merged tree Actions never builds", warn=False)
     stages, no_stages = declared_stages(i.stages_file)
-    if not stages:
+    if not stages or route_only:
+        if stages:      # route-only on a repository that CLAIMS equivalence: its follow jobs carry the host verdict
+            return actions(f"{i.repo.split('/')[-1]} claims CI equivalence — its contexts follow the host; nothing is forced", warn=False)
+        # 🚨 HOST-FORCED applies to PULL REQUESTS only: trunk runs keep their legs on Actions so main's CD keeps
+        # sealing platform sets — the sets that carry the build host's own fixes to the host.
+        forced, _ = forced_repos(routing) if (i.event == "pull_request" and i.pr) else (frozenset(), "")
+        if i.repo.split("/")[-1] in forced:
+            return decide_forced(i, get, post, api, route_only)
+        if route_only:
+            return actions(f"{i.repo.split('/')[-1]} is not host-forced for this {i.event or 'unknown'} run", warn=False)
         return actions(no_stages, warn=False)
     if not api:
         return actions("no build API is configured (vars.MW_BUILD_API, or an https BUILD_WEBHOOK_URL to derive it from)", warn=False)
@@ -239,8 +311,55 @@ def decide(i: Inputs, get: Get, post: Post) -> Decision:
         verdict = None
     if verdict != "verified":
         return actions(f"the inbox stored the build-request but did not verify its signature (signature: {verdict!r})")
+    page = run_page_url(api, repo_name, i.sha)
     return Decision(HOST, api, f"the instance runs {repo_name}'s stages ({', '.join(stages)}) on build-{i.channel}; the run is queued", [
-        f"::notice title=Heavy legs on a build host::{repo_name}@{i.sha[:12]} is queued on build-{i.channel} — every heavy leg is followed from the host ({', '.join(stages)})"])
+        f"::notice title=Heavy legs on a build host::{repo_name}@{i.sha[:12]} is queued on build-{i.channel} — every heavy leg is followed from the host ({', '.join(stages)})"
+        + (f"; live progress: {page}" if page else "")], page)
+
+
+def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool) -> Decision:
+    """The owner routed this repository's pull requests to the build server (policy `build-server-routes-all-ci`)
+    while its stages still owe parity. The operations instance must still SAY host for it (its
+    `Hosting:Builds:HostRepos`); then the answer is HOST_FORCED, which every lane and follow job turns RED,
+    naming the debt. When the repository declares stages, the run is ALSO queued on the host (best effort), so
+    the host runs what it can and its own check runs show how far it got — none of them is a required context."""
+    repo_name = i.repo.split("/")[-1]
+
+    def actions(why: str) -> Decision:
+        return Decision(ACTIONS, api, why, [f"::warning title=Heavy legs on Actions::{why} — the heavy legs run on GitHub Actions"])
+
+    if not api:
+        return actions(f"{repo_name} is host-forced, but no build API is configured — the routing cannot be confirmed")
+    status, text = get(f"{api}/queue?" + urllib.parse.urlencode({"channel": i.channel, "repo": repo_name}))
+    if status != 200:
+        return actions(f"{repo_name} is host-forced, but the build queue did not answer (GET {api}/queue: {'transport: ' + text if status == 0 else f'HTTP {status}'})")
+    try:
+        executor = json.loads(text).get("executor")
+    except (ValueError, AttributeError):
+        executor = None
+    if not isinstance(executor, str) or executor.strip().lower() != HOST:
+        return Decision(ACTIONS, api, f"{repo_name} is host-forced, but the instance executes it on {executor!s:.40}", [])
+    names, owes = stage_debt(i.stages_file)
+    queued = "not queued (route check only)" if route_only else "not queued (no stages declared)"
+    if names and not route_only:
+        if i.secret and safe_url(i.queue_url):
+            payload = json.dumps(request_body(i), separators=(",", ":")).encode()
+            st, body = post(i.queue_url, payload, {"Content-Type": "application/json", "X-Hub-Signature-256": sign(i.secret, payload),
+                                                   "User-Agent": "meshweaver-build-executor"})
+            try:
+                verdict = json.loads(body).get("signature") if 200 <= st < 300 and body.strip() else None
+            except (ValueError, AttributeError):
+                verdict = None
+            queued = (f"queued on build-{i.channel} ({', '.join(names)})" if verdict == "verified"
+                      else f"NOT queued on the host (HTTP {st:03d}, signature {verdict!r})")
+        else:
+            queued = "NOT queued on the host (no webhook pair or an unsafe inbox in this context)"
+    why = (f"{repo_name} is routed to the build server by the owner's decision (policy {ROUTING_POLICY}) while its host stages "
+           f"still owe parity with the Actions legs — every heavy required context is RED until the debt below is paid and "
+           f"`ciEquivalent` is claimed; the run is {queued}")
+    lines = [f"::warning title=Routed to the build host (owner decision {ROUTING_POLICY})::{why}"]
+    lines += [f"::error title=Owed on the build host::{o[:900]}" for o in owes]
+    return Decision(HOST_FORCED, api, why + " — owed: " + " | ".join(o[:300] for o in owes), lines)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -278,6 +397,10 @@ def _http_post(url: str, payload: bytes, headers: dict) -> tuple[int, str]:
         return 0, type(e).__name__
 
 
+def _routing() -> tuple[int, str]:
+    return _http_get(ROUTING_URL)
+
+
 def inputs_from_env(e: dict) -> Inputs:
     def num(name: str, default: int = 0) -> int:
         v = (e.get(name) or "").strip()
@@ -306,20 +429,28 @@ def emit(d: Decision, env: dict) -> None:
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(f"- 🏗️ Heavy legs: **{d.executor}** — {d.why.replace(chr(10), ' ')}\n")
+            if d.executor == HOST and d.page_url:
+                f.write(f"- 📡 Live progress of the run (stage board, what is left, log tail): {d.page_url}\n")
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--route-only", action="store_true",
+                    help="answer only whether this pull request is HOST-FORCED (policy build-server-routes-all-ci): queues nothing, "
+                         "and exits 1 naming the owed gap when it is — for a repository whose required context has no follow job")
     a = ap.parse_args(argv)
     if a.self_test:
         return self_test()
     try:
-        d = decide(inputs_from_env(dict(os.environ)), _http_get, _http_post)
+        d = decide(inputs_from_env(dict(os.environ)), _http_get, _http_post, _routing, route_only=a.route_only)
     except BadInput as e:
         print(f"::error title=Build executor::{e}")
         return 2
     emit(d, dict(os.environ))
+    if a.route_only and d.executor == HOST_FORCED:
+        print(f"::error title=Routed to the build host — owed legs are RED::{d.why[:1500]}")
+        return 1
     return 0
 
 
@@ -494,11 +625,67 @@ def self_test() -> int:
         check("input/a non-numeric run id is refused", False)
     except BadInput:
         pass
+    # 5b. HOST-FORCED (policy build-server-routes-all-ci): red-never-green while the stages owe parity
+    owing = os.path.join(tmp, "owing.json")
+    with open(owing, "w") as fh:
+        json.dump({"owes": ["modules: not built on the host"], "stages": [{"name": "compile-check"}, {"name": "gate"}]}, fh)
+    route = lambda *repos: (lambda: (200, json.dumps({"policy": ROUTING_POLICY, "hostForced": list(repos)})))
+    calls.clear()
+    d = decide(with_(stages_file=owing), host_q, ok_post, route("MeshWeaver.Plugins"))
+    check("forced/an owing repository the owner routed answers host-forced, never actions or host",
+          d.executor == HOST_FORCED and "modules: not built on the host" in d.why and ROUTING_POLICY in d.why, d)
+    check("forced/its stages are still queued on the host (traffic goes there)", [c[0] for c in calls] == ["GET", "POST"], calls)
+    check("forced/each owed item is an ::error annotation", any(l.startswith("::error title=Owed") and "modules" in l for l in d.lines), d.lines)
+    calls.clear()
+    d = decide(with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post, route("MeshWeaver.Plugins"))
+    check("forced/a repository with NO stages is host-forced too, owing everything, and queues nothing",
+          d.executor == HOST_FORCED and "no host stages" in d.why and [c[0] for c in calls] == ["GET"], (d, calls))
+    d = decide(with_(stages_file=owing), host_q, ok_post, route("MeshWeaver.Crm"))
+    check("forced/negative control: a repository NOT on the list stays on actions", d.executor == ACTIONS, d)
+    d = decide(with_(stages_file=owing), get_answer(200, {"executor": "actions"}), ok_post, route("MeshWeaver.Plugins"))
+    check("forced/the instance must still say host (HostRepos) — else actions", d.executor == ACTIONS, d)
+    d = decide(with_(stages_file=owing, event="push", ref_name="main", pr=None), host_q, ok_post, route("MeshWeaver.Plugins"))
+    check("forced/a TRUNK run is never forced (main's CD keeps sealing the sets that carry host fixes)", d.executor == ACTIONS, d)
+    for bad in ((404, ""), (0, "URLError"), (200, "<html>"), (200, json.dumps({"hostForced": "MeshWeaver.Plugins"}))):
+        d = decide(with_(stages_file=owing), host_q, ok_post, lambda b=bad: b)
+        check(f"forced/an unreadable routing decision {bad[0]} is NOT forced (legs run on Actions — a real verdict)", d.executor == ACTIONS, d)
+    d = decide(with_(stages_file=stages), host_q, ok_post, route("MeshWeaver.Plugins"))
+    check("forced/a repository that CLAIMS equivalence is plain host, routing list or not", d.executor == HOST, d)
+    calls.clear()
+    d = decide(with_(stages_file=stages), host_q, ok_post, route("MeshWeaver.Plugins"), route_only=True)
+    check("forced/route-only on a CLAIMING repository is never forced", d.executor == ACTIONS, d)
+    calls.clear()
+    d = decide(with_(stages_file=owing), host_q, ok_post, route("MeshWeaver.Plugins"), route_only=True)
+    check("forced/route-only on a forced, owing repository is host-forced and POSTs nothing", d.executor == HOST_FORCED and not any(c[0] == "POST" for c in calls), (d, calls))
+    d = decide(with_(stages_file=stages), host_q, ok_post, route("MeshWeaver.Crm"), route_only=True)
+    check("forced/route-only on an unlisted repository is actions", d.executor == ACTIONS, d)
+    # 5b. wiring: the required context must not let consolidate's SECOND read clear precheck's decision.
+    # `--route-only` reads an unanswering queue as NOT forced; precheck's `host-forced` already skipped
+    # `build`, so `Consolidate test results` must fail on precheck's answer itself, before any re-read.
+    wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows", "dotnet-test.yml")
+    if os.path.isfile(wf):  # core's own tree; a satellite running the platform copy has no such lane
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import workflow_yaml  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+        collect = workflow_yaml.job(workflow_yaml.load(Path(wf)), "collect-results", "dotnet-test.yml")
+        holds = [st for st in collect.get("steps") or []
+                 if "needs.precheck.outputs.executor == 'host-forced'" in str(st.get("if", ""))
+                 and "exit 1" in str(st.get("run", ""))]
+        check("wiring/Consolidate test results fails on precheck's host-forced itself (a transient queue outage on "
+              "its re-read cannot clear the decision)", len(holds) == 1, [st.get("name") for st in holds])
     # 6. outputs and summary
     out, summ = os.path.join(tmp, "out"), os.path.join(tmp, "summary")
-    emit(Decision(HOST, "https://control.example.com/api/builds", "queued", []), {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})
+    emit(Decision(HOST, "https://control.example.com/api/builds", "queued", [], run_page_url("https://control.example.com/api/builds", "MeshWeaver.Plugins", "a" * 40)),
+         {"GITHUB_OUTPUT": out, "GITHUB_STEP_SUMMARY": summ})
     check("emit/outputs", open(out).read() == "executor=host\napi-url=https://control.example.com/api/builds\n", open(out).read())
     check("emit/summary says which and why", "**host** — queued" in open(summ).read())
+    check("emit/summary links the run's live page", "https://control.example.com/Hosting/Builds/MeshWeaver.Plugins/" + "a" * 40 in open(summ).read(), open(summ).read())
+    check("page/no link off an unsafe API or a non-sha", run_page_url("http://evil.example/api/builds", "R", "a" * 40) == ""
+          and run_page_url("https://control.example.com/api/builds", "R", "abc") == ""
+          and run_page_url("https://control.example.com/api/builds", "../x", "a" * 40) == "", "linked")
+    summ2 = os.path.join(tmp, "summary2")
+    emit(Decision(ACTIONS, "", "no stages", []), {"GITHUB_STEP_SUMMARY": summ2})
+    check("emit/an actions run links no page", "Live progress" not in open(summ2).read(), open(summ2).read())
     for f in failures:
         print(f"SELF-TEST FAILED: {f}")
     if failures:

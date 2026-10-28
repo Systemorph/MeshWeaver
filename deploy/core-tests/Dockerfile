@@ -8,8 +8,10 @@
 #
 # The tree lives at /core-tests. A build host stages it READ-ONLY beside the tester and portal
 # trees (by digest, like the rest of the set); the runner copies a shard's bins into the run's
-# writable checkout before it runs them. The SDK base makes the image runnable on its own as well:
-#   docker run --rm mw-core-tests:<version> python3 /core-tests/core-tests.py run --shard 0 --total 8
+# writable checkout before it runs them. The SDK base makes the image runnable on its own as well,
+# given a checkout of the SET's commit (a shard records and gates with that commit's own
+# .github/scripts — record-host-crash.py, check-untyped-content.sh — which the image does not carry):
+#   docker run --rm -v "$PWD:/repo" mw-core-tests:<version> python3 /core-tests/core-tests.py run --shard 0 --total 8 --repo /repo
 #
 # Built and pushed by core's CD (`main-cd.yml`): `core-tests-image-arch` builds, packs and pushes
 # one platform image per architecture ON that architecture (the bins carry a native apphost and a

@@ -474,6 +474,14 @@ def self_test() -> int:
            is_protected(real, "gliner-multi-2.1") and is_protected(real, "1.7.4-flix-large-v3-q8")
            and tags_for(real, "3.1.10050", "whisper-image.yml", job="publish", repository="whisper-swiss-german") == ["1.7.4-flix-large-v3-q8"]
            and tags_for(real, "3.1.10050", "s1-extract-image.yml", job="publish", repository="s1-extract") == ["gliner-multi-2.1"])
+    # The service images moved to MeshWeaver.Deploy (core slimming): their writers are declared there,
+    # so `check` does not look for those workflows here, and the line tags stay protected.
+    expect("the four service-image writers name MeshWeaver.Deploy",
+           sorted(b["workflow"] for e in real["channels"] for b in e["writers"]
+                  if b.get("repo") == "Systemorph/MeshWeaver.Deploy")
+           == ["ocr-image.yml", "ollama-image.yml", "s1-extract-image.yml", "whisper-image.yml"])
+    expect("the moved service lines are still protected (ocr, ollama)",
+           is_protected(real, "tesseract-5.5") and is_protected(real, "0.33.2-qwen3.6-bge-m3"))
     expect("a version-shaped label is still refused on a SELF-UPDATE repository",
            bool(broken(lambda d: [e for e in d["channels"] if e["id"] == "whisper-line"][0]["writers"][0].update(repositories=["memex-portal-ai"]))))
 
