@@ -438,11 +438,18 @@ public static class DeclaredPointRead
     /// <c>Admin</c> partition (where the platform-admin predicate lives).
     /// </summary>
     internal static System.Collections.Immutable.ImmutableHashSet<string> ReadScopes(MeshNode node)
+        => ReadScopes(node.Path, node.MainNode);
+
+    /// <summary>
+    /// <see cref="ReadScopes(MeshNode)"/> for a read known only by its path (and, when known, its
+    /// <see cref="MeshNode.MainNode"/>) — the node-stream cache's read gate decides before it holds a node.
+    /// </summary>
+    internal static System.Collections.Immutable.ImmutableHashSet<string> ReadScopes(string? nodePath, string? mainNode = null)
     {
         var scopes = System.Collections.Immutable.ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         scopes.Add("");
         scopes.Add(PermissionEvaluator.AdminScope);
-        foreach (var path in new[] { node.Path, node.MainNode })
+        foreach (var path in new[] { nodePath, mainNode })
         {
             var segments = (path ?? "").Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
             for (var i = 1; i <= segments.Length; i++)
