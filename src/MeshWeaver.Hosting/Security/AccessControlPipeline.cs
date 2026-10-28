@@ -508,7 +508,7 @@ public static class AccessControlPipeline
                     // would overtake it (#6589, see SenderOrderedRelease).
                     if (!ordered.IsWaiting(senderKey))
                         return next.Invoke(delivery, ct);
-                    ordered.Release<EvaluatedCheck?>(senderKey, Observable.Return<EvaluatedCheck?>(null),
+                    ordered.Release<EvaluatedCheck?>(senderKey, delivery, Observable.Return<EvaluatedCheck?>(null),
                         _ => next.Invoke(delivery, ct).Subscribe(
                             _ => { },
                             ex => logger?.LogError(ex,
@@ -537,7 +537,7 @@ public static class AccessControlPipeline
                 // the pool), so acting on it the moment it arrived let a sender's later write run
                 // its handler before an earlier one: 20 patches posted in order to a node were
                 // applied 1,3,2,… and the last one posted did not stay. See SenderOrderedRelease.
-                ordered.Release(senderKey, pendingChecks.ToObservable()
+                ordered.Release(senderKey, delivery, pendingChecks.ToObservable()
                     // 🚨 CheckPermissionOutcome, NOT CheckPermission + a local .Catch(→false)
                     // — issue #974. The fold is the only party that knows whether it reached a
                     // verdict, so it is the only place that may decide "denied" vs. "could not
@@ -760,6 +760,67 @@ public static class AccessControlPipeline
         });
 
     /// <summary>
+    /// Answers a gated delivery whose permission verdict this hub's disposal released before it was
+    /// acted on. A hub going down for a recycle answers the recycling NACK
+    /// (<see cref="ErrorType.ShuttingDown"/>, wording matched as transient by every re-probe
+    /// classifier), so the caller asks the fresh activation instead of waiting out its budget. A hub
+    /// going down because its NODE WAS DELETED answers the authoritative
+    /// <see cref="ErrorType.NotFound"/> with <see cref="DeliveryFailure.NodeAbsent"/> and
+    /// <see cref="DeletedAddressNack"/>'s wording — the same fork <c>MessageService.NackThroughParent</c>
+    /// takes — because "retry" is a lie for an address that will not reactivate (#1029).
+    ///
+    /// <para>Posted through this hub's own Post, unconditionally: past
+    /// <see cref="MessageHubRunLevel.DisposeHostedHubs"/> the post layer itself carries a correlated
+    /// answer — through a live parent, else in-process to a requester still Quiescing on it
+    /// (<c>MessageService.PostImplGeneric</c>) — so choosing a carrier here could only drop one.</para>
+    /// </summary>
+    private static void AnswerReleasedAtTeardown(
+        IMessageHub hub, IMessageDelivery delivery, IAddressTombstones? tombstones, ILogger? logger)
+    {
+        var messageType = delivery.Message.GetType().Name;
+        var deleted = IsDeleted(tombstones, hub.Address.Path, logger);
+        logger?.LogDebug(
+            "AccessControlPipeline: {MessageType} (id={DeliveryId}) on {Hub} was still waiting for its "
+            + "permission verdict when the hub was disposed — NACKing as {ErrorType}",
+            messageType, delivery.Id, hub.Address, deleted ? ErrorType.NotFound : ErrorType.ShuttingDown);
+        hub.Post(
+            deleted
+                ? new DeliveryFailure(delivery)
+                {
+                    ErrorType = ErrorType.NotFound,
+                    Message = DeletedAddressNack.Message(hub.Address.Path),
+                    NodeAbsent = true
+                }
+                : new DeliveryFailure(delivery)
+                {
+                    ErrorType = ErrorType.ShuttingDown,
+                    Message = RecyclingRefusal(hub.Address, messageType,
+                        "the hub was disposed before the permission verdict for this delivery was acted on")
+                },
+            o => o.ResponseFor(delivery));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> carries a live delete tombstone. A mesh without one (bare
+    /// messaging fixtures) or a lookup that faults mid-teardown reads as "not deleted" — the
+    /// transient classification — and never costs the sender its answer.
+    /// </summary>
+    private static bool IsDeleted(IAddressTombstones? tombstones, string path, ILogger? logger)
+    {
+        try
+        {
+            return tombstones?.IsDeleted(path) ?? false;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogDebug(ex,
+                "AccessControlPipeline: could not read the delete tombstone for {Path} — classifying as transient",
+                path);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// 🚨 <b>Per-sender FIFO for gated deliveries (#6589).</b> A <see cref="RequiresPermissionAttribute"/>
     /// delivery is not handled on the turn that received it: the pipeline returns at once and the
     /// handler runs when the permission verdict arrives, which is OFF the turn — the decision hops to
@@ -785,6 +846,7 @@ public static class AccessControlPipeline
         private readonly ConcurrentDictionary<string, Lane> lanes = new(StringComparer.Ordinal);
         private readonly IMessageHub hub;
         private CompositeDisposable? connections;
+        private IAddressTombstones? tombstones;
 
         /// <summary>Creates the per-hub release whose in-flight verdict connections <paramref name="hub"/> owns.</summary>
         public SenderOrderedRelease(IMessageHub hub) => this.hub = hub;
@@ -801,6 +863,10 @@ public static class AccessControlPipeline
             var existing = Volatile.Read(ref connections);
             if (existing is not null)
                 return existing;
+            // The delete tombstone answers a released delivery at TEARDOWN, when this hub's own
+            // scope may already be gone — so it is resolved here, on first use while the hub is
+            // live. It is a mesh singleton (optional: bare messaging fixtures register none).
+            Volatile.Write(ref tombstones, hub.ServiceProvider.GetService<IAddressTombstones>());
             var created = new CompositeDisposable();
             var winner = Interlocked.CompareExchange(ref connections, created, null);
             if (winner is not null)
@@ -821,14 +887,53 @@ public static class AccessControlPipeline
         /// release for <paramref name="key"/> has been acted on.
         /// </summary>
         public void Release<T>(
-            string key, IObservable<T> decision, Action<T> onDecision, Action<Exception> onFault, ILogger? logger)
+            string key, IMessageDelivery delivery, IObservable<T> decision,
+            Action<T> onDecision, Action<Exception> onFault, ILogger? logger)
         {
             // Hot from here: the verdict is computed concurrently with everything queued ahead.
             var verdict = decision.Take(1).Replay(1);
-            verdict.ConnectOwnedBy(Connections());
+            var owner = Connections();
+
+            // 🚨 EVERY gated delivery is answered exactly once — including the one whose verdict the
+            // hub's disposal RELEASED before it was acted on. Disposing `owner` (the hub's ShutDown
+            // phase) unsubscribes the verdict from its upstream and emits NOTHING to the release
+            // below, so without this the delivery got no handler, no refusal and no NACK: the sender
+            // waited out its whole budget. Measured: RecycleNode's own read reached the activity hub
+            // it had just asked to dispose (still Started, so it was admitted), its Read verdict was
+            // in flight off the turn when the teardown released it, and GetMeshNode timed out after
+            // 60 s with `ROUTED onTarget=True state=Submitted` and nothing after it
+            // (ActivityActionReferenceDurabilityTest). The answer is the recycling NACK — the
+            // address is coming back, so the caller re-probes and lands on the fresh activation.
+            // `settled` makes it exactly one answer: whichever of {acted on, released} comes first.
+            var settled = 0;
+            var abandon = Disposable.Create(() =>
+            {
+                if (Interlocked.Exchange(ref settled, 1) != 0)
+                    return;
+                try { AnswerReleasedAtTeardown(hub, delivery, Volatile.Read(ref tombstones), logger); }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "AccessControlPipeline: answering a delivery released at teardown threw");
+                }
+            });
+            // An owner already disposed runs `abandon` on the spot: the delivery is answered now.
+            owner.Add(abandon);
+            verdict.ConnectOwnedBy(owner);
+
+            bool Claim()
+            {
+                if (Interlocked.Exchange(ref settled, 1) != 0)
+                    return false;
+                // Settled — drop the teardown answer; `Remove` disposes it, which is now a no-op.
+                owner.Remove(abandon);
+                return true;
+            }
+
             var release = Observable.Create<System.Reactive.Unit>(observer => verdict.Subscribe(
                 value =>
                 {
+                    if (!Claim())
+                        return;
                     try { onDecision(value); }
                     catch (Exception ex)
                     {
@@ -837,10 +942,13 @@ public static class AccessControlPipeline
                 },
                 ex =>
                 {
-                    try { onFault(ex); }
-                    catch (Exception inner)
+                    if (Claim())
                     {
-                        logger?.LogError(inner, "AccessControlPipeline: answering a failed permission check threw");
+                        try { onFault(ex); }
+                        catch (Exception inner)
+                        {
+                            logger?.LogError(inner, "AccessControlPipeline: answering a failed permission check threw");
+                        }
                     }
                     observer.OnCompleted();
                 },

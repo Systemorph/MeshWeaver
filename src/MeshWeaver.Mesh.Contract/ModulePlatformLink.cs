@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.Loader;
 using System.Text;
 using System.Text.Json;
 
@@ -389,7 +390,31 @@ public sealed class ModulePlatformSurface
     /// </summary>
     /// <param name="probeDirectories">Directories to add — production passes the application base
     /// directory. Missing directories are skipped.</param>
-    public static ModulePlatformSurface OfRunningProcess(params string[] probeDirectories)
+    public static ModulePlatformSurface OfRunningProcess(params string[] probeDirectories) =>
+        OfProcessAssemblies(AppDomain.CurrentDomain.GetAssemblies(), probeDirectories);
+
+    /// <summary>
+    /// 🚨 The surface of the PLATFORM this process runs: <see cref="OfRunningProcess"/> over the
+    /// assemblies the DEFAULT load context holds, and nothing a secondary load context brought in.
+    /// The shape a tool that measures its own process AS the platform host needs (the bake writes
+    /// it as <see cref="PublishedFileName"/>): such a tool also loads what it builds — a compiled
+    /// NodeType assembly opened to run its tests — into collectible contexts, and those stay in
+    /// the process's assembly list until a garbage collection finishes their unload. Measured over
+    /// every loaded assembly, the published surface carried the tool's own outputs, and only when
+    /// no collection had run yet, so two builds of one tree published different surfaces. A
+    /// portal's boot probe and landing check keep <see cref="OfRunningProcess"/>, because there a
+    /// landed module's context IS what a module binds to.
+    /// </summary>
+    /// <param name="probeDirectories">Directories to add — the application base directory.
+    /// Missing directories are skipped.</param>
+    public static ModulePlatformSurface OfRunningPlatform(params string[] probeDirectories) =>
+        OfProcessAssemblies(
+            AppDomain.CurrentDomain.GetAssemblies().Where(assembly =>
+                AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default),
+            probeDirectories);
+
+    private static ModulePlatformSurface OfProcessAssemblies(
+        IEnumerable<Assembly> processAssemblies, string[]? probeDirectories)
     {
         // 🚨 What binds AHEAD of a module's own copy on this process (#4083): the trusted platform
         // assemblies (the application's closure plus the shared frameworks — the TPA binder is
@@ -401,7 +426,7 @@ public sealed class ModulePlatformSurface
         foreach (var path in tpa.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             platformBound.Add(Path.GetFileNameWithoutExtension(path));
         var baseDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
-        var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies();
+        var loadedAssemblies = processAssemblies.ToArray();
         foreach (var assembly in loadedAssemblies)
         {
             var name = assembly.GetName().Name;

@@ -77,11 +77,18 @@ public class ModuleSuiteLaneGuard
         // The matrix is the suite subset cut into batches by `select` (module-pack-batch.py chunk).
         Assert.Contains("batch: ${{ fromJson(needs.select.outputs.test-batches) }}", tests, StringComparison.Ordinal);
 
-        // 🚨 `select` ONLY. Depending on prepare / build-workspace / pack would put the suite back
-        // on the very chain this job exists to run beside, and the change would measure as nothing.
+        // 🚨 `select` and the suites' own one-graph build ONLY. Depending on prepare /
+        // build-workspace / pack would put the suite back on the very chain this job exists to run
+        // beside, and the change would measure as nothing. `tests-build` itself needs `select` alone.
         var needs = Regex.Match(tests, @"\n    needs: (?<needs>.+)\n");
         Assert.True(needs.Success, "the tests job must declare its needs");
-        Assert.Equal("select", needs.Groups["needs"].Value.Trim());
+        Assert.Equal("[select, tests-build]", needs.Groups["needs"].Value.Trim());
+        var buildNeeds = Regex.Match(JobBody("tests-build"), @"\n    needs: (?<needs>.+)\n");
+        Assert.True(buildNeeds.Success, "the tests-build job must declare its needs");
+        Assert.Equal("select", buildNeeds.Groups["needs"].Value.Trim());
+        // --no-build only against output that job built, and a green exit only with a counted .trx.
+        Assert.Contains("--no-build", tests, StringComparison.Ordinal);
+        Assert.Contains("<Counters", tests, StringComparison.Ordinal);
 
         // The suite itself is a MOVE, not a rewrite: same command, same evidence trail.
         Assert.Contains("dotnet test \"$tests\"", tests, StringComparison.Ordinal);
@@ -130,7 +137,9 @@ public class ModuleSuiteLaneGuard
         var verify = JobBody("verify");
         // `prepare` and `build-workspace` are needed by the host arm (H7, Doc/Architecture/BuildHosts
         // §5), which must SEE that they skipped; `pack` and `tests` stay, for the reason above.
-        Assert.Contains("needs: [select, prepare, build-workspace, pack, tests]", verify, StringComparison.Ordinal);
+        Assert.Contains("needs: [select, prepare, build-workspace, pack, tests-build, tests]", verify, StringComparison.Ordinal);
+        // The legs run after a failed suite build, so the build's red must reach this context too.
+        Assert.Contains("TESTS_BUILD_RESULT: ${{ needs.tests-build.result }}", verify, StringComparison.Ordinal);
         Assert.Contains("if: always()", verify, StringComparison.Ordinal);
         Assert.Contains("TESTS_RESULT: ${{ needs.tests.result }}", verify, StringComparison.Ordinal);
         Assert.Contains("--tests-result \"$TESTS_RESULT\"", verify, StringComparison.Ordinal);

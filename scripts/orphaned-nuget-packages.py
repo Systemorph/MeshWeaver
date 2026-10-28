@@ -28,9 +28,11 @@ PREFIX = "MeshWeaver"
 # package is retired on purpose.
 #   MeshWeaver.MemexTemplate         - MeshWeaver.Plugins tools/MeshWeaver.MemexTemplate.Pack
 #   MeshWeaver.Aspire.Hosting.Memex  - MeshWeaver.Plugins src/Memex.Aspire.Hosting (moved from
-#                                      memex/aspire with the core-slimming carve;
-#                                      published by that repository's publish-aspire-package.yml)
-PACKED_ELSEWHERE = frozenset({"MeshWeaver.MemexTemplate", "MeshWeaver.Aspire.Hosting.Memex"})
+#                                      memex/aspire with the core-slimming carve)
+#   MeshWeaver.Cli                   - MeshWeaver.Plugins src/MeshWeaver.Cli (moved from core
+#                                      src/MeshWeaver.Cli before its first nuget.org publish)
+# Both of the last two are published by that repository's publish-packages.yml.
+PACKED_ELSEWHERE = frozenset({"MeshWeaver.MemexTemplate", "MeshWeaver.Aspire.Hosting.Memex", "MeshWeaver.Cli"})
 
 
 def published(prefix: str) -> set[str]:
@@ -269,8 +271,8 @@ def self_test() -> int:
         failures.append("empty tool output was misread as a quota refusal")
 
     # The survivors another repository packs must never fall into the orphan set: this tree packs
-    # neither, so only the declared set stands between them and an unlist.
-    for survivor in ("MeshWeaver.Aspire.Hosting.Memex", "MeshWeaver.MemexTemplate"):
+    # none of them, so only the declared set stands between them and an unlist.
+    for survivor in ("MeshWeaver.Aspire.Hosting.Memex", "MeshWeaver.MemexTemplate", "MeshWeaver.Cli"):
         if survivor not in PACKED_ELSEWHERE:
             failures.append(f"{survivor} is packed by MeshWeaver.Plugins and is not declared in "
                             "PACKED_ELSEWHERE — an apply would UNLIST a package we still publish")

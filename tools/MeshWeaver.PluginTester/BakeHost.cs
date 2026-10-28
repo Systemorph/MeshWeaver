@@ -164,9 +164,11 @@ internal sealed class BakeHost
             Note = PrebuiltAssemblySeeder.LiveFrameworkIdentityWarning is { } warning
                 ? $"framework identity degraded — {warning}"
                 : null,
-            // The process IS the host: its loaded assemblies plus its application directory, which
-            // is exactly the surface the portal's own boot probe measures (MeshBuilder).
-            Surface = () => ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory),
+            // The process IS the host: its default-context assemblies plus its application
+            // directory — the platform the portal's own boot probe measures (MeshBuilder), and
+            // never what this bake itself loaded into a test context (a compiled NodeType opened to
+            // run its tests stays listed until a collection finishes its unload).
+            Surface = () => ModulePlatformSurface.OfRunningPlatform(AppContext.BaseDirectory),
         };
 
     /// <summary>

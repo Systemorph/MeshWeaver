@@ -69,8 +69,8 @@ nupkg. **Nothing private ships, and the first row above is history.** The scaffo
 headless mesh host — no Blazor shell — which the generated README states rather than promising a UI
 the package cannot contain. Full reasoning: `Hosting/OptionalPortalGui` in MeshWeaver.Plugins.
 
-**What is left is this lane's wiring**, and it is a real task. `publish-packages.yml` publishes the
-Aspire integration only; the template's step is **absent rather than written-and-disabled** (a step
+**What is left is this lane's wiring**, and it is a real task. MeshWeaver.Plugins'
+`publish-packages.yml` publishes the CLI and the Aspire integration only; the template's step is **absent rather than written-and-disabled** (a step
 that exists but never runs is the skip-trapdoor this repository forbids). Building it needs a
 Plugins checkout with a minted App token, `-p:Version=`, `-p:MeshWeaverRoot=`, and an answer to
 which Plugins commit a core tag pairs with — see that workflow's header.
@@ -106,14 +106,23 @@ token and how it is stored) or its built-ins (`login`, `base-url`, `build …`, 
 change. A tool added, renamed or given a parameter on the server is never a reason to republish.
 The mapping from a tool's input schema to options and positionals, and the compatibility shapes that
 keep the verbs the CLI used to hand-code reading as before, are in
-[the CLI README](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Cli/README.md#commands).
+the CLI README (`src/MeshWeaver.Cli/README.md` in MeshWeaver.Plugins, shipped inside the package).
+
+**Where it lives.** The CLI's source and its publish lane moved from this repository to
+`Systemorph/MeshWeaver.Plugins` **before its first nuget.org publish**, so the CLI and the Aspire
+integration publish from ONE lane there — `publish-packages.yml`, dispatched, a job per package —
+and this repository packs nothing at all. Both are thin and carry no image version (the images come
+from configuration, default `latest` from `cr.meshweaver.cloud`), so both follow the same rule: a
+declared version (`<CliVersion>`, `<AspireIntegrationVersion>`, both `3.1.0`), bumped only when the
+package's own surface changes. The CLI embeds this repository's
+`.github/scripts/compose-gate-host.sh`, read from the platform checkout it builds beside.
 
 | | |
 |---|---|
-| Version | its own: `<CliVersion>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0`; `3.1.0` is the first publish. Bumped ONLY when the CLI's own surface changes — its MCP transport, its auth or its built-in commands — in the pull request that changes it; never per platform build and never for a server tool, because the mesh commands are generated from the instance's catalog |
-| When | after that pull request merges: dispatch `publish-packages.yml` with `packages=cli`. The lane reads the csproj version and refuses any other; a version already on nuget.org is skipped |
-| Bytes | packed by `publish-packages.yml`, asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll`, then verified LISTED |
-| Retirement sweep | `src/MeshWeaver.Cli` is packable again, so `orphaned-nuget-packages.py` derives `MeshWeaver.Cli` as packed and never unlists it; `PackableProjectReadmeTest` holds the packable set at two projects |
+| Version | its own: `<CliVersion>` in MeshWeaver.Plugins `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0`; `3.1.0` is the first publish. Bumped ONLY when the CLI's own surface changes — its MCP transport, its auth or its built-in commands — in the pull request that changes it; never per platform build and never for a server tool, because the mesh commands are generated from the instance's catalog |
+| When | after that pull request merges: dispatch MeshWeaver.Plugins' `publish-packages.yml` with `packages=cli` (or `both`). The lane reads the csproj version and refuses any other; a version already on nuget.org is skipped |
+| Bytes | packed by that lane, asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll` and depending on no MeshWeaver package, then verified LISTED |
+| Retirement sweep | packed in another repository, so `orphaned-nuget-packages.py` declares `MeshWeaver.Cli` in `PACKED_ELSEWHERE` and never unlists it; `PackableProjectReadmeTest` holds this repository's packable set at zero |
 
 A first design (2026-10-15, `cli-on-nuget-follows-3-latest`) published the CLI on every CD arming at
 the platform's `3.<minor>.<run>`. It was withdrawn the next day, before it ever published: a thin
@@ -122,57 +131,28 @@ client does not need hundreds of versions.
 CI still reaches the verbs through the `mw-plugin-test` image; nothing in the fleet installs the
 tool. The package is for people and build servers outside it.
 
-#### Status: not on nuget.org yet — the publish lane has never been able to authenticate
+#### Status: not on nuget.org yet — the owner points the nuget.org policy at the new lane
 
 Measured 2026-10-20 (#6845): nuget.org lists only `MeshWeaver.Cli` `3.0.0-rc1`…`rc13`
-(`https://api.nuget.org/v3-flatcontainer/meshweaver.cli/index.json`). The csproj declares `3.0.0`,
-and that version has never been published. `dotnet tool install -g MeshWeaver.Cli` therefore fails
-to resolve a stable version. An install has to name the old prerelease explicitly, and that
-prerelease is not the current client.
+(`https://api.nuget.org/v3-flatcontainer/meshweaver.cli/index.json`), so
+`dotnet tool install -g MeshWeaver.Cli` cannot resolve a stable version. Core's old
+`publish-packages.yml` never completed a run: every dispatch went red in `preflight` because
+`vars.NUGET_TRUSTED_USER` was not provisioned here. That lane is now deleted — the CLI publishes from
+MeshWeaver.Plugins, where `vars.NUGET_TRUSTED_USER` is already set and the account owns the
+Trusted Publishing policy the Aspire integration used.
 
-The workflow and the package are not the problem. **`publish-packages.yml` has never completed a
-run**: every dispatch (thirteen `packages=cli` runs, 2026-10-15/16, `3.1.10959`…`3.1.11007`) went
-red in `preflight` → *Every input this lane consumes exists*:
+What remains is owner provisioning, and nothing in a repository can supply it:
 
-```
-::error::the surviving packages cannot be published — provision:
-  • vars.NUGET_TRUSTED_USER — the nuget.org account (user or organisation) that owns the Trusted
-    Publishing policy for publish-packages.yml
-```
+1. On nuget.org, as the owner of both ids, point the Trusted Publishing policy (today named
+   *Publish*) at repository owner `Systemorph`, repository `MeshWeaver.Plugins`, workflow file
+   **`publish-packages.yml`** (it named `publish-aspire-package.yml`, which is deleted), environment
+   blank. A policy cannot be read from here; the lane's `preflight` performs the OIDC exchange, so a
+   policy that names another file is refused there, by name, before anything is packed.
+2. Dispatch MeshWeaver.Plugins' `publish-packages.yml` with `packages=both`. It publishes each
+   project's declared `3.1.0`, and *Verify the published version reads as LISTED* is the evidence.
 
-`vars.NUGET_TRUSTED_USER` exists neither as a repository variable nor as an organisation variable
-(both REST reads 404; the repository's variable list carries no NuGet entry). The lane switched to
-Trusted Publishing on 2026-09-08 (#3714), and nothing has been provisioned for it since. That is the
-whole root cause. The red preflight is the gate doing its job: it names the missing input instead
-of pushing with a credential that is not there. Dispatching it again changes nothing.
-
-The fix is owner provisioning, and nothing in the repository can supply it:
-
-1. On nuget.org, as an owner of `MeshWeaver.Cli` (today `rbuergi`; the organisation after §6 step
-   1), add a **Trusted Publishing policy**: repository owner `Systemorph`, repository `MeshWeaver`,
-   workflow file `publish-packages.yml`, environment blank.
-2. Set the **Actions variable** `NUGET_TRUSTED_USER` on `Systemorph/MeshWeaver` to that policy's
-   owner account. It is a variable, not a secret. **Done 2026-10-27**: the repository variable is
-   set to `rbuergi`, the account that already holds the policy MeshWeaver.Plugins' Aspire lane
-   uses. Step 1 is still the owner's, and a nuget.org policy cannot be read from here, so whether it
-   exists for `Systemorph/MeshWeaver` + `publish-packages.yml` is unverified until a dispatch's
-   `NuGet/login` step answers.
-3. Dispatch `publish-packages.yml` with `packages=cli` and no version. The lane publishes the
-   csproj's version (`3.1.0` since the CLI joined the 3.1 line; `3.0.0` was never published), and *Verify every published version reads as LISTED* is the evidence.
-
-The same two inputs unblock the Aspire integration on the next release tag. They do **not** by
-themselves unblock `unlist-orphaned-packages.yml`: it reads the same variable, but nuget.org issues
-a Trusted Publishing policy per workflow file, so unlisting also needs its own policy naming
-`unlist-orphaned-packages.yml` (same owner, repository owner `Systemorph`, repository `MeshWeaver`,
-environment blank). Without it the unlist lane's `NuGet/login` exchange is refused even after steps
-1–3 succeed (§6).
-
-The issue that reported this (#6845) was raised by `cli-publish-alert.sh` under the withdrawn
-`cli-on-nuget-follows-3-latest` design, so its premise is also stale. Under
-`cli-thin-wrapper-own-version` the CLI does **not** follow `3-latest`, and its `3.1.<run>` numbers
-are not owed to nuget.org. The script was removed with that design, so the issue no longer closes
-itself. What remains true is the narrower fact above: no `MeshWeaver.Cli` that matches the
-repository is on nuget.org.
+`unlist-orphaned-packages.yml` here still needs its own policy naming that file (same owner,
+repository `Systemorph/MeshWeaver`), and the repository variable `NUGET_TRUSTED_USER` it reads (§6).
 
 ## 2. The ground rule: startup dependencies are Aspire options, never packages
 
@@ -303,13 +283,19 @@ bug once computing "all 90".
 > packable, and four self-tests pin both directions.
 
 **Half three — the set is asserted.** `PackableProjectReadmeTest` fails if the effectively-packable
-set is anything other than the one expected project. A project that quietly regains packability
+set is anything other than the expected one — empty, since every survivor is packed in
+MeshWeaver.Plugins. A project that quietly regains packability
 would otherwise do two invisible things at once: enter the release's pack glob, and *spare* its
 retired package from the sweep.
 
 ### Publishing the survivors
 
-`.github/workflows/publish-packages.yml` packs and pushes both, on the release tag `v*.*.*`.
+> 🚨 **History.** This section describes core's former lane, which packed on the release tag
+> `v*.*.*`. Every survivor is now packed in MeshWeaver.Plugins: the CLI and the Aspire integration by
+> its dispatched `publish-packages.yml` (§1a), the template not yet. The reasoning below still holds
+> for that lane.
+
+Core's former `.github/workflows/publish-packages.yml` packed and pushed both, on the release tag `v*.*.*`.
 
 - **Why the tag and not every merge.** nuget.org orders by SemVer, and the continuous `-ci.<n>`
   stream does not sort the way the fleet's self-updater ranks it. A continuous stream on nuget.org
@@ -415,7 +401,7 @@ step below is a web action by the current owner, so this section is the checklis
 | `MeshWeaver.MemexTemplate` and every retired id — fully unlisted, ownership unchanged | still `rbuergi`'s; an owner can re-list any version |
 | `verified: false` on the survivor | the **`MeshWeaver.*` ID prefix is not reserved** — anyone can publish a new `MeshWeaver.X` |
 | nuget.org profile `Systemorph` exists | the organisation account to transfer to is there |
-| `publish-packages.yml` and `unlist-orphaned-packages.yml` authenticate by **Trusted Publishing** — GitHub OIDC exchanged by `NuGet/login` for a short-lived key, under a nuget.org policy per workflow file — with the policy owner in `vars.NUGET_TRUSTED_USER` | no stored NuGet secret. Measured 2026-10-20: `vars.NUGET_TRUSTED_USER` is **unset** (repository and organisation), so no publish has completed since the switch (§1a → *Status*); whether a policy exists on nuget.org cannot be read without the owner's sign-in |
+| MeshWeaver.Plugins' `publish-packages.yml` and this repository's `unlist-orphaned-packages.yml` authenticate by **Trusted Publishing** — GitHub OIDC exchanged by `NuGet/login` for a short-lived key, under a nuget.org policy per workflow file — with the policy owner in `vars.NUGET_TRUSTED_USER` | no stored NuGet secret. Measured 2026-10-20: `vars.NUGET_TRUSTED_USER` is **unset** (repository and organisation), so no publish has completed since the switch (§1a → *Status*); whether a policy exists on nuget.org cannot be read without the owner's sign-in |
 
 The transfer, in the order that keeps publishing working throughout:
 
@@ -426,7 +412,7 @@ The transfer, in the order that keeps publishing working throughout:
 2. **Reserve the `MeshWeaver.*` ID prefix for `Systemorph`** (nuget.org's ID-prefix reservation
    request). Until then the `verified` badge stays off and the prefix is open.
 3. **Move the Trusted Publishing policies to the organisation** — one per workflow file
-   (`publish-packages.yml`, `unlist-orphaned-packages.yml`; repository `Systemorph/MeshWeaver`;
+   (`publish-packages.yml` in `Systemorph/MeshWeaver.Plugins`; `unlist-orphaned-packages.yml` in `Systemorph/MeshWeaver`;
    environment blank, since neither job declares one) — and set `vars.NUGET_TRUSTED_USER` to
    `Systemorph`. The publish preflight *performs* the exchange, so a policy that does not match goes
    red there, named. Then delete `secrets.NUGET_PAT`: nothing reads it any more.

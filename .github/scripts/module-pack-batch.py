@@ -478,7 +478,8 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
         "select": "prepare",
         "prepare": "build-workspace",
         "build-workspace": "pack",
-        "pack": "tests",
+        "pack": "tests-build",
+        "tests-build": "tests",
         "tests": "verify",
         "verify": None,
     }
@@ -512,7 +513,7 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
             and "\n          path: build-logic\n" in f"\n{step}\n"
             and (job == "select" or "sparse-checkout: .github/scripts" in step)
         ]
-        expected_platform = 1 if job in {"prepare", "pack", "tests"} else 0
+        expected_platform = 1 if job in {"prepare", "pack", "tests-build", "tests"} else 0
         if len(platform_checkouts) != expected_platform:
             problems.append(f"{job} needs exactly {expected_platform} platform-ref checkout(s) at meshweaver")
         if len(logic_checkouts) != 1:

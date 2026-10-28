@@ -997,9 +997,7 @@ public class MessageService : IMessageService
     /// down</i>", itself an <c>IsTransientOwnerFailure</c> marker), so a post-delete read still
     /// rode it out and burned its whole budget.</para>
     /// </summary>
-    private string DeletedAddressMessage =>
-        $"No node found at '{Address.Path}' — the node was deleted, so this address "
-        + "will not reactivate.";
+    private string DeletedAddressMessage => DeletedAddressNack.Message(Address.Path);
 
     /// <summary>
     /// True when this hub's address carries a live delete tombstone — i.e. it is going down

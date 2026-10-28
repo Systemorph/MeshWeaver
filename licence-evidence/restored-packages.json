@@ -1,0 +1,394 @@
+{
+"azure.core": [
+"Azure.Core",
+"1.53.0"
+],
+"azure.identity": [
+"Azure.Identity",
+"1.21.0"
+],
+"bouncycastle.cryptography": [
+"BouncyCastle.Cryptography",
+"2.7.0"
+],
+"humanizer.core": [
+"Humanizer.Core",
+"3.0.10"
+],
+"markdig": [
+"Markdig",
+"1.5.0"
+],
+"microsoft.applicationinsights": [
+"Microsoft.ApplicationInsights",
+"2.23.0"
+],
+"microsoft.bcl.asyncinterfaces": [
+"Microsoft.Bcl.AsyncInterfaces",
+"10.0.3"
+],
+"microsoft.codeanalysis.analyzers": [
+"Microsoft.CodeAnalysis.Analyzers",
+"5.9.0-1.26328.17"
+],
+"microsoft.codeanalysis.common": [
+"Microsoft.CodeAnalysis.Common",
+"5.9.0"
+],
+"microsoft.codeanalysis.csharp": [
+"Microsoft.CodeAnalysis.CSharp",
+"5.9.0"
+],
+"microsoft.codeanalysis.csharp.features": [
+"Microsoft.CodeAnalysis.CSharp.Features",
+"5.9.0"
+],
+"microsoft.codeanalysis.csharp.scripting": [
+"Microsoft.CodeAnalysis.CSharp.Scripting",
+"5.9.0"
+],
+"microsoft.codeanalysis.csharp.workspaces": [
+"Microsoft.CodeAnalysis.CSharp.Workspaces",
+"5.9.0"
+],
+"microsoft.codeanalysis.elfie": [
+"Microsoft.CodeAnalysis.Elfie",
+"1.0.0"
+],
+"microsoft.codeanalysis.features": [
+"Microsoft.CodeAnalysis.Features",
+"5.9.0"
+],
+"microsoft.codeanalysis.scripting.common": [
+"Microsoft.CodeAnalysis.Scripting.Common",
+"5.9.0"
+],
+"microsoft.codeanalysis.workspaces.common": [
+"Microsoft.CodeAnalysis.Workspaces.Common",
+"5.9.0"
+],
+"microsoft.codecoverage": [
+"Microsoft.CodeCoverage",
+"18.11.0"
+],
+"microsoft.diasymreader": [
+"Microsoft.DiaSymReader",
+"2.0.0"
+],
+"microsoft.extensions.ai.abstractions": [
+"Microsoft.Extensions.AI.Abstractions",
+"10.11.0"
+],
+"microsoft.extensions.caching.abstractions": [
+"Microsoft.Extensions.Caching.Abstractions",
+"10.0.14"
+],
+"microsoft.extensions.caching.memory": [
+"Microsoft.Extensions.Caching.Memory",
+"10.0.14"
+],
+"microsoft.extensions.configuration": [
+"Microsoft.Extensions.Configuration",
+"10.0.14"
+],
+"microsoft.extensions.configuration.abstractions": [
+"Microsoft.Extensions.Configuration.Abstractions",
+"10.0.14"
+],
+"microsoft.extensions.configuration.binder": [
+"Microsoft.Extensions.Configuration.Binder",
+"10.0.14"
+],
+"microsoft.extensions.configuration.fileextensions": [
+"Microsoft.Extensions.Configuration.FileExtensions",
+"10.0.14"
+],
+"microsoft.extensions.configuration.json": [
+"Microsoft.Extensions.Configuration.Json",
+"10.0.14"
+],
+"microsoft.extensions.dependencyinjection": [
+"Microsoft.Extensions.DependencyInjection",
+"10.0.14"
+],
+"microsoft.extensions.dependencyinjection.abstractions": [
+"Microsoft.Extensions.DependencyInjection.Abstractions",
+"10.0.14"
+],
+"microsoft.extensions.diagnostics": [
+"Microsoft.Extensions.Diagnostics",
+"10.0.14"
+],
+"microsoft.extensions.diagnostics.abstractions": [
+"Microsoft.Extensions.Diagnostics.Abstractions",
+"10.0.14"
+],
+"microsoft.extensions.diagnostics.healthchecks": [
+"Microsoft.Extensions.Diagnostics.HealthChecks",
+"10.0.14"
+],
+"microsoft.extensions.diagnostics.healthchecks.abstractions": [
+"Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions",
+"10.0.14"
+],
+"microsoft.extensions.fileproviders.abstractions": [
+"Microsoft.Extensions.FileProviders.Abstractions",
+"10.0.14"
+],
+"microsoft.extensions.fileproviders.physical": [
+"Microsoft.Extensions.FileProviders.Physical",
+"10.0.14"
+],
+"microsoft.extensions.filesystemglobbing": [
+"Microsoft.Extensions.FileSystemGlobbing",
+"10.0.14"
+],
+"microsoft.extensions.hosting.abstractions": [
+"Microsoft.Extensions.Hosting.Abstractions",
+"10.0.14"
+],
+"microsoft.extensions.http": [
+"Microsoft.Extensions.Http",
+"10.0.14"
+],
+"microsoft.extensions.logging": [
+"Microsoft.Extensions.Logging",
+"10.0.14"
+],
+"microsoft.extensions.logging.abstractions": [
+"Microsoft.Extensions.Logging.Abstractions",
+"10.0.14"
+],
+"microsoft.extensions.logging.configuration": [
+"Microsoft.Extensions.Logging.Configuration",
+"10.0.14"
+],
+"microsoft.extensions.logging.console": [
+"Microsoft.Extensions.Logging.Console",
+"10.0.14"
+],
+"microsoft.extensions.options": [
+"Microsoft.Extensions.Options",
+"10.0.14"
+],
+"microsoft.extensions.options.configurationextensions": [
+"Microsoft.Extensions.Options.ConfigurationExtensions",
+"10.0.14"
+],
+"microsoft.extensions.primitives": [
+"Microsoft.Extensions.Primitives",
+"10.0.14"
+],
+"microsoft.identity.client": [
+"Microsoft.Identity.Client",
+"4.83.1"
+],
+"microsoft.identity.client.extensions.msal": [
+"Microsoft.Identity.Client.Extensions.Msal",
+"4.83.1"
+],
+"microsoft.identitymodel.abstractions": [
+"Microsoft.IdentityModel.Abstractions",
+"8.14.0"
+],
+"microsoft.net.test.sdk": [
+"Microsoft.NET.Test.Sdk",
+"18.11.0"
+],
+"microsoft.reactive.testing": [
+"Microsoft.Reactive.Testing",
+"7.0.0"
+],
+"microsoft.testing.extensions.telemetry": [
+"Microsoft.Testing.Extensions.Telemetry",
+"2.5.1"
+],
+"microsoft.testing.extensions.trxreport.abstractions": [
+"Microsoft.Testing.Extensions.TrxReport.Abstractions",
+"2.5.1"
+],
+"microsoft.testing.platform": [
+"Microsoft.Testing.Platform",
+"2.5.1"
+],
+"microsoft.testing.platform.msbuild": [
+"Microsoft.Testing.Platform.MSBuild",
+"2.5.1"
+],
+"microsoft.testplatform.objectmodel": [
+"Microsoft.TestPlatform.ObjectModel",
+"18.11.0"
+],
+"microsoft.testplatform.testhost": [
+"Microsoft.TestPlatform.TestHost",
+"18.11.0"
+],
+"microsoft.win32.registry": [
+"Microsoft.Win32.Registry",
+"5.0.0"
+],
+"modelcontextprotocol.core": [
+"ModelContextProtocol.Core",
+"2.3.0"
+],
+"net.codecrete.qrcodegenerator": [
+"Net.Codecrete.QrCodeGenerator",
+"3.2.1"
+],
+"newtonsoft.json": [
+"Newtonsoft.Json",
+"13.0.3"
+],
+"nuget.common": [
+"NuGet.Common",
+"7.9.0"
+],
+"nuget.configuration": [
+"NuGet.Configuration",
+"7.9.0"
+],
+"nuget.dependencyresolver.core": [
+"NuGet.DependencyResolver.Core",
+"7.9.0"
+],
+"nuget.frameworks": [
+"NuGet.Frameworks",
+"7.9.0"
+],
+"nuget.librarymodel": [
+"NuGet.LibraryModel",
+"7.9.0"
+],
+"nuget.packaging": [
+"NuGet.Packaging",
+"7.9.0"
+],
+"nuget.protocol": [
+"NuGet.Protocol",
+"7.9.0"
+],
+"nuget.resolver": [
+"NuGet.Resolver",
+"7.9.0"
+],
+"nuget.versioning": [
+"NuGet.Versioning",
+"7.9.0"
+],
+"ssh.net": [
+"SSH.NET",
+"2026.0.0"
+],
+"system.clientmodel": [
+"System.ClientModel",
+"1.10.0"
+],
+"system.composition": [
+"System.Composition",
+"10.0.1"
+],
+"system.composition.attributedmodel": [
+"System.Composition.AttributedModel",
+"10.0.1"
+],
+"system.composition.convention": [
+"System.Composition.Convention",
+"10.0.1"
+],
+"system.composition.hosting": [
+"System.Composition.Hosting",
+"10.0.1"
+],
+"system.composition.runtime": [
+"System.Composition.Runtime",
+"10.0.1"
+],
+"system.composition.typedparts": [
+"System.Composition.TypedParts",
+"10.0.1"
+],
+"system.configuration.configurationmanager": [
+"System.Configuration.ConfigurationManager",
+"10.0.1"
+],
+"system.data.datasetextensions": [
+"System.Data.DataSetExtensions",
+"4.5.0"
+],
+"system.diagnostics.eventlog": [
+"System.Diagnostics.EventLog",
+"10.0.1"
+],
+"system.memory.data": [
+"System.Memory.Data",
+"10.0.3"
+],
+"system.reactive": [
+"System.Reactive",
+"7.0.0"
+],
+"system.security.accesscontrol": [
+"System.Security.AccessControl",
+"6.0.1"
+],
+"system.security.cryptography.pkcs": [
+"System.Security.Cryptography.Pkcs",
+"10.0.14"
+],
+"system.security.cryptography.protecteddata": [
+"System.Security.Cryptography.ProtectedData",
+"10.0.1"
+],
+"system.security.cryptography.xml": [
+"System.Security.Cryptography.Xml",
+"10.0.14"
+],
+"xunit.analyzers": [
+"xunit.analyzers",
+"2.2.0"
+],
+"xunit.runner.visualstudio": [
+"xunit.runner.visualstudio",
+"4.0.1"
+],
+"xunit.v3": [
+"xunit.v3",
+"4.0.2"
+],
+"xunit.v3.assert": [
+"xunit.v3.assert",
+"4.0.2"
+],
+"xunit.v3.assert.source": [
+"xunit.v3.assert.source",
+"3.2.2"
+],
+"xunit.v3.common": [
+"xunit.v3.common",
+"4.0.2"
+],
+"xunit.v3.core.mtp-v2": [
+"xunit.v3.core.mtp-v2",
+"4.0.2"
+],
+"xunit.v3.extensibility.core": [
+"xunit.v3.extensibility.core",
+"4.0.2"
+],
+"xunit.v3.mtp-v2": [
+"xunit.v3.mtp-v2",
+"4.0.2"
+],
+"xunit.v3.runner.common": [
+"xunit.v3.runner.common",
+"4.0.2"
+],
+"xunit.v3.runner.console": [
+"xunit.v3.runner.console",
+"4.0.2"
+],
+"xunit.v3.runner.inproc.console": [
+"xunit.v3.runner.inproc.console",
+"4.0.2"
+]
+}

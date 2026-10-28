@@ -112,6 +112,40 @@ public static class Cascade
         IScheduler? scheduler = null,
         bool stopOnFirstFailure = false)
     {
+        ArgumentNullException.ThrowIfNull(run);
+        return RunObservable<T>(
+            ids,
+            dependenciesOf,
+            (id, deps) => Observable.Return(run(id, deps)),
+            maxParallel,
+            scheduler,
+            stopOnFirstFailure);
+    }
+
+    /// <summary>
+    /// <see cref="Run{T}"/> with REACTIVE work: <paramref name="run"/> returns a stream whose first
+    /// value is the node's payload and verdict, and the node holds its slot until that value
+    /// arrives. This is how a node's work can itself fan out — <c>mw-plugin-test build</c> compiles
+    /// a package's NodeTypes in parallel through a gate shared by every package — without a thread
+    /// parked on a wait. A stream that completes without a value, or errors, is
+    /// <see cref="NodeOutcome.Faulted"/>.
+    /// </summary>
+    /// <param name="ids">The node ids in the cascade.</param>
+    /// <param name="dependenciesOf">Direct dependencies per id.</param>
+    /// <param name="run">The work: given the id and its dependencies' results, a stream of the
+    /// payload and whether it is green. Called on the scheduler.</param>
+    /// <param name="maxParallel">Concurrency cap for the work. Blocking a node costs no slot.</param>
+    /// <param name="scheduler">Where the work is called; the task pool by default.</param>
+    /// <param name="stopOnFirstFailure">See <see cref="Run{T}"/>.</param>
+    /// <typeparam name="T">The work's payload type.</typeparam>
+    public static IObservable<ImmutableArray<NodeResult<T>>> RunObservable<T>(
+        IReadOnlyCollection<string> ids,
+        Func<string, IReadOnlyList<string>> dependenciesOf,
+        Func<string, IReadOnlyList<NodeResult<T>>, IObservable<(T Result, bool Green)>> run,
+        int maxParallel,
+        IScheduler? scheduler = null,
+        bool stopOnFirstFailure = false)
+    {
         ArgumentNullException.ThrowIfNull(ids);
         ArgumentNullException.ThrowIfNull(dependenciesOf);
         ArgumentNullException.ThrowIfNull(run);
@@ -172,34 +206,57 @@ public static class Cascade
                         }
                         var ordered = depResults.ToArray();
                         // The result travels back through its own subject; the work item handed
-                        // to the gate is deferred so it starts when the gate subscribes it —
-                        // that moment is 'Started', and Started - Ready is the slot wait.
+                        // to the gate is deferred so it starts when the gate's subscription runs
+                        // on the pool — that moment is 'Started', and Started - Ready is the slot
+                        // wait.
                         var result = new AsyncSubject<NodeResult<T>>();
-                        var work = Observable.Defer(() => Observable.Start(() =>
+                        var work = Observable.Defer(() =>
                             {
                                 var started = clock.Elapsed;
                                 if (stopOnFirstFailure && Volatile.Read(ref firstFailure[0]) is { } failedFirst)
-                                    return new NodeResult<T>(
+                                    return Observable.Return(new NodeResult<T>(
                                         id, NodeOutcome.Blocked, default, failedFirst, null,
-                                        ready, started, clock.Elapsed);
-                                try
-                                {
-                                    var (payload, green) = run(id, ordered);
-                                    if (!green && stopOnFirstFailure)
-                                        Interlocked.CompareExchange(ref firstFailure[0], id, null);
-                                    return new NodeResult<T>(
-                                        id, green ? NodeOutcome.Green : NodeOutcome.Red, payload, null, null,
-                                        ready, started, clock.Elapsed);
-                                }
-                                catch (Exception ex)
+                                        ready, started, clock.Elapsed));
+                                NodeResult<T> Faulted(string error)
                                 {
                                     if (stopOnFirstFailure)
                                         Interlocked.CompareExchange(ref firstFailure[0], id, null);
                                     return new NodeResult<T>(
                                         id, NodeOutcome.Faulted, default, null,
-                                        $"{ex.GetType().Name}: {ex.Message}", ready, started, clock.Elapsed);
+                                        error, ready, started, clock.Elapsed);
                                 }
-                            }, pool))
+                                IObservable<(T Result, bool Green)> stream;
+                                try
+                                {
+                                    stream = run(id, ordered);
+                                }
+                                catch (Exception ex)
+                                {
+                                    return Observable.Return(Faulted($"{ex.GetType().Name}: {ex.Message}"));
+                                }
+                                // The stream holds the slot until it yields its one result.
+                                return stream.Take(1).ToList()
+                                    .Select(results =>
+                                    {
+                                        if (results.Count == 0)
+                                            return Faulted("the work completed without a result");
+                                        var (payload, green) = results[0];
+                                        if (!green && stopOnFirstFailure)
+                                            Interlocked.CompareExchange(ref firstFailure[0], id, null);
+                                        return new NodeResult<T>(
+                                            id, green ? NodeOutcome.Green : NodeOutcome.Red, payload, null, null,
+                                            ready, started, clock.Elapsed);
+                                    })
+                                    .Catch((Exception ex) => Observable.Return(Faulted($"{ex.GetType().Name}: {ex.Message}")));
+                            })
+                            // 🚨 ONE scheduled action on the pool carries the fail-fast check,
+                            // 'Started' AND the call of the work. Checking at admission (on the
+                            // thread that freed the slot) and calling the work in a LATER pool
+                            // action let a node admitted before an earlier failure still run once
+                            // that failure had landed — what stopOnFirstFailure exists to prevent
+                            // (pinned by StopOnFirstFailure_ANodeAdmittedBeforeTheFailureLandsButNotYetStarted…).
+                            // It also keeps the work's synchronous prefix off the freeing thread.
+                            .SubscribeOn(pool)
                             .Do(r =>
                             {
                                 result.OnNext(r);

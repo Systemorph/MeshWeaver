@@ -237,7 +237,7 @@ that is not in it. Detecting the move and continuing on the half already fetched
 |---|---|---|
 | `node-repo-gate.yml`, the upstream seed | the bundle index + each bundle | this repo, pinned by each satellite's `uses:` |
 | `.github/scripts/compose-sealed-modules.sh` | the module-set index + each module | this repo, fetched at each satellite's `platform-ref` |
-| `memex build plugin` (`BuildPluginCommand`) | both | `src/MeshWeaver.Cli` |
+| `memex build plugin` (`BuildPluginCommand`) | both | MeshWeaver.Plugins `src/MeshWeaver.Cli` |
 | the REGISTRY, on behalf of a consumer one lane ahead of it | one package's bundle, for the CALLER's identity | `memex/Memex.Portal.Shared/Api/PluginBundleEndpoints.cs` |
 
 The `registry_get` backoff is **duplicated on purpose** between the workflow and the script: the
