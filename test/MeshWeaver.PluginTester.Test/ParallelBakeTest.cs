@@ -30,6 +30,9 @@ namespace MeshWeaver.PluginTester.Test;
 /// </summary>
 public partial class ParallelBakeTest(ITestOutputHelper output)
 {
+    /// <summary>The test output, for the parts of this class declared in other files.</summary>
+    private ITestOutputHelper Output => output;
+
     // ── 1. dependency order ───────────────────────────────────────────────────────────────────
 
     /// <summary>Base ← Mid ← Top is a chain; Free waits on nothing.</summary>

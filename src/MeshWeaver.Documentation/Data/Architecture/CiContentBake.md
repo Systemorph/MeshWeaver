@@ -53,6 +53,12 @@ persists:
   inside the platform image, so it is the one process that can write what that platform carries;
   the release gate reads it back to link an instance's landed modules against a release that is not
   running anywhere it can reach — see [The Module Platform Link Gate](/Doc/Architecture/ModulePlatformLinkGate).
+  It is measured with `ModulePlatformSurface.OfRunningPlatform` — the DEFAULT load context only —
+  never `OfRunningProcess`: the bake also loads what it builds (each compiled NodeType assembly is
+  opened in a collectible context to run its tests), and those stay in the process's assembly list
+  until a garbage collection finishes the unload. Measured over every loaded assembly, the document
+  listed the bake's own `DynamicNode_*` outputs on one run and not the next, so two builds of one
+  tree published different surfaces.
 
 Only types that reached `CompilationStatus.Ok` contribute. A type the gate's known-debt allowlist
 tolerates simply has no entry — the consumer compiles it as it would have anyway. A type that

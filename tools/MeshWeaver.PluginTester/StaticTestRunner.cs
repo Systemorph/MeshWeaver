@@ -128,9 +128,14 @@ public static class StaticTestRunner
         ArgumentNullException.ThrowIfNull(assemblyPath);
         ArgumentNullException.ThrowIfNull(dependencyAssemblies);
 
+        // Keyed by the assembly's OWN simple name — the name the runtime asks the load context for —
+        // never by its file name. An emitted NodeType assembly is written as `{SanitizeNodeName}.dll`
+        // but named `DynamicNode_{SanitizeNodeName}`, so a file-name key could never resolve one:
+        // a test reaching an assembly its package (or a dependency package) emitted earlier failed
+        // with FileNotFoundException although the path was in this list.
         var byName = dependencyAssemblies
             .Where(File.Exists)
-            .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
+            .GroupBy(SimpleNameOf, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         var context = new TestLoadContext(byName);
@@ -513,6 +518,20 @@ public static class StaticTestRunner
     /// follows (<c>ModuleTests</c>, <c>CourseIndexTests</c>, …). The <c>*TestsArea</c> aggregator
     /// classes match too, and their only method takes a host, so they classify as needs-mesh.
     /// </summary>
+    /// <summary>The simple name in the file's assembly metadata; the file name for a file that
+    /// carries none (a native library), which the runtime never asks a load context for anyway.</summary>
+    private static string SimpleNameOf(string path)
+    {
+        try
+        {
+            return AssemblyName.GetAssemblyName(path).Name ?? Path.GetFileNameWithoutExtension(path);
+        }
+        catch (BadImageFormatException)
+        {
+            return Path.GetFileNameWithoutExtension(path);
+        }
+    }
+
     private static bool IsTestClass(Type t) =>
         t.IsClass && t.IsPublic && t.IsAbstract && t.IsSealed
         && !t.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false)
