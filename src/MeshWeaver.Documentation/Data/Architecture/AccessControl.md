@@ -2363,13 +2363,32 @@ A revoked reader is not served after a recycle, and the reader who keeps the gra
 (negative control). A reader who never had Read is never served by recovery; that case already
 held before the fix.
 
-What this does NOT cover, measured on the same fixture: an open node-stream CACHE read does not
-follow a revoked standard grant. The cache's read gate is decided once per `GetStream`, and its
-30-second `AccessTtl` only bounds new reads, so a revoked reader's open cache read keeps receiving
-revisions until it ends or a recovery re-subscribes it. A direct owner-side subscription of a
-point-read shape (the node itself, a layout area) follows its standing grant live (above). Other
-shapes on a node hub (a collection, an entity reference) are admitted once, by a standing grant or
-not at all, and are not followed.
+**An open node-stream CACHE read follows its standing grant too** (Systemorph/MeshWeaver.Plugins#4418).
+The cache's read gate used to decide a standard grant once per `GetStream` and then hand back the
+shared upstream, which reads under the cache's own privileged identity. Its 30-second `AccessTtl`
+bounded only new reads, so a revoked reader's open cache read kept receiving revisions until it
+ended. Now a granted read is followed for its whole life (`MeshNodeStreamCache.FollowStandingRead`).
+The gate's own decision (the permission fold, else the type's read rule) is re-taken on signals,
+never on a timer:
+
+- a committed snapshot of a permission-fold input query in the cache that can reach the path
+  (global, or anchored to the path's partition), announced after the commit ends so the re-check
+  reads the new snapshot;
+- an access commit on the invalidation feed that can reach the path (`DeclaredPointRead.AffectsRead`,
+  which carries a type rule's inputs the fold's queries do not);
+- every declared feed gap.
+
+A re-check in flight holds: a revision that arrives meanwhile waits for the settled verdict, bounded
+by the permission-establishment budget. A grant admits, an undetermined re-check refuses, and a
+definitive denial hands the decision to the type's declared point read, revision by revision. The
+first refusal ends that reader's stream with the gate's `UnauthorizedAccessException`; the shared
+upstream and every other reader are untouched
+(`OpenSubscriptionEndsWithTheReadTest.ACacheRead_EndsWhenItsStandingGrantIsRevoked`, with an
+unrelated grant on the same node and a second reader whose grant stays as positive controls).
+
+What this does NOT cover: other subscription shapes on a node hub (a collection, an entity
+reference) are admitted once, by a standing grant or not at all, and are not followed. Open
+queries are tracked separately (MeshWeaver#7365).
 
 **A stored type's ownership is followed live.** A stored type's declaration counts only while
 its partition is system-owned, meaning a one-way `_GitSync` that names a repository.

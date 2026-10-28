@@ -438,6 +438,76 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
             n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2");
     }
 
+    /// <summary>
+    /// 🚨 Systemorph/MeshWeaver.Plugins#4418: a read through the NODE-STREAM CACHE — the seam every
+    /// <c>GetMeshNodeStream</c> view goes through — ends when its standing grant is revoked. The
+    /// cache's read gate decided the standard Read ONCE per <c>GetStream</c> and then returned the
+    /// shared upstream, which reads under the privileged cache identity, so the reader kept receiving
+    /// every later revision after the grant row was deleted. Measured before the fix: grace's open
+    /// cache read received <c>v3</c>, written after her grant was gone.
+    ///
+    /// <para>POSITIVE CONTROLS: an UNRELATED access commit on the same node (a third user's grant
+    /// added, which re-decides every open read of it) leaves grace's read open and serving; and henry,
+    /// reading the same node through the same shared cache entry on a grant that stays, keeps
+    /// receiving revisions after grace's revocation.</para>
+    /// </summary>
+    [HubFact]
+    public async Task ACacheRead_EndsWhenItsStandingGrantIsRevoked()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var doc = (await AsSystem(new MeshNode("cached-doc", Partition) { NodeType = "Markdown", Name = "v1" }, ct)).Path;
+        var graceGrant = (await AsSystem(AssignmentNodeFactory.UserRole(Grace.ObjectId, "Viewer", doc), ct)).Path;
+        await AsSystem(AssignmentNodeFactory.UserRole(Henry.ObjectId, "Viewer", doc), ct);
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var grace = Record(access.RunAs(Grace, () => Mesh.GetMeshNodeStream(doc)));
+        var henry = Record(access.RunAs(Henry, () => Mesh.GetMeshNodeStream(doc)));
+        using var openGrace = grace.Connect();
+        using var openHenry = henry.Connect();
+        await FirstNode(grace, doc, "grace's standing grant admits her cache read", ct);
+        await FirstNode(henry, doc, "henry's standing grant admits his cache read", ct);
+
+        // POSITIVE CONTROL 1: an unrelated grant on the same node re-decides grace's read and keeps it.
+        await AsSystem(AssignmentNodeFactory.UserRole("ivy", "Viewer", doc), ct);
+        await WaitForRead("ivy", doc, granted: true, ct);
+        await AsSystemRename(doc, "v2", ct);
+        await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v2",
+                "an unrelated access commit leaves a standing grant's cache read open and serving", cancellationToken: ct);
+
+        await access.RunAsSystem(() => NodeFactory.DeleteNode(graceGrant))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await WaitForRead(Grace.ObjectId, doc, granted: false, ct);
+        await AsSystemRename(doc, "v3", ct);
+
+        var end = await grace.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext || n.Value?.Name == "v3",
+                "the cache read ends, or delivers the revision written after the revocation", cancellationToken: ct);
+        Assert.False(end.Kind == NotificationKind.OnNext, "a revision written after the grant was revoked must never reach grace");
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.IsType<UnauthorizedAccessException>(end.Exception);
+
+        // POSITIVE CONTROL 2: henry, on the same shared cache entry, keeps receiving.
+        await henry.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v3",
+                "a cache read whose grant stands keeps receiving revisions after another reader's revocation", cancellationToken: ct);
+        Assert.DoesNotContain(await grace.ToList().Should().Emit(cancellationToken: ct),
+            n => n.Kind == NotificationKind.OnNext && n.Value?.Name == "v3");
+    }
+
+    /// <summary>Waits until the permission fold reports <paramref name="userId"/>'s Read on <paramref name="path"/> as <paramref name="granted"/>.</summary>
+    private Task WaitForRead(string userId, string path, bool granted, CancellationToken ct)
+        => Mesh.GetEffectivePermissions(path, userId)
+            .Where(perms => perms.HasFlag(Permission.Read) == granted)
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+    private Task AsSystemRename(string path, string name, CancellationToken ct)
+        => Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update(node => node with { Name = name }))
+            .Should().Emit(cancellationToken: ct);
+
     private static readonly AccessContext Grace = new() { ObjectId = "grace", Name = "grace" };
     private static readonly AccessContext Henry = new() { ObjectId = "henry", Name = "henry" };
 

@@ -7,6 +7,7 @@ using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -38,7 +39,10 @@ namespace MeshWeaver.Hosting;
 /// result carries <see cref="Permission.Read"/> does the gated observable
 /// forward the upstream emissions. No round-trip to the leaf path's own hub —
 /// a satellite / cell sub-path with no hub of its own no longer wedges the
-/// subscription. Per-(path,user) results are cached for <see cref="AccessTtl"/>.</para>
+/// subscription. Per-(path,user) results are cached for <see cref="AccessTtl"/>, and the
+/// decision is FOLLOWED for the reader's whole subscription, not taken once: a revoked grant or
+/// an added deny ends that reader's stream (<see cref="FollowStandingRead"/>,
+/// Systemorph/MeshWeaver.Plugins#4418).</para>
 ///
 /// <para><b>Never go around the cache.</b> An ad-hoc
 /// <c>workspace.GetRemoteStream(...)</c> from some other hub is a SEPARATE
@@ -748,6 +752,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             ? _partitionFoldInputs.GetOrAdd(partition, static _ => new FoldInputCounters())
             : _globalFoldInputs;
 
+    /// <summary>
+    /// Every committed fold-input snapshot, after its commit ENDED: the partition it is anchored to,
+    /// or <c>null</c> for a global input (root grants and policy, roles, memberships — any path).
+    /// What an open per-user read follows its standing Read on (<see cref="FollowStandingRead"/>).
+    /// Synchronized: fold-input queries commit from whatever thread their snapshot lands on.
+    /// </summary>
+    private readonly ISubject<string?> _foldInputCommits = Subject.Synchronize(new Subject<string?>());
+
+    /// <summary>The announcement a fold-input query makes after each committed snapshot; see <see cref="_foldInputCommits"/>.</summary>
+    private Action FoldInputCommitAnnouncer(object queryId)
+    {
+        var partition = SecurityQueries.TryGetAnchoredPartition(queryId, out var anchored) ? anchored : null;
+        return () => _foldInputCommits.OnNext(partition);
+    }
+
     private static void BeginFoldInputCommit(FoldInputCounters counters)
     {
         Interlocked.Increment(ref counters.InFlight);
@@ -766,7 +785,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// after. Pure counter operations on the emitting thread — no I/O, nothing re-subscribed; the next
     /// read simply re-evaluates. See <see cref="ReadAccessGeneration"/> for why both phases are needed.
     /// </summary>
-    private sealed class FoldInputReplay<T>(FoldInputCounters counters) : ISubject<T>
+    private sealed class FoldInputReplay<T>(FoldInputCounters counters, Action committed) : ISubject<T>
     {
         private readonly ReplaySubject<T> buffer = new(1);
 
@@ -783,6 +802,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // stop every later verdict in it from being cached, silently.
                 EndFoldInputCommit(counters);
             }
+            // Announced only once the commit has ENDED, so a follow that re-decides on it reads the
+            // new snapshot and may cache what it reads (see FollowStandingRead).
+            committed();
         }
 
         public void OnError(Exception error) => buffer.OnError(error);
@@ -2341,9 +2363,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // rule that faulted or answered nothing) is refused here as everywhere else, never
             // re-decided. The declaration is never written into the per-(path,user) cache, and an
             // admitted stream is cut the moment the admission ends (AdmittedThroughDeclaration).
-            .SelectMany(probe => probe.Permissions.HasFlag(Permission.Read) || probe.Undetermined
-                ? GateOnRead(probe.Permissions, shared, path, captured)
-                : AdmittedThroughDeclaration(path, captured, shared))
+            //
+            // 🚨 A STANDING grant is FOLLOWED for the whole subscription (Systemorph/MeshWeaver.Plugins#4418),
+            // never decided once: `shared` runs under the privileged read identity, so a reader admitted
+            // here would otherwise keep receiving every later revision after the grant was revoked or a
+            // deny was added. See FollowStandingRead.
+            .SelectMany(probe => probe.Permissions.HasFlag(Permission.Read)
+                ? FollowStandingRead(path, captured, shared)
+                : probe.Undetermined
+                    ? GateOnRead(probe.Permissions, shared, path, captured)
+                    : AdmittedThroughDeclaration(path, captured, shared))
             .CarryAccessContext(accessService);
     }
 
@@ -2379,6 +2408,114 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"));
         });
 
+    /// <summary>
+    /// The shared node stream for a caller the standard check GRANTED, served only for as long as that
+    /// Read stands (Systemorph/MeshWeaver.Plugins#4418 — the cache half of what #7329 did for a direct
+    /// owner-side subscription). The gate's own decision — the permission fold, else the type's read
+    /// rule (<see cref="ProbeEffectivePermissions"/>) — is RE-TAKEN whenever one of its inputs may have
+    /// moved, and every revision is forwarded only once the live verdict admits it
+    /// (<see cref="RevisionAdmission.AdmitEachRevision{T}"/>).
+    ///
+    /// <list type="bullet">
+    ///   <item><description><b>What re-decides it — signals, never a timer.</b> A committed snapshot of
+    ///     any permission-fold input query in this cache that can reach the path (a global one, or one
+    ///     anchored to the path's partition — <see cref="_foldInputCommits"/>, announced after the commit
+    ///     ENDED, so the re-check reads the new snapshot); an access commit on the invalidation feed that
+    ///     can reach the path (<see cref="DeclaredPointRead.AffectsRead"/> — the rule's inputs, which the
+    ///     fold's queries do not carry); and every declared feed gap. A re-check triggered by the feed
+    ///     bypasses the per-(path,user) verdict cache, whose generation does not move with a rule's
+    ///     inputs.</description></item>
+    ///   <item><description><b>A re-check in flight HOLDS</b> (the <c>null</c> marker of
+    ///     <see cref="DeclaredReadSubscriptionFollow.VerdictOf"/>): a revision that arrives while it runs
+    ///     waits for the settled answer, so a revision written after the revocation committed is never
+    ///     forwarded on the verdict from before it. The hold is bounded by the permission-establishment
+    ///     budget; past it, it is a refusal.</description></item>
+    ///   <item><description><b>Tri-state, as at admission.</b> A grant admits; an undetermined re-check
+    ///     (a fault, a timeout, no answer) refuses; a DEFINITIVE denial hands the decision to the type's
+    ///     declared point read, which admits only a caller it names — revision by revision, exactly as
+    ///     <see cref="AdmittedThroughDeclaration"/> does.</description></item>
+    ///   <item><description><b>Ended, not silenced.</b> The first refusal ends THIS reader's stream with
+    ///     the gate's own <see cref="UnauthorizedAccessException"/>; the shared upstream and every other
+    ///     reader are untouched.</description></item>
+    /// </list>
+    /// </summary>
+    private IObservable<MeshNode> FollowStandingRead(string path, AccessContext captured, IObservable<MeshNode> shared)
+        => Observable.Defer(() =>
+        {
+            var budget = (meshHub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+                .PermissionEstablishmentBudget;
+            var partition = PartitionOf(path);
+            var scopes = DeclaredPointRead.ReadScopes(path);
+            // true = the re-check must bypass the verdict cache (its generation does not carry the signal).
+            var foldCommits = _foldInputCommits
+                .Where(anchor => anchor is null || string.Equals(anchor, partition, StringComparison.OrdinalIgnoreCase))
+                .Select(_ => false);
+            var feed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
+            var accessCommits = feed is null
+                ? Observable.Never<bool>()
+                // The filter runs as an Rx operator, so a fault in it reaches this signal's OnError
+                // (a refusal below) instead of being thrown into the feed's delivery callback.
+                : Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+                    .Where(change => DeclaredPointRead.AffectsRead(change, scopes))
+                    .Select(_ => true);
+            var gaps = feed is null ? Observable.Never<bool>() : feed.Gaps.Select(_ => true);
+
+            var lifetime = new CompositeDisposable();
+            var standing = Observable.Merge(foldCommits, accessCommits, gaps)
+                .Select(bypassCache => Observable.Defer(() => ProbeEffectivePermissions(path, captured, bypassCache))
+                    .Take(1)
+                    .Select(probe => probe.Permissions.HasFlag(Permission.Read)
+                        ? PermissionCheckOutcome.Granted
+                        : probe.Undetermined
+                            ? PermissionCheckOutcome.Undetermined($"the Read check on '{path}' reached no verdict")
+                            : PermissionCheckOutcome.Denied)
+                    .Timeout(budget)
+                    .Catch((Exception ex) =>
+                    {
+                        logger.LogWarning(ex,
+                            "MeshNodeStreamCache: the standing Read of {Path} for {User} could not be re-decided — undetermined, refused",
+                            path, captured.ObjectId);
+                        return Observable.Return(PermissionCheckOutcome.Undetermined(
+                            $"the Read check on '{path}' failed ({ex.GetType().Name})"));
+                    })
+                    .DefaultIfEmpty(PermissionCheckOutcome.Undetermined($"the Read check on '{path}' answered nothing"))
+                    .Select(outcome => (PermissionCheckOutcome?)outcome)
+                    // Off the signalling thread (a fold-input commit announces from inside the query's
+                    // delivery); the pending marker is emitted ON it, so a revision that arrives after
+                    // the commit already waits for the re-check.
+                    .SubscribeOn(Scheduler.Default)
+                    .StartWith((PermissionCheckOutcome?)null))
+                .Switch()
+                // The admission's own verdict is where the follow starts.
+                .StartWith((PermissionCheckOutcome?)PermissionCheckOutcome.Granted)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "MeshNodeStreamCache: a signal of the standing Read of {Path} for {User} faulted — undetermined, refused",
+                        path, captured.ObjectId);
+                    return Observable.Return((PermissionCheckOutcome?)PermissionCheckOutcome.Undetermined(
+                        $"the Read check on '{path}' lost its signals ({ex.GetType().Name})"));
+                })
+                .Replay(1)
+                // Owned by THIS reader's subscription, released when it ends however it ends.
+                .AutoConnectOwnedBy(lifetime, _releaseLane, nameof(MeshNodeStreamCache));
+            // Connected now, before the first revision, so a revocation that commits before the first
+            // revision arrives is still seen.
+            lifetime.Add(standing.Subscribe(_ => { }, _ => { }));
+
+            return shared
+                .AdmitEachRevision(
+                    revision => DeclaredReadSubscriptionFollow.VerdictOf(
+                        standing,
+                        () => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
+                            .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
+                        budget,
+                        Scheduler.Default),
+                    budget,
+                    () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"))
+                .Finally(lifetime.Dispose);
+        });
+
     private static IObservable<MeshNode> GateOnRead(
         Permission perms, IObservable<MeshNode> shared, string path, AccessContext user)
     {
@@ -2399,7 +2536,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// node, so a satellite / cell sub-path with no hub of its own can never wedge
     /// the gate.
     /// </summary>
-    private IObservable<(Permission Permissions, bool Undetermined)> ProbeEffectivePermissions(string path, AccessContext captured)
+    private IObservable<(Permission Permissions, bool Undetermined)> ProbeEffectivePermissions(
+        string path, AccessContext captured, bool bypassCache = false)
     {
         var key = BuildAccessCacheKey(path, captured);
         return Observable.Defer(() =>
@@ -2415,7 +2553,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // makes it stale at once, in either direction) and within the TTL. The entry keeps
             // whether its denial was UNDETERMINED, so a cached "could not check" is never mistaken
             // for a definitive denial.
-            if (_access.TryGetValue(key, out var cached)
+            if (!bypassCache
+                && _access.TryGetValue(key, out var cached)
                 && cached.Generation == generation
                 && cached.ValidUntil > DateTimeOffset.UtcNow)
             {
@@ -3543,7 +3682,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // the previous one stop being served (see AccessGeneration). Everything else is a
                 // plain Replay(1).
                 .Multicast(SecurityQueries.IsFoldInput(id)
-                    ? new FoldInputReplay<IEnumerable<MeshNode>>(FoldInputCountersFor(id))
+                    ? new FoldInputReplay<IEnumerable<MeshNode>>(FoldInputCountersFor(id), FoldInputCommitAnnouncer(id))
                     : (ISubject<IEnumerable<MeshNode>>)new ReplaySubject<IEnumerable<MeshNode>>(1))
                 // AutoConnect(1): connect the upstream on the FIRST subscriber
                 // and keep it alive thereafter (AutoConnect doesn't track

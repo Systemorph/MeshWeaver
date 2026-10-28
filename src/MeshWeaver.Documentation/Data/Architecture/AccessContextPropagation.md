@@ -738,7 +738,7 @@ Why local, and why the hub round-trip was removed: `GetEffectivePermissions` wal
 
 The caller's captured `AccessContext` is restored around the *synchronous* evaluator capture (`accessService.SwitchAccessContext(captured)`) so claim-based (Bearer-token) roles on `AccessContext.Roles` resolve — `PermissionEvaluator` snapshots `accessService.Context` on the calling thread before any Rx scheduler hop.
 
-Per-`(path, userId)` validations are cached in-process for 30 s (the `AccessTtl` constant in `MeshNodeStreamCache.cs`). A NEW read sees a revocation within at most that window; the cache is not invalidated reactively. An OPEN read does not see it at all: for a standard grant the gate is decided once per `GetStream`, so a revoked reader's open stream keeps its revisions until it ends (measured; see [Access Control](/Doc/Architecture/AccessControl) → "Recovery re-subscribes as the subscriber"). The shared upstream is unchanged — only the returned subscriber-side observable is gated.
+Per-`(path, userId)` validations are cached in-process for 30 s (the `AccessTtl` constant in `MeshNodeStreamCache.cs`). A NEW read sees a revocation within at most that window; the cache is not invalidated reactively. An OPEN read follows it: a granted read re-takes the gate's decision whenever a permission-fold input or an access commit that can reach the path lands, and a revoked reader's stream ends with the denial (see [Access Control](/Doc/Architecture/AccessControl) → "An open node-stream CACHE read follows its standing grant too"). The shared upstream is unchanged — only the returned subscriber-side observable is gated.
 
 ## A render reads as its viewer
 
