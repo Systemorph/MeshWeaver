@@ -1,14 +1,5 @@
 {
   "$comment": "The owner's routing decision for the build server (policy build-server-routes-all-ci; Doc/Architecture/BuildHosts → \"Host-forced routing\"). Every repository named in hostForced has its PULL-REQUEST CI routed to the standing build host even while its .github/build-stages.json still owes parity (no \"ciEquivalent\": true): build-executor.py answers `host-forced`, and every lane and follow job that reads the executor is RED naming the owed gap — red, never green, never skipped. Read from core's DEFAULT branch only (build-executor.py ROUTING_URL), so no pull request routes itself. It narrows nothing on its own: the operations instance must ALSO answer host for the repository (Hosting:Builds:HostRepos). Trunk runs are never forced. A repository leaves this list when its stages claim equivalence (then it routes as plain `host`) or when the owner reverses the decision. MeshWeaver.Deploy and Memex are deliberately absent: they carry the host's fixes and the infrastructure and must stay mergeable.",
   "policy": "build-server-routes-all-ci",
-  "hostForced": [
-    "MeshWeaver",
-    "MeshWeaver.Plugins",
-    "MeshWeaver.Crm",
-    "MeshWeaver.Education",
-    "MeshWeaver.Reinsurance",
-    "MeshWeaver.SocialMedia",
-    "MeshWeaver.Manufacturing",
-    "MeshWeaver.FundReporting"
-  ]
+  "hostForced": []
 }
