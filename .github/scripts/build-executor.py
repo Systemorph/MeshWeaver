@@ -50,11 +50,14 @@ from typing import Callable, Optional
 
 HOST = "host"
 ACTIONS = "actions"
-# 🚨 HOST-FORCED (policy `build-server-routes-all-ci`): the owner routed this repository's pull-request CI to
-# the build server BEFORE its host stages are CI-equivalent. Every lane and follow job that reads the
-# executor turns RED on it, naming the owed gap — a leg the host does not yet run with parity is red,
-# never green and never skipped. It is not `host` (that would carry a host verdict as if equivalent) and
-# not `actions` (that would let the legs run here and paint green).
+# 🌘 HOST-FORCED = SHADOW until parity (policy build-server-routes-all-ci): the owner routed this repository's
+# pull-request CI to the build server BEFORE its host stages are CI-equivalent. The run is QUEUED on the host
+# (all traffic goes there, and the host's own build/* check runs show its real result — none of them is a
+# required context), AND every lane runs its legs on GitHub Actions exactly as with `actions`: the REQUIRED
+# verdict is the Actions legs', so a fix can always merge while the host goes green gap by gap. The owed
+# parity is printed as `::warning::` lines, one per owed item — named, never silent, never a red. It is not
+# `host` (that would carry a host verdict as if equivalent); a repository that claims `ciEquivalent` with
+# nothing owed is plain `host`, and there the host IS the verdict.
 HOST_FORCED = "host-forced"
 STAGES_FILE = ".github/build-stages.json"
 # The owner's routing decision is a TRUNK policy, read from core's DEFAULT branch — never from the pull
@@ -320,9 +323,10 @@ def decide(i: Inputs, get: Get, post: Post, routing: Optional[Routing] = None, r
 def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool) -> Decision:
     """The owner routed this repository's pull requests to the build server (policy `build-server-routes-all-ci`)
     while its stages still owe parity. The operations instance must still SAY host for it (its
-    `Hosting:Builds:HostRepos`); then the answer is HOST_FORCED, which every lane and follow job turns RED,
-    naming the debt. When the repository declares stages, the run is ALSO queued on the host (best effort), so
-    the host runs what it can and its own check runs show how far it got — none of them is a required context."""
+    `Hosting:Builds:HostRepos`); then the answer is HOST_FORCED — SHADOW: every lane runs its legs on Actions and
+    those carry the required verdict, while the debt is NAMED as warnings. When the repository declares stages, the
+    run is ALSO queued on the host (best effort), so the host runs what it can and its own check runs show how far
+    it got — none of them is a required context."""
     repo_name = i.repo.split("/")[-1]
 
     def actions(why: str) -> Decision:
@@ -354,11 +358,11 @@ def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool) -
                       else f"NOT queued on the host (HTTP {st:03d}, signature {verdict!r})")
         else:
             queued = "NOT queued on the host (no webhook pair or an unsafe inbox in this context)"
-    why = (f"{repo_name} is routed to the build server by the owner's decision (policy {ROUTING_POLICY}) while its host stages "
-           f"still owe parity with the Actions legs — every heavy required context is RED until the debt below is paid and "
-           f"`ciEquivalent` is claimed; the run is {queued}")
-    lines = [f"::warning title=Routed to the build host (owner decision {ROUTING_POLICY})::{why}"]
-    lines += [f"::error title=Owed on the build host::{o[:900]}" for o in owes]
+    why = (f"{repo_name} is routed to the build server by the owner's decision (policy {ROUTING_POLICY}) in SHADOW while its "
+           f"host stages still owe parity with the Actions legs — the legs run on Actions and carry every required verdict "
+           f"until the debt below is paid and `ciEquivalent` is claimed; the run is {queued}")
+    lines = [f"::warning title=Shadow run on the build host (owner decision {ROUTING_POLICY})::{why}"]
+    lines += [f"::warning title=Owed on the build host (shadow — not a red)::{o[:900]}" for o in owes]
     return Decision(HOST_FORCED, api, why + " — owed: " + " | ".join(o[:300] for o in owes), lines)
 
 
@@ -437,8 +441,8 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--route-only", action="store_true",
-                    help="answer only whether this pull request is HOST-FORCED (policy build-server-routes-all-ci): queues nothing, "
-                         "and exits 1 naming the owed gap when it is — for a repository whose required context has no follow job")
+                    help="answer only whether this pull request is HOST-FORCED (policy build-server-routes-all-ci — SHADOW until "
+                         "parity): queues nothing and exits 0 either way; the owed gap is printed as warnings")
     a = ap.parse_args(argv)
     if a.self_test:
         return self_test()
@@ -448,9 +452,6 @@ def main(argv: list[str]) -> int:
         print(f"::error title=Build executor::{e}")
         return 2
     emit(d, dict(os.environ))
-    if a.route_only and d.executor == HOST_FORCED:
-        print(f"::error title=Routed to the build host — owed legs are RED::{d.why[:1500]}")
-        return 1
     return 0
 
 
@@ -625,7 +626,8 @@ def self_test() -> int:
         check("input/a non-numeric run id is refused", False)
     except BadInput:
         pass
-    # 5b. HOST-FORCED (policy build-server-routes-all-ci): red-never-green while the stages owe parity
+    # 5b. HOST-FORCED (policy build-server-routes-all-ci): SHADOW while the stages owe parity — queued on the host,
+    # the legs run on Actions and carry the verdict, the debt is named as warnings (never an error)
     owing = os.path.join(tmp, "owing.json")
     with open(owing, "w") as fh:
         json.dump({"owes": ["modules: not built on the host"], "stages": [{"name": "compile-check"}, {"name": "gate"}]}, fh)
@@ -635,7 +637,9 @@ def self_test() -> int:
     check("forced/an owing repository the owner routed answers host-forced, never actions or host",
           d.executor == HOST_FORCED and "modules: not built on the host" in d.why and ROUTING_POLICY in d.why, d)
     check("forced/its stages are still queued on the host (traffic goes there)", [c[0] for c in calls] == ["GET", "POST"], calls)
-    check("forced/each owed item is an ::error annotation", any(l.startswith("::error title=Owed") and "modules" in l for l in d.lines), d.lines)
+    check("forced/each owed item is a ::warning annotation (shadow: named, never a red)",
+          any(l.startswith("::warning title=Owed") and "modules" in l for l in d.lines), d.lines)
+    check("forced/shadow prints NO ::error line — the required verdict is the Actions legs'", not any(l.startswith("::error") for l in d.lines), d.lines)
     calls.clear()
     d = decide(with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post, route("MeshWeaver.Plugins"))
     check("forced/a repository with NO stages is host-forced too, owing everything, and queues nothing",
@@ -657,29 +661,51 @@ def self_test() -> int:
     calls.clear()
     d = decide(with_(stages_file=owing), host_q, ok_post, route("MeshWeaver.Plugins"), route_only=True)
     check("forced/route-only on a forced, owing repository is host-forced and POSTs nothing", d.executor == HOST_FORCED and not any(c[0] == "POST" for c in calls), (d, calls))
+    check("forced/route-only prints the debt as warnings, never an error", d.lines and not any(l.startswith("::error") for l in d.lines), d.lines)
     d = decide(with_(stages_file=stages), host_q, ok_post, route("MeshWeaver.Crm"), route_only=True)
     check("forced/route-only on an unlisted repository is actions", d.executor == ACTIONS, d)
-    # 5b. wiring: the required context must not let consolidate's SECOND read clear precheck's decision.
-    # `--route-only` reads an unanswering queue as NOT forced; precheck's `host-forced` already skipped
-    # `build`, so `Consolidate test results` must fail on precheck's answer itself, before any re-read.
+    # 5c. wiring (core's own lane): SHADOW — on `host-forced` the Actions build runs and the required context is
+    # judged on it, the debt is a warning; on plain `host` (a repository that claims parity) the Actions build is
+    # replaced by the host's follow jobs (negative control: that route is unchanged).
     wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows", "dotnet-test.yml")
     if os.path.isfile(wf):  # core's own tree; a satellite running the platform copy has no such lane
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import workflow_yaml  # noqa: PLC0415
         from pathlib import Path  # noqa: PLC0415
-        collect = workflow_yaml.job(workflow_yaml.load(Path(wf)), "collect-results", "dotnet-test.yml")
-        holds = [st for st in collect.get("steps") or []
-                 if "needs.precheck.outputs.executor == 'host-forced'" in str(st.get("if", ""))
-                 and "exit 1" in str(st.get("run", ""))]
-        check("wiring/Consolidate test results fails on precheck's host-forced itself (a transient queue outage on "
-              "its re-read cannot clear the decision)", len(holds) == 1, [st.get("name") for st in holds])
-        check("wiring/... and on ADMISSION's host-forced (precheck's read failed, admission's answered and queued the host)",
-              len([st for st in holds if "needs.admission.outputs.executor == 'host-forced'" in str(st.get("if", ""))]) == 1,
-              [st.get("if") for st in holds])
-        build_if = str(workflow_yaml.job(workflow_yaml.load(Path(wf)), "build", "dotnet-test.yml").get("if", ""))
-        check("wiring/the Actions build starts on NEITHER precheck's nor admission's host-forced (no duplicate heavy legs, "
-              "no bypass of the forced routing)",
-              all(f"needs.{j}.outputs.executor != 'host-forced'" in build_if for j in ("precheck", "admission")), build_if)
+        doc = workflow_yaml.load(Path(wf))
+        collect = workflow_yaml.job(doc, "collect-results", "dotnet-test.yml")
+        steps = collect.get("steps") or []
+        forced = [st for st in steps if "host-forced" in str(st.get("if", "")) or "host-forced" in str(st.get("run", ""))]
+        check("wiring/Consolidate test results never FAILS on host-forced (shadow: the Actions legs carry the verdict)",
+              not any("exit 1" in str(st.get("run", "")) for st in forced), [st.get("name") for st in forced])
+        check("wiring/... and never re-asks the route (--route-only) to decide a red",
+              not any("--route-only" in str(st.get("run", "")) for st in steps), [st.get("name") for st in steps if "--route-only" in str(st.get("run", ""))])
+        check("wiring/... but NAMES the owed parity as a ::warning:: on host-forced",
+              any("needs.admission.outputs.executor == 'host-forced'" in str(st.get("if", "")) and "::warning" in str(st.get("run", "")) for st in steps),
+              [st.get("name") for st in forced])
+        build_if = str(workflow_yaml.job(doc, "build", "dotnet-test.yml").get("if", ""))
+        check("wiring/the Actions build RUNS on host-forced (no host-forced exclusion in its if)", "host-forced" not in build_if, build_if)
+        check("wiring/negative control: the Actions build still does NOT run on plain `host` (a parity claim — the host IS the verdict)",
+              "needs.admission.outputs.executor != 'host'" in build_if, build_if)
+        for j in ("host-follow", "host-results"):
+            jif = str(workflow_yaml.job(doc, j, "dotnet-test.yml").get("if", ""))
+            check(f"wiring/{j} runs ONLY on plain `host`, never on host-forced", "executor == 'host'" in jif and "host-forced" not in jif, jif)
+        test_assert = [st for st in steps if "needs.test.result != 'success'" in str(st.get("if", ""))]
+        check("wiring/the suites' assertion holds on every route but plain `host` (host-forced included)",
+              len(test_assert) == 1 and "needs.admission.outputs.executor != 'host'" in str(test_assert[0].get("if", "")),
+              [st.get("if") for st in test_assert])
+    # 5d. wiring (the reusable lanes every satellite calls): no lane fails or skips its legs on host-forced
+    lanes = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "workflows")
+    for name in ("build-follow.yml", "node-repo-compile-check.yml", "node-repo-gate.yml", "node-repo-module-pack.yml", "build-host-publication.yml"):
+        path = os.path.join(lanes, name)
+        if not os.path.isfile(path):
+            continue
+        text = open(path, encoding="utf-8").read()
+        check(f"wiring/{name} skips no job or step on host-forced (shadow runs the legs as `actions`)",
+              "!= 'host-forced'" not in text, name)
+        arm = [ln for ln in text.splitlines() if ln.strip().startswith("host-forced)") or ln.strip().startswith("actions|host-forced)")]
+        check(f"wiring/{name} handles host-forced in its executor switch, and never with exit 1",
+              arm and not any("exit 1" in ln for ln in arm), arm)
     # 6. outputs and summary
     out, summ = os.path.join(tmp, "out"), os.path.join(tmp, "summary")
     emit(Decision(HOST, "https://control.example.com/api/builds", "queued", [], run_page_url("https://control.example.com/api/builds", "MeshWeaver.Plugins", "a" * 40)),
@@ -699,7 +725,7 @@ def self_test() -> int:
         return 1
     print("build-executor self-test: all cases passed (host when declared + said + queued and verified; actions — said — on every failure: "
           "no stages, no API, unsafe URL, unreachable, 503, not JSON, no executor, actions, unknown, no pair, refused, unverified; the "
-          "request's shape, trunk, the admission's base, the signature, outputs)")
+          "request's shape, trunk, the admission's base, the signature, outputs; host-forced = shadow: queued, legs on Actions, debt as warnings)")
     return 0
 
 

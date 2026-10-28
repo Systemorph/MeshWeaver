@@ -58,6 +58,7 @@ on:
           follow job's result as `host-verdict`. With `host` nothing heavy runs here: the required
           context below carries the HOST's verdict, green only when `host-verdict` is `success`. Any
           other value is RED, named.
+          `host-forced` (policy build-server-routes-all-ci, SHADOW until parity) runs exactly as `actions`.
         required: false
         type: string
         default: actions
@@ -307,7 +308,7 @@ jobs:
         run: |
           case "$EXECUTOR" in
             actions|host) echo "executor: $EXECUTOR" ;;
-            host-forced) echo "::error title=Routed to the build host — owed::the owner routed this repository's pull requests to the build server (policy build-server-routes-all-ci) while its host stages still owe parity with this leg — RED until the debt is paid and ciEquivalent is claimed; the owed items are the ::error annotations of the run's executor/admission job and the owes list of .github/build-stages.json"; exit 1 ;;
+            host-forced) echo "::warning title=Shadow run on the build host (policy build-server-routes-all-ci)::the owner routed this repository's pull requests to the build server ahead of CI equivalence, so the host runs them in SHADOW — its build/* check runs show its real result and none of them is required — while this lane's legs run HERE on GitHub Actions and carry the required verdict, exactly as with executor 'actions'. What the host still owes is named in the run's executor/admission job and in the owes list of .github/build-stages.json"; echo "executor: host-forced — this lane runs on Actions (shadow mode)" ;;
             *) echo "::error title=Build executor::executor '$EXECUTOR' is neither 'actions' nor 'host' — refusing to guess who ran this lane's work"; exit 1 ;;
           esac
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
