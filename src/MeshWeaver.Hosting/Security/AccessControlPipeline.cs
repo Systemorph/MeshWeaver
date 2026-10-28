@@ -508,7 +508,7 @@ public static class AccessControlPipeline
                     // would overtake it (#6589, see SenderOrderedRelease).
                     if (!ordered.IsWaiting(senderKey))
                         return next.Invoke(delivery, ct);
-                    ordered.Release<EvaluatedCheck?>(senderKey, Observable.Return<EvaluatedCheck?>(null),
+                    ordered.Release<EvaluatedCheck?>(senderKey, delivery, Observable.Return<EvaluatedCheck?>(null),
                         _ => next.Invoke(delivery, ct).Subscribe(
                             _ => { },
                             ex => logger?.LogError(ex,
@@ -537,7 +537,7 @@ public static class AccessControlPipeline
                 // the pool), so acting on it the moment it arrived let a sender's later write run
                 // its handler before an earlier one: 20 patches posted in order to a node were
                 // applied 1,3,2,… and the last one posted did not stay. See SenderOrderedRelease.
-                ordered.Release(senderKey, pendingChecks.ToObservable()
+                ordered.Release(senderKey, delivery, pendingChecks.ToObservable()
                     // 🚨 CheckPermissionOutcome, NOT CheckPermission + a local .Catch(→false)
                     // — issue #974. The fold is the only party that knows whether it reached a
                     // verdict, so it is the only place that may decide "denied" vs. "could not
@@ -717,13 +717,11 @@ public static class AccessControlPipeline
                             logger?.LogWarning("AccessControlPipeline: {Message} (triggered by message={MessageType} sender={Sender} hub={Hub})",
                                 message, delivery.Message.GetType().Name, delivery.Sender, hub.Address);
 
-                            hub.Post(
-                                new DeliveryFailure(delivery)
-                                {
-                                    ErrorType = errorType,
-                                    Message = message
-                                },
-                                o => o.ResponseFor(delivery));
+                            PostAnswer(hub, delivery, new DeliveryFailure(delivery)
+                            {
+                                ErrorType = errorType,
+                                Message = message
+                            });
                         },
                         ex =>
                         {
@@ -745,19 +743,60 @@ public static class AccessControlPipeline
                                 + $"user's rights. Retry shortly. Cause: {ex.GetType().Name}: {ex.Message}";
                             logger?.LogWarning(ex, "AccessControlPipeline: {Message}", message);
 
-                            hub.Post(
-                                new DeliveryFailure(delivery)
-                                {
-                                    ErrorType = ErrorType.Unavailable,
-                                    Message = message
-                                },
-                                o => o.ResponseFor(delivery));
+                            PostAnswer(hub, delivery, new DeliveryFailure(delivery)
+                            {
+                                ErrorType = ErrorType.Unavailable,
+                                Message = message
+                            });
                         },
                         logger);
 
                 return Observable.Return(delivery.Forwarded());
             });
         });
+
+    /// <summary>
+    /// Answers a gated delivery whose permission verdict this hub's disposal released before it was
+    /// acted on — as the recycling NACK (<see cref="ErrorType.ShuttingDown"/>, wording matched as
+    /// transient by every re-probe classifier), so the caller asks the fresh activation instead of
+    /// waiting out its budget for an answer nobody owes it any more.
+    /// </summary>
+    private static void AnswerReleasedAtTeardown(IMessageHub hub, IMessageDelivery delivery, ILogger? logger)
+    {
+        var messageType = delivery.Message.GetType().Name;
+        logger?.LogDebug(
+            "AccessControlPipeline: {MessageType} (id={DeliveryId}) on {Hub} was still waiting for its "
+            + "permission verdict when the hub was disposed — NACKing as SHUTTING DOWN so the caller "
+            + "re-probes the fresh activation",
+            messageType, delivery.Id, hub.Address);
+        PostAnswer(hub, delivery, new DeliveryFailure(delivery)
+        {
+            ErrorType = ErrorType.ShuttingDown,
+            Message = RecyclingRefusal(hub.Address, messageType,
+                "the hub was disposed before the permission verdict for this delivery was acted on")
+        });
+    }
+
+    /// <summary>
+    /// Posts <paramref name="failure"/> as the reply to <paramref name="delivery"/> through a carrier
+    /// that can still deliver it: this hub while its own Post is open, otherwise its PARENT — once a
+    /// hub is past <see cref="MessageHubRunLevel.DisposeHostedHubs"/> its Post refuses every
+    /// non-shutdown message, which is how an answer computed during a teardown used to be lost.
+    /// Correlation rides <c>ResponseFor</c>'s request id, never the posting hub's identity — the same
+    /// escape <c>MessageService.NackThroughParent</c> uses. During a whole-mesh teardown the parent is
+    /// past that point too and nobody is waiting.
+    /// </summary>
+    private static void PostAnswer(IMessageHub hub, IMessageDelivery delivery, DeliveryFailure failure)
+    {
+        if (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+        {
+            hub.Post(failure, o => o.ResponseFor(delivery));
+            return;
+        }
+        var parent = hub.Configuration.ParentHub;
+        if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            parent.Post(failure, o => o.ResponseFor(delivery));
+    }
 
     /// <summary>
     /// 🚨 <b>Per-sender FIFO for gated deliveries (#6589).</b> A <see cref="RequiresPermissionAttribute"/>
@@ -821,14 +860,53 @@ public static class AccessControlPipeline
         /// release for <paramref name="key"/> has been acted on.
         /// </summary>
         public void Release<T>(
-            string key, IObservable<T> decision, Action<T> onDecision, Action<Exception> onFault, ILogger? logger)
+            string key, IMessageDelivery delivery, IObservable<T> decision,
+            Action<T> onDecision, Action<Exception> onFault, ILogger? logger)
         {
             // Hot from here: the verdict is computed concurrently with everything queued ahead.
             var verdict = decision.Take(1).Replay(1);
-            verdict.ConnectOwnedBy(Connections());
+            var owner = Connections();
+
+            // 🚨 EVERY gated delivery is answered exactly once — including the one whose verdict the
+            // hub's disposal RELEASED before it was acted on. Disposing `owner` (the hub's ShutDown
+            // phase) unsubscribes the verdict from its upstream and emits NOTHING to the release
+            // below, so without this the delivery got no handler, no refusal and no NACK: the sender
+            // waited out its whole budget. Measured: RecycleNode's own read reached the activity hub
+            // it had just asked to dispose (still Started, so it was admitted), its Read verdict was
+            // in flight off the turn when the teardown released it, and GetMeshNode timed out after
+            // 60 s with `ROUTED onTarget=True state=Submitted` and nothing after it
+            // (ActivityActionReferenceDurabilityTest). The answer is the recycling NACK — the
+            // address is coming back, so the caller re-probes and lands on the fresh activation.
+            // `settled` makes it exactly one answer: whichever of {acted on, released} comes first.
+            var settled = 0;
+            var abandon = Disposable.Create(() =>
+            {
+                if (Interlocked.Exchange(ref settled, 1) != 0)
+                    return;
+                try { AnswerReleasedAtTeardown(hub, delivery, logger); }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "AccessControlPipeline: answering a delivery released at teardown threw");
+                }
+            });
+            // An owner already disposed runs `abandon` on the spot: the delivery is answered now.
+            owner.Add(abandon);
+            verdict.ConnectOwnedBy(owner);
+
+            bool Claim()
+            {
+                if (Interlocked.Exchange(ref settled, 1) != 0)
+                    return false;
+                // Settled — drop the teardown answer; `Remove` disposes it, which is now a no-op.
+                owner.Remove(abandon);
+                return true;
+            }
+
             var release = Observable.Create<System.Reactive.Unit>(observer => verdict.Subscribe(
                 value =>
                 {
+                    if (!Claim())
+                        return;
                     try { onDecision(value); }
                     catch (Exception ex)
                     {
@@ -837,10 +915,13 @@ public static class AccessControlPipeline
                 },
                 ex =>
                 {
-                    try { onFault(ex); }
-                    catch (Exception inner)
+                    if (Claim())
                     {
-                        logger?.LogError(inner, "AccessControlPipeline: answering a failed permission check threw");
+                        try { onFault(ex); }
+                        catch (Exception inner)
+                        {
+                            logger?.LogError(inner, "AccessControlPipeline: answering a failed permission check threw");
+                        }
                     }
                     observer.OnCompleted();
                 },
