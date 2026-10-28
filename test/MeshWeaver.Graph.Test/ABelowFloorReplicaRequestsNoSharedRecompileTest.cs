@@ -121,7 +121,13 @@ public class ABelowFloorReplicaRequestsNoSharedRecompileTest(ITestOutputHelper o
         def.CompilationStatus.Should().Be(CompilationStatus.Ok,
             "🚨 a below-floor replica must not flip the shared record to Pending: no compile anywhere "
             + "can give THIS replica the dependency it lacks (#6195)");
-        record.Version.Should().Be(typeNode.Version, "nothing was written to the shared record");
+        // Not the node Version: the type's own hub legitimately writes its source snapshot after it
+        // activates. What a recompile request writes is the dispatch stamp and, on its refusal here,
+        // a terminal that replaces the status — neither may appear.
+        def.DispatchedBuildInputs.Should().BeNull("no compile was dispatched for the shared record");
+        def.LatestAssemblyPath.Should().Be(
+            typeNode.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.LatestAssemblyPath,
+            "the recorded build is untouched");
     }
 
     /// <summary>
