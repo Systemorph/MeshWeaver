@@ -1419,7 +1419,10 @@ public partial record MeshBuilder
     {
         return configuration
             .AddMeshTypes()
-            .WithNodeOperationHandlers();
+            .WithNodeOperationHandlers()
+            // #7380 — creates refused while the store was unreachable are re-issued once when it
+            // answers again, by the watcher on the mesh hub (it lives for the process).
+            .WithInitialization(PendingWriteRecovery.Arm);
     }
 
     /// <summary>
