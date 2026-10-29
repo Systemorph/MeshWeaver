@@ -32,7 +32,7 @@ Two places in the platform ride out a `ShuttingDown` address, and they are the w
 |---|---|---|
 | The **point read** | `MeshNodeStreamExtensions.GetMeshNodeOutcome` | one immediate re-probe, then paced re-probes inside the caller's budget |
 | The **sync stream** | `JsonSynchronizationStream`'s recycle re-arm latch | one re-ask per rejection, gated on the rejecting hub's teardown |
-| The **cross-hub write** | `MeshNodeStreamHandle.UpdateRemote` | the same bounded never-applied re-enqueue as `OwnerDisposing` (see *A write is a rider too*, below) |
+| The **cross-hub write** | `MeshNodeStreamHandle.UpdateRemote` | the same bounded never-applied re-enqueue as `OwnerDisposing`, gated on the rejecting hub's teardown (see *Node writes*, below) |
 
 Everything else treats the classification as *information* rather than as something to recover from:
 `MeshNodeStreamCache.IsTransientOwnerFailure` refuses to poison its negative cache with it,
@@ -340,6 +340,26 @@ silent success. A write parked behind a young activation's gates is therefore **
 activation is torn down mid-bring-up. The discard answers it `ShuttingDown`, the write is re-asked,
 and it lands on the next activation.
 
+### The write's re-ask joins the teardown too (#7326)
+
+Until #7326 the write rider broke rule 2: it re-asked AT ONCE. A re-attempt diffs against the same
+leased mirror as the attempt it replaces, and that mirror already has state, so the re-attempt posts
+immediately. The refusing owner is still registered under its address until its own teardown
+removes it, so routing handed every re-ask straight back to it. Measured with
+`AWriteRefusedByARecyclingOwner_LandsOnTheNextActivation`, before the fix: three refusals from one
+activation inside 5 ms, then a terminal `MeshNode Unknown … is shutting down`. That is the
+retype-then-repair upsert of #4484 and #7326: the retype makes the rebind watcher recycle the owner,
+and a repair whose mirror was answered just before that recycle meets an owner that is already
+refusing.
+
+Both re-enqueue arms (`OWNER_SHUTTING_DOWN_REENQUEUE`, `LATE_SHUTTING_DOWN_REENQUEUE`) now start the
+re-attempt only once the refusing LOCAL instance has finished its teardown
+(`LocalTeardownJoin.WhenLocalTeardownSettled`, the same lookup the sync stream's join uses). With no
+local instance to wait for (the owner is on another silo, or it is already gone), the re-attempt
+starts at once, as before. The join has no timer of its own; the write's late-verdict window stays
+the bound. The re-attempt is subscribed under the writer's AccessContext, because after the join it
+runs on whichever thread completed the owner's disposal.
+
 The producer did not say so, though. The patch carried neither the attribute nor the property, so
 that routine roll-time discard was reported at Error as stranded work. One measured case was #6733:
 an Orleans deactivation (`DirectoryFailure`, the directory owner's silo stopping) took down an
@@ -363,6 +383,7 @@ unmarked, because producers outside this repository may post it too.
 | `DeferredDeliveryNackedOnDisposeTest.ADiscardError_NamesTheRequest_SoItsProducerCanBeTold` (`MeshWeaver.Messaging.Hub.Test`) | a bring-up discard Error that names the request type but not its declared description (#5718), or that prints an undeclared payload |
 | `DeferredDeliveryNackedOnDisposeTest.ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError` (`MeshWeaver.Messaging.Hub.Test`) | a delivery stamped `ReasksOnShutdown` still reported at Error when a teardown discards it, or no longer answered `ShuttingDown` (#5718) |
 | `DeferredDeliveryNackedOnDisposeTest.ADeferredReplyToTheDisposingHub_IsTeardownNormal_AndItsReplierIsNotNacked` (`MeshWeaver.Messaging.Hub.Test`) | a reply parked behind a young activation's gates reported at Error, or reported as answering its replier `ShuttingDown`, or a drain that NACKs the replier (#6791) |
+| `AWriteDuringItsOwnersRecycleLandsTest` (`MeshWeaver.Graph.Test`) | a node write refused `ShuttingDown` by an owner that stays registered through its teardown, whose re-asks go back to that same owner instead of waiting for it to be gone (#7326) |
 | `PatchDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | a node write parked behind a young activation's gates that does not land on the next activation after a direct teardown, or whose discard is reported at Error (#6733) |
 | `PointReadDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | the PRODUCTION claimant: a `GetMeshNodeOutcome` request — the initial one or the re-probe issued from the `ShuttingDown` NACK — that arrives without the `ReasksOnShutdown` stamp, whose bring-up discard is reported at Error, or a read that does not settle `Present` after two such discards (#6717) |
 | `GetMeshNodeReProbeKeepsCallerIdentityTest` (`MeshWeaver.Data.Test`) | a re-probe posted without the read's identity (#5227), or a re-probe issued nested inside the first probe's `Subscribe` that the first probe's late slot assignment disposes, dropping the owner's answer (#7395) |
