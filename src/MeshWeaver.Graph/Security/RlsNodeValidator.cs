@@ -576,7 +576,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
             ? null
             : context.Node.ContentAs<ApiToken>(_hub.JsonSerializerOptions);
         var refusal = token is { TokenHash.Length: > 0 }
-            ? ApiTokenScope.MintRefusal(caller, token.Scopes)
+            ? ApiTokenScope.RecordMintRefusal(caller, token.Scopes, token.UserId, token.ServiceIdentityPath)
             : ApiTokenScope.Refusal(caller, ApiTokenScope.Tokens);
         return refusal is null
             ? null

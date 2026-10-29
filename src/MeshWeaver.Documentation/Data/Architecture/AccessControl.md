@@ -1472,7 +1472,9 @@ authenticates a token. From there:
   hub in a `DataChangeRequest` are all refused. Paired with the verdict authenticating only a node
   TYPED as a token record (content alone, untyped or foreign-typed, never authenticates), this is
   one invariant for the whole family: no scoped write can produce an authenticating record except a
-  subset-ruled mint. And only a token RECORD authenticates: the hash index outlives its record, so `ApiTokenVerdict`
+  subset-ruled mint. And the mint binds WHOSE token it is (`ApiTokenScope.RecordMintRefusal`): a
+  scoped minter writes only a token naming its own principal, never another person, System or a
+  service identity, which would otherwise authenticate as that principal. And only a token RECORD authenticates: the hash index outlives its record, so `ApiTokenVerdict`
   refuses a record at the indexed path that is not typed as a token record — another type, or none at
   all — which a record deleted and recreated as a lookalike would be. A legacy index that carries the record itself is still read as before.
 - **A hub-level grant never lifts the cap.** The delivery gate accepts a hub rule's grant (for

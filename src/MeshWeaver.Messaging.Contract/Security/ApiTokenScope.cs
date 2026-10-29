@@ -199,6 +199,33 @@ public static class ApiTokenScope
     /// <param name="minter">The context writing the token record.</param>
     /// <param name="requested">The scopes on the token record being written.</param>
     public static string? MintRefusal(AccessContext? minter, IReadOnlyCollection<string>? requested)
+        => MintScopeRefusal(minter, requested);
+
+    /// <summary>
+    /// <see cref="MintRefusal"/> for a whole token
+    /// record: a scoped minter may write only a token for ITS OWN principal (review of #7585) — never
+    /// one naming another person, System or any other infrastructure identity (which the fold and RLS
+    /// admit before any cap), and never a service credential. Otherwise a narrow-scoped mint would
+    /// authenticate as whoever the record names. An unscoped minter is unrestricted, as before.
+    /// </summary>
+    /// <param name="minter">The context writing the token record.</param>
+    /// <param name="requested">The scopes on the token record being written.</param>
+    /// <param name="owner">The principal the record names (<c>ApiToken.UserId</c>).</param>
+    /// <param name="serviceIdentityPath">The record's service identity path, if any.</param>
+    public static string? RecordMintRefusal(AccessContext? minter, IReadOnlyCollection<string>? requested,
+        string? owner, string? serviceIdentityPath)
+    {
+        if (IsScoped(minter)
+            && (!string.Equals(owner, minter!.ObjectId, StringComparison.Ordinal)
+                || string.IsNullOrEmpty(minter.ObjectId)
+                || !string.IsNullOrEmpty(serviceIdentityPath)))
+            return $"This API token is limited to the scopes [{Format(minter.Scopes)}]; it can write a token only "
+                   + $"for its own principal '{minter.ObjectId}', never for '{owner}'"
+                   + (string.IsNullOrEmpty(serviceIdentityPath) ? "." : " or a service identity.");
+        return MintScopeRefusal(minter, requested);
+    }
+
+    private static string? MintScopeRefusal(AccessContext? minter, IReadOnlyCollection<string>? requested)
     {
         if (!IsScoped(minter))
             return null;

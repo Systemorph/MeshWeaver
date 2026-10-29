@@ -521,6 +521,36 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Select(n => n!)
             .Should().Within(TestTimeouts.Convergence).Emit("the record must be readable", ct);
 
+    /// <summary>
+    /// 🚨 THE PRINCIPAL PIN (review of #7585, round 5). The subset rule bounds the scopes a scoped
+    /// token mints, and must also bind WHOSE token it mints: a record naming another principal —
+    /// System above all, which the fold and RLS admit before any cap — or a service identity would
+    /// authenticate as that principal. A scoped minter writes only its own principal's tokens.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AScopedToken_MintsOnlyForItsOwnPrincipal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var minter = BecomeToken(ApiTokenScope.Read, ApiTokenScope.Write, ApiTokenScope.Tokens);
+        MeshNode Minted(string userId, string? serviceIdentityPath = null) => TokenRecord("bound", [ApiTokenScope.Read]) with
+        {
+            Content = new ApiToken
+            {
+                TokenHash = new string('c', 64), UserId = userId, Label = "bound",
+                Scopes = [ApiTokenScope.Read], ServiceIdentityPath = serviceIdentityPath,
+            },
+        };
+
+        (await Validate(minter, NodeOperation.Create, Minted(WellKnownUsers.System), ct)).IsValid.Should().BeFalse(
+            "a scoped token must not mint a System credential, however narrow its scopes");
+        (await Validate(minter, NodeOperation.Create, Minted("someone-else"), ct)).IsValid.Should().BeFalse(
+            "nor one for another person");
+        (await Validate(minter, NodeOperation.Create, Minted(TokenUser, "Svc/Identity"), ct)).IsValid.Should().BeFalse(
+            "nor a service credential");
+        (await Validate(minter, NodeOperation.Create, Minted(TokenUser), ct)).IsValid.Should().BeTrue(
+            "the control: its own principal, a subset of its scopes");
+    }
+
     // ── The verdict carries the cap ─────────────────────────────────────────────────────────────
 
     /// <summary>The shared verdict returns the token's scopes, and null for an unscoped token — so
