@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
-/// <summary>The result of an <see cref="SpaceInviteService.Invite"/> call.</summary>
+/// <summary>The result of an <see cref="SpaceInviteService.Invite(string, string, string, bool, string?)"/> call.</summary>
 public enum SpaceInviteOutcome
 {
     /// <summary>The email already had an account — access was granted immediately.</summary>
@@ -46,7 +46,19 @@ public sealed class SpaceInviteService(
     /// (the Space flavour — also pins the Space to the dashboard when <paramref name="pin"/>).</summary>
     public IObservable<SpaceInviteOutcome> Invite(
         string spacePath, string email, string role, bool pin, string? invitedBy)
-        => GrantOrScheduleAccess(spacePath, email, role, pin, invitedBy, note: $"Invited to space {spacePath}");
+        => Invite(spacePath, email, role, pin, invitedBy, message: null);
+
+    /// <summary>Invites <paramref name="email"/> to <paramref name="spacePath"/> with <paramref name="role"/>,
+    /// carrying the host's personal <paramref name="message"/> into the invitation email
+    /// (<see cref="Invitation.Message"/>). An existing account is granted immediately and is sent no
+    /// invitation email, so the message travels only with an invitation.</summary>
+    /// <remarks>An overload, not an optional parameter on the method above: an added optional
+    /// parameter replaces the signature, and callers compiled against the old one — in-mesh code
+    /// included — would no longer bind.</remarks>
+    public IObservable<SpaceInviteOutcome> Invite(
+        string spacePath, string email, string role, bool pin, string? invitedBy, string? message)
+        => GrantOrScheduleAccess(spacePath, email, role, pin, invitedBy,
+            note: $"Invited to space {spacePath}", message: message);
 
     /// <summary>
     /// The general grant-or-schedule primitive behind BOTH the Space invite and the granular Access
@@ -62,6 +74,16 @@ public sealed class SpaceInviteService(
     /// </summary>
     public IObservable<SpaceInviteOutcome> GrantOrScheduleAccess(
         string nodePath, string email, string role, bool pin, string? invitedBy, string? note = null)
+        => GrantOrScheduleAccess(nodePath, email, role, pin, invitedBy, note, message: null);
+
+    /// <summary>
+    /// <see cref="GrantOrScheduleAccess(string, string, string, bool, string?, string?)"/>, carrying the
+    /// host's personal <paramref name="message"/> into the invitation it schedules
+    /// (<see cref="Invitation.Message"/>). Unused when the account already exists: a grant sends no
+    /// invitation email.
+    /// </summary>
+    public IObservable<SpaceInviteOutcome> GrantOrScheduleAccess(
+        string nodePath, string email, string role, bool pin, string? invitedBy, string? note, string? message)
     {
         var normalizedEmail = email.Trim();
 
@@ -75,7 +97,7 @@ public sealed class SpaceInviteService(
                 var existing = users.FirstOrDefault(u => EmailMatches(u, normalizedEmail));
                 return existing is not null
                     ? GrantNow(existing.Id, nodePath, role, pin)
-                    : ScheduleAndInvite(nodePath, normalizedEmail, role, pin, invitedBy, note);
+                    : ScheduleAndInvite(nodePath, normalizedEmail, role, pin, invitedBy, note, message);
             });
     }
 
@@ -136,7 +158,7 @@ public sealed class SpaceInviteService(
     }
 
     private IObservable<SpaceInviteOutcome> ScheduleAndInvite(
-        string spacePath, string email, string role, bool pin, string? invitedBy, string? note = null)
+        string spacePath, string email, string role, bool pin, string? invitedBy, string? note, string? message)
     {
         var subscription = new EventSubscription
         {
@@ -160,7 +182,11 @@ public sealed class SpaceInviteService(
             Name = $"Invitation {email}",
             // SpacePath (structured) drives the space-aware invite email + the settings-tab list;
             // the grant itself lands on sign-up via the EventSubscription above.
-            Content = new Invitation { Email = email, InvitedBy = invitedBy, Note = note, SpacePath = spacePath },
+            Content = new Invitation
+            {
+                Email = email, InvitedBy = invitedBy, Note = note, SpacePath = spacePath,
+                Message = string.IsNullOrWhiteSpace(message) ? null : message.Trim(),
+            },
         };
 
         // Both writes land in the Admin partition → system identity, constructed inside the scope.

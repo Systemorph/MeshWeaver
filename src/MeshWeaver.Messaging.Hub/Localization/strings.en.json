@@ -729,6 +729,8 @@
   "ui.regenerate": "Regenerate",
   "ui.recompile": "Recompile",
   "ui.invite": "Invite",
+  "ui.invitePersonalMessage": "Personal message (optional)",
+  "ui.invitePersonalMessageHint": "A few words for the invitation email",
   "ui.revoke": "Revoke",
   "ui.disconnect": "Disconnect",
   "ui.present": "Present",
