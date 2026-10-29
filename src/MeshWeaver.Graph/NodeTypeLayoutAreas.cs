@@ -464,16 +464,18 @@ public static class NodeTypeLayoutAreas
                 $"Running Roslyn against {(def.Sources?.Count ?? 0)} source binding(s). The activity log below streams diagnostics live."),
             CompilationStatus.Pending => ("▶", "Compile queued",
                 "Initiating compilation — the per-NodeType compile watcher has flipped status to Pending and the activity hub is being created."),
+            // #7355 — a platform refusal renders in the VIEWER's language (its keyed form); a
+            // Roslyn diagnostic or any unkeyed text renders verbatim (KeyedTexts.Localize).
             CompilationStatus.Error => ("✗", "Compilation failed",
                 string.IsNullOrEmpty(def.CompilationError)
                     ? "The last compile failed — no diagnostic captured. Click **Recycle** on the parent NodeType to retry."
-                    : $"```text\n{def.CompilationError}\n```"),
+                    : $"```text\n{KeyedTexts.Localize(def.CompilationError, def.CompilationErrorText, host.ViewerLocale())}\n```"),
             // 🚨 NOT a failure: the last attempt could not DETERMINE the state (a settle
             // or lookup timeout). Never phrase this as broken code.
             CompilationStatus.Unavailable => ("❔", "Compile state unknown",
                 (string.IsNullOrEmpty(def.CompilationError)
                     ? "The last attempt to determine this type's build state did not complete."
-                    : $"```text\n{def.CompilationError}\n```")
+                    : $"```text\n{KeyedTexts.Localize(def.CompilationError, def.CompilationErrorText, host.ViewerLocale())}\n```")
                 + "\n\nNothing is known to be wrong with the code — click **Recompile** to try again."),
             // null / Unknown — split on whether there's anything to compile at all.
             _ => hasSource

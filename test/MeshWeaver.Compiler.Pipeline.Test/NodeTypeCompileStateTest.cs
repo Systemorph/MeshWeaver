@@ -49,6 +49,7 @@ public class NodeTypeCompileStateTest
             Configuration = "config => config",
             CompilationStatus = CompilationStatus.Ok,
             CompilationError = "none",
+            CompilationErrorText = [new KeyedText("compile.refusal.sample")],
             LastCompileStartedAt = new DateTimeOffset(2026, 8, 2, 8, 53, 45, TimeSpan.Zero),
             LastCompileSucceededAt = new DateTimeOffset(2026, 8, 2, 8, 53, 46, TimeSpan.Zero),
             LastCompiledVersion = 1095,
@@ -68,6 +69,7 @@ public class NodeTypeCompileStateTest
         var state = NodeTypeCompileState.FromDefinition(definition)!;
         Assert.Equal(CompilationStatus.Ok, state.CompilationStatus);
         Assert.Equal("none", state.CompilationError);
+        Assert.Equal("compile.refusal.sample", Assert.Single(state.CompilationErrorText!).Key);
         Assert.Equal(1095, state.LastCompiledVersion);
         Assert.Equal("Store/Plugin/_Activity/compile-x", state.LastCompilationActivityPath);
         Assert.Equal("Store/Plugin/Release/x", state.LatestReleasePath);
@@ -91,6 +93,8 @@ public class NodeTypeCompileStateTest
             new NodeTypeDefinition { CompilationStatus = CompilationStatus.Pending })!.IsEmpty);
         Assert.False(NodeTypeCompileState.FromDefinition(
             new NodeTypeDefinition { RequestedReleaseForce = true })!.IsEmpty);
+        Assert.False(NodeTypeCompileState.FromDefinition(
+            new NodeTypeDefinition { CompilationErrorText = [new KeyedText("compile.refusal.sample")] })!.IsEmpty);
         Assert.False(NodeTypeCompileState.FromDefinition(
             new NodeTypeDefinition { CurrentSourceVersions = new Dictionary<string, long>() })!.IsEmpty);
     }

@@ -103,6 +103,11 @@ public static class NodeTypeOperationalContent
     {
         "compilationStatus",
         "compilationError",
+        // #7355 — the keyed (localizable) form of compilationError, stamped by the gate settle next
+        // to it. Operational for the same reason: it describes a refusal THIS mesh measured, and it
+        // renders only while it reproduces compilationError, so an authored value is either dead
+        // weight or a stale reason from another mesh.
+        "compilationErrorText",
         "compilationDiagnostics",
         "lastCompileStartedAt",
         "lastCompileSucceededAt",
