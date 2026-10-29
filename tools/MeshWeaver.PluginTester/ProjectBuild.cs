@@ -532,6 +532,9 @@ public static class ProjectBuild
 
         var extraReferences = ResolveExtraReferences(options, sink);
         var generators = ResolveGenerators(options, sink);
+        // ONE generator ledger for the run: every project loads the same --generators set, and a
+        // second, different build of one is refused naming both projects (#7444).
+        var generatorLedger = new SourceGeneratorLedger();
         ModuleLibrariesShelf? shelf;
         try
         {
@@ -567,7 +570,7 @@ public static class ProjectBuild
                                 + $"'{dependency}' recorded its result"))
                         .ToArray();
                     var result = Compile(
-                        graph.Models[id], graph, container, extraReferences, generators, shelf, options, sink, workRoot,
+                        graph.Models[id], graph, container, extraReferences, generators, generatorLedger, shelf, options, sink, workRoot,
                         dependencyResults);
                     completedProjects[id] = result;
                     return (result, result.IsGreen);
@@ -1062,6 +1065,7 @@ public static class ProjectBuild
         ContainerReferenceSet container,
         ImmutableArray<string> extraReferences,
         ImmutableArray<string> generators,
+        SourceGeneratorLedger generatorLedger,
         ModuleLibrariesShelf? shelf,
         Options options,
         Sink sink,
@@ -1402,7 +1406,7 @@ public static class ProjectBuild
         if (!generators.IsEmpty)
         {
             compilation = GeneratorPipeline.RunSourceGenerators(
-                compilation, generators, sink.Logger, CancellationToken.None);
+                compilation, generators, generatorLedger, model.ProjectPath, sink.Logger, CancellationToken.None);
             sink.Info($"[{name}] phase: source generators {phase.ElapsedMilliseconds} ms");
         }
 

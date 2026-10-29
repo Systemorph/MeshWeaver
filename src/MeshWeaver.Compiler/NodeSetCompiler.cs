@@ -316,9 +316,39 @@ public static class NodeSetCompiler
         Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>? resolveNuGet = null,
         ILogger? logger = null,
         CancellationToken ct = default)
+        // A ledger of its own: a different generator build than one already in this process is
+        // still refused (the default load context is checked), named by where that build loaded
+        // from. A bake hands every compile ONE ledger so the refusal names the other NodeType too.
+        => CompileWithGeneratorLedger(nodes, typeNode, sources, tests, configuration, contentCollections,
+            references, dependencyIdOf, toolchainId, outputDirectory, moduleAssemblyPaths,
+            new SourceGeneratorLedger(), resolveNuGet, logger, ct);
+
+    /// <summary>
+    /// <see cref="CompileWithModules"/> with the <see cref="SourceGeneratorLedger"/> the run shares,
+    /// so a second, different build of a source generator is refused naming BOTH NodeTypes (#7444).
+    /// Internal: a bake (mw-plugin-test) owns one ledger per run; the published methods keep their
+    /// binary signatures.
+    /// </summary>
+    internal static CompiledNode CompileWithGeneratorLedger(
+        NodeSet nodes,
+        MeshNode typeNode,
+        IReadOnlyList<string>? sources,
+        IReadOnlyList<string>? tests,
+        string? configuration,
+        IReadOnlyList<ContentCollectionConfig>? contentCollections,
+        IReadOnlyList<MetadataReference> references,
+        Func<string, string?> dependencyIdOf,
+        string toolchainId,
+        string outputDirectory,
+        IReadOnlyCollection<string>? moduleAssemblyPaths,
+        SourceGeneratorLedger generatorLedger,
+        Func<IReadOnlyList<NuGetPackageReference>, CancellationToken, IReadOnlyList<string>>? resolveNuGet = null,
+        ILogger? logger = null,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(references);
         ArgumentNullException.ThrowIfNull(dependencyIdOf);
+        ArgumentNullException.ThrowIfNull(generatorLedger);
         ArgumentException.ThrowIfNullOrEmpty(outputDirectory);
         logger ??= NullLogger.Instance;
 
@@ -351,7 +381,7 @@ public static class NodeSetCompiler
         // The NODE-SUPPLIED generators' trees are the author's code too: the dependency scan reads
         // them (a generator the node #r'd can emit a reflection lookup just as its source can).
         var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
-            authored, generatorPaths, logger, ct, out var nodeGeneratedTrees);
+            authored, generatorPaths, generatorLedger, inputs.NodePath, logger, ct, out var nodeGeneratedTrees);
 
         var artifact = EmitPipeline.EmitCompilationToDirectory(
             compilation, nodeName, inputs.NodePath, outputDirectory, ct);
