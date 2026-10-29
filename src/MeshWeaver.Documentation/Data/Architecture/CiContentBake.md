@@ -997,7 +997,7 @@ at Information, so whether a pass ran, what it removed and whether it refused we
 |---|---|---|
 | prebuilt-bundle retention | at boot and every `Interval` (daily), per replica | `PrebuiltBundleRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / INTERRUPTED / FAULTED …` |
 | assembly-cache retention | once per pod start | `AssemblyCacheRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / INTERRUPTED / FAULTED …` |
-| modules GC | once per pod start | `Modules GC: pass outcome — COLLECTED / FAILED CLOSED / INTERRUPTED / FAULTED …` |
+| modules GC | once per pod start | `Modules GC: pass outcome — COLLECTED / FAILED CLOSED / SKIPPED / INTERRUPTED / FAULTED …` |
 
 All three write that line through one type, `PassLedger` (`MeshWeaver.Mesh.Threading`). It records
 exactly one outcome per pass (a second one throws). It also owns the pass's step boundary,
@@ -1024,6 +1024,21 @@ deliberate exception: a modules-GC reference record that cannot be READ stays an
 corrupt record is a defect to triage, not a retention outcome — and the outcome line says `FAILED
 CLOSED` with the count. Per-write eviction in the assembly store (`Assembly cache: evicted …`)
 is not a pass — it fires on every compile — and stays at Information.
+
+Three paths that used to break the one-line rule (#7349) now keep it:
+- **The prebuilt-bundle ledger is written BEFORE the outcome.** When the append fails (a full
+  volume, `_retention` turned into a file), the outcome line ends with `The ledger was NOT written
+  (…)` and the exception goes to Information — never a second Warning.
+- **A refused `_current` pointer is counted, not logged per source.** Retention resolves pointers
+  through the readers' own resolver but at Information, and every outcome line carries
+  `N source pointer(s) refused`. A READER (a portal resolving its publication) still warns: for it a
+  dangling pointer is a serving problem.
+- **A modules GC with no `modules/` folder reports `SKIPPED`** instead of returning silently, so
+  "the pass ran and had nothing to sweep" is never confused with "no pass ran".
+
+The prebuilt-bundle outcome also carries the release-surface counts (`… and N release surface(s)
+reclaiming …` / `kept N release surface(s)`) added when per-release surfaces became collectable
+(#6990).
 
 Read them through a governed `Logs` action on the control instance. Because aborts and faults carry
 the tag too, one query finds every pass, whatever its verdict: `{ "requestedAction": "Logs", "query":

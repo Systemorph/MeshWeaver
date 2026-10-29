@@ -136,6 +136,10 @@ Three changes, all in core:
 
    and the step is red (exit 3). Only a genuine **404** lets `fetch-deployed-plugin-set.sh` skip a
    candidate; any other refusal (401, a non-rate-limit 403) is red at once, without retries. The
+   error BODY is read over the same connection as the request, so that read can fail too (a reset
+   or a timeout on a 503): an unreadable body on a 5xx, 429 or 403 is retried like the outage it is
+   and ends as NO VERDICT, never a traceback — a 403 because its body is part of what tells a rate
+   limit from a refusal — while a 401 or 404 stays an immediate refusal whatever its body (#7457). The
    closing-keyword gate's label probe says the same sentence instead of *"the token cannot read
    issues"*. Both scripts carry self-tests against a fake API (a 403 rate limit → NO VERDICT, a 404 →
    skip, a 200 → the normal verdict) that run before the real call.

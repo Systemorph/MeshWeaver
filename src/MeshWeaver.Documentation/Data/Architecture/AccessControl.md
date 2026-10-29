@@ -2433,6 +2433,29 @@ as long as the test needs it, and checks the instrument first: the store still r
 (`DeclaredPointReadOwnershipAndSelfReadTest.APartitionThatStopsBeingSystemOwned_WithdrawsTheDeclaration_BeforeTheStoreHasTheRow`,
 with a second partition rewritten under the same hold but kept one-way as the positive control).
 
+**Both live inputs attach their signals BEFORE the first read, and an ownership re-read is bounded**
+(#7367). Each live decision here — the ownership re-check and the standard read's input set — used to
+seed its first read with `StartWith`, which emits the seed before it subscribes its source. The first
+read therefore ran before the invalidation feed's handler was attached, and a commit that landed
+after that read captured its value was announced to nobody: the old decision stood until some other
+signal arrived (a synchronous store read widens that window). Both now start from
+`AttachedThenSeeded`, which subscribes the signals first and only then emits the seed. The ownership
+re-read taken on each signal is also held to the permission-establishment budget until its FIRST
+answer (`FollowOwnership`); past it the partition is not owned. Without that bound, a re-read that
+stalled after a withdrawal kept the previous ownership decision in force for as long as it stalled.
+The budget bounds the whole continuous unanswered period, not each re-read: a signal that replaces a
+re-read still in flight continues the same period, so signals arriving faster than the budget cannot
+restart the deadline and hold a stalled re-check open (the `BoundPendingPeriods` shape).
+The trade-off is decided for failing closed: `false` ends an admitted subscription, and every sync
+writes `_GitSync`, so an ownership re-read that cannot answer within the budget ends the open declared
+reads of that partition's types. That is how every other permission check classifies a timeout
+(undetermined, refused), and the reader re-subscribes to a fresh decision. A re-read in flight
+withdraws nothing, so a sync that rewrites the config without changing its ownership does not blink
+an open read. Pinned by `DeclaredReadLiveInputsTest`: the commit lands inside the first read, on a
+hot feed that, like the process feed, drops an announcement no handler hears; the `StartWith` shape
+under the same commit is the instrument's negative control, and an unchanged ownership and a re-read
+answered inside the budget are the positive controls; signals every few seconds over a stalled re-read pin the single deadline per unanswered period.
+
 **A hub's point read of its OWN path is decided locally** (#7298, F8). The declaration reads the node
 from its owner. When the deciding hub IS the owner, that is its own-node stream, with no round-trip.
 The round-trip was not just redundant there. Suppose a node hub sends a gated, declaration-only read
