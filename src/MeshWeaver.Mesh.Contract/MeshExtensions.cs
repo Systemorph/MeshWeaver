@@ -3654,8 +3654,9 @@ public static class MeshExtensions
     private const string DeleteUnansweredDataKey = "DeleteUnansweredPaths";
 
     /// <summary><see cref="Exception.Data"/> key carrying the paths already removed from storage
-    /// when the operation failed.</summary>
-    private const string DeletedPathsDataKey = "DeletedPaths";
+    /// when the operation failed — the ONE key <see cref="HierarchicalPathDeletion"/> also writes,
+    /// so it is that class's constant rather than a second spelling (#7348).</summary>
+    private const string DeletedPathsDataKey = HierarchicalPathDeletion.DeletedPathsDataKey;
 
     /// <summary>
     /// <see cref="Exception.Data"/> key carrying the <see cref="NodeDeletionRejectionReason"/> a
@@ -5108,14 +5109,14 @@ public static class MeshExtensions
                     // 🚨 BOTH SOURCES, UNION'd — neither one alone can be trusted to be complete
                     // (#1198).
                     //
-                    // `ex.Data["DeletedPaths"]` is written by SEVERAL sites, and they are fed by the
+                    // `ex.Data[DeletedPathsDataKey]` is written by SEVERAL sites, and they are fed by the
                     // same set of real removals: the commit stage's own TimeoutAtStage arm and the
                     // drain-pass fold read `SnapshotProgress()` directly, the max-pass branch writes
                     // the drain fold's accumulated total, and `HierarchicalPathDeletion` attaches its
                     // OWN builder — which is appended in a `.Do(...)` on the same `deleteOne` emission
-                    // `RecordDeleted` appends from. (Two of those spell the key as a bare literal
-                    // rather than through DeletedPathsDataKey, which is why an inventory taken by
-                    // grepping the constant reads short.)
+                    // `RecordDeleted` appends from. Every one of them spells the key through
+                    // DeletedPathsDataKey (= HierarchicalPathDeletion.DeletedPathsDataKey), and
+                    // ExceptionDataKeysAreNeverLiteralsGuard holds it that way (#7348).
                     //
                     // So neither side is provably a SUPERSET of the other: two builders fed off one
                     // emission with no ordering between them means an in-flight removal can be in
@@ -5791,7 +5792,7 @@ public static class MeshExtensions
                                 + $"{pass} pass(es): {what}. Either a writer keeps re-creating nodes "
                                 + "under the subtree faster than they can be deleted, or a storage "
                                 + "provider is accepting the delete without removing the row.");
-                            ex.Data["DeletedPaths"] = (IReadOnlyList<string>)acc;
+                            ex.Data[DeletedPathsDataKey] = (IReadOnlyList<string>)acc;
                             return Observable.Throw<IReadOnlyList<string>>(ex);
                         }
 

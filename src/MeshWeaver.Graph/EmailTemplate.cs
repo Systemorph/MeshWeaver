@@ -75,7 +75,7 @@ public static class EmailTemplate
 
         foreach (var p in paragraphs)
             if (!string.IsNullOrWhiteSpace(p))
-                sb.Append($"<p style=\"margin:0 0 14px 0;font-size:15px;line-height:1.55;color:{Ink};\">{Enc(p)}</p>");
+                sb.Append($"<p style=\"margin:0 0 14px 0;font-size:15px;line-height:1.55;color:{Ink};\">{EncLines(p)}</p>");
 
         if (!string.IsNullOrEmpty(ctaLabel) && !string.IsNullOrWhiteSpace(ctaUrl))
         {
@@ -90,7 +90,7 @@ public static class EmailTemplate
         }
 
         if (!string.IsNullOrWhiteSpace(footerNote))
-            sb.Append($"<p style=\"margin:20px 0 0 0;font-size:13px;line-height:1.5;color:{Muted};\">{Enc(footerNote)}</p>");
+            sb.Append($"<p style=\"margin:20px 0 0 0;font-size:13px;line-height:1.5;color:{Muted};\">{EncLines(footerNote)}</p>");
 
         sb.Append(
             "</div></div>" +
@@ -102,4 +102,14 @@ public static class EmailTemplate
     }
 
     private static string Enc(string? s) => WebUtility.HtmlEncode(s ?? "");
+
+    /// <summary>
+    /// <see cref="Enc"/> for a block of plain text whose line breaks are meant (#7480): a closing such
+    /// as "Kind regards" + newline + a sign-off line. HTML collapses a newline to a space, and a caller
+    /// cannot write <c>&lt;br&gt;</c> (it would be encoded), so the break is emitted here — AFTER
+    /// encoding, so the inserted tag is the only markup and caller text stays inert. CRLF and lone CR
+    /// count as one break; leading and trailing breaks are trimmed so they add no blank lines.
+    /// </summary>
+    private static string EncLines(string? s)
+        => Enc((s ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Trim('\n')).Replace("\n", "<br>");
 }

@@ -16,8 +16,14 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// Configuration nodes (type definitions) respect path/scope and context filtering.
 /// Every served row that is not a definition (<see cref="IsDeclaredVocabulary"/>) is row-filtered
 /// for the query's viewer exactly as a stored row is.
+///
+/// <para><b>Lifetime.</b> The provider subscribes to the module registry's
+/// <see cref="MeshWeaver.Mesh.ModuleContexts.VersionChanged"/> and OWNS that subscription: it is disposed
+/// with the provider, which the mesh's container disposes when the mesh ends (it builds the provider, so
+/// it owns it). A subscription left on the registry kept the provider — and everything it references —
+/// reachable for as long as the registry was (MeshWeaver#7373).</para>
 /// </summary>
-public class StaticNodeQueryProvider : IMeshQueryProvider
+public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
 {
     /// <summary>
     /// Default <see cref="Matches"/> predicate: union of the providers' static
@@ -58,6 +64,8 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     private Catalog? catalog;
     private readonly IList<IStaticNodeProvider> _providerList;
     private readonly MeshWeaver.Mesh.ModuleContexts? _modules;
+    // The registry subscription this provider owns — ended in Dispose (MeshWeaver#7373).
+    private IDisposable? _versionChanged;
 
     private Catalog Current
     {
@@ -174,8 +182,28 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
         // Dropped the moment a module generation changes — never held until the next query, which
         // would keep the swapped-out generation's nodes, and so the generation, alive.
-        // The subscription lives as long as the registry that holds it — the same mesh as this provider.
-        _modules?.VersionChanged.Subscribe(_ => Volatile.Write(ref catalog, null));
+        // 🚨 OWNED, and ended in Dispose (MeshWeaver#7373): a subject keeps every observer it was handed
+        // until the observer unsubscribes, so a discarded subscription rooted this provider — and its
+        // validators, and through them a hub — in the registry for as long as the registry lived.
+        _versionChanged = _modules?.VersionChanged.Subscribe(_ => Volatile.Write(ref catalog, null));
+    }
+
+    /// <summary>Whether <see cref="Dispose"/> has ended the registry subscription.</summary>
+    public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+    private int _disposed;
+
+    /// <summary>
+    /// Ends the subscription to module swaps and drops the catalog — called by the mesh's container when
+    /// the mesh ends. Idempotent: the provider is reachable under two registrations (itself and
+    /// <see cref="IMeshQueryProvider"/>), and each may hand it back for disposal.
+    /// </summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        Interlocked.Exchange(ref _versionChanged, null)?.Dispose();
+        Volatile.Write(ref catalog, null);
+        GC.SuppressFinalize(this);
     }
 
     private Catalog Build(long version)

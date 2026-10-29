@@ -156,6 +156,25 @@ public class ModulesGcPassOutcomeTest : IDisposable
         Entries = [new ModuleActivationEntry { Name = "A", Directory = generation }],
     };
 
+    /// <summary>
+    /// #7349 — a base directory with no <c>modules/</c> folder used to return before any outcome,
+    /// so that pass was indistinguishable from one that never ran. It now reports SKIPPED, once.
+    /// </summary>
+    [Fact]
+    public void APassWithNoModulesFolder_ReportsSkipped_Once()
+    {
+        var bare = Path.Combine(root, "no-modules-here");
+        Directory.CreateDirectory(bare);
+        var log = new OutcomeLogger();
+
+        var removed = ModuleLandingService.CollectGarbage(bare, log, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow);
+
+        removed.Should().Be(0);
+        log.Entries.Where(e => e.Level >= LogLevel.Warning).Should().ContainSingle(
+                "a pass with nothing to sweep still says it ran")
+            .Which.Message.Should().Contain("pass outcome — SKIPPED").And.Contain("modules");
+    }
+
     private sealed class OutcomeLogger(Action<string>? onLog = null) : ILogger
     {
         public ConcurrentQueue<(LogLevel Level, string Message)> Entries { get; } = new();

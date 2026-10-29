@@ -355,9 +355,30 @@ to change):
   A pass runs for at most half its hold: past that it is unsubscribed, and the pool leaf stops at its
   next step boundary, with the other half of the hold to reach it. That bound is cooperative: one
   synchronous directory removal that stalls past the whole remaining half-hold is not fenced at the
-  store, and is tracked as a follow-up. A pass that finishes or faults releases the lease at once. A pass cut short by
-  teardown or by the deadline leaves the lease to lapse, so a pass that dies holding it delays the
-  next sweep by at most one hold.
+  store, and is tracked as a follow-up. A pass cut short by teardown or by the deadline leaves the
+  lease to lapse, so a pass that dies holding it delays the next sweep by at most one hold.
+- **The lease is released once, at the pass's terminal (#7459).** A pass that completes (an empty one
+  included) or faults releases the lease once. It is never released per result: an earlier cut
+  released on every result, so a pass that emitted and kept working released the lease under itself,
+  and an empty pass never released at all. The pass's results are delivered after the release has been
+  attempted.
+- **A release fault never changes the pass's outcome (#7459).** A sweep that succeeded is recorded as a
+  success even if the release then faults. The release fault is logged on its own line, and the lease
+  lapses at the end of its hold. Earlier, the release fault replaced the sweep's result, and the service
+  logged "nothing was collected" over deletions that had completed.
+- **A holder that loses its claim stops (#7459).** An `Update` is acknowledged when it commits, not
+  when it persists: `ArmPatchAckWatcher` acks on its flush bound. An owner that dies before the claim
+  persisted is replaced by one that reloads the lapsed lease and grants it to another replica. So the
+  holder watches the live lease while its pass runs. Once its own claim has appeared there, any later
+  state without it (lapsed, unreadable, or another pass's claim) cancels the pass at its next step
+  boundary. The lease is not released in that case. This is the same cooperative bound as the
+  deadline. A lease stream that faults or completes also cancels the pass, keeping the fault as the
+  inner exception. It never surfaces as an ordinary pass fault, which would release the lease under a
+  leaf that is still winding down (`PrebuiltBundleRetentionLease.Lost`, pinned in
+  `PrebuiltBundleRetentionLeaseTerminalTest`). Known gap: a claim lost before the watcher's first
+  snapshot of it is not detected. The lease's content cannot tell a snapshot replayed from before the
+  claim apart from a later loss without a fencing token, and this is filed to triage. Persistence is still not confirmed before a pass counts as held; that guarantee belongs to
+  the data layer.
 
 🚨 **The claim is ONE number, and a lapsed claim is never `0`.** A remote `Update` reaches the owner
 as a three-way merge resolved per leaf (`MeshNodePatchMerge`). A string changed on both sides is
@@ -377,7 +398,8 @@ once the owner has committed it, and the next tick asks again.
 
 | Pinned by | What it fails on |
 |---|---|
-| `PrebuiltBundleRetentionLeaseAcrossSilosTest` (`MeshWeaver.Hosting.Orleans.Test`) | two silos passing at one instant where both sweep or neither is told who does; a finished pass that keeps the lease; a dead pass's lease that never lapses, or one released by a token that no longer holds it; a lease shape the owner's merge can tear, or a lapsed value it omits from the base; a hold dated from when the pass was queued rather than started; a claimant that sweeps although its stamp found another replica's claim |
+| `PrebuiltBundleRetentionLeaseAcrossSilosTest` (`MeshWeaver.Hosting.Orleans.Test`) | two silos passing at one instant where both sweep or neither is told who does; a finished pass that keeps the lease; a dead pass's lease that never lapses, or one released by a token that no longer holds it; a lease shape the owner's merge can tear, or a lapsed value it omits from the base; a hold dated from when the pass was queued rather than started; a claimant that sweeps although its stamp found another replica's claim; a holder that keeps sweeping after the lease it held was reloaded lapsed and taken by another replica |
+| `PrebuiltBundleRetentionLeaseTerminalTest` (`MeshWeaver.Hosting.Test`) | a release per result instead of once at the terminal; an empty pass that never releases; a release fault that replaces a successful sweep's result or a faulted pass's own fault; a cancelled pass that releases |
 
 ## Rolling it out
 
