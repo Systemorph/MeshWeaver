@@ -240,11 +240,17 @@ public sealed class ModuleLandingService : IDisposable
         Func<string?>? ownPlatform = null)
     {
         var modulesRoot = Path.Combine(baseDirectory, "modules");
-        if (!Directory.Exists(modulesRoot))
-            return 0;
-        var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
         // 🚨 The pass's one outcome line and its step boundary (#6991, #7049): see PassLedger.
         var ledger = new PassLedger(GcPassName, logger);
+        if (!Directory.Exists(modulesRoot))
+        {
+            // #7349: a pass with nothing to sweep still says it ran — otherwise the documented
+            // `pass outcome` query cannot tell it from a pass that never ran.
+            ledger.Record(PassOutcome.Skipped,
+                ": {ModulesRoot} does not exist — nothing to collect, removed 0 of 0 directory(ies)", modulesRoot);
+            return 0;
+        }
+        var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
         var readFaults = 0;
         void OnReadFault(string msg)
         {
