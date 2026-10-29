@@ -133,11 +133,24 @@ def api_get(path, *, token, base_url=None, budget_seconds=DEFAULT_BUDGET_SECONDS
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             headers = error.headers
-            text = error.read(2048).decode("utf-8", errors="replace")
+            # The error body is read over the same connection, so it can fail exactly like the
+            # request did (a reset or a timeout on a 503). Raised here, it would escape this handler
+            # past the sibling `except` below and exit as a defect instead of NO VERDICT (#7457).
+            try:
+                text = error.read(2048).decode("utf-8", errors="replace")
+                body_unread = None
+            except (TimeoutError, OSError, http.client.HTTPException) as read_error:
+                text, body_unread = "", type(read_error).__name__
             kind = classify(error.code, headers, text)
+            if kind == "refused" and body_unread and error.code == 403:
+                # A 403 is told apart from a rate limit partly by its BODY; with the body unread
+                # the answer is undecided, so it is retried like an outage, never refused on a guess.
+                kind = "transient"
             if kind == "refused":
                 raise ApiRefused(f"HTTP {error.code} for GET {path}") from error
             reason = f"HTTP {error.code}" + (" rate limit" if kind == "rate-limited" else "")
+            if body_unread:
+                reason += f" (error body unreadable: {body_unread})"
         # http.client.HTTPException covers IncompleteRead: a connection closed before the full
         # Content-Length body arrived is transient, retried under the same budget, never a traceback.
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
