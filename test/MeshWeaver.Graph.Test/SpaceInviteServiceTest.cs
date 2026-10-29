@@ -132,4 +132,69 @@ public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTest
 
         Assert.Null(invitation.Message);
     }
+
+    /// <summary>A German-speaking inviting host (#7482).</summary>
+    private static readonly AccessContext GermanHost = new() { ObjectId = "admin", Name = "Admin", Locale = "de" };
+
+    /// <summary>
+    /// Invites <paramref name="email"/> AS <see cref="GermanHost"/> with <paramref name="locale"/> as the
+    /// pick, and reads the stored invitation back. The invite is issued inside the host's context and
+    /// awaited outside it: the language must be read on the host's own turn.
+    /// </summary>
+    /// <param name="email">The invitee.</param>
+    /// <param name="locale">The host's pick, or null.</param>
+    /// <param name="ct">The test's cancellation.</param>
+    /// <returns>The stored invitation.</returns>
+    private async Task<Invitation> InviteAsGermanHost(string email, string? locale, CancellationToken ct)
+    {
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        IObservable<SpaceInviteOutcome> invite;
+        using (access.SwitchAccessContext(GermanHost))
+            invite = NewService().Invite(Space, email, "Viewer", pin: false, invitedBy: "admin",
+                message: null, locale: locale);
+        Assert.Equal(SpaceInviteOutcome.Invited,
+            await invite.FirstAsync().Timeout(30.Seconds()).Await(ct));
+
+        return await Mesh.GetWorkspace()
+            .GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}")
+            .Select(n => n?.ContentAs<Invitation>(Mesh.JsonSerializerOptions))
+            .Where(inv => inv is not null && inv.Email == email)
+            .Select(inv => inv!)
+            .FirstAsync().Timeout(30.Seconds()).Await(ct);
+    }
+
+    /// <summary>#7482: with no language picked, the invitation is written in the INVITER's language.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task InviteAbsentEmail_WithNoLanguagePicked_StoresTheInvitersLanguage()
+    {
+        var invitation = await InviteAsGermanHost("frank@acme.com", locale: null, TestContext.Current.CancellationToken);
+        Assert.Equal("de", invitation.Locale);
+    }
+
+    /// <summary>#7482: the host's explicit pick wins over their own language.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task InviteAbsentEmail_AnExplicitLanguagePick_Wins()
+    {
+        var invitation = await InviteAsGermanHost("grace@acme.com", locale: "en", TestContext.Current.CancellationToken);
+        Assert.Equal("en", invitation.Locale);
+    }
+
+    /// <summary>
+    /// #7482 end to end: the email rendered from the stored invitation is in the stored language —
+    /// German heading, body, button and footer, and no English left in it.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheInvitationEmail_IsWrittenInTheStoredLanguage()
+    {
+        var invitation = await InviteAsGermanHost("heidi@acme.com", locale: null, TestContext.Current.CancellationToken);
+
+        var (subject, html) = InvitationEmail.Build(invitation, "Team Space", "https://portal.example.com");
+
+        Assert.Equal("Sie wurden zu Team Space eingeladen", subject);
+        Assert.Contains("Sie wurden zu „Team Space“ auf Memex eingeladen.", System.Net.WebUtility.HtmlDecode(html));
+        Assert.Contains("Team Space öffnen", System.Net.WebUtility.HtmlDecode(html));
+        Assert.Contains(LocalizationCatalog.Get("notification.email.standingFooter", "de"), System.Net.WebUtility.HtmlDecode(html));
+        Assert.DoesNotContain("invited", html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("https://portal.example.com/TeamSpace", html);
+    }
 }
