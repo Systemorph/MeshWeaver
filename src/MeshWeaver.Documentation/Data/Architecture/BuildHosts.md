@@ -661,7 +661,15 @@ fixes can merge while the host closes its gaps one by one. That is a third execu
   stages do not claim equivalence, `executor=host-forced`. When stages are declared, the run is
   queued on the host (one signed `build-request`, exactly as for `host`), so the host runs what it can
   and publishes its own `build` / `build/<stage>` check runs. Those check runs are NOT required
-  contexts: they show the host's real result, red where a gap remains.
+  contexts, so they never conclude `failure`: they conclude **`neutral`**, and the title carries the
+  would-be verdict (`shadow — would be RED: compile-check failed`, `shadow — would be GREEN: …`), with
+  the summary unchanged. A red X on every pull request for a check that gates nothing read as a broken
+  fleet; a neutral one with its verdict in the title says exactly what the host found.
+- **How the instance knows.** The `build-request` carries the admission's own answer,
+  `"executor": "host"` or `"executor": "host-forced"`, so the operations instance projects the check
+  runs from the SAME decision the lanes act on (this routing file plus the stages' `ciEquivalent`) and
+  never re-derives it. A run every one of whose requests said `host-forced` is a shadow run; one
+  `host` request (the repository claims parity) makes its checks conclude `success` / `failure` again.
 - **The owed gap is named, never a red.** The executor job prints each `owes` item of
   `.github/build-stages.json` as a `::warning::` annotation (a repository with no declaration owes
   "no host stages"). In core, `Consolidate test results` repeats that as a warning pointing at the
