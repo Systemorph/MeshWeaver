@@ -372,14 +372,12 @@ to change):
   holder watches the live lease while its pass runs. Once its own claim has appeared there, any later
   state without it (lapsed, unreadable, or another pass's claim) cancels the pass at its next step
   boundary. The lease is not released in that case. This is the same cooperative bound as the
-  deadline. The watcher may first replay snapshots from before the claim landed, so a foreign state
-  seen first is not a loss on its own. A foreign claim whose hold ends no earlier than this one's,
-  however, can only have been taken at or after it. That claim counts as a loss even if the holder
-  never saw its own claim, because waiting for it would skip every later state. A lease stream that
-  faults or completes also cancels the pass, keeping the fault as the inner exception. It never
-  surfaces as an ordinary pass fault, which would release the lease under a leaf that is still
-  winding down (`PrebuiltBundleRetentionLease.Lost`, pinned in
-  `PrebuiltBundleRetentionLeaseTerminalTest`). Persistence is still not confirmed before a pass counts as held; that guarantee belongs to
+  deadline. A lease stream that faults or completes also cancels the pass, keeping the fault as the
+  inner exception. It never surfaces as an ordinary pass fault, which would release the lease under a
+  leaf that is still winding down (`PrebuiltBundleRetentionLease.Lost`, pinned in
+  `PrebuiltBundleRetentionLeaseTerminalTest`). Known gap: a claim lost before the watcher's first
+  snapshot of it is not detected. The lease's content cannot tell a snapshot replayed from before the
+  claim apart from a later loss without a fencing token, and this is filed to triage. Persistence is still not confirmed before a pass counts as held; that guarantee belongs to
   the data layer.
 
 🚨 **The claim is ONE number, and a lapsed claim is never `0`.** A remote `Update` reaches the owner

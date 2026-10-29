@@ -303,8 +303,7 @@ public static class PrebuiltBundleRetentionLease
     /// claim persisted is replaced by one that reloads the LAPSED lease and grants it to another replica.
     /// So the holder watches the live lease while its pass runs (<see cref="Lost"/>): once its own claim has
     /// been seen there, any later state that does not carry it (lapsed, unreadable, or another pass's claim)
-    /// — and, even before that, a claim taken at or after its own, or a lease stream that faults or ends —
-    /// ends the pass with an <see cref="OperationCanceledException"/>, cancelling the pool leaf at its next step
+    /// — and a lease stream that faults or ends — ends the pass with an <see cref="OperationCanceledException"/>, cancelling the pool leaf at its next step
     /// boundary — the same cooperative bound as the deadline — and leaves the lease alone. COLD.</para>
     /// </summary>
     /// <typeparam name="TResult">The pass's result.</typeparam>
@@ -419,11 +418,6 @@ public static class PrebuiltBundleRetentionLease
     /// <list type="bullet">
     ///   <item><description><b>Lost after it was seen.</b> Once the live lease has carried this claim, any
     ///     later state that does not (lapsed, unreadable, another pass's claim) is a loss.</description></item>
-    ///   <item><description><b>Replaced before it was seen</b> (review of #7515). The live lease may replay
-    ///     a snapshot from BEFORE this claim landed, so a foreign state seen first is not by itself a loss —
-    ///     but a foreign claim whose hold ends no earlier than this one's was taken at or after it, never
-    ///     before it (a claim is taken only over a hold that has ended), so it IS one. Waiting for this
-    ///     claim to appear first would skip it, and every later state, for as long as the pass runs.</description></item>
     ///   <item><description><b>The lease can no longer be followed.</b> A fault of the live lease, or its
     ///     completion, leaves the holder unable to see a loss, so it is one: a cancellation (the fault kept
     ///     as its inner exception), never an ordinary pass fault — a pass that FAULTS releases at once, under
@@ -436,11 +430,9 @@ public static class PrebuiltBundleRetentionLease
         IObservable<PrebuiltBundleRetentionLeaseState?> live, long stampedClaim)
     {
         var unstamped = stampedClaim & ~StampedFlag;
-        var until = new PrebuiltBundleRetentionLeaseState(stampedClaim).Until;
         bool Ours(PrebuiltBundleRetentionLeaseState? lease) => lease is not null && (lease.Claim == stampedClaim || lease.Claim == unstamped);
-        bool Replaced(PrebuiltBundleRetentionLeaseState? lease) => lease is { Claim: > 0 } && !Ours(lease) && lease.Until >= until;
         return live
-            .SkipWhile(lease => !Ours(lease) && !Replaced(lease))
+            .SkipWhile(lease => !Ours(lease))
             .Where(lease => !Ours(lease))
             .Select(lease => new OperationCanceledException(
                 "the prebuilt-bundle retention lease this pass held no longer names it (now: "

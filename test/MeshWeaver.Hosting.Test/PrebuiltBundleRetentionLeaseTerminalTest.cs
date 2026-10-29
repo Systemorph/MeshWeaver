@@ -153,21 +153,6 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
         => new(PrebuiltBundleRetentionLease.ClaimFor(at + HoldSpan, nonce) | PrebuiltBundleRetentionLease.StampedFlag);
 
     [Fact]
-    public void AClaimReplacedBeforeTheWatcherSawItsOwn_IsALoss()
-    {
-        // The claim was lost after Take returned and before the watcher's first own-claim snapshot: the
-        // live lease never carries it, only the replacement taken after it.
-        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
-        var outcome = new Outcome<OperationCanceledException>();
-        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim));
-
-        live.OnNext(Claimed(ClaimedAt, 9));
-
-        outcome.Values.Should().ContainSingle(
-            "a foreign claim ending no earlier than ours was taken at or after ours — waiting to see our own first skips it forever");
-    }
-
-    [Fact]
     public void ASnapshotFromBeforeTheClaim_IsNotALoss_AndALaterLossStillIs()
     {
         // CONTROL: what the live lease may replay from before this claim landed — the previous holder's
