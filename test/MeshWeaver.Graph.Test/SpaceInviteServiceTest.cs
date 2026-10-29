@@ -87,4 +87,49 @@ public class SpaceInviteServiceTest(ITestOutputHelper output) : MonolithMeshTest
             .Where(n => n?.Content is Invitation inv && inv.Email == email && inv.SpacePath == Space)
             .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
     }
+
+    /// <summary>
+    /// The host's personal message travels on the invitation as <see cref="Invitation.Message"/>, kept
+    /// apart from the platform's admin-facing <see cref="Invitation.Note"/> (Plugins#4551): the email
+    /// renders the first and must never render the second.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task InviteAbsentEmail_CarriesTheHostsMessage_ApartFromTheSystemNote()
+    {
+        const string email = "dave@acme.com";
+
+        var outcome = await NewService()
+            .Invite(Space, email, "Viewer", pin: false, invitedBy: "admin", message: "  Welcome aboard, Dave!  ")
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+        Assert.Equal(SpaceInviteOutcome.Invited, outcome);
+
+        var invitation = await Mesh.GetWorkspace()
+            .GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}")
+            .Where(n => n?.Content is Invitation inv && inv.Email == email)
+            .Select(n => (Invitation)n!.Content!)
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        Assert.Equal("Welcome aboard, Dave!", invitation.Message);
+        Assert.Equal($"Invited to space {Space}", invitation.Note);
+    }
+
+    /// <summary>Negative control: an invite without a message, or with only whitespace, stores none —
+    /// so the email adds no empty paragraph.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task InviteAbsentEmail_WithABlankMessage_StoresNone()
+    {
+        const string email = "erin@acme.com";
+
+        await NewService()
+            .Invite(Space, email, "Viewer", pin: false, invitedBy: "admin", message: "   ")
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        var invitation = await Mesh.GetWorkspace()
+            .GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}")
+            .Where(n => n?.Content is Invitation inv && inv.Email == email)
+            .Select(n => (Invitation)n!.Content!)
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        Assert.Null(invitation.Message);
+    }
 }

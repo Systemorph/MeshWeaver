@@ -56,8 +56,17 @@ public record Invitation
     [Browsable(false)]
     public DateTimeOffset? AcceptedAt { get; init; }
 
-    /// <summary>Optional free-text note shown to the admin.</summary>
+    /// <summary>Optional free-text note shown to the admin. Written by the platform
+    /// (e.g. "Invited to space …"), never shown to the invitee — see <see cref="Message"/>.</summary>
     public string? Note { get; init; }
+
+    /// <summary>
+    /// The inviting host's personal message to the invitee, as typed (plain text). Rendered in the
+    /// invitation email as its own paragraph, HTML-encoded by the sender. <c>null</c> or blank = no
+    /// personal message. Kept apart from <see cref="Note"/>, which the platform fills with an
+    /// admin-facing description that must never reach the invitee's inbox.
+    /// </summary>
+    public string? Message { get; init; }
 
     /// <summary>
     /// Optional path of the Space this person was invited to (set by

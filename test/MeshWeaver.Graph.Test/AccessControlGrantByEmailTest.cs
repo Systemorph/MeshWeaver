@@ -14,7 +14,7 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// The Access Control UI "grant by email" path (issue #213 remaining gap): granting access to a person
 /// who has no <c>User</c> node yet. Exercises the primitive the add-row calls —
-/// <see cref="SpaceInviteService.GrantOrScheduleAccess"/> with pinning OFF — at a GRANULAR node path with a
+/// <see cref="SpaceInviteService.GrantOrScheduleAccess(string, string, string, bool, string?, string?)"/> with pinning OFF — at a GRANULAR node path with a
 /// NON-default role, proving the deferred grant carries the SELECTED (role, nodePath) rather than a
 /// hardcoded Space/Editor grant, and that an already-provisioned user is granted immediately.
 ///

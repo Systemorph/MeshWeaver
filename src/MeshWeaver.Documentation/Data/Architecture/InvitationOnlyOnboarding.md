@@ -73,6 +73,18 @@ An offer the node has already moved past (a newer invite overwrote it before the
 emailed, unstamped: it was a real invite and its Space is announced nowhere else. Back-to-back invites
 to two Spaces therefore produce two emails, one per Space.
 
+### The host's personal message
+
+The Space **Invite** form has an optional **Personal message** field. What the host types travels on
+the invitation as `Invitation.Message` (`SpaceInviteService.Invite(…, message)`, or
+`GrantOrScheduleAccess(…, note, message)`), trimmed, and blank stores nothing. The invitation email
+renders it as its own paragraph, HTML-encoded (MeshWeaver.Plugins#4551).
+
+It is deliberately a separate field from `Note`. The platform fills `Note` with an admin-facing
+description ("Invited to space …", "Invited to group … as …"), and that text must never reach the
+invitee's inbox. An address that already has an account is granted at once and is sent no
+invitation email, so the message only travels with an invitation.
+
 ---
 
 ## Where invitations live
