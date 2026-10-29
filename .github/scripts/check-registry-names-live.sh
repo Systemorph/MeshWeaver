@@ -14,7 +14,8 @@
 # `--probe` asks the same question for deliver-live-publication.sh (the scope=none path, MeshWeaver#7323),
 # which REPAIRS a stale tag: verified → exit 0; not verified → "stale: <why>" on stdout and exit 3
 # (no ::error — the caller decides); a registry that cannot be READ → exit 1 either way, because an
-# unreadable registry is never "stale" and never "verified". ONE decision, two callers: the
+# unreadable registry is never "stale" and never "verified"; nor is a tag naming a commit that cannot
+# be ORDERED against the live one (no token, or the compare API refused), which may be newer. ONE decision, two callers: the
 # same-commit-older-layout rule (Copilot on #6878) cannot hold for one path and not the other.
 #
 # ENVIRONMENT: BUNDLE_REGISTRY, SOURCE, IDENTITY, LIVE_COMMIT (required); GH_TOKEN +
@@ -49,12 +50,25 @@ if [ "$named" = "$LIVE_COMMIT" ] && [ "$layout" = "$current" ]; then
   echo "registry: $tag names $LIVE_COMMIT (layout $layout) — the publication the shares serve. Verified."
   exit 0
 fi
-if [ "$named" != "-" ] && [ "$named" != "$LIVE_COMMIT" ] && [ -n "${GH_TOKEN:-}" ] && [ -n "${BAKE_CONTENT_REPOSITORY:-}" ]; then
-  if order=$(gh api "repos/$BAKE_CONTENT_REPOSITORY/compare/$LIVE_COMMIT...$named" --jq .status 2>&1) \
-     && [ "$order" = "ahead" ]; then
-    echo "registry: $tag names $named, NEWER than the shares' $LIVE_COMMIT and containing it. Verified."
-    exit 0
+if [ "$named" != "-" ] && [ "$named" != "$LIVE_COMMIT" ]; then
+  order=""
+  if [ -n "${GH_TOKEN:-}" ] && [ -n "${BAKE_CONTENT_REPOSITORY:-}" ]; then
+    order=$(gh api "repos/$BAKE_CONTENT_REPOSITORY/compare/$LIVE_COMMIT...$named" --jq .status 2>&1) || order=""
   fi
+  case "$order" in
+    ahead)
+      echo "registry: $tag names $named, NEWER than the shares' $LIVE_COMMIT and containing it. Verified."
+      exit 0 ;;
+    behind|diverged|identical) ;;
+    *)
+      # Two commits that cannot be ORDERED are never "stale" to a repair: the tag may name a newer
+      # commit, and delivering over it would roll the tag BACKWARDS (the publisher's own fallback, on
+      # a compare it cannot run either, republishes). The guard path below is red either way.
+      if [ "$PROBE" -eq 1 ]; then
+        echo "::error::the registry tag $tag names $named and the shares serve $LIVE_COMMIT, but the two could not be ORDERED (${order:-no GH_TOKEN / BAKE_CONTENT_REPOSITORY}) — whether the tag is stale or newer cannot be established. Not green, and not a repair either."
+        exit 1
+      fi ;;
+  esac
 fi
 if [ "$named" = "-" ]; then
   why="the tag is ABSENT"

@@ -178,6 +178,8 @@ if sub == "directory":
     if action == "exists":
         if opts.get("--query", [""])[0] != "exists" or not out_tsv:
             die("only `--query exists -o tsv` is modelled for directory exists: " + raw)
+        if os.environ.get("MOCK_AZ_FAIL_DIR_EXISTS"):
+            sys.stderr.write("stub-az: simulated failure answering directory exists for %s\n" % name); sys.exit(1)
         emit("true" if d.is_dir() else "false"); sys.exit(0)
     if action == "create":
         d.mkdir(parents=True, exist_ok=True); sys.exit(0)
@@ -3135,7 +3137,11 @@ def run_scope_none_delivery_cases(h: "Harness", work: Path) -> None:
                   "PUSH_BUNDLE_PUBLICATION": str(recorder), "MOCK_REGISTRY_TAG": str(tag),
                   "MOCK_REGISTRY_DELIVERED": str(delivered), "MOCK_REGISTRY_PUSH_ARGS": str(push_args),
                   "MOCK_AZ_ALLOW_SHOW": "1", "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
-                  "GITHUB_RUN_ID": run_id})
+                  "GITHUB_RUN_ID": run_id,
+                  # The lane passes both, so a different commit is ORDERED by default: the stub
+                  # answers every other commit as OLDER than the live one (`behind`).
+                  "GH_TOKEN": "stub", "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+                  "MOCK_GH_AHEAD": live_sha})
         e.update(extra)
         return subprocess.run(["bash", str(LOCK_WRAPPER), "--", str(DELIVER)], capture_output=True,
                               text=True, env=e)
@@ -3228,6 +3234,38 @@ def run_scope_none_delivery_cases(h: "Harness", work: Path) -> None:
     check("a set stamped by TWO publications is refused as a mix",
           r.returncode != 0 and "not ONE publication" in (r.stdout + r.stderr) and not push_args.exists(),
           f"rc={r.returncode}; {tail(r)}")
+
+    # Copilot on #7545: a tag naming a commit that cannot be ORDERED against the live one was "stale",
+    # so the repair ran — and the publisher's own fallback on an unorderable compare republishes,
+    # rolling a NEWER tag backwards. Both unorderable shapes: the compare refused, and no token.
+    for label, extra in (("the compare API refused", {"MOCK_GH_FAIL": "1"}), ("no GH_TOKEN", {"GH_TOKEN": ""})):
+        gen_dir, gen = seal_live()
+        r = deliver(f"{newer} 2 2", "9309", **extra)
+        check(f"a tag naming a commit that cannot be ordered ({label}) is RED, nothing pushed, the tag not moved",
+              r.returncode != 0 and "could not be ORDERED" in (r.stdout + r.stderr) and not push_args.exists()
+              and tag_now() == f"{newer} 2 2", f"rc={r.returncode}; tag {tag_now()}; {tail(r)}")
+
+    # Copilot on #7545: a FAILED `directory exists` for the generation `_current` names read as
+    # "absent" and fell back to the flat prefix — here an OLDER publication the tag already names, so
+    # the run went green ("Verified") while `_current` served a newer generation.
+    gen_dir, gen = seal_live()
+    older = "b" * 40
+    for name, text in (("source-commit.txt", older + "\n"), (SENTINEL, f"{BUNDLES[0]}\n"),
+                       (BUNDLES[0], "an older flat publication\n")):
+        (share_dest / name).write_text(text)
+    r = deliver(f"{older} 2 2", "9310", MOCK_AZ_FAIL_DIR_EXISTS="1")
+    check("a generation whose existence az could not answer is RED — never a fallback to the flat prefix",
+          r.returncode != 0 and "could not say whether generation" in (r.stdout + r.stderr)
+          and "Verified" not in r.stdout and not push_args.exists(), f"rc={r.returncode}; {tail(r)}")
+
+    # Copilot on #7545: a publication without modules/_index (which the publisher always writes) was
+    # delivered module-free and reported repaired.
+    gen_dir, gen = seal_live()
+    (gen_dir / "modules" / "_index").unlink()
+    r = deliver(stale, "9311")
+    check("a publication missing modules/_index is refused as INCOMPLETE, nothing pushed",
+          r.returncode != 0 and "carries no modules/_index" in (r.stdout + r.stderr) and not push_args.exists()
+          and tag_now() == stale, f"rc={r.returncode}; tag {tag_now()}; {tail(r)}")
 
     gen_dir, gen = seal_live()
     r = deliver(stale, "9307", MOCK_REGISTRY_UNREADABLE="1")

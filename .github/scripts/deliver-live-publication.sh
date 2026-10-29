@@ -49,7 +49,9 @@ POINTER="_current"
 # skipped (an older publisher wrote fewer); source-commit.txt is required below. The harness
 # delivers a REAL publication and compares the result with the share byte for byte, so a sidecar
 # the publisher starts writing and this list does not name is red there, not a silent omission.
-SIDECARS="source-commit.txt repository.txt architecture.txt platform-surface.json sealed-packages.json platform-set.json modules/_index"
+# modules/_index is NOT optional: the publisher always writes it (an empty set included) and treats a
+# publication without it as incomplete, so it is fetched as required below.
+SIDECARS="source-commit.txt repository.txt architecture.txt platform-surface.json sealed-packages.json platform-set.json"
 
 # shellcheck disable=SC2086 # whitespace-separated targets, split on purpose (bake-publication-lock.sh does the same)
 target=$(printf '%s\n' $BAKE_PUBLISH_TARGETS | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u | head -n 1)
@@ -90,9 +92,14 @@ if [ "$pointer_exists" = "true" ]; then
   named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$WORK/pointer" | sed -n '/./{p;q;}')
   case "$named" in
     ''|.|..|*/*|*\\*) echo "::warning::$prefix/$POINTER names '$named', which is not a single directory name — reading $prefix as its own publication directory." ;;
-    *) dir_exists=$(az storage directory exists "${AZ[@]}" --name "$prefix/$named" --query exists -o tsv) || dir_exists="unknown"
-       if [ "$dir_exists" = "true" ]; then live="$prefix/$named"
-       else echo "::warning::$prefix/$POINTER names generation '$named', which is not on the share (exists=$dir_exists) — reading $prefix as its own publication directory."; fi ;;
+    *) dir_exists=$(az storage directory exists "${AZ[@]}" --name "$prefix/$named" --query exists -o tsv) || dir_exists="<the call failed>"
+       # Only a confirmed `false` falls back: a refused answer read as "absent" would send this
+       # script to the flat prefix, possibly an OLDER publication than the generation served.
+       case "$dir_exists" in
+         true) live="$prefix/$named" ;;
+         false) echo "::warning::$prefix/$POINTER names generation '$named', which is not on the share — reading $prefix as its own publication directory." ;;
+         *) echo "::error::az could not say whether generation $account/$share/$prefix/$named exists (answered '$dir_exists') — the live publication cannot be resolved."; exit 1 ;;
+       esac ;;
   esac
 fi
 sealed=$(exists_file "$live/$SENTINEL")
@@ -168,15 +175,17 @@ done < "$pub/$SENTINEL"
 for rel in $SIDECARS; do fetch "$rel" no < /dev/null; done
 [ -f "$pub/source-commit.txt" ] && [ "$(tr -d '[:space:]' < "$pub/source-commit.txt")" = "$live_commit" ] \
   || { echo "::error::the downloaded source-commit.txt does not record $live_commit — the live publication moved while it was read (the prefix lock should exclude that). Refusing."; exit 1; }
-if [ -f "$pub/modules/_index" ]; then
-  while IFS= read -r name || [ -n "$name" ]; do
-    name="${name#"${name%%[![:space:]]*}"}"; name="${name%"${name##*[![:space:]]}"}"
-    if [ -n "$name" ]; then
-      case "$name" in */*|.|..|*\\*) echo "::error::modules/_index lists '$name', which is not a plain file name"; exit 1 ;; esac
-      fetch "modules/$name" yes < /dev/null
-    fi
-  done < "$pub/modules/_index"
-fi
+index_present=$(exists_file "$live/modules/_index")
+[ "$index_present" = "true" ] \
+  || { echo "::error::$live carries no modules/_index — the publisher always writes one, so this publication is INCOMPLETE and delivering it would push a module-free set. Refusing."; exit 1; }
+fetch "modules/_index" yes
+while IFS= read -r name || [ -n "$name" ]; do
+  name="${name#"${name%%[![:space:]]*}"}"; name="${name%"${name##*[![:space:]]}"}"
+  if [ -n "$name" ]; then
+    case "$name" in */*|.|..|*\\*) echo "::error::modules/_index lists '$name', which is not a plain file name"; exit 1 ;; esac
+    fetch "modules/$name" yes < /dev/null
+  fi
+done < "$pub/modules/_index"
 rmdir "$pub/modules" 2>/dev/null || true
 # shellcheck disable=SC2086 # one token per owner, split on purpose
 count=$(printf '%s\n' $owners | grep -c '[^[:space:]]' || true)
