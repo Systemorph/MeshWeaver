@@ -83,6 +83,26 @@ public class PermissionProbeCacheKeyTests
     }
 
     /// <summary>
+    /// A SCOPED token's verdict is capped (ApiTokenScope), so it must never share an entry with an
+    /// unscoped token of the same person — that would serve the uncapped verdict to the capped
+    /// token (a cap bypass) or the capped one to the unscoped token. Scopes are a set: order does
+    /// not split the entry.
+    /// </summary>
+    [Fact]
+    public void A_scoped_token_never_shares_an_entry_with_an_unscoped_one()
+    {
+        var unscoped = Carson() with { IsApiToken = true };
+        var relay = Carson() with { IsApiToken = true, Scopes = ["relay"] };
+
+        Assert.NotEqual(
+            MeshNodeStreamCache.BuildAccessCacheKey(Path, unscoped),
+            MeshNodeStreamCache.BuildAccessCacheKey(Path, relay));
+        Assert.Equal(
+            MeshNodeStreamCache.BuildAccessCacheKey(Path, Carson() with { IsApiToken = true, Scopes = ["read", "write"] }),
+            MeshNodeStreamCache.BuildAccessCacheKey(Path, Carson() with { IsApiToken = true, Scopes = ["write", "read"] }));
+    }
+
+    /// <summary>
     /// …but claims are a SET. Two tokens carrying the same roles in a different order are the
     /// same capability and must still share the entry — otherwise the fix quietly turns the
     /// probe cache off for every multi-role token, which is a latency regression on the read

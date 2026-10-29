@@ -33,6 +33,19 @@ namespace MeshWeaver.Mesh.Services;
 /// </summary>
 public static class NodeTypeAccessRuleGate
 {
+    /// <summary>The node permission a CRUD <see cref="NodeOperation"/> exercises — what the API-token
+    /// scope cap is asked about before a rule runs.</summary>
+    /// <param name="operation">The operation being decided.</param>
+    /// <returns>The permission; <see cref="Permission.None"/> for an operation outside the CRUD four.</returns>
+    public static Permission PermissionFor(NodeOperation operation) => operation switch
+    {
+        NodeOperation.Read => Permission.Read,
+        NodeOperation.Create => Permission.Create,
+        NodeOperation.Update => Permission.Update,
+        NodeOperation.Delete => Permission.Delete,
+        _ => Permission.None,
+    };
+
     /// <summary>
     /// The <see cref="NodeOperation"/> a <c>[RequiresPermission(<paramref name="permission"/>)]</c>
     /// delivery gate is deciding ABOUT THE HUB'S OWN NODE, or <c>null</c> when no rule at that hub
@@ -122,6 +135,13 @@ public static class NodeTypeAccessRuleGate
     {
         ArgumentNullException.ThrowIfNull(rule);
         ArgumentNullException.ThrowIfNull(context);
+
+        // 🛡️ The API-token scope cap holds over a type's own rule too: a rule may GRANT where the
+        // fold would not (a satellite's Delete as Update on its main node, a profile readable by
+        // every signed-in user), and a capped token must not reach through that grant. Denied —
+        // definitive, the cap is a fact about the token — without running the rule.
+        if (!ApiTokenScope.AllowsPermission(context.AccessContext, PermissionFor(context.Operation)))
+            return Observable.Return(PermissionCheckOutcome.Denied);
 
         return EvaluateVerdict(() => rule.HasAccess(context, userId),
             context.Node.NodeType ?? rule.NodeType, context.Node.Path, userId, logger);
@@ -279,6 +299,9 @@ public static class NodeTypeAccessRuleGate
     {
         ArgumentNullException.ThrowIfNull(rule);
         ArgumentNullException.ThrowIfNull(node);
+        // 🛡️ The API-token scope cap — see Evaluate.
+        if (!ApiTokenScope.AllowsPermission(accessContext, permission))
+            return Observable.Return(PermissionCheckOutcome.Denied);
         return EvaluateVerdict(() => rule.HasPermission(node, accessContext, userId, permission),
             node.NodeType ?? rule.NodeType, node.Path, userId, logger);
     }

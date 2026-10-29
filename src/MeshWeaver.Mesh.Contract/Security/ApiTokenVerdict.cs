@@ -94,7 +94,9 @@ public static class ApiTokenVerdict
             return Observable.Return(ValidateTokenResponse.Fail("OAuth token expired after being unused"));
 
         // Diagnostic only — no permission decision reads the mint-time roles (see ApiToken.Roles).
-        var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles);
+        var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles)
+            // The scope CAP travels with the verdict; an unscoped token carries null (not []).
+            with { Scopes = ApiTokenScope.IsScoped(apiToken.Scopes) ? apiToken.Scopes : null };
 
         if (string.IsNullOrEmpty(apiToken.ServiceIdentityPath))
             // A person's token. One naming a SERVICE object id without an identity path was not

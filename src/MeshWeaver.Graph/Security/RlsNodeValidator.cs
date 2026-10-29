@@ -76,6 +76,19 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
         if (userId == WellKnownUsers.System)
             return Observable.Return(NodeValidationResult.Valid());
 
+        // 🛡️ The API-token SCOPE cap (ApiTokenScope) — ahead of every shortcut below. The own-scope
+        // shortcut grants a user everything in their own partition without asking the fold, so a
+        // cap applied only inside the fold would let a token scoped to, say, the device relay
+        // still read and write its owner's whole home. Refused BY NAME: the message lists the
+        // scopes the token carries, so a token carrying only a value no site claims is told so
+        // rather than silently treated as unscoped.
+        if (ScopeRefusal(context) is { } scopeRefusal)
+        {
+            _logger.LogDebug("RLS: {Operation} on {Path} refused by the API-token scope cap — {Refusal}",
+                context.Operation, context.Node.Path, scopeRefusal);
+            return Observable.Return(NodeValidationResult.Unauthorized(scopeRefusal));
+        }
+
         // 🚨 The instance-level anonymous switch (Access:DenyAnonymous — AnonymousAccess). The
         // permission fold already refuses the anonymous subject, but the chain below consults a
         // hub rule and a per-type INodeTypeAccessRule FIRST, and either may answer without ever
@@ -521,6 +534,50 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
         CommentsGate.CommentNodeTypeName => Permission.Comment,
         _ => Permission.Create
     };
+
+    /// <summary>
+    /// The API-token scope cap's verdict on this operation: <c>null</c> when the caller is unscoped
+    /// or its scopes allow the operation, otherwise the refusal (localized, naming the scope
+    /// required and every scope the token carries).
+    ///
+    /// <para>Two rules. The OPERATION needs the node permission it exercises inside the token's
+    /// cap (<see cref="ApiTokenScope.PermissionCap(AccessContext)"/>). And a WRITE to an
+    /// <c>ApiToken</c> record needs <see cref="ApiTokenScope.Tokens"/>, and may only produce a
+    /// token scoped to a subset of the writer's own scopes (<see cref="ApiTokenScope.MintRefusal"/>)
+    /// — otherwise a token holding <c>write</c> could mint an unscoped token, or patch its own
+    /// record's scopes away, and the cap would be one write deep.</para>
+    /// </summary>
+    private string? ScopeRefusal(NodeValidationContext context)
+    {
+        var caller = context.AccessContext;
+        if (!ApiTokenScope.IsScoped(caller))
+            return null;
+
+        var demanded = NodeTypeAccessRuleGate.PermissionFor(context.Operation);
+        if (!ApiTokenScope.AllowsPermission(caller, demanded))
+            return LocalizationCatalog.Get("access.apiTokenScope.refused", caller!.Locale,
+                ApiTokenScope.Format(caller.Scopes),
+                ApiTokenScope.ScopeFor(demanded) ?? demanded.ToString(),
+                context.Operation, context.Node.Path);
+
+        if (context.Operation == NodeOperation.Read
+            || !string.Equals(context.Node.NodeType, Configuration.ApiTokenNodeType.NodeType, StringComparison.Ordinal))
+            return null;
+
+        // A write to a token record. Its index rows (ApiTokenIndex) carry no scopes of their own:
+        // they need the Tokens scope and nothing more; the token record itself must stay within
+        // the writer's cap. A delete removes authority and needs only the Tokens scope.
+        var token = context.Operation == NodeOperation.Delete
+            ? null
+            : context.Node.ContentAs<ApiToken>(_hub.JsonSerializerOptions);
+        var refusal = token is { TokenHash.Length: > 0 }
+            ? ApiTokenScope.MintRefusal(caller, token.Scopes)
+            : ApiTokenScope.Refusal(caller, ApiTokenScope.Tokens);
+        return refusal is null
+            ? null
+            : LocalizationCatalog.Get("access.apiTokenScope.mintRefused", caller!.Locale,
+                ApiTokenScope.Format(caller.Scopes), context.Node.Path, refusal);
+    }
 
     /// <summary>
     /// Extracts the user ID from the validation context.
