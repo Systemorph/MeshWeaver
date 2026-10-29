@@ -771,7 +771,12 @@ a heap dump (`dotnet-dump` `gcroot`, ClrMD for the referrers):**
    next query, so a swapped-out generation stayed referenced until something asked. It is now dropped on
    `ModuleContexts.VersionChanged`, and a module's nodes enter the boot node list only as SLOTS (content,
    hub configuration and service delegates stripped) — the provider serves the current generation's nodes
-   in their place.
+   in their place. The provider OWNS that subscription and ends it in `Dispose`, which the mesh's
+   container calls when the mesh ends; a discarded subscription let the registry's subject keep the
+   provider — and through its validators a hub — reachable after its mesh was gone (MeshWeaver#7373,
+   `StaticNodeQueryProviderEndsWithItsContainerTest`). The registry also completes `VersionChanged` when it
+   is disposed, releasing any subscriber that did not end its own subscription. The other root subscriber,
+   `ModuleEndpointDataSource`, already ended its subscription with the host.
 
 **Only boot-time infrastructure may be restart-required.** `[ModuleRestartRequired(category, reason)]`
 takes a `ModuleBootCategory` — `StorageDriver`, `Orleans`, `Authentication`, `Host` — a deliberately
@@ -818,10 +823,16 @@ into a module that registers the type, which answers the module's instance. Muta
 to `RegistrationsOf` kills the test host with `Stack overflow.` (exit 134), and the frames repeat the
 dump's cycle.
 
-**Not covered by this:** a cycle made ONLY of transient factory registrations (every stand-in is one)
-is still not refused by the container. `ResolveContext` restarts inside a factory, and only a shared
-instance's slot (`InstanceSlot.BuildingThread`) catches re-entry. The mutated run above recursed through
-1,804 transient builds with no refusal.
+**A cycle made ONLY of transient factory registrations** (every stand-in is one) is refused by the
+container as well (MeshWeaver#7400): `ResolveContext` restarts inside a factory, and only a shared
+instance's slot (`InstanceSlot.BuildingThread`) caught re-entry, so the mutated run above once recursed
+through 1,804 transient builds with no refusal. A transient whose resolve chain restarted is now marked
+in flight per (scope, thread, service, cycle identity) — a stand-in keyed by what it stands in for, or
+by the level whose source minted it — and a re-entry is refused by name (*"A circular dependency was
+detected … building it asked for itself again on the same thread"*). Measured: with that guard, the
+same `RegistrationAt` mutation no longer kills the test host. Both stale-stand-in tests fail on the named
+refusal instead of the position message. See
+[Hub Service Layers](../HubServiceLayers) → "Threads, cycles and faults".
 
 ## What is shipped (slice 5 — the builder hook, decomposed; the mesh hub's type registry re-applied)
 
