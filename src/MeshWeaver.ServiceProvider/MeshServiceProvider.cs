@@ -37,7 +37,9 @@ namespace MeshWeaver.ServiceProvider;
 /// at most once, under its own slot's lock — taken synchronously, never awaited, and never a lock
 /// covering more than that one instance, so two first builds only wait for each other when one really
 /// needs the other. A fault is not cached: the next resolve builds afresh. A cycle is detected per
-/// resolve chain and refused by name.</para>
+/// resolve chain and refused by name — through constructors by the chain, through a shared instance by
+/// its slot, and through a factory of TRANSIENT registrations by the scope's in-flight restarted builds
+/// (MeshWeaver#7400).</para>
 ///
 /// <para><b>Ownership.</b> A scope disposes only what it built, in reverse order, when it ends: never a
 /// provided instance, a <see cref="NotOwnedServiceDescriptor"/> forwarder's result, or a source's
@@ -75,6 +77,9 @@ public sealed class MeshServiceProvider :
     private int disposed;
     private EventHandler? ending;
     private ILogger? faultLogger;
+    // The transient builds whose resolve chain restarted, in flight right now — held by the container
+    // ROOT only, created on first use (BuildRestartedChain, MeshWeaver#7400).
+    private System.Collections.Concurrent.ConcurrentDictionary<RestartedBuild, ServiceRegistration>? restartedBuilds;
 
     private MeshServiceProvider(MeshServiceProvider? parent, ServiceRegistry? registry, object? tag)
     {
@@ -517,9 +522,55 @@ public sealed class MeshServiceProvider :
             case ServiceLifetime.Scoped:
                 return Shared(SlotIn(registration, id), registration, id, context);
             default:
-                return Build(registration, id, context);
+                // 🚨 A transient has no slot, so nothing above catches its re-entry: a resolve chain that
+                // RESTARTED (context == null — the resolve came from a factory, a deferred Func/Lazy, or a
+                // caller) is guarded per scope and thread instead (MeshWeaver#7400).
+                return context is null ? BuildRestartedChain(registration, id) : Build(registration, id, context);
         }
     }
+
+    // 🚨 MeshWeaver#7400 — a cycle made only of TRANSIENT registrations through a factory (every module
+    // stand-in is a transient ForDelegate) has neither a slot (Shared's BuildingThread) nor a chain
+    // (ResolveContext restarts inside a factory, which is handed the scope itself), so it recursed until
+    // the process died of a stack overflow. Every lap of such a cycle restarts its chain at the same
+    // place, so the restart is what is guarded: while a transient whose chain restarted is being built,
+    // the same thread asking THIS scope for it again is refused by name. Same-thread re-entry of the same
+    // registration while it is still being built never terminates on its own — the factory would be asked
+    // the same question again — so it is never legitimate; a decorator that resolves ANOTHER registration
+    // of the service (ResolveRegistration) has another key and is untouched.
+    // The in-flight set is instance state of the container root (no static, no [ThreadStatic]); an entry
+    // lives exactly as long as the build it marks.
+    private object BuildRestartedChain(ServiceRegistration registration, ServiceIdentifier id)
+    {
+        var inFlight = root.restartedBuilds
+                       ?? Interlocked.CompareExchange(ref root.restartedBuilds, new(), null)
+                       ?? root.restartedBuilds!;
+        var key = new RestartedBuild(this, Environment.CurrentManagedThreadId, id, CycleIdentityOf(registration));
+        if (!inFlight.TryAdd(key, registration))
+            throw new InvalidOperationException(
+                $"A circular dependency was detected for the service of type '{id.Type.FullName}': "
+                + $"building it asked for itself again on the same thread, through a factory or a deferred "
+                + $"Func/Lazy ({registration}). A transient has no instance to wait for, so the cycle is refused "
+                + "instead of recursing until the stack overflows.");
+        try
+        {
+            return Build(registration, id, null);
+        }
+        finally
+        {
+            inFlight.TryRemove(key, out _);
+        }
+    }
+
+    // What a re-entry is recognised by. A source's stand-in is minted afresh on every lookup, so its own
+    // identity never repeats: one that names what it stands in for is keyed by that, and one that names
+    // nothing by the level whose source made it — the same (scope, service) asked again through the same
+    // level's stand-ins on one thread is the cycle.
+    private static object CycleIdentityOf(ServiceRegistration registration) =>
+        registration.StandsInFor
+        ?? (registration.Descriptor is null && ReferenceEquals(registration.Identity, registration) && registration.Registry is { } madeBy
+            ? madeBy
+            : registration.Identity);
 
     // 🚨 A root singleton CLOSED over a collectible type (a NodeType's compiled type, a module's) is held by
     // the level that asked for it — the hub — never by the root: held in the root it would pin its load
@@ -831,13 +882,16 @@ public sealed class MeshServiceProvider :
         $"MeshServiceProvider[{Tag ?? (IsContainerRoot ? "root" : "scope")}, own registrations {OwnRegistrationCount}]";
 
     private readonly record struct SlotKey(object Identity, Type Type, object? Key);
+
+    private readonly record struct RestartedBuild(MeshServiceProvider Scope, int Thread, ServiceIdentifier Id, object CycleIdentity);
 }
 
 /// <summary>
 /// One step of a resolve chain through constructors — so a cycle is refused by name, with its path,
 /// instead of recursing. A factory is handed the scope itself (it may keep it), so a chain restarts
 /// inside a factory; a cycle through a factory is caught where it re-enters a shared instance it is
-/// building (<c>InstanceSlot.BuildingThread</c>). A finished step no longer counts.
+/// building (<c>InstanceSlot.BuildingThread</c>), or a transient whose chain restarted while it is still
+/// being built (<c>MeshServiceProvider.BuildRestartedChain</c>). A finished step no longer counts.
 /// </summary>
 internal sealed class ResolveContext(MeshServiceProvider scope, ResolveContext? parent, object identity, ServiceIdentifier id)
 {

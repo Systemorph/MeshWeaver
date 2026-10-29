@@ -1396,13 +1396,23 @@ public sealed class PluginBundleClient
                         _logger?.LogInformation(
                             "Bundle for {Plugin}: adopted {Adopted}/{Total} prebuilt assemblies",
                             pluginId, count, assemblies.Count);
+                        // 🚨 #7401 — a MIXED package whose module the registry declared but did not
+                        // serve. The NodeTypes above arrived, so the empty-bundle branch that names
+                        // this reason was never reached, and the miss was dropped: the outcome read
+                        // as a clean adoption while the package's runtime module was absent.
+                        var modulesNotServed = BundleOffering.ModulesNotServed(manifest);
+                        if (!modulesNotServed.IsEmpty)
+                            _logger?.LogWarning(
+                                "Bundle for {Plugin}: its NodeTypes arrived but the registry did not serve "
+                                + "its runtime module — it is not in this bundle (an earlier landed generation "
+                                + "keeps running; nothing compiles in its place): {Misses}",
+                                pluginId, string.Join(" | ", modulesNotServed));
                         // 🚨 A PARTIAL adoption is recorded as the partial thing it is. Rounding
                         // "adopted 3 of 12" up to "adopted" is how a regression hides inside a
                         // success — the other nine are compiled here, which is precisely the cost
                         // this lane exists to remove.
-                        _ledger?.Record(new BundleAdoptionOutcome(
-                            pluginId, BundleAdoptionKind.Adopted, _registryUrl,
-                            Adopted: count, Offered: assemblies.Count));
+                        _ledger?.Record(BundleOffering.AdoptedOutcome(
+                            pluginId, _registryUrl, count, assemblies.Count, manifest));
                     });
             });
 

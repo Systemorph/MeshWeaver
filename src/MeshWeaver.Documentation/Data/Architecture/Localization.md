@@ -91,6 +91,22 @@ nothing to grandfather. The fix for a red is never a new entry — it is to stat
 `AccessContext.Locale` / `host.ViewerLocale()`, or `CultureInfo.InvariantCulture` where the value
 sits inside deliberately unlocalized text.
 
+### After an async gate, the CAPTURED viewer — not the ambient one
+
+The restore above covers the render TURN. A view that builds its controls on a later emission — a
+permission answer (`hub.IsGlobalAdmin(userId).Select(_ => host.Edit(…))`), a query result — runs on
+whichever thread delivered that emission, and the ambient `AccessContext` there is not the viewer's.
+Reading the language off the ambient context at that point renders English for a German viewer
+([#7383](https://github.com/Systemorph/MeshWeaver/issues/7383)).
+
+So `host.ViewerLocale()` — and with it `host.Localize(…)`, `host.LocalizePlural(…)` and every
+`host.Edit(…)` overload — reads the language of the viewer the host CAPTURED
+(`LayoutAreaHost.ViewerContext`) first, and the ambient context only when the captured one carries no
+language. Inside a layout area, build a form with the **host** overloads (`host.Edit(…)`); the
+`IServiceProvider` / `IMessageHub` overloads have no host and still read the ambient context, which
+is the viewer's only on the render turn. `EditorViewerLocaleTest` (`test/MeshWeaver.Layout.Test`)
+builds the same form behind a gate the test opens from its own thread and asserts German.
+
 ## Three lookup shapes, one resolution rule
 
 All three resolve the viewer's language through `Locales.Resolve`, so they can
@@ -150,6 +166,35 @@ public static StackControl BuildLog(ActivityLog log, string? locale = null)
 // caller
 BuildLog(log, locale: host.ViewerLocale())
 ```
+
+#### A cell's result area — the viewer who RAN it
+
+A failed code cell shows its failure in two places: the run's **transcript** (shape 3 below) and the
+cell's **result area**, the control the kernel writes under the code. The result area is written by
+the kernel with no host, so its heading is a catalog key (`kernel.executionFailed`) rendered in the
+language of the submission's own `AccessContext` — the person who ran the cell
+([#7363](https://github.com/Systemorph/MeshWeaver/issues/7363)). The detail splits along the same line
+as the transcript: a compiler diagnostic or the script's own exception message is script output and
+renders as written, while a refusal by the full kernel script lane is the platform's sentence and
+renders through `activity.codeRun.kernelSaturated`, the key its transcript entry already uses
+(`KernelExecutor.FailureView`, pinned by `KernelResultAreaFailureLocalizedTest`).
+
+#### A node NAME the platform writes — `node.defaultName.{NodeType}`
+
+Some node types are created by the platform with a fixed name: every declared partition policy is
+written as `Name = "Access Policy"`, from several sites (the documentation provider, the settings,
+licence, role and What's New types, the package installer). That name is platform text, so it
+follows the viewer — and it is resolved in ONE place, at display time, never by swapping the
+literal at each writer ([#7371](https://github.com/Systemorph/MeshWeaver/issues/7371)).
+
+`NodeTextTranslations.LocalizedName(node, locale)` checks for a catalog key
+`node.defaultName.{node.NodeType}`. When the node's name equals that key's **English** value — the
+name the platform wrote — it returns the key in the viewer's language; any other name was authored
+by a person (a renamed policy) and is returned as written. The node page header
+(`NodePageProjections.ProjectHeader`) titles the page with it. A new platform-named type therefore
+needs one key pair in `strings.{en,de}.json` whose English value equals the name it writes, and no
+code. `DeclaredPolicyNameLocalizedTest` pins the policy case, the renamed case and the same name on
+an unrelated type.
 
 ### 3. Key + args on a persisted record — for text written with no viewer in scope
 
@@ -306,6 +351,11 @@ time, and cannot be re-rendered afterwards — so `NotificationService` resolves
 label and footer against that person's own `User.Locale` before handing them to `EmailTemplate`
 (including the default `Open` button label). The rule is not "never resolve at write time", it is
 *never resolve against a viewer you do not have*.
+
+`EmailTemplate` takes every string as plain text and encodes it, so a caller cannot write markup —
+and a newline inside a paragraph or the footer note is a line the reader sees: the template turns it
+into `<br>` AFTER encoding (#7480). A translated closing such as "Beste Grüsse" + newline + the
+sign-off is therefore one paragraph with a break, never two strings glued onto one line.
 
 **What stayed English, and why.** The same boundary as the transcript: the sentence the platform
 owns is keyed, verbatim upstream text is not. `ex.Message`, a Roslyn diagnostic, the captured

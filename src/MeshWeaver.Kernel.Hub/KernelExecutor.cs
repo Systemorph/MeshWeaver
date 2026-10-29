@@ -440,16 +440,44 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             .Catch<object?, Exception>(ex =>
             {
                 if (ex is OperationCanceledException) return Observable.Throw<object?>(ex);
-                if (ex is CompilationErrorException compEx)
-                {
-                    var msg = string.Join("\n", compEx.Diagnostics.Select(d => d.ToString()));
-                    UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{msg}"));
-                    return Observable.Throw<object?>(new ScriptExecutionException(msg, compEx));
-                }
-                UpdateView(viewId, Controls.Markdown($"**Execution failed**:\n{ex.Message}"));
-                return Observable.Throw<object?>(ex);
+                // The result area is read by the person who RAN the cell, so it is rendered in the
+                // language of the submission's own viewer — explicitly, never the ambient culture
+                // (MeshWeaver#7363).
+                UpdateView(viewId, FailureView(ex, accessContext?.Locale));
+                return ex is CompilationErrorException compEx
+                    ? Observable.Throw<object?>(new ScriptExecutionException(CompilerDiagnostics(compEx), compEx))
+                    : Observable.Throw<object?>(ex);
             })
             .SubscribeOn(TaskPoolScheduler.Default);
+    }
+
+    /// <summary>The compiler's diagnostics, one per line — the reason a cell did not compile.</summary>
+    private static string CompilerDiagnostics(CompilationErrorException compEx)
+        => string.Join("\n", compEx.Diagnostics.Select(d => d.ToString()));
+
+    /// <summary>
+    /// What the cell's RESULT AREA shows when a submission fails, in <paramref name="locale"/>.
+    /// <para>The heading is platform text and is keyed (<c>kernel.executionFailed</c>). The detail
+    /// is the compiler's diagnostics or the script's own exception message — script output, which
+    /// renders as written — except for a refusal by the kernel's script lane: that sentence is the
+    /// platform's, so it renders through the same key the run's transcript uses
+    /// (<c>activity.codeRun.kernelSaturated</c>) rather than the exception's English text.</para>
+    /// </summary>
+    /// <param name="ex">The failure.</param>
+    /// <param name="locale">The language tag of the viewer who ran the cell; null renders English.</param>
+    /// <returns>The control to render in the result area.</returns>
+    internal static UiControl FailureView(Exception ex, string? locale)
+    {
+        var detail = ex switch
+        {
+            CompilationErrorException compEx => CompilerDiagnostics(compEx),
+            IoPoolSaturatedException saturated => LocalizationCatalog.GetNamed(
+                "activity.codeRun.kernelSaturated", locale,
+                ImmutableDictionary<string, object>.Empty.Add("max", saturated.MaxConcurrency),
+                ex.Message),
+            _ => ex.Message,
+        };
+        return Controls.Markdown($"**{LocalizationCatalog.Get("kernel.executionFailed", locale)}**:\n{detail}");
     }
 
     /// <summary>

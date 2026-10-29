@@ -83,6 +83,18 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
 - **an unreadable endpoint is RED, naming why**: 403 at once (the token's repository or run does not
   match the build), 401 after one token refresh, 404 after a five-minute grace (the run may not be registered
   yet), transport errors and 5xx after six consecutive failures.
+- 🚨 **a redirect is a refusal, never followed.** Every call of the shared `Http` transport carries a
+  bearer (the OIDC token on a log read, the runtime's request token on the OIDC mint), and urllib's
+  default handler re-sends the `Authorization` header to whatever a 3xx names — another host, or an
+  https→http downgrade; the `https://` check on `api-url` guards the first hop only. So the transport
+  never follows one: it answers the 3xx as its status before any byte reaches the target, and the
+  follower turns it into a RED at once, without a retry (MeshWeaver.Plugins#4514; the same rule as
+  MeshWeaver.Plugins `scripts/build-probe.py`). The self-test proves it against the real transport
+  over loopback — a cross-origin 302 whose target records every `Authorization` it receives, with a
+  direct call to that target as the control — plus an https→http 301 against the handler and a 302
+  against the follower. Every consumer of the transport inherits it (`build-artifacts-fetch.py`,
+  `host-shard-results.py`, MeshWeaver.Plugins `scripts/host-gate-log.py`), and each already reads a
+  non-200 status as RED.
 - **a `skipped` gap is a warning with the count** — the host keeps the newest 2,000 lines.
 - **the log is drained before the verdict**, so the last error lines print first.
 - **the RUN ends the follow, not the stage.** The log page carries `runState` and `runTerminal`;
@@ -775,6 +787,26 @@ would replace, and the claim is refused until that list is empty.
   through the host's own paths, never a hard-coded `/host/`, the lane's allow file, the warning
   baseline when ci.yml passes one, the gate seeded with its own bake, the Tests-area ratchet over the
   log, the log handed back as an artifact).
+- **A gate stage is the WHOLE gate, and every check reaches its exit code (#7456).** Two holes a
+  substring cannot see. (1) A tester narrowed with `--shard k/n` gates one slice, and the host route
+  runs no `gate-shard-merge.py` of its own, so nothing would notice the missing slices: a narrowed
+  gate is red unless the stage runs EVERY literal slice `1..n` and folds them with
+  `gate-shard-merge.py --shards n` (a slice from a variable or a loop is red — the guard cannot read
+  it). (2) The runner executes a stage with `bash -c`, which adds no failure propagation, so
+  `compile; gate | tee; ratchet` exits with the ratchet's code — measured by EXECUTING it against stub
+  tools: a compile that exits 1 followed by a green gate and ratchet is a stage exit of 0. A gate stage
+  is therefore red unless it is `set -e` (with `-o pipefail` when a check is piped), or every check is
+  handled by hand the way every satellite writes it today under `set -uo pipefail`: the compile
+  `|| exit`, the gate's `${PIPESTATUS[0]}` (or `$?`) and the ratchet's `$?` captured right after them
+  into variables the stage `exit`s with. The self-test executes both shapes and the unsafe one.
+  The guard reads the stage in order and checks every invocation of every check: each gate slice,
+  `gate-shard-merge.py`, the compile and the ratchet.
+  - `set -e` counts only where it is in force. A `set -e` written after the checks, or undone by
+    `set +e`, does not count.
+  - `gate | tee || exit` counts only under pipefail. Without it, the `|| exit` tests `tee`.
+  - A captured status must reach an `exit` before anything assigns its variable again. Two slices
+    captured into one name lose the first slice's failure.
+  - A `--shard` token the guard cannot read as a slice, quoted ones included, is red.
 - **The rule lives once**, in `.github/scripts/check-build-stages.py` (`--profile core|node-repo`,
   `--self-test` with a negative control per breach). Core runs it through `core-build-stages.py
   --check` in `dotnet-test.yml`'s `workflow-shell` job; every satellite runs it through the shared
