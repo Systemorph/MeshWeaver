@@ -145,6 +145,41 @@ public static class BundleOffering
                    : string.Empty);
     }
 
+    /// <summary>
+    /// The producer's <c>module '&lt;name&gt;': not served — …</c> misses
+    /// (<see cref="BundleReader.IsModuleNotServedMiss"/>) — empty when it stated none.
+    ///
+    /// <para>🚨 MeshWeaver#7401: a MIXED package (NodeTypes AND a runtime module) whose module the
+    /// registry declared but could not serve arrives with its NodeType assemblies, so it never
+    /// reaches the empty-bundle branch that names this reason. The miss was filtered out of the
+    /// NodeType coverage check (correctly — it names no NodeType) and then dropped, so the adoption
+    /// was recorded as a clean <see cref="BundleAdoptionKind.Adopted"/> and <c>/health</c> could not
+    /// see that the package's module was absent. The adoption outcome now carries these, whatever
+    /// else the bundle held.</para>
+    /// </summary>
+    /// <param name="manifest">The bundle's manifest, or null from an unreadable bundle.</param>
+    public static ImmutableArray<string> ModulesNotServed(BundleReader.Manifest? manifest) =>
+        manifest?.Misses is { Count: > 0 } misses
+            ? misses.Where(BundleReader.IsModuleNotServedMiss).ToImmutableArray()
+            : ImmutableArray<string>.Empty;
+
+    /// <summary>
+    /// The outcome of a bundle whose NodeType assemblies arrived and were seeded — the ONE place
+    /// <see cref="PluginBundleClient"/> builds it, so the module-not-served misses the manifest
+    /// states travel with it (#7401) instead of being dropped with the NodeType-coverage filter.
+    /// </summary>
+    /// <param name="pluginId">The package.</param>
+    /// <param name="registry">The registry asked.</param>
+    /// <param name="adopted">Assemblies actually seeded.</param>
+    /// <param name="offered">Assemblies the bundle carried.</param>
+    /// <param name="manifest">The bundle's manifest.</param>
+    public static BundleAdoptionOutcome AdoptedOutcome(
+        string pluginId, string registry, int adopted, int offered, BundleReader.Manifest? manifest)
+        => new(pluginId, BundleAdoptionKind.Adopted, registry, Adopted: adopted, Offered: offered)
+        {
+            ModulesNotServed = ModulesNotServed(manifest),
+        };
+
     /// <summary>What an empty-but-complete bundle offered instead of NodeTypes, for the log.</summary>
     public static string OfferingOf(BundleReader.Manifest? manifest) =>
         manifest?.Module?.AssemblyName is { Length: > 0 } name
@@ -170,6 +205,17 @@ public sealed record BundleAdoptionOutcome(
     string? Reason = null)
 {
     /// <summary>
+    /// The producer's <c>module '&lt;name&gt;': not served — …</c> misses carried by a bundle whose
+    /// NodeType assemblies DID arrive (<see cref="BundleOffering.ModulesNotServed"/>, #7401). Empty
+    /// otherwise. Any entry makes the attempt a miss: the package's runtime module is absent here,
+    /// and nothing compiles in its place.
+    ///
+    /// <para>An INIT property rather than a positional parameter: adding one to the primary
+    /// constructor would replace its signature for every assembly compiled against it.</para>
+    /// </summary>
+    public ImmutableArray<string> ModulesNotServed { get; init; } = ImmutableArray<string>.Empty;
+
+    /// <summary>
     /// Whether this attempt left content to be COMPILED here that the distribution lane was meant
     /// to serve. Adopting fewer assemblies than were offered counts — a partial adoption is a
     /// partial miss, and rounding it to "adopted" is how a regression hides inside a success.
@@ -183,15 +229,16 @@ public sealed record BundleAdoptionOutcome(
     public bool IsMiss =>
         Kind is not (BundleAdoptionKind.Adopted or BundleAdoptionKind.NothingToAdopt
             or BundleAdoptionKind.NotApplicable)
-        || Adopted < Offered;
+        || Adopted < Offered
+        || !ModulesNotServed.IsDefaultOrEmpty;
 
     /// <summary>One line, for a log or a health payload.</summary>
     public string Describe() => Kind switch
     {
         BundleAdoptionKind.Adopted when Adopted >= Offered =>
-            $"{PluginId}: adopted {Adopted}/{Offered}",
+            $"{PluginId}: adopted {Adopted}/{Offered}" + ModuleSuffix(),
         BundleAdoptionKind.Adopted =>
-            $"{PluginId}: adopted only {Adopted}/{Offered} — the rest compile here",
+            $"{PluginId}: adopted only {Adopted}/{Offered} — the rest compile here" + ModuleSuffix(),
         BundleAdoptionKind.NothingToAdopt =>
             $"{PluginId}: no NodeTypes to adopt"
             + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
@@ -201,6 +248,11 @@ public sealed record BundleAdoptionOutcome(
         _ => $"{PluginId}: {Kind}"
              + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
     };
+
+    private string ModuleSuffix() => ModulesNotServed.IsDefaultOrEmpty
+        ? string.Empty
+        : " — but its runtime module is ABSENT here (nothing compiles in its place): "
+          + string.Join(" | ", ModulesNotServed);
 }
 
 /// <summary>
@@ -287,8 +339,8 @@ public sealed class BundleAdoptionLedger
                 + $"no misses{nothingSuffix}";
 
         return $"{all.Count} adoption attempt(s), {adopted} assembly/assemblies adopted{nothingSuffix}, "
-            + $"{misses.Length} MISS(es) — content the registry was meant to serve is compiled "
-            + "here instead: "
+            + $"{misses.Length} MISS(es) — content the registry was meant to serve did not arrive "
+            + "(a NodeType compiles here instead; a module that was not served is absent): "
             + string.Join("; ", misses.Take(Math.Max(1, maxNamed)).Select(m => m.Describe()))
             + (misses.Length > maxNamed ? $", …(+{misses.Length - maxNamed})" : string.Empty);
     }
