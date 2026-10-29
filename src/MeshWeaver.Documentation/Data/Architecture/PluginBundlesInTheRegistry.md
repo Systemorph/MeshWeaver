@@ -386,10 +386,13 @@ version is published.
 module arrives with its NodeType assemblies, so it never reaches the empty-bundle branch that names
 the reason above; the module miss was filtered out of the NodeType coverage check and then dropped,
 the attempt was recorded as a clean `Adopted`, and `/health` `bundle_adoption` could not see that
-the package's runtime module was absent. The adoption outcome now carries every
+the bundle arrived without the package's runtime module. The adoption outcome now carries every
 `module '<name>': not served — …` entry (`BundleAdoptionOutcome.ModulesNotServed`, built in one
 place by `BundleOffering.AdoptedOutcome`), which makes the attempt a miss and names the module:
-`<package>: adopted 3/3 — but its runtime module is ABSENT here (nothing compiles in its place): …`.
+`<package>: adopted 3/3 — but its runtime module was NOT IN THIS BUNDLE (…): …`. That names a
+DELIVERY miss, not an outage: a module generation landed earlier is kept when no bundle carries a
+replacement (`PluginBundleClient.AdoptModuleOutcome`), so whether this instance runs the module is
+the module activation's answer, never this line's.
 The kind stays `Adopted`, because the NodeTypes that arrived were adopted, and a require-prebuilt
 mesh still does not fail on it. The ledger's summary line now says the content "did not arrive"
 rather than that it "is compiled here instead", which was never true of a module.

@@ -1404,8 +1404,8 @@ public sealed class PluginBundleClient
                         if (!modulesNotServed.IsEmpty)
                             _logger?.LogWarning(
                                 "Bundle for {Plugin}: its NodeTypes arrived but the registry did not serve "
-                                + "its runtime module — the module is absent here and nothing compiles in "
-                                + "its place: {Misses}",
+                                + "its runtime module — it is not in this bundle (an earlier landed generation "
+                                + "keeps running; nothing compiles in its place): {Misses}",
                                 pluginId, string.Join(" | ", modulesNotServed));
                         // 🚨 A PARTIAL adoption is recorded as the partial thing it is. Rounding
                         // "adopted 3 of 12" up to "adopted" is how a regression hides inside a

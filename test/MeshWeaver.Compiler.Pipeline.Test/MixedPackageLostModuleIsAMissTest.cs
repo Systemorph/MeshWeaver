@@ -56,10 +56,12 @@ public class MixedPackageLostModuleIsAMissTest
         outcome.Kind.Should().Be(BundleAdoptionKind.Adopted,
             "the NodeTypes that arrived WERE adopted — the kind stays truthful");
         outcome.IsMiss.Should().BeTrue(
-            "the package's runtime module is absent here, which is exactly what bundle_adoption exists to show");
+            "the bundle arrived without the package's runtime module, which is exactly what bundle_adoption exists to show");
         outcome.Describe().Should().Contain("adopted 3/3")
             .And.Contain("module 'MeshWeaver.Sample'")
-            .And.Contain("ABSENT");
+            .And.Contain("NOT IN THIS BUNDLE")
+            .And.NotContain("ABSENT",
+                "a module not served in this bundle says nothing about whether an earlier landed generation runs here");
 
         var ledger = new BundleAdoptionLedger();
         ledger.Record(outcome);

@@ -207,8 +207,8 @@ public sealed record BundleAdoptionOutcome(
     /// <summary>
     /// The producer's <c>module '&lt;name&gt;': not served — …</c> misses carried by a bundle whose
     /// NodeType assemblies DID arrive (<see cref="BundleOffering.ModulesNotServed"/>, #7401). Empty
-    /// otherwise. Any entry makes the attempt a miss: the package's runtime module is absent here,
-    /// and nothing compiles in its place.
+    /// otherwise. Any entry makes the attempt a miss: this bundle did not carry the package's
+    /// runtime module, and nothing compiles in its place (an earlier landed generation keeps running).
     ///
     /// <para>An INIT property rather than a positional parameter: adding one to the primary
     /// constructor would replace its signature for every assembly compiled against it.</para>
@@ -251,7 +251,10 @@ public sealed record BundleAdoptionOutcome(
 
     private string ModuleSuffix() => ModulesNotServed.IsDefaultOrEmpty
         ? string.Empty
-        : " — but its runtime module is ABSENT here (nothing compiles in its place): "
+        // A DELIVERY miss, not a statement about what runs: a module generation landed earlier is kept
+        // when no bundle carries a replacement (PluginBundleClient.AdoptModuleOutcome).
+        : " — but its runtime module was NOT IN THIS BUNDLE (declared, not served; an earlier landed "
+          + "generation keeps running, nothing compiles in its place): "
           + string.Join(" | ", ModulesNotServed);
 }
 
@@ -340,7 +343,7 @@ public sealed class BundleAdoptionLedger
 
         return $"{all.Count} adoption attempt(s), {adopted} assembly/assemblies adopted{nothingSuffix}, "
             + $"{misses.Length} MISS(es) — content the registry was meant to serve did not arrive "
-            + "(a NodeType compiles here instead; a module that was not served is absent): "
+            + "(a NodeType compiles here instead; a module that was not served is missing from its bundle): "
             + string.Join("; ", misses.Take(Math.Max(1, maxNamed)).Select(m => m.Describe()))
             + (misses.Length > maxNamed ? $", …(+{misses.Length - maxNamed})" : string.Empty);
     }
