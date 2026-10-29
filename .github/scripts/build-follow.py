@@ -135,13 +135,35 @@ def stage_of(name: str, channel: str) -> str:
     return name
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """🚨 The transport never follows a redirect (MeshWeaver.Plugins#4514). Every call it makes
+    carries a bearer — the run's OIDC token on a build-API read, the runtime's request token on the
+    OIDC mint — and urllib's default handler re-sends the request, Authorization header included, to
+    whatever the 3xx names: another host, or an https→http downgrade. The `https://` check on
+    --api-url covers the first hop only. Returning None makes urllib raise the 3xx as an HTTPError,
+    which `Http.get` answers as its status, before any byte reaches the target — the same rule as
+    MeshWeaver.Plugins `scripts/build-probe.py`. `follow` turns a 3xx into a RED at once."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def is_redirect(status: int) -> bool:
+    """Whether a transport status is a redirect the transport refused to follow. Pure."""
+    return 300 <= status < 400
+
+
 class Http:
-    """The transport. Returns (status, parsed JSON or None); status 0 is a transport failure."""
+    """The transport. Returns (status, parsed JSON or None); status 0 is a transport failure, and a
+    3xx is a redirect it refused to follow (see _NoRedirect) — every caller reads it as a refusal."""
+
+    def __init__(self) -> None:
+        self._opener = urllib.request.build_opener(_NoRedirect)
 
     def get(self, url: str, headers: dict) -> tuple[int, object]:
         req = urllib.request.Request(url, headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with self._opener.open(req, timeout=30) as r:
                 body = r.read().decode() or "null"
                 return r.status, json.loads(body)
         except urllib.error.HTTPError as e:
@@ -273,6 +295,10 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
                     f"channel {query['channel']}). A build-request this workflow run did not post, a "
                     f"merge-commit sha where the PR head was meant, or a wrong audience ({audience}) "
                     f"reads exactly like this")
+            if is_redirect(status):
+                raise Failure(f"the build API answered a redirect (HTTP {status}) — refused, never followed: the "
+                              f"OIDC bearer is never sent on to a redirect target. Is --api-url the build API's "
+                              f"own host?")
             if status == 401:
                 if refreshed_after_401:
                     raise Failure(f"the build API refused a FRESH OIDC token too (HTTP 401) — the "
@@ -533,6 +559,69 @@ def _page(lines, nxt, state, skipped=0, summary=""):
                  "skipped": skipped, "state": state, "summary": summary}
 
 
+def _redirect_cases(check) -> None:
+    """The redirect refusal, against the real Http transport over loopback, with its control."""
+    import http.server
+    import threading
+
+    seen: list[str] = []
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            seen.append(self.headers.get("Authorization") or "")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+
+    target = http.server.HTTPServer(("127.0.0.1", 0), Target)
+    target_url = f"http://127.0.0.1:{target.server_address[1]}/stolen"
+
+    class Redirector(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", target_url)
+            self.end_headers()
+
+    redirector = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+    servers = [target, redirector]
+    for s in servers:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        # Control: the target itself answers, and records the bearer it was sent — so an empty
+        # `seen` below is a refusal, never a recorder that cannot record.
+        status, body = Http().get(target_url, {"Authorization": "Bearer control"})
+        check("redirect/control: the recorder records a direct call", status == 200 and seen == ["Bearer control"],
+              (status, body, seen))
+        seen.clear()
+        status, body = Http().get(f"http://127.0.0.1:{redirector.server_address[1]}/api/builds?after=1",
+                                  {"Authorization": "Bearer secret-oidc"})
+        check("redirect/a cross-origin 302 is answered as its 3xx, never followed", status == 302 and is_redirect(status),
+              (status, body))
+        check("redirect/🚨 no bearer reaches the redirect target", seen == [], seen)
+    finally:
+        for s in servers:
+            s.shutdown()
+            s.server_close()
+
+    # An https→http downgrade: the handler builds no follow-up request, so urllib raises the 3xx.
+    req = urllib.request.Request("https://control.example.com/api/builds", headers={"Authorization": "Bearer x"})
+    check("redirect/an https→http downgrade builds no follow-up request",
+          _NoRedirect().redirect_request(req, None, 301, "Moved", {}, "http://control.example.com/api/builds") is None,
+          "followed")
+
+    # The follower: a 3xx is RED at once — one read, no retry, no token sent anywhere else.
+    code, err, _out, fhttp = _run([(302, None)])
+    check("redirect/follow: a 3xx is RED at once, naming the redirect",
+          code == 1 and err is not None and "redirect (HTTP 302)" in err and len(fhttp.urls) == 1, (code, err, fhttp.urls))
+
+
 def self_test() -> int:
     failures: list[str] = []
 
@@ -763,13 +852,18 @@ def self_test() -> int:
     check("summary/no page link off plain http", page_url("http://evil.example/api/builds", "Hosting/Builds/R/x") == "", "linked")
     check("summary/nothing served → nothing added", summary_block("https://control.example.com/api/builds", {}) == "", "added")
 
+    # 🚨 The REAL transport never carries a bearer across a redirect (MeshWeaver.Plugins#4514).
+    # Two loopback servers on different ports are two origins: the first answers 302 to the
+    # second, which records every Authorization header that reaches it.
+    _redirect_cases(check)
+
     if failures:
         for f in failures:
             print(f"SELF-TEST FAILED: {f}")
         return 1
     print("build-follow self-test: all cases passed (cursor, skipped gap, verdicts, timeout, 403, 401, "
           "transient/unreadable, 404 grace, command neutralisation, OIDC grant, argument guards, "
-          "heartbeat cadence + its control, step-summary board and page link)")
+          "heartbeat cadence + its control, step-summary board and page link, redirect refusal)")
     return 0
 
 

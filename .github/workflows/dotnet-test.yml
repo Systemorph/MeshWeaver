@@ -3716,8 +3716,12 @@ jobs:
         app-id: ${{ secrets.FLEET_READER_APP_ID }}
         private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         owner: Systemorph
+        # The register's `repos` PLUS its `pair-only-repos` (MeshWeaver.Deploy, #7415): a
+        # repository that consumes core by checkout can be a declared counterpart, so the token
+        # must be able to resolve one there. The probe below reads both lists and fails on any
+        # repo this mint does not reach.
         repositories: >-
-          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex,CreditReRate,DecisionModels
+          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex,CreditReRate,DecisionModels,MeshWeaver.Deploy
         permission-contents: read
         permission-pull-requests: read
 
@@ -3733,7 +3737,7 @@ jobs:
         # 🚨 Read the register into a variable FIRST and assert it. `for repo in $(...)` would
         # iterate ZERO times if that command failed — the loop would simply end and the step would
         # report every repo readable having contacted none of them.
-        repos=$(python3 -c "import json;print(' '.join(r for r in json.load(open('.github/shared-rules.json'))['repos'] if r != 'Systemorph/MeshWeaver'))") \
+        repos=$(python3 -c "import json;d=json.load(open('.github/shared-rules.json'));print(' '.join(r for r in d['repos']+d.get('pair-only-repos',[]) if r != 'Systemorph/MeshWeaver'))") \
           || { echo "::error::Could not read the repo register from .github/shared-rules.json."; exit 1; }
         [ -n "$repos" ] || { echo "::error::.github/shared-rules.json lists no sibling repos — no declaration could be validated against it."; exit 1; }
         bad=0
@@ -3786,6 +3790,7 @@ jobs:
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Report the public surface this diff removes"
+      id: surface
       run: |
         set -euo pipefail
         git fetch --no-tags --depth=200 origin "${{ github.base_ref }}"
@@ -3796,15 +3801,21 @@ jobs:
         base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
         echo "Comparing against merge base $base"
         python3 scripts/check-type-forwards.py --base "$base" --surface-json "$RUNNER_TEMP/surface.json"
+        echo "base=$base" >> "$GITHUB_OUTPUT"
 
+    # The same merge base also lists the `.csproj` files this diff deletes or renames (#7415): a
+    # repository that checks core out and ProjectReferences a path breaks on MSB9008 although no
+    # public type left src/ — #7297 reddened MeshWeaver.Deploy's required chart guards that way.
     - name: "Every declared cross-repo counterpart has already landed"
       env:
         GITHUB_TOKEN: ${{ steps.fleet-token.outputs.token }}
+        MERGE_BASE: ${{ steps.surface.outputs.base }}
       run: |
         set -euo pipefail
         python3 scripts/check-cross-repo-pair.py \
           --surface-json "$RUNNER_TEMP/surface.json" \
-          --pr-body-file "$RUNNER_TEMP/pr-body.md"
+          --pr-body-file "$RUNNER_TEMP/pr-body.md" \
+          --base "$MERGE_BASE"
 
     # 🚨 THE PARSER-DELTA CONTROL THAT GUARDS THE REPORT ABOVE HAS MOVED (#3508). It used to sit
     # here, and this job runs on `pull_request` ONLY — so a pull request already green when the
@@ -4767,7 +4778,7 @@ jobs:
     - name: Fail if a cross-repo counterpart has not landed
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.cross-repo-pair.result != 'success'
       run: |
-        echo "::error::The 'Cross-repo pair (public surface)' gate concluded '${{ needs.cross-repo-pair.result }}' — see that job, which names the public types this diff removes from src/ and the state of every declared counterpart."
+        echo "::error::The 'Cross-repo pair (public surface)' gate concluded '${{ needs.cross-repo-pair.result }}' — see that job, which names the public types this diff removes from src/, the project files it deletes or renames (#7415), and the state of every declared counterpart."
         echo "::error::This pull request removes public surface, which can red a plugin repo's trunk hours later on pull requests that did not make the change (#2689). Declare the counterpart in the PR BODY as 'Pairs-with: Systemorph/MeshWeaver.Plugins#904', or 'Pairs-with: none — <reason>' when no other repository is affected."
         echo "::error::ORDERING IS THE INVARIANT: the deleting half lands LAST. Merge the counterpart into its repo's default branch first, then re-run. Rationale: Doc/Architecture/CrossRepoPairGate."
         exit 1
