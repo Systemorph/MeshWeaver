@@ -787,6 +787,26 @@ would replace, and the claim is refused until that list is empty.
   through the host's own paths, never a hard-coded `/host/`, the lane's allow file, the warning
   baseline when ci.yml passes one, the gate seeded with its own bake, the Tests-area ratchet over the
   log, the log handed back as an artifact).
+- **A gate stage is the WHOLE gate, and every check reaches its exit code (#7456).** Two holes a
+  substring cannot see. (1) A tester narrowed with `--shard k/n` gates one slice, and the host route
+  runs no `gate-shard-merge.py` of its own, so nothing would notice the missing slices: a narrowed
+  gate is red unless the stage runs EVERY literal slice `1..n` and folds them with
+  `gate-shard-merge.py --shards n` (a slice from a variable or a loop is red — the guard cannot read
+  it). (2) The runner executes a stage with `bash -c`, which adds no failure propagation, so
+  `compile; gate | tee; ratchet` exits with the ratchet's code — measured by EXECUTING it against stub
+  tools: a compile that exits 1 followed by a green gate and ratchet is a stage exit of 0. A gate stage
+  is therefore red unless it is `set -e` (with `-o pipefail` when a check is piped), or every check is
+  handled by hand the way every satellite writes it today under `set -uo pipefail`: the compile
+  `|| exit`, the gate's `${PIPESTATUS[0]}` (or `$?`) and the ratchet's `$?` captured right after them
+  into variables the stage `exit`s with. The self-test executes both shapes and the unsafe one.
+  The guard reads the stage in order and checks every invocation of every check: each gate slice,
+  `gate-shard-merge.py`, the compile and the ratchet.
+  - `set -e` counts only where it is in force. A `set -e` written after the checks, or undone by
+    `set +e`, does not count.
+  - `gate | tee || exit` counts only under pipefail. Without it, the `|| exit` tests `tee`.
+  - A captured status must reach an `exit` before anything assigns its variable again. Two slices
+    captured into one name lose the first slice's failure.
+  - A `--shard` token the guard cannot read as a slice, quoted ones included, is red.
 - **The rule lives once**, in `.github/scripts/check-build-stages.py` (`--profile core|node-repo`,
   `--self-test` with a negative control per breach). Core runs it through `core-build-stages.py
   --check` in `dotnet-test.yml`'s `workflow-shell` job; every satellite runs it through the shared
