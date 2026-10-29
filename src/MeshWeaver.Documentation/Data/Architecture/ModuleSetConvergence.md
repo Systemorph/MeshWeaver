@@ -435,12 +435,18 @@ and `Error`. With the build's coordinates kept, the failed-verdict re-drive (no-
 the older-platform trigger (`Error` only) both decline such a record, so before this a type a
 below-floor replica left `Unavailable` was rebuilt by nobody until a batch bake. Now the first owner
 that meets the floor rebuilds it, and the instances' version-gated overlay re-binds on that write.
+That holds even when the store already has bytes for the live framework and the re-evaluation
+carries forward or is inconclusive. For an `Ok` or `Error` record that case is skipped, because the
+instance-activation self-heal binds those bytes. That heal excludes `Unavailable`, so a skip would
+leave the type on the overlay everywhere, and the record is rebuilt instead
+(`DecideStaleBuildAction(recordUnavailable: true)`).
 
 Pinned by `AnUnmetDependencyFloorIsNotACompileVerdictTest` (with met-floor negative controls for the
 compile and the hydration), `ABatchBakeBelowADependencyFloorFormsNoVerdictTest`,
 `ACompileDependencyFloorReadsThePackageRootTest` (including a lower-cased reference and a silent
-resolver), `ABelowFloorReplicaRequestsNoSharedRecompileTest` and
-`AFloorRefusedTypeRecoversWhereTheFloorIsMetTest`.
+resolver), `ABelowFloorReplicaRequestsNoSharedRecompileTest`,
+`AFloorRefusedTypeRecoversWhereTheFloorIsMetTest` and
+`ContentKeyReevaluationTest.DecideStaleBuildAction_AnUnavailableRecordOnAStoreHit_IsRebuilt`.
 
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here
 (content-only, image-shipped, not installed) has no landed version to compare. A range it cannot

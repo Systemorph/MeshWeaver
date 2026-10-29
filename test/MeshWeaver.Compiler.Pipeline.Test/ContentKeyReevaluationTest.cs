@@ -283,6 +283,31 @@ public class ContentKeyReevaluationTest
                     + $"tag (storeHit={storeHit}, verdict={verdict}, usable={usable})");
     }
 
+    /// <summary>
+    /// Review of #7506: a record a below-floor replica left <c>Unavailable</c> is REBUILT on a
+    /// framework roll even when the store holds live-framework bytes and the re-evaluation carries
+    /// forward or is inconclusive. A skip leaves it to the instance-activation heal, which excludes
+    /// <c>Unavailable</c> — the type stayed on the overlay on every replica. CONTROL: the same inputs
+    /// on an <c>Ok</c>/<c>Error</c> record keep the pre-lane skip.
+    /// </summary>
+    [Theory]
+    [InlineData(ReevaluationVerdict.CarryForward, true)]
+    [InlineData(ReevaluationVerdict.CarryForward, false)]
+    [InlineData(ReevaluationVerdict.Inconclusive, false)]
+    [InlineData(ReevaluationVerdict.Rebuild, false)]
+    internal void DecideStaleBuildAction_AnUnavailableRecordOnAStoreHit_IsRebuilt(ReevaluationVerdict verdict, bool usable)
+    {
+        NodeTypeCompilationHelpers.DecideStaleBuildAction(
+                frameworkHeldStill: false, storeHasLiveFrameworkBytes: true, verdict, usable, recordUnavailable: true)
+            .Should().Be(NodeTypeCompilationHelpers.StaleBuildAction.Rebuild,
+                "nothing else recovers an Unavailable record once the owner skips it");
+        if (verdict is not ReevaluationVerdict.Rebuild)
+            NodeTypeCompilationHelpers.DecideStaleBuildAction(
+                    frameworkHeldStill: false, storeHasLiveFrameworkBytes: true, verdict, usable, recordUnavailable: false)
+                .Should().Be(NodeTypeCompilationHelpers.StaleBuildAction.Skip,
+                    "CONTROL: an Ok/Error record on a store hit keeps the pre-lane skip");
+    }
+
     /// <summary>The rest of the table, stated rather than implied.</summary>
     [Theory]
     // framework HELD STILL — a dependency drift, where the record's own build IS the addressable

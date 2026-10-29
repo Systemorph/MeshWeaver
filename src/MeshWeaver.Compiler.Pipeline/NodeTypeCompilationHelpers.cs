@@ -3420,11 +3420,19 @@ internal static class NodeTypeCompilationHelpers
     /// <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/> re-asked with the
     /// regenerated digest on the guards — the production predicate itself, so the lane and the
     /// predicate can never disagree about what it just proved.</param>
+    /// <param name="recordUnavailable">The record is <see cref="CompilationStatus.Unavailable"/> — a
+    /// replica below its package's dependency floor stamped it over the last good build (#6195).
+    /// 🚨 On a framework roll with a store HIT such a record is REBUILT, never skipped (review of
+    /// #7506): the skip leaves the correction to the instance-activation self-heal, and that heal
+    /// deliberately excludes <c>Unavailable</c>, so a skip stranded the type on the overlay on every
+    /// replica. The rebuild is bounded like every kickoff — once per hub lifetime, on a replica that
+    /// meets the floor — and publishes coordinates for the live framework.</param>
     internal static StaleBuildAction DecideStaleBuildAction(
         bool frameworkHeldStill,
         bool storeHasLiveFrameworkBytes,
         ReevaluationVerdict verdict,
-        bool usableAfterReevaluation)
+        bool usableAfterReevaluation,
+        bool recordUnavailable = false)
     {
         if (frameworkHeldStill)
             return verdict is ReevaluationVerdict.CarryForward && usableAfterReevaluation
@@ -3434,7 +3442,7 @@ internal static class NodeTypeCompilationHelpers
         // 🚨 The framework moved: NO path here returns RestampDependencyRecord.
         if (!storeHasLiveFrameworkBytes)
             return StaleBuildAction.Rebuild;
-        return verdict is ReevaluationVerdict.Rebuild
+        return verdict is ReevaluationVerdict.Rebuild || recordUnavailable
             ? StaleBuildAction.Rebuild
             : StaleBuildAction.Skip;
     }
@@ -3509,7 +3517,8 @@ internal static class NodeTypeCompilationHelpers
                             frameworkHeldStill: false,
                             storeHasLiveFrameworkBytes: true,
                             r.Result.Verdict,
-                            usableAfterReevaluation: false),
+                            usableAfterReevaluation: false,
+                            recordUnavailable: def?.CompilationStatus is CompilationStatus.Unavailable),
                         r.Result.Detail)));
     }
 
