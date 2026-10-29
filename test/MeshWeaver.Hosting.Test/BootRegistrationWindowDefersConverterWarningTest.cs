@@ -160,6 +160,79 @@ public class BootRegistrationWindowDefersConverterWarningTest
         Assert.False(registry.DeferUnresolvedWarning("Shared", () => { }));
     }
 
+    /// <summary>A closed generic: its FULL name (assembly-qualified type arguments) is far past the
+    /// converter's 256-character display bound — a valid discriminator, not junk.</summary>
+    public record LongNameProbe<T>(string Title);
+
+    private static object? Read(ILogger<ObjectPolymorphicConverter> logger, IMeshContentTypeRegistry registry, string json)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new ObjectPolymorphicConverter(
+            MessageHubExtensions.CreateTypeRegistry(), logger, contentTypeRegistry: registry));
+        return JsonSerializer.Deserialize<object>(json, options);
+    }
+
+    private static IEnumerable<Record> Unbindable(RecordingLogger logger) =>
+        logger.Records.Where(r => r.Level >= LogLevel.Warning
+                                  && r.Message.Contains("could not be deserialized", StringComparison.Ordinal));
+
+    /// <summary>
+    /// A name that resolves mesh-wide but whose JSON does not bind (an object where the record
+    /// declares a string) is a DATA problem, not a boot race: it is reported at the read, as
+    /// unbindable, even while the window is open — the settle would find the name resolving and
+    /// drop a deferred line, leaving the payload an untyped JsonElement with no diagnostic at all.
+    /// </summary>
+    [Fact]
+    public void DuringTheWindow_AResolvableTypeWhoseJsonDoesNotBind_IsWarnedAtTheRead_AsUnbindable()
+    {
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(ConverterWindowProbePost), ProbeNodeType);
+        var (service, lifetime, services) = HostedPass(registry);
+        using var _ = service;
+        using var __ = services;
+        var logger = new RecordingLogger<ObjectPolymorphicConverter>();
+
+        var value = Read(logger, registry, """{"$type":"ConverterWindowProbePost","title":{}}""");
+
+        Assert.IsType<JsonElement>(value);
+        Assert.Single(Unbindable(logger));
+        Assert.Empty(Unregistered(logger));
+
+        lifetime.Start();
+        Assert.Single(Unbindable(logger));
+        Assert.Empty(Unregistered(logger));
+    }
+
+    /// <summary>
+    /// The settle looks up the ORIGINAL discriminator, never the truncated display text: a valid
+    /// name longer than the display bound that registers before the settle is never warned.
+    /// </summary>
+    [Fact]
+    public void DuringTheWindow_ALongNameThatThenRegisters_IsNeverWarned()
+    {
+        var longType = typeof(LongNameProbe<ImmutableDictionary<string, ImmutableList<string>>>);
+        Assert.True(longType.FullName!.Length > 256, $"probe name is only {longType.FullName.Length} characters");
+        var json = JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["$type"] = longType.FullName,
+            ["title"] = "read at boot",
+        });
+        var registry = new MeshContentTypeRegistry();
+        var (service, lifetime, services) = HostedPass(registry);
+        using var _ = service;
+        using var __ = services;
+        var logger = new RecordingLogger<ObjectPolymorphicConverter>();
+
+        Assert.IsType<JsonElement>(Read(logger, registry, json));
+        Assert.Empty(Unregistered(logger));
+
+        registry.Register(longType, "Probe/LongName");
+        lifetime.Start();
+
+        Assert.Empty(Unregistered(logger));
+        Assert.IsType(longType, Read(new RecordingLogger<ObjectPolymorphicConverter>(), registry, json));
+    }
+
     private sealed record Record(LogLevel Level, string Message);
 
     private class RecordingLogger : ILogger

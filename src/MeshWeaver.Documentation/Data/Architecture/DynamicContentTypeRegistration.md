@@ -347,6 +347,18 @@ that read the type, and only if the `$type` still does not resolve by name. An a
 two declarations claim, still does not resolve, so its line is still written. All three members have
 default implementations, so other implementers keep the old behaviour of warning at the read.
 
+Two cases are never deferred:
+
+- **A name that resolves but does not bind.** When the `$type` resolves mesh-wide and the JSON still
+  does not bind to it (an object where the record declares a string), the problem is the data, not a
+  registration. The converter writes `Content for 'X' could not be deserialized` at the read, once per
+  name, even inside the window. Deferred, the settle would find the name resolving and drop the line,
+  leaving the payload an untyped `JsonElement` with no diagnostic.
+- **The settle looks up the original `$type`, never the display text.** The log line truncates a name
+  past 256 characters, but the deferral keeps the full name, so a valid long name is not reported missing
+  after it registered. A closed generic's full name is easily that long. A name past 4096 characters is
+  not deferred and is warned at the read, which keeps the deferred list bounded in bytes.
+
 **Pinned by** `BootRegistrationWindowDefersConverterWarningTest` (MeshWeaver.Hosting.Test). Its
 negative control is the same read with no window, which warns at the read.
 
