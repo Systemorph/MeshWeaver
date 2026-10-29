@@ -851,6 +851,10 @@ wire spelling is unchanged. The decision adds `Retired`:
   verdict cannot go Green on a partial listing. The same rule holds when the fetch ref already was
   `HEAD`: that one snapshot must be complete. This is the rule the importer's prune already
   follows ([Prune Requires a Complete Listing](../PruneRequiresACompleteListing)).
+- 🚨 **Presence is not proof either (#7316).** A module whose files come from a truncated listing
+  is never `Materialized`, even when the listing names some of its files: the files it left out
+  are invisible downstream, and a matching `moduleVersion` proves only the `manifest.lock` the
+  listing happened to name. It stays `Failed` with an `indeterminate listing` reason.
 - `ComboAssemblyReport.Success` counts a retired module as not failing. A combo whose every module
   is retired is still **not** a success, because the gate would otherwise run over an empty root.
 - The verdict carries retired modules on their own list, `ComboVerification.RetiredModules`. They
