@@ -767,6 +767,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     private readonly ISubject<string?> _foldInputCommits = Subject.Synchronize(new Subject<string?>());
 
+    /// <summary>
+    /// <see cref="_foldInputCommits"/> as a read-only signal: what an OPEN secured query re-decides its
+    /// rows on (MeshWeaver#7365, <see cref="Persistence.Query.SecuredQueryAccessFollow"/>), exactly as
+    /// an open per-user read re-decides its standing Read on it.
+    /// </summary>
+    internal IObservable<string?> FoldInputCommits => _foldInputCommits.AsObservable();
+
     /// <summary>The announcement a fold-input query makes after each committed snapshot; see <see cref="_foldInputCommits"/>.</summary>
     private Action FoldInputCommitAnnouncer(object queryId)
     {
@@ -2429,7 +2436,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     ///     anchored to the path's partition, to the partition of the MainNode the newest revision points
     ///     at, or to <c>Admin</c> — <see cref="_foldInputCommits"/>, announced after the commit ENDED, so
     ///     the re-check reads the new snapshot); an access commit on the invalidation feed that can reach
-    ///     the path or that MainNode (<see cref="DeclaredPointRead.AffectsRead"/> — the rule's inputs,
+    ///     the path or that MainNode (<see cref="DeclaredPointRead.AffectsRead(MeshChangeEvent, ImmutableHashSet{string})"/> — the rule's inputs,
     ///     which the fold's queries do not carry); and every declared feed gap. A re-check triggered by
     ///     anything but a global or same-partition fold commit bypasses the per-(path,user) verdict
     ///     cache, whose generation does not move with those inputs.</description></item>

@@ -2478,7 +2478,65 @@ unrelated grant on the same node and a second reader whose grant stays as positi
 
 What this does NOT cover: other subscription shapes on a node hub (a collection, an entity
 reference) are admitted once, by a standing grant or not at all, and are not followed. Open
-queries are tracked separately (MeshWeaver#7365).
+queries follow grants by their own mechanism (next paragraph).
+
+**An open secured QUERY follows grants too** (MeshWeaver#7365). A live listing (`IMeshService.Query`
+held open, `ObserveQuery`) filters its rows for the reader each time it runs. Before this, it ran
+again only when a write landed UNDER its own scope. A grant or revocation lands elsewhere: on an
+ancestor's `_Access`, in a group membership, or in a role. So a revoked reader kept every row they
+held, and a newly granted reader saw nothing until they queried again. Now both query executors
+re-run an open secured query when access changes. The in-memory executor is
+`StorageAdapterMeshQueryProvider`. The Postgres executors, `PostgreSqlMeshQuery` and
+`PostgreSqlPartitionedMeshQuery`, live in MeshWeaver.Plugins. Both take their triggers from ONE
+core source, `SecuredQueryAccessFollow.RecheckTriggers`, which fires on the same signals as the
+cache read above:
+
+- a committed permission-fold input that can reach the query: a global one, or one anchored to an
+  anchor's partition, to a held row's MainNode partition, or to `Admin`;
+- an access commit on the invalidation feed on any scope above or below the query's anchors, any
+  group membership, or any role (`DeclaredPointRead.AffectsRead` with a scope predicate). This is
+  how the Postgres executor, whose permission projection is rebuilt by trigger in the same commit,
+  learns of a grant immediately;
+- every declared feed gap.
+
+A trigger is only a trigger. The re-query is the sole source of rows, it re-runs the executor's own
+row filter, and the result is diffed against what the query holds. So a revoked row leaves as
+`Removed`, a newly readable one arrives as `Added`, and a grant that changes nothing for this reader
+emits nothing. The in-memory row filter (`ValidateRead`) is bounded and fails closed:
+
+- a validator that answers nothing refuses the row (`.All` over an empty answer used to admit it);
+- a validator that faults refuses the row instead of ending the query;
+- the check is bounded by the permission-establishment budget, and past it the row is withheld.
+
+A run that could not read part of its scope is incomplete, and an incomplete run removes nothing it
+could not read (MeshWeaver#7399). It still removes every held row it READ and REFUSED. Each run
+records its refusals apart from its dropped reads, so a revoked reader never keeps a row just because
+some other read in the same run failed. `AnIncompleteLiveRequeryStillRemovesARefusedRowTest` in
+`test/MeshWeaver.Hosting.Test/` pins this.
+
+A fault in the follow itself ends the query, because a listing that can no longer follow access
+must not go on serving rows. A System query follows nothing, because no grant moves it.
+
+Pinned on the in-memory executor by `OpenQueryFollowsAccessChangesTest` (`test/MeshWeaver.Graph.Test/`),
+and on Postgres by the same scenarios in MeshWeaver.Plugins. Every grant in those tests sits on the
+partition root, above the query's scope, and each test fails on the unfixed build:
+
+- a revoked reader's held rows are removed by the revocation itself, and a row inserted afterwards
+  never reaches her;
+- a newly granted reader's open query admits the row with no write under its scope;
+- an unrelated grant leaves another reader's result untouched while it admits the row for the
+  reader it names (the negative control).
+
+`AReadCheckWithNoVerdict_WithholdsTheRow` pins the fail-closed filter.
+
+What this does NOT cover:
+- configuration-declared rows (`StaticNodeQueryProvider`) are still decided once, because that
+  provider emits its Initial and completes;
+- a row whose Read is decided through a MainNode is re-checked when a fold or grant reaches that
+  MainNode, but the in-memory executor learns of the MainNode only from the rows it already holds;
+- the window between an access commit and the fold taking it in is not held, as it is for a cache
+  read. A write under the scope in that window can re-admit a row. The fold's commit re-runs the
+  query and removes it.
 
 **A stored type's ownership is followed live.** A stored type's declaration counts only while
 its partition is system-owned, meaning a one-way `_GitSync` that names a repository.
