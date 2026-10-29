@@ -1464,7 +1464,12 @@ authenticates a token. From there:
   type is a token record (`ApiTokenScope.IsTokenRecordType`, case-insensitive) is refused, except a
   delete by a token holding `tokens` (`AccessControlPipeline.CapScopedTokenRecordWrite`). A scoped
   token never rewrites a token record — neither stripping its scopes nor retyping it out of the
-  rule's sight while the verdict still authenticates its content; it revokes by deleting. And only a token RECORD authenticates: the hash index outlives its record, so `ApiTokenVerdict`
+  rule's sight while the verdict still authenticates its content; it revokes by deleting. The gate
+  sees only the node the owner holds when the write arrives, so the same rule is also judged at the
+  owner's COMMIT point against the merged result (`ApiTokenRecordCommitGuard`, an
+  `IEntityCommitGuard`): a scoped writer never rewrites an existing node into, out of, or as a token
+  record. Without it, a deleted record recreated as Markdown and then retyped INTO `ApiToken` with
+  unscoped content would be authenticated by the surviving index. And only a token RECORD authenticates: the hash index outlives its record, so `ApiTokenVerdict`
   refuses a record at the indexed path that names another type, which a record deleted and recreated
   as a lookalike would. A legacy index that carries the record itself is still read as before.
 - **A hub-level grant never lifts the cap.** The delivery gate accepts a hub rule's grant (for

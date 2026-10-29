@@ -344,6 +344,38 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 THE RETYPE-INTO PIN (review of #7585, round 3). A scoped token holding <c>tokens</c> may
+    /// delete a token it minted, and may create an ordinary node. Recreating the record's path as
+    /// Markdown and then retyping it INTO <c>ApiToken</c> with unscoped content through the routed
+    /// update would leave the surviving index authenticating an unscoped credential. The gate sees
+    /// only the Markdown it holds, so the rule is judged at the commit point against the merged
+    /// result. The unscoped arm is the control: the owner's own retype lands.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task AScopedToken_CannotRetypeANodeIntoATokenRecord_ThroughTheRoutedUpdate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = $"{TokenUser}/_Api/recreated";
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(
+                new MeshNode("recreated", $"{TokenUser}/_Api") { Name = "recreated", NodeType = "Markdown", MainNode = TokenUser }))
+            .Should().Within(TestTimeouts.Convergence).Emit("the lookalike must exist first", ct);
+        MeshNode IntoUnscopedToken(MeshNode n) => n with
+        {
+            NodeType = ApiTokenNodeType.NodeType,
+            Content = new ApiToken { TokenHash = new string('b', 64), UserId = TokenUser, Label = "recreated", Scopes = null },
+        };
+
+        BecomeToken(ApiTokenScope.Api, ApiTokenScope.Read, ApiTokenScope.Write, ApiTokenScope.Tokens);
+        (await RoutedUpdate(path, IntoUnscopedToken, ct)).Should().StartWith("refused:",
+            "a scoped token must not turn an ordinary node into an unscoped token record");
+        (await StoredRecord(path, ct)).NodeType.Should().Be("Markdown", "the refused retype committed nothing");
+
+        BecomeToken(null);
+        (await RoutedUpdate(path, IntoUnscopedToken, ct)).Should().Be("landed",
+            "the control: the same retype by the owner's full authority lands — the refusal above is the cap");
+    }
+
+    /// <summary>
     /// 🚨 THE TYPE-PATH PIN (review of #7585). The stream cache passes a path whose first segment
     /// names a satellite type (<c>AccessAssignment/…</c>, <c>Thread/…</c>) straight to its shared,
     /// privileged upstream without asking the fold — so the cap has to be applied ahead of that
