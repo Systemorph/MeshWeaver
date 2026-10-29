@@ -6,18 +6,23 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Graph.Security;
 
 /// <summary>
-/// 🛡️ The API-token scope cap's token-record rule at the owner's COMMIT point (review of #7585): a
-/// scoped token never rewrites an existing node into, out of, or as an API-token record.
+/// 🛡️ The API-token scope cap's token-record rule at the owner's COMMIT point — the one invariant
+/// every write that commits into an owner meets (review of #7585): a SCOPED writer commits a token
+/// record ONLY as a create at the committing hub's own path. Every other commit that touches one is
+/// refused:
+/// <list type="bullet">
+/// <item>a rewrite, retype into or out of <c>ApiToken</c> (a predecessor exists) — otherwise a token
+///   could strip its own scopes, or recreate a deleted record as Markdown and retype it back unscoped;</item>
+/// <item>a token record CARRIED to another node's hub (a <c>DataChangeRequest</c> whose entity is not
+///   the receiving hub's own node) — there the workspace holds no predecessor, its own owner never sees
+///   the write, and persistence would overwrite the credential.</item>
+/// </list>
 ///
-/// <para>The delivery gate (<c>AccessControlPipeline.CapScopedTokenRecordWrite</c>) sees only the node
-/// the owner holds when the write arrives, so a write that turns an ordinary node INTO a token record
-/// passes it: delete a minted token's record, recreate the path as Markdown, then retype it with
-/// unscoped token content, and the surviving hash index authenticates the result unscoped. Here the
-/// rule is judged against the merged entity AND the one it replaces, for every route that commits
-/// into an owner (merge patch and data change).</para>
-///
-/// <para>A CREATE (nothing held under the key) is left to the creation chain, where the RLS validator
-/// applies the subset rule (<see cref="ApiTokenScope.MintRefusal"/>). Unscoped writers pass.</para>
+/// <para>The create it leaves is decided by the creation chain, where the RLS validator applies the
+/// subset rule (<see cref="ApiTokenScope.MintRefusal"/>). Together with the verdict authenticating only
+/// a node TYPED as a token record (<c>ApiTokenVerdict</c>), this closes the family: content alone never
+/// authenticates, and no scoped write can produce a typed record except a subset-ruled mint.
+/// Unscoped writers pass.</para>
 /// </summary>
 public sealed class ApiTokenRecordCommitGuard : IEntityCommitGuard
 {
@@ -27,13 +32,16 @@ public sealed class ApiTokenRecordCommitGuard : IEntityCommitGuard
     {
         if (!ApiTokenScope.IsScoped(writer)
             || !string.Equals(collection, nameof(MeshNode), StringComparison.Ordinal)
-            || before?.As<MeshNode>(options) is not { } previous
             || after.As<MeshNode>(options) is not { } next)
             return null;
-        if (!ApiTokenScope.IsTokenRecordType(previous.NodeType) && !ApiTokenScope.IsTokenRecordType(next.NodeType))
+        var previous = before?.As<MeshNode>(options);
+        if (!ApiTokenScope.IsTokenRecordType(next.NodeType) && !ApiTokenScope.IsTokenRecordType(previous?.NodeType))
+            return null;
+        // The ONE exemption: a create at the committing hub's own path.
+        if (previous is null && PolicyCommitGuard.IsOwnPath(next.Path, ownerPath))
             return null;
         return LocalizationCatalog.Get("access.apiTokenScope.mintRefused", writer!.Locale,
             ApiTokenScope.Format(writer.Scopes), next.Path,
-            "a scoped token never rewrites a node into, out of, or as a token record");
+            "a scoped token commits a token record only as a create at that record's own hub");
     }
 }

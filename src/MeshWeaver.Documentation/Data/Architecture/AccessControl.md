@@ -1467,11 +1467,14 @@ authenticates a token. From there:
   rule's sight while the verdict still authenticates its content; it revokes by deleting. The gate
   sees only the node the owner holds when the write arrives, so the same rule is also judged at the
   owner's COMMIT point against the merged result (`ApiTokenRecordCommitGuard`, an
-  `IEntityCommitGuard`): a scoped writer never rewrites an existing node into, out of, or as a token
-  record. Without it, a deleted record recreated as Markdown and then retyped INTO `ApiToken` with
-  unscoped content would be authenticated by the surviving index. And only a token RECORD authenticates: the hash index outlives its record, so `ApiTokenVerdict`
-  refuses a record at the indexed path that names another type, which a record deleted and recreated
-  as a lookalike would. A legacy index that carries the record itself is still read as before.
+  `IEntityCommitGuard`): a scoped writer commits a token record ONLY as a create at that record's own
+  hub. A rewrite, a retype into or out of `ApiToken`, and a token record carried to another node's
+  hub in a `DataChangeRequest` are all refused. Paired with the verdict authenticating only a node
+  TYPED as a token record (content alone, untyped or foreign-typed, never authenticates), this is
+  one invariant for the whole family: no scoped write can produce an authenticating record except a
+  subset-ruled mint. And only a token RECORD authenticates: the hash index outlives its record, so `ApiTokenVerdict`
+  refuses a record at the indexed path that is not typed as a token record — another type, or none at
+  all — which a record deleted and recreated as a lookalike would be. A legacy index that carries the record itself is still read as before.
 - **A hub-level grant never lifts the cap.** The delivery gate accepts a hub rule's grant (for
   example the User node's public read) only for a permission the caller's scopes allow; a capped
   check falls through to the fold, which applies the cap.

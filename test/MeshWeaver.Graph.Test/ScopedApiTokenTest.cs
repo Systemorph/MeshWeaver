@@ -376,6 +376,41 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 THE CARRIED-RECORD PIN (review of #7585, round 4). A <c>DataChangeRequest</c> sent to ANOTHER
+    /// writable node's hub can carry an existing token record — scopes stripped — whose own owner never
+    /// sees the write: the receiving workspace holds nothing under that key, so the commit point sees
+    /// no predecessor. A token record is committed only by its own hub, as a create there; carried
+    /// anywhere else it is refused.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task ATokenRecordCarriedThroughAnotherNodesHub_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var recordPath = $"{TokenUser}/_Api/carried";
+        var carrierPath = $"{TokenUser}/Carrier";
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(TokenRecord("carried", [ApiTokenScope.Read])))
+            .Should().Within(TestTimeouts.Convergence).Emit("the token record must exist first", ct);
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(
+                new MeshNode("Carrier", TokenUser) { Name = "Carrier", NodeType = "Markdown", MainNode = TokenUser }))
+            .Should().Within(TestTimeouts.Convergence).Emit("the carrier must exist first", ct);
+        var record = await StoredRecord(recordPath, ct);
+
+        var scoped = BecomeToken(ApiTokenScope.Api, ApiTokenScope.Read, ApiTokenScope.Write, ApiTokenScope.Tokens);
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(
+                DataChangeRequest.Update([record with { Content = TokenOf(record) with { Scopes = null } }]),
+                o => o.WithTarget(new Address(carrierPath)).WithAccessContext(scoped))
+            .Select(d => d.Message.Status.ToString())
+            .Catch((Exception ex) => Observable.Return("refused:" + ex.GetType().Name))
+            .Should().Within(TestTimeouts.Convergence).Emit("the carried write must answer", ct);
+        Output.WriteLine($"carried token write: {response}");
+
+        response.Should().NotBe(nameof(DataChangeStatus.Committed),
+            "a token record carried through another node's hub never meets its own owner's rule");
+        TokenOf(await StoredRecord(recordPath, ct)).Scopes.Should().Equal(ApiTokenScope.Read);
+    }
+
+    /// <summary>
     /// 🚨 THE TYPE-PATH PIN (review of #7585). The stream cache passes a path whose first segment
     /// names a satellite type (<c>AccessAssignment/…</c>, <c>Thread/…</c>) straight to its shared,
     /// privileged upstream without asking the fold — so the cap has to be applied ahead of that
@@ -457,6 +492,9 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         (await Decide(Record("Markdown"))).Success.Should().BeFalse(
             "a recreated non-token node with token-shaped content must not authenticate");
+        (await Decide(Record(null!))).Success.Should().BeFalse(
+            "nor an UNTYPED node at the indexed path — a content-only create bypasses every type-based write rule");
+        (await Decide(Record(""))).Success.Should().BeFalse("nor an empty-typed one");
         (await Decide(Record(ApiTokenNodeType.NodeType))).Success.Should().BeTrue("the control: a token record does");
     }
 
