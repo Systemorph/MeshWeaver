@@ -21,6 +21,14 @@ namespace MeshWeaver.Layout.Composition;
 /// <para>Resolution is explicit off the AccessContext, never ambient
 /// <c>CultureInfo.CurrentUICulture</c> — see <c>LocalizeExtensions</c> for why an ambient culture
 /// does not survive the hub's scheduler hops.</para>
+///
+/// <para>🚨 The language is read off the viewer the host CAPTURED
+/// (<see cref="LayoutAreaHost.ViewerContext"/>) first, and off the ambient context only when the
+/// captured one carries no language (MeshWeaver#7383). The captured service alone is not enough: its
+/// <c>Context</c> is the AMBIENT AsyncLocal, and a view that builds its controls after an async gate
+/// (<c>hub.IsGlobalAdmin(userId).Select(_ =&gt; host.Edit(…))</c>, a query answering) runs on a thread
+/// where that ambient is gone — so every string localised there fell back to English for a German
+/// viewer.</para>
 /// </summary>
 public static class LayoutAreaLocalizationExtensions
 {
@@ -29,7 +37,7 @@ public static class LayoutAreaLocalizationExtensions
     /// <paramref name="args"/> as positional placeholders. Unknown viewer → English.
     /// </summary>
     public static string Localize(this LayoutAreaHost host, string key, params object?[] args)
-        => host.ViewerAccess.Localize(key, args);
+        => LocalizationCatalog.Get(key, host.ViewerLocale(), args);
 
     /// <summary>
     /// An ACTIVITY TRANSCRIPT entry in the viewer's language (#3236): the entry's catalog key bound
@@ -48,12 +56,17 @@ public static class LayoutAreaLocalizationExtensions
 
     /// <summary>Plural-aware overload — resolves <c>{key}.one</c> / <c>{key}.other</c>.</summary>
     public static string LocalizePlural(this LayoutAreaHost host, string key, int count)
-        => host.ViewerAccess.LocalizePlural(key, count);
+        => LocalizationCatalog.Plural(key, count, host.ViewerLocale());
 
     /// <summary>
     /// The viewer's resolved language tag, for callers that need to pass it on (e.g. into
     /// <c>MeshNodeEditorField.FromType</c>, which reads <c>[Translation]</c> attributes).
+    ///
+    /// <para>The CAPTURED viewer's language wins over the ambient one, so the answer is the same on
+    /// the render turn and on any later emission of a view the host renders (MeshWeaver#7383).</para>
     /// </summary>
     public static string ViewerLocale(this LayoutAreaHost host)
-        => host.ViewerAccess.ViewerLocale();
+        => host.ViewerContext?.Locale is { } captured && !string.IsNullOrWhiteSpace(captured)
+            ? Locales.Resolve(captured)
+            : host.ViewerAccess.ViewerLocale();
 }
