@@ -438,7 +438,7 @@ def compile_refs_problems(name: str, cmd: str) -> list[str]:
     return out
 
 
-SHARD_ARG = re.compile(r"--shard(?![A-Za-z0-9_-])(?:[ \t]+|=)[\"']?([^\s\"';|&)]*)")
+SHARD_ARG = re.compile(r"--shard(?![A-Za-z0-9_-])[\"']?(?:[ \t]+|=)[\"']?([^\s\"';|&)]*)")
 MERGE_SHARDS = re.compile(r"gate-shard-merge\.py\b[^;|&]*--shards(?:[ \t]+|=)[\"']?(\d+)\b")
 
 
@@ -448,6 +448,13 @@ def gate_shard_problems(name: str, cmd: str) -> list[str]:
     whole gate (#7456). Narrowing is green only when the stage runs EVERY slice 1..n with literal arguments AND
     folds them with gate-shard-merge.py `--shards n`; a slice this guard cannot read (a variable, a loop) is red."""
     slices = SHARD_ARG.findall(cmd)
+    # FAIL CLOSED, as for `--refs`: every `--shard` token must be one SHARD_ARG reads. A form it cannot (an option
+    # split across quotes it does not model, a line continuation) would otherwise narrow the gate unseen.
+    every = re.findall(r"--shard(?![A-Za-z0-9_-])", cmd)
+    if len(every) != len(slices):
+        return [f"stage `{name}` passes `--shard` {len(every)} time(s) but only {len(slices)} read as a slice — a host "
+                "stage must run the WHOLE gate (or every literal slice and fold them), and a slice this guard cannot "
+                "read could be narrowing it"]
     if not slices:
         return []
     parsed = [re.fullmatch(r"(\d+)/(\d+)", s) for s in slices]
@@ -472,11 +479,55 @@ def gate_shard_problems(name: str, cmd: str) -> list[str]:
     return out
 
 
-_SET_E = re.compile(r"(^|[;\n]\s*)set\s+(-[A-Za-z]*e[A-Za-z]*\b[^;\n]*)")
-
-
 def _statements(cmd: str) -> list[str]:
     return [s.strip() for s in re.split(r";|\n", cmd) if s.strip()]
+
+
+def _set_change(stmt: str) -> dict[str, bool]:
+    """What a `set` statement does to errexit / pipefail: {'e': True} for `set -e`, {'pipefail': False} for
+    `set +o pipefail`, and so on. Anything else changes nothing."""
+    m = re.fullmatch(r"set\s+(.*)", stmt)
+    if not m:
+        return {}
+    out: dict[str, bool] = {}
+    toks = m.group(1).split()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t[:1] in "-+" and t not in ("-", "--"):
+            on = t[0] == "-"
+            if t[1:] == "o":
+                name = toks[i + 1] if i + 1 < len(toks) else ""
+                if name == "errexit":
+                    out["e"] = on
+                elif name == "pipefail":
+                    out["pipefail"] = on
+                i += 2
+                continue
+            letters = t[1:]
+            if "e" in letters:
+                out["e"] = on
+            if "o" in letters and i + 1 < len(toks):
+                # `-euo pipefail`: the `o` takes the next word as its option name
+                name = toks[i + 1]
+                if name == "errexit":
+                    out["e"] = on
+                elif name == "pipefail":
+                    out["pipefail"] = on
+                i += 2
+                continue
+        i += 1
+    return out
+
+
+def _states(stmts: list[str]) -> list[dict[str, bool]]:
+    """The errexit / pipefail state IN FORCE when each statement runs (before it, so a `set` affects what follows)."""
+    state = {"e": False, "pipefail": False}
+    out = []
+    for st in stmts:
+        out.append(dict(state))
+        state.update(_set_change(st))
+    return out
 
 
 def _captured_after(stmts: list[str], i: int, source: str) -> Optional[str]:
@@ -487,50 +538,63 @@ def _captured_after(stmts: list[str], i: int, source: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _exits_with(cmd: str, var: str) -> bool:
-    return re.search(rf"exit\s+\"?\$\{{?{re.escape(var)}\b", cmd) is not None
+def _exited_before_reassigned(stmts: list[str], at: int, var: str) -> bool:
+    """A statement after `at` exits with `$var` before any statement assigns `var` again — so a later capture into
+    the same name cannot overwrite a failure nobody looked at."""
+    for st in stmts[at + 1:]:
+        if re.search(rf"exit\s+\"?\$\{{?{re.escape(var)}\b", st):
+            return True
+        if re.match(rf"(?:then\s+|do\s+|else\s+)?{re.escape(var)}=", st):
+            return False
+    return False
+
+
+_PIPED = re.compile(r"(?<![|])\|(?![|])")
 
 
 def fail_fast_problems(name: str, cmd: str) -> list[str]:
     """Every check the gate stage runs must reach the stage's exit code. `bash -c` adds no failure propagation, so
     compile → gate → ratchet written as three plain statements exits with the RATCHET's code: a compile that exits 1
-    followed by a green gate and ratchet is a green stage (#7456). Two shapes are fail-fast:
+    followed by a green gate and ratchet is a green stage (#7456). The guard reads the stage IN ORDER and checks EVERY
+    invocation of each check (the compile, each gate run, the shard merger, the Tests-area ratchet):
 
-      * `set -e` (with `-o pipefail` when a check is piped), or
-      * the satellites' validated hand capture — the compile `|| exit`, the gate's status captured right after it
-        (`${PIPESTATUS[0]}` when piped into `tee`, else `$?`) and the ratchet's `$?` captured right after it, each
-        captured variable reaching an `exit "$var"`; a check written LAST needs no capture (its code is the stage's).
+      * under `set -e` in force at that statement (with `-o pipefail` too when it is piped) it propagates — a `set`
+        written after the checks, or a later `set +e` / `set +o pipefail`, is not in force there and does not count;
+      * otherwise it needs `|| exit` (only on an unpiped check, or under pipefail — `gate | tee || exit` tests TEE),
+        or its status captured right after it (`${PIPESTATUS[0]}` when piped, else `$?`) into a variable the stage
+        exits with before anything assigns that variable again; the stage's LAST statement needs no capture.
     """
-    pipes = re.search(r"(?<![|])\|(?![|])", cmd) is not None
-    m = _SET_E.search(cmd)
-    if m and (not pipes or "pipefail" in m.group(2)):
-        return []
     stmts = _statements(cmd)
+    states = _states(stmts)
     out: list[str] = []
 
     def check(marker: str, what: str) -> None:
         idx = [i for i, s in enumerate(stmts) if re.search(marker, s)]
-        if not idx:
-            return  # a missing check is the parity markers' finding, not this one's
-        i = idx[-1]
-        s = stmts[i]
-        if re.search(r"\|\|\s*exit\b", s):
-            return
-        piped = re.search(r"(?<![|])\|(?![|])", s) is not None
-        if piped:
-            var = _captured_after(stmts, i, "${PIPESTATUS[0]}")
-        else:
-            var = _captured_after(stmts, i, "$?")
-            if var is None and i == len(stmts) - 1:
+        # a missing check is the parity markers' finding, not this one's
+        for i in idx:
+            s, st = stmts[i], states[i]
+            piped = _PIPED.search(s) is not None
+            if st["e"] and (not piped or st["pipefail"]):
+                continue
+            if re.search(r"\|\|\s*exit\b", s) and (not piped or st["pipefail"]):
+                continue
+            if piped:
+                var = _captured_after(stmts, i, "${PIPESTATUS[0]}")
+            else:
+                var = _captured_after(stmts, i, "$?")
+                if var is None and i == len(stmts) - 1:
+                    continue
+            if var is None or not _exited_before_reassigned(stmts, i + 1, var):
+                how = "`${PIPESTATUS[0]}` (it is piped)" if piped else "`$?`"
+                out.append(f"stage `{name}` does not propagate the {what}'s exit code (statement {i + 1}) — `set -e`"
+                           f"{' with `-o pipefail`' if piped else ''} is not in force there, it has no "
+                           f"{'pipefail-backed ' if piped else ''}`|| exit`, and it is not captured from {how} into a "
+                           "variable the stage exits with; a failing earlier check followed by green later ones would exit 0")
                 return
-        if var is None or not _exits_with(cmd, var):
-            how = "`${PIPESTATUS[0]}` (it is piped)" if piped else "`$?`"
-            out.append(f"stage `{name}` does not propagate the {what}'s exit code — it is neither `set -e`"
-                       f"{' with `-o pipefail`' if pipes else ''}, nor `|| exit`, nor captured from {how} into a variable "
-                       "the stage exits with; a failing earlier check followed by green later ones would exit 0")
 
     check(r"[\"'}]\s+compile\s", "compile step")  # the tester invocation, never an `echo "… the compile …"`
     check(r"--seed(?![A-Za-z0-9_-])", "gate run")
+    check(r"gate-shard-merge\.py", "shard merge")
     check(r"check-test-suites\.py --gate-log", "Tests-area ratchet")
     return out
 
@@ -608,8 +672,9 @@ _SATELLITE_GATE = ('set -uo pipefail; tester="${MW_BUILD_GATE_HOST:?no tester}/m
                    'python3 scripts/check-test-suites.py --gate-log "$log"; ratchet=$?; if [ "$gate" -ne 0 ]; then exit "$gate"; fi; exit "$ratchet"')
 
 
-def _run_stage(command: str, compile_exit: int) -> int:
-    """EXECUTE a gate stage against stub tools: the tester's `compile` exits `compile_exit`, every other check is green."""
+def _run_stage(command: str, compile_exit: int, fail_on: str = "") -> int:
+    """EXECUTE a gate stage against stub tools: the tester's `compile` exits `compile_exit`, a tester invocation whose
+    arguments contain `fail_on` exits 1, every other check is green."""
     import subprocess
     import tempfile
     with tempfile.TemporaryDirectory() as root:
@@ -621,7 +686,8 @@ def _run_stage(command: str, compile_exit: int) -> int:
         dn = os.path.join(root, "dotnet")
         with open(dn, "w") as f:
             # A green compile writes its bake identity under --output, as the tester does.
-            f.write(f'#!/bin/sh\nif [ "$2" = compile ]; then\n  [ {compile_exit} -ne 0 ] && exit {compile_exit}\n'
+            fail = f'case "$*" in *"{fail_on}"*) exit 1;; esac\n' if fail_on else ""
+            f.write(f'#!/bin/sh\n{fail}if [ "$2" = compile ]; then\n  [ {compile_exit} -ne 0 ] && exit {compile_exit}\n'
                     '  prev=; for a in "$@"; do if [ "$prev" = --output ]; then mkdir -p "$a"; echo m > "$a/framework-mvid.txt"; fi; prev=$a; done\n'
                     'fi\nexit 0\n')
         py = os.path.join(stubs, "python3")
@@ -883,6 +949,52 @@ def _self_test() -> int:
         "does not fold the slices", "slices folded under the wrong --shards count")
     red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=gate_cmd.replace("--seed b", "--shard \"$i/4\" --seed b")))),
         "node-repo", "cannot read as literal", "a slice taken from a variable (a loop this guard cannot read)")
+    for quote in ('"', "'"):
+        quoted = gate_cmd.replace("--seed b", f"{quote}--shard{quote} 1/4 --seed b")
+        red(mutate(node, lambda d, c=quoted: (claim(d), d["stages"][1].update(command=c))), "node-repo", "never run",
+            f"a QUOTED {quote}--shard{quote} 1/4 slice standing in for the gate (review of #7525)")
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=gate_cmd.replace("--seed b", "--shard \\\n 1/4 --seed b")))),
+        "node-repo", "cannot read", "a `--shard` token the guard cannot read as a slice is red, never skipped")
+    print("fail-fast, read in order (review of #7525):")
+    late = _UNSAFE_GATE + "; set -euo pipefail"
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=late))), "node-repo",
+        "does not propagate the compile step's exit code", "a `set -euo pipefail` written AFTER the checks")
+    expect(_run_stage(late, compile_exit=1) == 0, "EXECUTED: a `set -e` after the checks still exits 0 over a failed compile")
+    undone = "set -euo pipefail; set +e; " + _UNSAFE_GATE
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=undone))), "node-repo",
+        "does not propagate the compile step's exit code", "a `set +e` that undoes `set -e` before the checks")
+    expect(_run_stage(undone, compile_exit=1) == 0, "EXECUTED: `set -e; set +e` exits 0 over a failed compile")
+    tee_exit = _SATELLITE_GATE.replace("set -uo pipefail; ", "set -u; ").replace(
+        '| tee "$log"; gate=${PIPESTATUS[0]}; ', '| tee "$log" || exit $?; gate=0; ')
+    expect(tee_exit != _SATELLITE_GATE, "self-test fixture: the `gate | tee || exit` gate was built")
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=tee_exit))), "node-repo",
+        "does not propagate the gate run's exit code", "`gate | tee || exit` with no pipefail (the exit tests TEE)")
+    expect(_run_stage(tee_exit, compile_exit=0, fail_on="--seed") == 0,
+           "EXECUTED: `gate | tee || exit` without pipefail exits 0 over a failed gate")
+    tee_exit_pf = tee_exit.replace("set -u; ", "set -uo pipefail; ")
+    expect(problems(json.dumps(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=tee_exit_pf)))),
+                    "node-repo", NODE_CI)[0] == [], "`gate | tee || exit` UNDER pipefail is green")
+    expect(_run_stage(tee_exit_pf, compile_exit=0, fail_on="--seed") != 0,
+           "EXECUTED: `gate | tee || exit` under pipefail exits non-zero over a failed gate")
+    one_run = '"$dn" "$tester" . --app "$app" --allow plugin-gate.allow --seed "$bake" 2>&1 | tee "$log"; gate=${PIPESTATUS[0]}; '
+    run = lambda k, v: (f'"$dn" "$tester" . --app "$app" --allow plugin-gate.allow --shard {k}/2 --seed "$bake" 2>&1 '  # noqa: E731
+                        f'| tee "$log.{k}"; {v}=${{PIPESTATUS[0]}}; ')
+    merge = 'python3 gate-shard-merge.py --logs "$logdir" --shards 2 --out "$log"; merged=$?; if [ "$merged" -ne 0 ]; then exit "$merged"; fi; '
+    overwritten = _SATELLITE_GATE.replace(one_run, run(1, "gate") + run(2, "gate") + merge)
+    distinct = _SATELLITE_GATE.replace(
+        one_run, run(1, "g1") + 'if [ "$g1" -ne 0 ]; then exit "$g1"; fi; ' + run(2, "gate") + merge)
+    unmerged = distinct.replace('merged=$?; if [ "$merged" -ne 0 ]; then exit "$merged"; fi; ', "")
+    expect(len({_SATELLITE_GATE, overwritten, distinct, unmerged}) == 4, "self-test fixture: the two-slice gates were built")
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=overwritten))), "node-repo",
+        "does not propagate the gate run's exit code", "two slices captured into ONE variable (slice 1's failure overwritten)")
+    expect(_run_stage(overwritten, compile_exit=0, fail_on="--shard 1/2") == 0,
+           "EXECUTED: a slice-1 failure overwritten by slice 2's capture exits 0")
+    expect(problems(json.dumps(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=distinct)))),
+                    "node-repo", NODE_CI)[0] == [], "every slice's status exited before the next capture is green")
+    expect(_run_stage(distinct, compile_exit=0, fail_on="--shard 1/2") != 0,
+           "EXECUTED: …and it exits non-zero over a slice-1 failure")
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=unmerged))), "node-repo",
+        "does not propagate the shard merge's exit code", "a gate-shard-merge.py whose failure never reaches the stage")
     red(node, "node-repo", "calls none of", "a ci.yml that calls no shared heavy lane", "jobs:\n  x:\n    runs-on: y\n")
     red(node, "node-repo", "is absent", "no ci.yml to derive the owed stages from", None)
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every breach is red, every honest declaration is green'}")

@@ -787,6 +787,14 @@ would replace, and the claim is refused until that list is empty.
   handled by hand the way every satellite writes it today under `set -uo pipefail`: the compile
   `|| exit`, the gate's `${PIPESTATUS[0]}` (or `$?`) and the ratchet's `$?` captured right after them
   into variables the stage `exit`s with. The self-test executes both shapes and the unsafe one.
+  The guard reads the stage in order and checks every invocation of every check: each gate slice,
+  `gate-shard-merge.py`, the compile and the ratchet.
+  - `set -e` counts only where it is in force. A `set -e` written after the checks, or undone by
+    `set +e`, does not count.
+  - `gate | tee || exit` counts only under pipefail. Without it, the `|| exit` tests `tee`.
+  - A captured status must reach an `exit` before anything assigns its variable again. Two slices
+    captured into one name lose the first slice's failure.
+  - A `--shard` token the guard cannot read as a slice, quoted ones included, is red.
 - **The rule lives once**, in `.github/scripts/check-build-stages.py` (`--profile core|node-repo`,
   `--self-test` with a negative control per breach). Core runs it through `core-build-stages.py
   --check` in `dotnet-test.yml`'s `workflow-shell` job; every satellite runs it through the shared
