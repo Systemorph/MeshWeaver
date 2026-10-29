@@ -141,6 +141,23 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    runtime helpers behind one compile stub never share a key.
    An installed MODULE counts as host-shipped too: the NodeType context binds a module that satisfies
    the requested version AHEAD of a package's copy of the same name, matching the compile's choice.
+
+   **One build of a generator per process; a second build is refused (#7444).** Generators and their
+   helpers load into the DEFAULT context, which holds one assembly per simple name for the life of
+   the process. Two NodeTypes that ship different builds of the same generator therefore cannot both
+   have theirs, and before #7444 the one that compiled first won (activation order in the portal,
+   worker timing in the parallel bake): the other silently ran the wrong build or lost its
+   generator. Now every generator and generator helper is admitted through a `SourceGeneratorLedger`
+   that records, per simple name, the build (module version id) and the NodeType it was loaded for.
+   The same build asked for again, from any path, is the already-loaded assembly. A DIFFERENT build
+   throws `SourceGeneratorBuildConflictException`, a `CompilationException`, so the compile fails and
+   the runtime parks that NodeType at `CompilationStatus=Error` with a message naming BOTH NodeTypes
+   and BOTH builds (name, version, module version id, file). The default context stays the authority:
+   a different build already there that this ledger did not record (another mesh in the same
+   process, a load outside the compile path) is refused too, named by the file it loaded from. The
+   runtime compile service holds one ledger; a bake (`mw-plugin-test`) holds one per run. A name the
+   host itself ships (its trusted platform assemblies) is not a generator another NodeType brought
+   and keeps the plain load. The remedy is to align both NodeTypes on one build of the generator.
 3. **The host ships no assembly whose implementation is wider than its reference assembly.** In-mesh
    C# compiles against the host's IMPLEMENTATION assemblies (TPA), never against reference
    assemblies, so a package that keeps members in its `lib/` for binary compatibility while its

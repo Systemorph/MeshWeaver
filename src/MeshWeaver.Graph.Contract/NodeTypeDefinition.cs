@@ -348,6 +348,16 @@ public record NodeTypeDefinition
     public string? CompilationError { get; init; }
 
     /// <summary>
+    /// The keyed, language-neutral form of <see cref="CompilationError"/> for the platform's own
+    /// refusals (#7355) — the compile watcher's park reasons and the delivery-hold notices. A reader
+    /// renders it in the VIEWER's language through <see cref="KeyedTexts.Localize"/>, which uses it
+    /// only while its English rendering is exactly <see cref="CompilationError"/>; a Roslyn
+    /// diagnostic, or any text written without it, renders verbatim. Null when the error has no
+    /// keyed form.
+    /// </summary>
+    public ImmutableList<KeyedText>? CompilationErrorText { get; init; }
+
+    /// <summary>
     /// Structured per-source-file Roslyn diagnostics from the last FAILED compile —
     /// kept in their native <see cref="DiagnosticInfo"/> form (id, severity, message,
     /// and a per-file <see cref="SourceLocation"/> line/column range) rather than

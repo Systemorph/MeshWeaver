@@ -203,6 +203,43 @@ public interface IMeshContentTypeRegistry
     /// Returns <c>null</c> when neither route resolves.</para>
     /// </summary>
     object? TryRecoverForNodeType(string? nodeTypePath, JsonElement content, JsonSerializerOptions options);
+
+    /// <summary>
+    /// 🚨 <b>Opens the boot registration window for the WIRE-LEVEL verdict (MeshWeaver#7318).</b>
+    /// Until <see cref="SettleDeferredUnresolvedWarnings"/> runs, a deserializer that could not
+    /// resolve a <c>$type</c> hands its "NOT registered in this (receiving) hub" warning to
+    /// <see cref="DeferUnresolvedWarning"/> instead of writing it: during the window that sentence
+    /// cannot be decided yet, because the dynamic NodeTypes' content types register on a replica
+    /// only as the registration pass reaches them.
+    ///
+    /// <para>The read-seam verdict has been deferred the same way since Plugins#2799
+    /// (<c>ContentDegradationRegistry.DeferWarningsUntilRegistrationSettles</c>); the converter
+    /// beneath those seams was not, so every portal boot still wrote one such line per runtime-
+    /// compiled content type a boot-time reader touched (measured on memex-cloud: ~90 per pod, one
+    /// pod per roll, every one of them recovered minutes later).</para>
+    ///
+    /// <para>Default: no window — a registry that does not implement it keeps every warning at
+    /// the read, exactly as before.</para>
+    /// </summary>
+    void DeferUnresolvedWarningsUntilSettled() { }
+
+    /// <summary>
+    /// While the window opened by <see cref="DeferUnresolvedWarningsUntilSettled"/> is open, keeps
+    /// <paramref name="warnIfStillUnresolved"/> and answers <c>true</c>; the settle invokes it once,
+    /// and only when <paramref name="discriminator"/> still does not resolve by name then. Answers
+    /// <c>false</c> when no window is open, and the caller then warns at the read.
+    /// </summary>
+    /// <param name="discriminator">The unresolved <c>$type</c>.</param>
+    /// <param name="warnIfStillUnresolved">Writes the caller's warning.</param>
+    /// <returns><c>true</c> when the warning was deferred to the settle.</returns>
+    bool DeferUnresolvedWarning(string discriminator, Action warnIfStillUnresolved) => false;
+
+    /// <summary>
+    /// Closes the window and writes every deferred warning whose discriminator STILL does not
+    /// resolve — a deferred verdict is re-timed, never dropped. A second call writes nothing.
+    /// </summary>
+    /// <returns>How many deferred warnings were written.</returns>
+    int SettleDeferredUnresolvedWarnings() => 0;
 }
 
 /// <summary>
@@ -270,6 +307,65 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
     public IObservable<MeshContentTypeRegistration> RegistrationsMatching(
         Func<MeshContentTypeRegistration, bool> couldMatter)
         => _registrations.Where(couldMatter).ObserveOn(PooledContinuationScheduler.Instance);
+
+    // The wire-level boot registration window (#7318) — see DeferUnresolvedWarningsUntilSettled.
+    // Read and written ONLY under _windowGate, so "defer this warning?" and "close the window and
+    // take what was deferred" are one decision each: a warning lands on exactly one side.
+    private readonly object _windowGate = new();
+    private bool _unresolvedWarningsDeferred;
+    private System.Collections.Immutable.ImmutableList<(string Discriminator, Action Warn)> _deferredUnresolvedWarnings =
+        System.Collections.Immutable.ImmutableList<(string Discriminator, Action Warn)>.Empty;
+
+    // '$type' is payload-controlled, and every hub's converter defers each name once, so the list
+    // is capped: past the cap a warning is written at the read, as without a window — visible,
+    // never a memory sink.
+    private const int MaxDeferredUnresolvedWarnings = 10_000;
+
+    /// <inheritdoc />
+    public void DeferUnresolvedWarningsUntilSettled()
+    {
+        lock (_windowGate)
+            _unresolvedWarningsDeferred = true;
+    }
+
+    /// <inheritdoc />
+    public bool DeferUnresolvedWarning(string discriminator, Action warnIfStillUnresolved)
+    {
+        if (string.IsNullOrEmpty(discriminator) || warnIfStillUnresolved is null)
+            return false;
+        lock (_windowGate)
+        {
+            if (!_unresolvedWarningsDeferred || _deferredUnresolvedWarnings.Count >= MaxDeferredUnresolvedWarnings)
+                return false;
+            _deferredUnresolvedWarnings = _deferredUnresolvedWarnings.Add((discriminator, warnIfStillUnresolved));
+            return true;
+        }
+    }
+
+    /// <inheritdoc />
+    public int SettleDeferredUnresolvedWarnings()
+    {
+        System.Collections.Immutable.ImmutableList<(string Discriminator, Action Warn)> deferred;
+        lock (_windowGate)
+        {
+            if (!_unresolvedWarningsDeferred)
+                return 0;
+            _unresolvedWarningsDeferred = false;
+            deferred = _deferredUnresolvedWarnings;
+            _deferredUnresolvedWarnings = System.Collections.Immutable.ImmutableList<(string Discriminator, Action Warn)>.Empty;
+        }
+
+        // Outside the gate: a warning is a logger call, never work to hold the window's lock across.
+        var written = 0;
+        foreach (var (discriminator, warn) in deferred)
+        {
+            if (TryResolveByDiscriminator(discriminator, out _))
+                continue;
+            warn();
+            written++;
+        }
+        return written;
+    }
 
     /// <summary>
     /// WHO declared a content type — the NodeType path when the caller knows it, otherwise the
