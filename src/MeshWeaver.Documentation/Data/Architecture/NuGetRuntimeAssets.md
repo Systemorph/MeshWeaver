@@ -247,7 +247,7 @@ answer (#6863):
   framework, which is what a feed's dependency info would have returned. No feed is contacted, so the
   same closure resolves online and offline.
 - **The package folders are NuGet's own, in NuGet's order**: the global-packages folder first, then
-  every FALLBACK package folder — `NUGET_FALLBACK_PACKAGES` (split on the platform's path separator), or
+  every FALLBACK package folder — `NUGET_FALLBACK_PACKAGES` (folders separated by `;` on EVERY platform — never the platform path separator: a `:`-joined list on Linux reads as ONE folder), or
   the configured `fallbackPackageFolders` when the variable is unset, exactly as
   `SettingsUtility.GetFallbackPackageFolders` reads them for `dotnet restore`. A package complete in a
   fallback folder (same completion rule as below, same lower-cased `{id}/{version}` layout) answers the
