@@ -760,8 +760,16 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   bounded by 20 s, and only on the expiry path; one that fails or runs late says so per leaf, naming
   the thread, so `AnalyzeDump` (`clrstack`) on a crash dump of the pod is the fallback. The runtime's
   data-access library (DAC) that ClrMD loads is pinned for the life of the process, because unloading
-  it crashes any thread that ran it when that thread exits. An async leaf holds no thread, so it gets
-  no stack. Pinned by `IoPoolSiloTeardownTest.WhenTheJoinBudgetExpires_ABlockedSubscribeIsReportedWithTheFrameItIsStuckIn`.
+  it crashes any thread that ran it when that thread exits. ClrMD is handed that pinned DAC by path.
+  A host with no DAC beside its runtime refuses the capture rather than let ClrMD resolve an unpinned
+  copy elsewhere. A thread id names a thread, not a leaf: a leaf that returned between the expiry's
+  snapshot and the dump has handed its thread back. So each leaf carries its own ticket, which is
+  rechecked after the dump. A leaf whose ticket is gone is reported as having returned before its
+  stack could be read, and is never given the stack of whatever its thread ran next. An async leaf
+  holds no thread, so it gets no stack. Pinned by
+  `IoPoolSiloTeardownTest.WhenTheJoinBudgetExpires_ABlockedSubscribeIsReportedWithTheFrameItIsStuckIn`,
+  `ALeafThatReturnsBeforeTheDump_IsNotGivenTheStackOfWhatItsThreadRanNext` and
+  `ACaptureWithoutTheLocalDac_IsRefusedBeforeAnythingIsDumped`.
 
 Pinned by `IoPoolDrainCancelJoinTest` (deterministic: a `TestScheduler`-driven `Throttle` fired from a
 thread the test owns, with the two interleavings the deadlock needs made explicit).

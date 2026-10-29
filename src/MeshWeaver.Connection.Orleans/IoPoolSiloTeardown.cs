@@ -230,7 +230,7 @@ public sealed class IoPoolSiloTeardown(
                   + "join never completed: that is a defect in IoPoolRegistry.Dispose's Zip, "
                   + "NOT a leaf ignoring its token)"
                 : string.Join(" | ", stuck));
-        return ReportBlockedStacks(stuck);
+        return ReportBlockedStacks(stuck, registry);
     }
 
     /// <summary>
@@ -248,7 +248,7 @@ public sealed class IoPoolSiloTeardown(
     /// every pool is disposed by now. A capture that fails or does not arrive in time is said so, per
     /// leaf, with the thread it was after; it never fails the stop.</para>
     /// </summary>
-    private IObservable<Unit> ReportBlockedStacks(IReadOnlyList<IoPoolRegistry.PoolResidual> stuck)
+    private IObservable<Unit> ReportBlockedStacks(IReadOnlyList<IoPoolRegistry.PoolResidual> stuck, IoPoolRegistry registry)
     {
         var leaves = stuck
             .SelectMany(r => r.SynchronousLeaves.Select(leaf => (r.Pool, Leaf: leaf)))
@@ -261,12 +261,28 @@ public sealed class IoPoolSiloTeardown(
             .Do(byThread =>
             {
                 foreach (var (pool, leaf) in leaves)
+                {
+                    // 🚨 The thread id names a thread, not the leaf: a leaf that returned between the
+                    // expiry's snapshot and the dump handed its thread back, and the stack read from
+                    // it is then whatever that thread ran next. The ticket is the leaf's own, and a
+                    // synchronous leaf holds its thread for as long as the ticket lives — live both
+                    // before and after the dump means the stack is the leaf's.
+                    if (!registry.IsLeafInFlight(pool, leaf))
+                    {
+                        logger.LogWarning(
+                            "IoPoolSiloTeardown: the {Pool} leaf {Site} outlived the join on managed thread {Thread} "
+                            + "but returned before its stack could be read — the dump's stack of that thread is "
+                            + "NOT attributed to it",
+                            pool, leaf.Site, leaf.ManagedThreadId);
+                        continue;
+                    }
                     logger.LogWarning(
                         "IoPoolSiloTeardown: the {Pool} leaf {Site} still holds managed thread {Thread} after the join "
                         + "expired — the frame it is stuck in is at the top of that thread's stack, read once from a "
                         + "dump of this process:{Stack}",
                         pool, leaf.Site, leaf.ManagedThreadId,
                         byThread.TryGetValue(leaf.ManagedThreadId, out var stack) ? stack : " (not in the capture)");
+                }
             })
             .Select(_ => Unit.Default)
             .Catch<Unit, Exception>(ex =>

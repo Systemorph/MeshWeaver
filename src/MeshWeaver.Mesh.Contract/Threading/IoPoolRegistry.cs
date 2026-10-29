@@ -323,7 +323,20 @@ public sealed class IoPoolRegistry : IDisposable
     /// </summary>
     /// <param name="Site">The leaf's call site.</param>
     /// <param name="ManagedThreadId">The managed thread the leaf started on and is still holding.</param>
-    public readonly record struct SynchronousLeaf(string Site, int ManagedThreadId);
+    /// <param name="Ticket">The leaf's own ticket in its pool — unique for the pool's life, unlike the
+    /// thread id, which the thread takes on to its next work item once the leaf returns.</param>
+    public readonly record struct SynchronousLeaf(string Site, int ManagedThreadId, long Ticket);
+
+    /// <summary>
+    /// Whether the synchronous leaf <paramref name="leaf"/> of the draining pool <paramref name="pool"/>
+    /// is still in flight. A stack read between two readings that both say yes belongs to that leaf;
+    /// once it says no, the thread may already be running unrelated work (#7277).
+    /// </summary>
+    /// <param name="pool">The pool's name, as <see cref="PoolResidual.Pool"/> carries it.</param>
+    /// <param name="leaf">The leaf, as <see cref="PoolResidual.SynchronousLeaves"/> carries it.</param>
+    public bool IsLeafInFlight(string pool, SynchronousLeaf leaf) =>
+        _draining.Any(kvp => string.Equals(kvp.Key, pool, StringComparison.Ordinal)
+                             && kvp.Value.IsLeafInFlight(leaf.Ticket));
 
     /// <summary>
     /// The budget a host's terminal drain holds shutdown for while waiting on <see cref="Disposed"/>

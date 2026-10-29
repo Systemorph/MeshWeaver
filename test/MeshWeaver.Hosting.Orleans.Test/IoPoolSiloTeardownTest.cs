@@ -56,11 +56,17 @@ public class IoPoolSiloTeardownTest
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
+        /// <summary>Runs after each entry is recorded, outside the lock — a test's hook into the
+        /// moment a given line is written.</summary>
+        public Action<LogLevel, string>? OnLog { get; set; }
+
         public void Log<TState>(
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            lock (entries) entries.Add(new Entry(logLevel, formatter(state, exception)));
+            var message = formatter(state, exception);
+            lock (entries) entries.Add(new Entry(logLevel, message));
+            OnLog?.Invoke(logLevel, message);
         }
     }
 
@@ -343,6 +349,78 @@ public class IoPoolSiloTeardownTest
         {
             Volatile.Write(ref release, 1);
         }
+    }
+
+    /// <summary>
+    /// 🚨 A leaf that RETURNS between the expiry's snapshot and the dump hands its thread back, and the
+    /// stack read from that thread is then whatever it ran next (review of #7584). The thread id cannot
+    /// tell the two apart; the leaf's ticket can. Here the leaf is released the moment the expiry is
+    /// logged — after the snapshot, before the capture — and the report must say it returned rather
+    /// than hand it a stack that is not its own.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ALeafThatReturnsBeforeTheDump_IsNotGivenTheStackOfWhatItsThreadRanNext()
+    {
+        var registry = new IoPoolRegistry(new IoPoolOptions { SiloJoinBudget = TimeSpan.FromMilliseconds(300) });
+        var services = new ServiceCollection();
+        services.AddSingleton(registry);
+        await using var provider = services.BuildServiceProvider();
+        var logger = new CapturingLogger();
+        var observer = (ILifecycleObserver)new IoPoolSiloTeardown(provider, logger);
+        await observer.OnStart(TestContext.Current.CancellationToken);
+
+        var entered = new AsyncSubject<Unit>();
+        var release = 0;
+        var source = Observable.Create<int>(_ =>
+        {
+            ParkedInsideTheSubscribe(entered, () => Volatile.Read(ref release) == 1);
+            return Disposable.Empty;
+        });
+        using var leaf = registry.Get(IoPoolNames.Query).SubscribeThroughPool(source).Subscribe(_ => { }, _ => { });
+
+        // The expiry line is written after the snapshot of the residual leaves and before the capture:
+        // release the leaf there and let it retire, so the capture reads a thread the leaf has left.
+        logger.OnLog = (level, message) =>
+        {
+            if (level != LogLevel.Error || !message.Contains("did not finish within", StringComparison.Ordinal))
+                return;
+            Volatile.Write(ref release, 1);
+            SpinWait.SpinUntil(
+                () => registry.UnreportedResiduals().All(r => r.SynchronousLeaves.Count == 0), Budget);
+        };
+
+        try
+        {
+            await entered.Should().Within(Budget).Emit(
+                "precondition: the subscribe must be running before the join is asked to wait for it");
+
+            await observer.OnStop(TestContext.Current.CancellationToken);
+
+            logger.Entries.Should().NotContain(
+                e => e.Message.Contains("still holds managed thread", StringComparison.Ordinal),
+                "a leaf that returned before the dump must not be reported with its former thread's stack");
+            logger.Entries.Should().ContainSingle(
+                e => e.Level == LogLevel.Warning && e.Message.Contains("returned before its stack could be read", StringComparison.Ordinal),
+                "it is reported as having returned — named, never silently dropped");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 A host with no local DAC REFUSES the capture rather than letting ClrMD resolve one elsewhere —
+    /// that copy would not be pinned, and its unload crashes every thread that ran it (review of #7584).
+    /// </summary>
+    [Fact]
+    public void ACaptureWithoutTheLocalDac_IsRefusedBeforeAnythingIsDumped()
+    {
+        var missing = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"no-dac-{Guid.NewGuid():N}", "libmscordaccore.so");
+        var refused = Record.Exception(() =>
+            new BlockedThreadStacks(missing).Capture([Environment.CurrentManagedThreadId]));
+        refused.Should().BeOfType<InvalidOperationException>();
+        refused!.Message.Should().Contain(missing, "the refusal names the DAC it looked for");
     }
 
     /// <summary>The blocking frame the report must name. Not inlined, so it is a frame of its own.</summary>

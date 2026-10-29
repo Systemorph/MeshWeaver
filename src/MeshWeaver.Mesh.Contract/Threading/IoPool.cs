@@ -506,11 +506,19 @@ public sealed class IoPool : IIoPool, IDisposable
     /// mechanism). Empty when none is in flight.
     /// </summary>
     internal IReadOnlyList<IoPoolRegistry.SynchronousLeaf> PendingSynchronousLeaves =>
-        _inFlightLeaves.Values
-            .Where(l => l.Synchronous)
-            .OrderBy(l => l.StartedAt)
-            .Select(l => new IoPoolRegistry.SynchronousLeaf(SiteOf(l.Work), l.ThreadId))
+        _inFlightLeaves
+            .Where(l => l.Value.Synchronous)
+            .OrderBy(l => l.Value.StartedAt)
+            .Select(l => new IoPoolRegistry.SynchronousLeaf(SiteOf(l.Value.Work), l.Value.ThreadId, l.Key))
             .ToArray();
+
+    /// <summary>
+    /// Whether the leaf holding <paramref name="ticket"/> is still in flight. A synchronous leaf holds
+    /// its thread for as long as its ticket lives, so a stack read while the ticket was live both
+    /// before and after the read is that leaf's (#7277).
+    /// </summary>
+    /// <param name="ticket">The leaf's ticket (<see cref="IoPoolRegistry.SynchronousLeaf.Ticket"/>).</param>
+    internal bool IsLeafInFlight(long ticket) => _inFlightLeaves.ContainsKey(ticket);
 
     /// <summary>Retires a leaf's ticket. Safe to call for an id that was never added.</summary>
     private void LeaveLeaf(long id) => _inFlightLeaves.TryRemove(id, out _);

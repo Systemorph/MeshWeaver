@@ -29,10 +29,16 @@ namespace MeshWeaver.Connection.Orleans;
 /// loads it keeps the mapping for the life of the process, so ClrMD's unload only drops the count to
 /// ours. The handle is instance state held by this mesh-scoped singleton and deliberately never freed.</para>
 /// </summary>
-internal sealed class BlockedThreadStacks
+internal sealed class BlockedThreadStacks(string? dacPath = null)
 {
     /// <summary>How many frames of a thread's stack are reported — the blocking frame is at the top.</summary>
     internal const int MaxFrames = 40;
+
+    /// <summary>The DAC this process's runtime ships beside itself — the ONE DAC a capture may use.</summary>
+    private readonly string dac = dacPath ?? Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(),
+        OperatingSystem.IsWindows() ? "mscordaccore.dll"
+        : OperatingSystem.IsMacOS() ? "libmscordaccore.dylib"
+        : "libmscordaccore.so");
 
     private nint pinnedDac;
 
@@ -45,6 +51,7 @@ internal sealed class BlockedThreadStacks
     /// <param name="managedThreadIds">The managed thread ids whose stacks are wanted.</param>
     public IReadOnlyDictionary<int, string> Capture(IReadOnlyCollection<int> managedThreadIds)
     {
+        // Pinned FIRST, and nothing is dumped without it: see PinDac.
         PinDac();
         var path = Path.Combine(Path.GetTempPath(), $"mw-blocked-leaf-{Environment.ProcessId}-{Guid.NewGuid():N}.dmp");
         try
@@ -53,7 +60,10 @@ internal sealed class BlockedThreadStacks
             using var target = DataTarget.LoadDump(path);
             if (target.ClrVersions.Length == 0)
                 throw new InvalidOperationException($"the dump of process {Environment.ProcessId} carries no CLR runtime");
-            using var runtime = target.ClrVersions[0].CreateRuntime();
+            // The PINNED DAC, by path — never ClrMD's own resolution, which may find another copy
+            // (a symbol server, a file locator) that the pin does not hold and its unload would then
+            // pull out from under every thread that ran it.
+            using var runtime = target.ClrVersions[0].CreateRuntime(dac);
             return managedThreadIds.Distinct().ToDictionary(
                 id => id,
                 id => runtime.Threads.FirstOrDefault(t => t.ManagedThreadId == id) is { } thread
@@ -80,17 +90,20 @@ internal sealed class BlockedThreadStacks
                + (frames.Length > MaxFrames ? $"{Environment.NewLine}   … (deeper frames omitted)" : "");
     }
 
+    /// <summary>
+    /// Takes the process-lifetime reference on the runtime's own DAC, or REFUSES the capture. A host
+    /// without a local DAC (trimmed / self-contained) must not let ClrMD resolve one elsewhere: that
+    /// copy would be loaded without the pin, and its unload would crash every thread that ran it on
+    /// exit (review of #7584). The caller reports the refusal per leaf.
+    /// </summary>
     private void PinDac()
     {
         if (pinnedDac != 0)
             return;
-        var dac = Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(),
-            OperatingSystem.IsWindows() ? "mscordaccore.dll"
-            : OperatingSystem.IsMacOS() ? "libmscordaccore.dylib"
-            : "libmscordaccore.so");
-        // A host without a DAC (trimmed / self-contained) cannot have it loaded by ClrMD either; the
-        // read then fails and the caller reports that.
-        if (File.Exists(dac))
-            pinnedDac = NativeLibrary.Load(dac);
+        if (!File.Exists(dac))
+            throw new InvalidOperationException(
+                $"no DAC at '{dac}' to pin — the stacks are not read, because a DAC ClrMD resolved elsewhere "
+                + "would be unloaded under the threads that ran it");
+        pinnedDac = NativeLibrary.Load(dac);
     }
 }
