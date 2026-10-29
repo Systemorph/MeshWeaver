@@ -218,10 +218,19 @@ def workflow_contract_problems(text: str) -> list:
     step (`id: follow`) maps NO_VERDICT_EXIT to the `no-verdict` output, and a step named exactly NO_VERDICT_STEP runs
     on that output and FAILS. Text checks over the one file, each naming what is missing."""
     problems = []
-    if not re.search(r"^\s+id: follow\s*$", text, re.M):
+    follow = re.search(r"^\s+id: follow\s*\n((?:(?!      \S).*\n?)*)", text, re.M)
+    if not follow:
         problems.append("the follow step carries no `id: follow` — the no-verdict output has no step to come from")
-    if f'"$rc" -eq {NO_VERDICT_EXIT}' not in text or 'echo "no-verdict=true" >> "$GITHUB_OUTPUT"' not in text:
+    # Everything below reads the follow step's OWN body, with `\`-continued lines joined: a capture or a hand-over
+    # elsewhere in the file is not this step's.
+    step = follow.group(1).replace("\\\n", " ") if follow else ""
+    if f'"$rc" -eq {NO_VERDICT_EXIT}' not in step or 'echo "no-verdict=true" >> "$GITHUB_OUTPUT"' not in step:
         problems.append(f"the follow step does not hand exit {NO_VERDICT_EXIT} (build-follow.py NO_VERDICT_EXIT) to the `no-verdict` output")
+    # Under `set -e` the follower's non-zero exit aborts the step BEFORE the hand-over unless it is captured on the
+    # invocation itself — then `no-verdict` is never published, the named step is skipped and nothing resumes the run.
+    if not re.search(r"^.*build-follow\.py\b.*\|\|\s*rc=\$\?\s*$", step, re.M):
+        problems.append("the follow step does not capture build-follow.py's exit status (`... || rc=$?` on the invocation) — "
+                        f"under `set -e` exit {NO_VERDICT_EXIT} aborts the step before the `no-verdict` hand-over")
     m = re.search(rf"^      - name: {re.escape(NO_VERDICT_STEP)}\s*\n((?:        .*\n|\s*\n)*)", text, re.M)
     if not m:
         problems.append(f"no step named exactly `{NO_VERDICT_STEP}` — the operations instance re-runs a follow by that name, so "
@@ -752,7 +761,8 @@ def self_test() -> int:
           kinds == {"pending": NO_VERDICT_EXIT, "silent": NO_VERDICT_EXIT, "failed": 1}, kinds)
     check("no-verdict/the exit code is distinct from every other red and from a pass", NO_VERDICT_EXIT not in (0, 1), NO_VERDICT_EXIT)
     # The workflow contract (--check-workflow): a conforming step pair passes, and each break is named.
-    good = ("      - name: Follow x\n        id: follow\n        run: |\n"
+    good = ("      - name: Follow x\n        id: follow\n        run: |\n          set -euo pipefail\n          rc=0\n"
+            "          python3 \"$RUNNER_TEMP/build-follow.py\" --api-url \"$API_URL\" \\\n            --sha \"$SHA\" || rc=$?\n"
             "          if [ \"$rc\" -eq 3 ]; then echo \"no-verdict=true\" >> \"$GITHUB_OUTPUT\"; exit 0; fi\n"
             f"      - name: {NO_VERDICT_STEP}\n        if: steps.follow.outputs.no-verdict == 'true'\n        run: |\n          echo x\n          exit 1\n")
     check("contract/a conforming workflow passes", workflow_contract_problems(good) == [], workflow_contract_problems(good))
@@ -761,7 +771,11 @@ def self_test() -> int:
             ("step never fails", good.replace("          exit 1\n", "          exit 0\n"), "does not fail"),
             ("step on the wrong output", good.replace("no-verdict == 'true'", "other == 'true'"), "does not run on"),
             ("exit not handed over", good.replace("-eq 3", "-eq 2"), "does not hand exit"),
-            ("no follow id", good.replace("        id: follow\n", ""), "no `id: follow`")):
+            ("no follow id", good.replace("        id: follow\n", ""), "no `id: follow`"),
+            ("exit status not captured (set -e aborts before the hand-over)", good.replace(" || rc=$?", ""), "does not capture"),
+            ("exit status captured in another step only",
+             good.replace(" || rc=$?", "") + "      - name: Other\n        run: |\n          python3 build-follow.py || rc=$?\n",
+             "does not capture")):
         got = workflow_contract_problems(broken)
         check(f"contract/{label} is named", any(needle in p for p in got), got)
 
