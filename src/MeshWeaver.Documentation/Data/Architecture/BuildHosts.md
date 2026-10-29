@@ -535,6 +535,9 @@ sealed reds every Plugins run. Two halves keep them in agreement:
   the resolver called the set "cancelled before any seal job ran". Every Plugins run on that channel set
   was RED for hours, although the set was sealed and its images were present. An attempt that DID
   materialise is read exactly as before, so a trio job a re-run re-ran and lost still unseals the set.
+  The walk re-reads the run's attempt number AFTER the empty answer and starts AT it, inclusive: the
+  listing and the jobs read are two requests, and a re-run created between them would otherwise be
+  skipped together with any trio job it lost. `arm-promoted-set.py` (`read_run_jobs`) walks the same way.
 - *The hand-over waits for the seal.* Arming does not wait for `verify-images` or the platform bake, so
   the newest ARMED set can be one the resolver does not yet call sealed. MeshWeaver.Deploy's `handover`
   asks core's resolver at `main` (`--no-registry --freeze <set>`) before it signs anything, and holds

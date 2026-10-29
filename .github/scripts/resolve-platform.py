@@ -728,14 +728,26 @@ def seal_jobs(fetch: Fetch, run: dict, log: Callable[[str], None] = print) -> li
     because it ran nothing — is passed over, and that is said."""
     run_id = int(run["id"])
     jobs = run_jobs(fetch, run_id)
-    attempt = int(run.get("run_attempt") or 1)
-    if jobs or attempt <= 1:
+    if jobs:
         return jobs
-    for earlier in range(attempt - 1, 0, -1):
-        rows = run_jobs_of_attempt(fetch, CORE_REPO, run_id, earlier)
+    # 🚨 The listing that named this run and the `filter=latest` read are TWO requests, and a re-run
+    # can be created between them: the listing may say attempt 2 while the empty read was attempt 3.
+    # Starting below the LISTED attempt would then skip attempt 2 — which may have re-run and LOST a
+    # trio job — and read attempt 1's green seal. So the attempt number is re-read AFTER the empty
+    # answer (attempts only grow, so it is at least the one that answered empty), and the walk starts
+    # AT it, inclusive: every numbered attempt from the newest down is read, and the first one that
+    # materialised a job is the seal's evidence.
+    attempt = int(run.get("run_attempt") or 1)
+    fresh = fetch(f"/repos/{CORE_REPO}/actions/runs/{run_id}")
+    attempt = max(attempt, int(fresh.get("run_attempt") or 1))
+    if attempt <= 1:
+        return jobs
+    for numbered in range(attempt, 0, -1):
+        rows = run_jobs_of_attempt(fetch, CORE_REPO, run_id, numbered)
         if rows:
-            log(f"  (#{run.get('run_number')}: attempt {attempt} created no job — "
-                f"its seal is read from attempt {earlier}, the newest attempt that ran)")
+            if numbered < attempt:
+                log(f"  (#{run.get('run_number')}: attempt {attempt} created no job — "
+                    f"its seal is read from attempt {numbered}, the newest attempt that ran)")
             return rows
     return jobs
 
@@ -3853,8 +3865,11 @@ def self_test() -> int:
     # `failure` on a leg outside the trio; the transient-retry lane re-ran it and attempt 2 was cancelled
     # in the pending slot before it created a job. `filter=latest` answers ZERO records — the reading
     # that turned every Plugins run on the channel's set RED at this freeze path.
-    def rerun_fetch(attempts: dict[int, list[dict]], latest: int, conclusion: str = "cancelled") -> Fetch:
-        runs = [_run(8207, A, conclusion=conclusion) | {"run_attempt": latest}, _run(8203, B)]
+    def rerun_fetch(attempts: dict[int, list[dict]], latest: int, conclusion: str = "cancelled",
+                    listed: int | None = None) -> Fetch:
+        """`latest` is the attempt that EXISTS (what `filter=latest` and a fresh run read answer);
+        `listed` is the attempt the run LISTING reported, older when a re-run lands between them."""
+        runs = [_run(8207, A, conclusion=conclusion) | {"run_attempt": listed or latest}, _run(8203, B)]
         base = _fetch_for(runs, {1000 + 8203: _jobs()})
 
         def fetch(path: str) -> dict:
@@ -3865,6 +3880,8 @@ def self_test() -> int:
             if f"/runs/{1000 + 8207}/jobs" in path:
                 rows = attempts.get(latest, [])
                 return {"total_count": len(rows), "jobs": rows}
+            if path.endswith(f"/actions/runs/{1000 + 8207}"):
+                return {**runs[0], "run_attempt": latest}
             return base(path)
         return fetch
     case("freeze on a set sealed in attempt 1 whose re-run was cancelled before any job → taken", True,
@@ -3881,6 +3898,18 @@ def self_test() -> int:
          lambda: choose(rerun_fetch({1: _jobs(), 2: _jobs(promote="cancelled")}, latest=2), _registry(full),
                         tester, portal, freeze="3.0.0-ci.8207", log=logs.append),
          lambda msg: "not a sealed set" in msg)
+    # 🚨 The listing said attempt 2; a re-run (attempt 3) landed before the jobs read and was cancelled
+    # before any job. Attempt 2 re-ran and LOST promote. Starting below the LISTED attempt skipped
+    # attempt 2 and read attempt 1's green seal — the walk must start at the re-read attempt, inclusive.
+    case("negative control: attempt advanced between listing and jobs read, attempt 2 lost promote → RED",
+         False,
+         lambda: choose(rerun_fetch({1: _jobs(), 2: _jobs(promote="failure"), 3: []}, latest=3, listed=2),
+                        _registry(full), tester, portal, freeze="3.0.0-ci.8207", log=logs.append),
+         lambda msg: "not a sealed set" in msg)
+    case("…and the same advance over a SEALED attempt 2 is still taken", True,
+         lambda: choose(rerun_fetch({1: _jobs(), 2: _jobs(), 3: []}, latest=3, listed=2),
+                        _registry(full), tester, portal, freeze="3.0.0-ci.8207", log=logs.append),
+         lambda c: c.sha == A and any("attempt 3 created no job" in l and "attempt 2" in l for l in logs))
     case("negative control: attempt 1 itself unsealed, attempt 2 empty → RED under the freeze", False,
          lambda: choose(rerun_fetch({1: _jobs(bake="failure"), 2: []}, latest=2), _registry(full),
                         tester, portal, freeze="3.0.0-ci.8207", log=logs.append),
