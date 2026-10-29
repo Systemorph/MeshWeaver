@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Security;
@@ -48,6 +49,7 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
             .AddMeshNodes(
                 new MeshNode(GrantedPartition) { Name = "Granted Space", NodeType = "Markdown" },
                 new MeshNode("Page", GrantedPartition) { Name = "Granted Page", NodeType = "Markdown" },
+                new MeshNode("ScopeProbe", "AccessAssignment") { Name = "Scope Probe", NodeType = "Markdown" },
                 AssignmentNodeFactory.UserRole(TokenUser, "Editor", GrantedPartition));
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -306,6 +308,84 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
         (await Validate(minter, NodeOperation.Create, TokenRecord("narrower", [ApiTokenScope.Read]), ct)).IsValid.Should().BeTrue(
             "a subset of the minter's own scopes is allowed");
     }
+
+    /// <summary>
+    /// 🚨 THE ROUTED-UPDATE PIN (review of #7585). The canonical write — <c>GetMeshNodeStream(path).Update</c>
+    /// — never runs the RLS validator: it is an owner-enforced validator, and the owner decides the
+    /// patch at its delivery gate from the (capped) fold alone. A token holding <c>write</c> holds
+    /// Update on its owner's own records, so without a rule at that gate it could strip its own
+    /// record's scopes — or retype the record so no token-record rule recognises it, while the
+    /// verdict still authenticates its content — and be unscoped on its next request.
+    /// The unscoped arm is the control: the same write by the same person lands.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task AScopedToken_CannotRewriteItsOwnRecord_ThroughTheRoutedUpdate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = $"{TokenUser}/_Api/self";
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(TokenRecord("self", [ApiTokenScope.Read, ApiTokenScope.Write])))
+            .Should().Within(TestTimeouts.Convergence).Emit("the token record must exist first", ct);
+
+        BecomeToken(ApiTokenScope.Read, ApiTokenScope.Write);
+        (await RoutedUpdate(path, n => n with { Content = TokenOf(n) with { Scopes = null } }, ct))
+            .Should().StartWith("refused:", "a capped token must not strip its own record's scopes");
+        (await RoutedUpdate(path, n => n with { NodeType = "Markdown" }, ct))
+            .Should().StartWith("refused:", "nor retype its record out of the token-record rule's sight");
+
+        var after = await StoredRecord(path, ct);
+        after.NodeType.Should().Be(ApiTokenNodeType.NodeType);
+        TokenOf(after).Scopes.Should().Equal(ApiTokenScope.Read, ApiTokenScope.Write);
+
+        // The control: an unscoped token (its owner's full authority) writes the same record.
+        BecomeToken(null);
+        (await RoutedUpdate(path, n => n with { Content = TokenOf(n) with { Label = "renamed" } }, ct))
+            .Should().Be("landed", "the record is writable by its owner — the refusal above is the cap, not the path");
+    }
+
+    /// <summary>
+    /// 🚨 THE TYPE-PATH PIN (review of #7585). The stream cache passes a path whose first segment
+    /// names a satellite type (<c>AccessAssignment/…</c>, <c>Thread/…</c>) straight to its shared,
+    /// privileged upstream without asking the fold — so the cap has to be applied ahead of that
+    /// shortcut, or a token scoped to no read still reads those nodes.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ATokenWithoutRead_CannotReadATypeNamedPath_ThroughTheStreamCache()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        BecomeToken(ApiTokenScope.Relay);
+        (await StreamRead(TypeNamedPath, ct)).Should().StartWith("denied:",
+            "a token scoped to the relay reads no node — the type-path shortcut included");
+
+        BecomeToken(ApiTokenScope.Read);
+        (await StreamRead(TypeNamedPath, ct)).Should().Be("read:" + TypeNamedPath,
+            "the control: a read-scoped token is served the path exactly as before");
+    }
+
+    private const string TypeNamedPath = "AccessAssignment/ScopeProbe";
+
+    private Task<string> StreamRead(string path, CancellationToken ct) =>
+        Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null)
+            .Take(1)
+            .Select(n => "read:" + n!.Path)
+            .Catch((UnauthorizedAccessException ex) => Observable.Return("denied:" + ex.Message))
+            .Should().Within(TestTimeouts.Convergence).Emit("the read must answer", ct);
+
+    private ApiToken TokenOf(MeshNode node) => node.ContentAs<ApiToken>(Mesh.JsonSerializerOptions)!;
+
+    private Task<string> RoutedUpdate(string path, Func<MeshNode, MeshNode> change, CancellationToken ct) =>
+        Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Update(change)
+            .Take(1)
+            .Select(_ => "landed")
+            .Catch((Exception ex) => Observable.Return("refused:" + ex.GetType().Name + ": " + ex.Message))
+            .Should().Within(TestTimeouts.Convergence).Emit("the update must answer", ct);
+
+    private Task<MeshNode> StoredRecord(string path, CancellationToken ct) =>
+        Access.RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null).Take(1))
+            .Select(n => n!)
+            .Should().Within(TestTimeouts.Convergence).Emit("the record must be readable", ct);
 
     // ── The verdict carries the cap ─────────────────────────────────────────────────────────────
 

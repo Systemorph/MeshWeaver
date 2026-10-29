@@ -103,6 +103,28 @@ public class PermissionProbeCacheKeyTests
     }
 
     /// <summary>
+    /// 🚨 Scope VALUES are free strings from the token record (an open vocabulary), so the encoding
+    /// must be unambiguous: a value containing the separator must not reproduce another scope set's
+    /// key, and a token scoped to the empty string (capped to nothing) must not take the unscoped
+    /// entry. Either collision would serve one capability's cached verdict to the other (review of #7585).
+    /// </summary>
+    [Fact]
+    public void Scope_values_cannot_forge_another_scope_sets_key()
+    {
+        var readWrite = Carson() with { IsApiToken = true, Scopes = ["api", "read", "write"] };
+        var forged = Carson() with { IsApiToken = true, Scopes = ["api", "read\u001fwrite"] };
+        Assert.NotEqual(
+            MeshNodeStreamCache.BuildAccessCacheKey(Path, readWrite),
+            MeshNodeStreamCache.BuildAccessCacheKey(Path, forged));
+
+        var unscoped = Carson() with { IsApiToken = true };
+        var emptyValue = Carson() with { IsApiToken = true, Scopes = [""] };
+        Assert.NotEqual(
+            MeshNodeStreamCache.BuildAccessCacheKey(Path, unscoped),
+            MeshNodeStreamCache.BuildAccessCacheKey(Path, emptyValue));
+    }
+
+    /// <summary>
     /// …but claims are a SET. Two tokens carrying the same roles in a different order are the
     /// same capability and must still share the entry — otherwise the fix quietly turns the
     /// probe cache off for every multi-role token, which is a latency regression on the read

@@ -67,6 +67,20 @@ public static class ApiTokenScope
     public const string ScopeClaimType = "mw_scope";
 
     /// <summary>
+    /// The node type of an API-token record (and of its index rows) — the records the
+    /// <see cref="Tokens"/> rule protects. NOT a scope value.
+    /// </summary>
+    public const string TokenRecordNodeType = "ApiToken";
+
+    /// <summary>
+    /// Whether <paramref name="nodeType"/> names an API-token record. Case-insensitive, because node
+    /// type resolution is: a record written as <c>apitoken</c> is still a token record.
+    /// </summary>
+    /// <param name="nodeType">A node's type.</param>
+    public static bool IsTokenRecordType(string? nodeType)
+        => string.Equals(nodeType, TokenRecordNodeType, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The node permissions each of the platform's NODE scopes allows. Immutable constant lookup;
     /// a value absent here contributes nothing to <see cref="PermissionCap(IReadOnlyCollection{string})"/> — never everything.
     /// <see cref="Permission.Api"/> rides along with both, because the API-token clamp demands it

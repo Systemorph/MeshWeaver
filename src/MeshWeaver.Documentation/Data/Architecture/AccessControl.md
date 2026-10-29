@@ -1442,7 +1442,11 @@ authenticates a token. From there:
   - the RLS node validator refuses a capped operation **before** its own-scope shortcut, which
     otherwise grants a user everything in their own partition without asking the fold;
   - the stream cache's read-verdict key carries the scopes, so a scoped token never shares a verdict
-    with an unscoped session of the same person;
+    with an unscoped session of the same person — each value length-prefixed, because scope values
+    are free strings and a plain join would let `["read\u001fwrite"]` or `[""]` reproduce another
+    set's key; and the cap is applied **before** the cache's type-path shortcut (a path whose first
+    segment names a satellite type, served from the privileged shared stream without asking the
+    fold), so a token scoped to no read reads nothing there either;
   - a **query** by a token whose scopes allow no read answers nothing, decided once at the query
     boundary (`MeshService`) — because a listing never asks the fold: the SQL-backed providers filter
     rows in the database against the viewer's projected grants, and the in-process providers rebuild
@@ -1454,7 +1458,13 @@ authenticates a token. From there:
 - **A capped token cannot widen itself.** A write to an `ApiToken` record by a scoped caller needs
   `tokens`, and the record it writes must itself be scoped to a subset of the caller's scopes
   (`ApiTokenScope.MintRefusal`) — otherwise `write` would be enough to mint an unscoped token, or to
-  patch the token's own record free of its cap.
+  patch the token's own record free of its cap. The RLS validator decides a create and a delete; it
+  is owner-enforced, so the canonical `GetMeshNodeStream(path).Update` never runs it. The owner's
+  delivery gate therefore holds the rule for every routed write: a scoped caller writing a node whose
+  type is a token record (`ApiTokenScope.IsTokenRecordType`, case-insensitive) is refused, except a
+  delete by a token holding `tokens` (`AccessControlPipeline.CapScopedTokenRecordWrite`). A scoped
+  token never rewrites a token record — neither stripping its scopes nor retyping it out of the
+  rule's sight while the verdict still authenticates its content; it revokes by deleting.
 
 **Unknown values.** The set is open, so a value is never rejected for not being one of the
 platform's constants — that would re-close it. A value no site claims simply allows nothing: a
@@ -1470,8 +1480,10 @@ its cap, and a grant revoked later is gone for the token at once, because the gr
 read live.
 
 Pinned by `ScopedApiTokenTest` (refused outside its scopes, allowed inside them, unscoped
-unchanged, an unknown scope refused and named, no minting a wider token) and
-`PermissionProbeCacheKeyTests.A_scoped_token_never_shares_an_entry_with_an_unscoped_one`.
+unchanged, an unknown scope refused and named, no minting a wider token, no rewriting its own record
+through the routed update, no type-path read without `read`) and
+`PermissionProbeCacheKeyTests` (`A_scoped_token_never_shares_an_entry_with_an_unscoped_one`,
+`Scope_values_cannot_forge_another_scope_sets_key`).
 
 ---
 

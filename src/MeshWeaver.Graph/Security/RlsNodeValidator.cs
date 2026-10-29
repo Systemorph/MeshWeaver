@@ -560,8 +560,13 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
                 ApiTokenScope.ScopeFor(demanded) ?? demanded.ToString(),
                 context.Operation, context.Node.Path);
 
+        // Both the proposed AND the existing type: a write that retypes a token record (to, say,
+        // Markdown) is still a write to a token record — the verdict authenticates its content
+        // whatever its type says. The owner's gate holds the same rule for the routed update,
+        // which never runs this validator (AccessControlPipeline.CapScopedTokenRecordWrite).
         if (context.Operation == NodeOperation.Read
-            || !string.Equals(context.Node.NodeType, Configuration.ApiTokenNodeType.NodeType, StringComparison.Ordinal))
+            || !(ApiTokenScope.IsTokenRecordType(context.Node.NodeType)
+                 || ApiTokenScope.IsTokenRecordType(context.ExistingNode?.NodeType)))
             return null;
 
         // A write to a token record. Its index rows (ApiTokenIndex) carry no scopes of their own:

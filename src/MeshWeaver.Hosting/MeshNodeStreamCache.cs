@@ -325,10 +325,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // 🛡️ The API-token scope cap (ApiTokenScope) is folded into the verdict, so it is a
             // dimension of the key: a scoped token must never take an unscoped session's entry for
             // the same person (a cap bypass), nor leave its capped verdict for that session.
-            // Order-independent, like the roles; empty for an unscoped context.
+            // Order-independent, like the roles; empty for an unscoped context. Each value is
+            // LENGTH-PREFIXED: scope values are free strings from the token record, so a plain join
+            // would let ["read\u001fwrite"] reproduce ["read", "write"]'s key, and [""] the unscoped
+            // one — one capability served another's cached verdict.
             context.Scopes is null || context.Scopes.Count == 0
                 ? string.Empty
-                : string.Join('\u001f', context.Scopes.OrderBy(r => r, StringComparer.Ordinal)));
+                : string.Concat(context.Scopes
+                    .OrderBy(s => s, StringComparer.Ordinal)
+                    .Select(s => $"{(s ?? string.Empty).Length}:{s}\u001f")));
 
     // 🚨 Idle release of read entries — the read-side counterpart of the write
     // cache's (_updateQueues) sliding expiration. Window/interval come from
@@ -2368,6 +2373,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // the per-user gate only makes sense for real partition-rooted node paths.
         // If the first segment is empty or matches a known NodeType name, skip the
         // gate entirely (pass through to the system-read shared upstream).
+        // 🛡️ …but never for a token whose scopes allow no read (ApiTokenScope): the shortcut serves
+        // the privileged shared upstream without asking the fold the cap lives in, so the cap is
+        // applied here, ahead of it (review of #7585).
+        if (!ApiTokenScope.AllowsPermission(captured, Permission.Read))
+            return GateOnRead(Permission.None, shared, path, captured);
         if (LooksLikeNodeTypePath(path))
             return shared;
 
