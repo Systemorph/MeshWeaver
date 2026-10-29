@@ -2245,6 +2245,8 @@
   "hosting.triage.filedIssueFound": "über die Herkunftsmarke gefunden, nicht erneut gemeldet",
   "hosting.repoHealth.budgetRefused.title": "GitHub-Actions-Budget verweigert Arbeit ({count} Repositories)",
   "hosting.repoHealth.budgetRefused.body": "Die Repository-Gesundheitsprüfung um {at} UTC hat festgestellt, dass das Actions-Budget der Organisation Arbeit verweigert in: {repositories}. Erhöhe das Budget oder warte, bis der Abrechnungszeitraum zurückgesetzt wird. Dies ist die einzige Benachrichtigung zu dieser Verweigerung; die nächste kommt erst, wenn sie behoben ist und erneut auftritt.",
+  "hosting.triage.heldIntake.title": "Die Triage hält {held} Eingangselement(e) zurück, das älteste seit {days} Tag(en)",
+  "hosting.triage.heldIntake.body": "Solange Dispatch nicht auf On steht oder der Triage-Agent ausgeschaltet ist, startet kein Triage-Thread, daher wird der Eingang zurückgehalten. Zurückgehalten: {sources}. Das älteste wartet seit {since} UTC. Setze Dispatch auf On, um sie zu starten, oder schliesse die nicht gewünschten. Dies ist die einzige Benachrichtigung zu dieser Zurückhaltung; die nächste kommt erst, wenn sie aufgehoben ist und eine neue Zurückhaltung altert.",
   "secret.inputLabel": "Neuer Wert",
   "secret.inputPlaceholder": "Wert hier einfügen",
   "secret.generate": "Generieren",
