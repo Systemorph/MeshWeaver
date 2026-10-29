@@ -364,8 +364,9 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    every reader reads the marker: `build-artifacts-fetch.py` takes ONLY `succeeded` receipts by
    default — a failed stage's artifacts are never published and never ratcheted as a green gate log,
    and a selection whose every receipt is failed is RED naming the stage — while
-   `host-shard-results.py` asks for failed ones explicitly (`include_failed=True`). Any value but
-   `succeeded` is refused by the default reader, never defaulted to green. A receipt WITHOUT the field
+   `host-shard-results.py` asks for failed ones explicitly (`include_failed=True`). A value other than
+   `succeeded` or `failed` — an explicit `null` included — is refused in EVERY mode, never defaulted to
+   green and never dropped silently beside a succeeded receipt. Only a receipt WITHOUT the field
    predates the marker: such a host handed over only a green stage's files, plus a red stage's
    `diagnostics/` unit, which the build API marks from the stage's own recorded verdict. The order the
    halves land in: the readers (this repository and MeshWeaver.Plugins' build API and

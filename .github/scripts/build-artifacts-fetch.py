@@ -78,19 +78,23 @@ class Red(Exception):
 
 
 SUCCEEDED = "succeeded"
+FAILED = "failed"
+STAGE_STATES = (SUCCEEDED, FAILED)
 STAGE_STATE = "stageState"
 
 
 def stage_state_of(r: dict) -> str:
-    """The outcome of the stage that handed receipt `r` over: its `stageState` when it carries one, else `succeeded`
-    (a receipt without the field predates the marker, and such a host handed artifacts over only from a stage that
-    succeeded; its red-stage `diagnostics/` units are marked by the build API from the stage's own verdict). A value
-    that is not a non-empty string is malformed. Pure."""
-    v = r.get(STAGE_STATE)
-    if v is None:
+    """The outcome of the stage that handed receipt `r` over: its `stageState` when it carries the field, else
+    `succeeded` (a receipt WITHOUT the field predates the marker, and such a host handed artifacts over only from a
+    stage that succeeded; its red-stage `diagnostics/` units are marked by the build API from the stage's own verdict).
+    Only an ABSENT field is legacy: a present value must be exactly `succeeded` or `failed` — an explicit null, a
+    non-string, or a state this script does not know is refused in EVERY mode, never defaulted to green and never
+    silently dropped beside a succeeded receipt. Pure."""
+    if STAGE_STATE not in r:
         return SUCCEEDED
-    if not isinstance(v, str) or not v or any(ord(ch) < 32 for ch in v):
-        raise Red(f"a receipt's {STAGE_STATE} is malformed: {json.dumps(r)[:160]}")
+    v = r[STAGE_STATE]
+    if not isinstance(v, str) or v not in STAGE_STATES:
+        raise Red(f"a receipt's {STAGE_STATE} is not one of {', '.join(STAGE_STATES)}: {json.dumps(r)[:160]}")
     return v
 
 
@@ -290,9 +294,18 @@ def self_test() -> int:
     except Red as e:
         check("state/the refusal names the failed stage", "did NOT succeed" in str(e) and "modules (failed)" in str(e), e)
     for unknown in ("cancelled", "SUCCEEDED"):
+        for mode, rows, inc in (("alone", [dict(ok_rows[0], stageState=unknown)], False),
+                                ("beside a succeeded receipt", [ok_rows[0], dict(ok_rows[0], stage="tests", stageState=unknown)], False),
+                                ("with include_failed", [dict(ok_rows[0], stageState=unknown)], True)):
+            try:
+                receipts_of({"artifacts": rows}, include_failed=inc)
+                check(f"state/an unknown state {unknown!r} {mode} is refused, never defaulted or dropped", False, "accepted")
+            except Red:
+                pass
+    for inc in (False, True):
         try:
-            receipts_of({"artifacts": [dict(ok_rows[0], stageState=unknown)]})
-            check(f"state/an unknown state {unknown!r} is refused, never defaulted to green", False, "accepted")
+            receipts_of({"artifacts": [dict(ok_rows[0], stageState=None)]}, include_failed=inc)
+            check(f"state/an explicit null stageState is malformed, never legacy (include_failed={inc})", False, "accepted")
         except Red:
             pass
     for bad in (1, "", ["succeeded"]):
