@@ -210,7 +210,11 @@ no further module.
 ## Self-trigger: the watchdog
 
 `RebootWatchdog`, armed on every process's mesh hub, evaluates once per `Reboot:WatchdogInterval`
-(default 1 minute). The predicate is explicit and pure (`RebootWatchdogRules.Evaluate`), and it
+(default 1 minute). It lives exactly as long as that hub (#7496): it takes no pass once the hub
+leaves `Started`, and a pass that meets the hub's disposed service scope ENDS the loop with one
+Debug line — the container cannot come back, so there is nothing to retry and nothing to alarm.
+Any other fault of a pass is a Warning and the next pass runs. (It used to resolve its services
+outside the per-pass catch, so a pod going down logged `[RebootWatchdog] stopped` at Error.) The predicate is explicit and pure (`RebootWatchdogRules.Evaluate`), and it
 holds when EITHER leg holds:
 
 - **thread-start leg:** at least `ThreadStartFaultThreshold` (default 3) thread starts failed with a

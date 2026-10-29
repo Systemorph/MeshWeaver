@@ -71,20 +71,51 @@ public sealed class RebootWatchdog
         if (!options.WatchdogEnabled || options.WatchdogInterval <= TimeSpan.Zero)
             return Observable.Return(Unit.Default);
         var logger = meshHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<RebootWatchdog>();
+        // 🚨 The watchdog lives exactly as long as the hub it reads from (#7496). Its interval used to
+        // tick on after the hub's service scope (or a parent scope) was disposed ahead of the hub's own
+        // disposables — measured on a portal pod going down — and the next pass's first resolve threw
+        // ObjectDisposedException from INSIDE the selector, outside the per-pass Catch, ending the loop
+        // as "[RebootWatchdog] stopped" at Error on every pod stop.
+        var tornDown = meshHub.RunLevelChanged.Where(level => level > MessageHubRunLevel.Started).Take(1);
         meshHub.RegisterForDisposal(meshHub.RunLevelChanged
             .Where(level => level >= MessageHubRunLevel.Started)
             .Take(1)
             .Where(level => level == MessageHubRunLevel.Started)
             .SelectMany(_ => Observable.Interval(options.WatchdogInterval))
-            .Select(_ => Evaluate(meshHub).Catch((Exception ex) =>
-            {
-                logger?.LogWarning(ex, "[RebootWatchdog] a pass faulted; the next pass evaluates again");
-                return Observable.Empty<RebootWatchdogPass>();
-            }))
+            // A hub that starts winding down takes no further pass.
+            .TakeUntil(tornDown)
+            // Deferred, so a pass that cannot even START (its first resolve) is that pass's fault —
+            // caught and classified below — never the selector's, which would end the loop at Error.
+            .Select(_ => Observable.Defer(() => Evaluate(meshHub)).Catch((Exception ex) =>
+                HubDisposingException.IsDisposedContainer(ex)
+                    // The container is gone, so no later pass can run either: the loop ENDS here, said
+                    // once at Debug. Classified, never swallowed — any other fault still warns.
+                    ? Observable.Throw<RebootWatchdogPass>(new WatchdogTornDownException(ex))
+                    : PassFaulted(ex)))
             .Concat()
-            .Subscribe(_ => { }, ex => logger?.LogError(ex, "[RebootWatchdog] stopped on {Hub}", meshHub.Address)));
+            .Subscribe(
+                _ => { },
+                ex =>
+                {
+                    if (ex is WatchdogTornDownException)
+                        logger?.LogDebug(ex.InnerException,
+                            "[RebootWatchdog] ended on {Hub}: its service scope was disposed (the hub is being torn down)",
+                            meshHub.Address);
+                    else
+                        logger?.LogError(ex, "[RebootWatchdog] stopped on {Hub}", meshHub.Address);
+                }));
         return Observable.Return(Unit.Default);
+
+        IObservable<RebootWatchdogPass> PassFaulted(Exception ex)
+        {
+            logger?.LogWarning(ex, "[RebootWatchdog] a pass faulted; the next pass evaluates again");
+            return Observable.Empty<RebootWatchdogPass>();
+        }
     }
+
+    /// <summary>The watchdog's own end: its hub's service scope is gone, so no pass can run again.</summary>
+    private sealed class WatchdogTornDownException(Exception cause)
+        : Exception("the watchdog's hub service scope was disposed", cause);
 
     /// <summary>One pass: read the evidence, decide, and file (or alarm). Cold; emits ONE pass.</summary>
     public IObservable<RebootWatchdogPass> Evaluate(IMessageHub meshHub)

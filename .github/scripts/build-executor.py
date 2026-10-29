@@ -227,8 +227,14 @@ def is_trunk(i: Inputs) -> bool:
     return i.event in TRUNK_EVENTS and i.ref_name == i.default_branch
 
 
-def request_body(i: Inputs) -> dict:
-    """The `build-request` — the shape `BuildRequest.Parse` reads (Hosting/Build/Source/BuildEvents.cs)."""
+def request_body(i: Inputs, executor: str = HOST) -> dict:
+    """The `build-request` — the shape `BuildRequest.Parse` reads (Hosting/Build/Source/BuildEvents.cs).
+
+    `executor` is THIS admission's answer, carried to the queue so the operations instance projects the run's
+    host check runs from the SAME decision the lanes act on: `host` (the repository claims `ciEquivalent`, so the
+    host verdict is what its follow jobs read — the checks conclude success/failure) or `host-forced` (SHADOW until
+    parity — the Actions legs carry every required verdict, so the host's checks conclude `neutral` and name the
+    would-be verdict in their title). The instance never re-derives it."""
     if i.event == "pull_request" and i.pr:
         ref = {"kind": "pullRequest", "name": i.ref_name, "number": i.pr}
         if i.base_ref:
@@ -243,6 +249,7 @@ def request_body(i: Inputs) -> dict:
         body["requestedBy"] = i.requested_by
     if i.change_mode:
         body["changeMode"] = i.change_mode
+    body["executor"] = executor
     return body
 
 
@@ -347,7 +354,7 @@ def decide_forced(i: Inputs, get: Get, post: Post, api: str, route_only: bool) -
     queued = "not queued (route check only)" if route_only else "not queued (no stages declared)"
     if names and not route_only:
         if i.secret and safe_url(i.queue_url):
-            payload = json.dumps(request_body(i), separators=(",", ":")).encode()
+            payload = json.dumps(request_body(i, HOST_FORCED), separators=(",", ":")).encode()
             st, body = post(i.queue_url, payload, {"Content-Type": "application/json", "X-Hub-Signature-256": sign(i.secret, payload),
                                                    "User-Agent": "meshweaver-build-executor"})
             try:
@@ -514,6 +521,7 @@ def self_test() -> int:
     body = json.loads(payload)
     check("host/the request is a build-request for the head, with the run id the follower's OIDC binds to",
           body["event"] == "build-request" and body["sha"] == "a" * 40 and body["repo"] == "MeshWeaver.Plugins" and body["runId"] == 42, body)
+    check("host/the request carries the admission's answer `host` (the instance projects real verdicts)", body.get("executor") == HOST, body)
     check("host/a PR request names the PR and the ADMISSION's main as its base (one merged tree)",
           body["ref"] == {"kind": "pullRequest", "name": "feat/x", "number": 7, "baseRef": "main", "baseSha": "b" * 40} and body["isTrunk"] is False, body)
     # 2. trunk: a push to main is trunk; a push elsewhere is not
@@ -637,6 +645,9 @@ def self_test() -> int:
     check("forced/an owing repository the owner routed answers host-forced, never actions or host",
           d.executor == HOST_FORCED and "modules: not built on the host" in d.why and ROUTING_POLICY in d.why, d)
     check("forced/its stages are still queued on the host (traffic goes there)", [c[0] for c in calls] == ["GET", "POST"], calls)
+    fb = json.loads(calls[1][2]) if len(calls) > 1 else {}
+    check("forced/the request carries the admission's answer `host-forced` (the instance projects SHADOW checks as neutral)",
+          fb.get("executor") == HOST_FORCED, fb)
     check("forced/each owed item is a ::warning annotation (shadow: named, never a red)",
           any(l.startswith("::warning title=Owed") and "modules" in l for l in d.lines), d.lines)
     check("forced/shadow prints NO ::error line — the required verdict is the Actions legs'", not any(l.startswith("::error") for l in d.lines), d.lines)

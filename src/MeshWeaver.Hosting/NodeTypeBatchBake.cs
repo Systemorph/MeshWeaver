@@ -1360,8 +1360,13 @@ internal static class NodeTypeBatchBake
                 // recorded CompilationStatus.Unavailable for the same reason. The batch driver
                 // hands the compiler a pre-resolved snapshot, so this normally cannot arise here
                 // — but the status vocabulary must not depend on WHICH driver ran the compile.
-                if (error is SourceDiscoveryUnavailableException)
-                    return new PreWarmOutcome(typePath, PreWarmStatus.TimedOut, error.Message);
+                // 🚨 So it reads the ONE predicate the stamp above read (#1701, #6195): a compile
+                // this replica declined below its package's dependency floor, or a read that met a
+                // recycling address, is stamped Unavailable — and reporting it CompileError here
+                // would cascade UpstreamFailed to its dependents and refuse readiness over a verdict
+                // nobody formed.
+                if (NodeTypeCompilationHelpers.IsAvailabilityNonVerdict(error))
+                    return new PreWarmOutcome(typePath, PreWarmStatus.TimedOut, error!.Message);
 
                 // Same classification the activation path applies
                 // (DynamicTypePreWarmer.ClassifyCompileFailure): a compile whose source set

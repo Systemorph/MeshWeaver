@@ -383,6 +383,71 @@ a satisfying dependency applies the update for all of them, the same limit as th
 two records was not read from the logs; all of them go through the orchestrator. Pinned by
 `PackageDependencyFloorHoldTest`; with the gate unwired the held arms never record a hold.
 
+🚨 **The per-process limit has a COMPILE half, and it is closed (#6195).** The import and the
+installer judge the floor where SOURCES are written; once one replica that meets the floor has
+written them, every replica reads them — and a NodeType's hub is placed on whichever replica asks
+first. Measured on memex-cloud on 2026-10-28: Hosting 1.73 declares `AI@^1.40.0`; the outgoing
+generation ran AI 1.39.8 (its own import declined Hosting on that ground every ten minutes for
+hours); during the 04:49–04:57Z roll the `Hosting/Deployment` and `Hosting/PlatformBuildInbox`
+hubs (and nine more Hosting types) were placed on those replicas, compiled the stored sources
+against AI 1.39.8 and failed with `CS0246 FillOutcome` / `CS0103 NodeDescriptions` / `CS0103
+FillResult` — members AI 1.40 ships. That verdict was stamped `Error` on the ONE record every
+replica reads; the reboot watchdog declared the instance WEDGED at 05:16Z, and only the next roll's
+boot bake (05:21Z, `BatchBake: Hosting/Deployment → Compiled`) cleared it. The compilation service
+now asks `INodeTypeDependencyFloor` (PluginCatalog's `NodeTypeDependencyFloorReader`: the partition
+root's `content.requires` against the LOADED modules, the same `PackageDependencyFloorGate` rule)
+before it reads, emits or loads anything. An unmet floor ends the attempt with
+`DependencyFloorUnmetException`, an availability non-verdict: the record goes `Unavailable`, never
+`Error`; the type is not parked; and the last good build — the one a satisfying replica compiled —
+keeps its coordinates. Abstains on everything it cannot judge (no module host, a root declaring
+nothing, no loaded version, an unreadable range or root). The rule has two entries, and both are
+held to it. A COMPILE (`CompileAndGetConfigurations`, `GetAssemblyLocation`) is one. The HYDRATION
+of an existing build (`GetConfigurationsFromExistingAssembly`) is the other: it is how the contract
+handler adopts a published or pinned build, and without the guard an older replica loaded a newer
+build whose dependency members it lacks, and the reflection failure was stamped `Error`. The batch
+bake's REPORTED outcome reads the same non-verdict predicate as its stamp, so an unmet floor reports
+"not evaluated" and never `CompileError`, which would cascade `UpstreamFailed` to dependents. The
+compile activity's failure line says "Compile NOT ATTEMPTED", never "Roslyn failed".
+
+Because the floor sits on the ACTIVATION path, both of its reads stay off it. The package root is
+read as PERSISTED, through the path resolver, and never through the root's own hub. A package root
+is often an instance of a type its own package defines (`Store` is a `Store/Catalog`), and reading
+it through its hub made a cold root's activation wait for itself until the read's budget ran out,
+after which the floor was silently not judged. The loaded modules are read off the landing
+service's maintained activation snapshot (`ServedLoadedPackageModuleReader`) rather than a volume
+walk per call, which measured 7–9 s on the fleet's share. The snapshot can lag by its freshness
+bound, and a lag only leaves a module unjudged; it never misjudges one, because a generation's
+version never changes. The reading is BOUNDED and an expired bound abstains like a failed read: the
+path resolver stays silent when its query loses the Initial snapshot and leaves recovery to its
+caller, and nothing else encloses this read before Roslyn's own bound. The root comparison is
+case-insensitive, as the resolver's own path matching is, so a reference spelled `hosting/Deployment`
+is still judged against `Hosting`.
+
+Three rules keep a below-floor replica from doing harm while the roll is mixed, and keep the type
+recoverable afterwards. First, an instance activation on a replica below the floor never asks for a
+SHARED recompile. A hydration refused by the floor, and a framework-stale build on such a replica,
+serve the no-code-change diagnosis naming the unmet requirement and leave the record untouched. No
+compile anywhere can give the ACTIVATING replica the dependency it lacks, and routing the refusal
+through the unloadable-build self-heal rebuilt a healthy type once per cold activation. Second, the
+owner's framework-stale kickoff skips a type whose floor its own replica does not meet, for the same
+reason. Third, that kickoff treats `Unavailable` over a stale recorded build as SETTLED, like `Ok`
+and `Error`. With the build's coordinates kept, the failed-verdict re-drive (no-build case only) and
+the older-platform trigger (`Error` only) both decline such a record, so before this a type a
+below-floor replica left `Unavailable` was rebuilt by nobody until a batch bake. Now the first owner
+that meets the floor rebuilds it, and the instances' version-gated overlay re-binds on that write.
+That holds even when the store already has bytes for the live framework and the re-evaluation
+carries forward or is inconclusive. For an `Ok` or `Error` record that case is skipped, because the
+instance-activation self-heal binds those bytes. That heal excludes `Unavailable`, so a skip would
+leave the type on the overlay everywhere, and the record is rebuilt instead
+(`DecideStaleBuildAction(recordUnavailable: true)`).
+
+Pinned by `AnUnmetDependencyFloorIsNotACompileVerdictTest` (with met-floor negative controls for the
+compile and the hydration), `ABatchBakeBelowADependencyFloorFormsNoVerdictTest`,
+`ACompileDependencyFloorReadsThePackageRootTest` (including a lower-cased reference and a silent
+resolver), `ABelowFloorReplicaRequestsNoSharedRecompileTest`,
+`AFloorRefusedTypeRecoversWhereTheFloorIsMetTest` and
+`ContentKeyReevaluationTest.DecideStaleBuildAction_AnUnavailableRecordOnAStoreHit_IsRebuilt`.
+
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here
 (content-only, image-shipped, not installed) has no landed version to compare. A range it cannot
 parse is unverifiable (`ModuleDependencyFloor.Satisfies` → null) and never refuses; the fleet's

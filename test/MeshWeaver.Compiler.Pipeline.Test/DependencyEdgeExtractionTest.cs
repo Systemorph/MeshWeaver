@@ -563,6 +563,145 @@ public class DependencyEdgeExtractionTest
         }
     }
 
+    /// <summary>
+    /// #7449: a module member used ONLY in code a constant condition makes unreachable is bound — a
+    /// change to the module breaks the consumer's compile — but the compiler discards that code, so the
+    /// image carries no <c>AssemblyRef</c> for it. Six shapes, each on its own module: <c>if (false)</c>,
+    /// <c>false &amp;&amp; …</c>, <c>true || …</c>, a constant ternary's dead arm, <c>while (false)</c>,
+    /// <c>for (…; false; …)</c>, a named <c>const bool</c> condition, conditions built from <c>?:</c>,
+    /// <c>nameof</c> and <c>sizeof</c>, and a <c>foreach</c> whose extension <c>GetEnumerator</c> no
+    /// name spells. Under BOTH optimisation levels
+    /// (the bake emits Debug) every one is still a module edge. On unfixed code the shapes whose
+    /// AssemblyRef the compiler dropped were missing.
+    /// Negative control: a constant-TRUE branch is edged once from the image, a non-constant condition
+    /// is ordinary reachable code, and a module the consumer never uses is no edge.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void AMemberUsedOnlyInConstantUnreachableCode_IsStillAModuleEdge()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        string Ext(string assembly, string ns, string method) => EmitModule(assembly, $$"""
+            namespace {{ns}};
+            /// <summary>An extension used only inside constant-unreachable code.</summary>
+            public static class E
+            {
+                /// <summary>Discarded with its branch.</summary>
+                public static string {{method}}(this string value) => value;
+            }
+            """);
+        var deadShapes = new (string Assembly, string Ns, string Method)[]
+        {
+            ("DepGraphProbeIfFalse", "DepGraphProbe.IfFalse", "PIf"),
+            ("DepGraphProbeAndFalse", "DepGraphProbe.AndFalse", "PAnd"),
+            ("DepGraphProbeOrTrue", "DepGraphProbe.OrTrue", "POr"),
+            ("DepGraphProbeTernaryArm", "DepGraphProbe.TernaryArm", "PTer"),
+            ("DepGraphProbeWhileFalse", "DepGraphProbe.WhileFalse", "PWhile"),
+            ("DepGraphProbeForFalse", "DepGraphProbe.ForFalse", "PFor"),
+            ("DepGraphProbeConstFlag", "DepGraphProbe.ConstFlag", "PConst"),
+            ("DepGraphProbeTernaryCondition", "DepGraphProbe.TernaryCondition", "PTerCond"),
+            ("DepGraphProbeNameofCondition", "DepGraphProbe.NameofCondition", "PNameof"),
+            ("DepGraphProbeSizeofCondition", "DepGraphProbe.SizeofCondition", "PSizeof"),
+        };
+        var dead = deadShapes.Select(s => Ext(s.Assembly, s.Ns, s.Method))
+            // A use NO name spells: a foreach over an int binds this module's extension GetEnumerator.
+            .Append(EmitModule("DepGraphProbeImplicitForeach", """
+                namespace DepGraphProbe.ImplicitForeach;
+                /// <summary>An extension enumerator a foreach binds without naming it.</summary>
+                public static class E
+                {
+                    /// <summary>Discarded with its branch.</summary>
+                    public static System.Collections.Generic.IEnumerator<int> GetEnumerator(this int count)
+                    {
+                        for (var i = 0; i < count; i++)
+                            yield return i;
+                    }
+                }
+                """))
+            .ToArray();
+        deadShapes = [.. deadShapes, ("DepGraphProbeImplicitForeach", "DepGraphProbe.ImplicitForeach", "GetEnumerator")];
+        var live = Ext("DepGraphProbeIfTrue", "DepGraphProbe.IfTrue", "PLive");
+        var flagged = Ext("DepGraphProbeRuntimeFlag", "DepGraphProbe.RuntimeFlag", "PFlag");
+        var unused = Ext("DepGraphProbeNeverUsed", "DepGraphProbe.NeverUsed", "PNever");
+        var all = dead.Append(live).Append(flagged).Append(unused).ToArray();
+        try
+        {
+            var references = CompileReferences.Default.Concat(all.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))).ToList();
+            var tree = CSharpSyntaxTree.ParseText("""
+                using DepGraphProbe.IfFalse;
+                using DepGraphProbe.AndFalse;
+                using DepGraphProbe.OrTrue;
+                using DepGraphProbe.TernaryArm;
+                using DepGraphProbe.WhileFalse;
+                using DepGraphProbe.ForFalse;
+                using DepGraphProbe.ConstFlag;
+                using DepGraphProbe.TernaryCondition;
+                using DepGraphProbe.NameofCondition;
+                using DepGraphProbe.SizeofCondition;
+                using DepGraphProbe.ImplicitForeach;
+                using DepGraphProbe.IfTrue;
+                using DepGraphProbe.RuntimeFlag;
+                public static class P
+                {
+                    const bool Off = false;
+                    public static bool Flag;
+                    public static void I() { if (false) { "x".PIf(); } }
+                    public static bool A() => false && "x".PAnd().Length > 0;
+                    public static bool O() => true || "x".POr().Length > 0;
+                    public static string T() => true ? "a" : "x".PTer();
+                    public static void W() { while (false) { "x".PWhile(); } }
+                    public static void F() { for (var i = 0; false; i++) { "x".PFor(); } }
+                    public static void C() { if (Off) { "x".PConst(); } }
+                    public static void TC() { if (true ? false : true) { "x".PTerCond(); } }
+                    public static void N() { if (nameof(P) == "Other") { "x".PNameof(); } }
+                    public static void S() { if (sizeof(int) == 8) { "x".PSizeof(); } }
+                    public static void Fe() { if (false) { foreach (var i in 3) { } } }
+                    public static void L() { if (true) { "x".PLive(); } }
+                    public static void R() { if (Flag) { "x".PFlag(); } }
+                }
+                """, cancellationToken: ct);
+            var classes = DependencyReferenceClasses.Of(references, all, new Dictionary<string, string>());
+            var droppedSomewhere = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var level in new[] { OptimizationLevel.Debug, OptimizationLevel.Release })
+            {
+                var compilation = CSharpCompilation.Create("DeadCodeProbe", [tree], references,
+                    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary).WithOptimizationLevel(level));
+                var image = new MemoryStream();
+                var emit = compilation.Emit(image, cancellationToken: ct);
+                emit.Success.Should().BeTrue(string.Join("\n", emit.Diagnostics));
+                using (var pe = new PEReader(new MemoryStream(image.ToArray(), writable: false)))
+                {
+                    var reader = pe.GetMetadataReader();
+                    var refs = reader.AssemblyReferences.Select(h => reader.GetString(reader.GetAssemblyReference(h).Name)).ToList();
+                    refs.Should().Contain(["DepGraphProbeIfTrue", "DepGraphProbeRuntimeFlag"],
+                        $"precondition ({level}): reachable code is in the image");
+                    droppedSomewhere.UnionWith(deadShapes.Select(s => s.Assembly).Where(a => !refs.Contains(a)));
+                    TestContext.Current.TestOutputHelper?.WriteLine($"{level}: AssemblyRef dropped for [{string.Join(", ", deadShapes.Select(s => s.Assembly).Where(a => !refs.Contains(a)))}]");
+                }
+
+                var modules = DependencyEdgeExtraction.Extract(compilation, [tree], "App/P", [], null, classes,
+                        () => new MemoryStream(image.ToArray(), writable: false), ct: ct)
+                    .Edges.Where(e => e.Kind == DependencyEdgeKinds.Module).Select(e => e.Target).ToList();
+
+                modules.Should().Equal(
+                    deadShapes.Select(s => s.Assembly).Append("DepGraphProbeIfTrue").Append("DepGraphProbeRuntimeFlag")
+                        .OrderBy(n => n, StringComparer.Ordinal).ToList(),
+                    $"({level}) a module used only in constant-unreachable code is still bound by the consumer; "
+                    + "a reachable use is edged from the image; an unused module is no edge");
+            }
+            droppedSomewhere.Should().Contain("DepGraphProbeIfFalse",
+                "precondition: the compiler really discards an if (false) body, so the image alone would miss that module");
+        }
+        finally
+        {
+            foreach (var path in all)
+            {
+                try { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+    }
+
     [Fact(Timeout = 120_000)]
     public void NegativeControl_AReferenceTheCallerDoesNotNameAsAModule_IsNoModuleEdge()
     {

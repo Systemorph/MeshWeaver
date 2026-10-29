@@ -488,7 +488,7 @@ an armed set reaches `build-latest` within about 15 minutes, and no platform rol
 build host is outside the platform's delivery.
 
 **The runner image.** Deploy's `build-host.yml` builds its `deploy/build-host/Dockerfile`
-(the .NET 10 SDK, bash, python3, git, bubblewrap, Deploy's `build-run.py`, and the platform's
+(the .NET 10 SDK, bash, python3, git, jq, bubblewrap, Deploy's `build-run.py`, and the platform's
 `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py` with the sibling it loads,
 `node-repo-scope.py`, `ci-artifact-store.py` and `meshweaver-plugin-build`). The Dockerfile fetches
 every source BY COMMIT inside the build (`DEPLOY_COMMIT`, and `PLATFORM_COMMIT` = the set's own
@@ -641,7 +641,15 @@ fixes can merge while the host closes its gaps one by one. That is a third execu
   stages do not claim equivalence, `executor=host-forced`. When stages are declared, the run is
   queued on the host (one signed `build-request`, exactly as for `host`), so the host runs what it can
   and publishes its own `build` / `build/<stage>` check runs. Those check runs are NOT required
-  contexts: they show the host's real result, red where a gap remains.
+  contexts, so they never conclude `failure`: they conclude **`neutral`**, and the title carries the
+  would-be verdict (`shadow — would be RED: compile-check failed`, `shadow — would be GREEN: …`), with
+  the summary unchanged. A red X on every pull request for a check that gates nothing read as a broken
+  fleet; a neutral one with its verdict in the title says exactly what the host found.
+- **How the instance knows.** The `build-request` carries the admission's own answer,
+  `"executor": "host"` or `"executor": "host-forced"`, so the operations instance projects the check
+  runs from the SAME decision the lanes act on (this routing file plus the stages' `ciEquivalent`) and
+  never re-derives it. A run every one of whose requests said `host-forced` is a shadow run; one
+  `host` request (the repository claims parity) makes its checks conclude `success` / `failure` again.
 - **The owed gap is named, never a red.** The executor job prints each `owes` item of
   `.github/build-stages.json` as a `::warning::` annotation (a repository with no declaration owes
   "no host stages"). In core, `Consolidate test results` repeats that as a warning pointing at the
@@ -958,6 +966,18 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
   suites run inside a host's sandbox — the shards' browser tests need the headless browser and font
   set the build-host image carries from MeshWeaver.Deploy#50 on.
+- **Two host-only reds, neither from the fan-out.** Measured on build-latest: shard 7 and shard 0 were
+  red on #7308 (serial) and on #7506 and #7515 (fanned out) while the same commits were green on Actions.
+  Both reproduce in a host-shaped container (the .NET 10 SDK image, the runner's exact `bwrap` flags,
+  the shard's bins at `<checkout>/.core-tests/shard-<i>/`), so the parallel fan-out is not the cause.
+  **Shard 7:** `PluginPublicationProvenanceTest` runs the publication workflow's own `run:` steps, which
+  call `jq`; Actions' runner ships it and the runner image did not, so 11 tests failed on
+  `step.sh: jq: command not found` (11 of 891 without jq, 0 with it). The image now installs jq and
+  prints its version at build. **Shard 0:** `AStampThatFindsAnotherReplicasClaim_IsNotHeld` waited for a
+  holder number, which also matches a claim whose STAMP has not reached that silo's mirror yet; a stamp
+  that finds another claim writes nothing and reports the mirror, so a lagging mirror read as "A's stamp
+  landed over B's claim". It now waits for the exact settled claim (5 of 6 runs red before, 0 of 10 after,
+  in the container). A host's slower mirror propagation exposed the wait; it did not cause it.
 
 **The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
 credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`
