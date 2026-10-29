@@ -224,9 +224,40 @@ publishes nothing, so if the sibling that sealed the shares failed its registry 
 would hide it. Under the lock it still holds, that run reads the tag
 (`push-bundle-publication.sh --published-commit`) and `check-registry-names-live.sh` goes RED unless
 the tag names the live share publication's commit in the current layout, or a newer commit
-containing it. It repairs nothing. The older `scope=none` path has the same blind spot and predates
-this work; delivering the live share publication from a run that did not bake it is a separate
-change, filed to triage rather than folded in here.
+containing it. It repairs nothing.
+
+**A run that bakes nothing repairs a stale registry tag (#7323).** `scope=none` reasons from the
+SHARES alone, and the registry is a second target with its own failure modes: a run that sealed the
+shares and then failed its registry login or push left `plugins/<source>:<identity>` stale (or
+absent), and every later run of that content — its own re-run included — read `none` and skipped the
+registry too, until the content next changed. On `scope=none` the lane now runs
+`deliver-live-publication.sh` under the prefix lock:
+
+1. it resolves the LIVE share publication by the reader's rules (`_current`, else the prefix) on the
+   first target in lock order — `none` is only decided when every target holds the same sealed
+   commit and listing — and reads its `source-commit.txt`;
+2. it asks `check-registry-names-live.sh --probe` the superseded guard's own question — does the tag
+   name that commit **in the current layout**, or a newer commit containing it? A same-commit tag of
+   an OLDER layout is not current, because one decision serves both paths. This is the every-poll
+   cost: one pointer read, one marker read, one tag read, nothing downloaded. A registry that cannot
+   be READ is red, never "absent";
+3. when the tag is not current it downloads the live share publication — `_complete`, every bundle it
+   lists, the sidecars, every module `modules/_index` lists — verifies each file against its own
+   `digest` stamp, and requires every file to carry a `publication` stamp naming the ONE publication
+   that sealed `_complete`. A missing stamp is refused, never counted as an owner. It then pushes
+   THAT directory with the publishing path's publisher and flags (`--skip-if-published`, which also
+   never moves the tag backwards) — never this run's bake, of which there is none;
+4. it re-reads the tag and is green only when the tag now names the live publication.
+
+Everything it needs runs on every path of the job, `none` included: the storage login, the platform
+script checkout, the venv probe/heal/assert (the lock wrapper builds the pinned-SDK venv, so a runner
+without `ensurepip` is healed or named, not a bare failure inside the lock), ORAS and the registry
+login. The harness (`test-publish-bake-overlap.py`) delivers a REAL generation publication — platform
+record included — and compares the registry copy with the share byte for byte, so a sidecar the
+publisher starts writing that this script does not fetch is red there. Two things it does not do:
+the superseded path keeps its guard rather than this repair, and a sealing run that failed its
+registry push also never ran `register-publication`; this repair re-delivers the bytes, it does not
+re-register the record.
 
 `main-cd.yml`'s platform publish now carries a read-only `GH_TOKEN`, so the never-seal-backwards
 comparison can order two commits instead of reporting *"could not order … republishing as before"*

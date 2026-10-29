@@ -2200,8 +2200,10 @@ jobs:
         env:
           PLATFORM_VERSION: ${{ steps.platform-version.outputs.version }}
         run: python3 mw-platform-gate/.github/scripts/assert-bake-floor.py --bake "$BAKE_DIR" --platform-version "$PLATFORM_VERSION"
+      # Runs on EVERY path, the `scope=none` one included: that path now reads the live share
+      # publication under the prefix lock to prove — or repair — the registry tag (MeshWeaver#7323),
+      # and the gate's login above may be minutes old by then.
       - name: Azure login (OIDC)
-        if: steps.scope.outputs.scope != 'none'
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.azure-client-id }}
@@ -2210,8 +2212,9 @@ jobs:
       # The CANONICAL script — one home, next to the ShippedPrebuiltBundles constants its
       # `_complete` sentinel must keep matching. Checked out after the bake so it never sits in
       # the tester's /repo mount. Public repo: the default token reads it from any caller.
+      # Every path: the `scope=none` registry repair runs deliver-live-publication.sh and the lock
+      # wrapper from this checkout too (MeshWeaver#7323).
       - name: Fetch the canonical publish script (platform repo)
-        if: steps.scope.outputs.scope != 'none'
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
@@ -2252,9 +2255,14 @@ jobs:
       #
       # So a good runner pays a sub-second probe, a bad one publishes anyway and says so loudly,
       # and a runner that cannot be healed is a named red here rather than a silent outage.
+      #
+      # 🚨 ON EVERY PATH, `scope=none` included (MeshWeaver#7323, Copilot on the first draft in
+      # #6878). That path publishes no bake, but it runs the registry repair under
+      # bake-publication-lock.sh — which builds the SAME pinned-SDK venv to take the lease. Gating
+      # these three steps on `scope != 'none'` would leave exactly that path on an unproven
+      # interpreter: a runner without ensurepip would fail the lock with the real cause unnamed.
       - name: Prove this runner's python3 can build a venv
         id: venv-probe
-        if: steps.scope.outputs.scope != 'none'
         run: |
           set -uo pipefail
           probe="${RUNNER_TEMP}/publish-bake-venv-probe"
@@ -2269,12 +2277,12 @@ jobs:
           fi
           rm -rf "$probe"
       - name: Heal — an interpreter with pip, only because the probe failed
-        if: steps.scope.outputs.scope != 'none' && steps.venv-probe.outputs.ok != 'true'
+        if: steps.venv-probe.outputs.ok != 'true'
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Assert the healed interpreter builds a venv
-        if: steps.scope.outputs.scope != 'none' && steps.venv-probe.outputs.ok != 'true'
+        if: steps.venv-probe.outputs.ok != 'true'
         run: |
           set -euo pipefail
           probe="${RUNNER_TEMP}/publish-bake-venv-probe-healed"
@@ -2478,19 +2486,18 @@ jobs:
       # `plugins/<source>:<identity>`, the immutable `<identity>-<run>` tag beside it, the tag move
       # LAST as the seal. `--skip-if-published` is the registry's sealed-skip, keyed on content ×
       # identity exactly as the share's. Same `if:` as the publish above: a run whose scope is
-      # `none` verified the shares already hold this content and publishes to neither.
+      # `none` verified the shares already hold this content and pushes no bake of its own — it
+      # PROVES, or REPAIRS, the registry instead (the `scope=none` step below, MeshWeaver#7323).
       #
       # The scripts come from the platform checkout at `platform-ref` beside publish-bake-bundles.sh
       # — the three move together (the publisher expects the layout the share script materialises).
       # ORAS is installed PINNED by the platform's install-oras.sh (the harness executes the
       # publisher with the same pin); the login is docker's, so ORAS reads the same credential.
-      # Also on the SUPERSEDED path (publish=false): it publishes nothing, but its registry guard below
-      # reads the tag.
+      # On EVERY path: the SUPERSEDED one (publish=false) publishes nothing but its guard below reads
+      # the tag, and the `scope=none` one reads the tag and may push the live share publication.
       - name: Install ORAS (pinned, from the platform checkout)
-        if: steps.scope.outputs.scope != 'none'
         run: bash mw-platform/.github/scripts/install-oras.sh
       - name: Log in to the fleet registry (publisher)
-        if: steps.scope.outputs.scope != 'none'
         env:
           REGISTRY_PASSWORD: ${{ secrets.bundle-registry-publisher-password }}
         run: bash mw-platform/.github/scripts/registry-login.sh "${{ inputs.bundle-registry }}" "${{ inputs.bundle-registry-publisher }}"
@@ -2539,6 +2546,28 @@ jobs:
           GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
           BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
         run: mw-platform/.github/scripts/bake-publication-lock.sh -- mw-platform/.github/scripts/check-registry-names-live.sh
+      # 🚨 A RUN THAT BAKES NOTHING STILL OWES THE REGISTRY (MeshWeaver#7323). `scope=none` reasons from
+      # the SHARES alone, and the registry is a second target with its own failure modes: a run that
+      # sealed the shares and then failed its registry login or push left the tag stale (or absent),
+      # and every later run of that content — its own re-run included — read `none` and skipped the
+      # registry too, until the content next changed. So under the prefix lock (taken here; no re-bind
+      # step ran on this path) the tag is READ — check-registry-names-live.sh's decision, so a
+      # same-commit tag of an OLDER layout is not current — and when it is not current, the LIVE SHARE
+      # publication is downloaded, verified file by file against its own digest stamps and its ONE
+      # publication stamp (an unstamped file is refused, never counted as an owner), pushed with the
+      # same publisher and flags as the step above, and the tag re-read. Never this run's bake: there
+      # is none. The steady-state cost is one pointer read, one marker read and one tag read.
+      # A GATE: no continue-on-error, no input-shaped `if:` — it runs exactly when the scope is `none`.
+      - name: "Nothing baked: the registry must carry the live share publication (repaired when stale)"
+        if: steps.scope.outputs.scope == 'none'
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          SOURCE: ${{ inputs.bake-source }}
+          BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
+          GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
+          BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+        run: mw-platform/.github/scripts/bake-publication-lock.sh -- mw-platform/.github/scripts/deliver-live-publication.sh
       # The lock the re-bind step took is held THROUGH the publish AND the registry push (the
       # registry's read–decide–tag must not interleave with another publisher's either) and
       # released here, on every
@@ -2579,6 +2608,8 @@ jobs:
           echo "published baseline: $BASELINE   head: ${{ steps.content.outputs.sha }}   identity: ${{ steps.identity.outputs.identity }}"
           echo "This is a VERIFIED outcome, not a skipped gate: the sealed publication was read from"
           echo "every target in BAKE_PUBLISH_TARGETS and compared against this commit's content."
+          echo "The fleet registry tag was read under the publication lock in the step above and names the"
+          echo "live share publication — repaired from the shares if a failed registry push had left it stale."
 
   # ────────────────── REGISTER THE PUBLICATION WITH MEMEX — the pipeline's LAST word ──────────────────
   # Maintainer, 2026-09-03: "end of github pipeline must call memex, which must register release and

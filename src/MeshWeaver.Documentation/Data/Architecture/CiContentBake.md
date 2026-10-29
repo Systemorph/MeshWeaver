@@ -1279,7 +1279,10 @@ And one verdict that is neither: **`scope=none`**, when the sealed publication a
 *this* commit for *this* identity. It is a positive finding — read from every target, logged with
 both shas and an explicit green step, never a grey skip — and it is what the every-30-minutes
 release poll hits almost every time it runs. `publish-bake-bundles.sh` already skipped the upload
-in that case; nothing had ever gated the 40-minute build in front of it.
+in that case; nothing had ever gated the 40-minute build in front of it. Such a run still owes the
+fleet REGISTRY: under the prefix lock it reads the identity tag and, when a failed registry push left
+it stale, delivers the live share publication itself — verified against its own stamps
+([Sealed Publication Generations](../SealedPublicationGenerations), #7323).
 
 A **missing** carried-forward bundle is fatal: the only alternatives are "publish less than is
 published today" and "stop", and shrinking is the one that fails silently. The job goes red with
