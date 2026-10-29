@@ -11,7 +11,10 @@ So the paths Deploy#1 copied are FROZEN here: a pull request may DELETE them (th
 MeshWeaver#7127) and may do nothing else to them. A file the diff adds, modifies, retypes, copies or
 renames INTO a frozen path is refused, naming the file and where the chart lives now. A frozen
 DIRECTORY matches its own path as well as everything below it, so replacing it with a symlink (its
-files deleted, the directory path added) is refused too.
+files deleted, the directory path added) is refused too — and so is a non-deletion AT any directory
+ABOVE a frozen path (MeshWeaver#7391), which would replace the whole frozen subtree the same way.
+A saved listing is read strictly: the whole status token, the number of path fields it needs and
+their non-emptiness are validated before a record counts.
 
 The build-host deployment followed (MeshWeaver.Deploy#5): its runner `.github/scripts/build-run.py`,
 `deploy/build-host/**`, the announcement script, the declaration `.github/build-hosts.json` and the
@@ -40,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 
@@ -82,8 +86,21 @@ FROZEN = (
     "deploy/aks/INSTANCE-LIFECYCLE.md",
 )
 
-# The status letters `git diff --name-status` prints (C and R do not occur with --no-renames).
-KNOWN_STATUS = set("ADMTUXBCR")
+# The status TOKENS `git diff --name-status` prints (C and R do not occur with --no-renames). The
+# WHOLE token is validated, not its first letter (MeshWeaver#7391): `Dgarbage` once read as a
+# deletion and passed. A copy or rename carries a similarity score (`R100`); a modification may
+# carry a dissimilarity score under `-B`. No other status is scored — a scored deletion (`D100`)
+# is not something git prints, and reading it as a deletion would exempt it — and a score is a
+# percentage, so it never exceeds 100.
+STATUS_RE = re.compile(r"(?:[ADTUXB]|M(?P<m>\d{1,3})?|[CR](?P<cr>\d{1,3}))")
+
+
+def _valid_status(status: str) -> bool:
+    m = STATUS_RE.fullmatch(status)
+    if not m:
+        return False
+    score = m.group("m") or m.group("cr")
+    return score is None or int(score) <= 100
 
 
 def _matches(path: str, prefixes: tuple[str, ...]) -> bool:
@@ -97,11 +114,22 @@ def is_frozen(path: str) -> bool:
     return _matches(path, FROZEN)
 
 
+def is_frozen_ancestor(path: str) -> bool:
+    """`path` is a directory ABOVE a frozen path (MeshWeaver#7391). A name-status listing names
+    files, so a non-deletion AT a directory's own path is a file or symlink replacing that whole
+    directory: moving `deploy/aks` aside and adding the symlink `deploy/aks -> ../editable-aks`
+    lists the frozen children as deletions and an addition at `deploy/aks`, which no frozen prefix
+    matches — and re-opens every frozen path below it for editing through the link."""
+    prefix = path.rstrip("/") + "/"
+    return bool(path) and any(f.startswith(prefix) for f in FROZEN)
+
+
 def violations(listing: str) -> list[tuple[str, str]]:
     """Every (status, path) in a NUL-delimited name-status listing that touches a frozen path with
     anything but a deletion. The listing is a flat sequence of fields: status, path, status, path, …
-    A field this gate cannot read — an unknown status, or a status with no path after it — is itself
-    a violation: a change it could not read is a change it did not check."""
+    A field this gate cannot read — an unknown or malformed status token, a status with fewer path
+    fields than it needs, or an empty path — is itself a violation: a change it could not read is a
+    change it did not check."""
     out: list[tuple[str, str]] = []
     fields = listing.split("\0")
     if fields and fields[-1] == "":
@@ -109,15 +137,17 @@ def violations(listing: str) -> list[tuple[str, str]]:
     i = 0
     while i < len(fields):
         status = fields[i]
-        if not status or status[0] not in KNOWN_STATUS or i + 1 >= len(fields):
+        # A C or R entry carries two paths; --no-renames should never produce one, but read both.
+        width = 3 if status[:1] in ("C", "R") else 2
+        paths = fields[i + 1:i + width]
+        if (not _valid_status(status) or len(paths) != width - 1
+                or any(not p for p in paths)):
             # Past an unreadable field the status/path pairing is lost, so nothing after it can be
             # read either: one violation names where reading stopped.
             out.append(("?", status))
             break
-        # A C or R entry carries two paths; --no-renames should never produce one, but read both.
-        width = 3 if status[0] in "CR" else 2
-        for path in fields[i + 1:i + width]:
-            if is_frozen(path) and status[0] != "D":
+        for path in paths:
+            if status[0] != "D" and (is_frozen(path) or is_frozen_ancestor(path)):
                 out.append((status[0], path))
         i += width
     return out
@@ -201,6 +231,28 @@ def self_test() -> int:
          "M\0", 1),
         ("an empty listing is no change",
          "", 0),
+        # #7391: the ancestor replacement and the strict record reader.
+        ("a frozen path's ANCESTOR replaced by a symlink is refused (deploy/aks -> elsewhere)",
+         _z("D\tdeploy/aks/values.aks.yaml\nD\tdeploy/aks/manifests/x.yaml\nA\tdeploy/aks\n"
+            "A\teditable-aks/values.aks.yaml"), 1),
+        ("…at any depth (a file replacing .github/scripts)",
+         _z("A\t.github/scripts"), 1),
+        ("…but deleting at an ancestor path is allowed, and a sibling of it is not an ancestor",
+         _z("D\tdeploy/aks\nM\tdeploy/aksx\nM\tdeploy/aks-notes.md"), 0),
+        ("a rename with a MISSING destination is a violation, never a silent pass",
+         "R100\0docs/x.yaml\0", 1),
+        ("a status token with trailing garbage is not a deletion",
+         "Dgarbage\0deploy/helm/values.yaml\0", 1),
+        ("an EMPTY path field is a violation",
+         "M\0\0", 1),
+        ("a scored modification (-B) still reads",
+         "M073\0deploy/helm/values.yaml\0", 1),
+        ("a SCORED deletion is not a deletion (git never scores one)",
+         "D100\0deploy/helm/values.yaml\0", 1),
+        ("a score above 100 is malformed, never a silent pass",
+         "R101\0docs/x.yaml\0docs/y.yaml\0", 1),
+        ("…and a rename scored at the 100 bound between unfrozen paths stays clean",
+         "R100\0docs/x.yaml\0docs/y.yaml\0", 0),
     ]
     failed = 0
     for name, text, expected in cases:
