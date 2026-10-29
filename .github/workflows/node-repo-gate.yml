@@ -1100,6 +1100,52 @@ jobs:
           print("baseline=" + json.dumps(rows, separators=(",", ":")))
           PY
           echo "platform: resolved $(grep '^set=' "$ROWS" | cut -d= -f2-) (core $(grep '^sha=' "$ROWS" | cut -d= -f2- | cut -c1-9)); the plugins publication is read by identity at the upstream fetch"
+          # The core sha the set was built from, for the freeze reference below (diagnostic only).
+          echo "core-sha=$(grep '^sha=' "$ROWS" | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
+      # ───────────── A FREEZE IS A RETENTION REFERENCE (MeshWeaver#7378) ─────────────
+      # A lane frozen on a set pulls that set's bundles by identity, and the registry's prebuilt-bundle
+      # retention keeps an identity only when something references it. So every run that RESOLVED
+      # through a freeze files a reference on the registry (`/api/ci/platform-freezes`, presenting
+      # the same instance key it pulls with). The store stamps an expiry a week out, and each frozen
+      # run refreshes it: a lifted freeze stops protecting its set a week after its last run.
+      # Doc/Architecture/PrebuiltBundleRetention → "A CI freeze is a reference".
+      # 🚨 Not an input-shaped `if:` — the step runs whenever the plan resolved, and decides inside.
+      # A freeze it cannot file is RED naming what to provision: a frozen lane whose set the registry
+      # may collect is the failure this step exists to prevent, and silence would hide it.
+      - name: "A freeze files its set as a retention reference on the registry"
+        if: steps.digests.outputs.resolved == 'true'
+        env:
+          FREEZE: ${{ vars.MW_PLATFORM_REF }}
+          FROZEN_SET: ${{ steps.digests.outputs.platform-set }}
+          CORE_SHA: ${{ steps.digests.outputs.core-sha }}
+          REGISTRY_URL: ${{ inputs.registry-url }}
+          REGISTRY_KEY: ${{ secrets.registry-key }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FREEZE:-}" ]; then
+            echo "platform: not frozen — no retention reference to file"
+            exit 0
+          fi
+          missing=()
+          [ -n "${REGISTRY_URL:-}" ] || missing+=("registry-url (input) — the registry whose retention must keep the frozen set")
+          [ -n "${REGISTRY_KEY:-}" ] || missing+=("registry-key (secret) — the instance key the reference is filed with")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::this run is FROZEN on ${FROZEN_SET} (MW_PLATFORM_REF='${FREEZE}') and cannot file the freeze as a retention reference, so the registry may collect the set this lane pulls. Provision: ${missing[*]}. MeshWeaver#7378."
+            exit 1
+          fi
+          body=$(jq -nc --arg set "$FROZEN_SET" --arg freeze "$FREEZE" --arg sha "${CORE_SHA:-}" \
+            --arg repo "$GITHUB_REPOSITORY" --arg lane "${GITHUB_WORKFLOW}/${GITHUB_JOB}" \
+            --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{event:"platform-freeze", set:$set, freeze:$freeze, coreSha:$sha, repository:$repo, lane:$lane, run:$run}')
+          out="${RUNNER_TEMP:-/tmp}/freeze-reference.json"
+          code=$(curl -sS -o "$out" -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $REGISTRY_KEY" -H "Content-Type: application/json" \
+            --data "$body" "${REGISTRY_URL%/}/api/ci/platform-freezes") || code="000"
+          if [ "$code" != "200" ]; then
+            echo "::error::the registry at ${REGISTRY_URL} did not file the freeze on ${FROZEN_SET} as a retention reference (HTTP ${code}: $(head -c 300 "$out" 2>/dev/null | tr -d '\n')). Until it does, the registry may collect the set this lane is frozen on. MeshWeaver#7378."
+            exit 1
+          fi
+          echo "platform: frozen on ${FROZEN_SET} — filed as a retention reference on ${REGISTRY_URL} ($(jq -r '.path // "?"' "$out")), expires $(jq -r '.expiresAt // "?"' "$out")"
 
   # ─────────────────────────── 2. THE GATE, one job per shard ───────────────────────────
   gate:
