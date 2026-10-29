@@ -189,7 +189,10 @@ def _tokens(cond: str) -> list[str] | None:
 
 
 def _conjuncts(tokens: list[str]) -> list[list[str]]:
-    """Split on top-level `&&`, after dropping parentheses that enclose the whole expression."""
+    """Split on top-level `&&`, after dropping parentheses that enclose the whole expression. `&&` binds
+    tighter than `||`, so an expression with a top-level `||` is a DISJUNCTION and has no required
+    conjuncts: it is returned whole, as ONE part (Copilot on #7512 — `success() && true || <guard>` was
+    split into a required `success()`, although the guard's branch runs it after a red)."""
     def wrapped(t: list[str]) -> bool:
         if len(t) < 2 or t[0] != "(" or t[-1] != ")":
             return False
@@ -202,6 +205,12 @@ def _conjuncts(tokens: list[str]) -> list[list[str]]:
         return True
     while wrapped(tokens):
         tokens = tokens[1:-1]
+    depth = 0
+    for tok in tokens:
+        depth += tok == "("
+        depth -= tok == ")"
+        if tok == "||" and depth == 0:
+            return [list(tokens)]
     parts: list[list[str]] = [[]]
     depth = 0
     for tok in tokens:
@@ -677,6 +686,16 @@ jobs:
             "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result != 'success' || needs.b.result == 'failure')").replace(
             "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
             "  green:\n    needs: [a, b]\n    if: always() && needs.a.result == 'success' && needs.b.result == 'success'"), "", False),
+        # Copilot on #7512 — `&&` binds tighter than `||`: no top-level `&&` conjunct of a disjunction is required.
+        ("#7512 intermediate `success() && true || <schedule>` runs b after a's red", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: \"${{ success() && true || github.event_name == 'schedule' }}\", runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("#7512 control: intermediate `success() && (true || <schedule>)` keeps success() required", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: \"${{ success() && (true || github.event_name == 'schedule') }}\", runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", False),
+        ("#7512 success half `success() && true || <schedule>` closes the ledger on a red", pair.replace(
+            "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
+            "  green:\n    needs: [b]\n    if: \"${{ success() && true || github.event_name == 'schedule' }}\""), "", True),
         ("`on:` as a list with schedule, no reporter","on: [schedule, push]\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n", "", True),
     ]
     failures = 0

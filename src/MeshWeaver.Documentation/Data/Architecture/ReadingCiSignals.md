@@ -206,7 +206,7 @@ its `if:` is `success()`, `always()`/`!cancelled()` paired with `needs.<n>.resul
 direct need, a `needs.<n>.outputs.<o>` comparison, or an event/ref guard that is true for a scheduled run
 on main — so `failure()`, an `||` over needs, and `${{ false }}` are refused. "Every job" counts a
 job reached only through an intermediate whose `if:` keeps the implicit success() (no status function,
-or `success()` as a required `&&` conjunct); behind `always()`, `!cancelled()`, `failure()`,
+or `success()` as a required `&&` conjunct — `&&` binds tighter than `||`, so an `if:` with a top-level `||` has no required conjunct at all); behind `always()`, `!cancelled()`, `failure()`,
 `success() || …` or `!success()` the intermediate can succeed on a red, so its needs must be listed
 directly. And the failure half's `if:` is evaluated JOINTLY over every combination of its direct needs'
 results — `success`, `failure`, or `skipped` where a red ancestor can skip that need — other than
