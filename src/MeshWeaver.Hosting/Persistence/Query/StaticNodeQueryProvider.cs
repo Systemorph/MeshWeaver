@@ -599,7 +599,8 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
             }
             var text = !string.IsNullOrEmpty(node.Name) ? node.Name : (node.Path ?? string.Empty);
             var scored = scorer.Score(new[] { node }, parsed.TextSearch, _ => text).FirstOrDefault();
-            scores[i] = scored?.Score ?? 0;
+            // Exact name and Space matches lead (SearchRanking, #7381); fzf orders within a tier.
+            scores[i] = SearchRanking.Boost(node, parsed.TextSearch) + (scored?.Score ?? 0);
         }
         return scores;
     }

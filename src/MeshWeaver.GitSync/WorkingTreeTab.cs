@@ -85,9 +85,9 @@ public static class WorkingTreeTab
         var spacePath = SpaceRootPath(node?.Path ?? "");
 
         if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(GitSyncViews.Hint("Code workspace is available inside a Space."));
+            return stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.workspace.onlyInSpace")));
         if (string.IsNullOrEmpty(userId))
-            return stack.WithView(GitSyncViews.Hint("Sign in to use the code workspace."));
+            return stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.workspace.signIn")));
 
         // Seed the selection/refresh state once so the sub-views below have a stream to bind to.
         host.UpdateData(RefreshId, "0");
@@ -99,14 +99,12 @@ public static class WorkingTreeTab
         host.UpdateData(EditorContentId, "");
 
         stack = stack.WithView(Controls.H2(host.Localize("ui.codeWorkspace")).WithStyle("margin:0 0 8px 0;"));
-        stack = stack.WithView(GitSyncViews.Hint(
-            "Check out this Space's connected GitHub repository as a working tree, edit a file, and " +
-            "commit + push as yourself. The same checkout is what the AI assistants operate on."));
+        stack = stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.workspace.intro")));
 
         // Everything depends on the Space's connected repo (RepositoryUrl + Branch) from the GitHub-Sync config.
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
-            .Select(cfg => (UiControl?)BuildWorkspace(workingTrees, userId, cfg))
-            .StartWith((UiControl?)GitSyncViews.Hint("Loading repository settings…")));
+            .Select(cfg => (UiControl?)BuildWorkspace(workingTrees, userId, cfg, host.ViewerLocale()))
+            .StartWith((UiControl?)GitSyncViews.Hint(host.Localize("ui.gitSync.loadingRepoSettings"))));
 
         // Result/status line.
         stack = stack.WithView((h, _) => h.NoticeView(ResultId));
@@ -114,11 +112,11 @@ public static class WorkingTreeTab
         return stack;
     }
 
-    private static UiControl BuildWorkspace(GitWorkingTreeService wt, string userId, GitHubSyncConfig? cfg)
+    private static UiControl BuildWorkspace(GitWorkingTreeService wt, string userId, GitHubSyncConfig? cfg, string? locale)
     {
         var repoFullName = RepoFullName(cfg?.RepositoryUrl);
         if (repoFullName is null)
-            return GitSyncViews.Hint("Connect a GitHub repository in the GitHub Sync tab first.");
+            return GitSyncViews.Hint(LocalizationCatalog.Get("ui.gitSync.workspace.connectFirst", locale));
 
         var repoSlug = RepoSlug(repoFullName);
         var branch = string.IsNullOrWhiteSpace(cfg!.Branch) ? "main" : cfg.Branch;
@@ -126,16 +124,16 @@ public static class WorkingTreeTab
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:12px;");
 
         // Checkout / pull.
-        stack = stack.WithView(Controls.Button($"Check out {repoFullName} ({branch})")
+        stack = stack.WithView(Controls.Button(LocalizationCatalog.Get("ui.gitSync.workspace.checkOut", locale, repoFullName, branch))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.ArrowDownload())
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(ResultId, ActionNotice.Info($"Checking out {repoFullName}…"));
+                ctx.Host.UpdateData(ResultId, ActionNotice.Info(LocalizationCatalog.Get("ui.gitSync.workspace.checkingOut", ctx.Host.ViewerLocale(), repoFullName)));
                 wt.Checkout(userId, repoFullName, branch).Subscribe(
                     tree =>
                     {
-                        ctx.Host.UpdateData(ResultId, ActionNotice.Success($"Checked out {repoFullName} on {tree.Branch}."));
+                        ctx.Host.UpdateData(ResultId, ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.workspace.checkedOut", ctx.Host.ViewerLocale(), repoFullName, tree.Branch)));
                         ctx.Host.UpdateData(RefreshId, Guid.NewGuid().ToString("N"));
                     },
                     ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
@@ -147,12 +145,12 @@ public static class WorkingTreeTab
             .SelectMany(_ => wt.Status(userId, repoSlug)
                 .Select(s => (UiControl?)StatusView(s, h.ViewerLocale()))
                 .Catch<UiControl?, Exception>(_ => Observable.Return((UiControl?)GitSyncViews.Hint(
-                    "Not checked out yet — use the button above."))))
+                    LocalizationCatalog.Get("ui.gitSync.workspace.notCheckedOut", locale)))))
             .StartWith(GitSyncViews.Hint("…")));
 
         // File filter.
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference(""))
-            .WithPlaceholder("Filter files…")
+            .WithPlaceholder(LocalizationCatalog.Get("ui.gitSync.workspace.filter", locale))
             .WithImmediate(true) with
         { DataContext = LayoutAreaReference.GetDataPointer(FilterId) });
 
@@ -161,21 +159,21 @@ public static class WorkingTreeTab
             .SelectMany(_ => wt.ListFiles(userId, repoSlug)
                 .Catch<IReadOnlyList<string>, Exception>(_ => Observable.Return((IReadOnlyList<string>)Array.Empty<string>())))
             .CombineLatest(h.Stream.GetDataStream<string>(FilterId).StartWith(""), (files, filter) => (files, filter))
-            .Select(x => (UiControl?)BuildFileList(wt, userId, repoSlug, x.files, x.filter))
-            .StartWith((UiControl?)GitSyncViews.Hint("Loading files…")));
+            .Select(x => (UiControl?)BuildFileList(wt, userId, repoSlug, x.files, x.filter, locale))
+            .StartWith((UiControl?)GitSyncViews.Hint(LocalizationCatalog.Get("ui.gitSync.workspace.loadingFiles", locale))));
 
         // Editor pane for the selected file (re-renders when a different file is opened).
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(SelectedFileId)
             .Select(path => (UiControl?)(string.IsNullOrEmpty(path)
-                ? GitSyncViews.Hint("Select a file to edit.")
-                : BuildEditorPane(wt, userId, repoSlug, branch, path)))
-            .StartWith((UiControl?)GitSyncViews.Hint("Select a file to edit.")));
+                ? GitSyncViews.Hint(LocalizationCatalog.Get("ui.gitSync.workspace.selectFile", locale))
+                : BuildEditorPane(wt, userId, repoSlug, branch, path, locale)))
+            .StartWith((UiControl?)GitSyncViews.Hint(LocalizationCatalog.Get("ui.gitSync.workspace.selectFile", locale))));
 
         return stack;
     }
 
     private static UiControl BuildFileList(
-        GitWorkingTreeService wt, string userId, string repoSlug, IReadOnlyList<string> files, string? filter)
+        GitWorkingTreeService wt, string userId, string repoSlug, IReadOnlyList<string> files, string? filter, string? locale)
     {
         const int cap = 200;
         var matched = string.IsNullOrWhiteSpace(filter)
@@ -188,8 +186,8 @@ public static class WorkingTreeTab
         if (matched.Count == 0)
         {
             return list.WithView(GitSyncViews.Hint(files.Count == 0
-                ? "No files (check out the repository first)."
-                : "No files match the filter."));
+                ? LocalizationCatalog.Get("ui.gitSync.workspace.noFiles", locale)
+                : LocalizationCatalog.Get("ui.gitSync.workspace.noMatch", locale)));
         }
 
         foreach (var file in matched.Take(cap))
@@ -214,7 +212,7 @@ public static class WorkingTreeTab
         }
 
         if (matched.Count > cap)
-            list = list.WithView(GitSyncViews.Hint($"… {matched.Count - cap} more — refine the filter."));
+            list = list.WithView(GitSyncViews.Hint(LocalizationCatalog.Get("ui.gitSync.workspace.moreFiles", locale, matched.Count - cap)));
 
         return list;
     }
@@ -245,14 +243,14 @@ public static class WorkingTreeTab
             {
                 return ctx.Host.Stream.GetDataStream<string>(EditorContentId).Take(1).Do(content =>
                 {
-                    ctx.Host.UpdateData(ResultId, ActionNotice.Info($"Committing {path}…"));
+                    ctx.Host.UpdateData(ResultId, ActionNotice.Info(LocalizationCatalog.Get("ui.gitSync.workspace.committing", ctx.Host.ViewerLocale(), path)));
                     wt.WriteFile(userId, repoSlug, path, content ?? "")
                         .SelectMany(_ => wt.CommitAndPush(userId, repoSlug, $"Edit {path} (via portal)", branch))
                         .Subscribe(
                             r =>
                             {
                                 ctx.Host.UpdateData(ResultId, r.Ok
-                                    ? ActionNotice.Success($"Committed & pushed {path}.")
+                                    ? ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.workspace.committed", ctx.Host.ViewerLocale(), path))
                                     : ActionNotice.Error(r.Message));
                                 ctx.Host.UpdateData(RefreshId, Guid.NewGuid().ToString("N"));
                             },

@@ -89,7 +89,8 @@ public static class CompileDiagnostics
         // compile already reflects generation). Avoids loading any generator on every failed compile.
         var compilation = GeneratorPipeline.RunSourceGenerators(
             CSharpCompilation.Create(inputs.AssemblyName, trees, inputs.References, inputs.CompilationOptions),
-            Array.Empty<string>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, ct);
+            Array.Empty<string>(), new SourceGeneratorLedger(), inputs.AssemblyName,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, ct);
 
         var diags = compilation.GetDiagnostics(ct);
         if (diags.IsDefaultOrEmpty) return Array.Empty<Lsp.DiagnosticInfo>();

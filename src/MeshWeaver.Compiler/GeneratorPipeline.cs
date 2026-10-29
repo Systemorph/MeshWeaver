@@ -119,10 +119,16 @@ public static class GeneratorPipeline
     /// <c>IScope&lt;,&gt;</c> implementations → CS0101. Legacy nodes that still carry that
     /// <c>#r</c> keep compiling (built-in supersedes it, and the strip above keeps it out of the
     /// NuGet resolve set so it never round-trips).
+    ///
+    /// <para>🚨 The generators load through <paramref name="ledger"/> for
+    /// <paramref name="loadedFor"/>: a different build of a generator this process already loaded for
+    /// another NodeType throws <see cref="SourceGeneratorBuildConflictException"/> and fails this
+    /// compile, naming both (#7444).</para>
     /// </summary>
     internal static CSharpCompilation RunSourceGenerators(
-        CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
-        => RunSourceGeneratorsWithNodeOutput(compilation, generatorAssemblyPaths, logger, ct, out _);
+        CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths,
+        SourceGeneratorLedger ledger, string loadedFor, ILogger logger, CancellationToken ct)
+        => RunSourceGeneratorsWithNodeOutput(compilation, generatorAssemblyPaths, ledger, loadedFor, logger, ct, out _);
 
     /// <summary>
     /// As <see cref="RunSourceGenerators"/>,
@@ -132,7 +138,8 @@ public static class GeneratorPipeline
     /// (<c>InMeshImpersonationReferences</c>), which must scan it AFTER generation (#6619 review).
     /// </summary>
     internal static CSharpCompilation RunSourceGeneratorsWithNodeOutput(
-        CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger,
+        CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths,
+        SourceGeneratorLedger ledger, string loadedFor, ILogger logger,
         CancellationToken ct, out ImmutableArray<SyntaxTree> nodeGeneratedTrees)
     {
         nodeGeneratedTrees = [];
@@ -140,9 +147,11 @@ public static class GeneratorPipeline
         if (allPaths.Count == 0)
             return compilation;
         var builtIn = SourceGeneratorLoader.Discover(
-            allPaths.Where(p => BuiltInGeneratorPaths.Contains(p, StringComparer.OrdinalIgnoreCase)), logger);
+            allPaths.Where(p => BuiltInGeneratorPaths.Contains(p, StringComparer.OrdinalIgnoreCase)),
+            ledger, loadedFor, logger);
         var nodeSupplied = SourceGeneratorLoader.Discover(
-            allPaths.Where(p => !BuiltInGeneratorPaths.Contains(p, StringComparer.OrdinalIgnoreCase)), logger);
+            allPaths.Where(p => !BuiltInGeneratorPaths.Contains(p, StringComparer.OrdinalIgnoreCase)),
+            ledger, loadedFor, logger);
         var generators = builtIn.AddRange(nodeSupplied);
         if (generators.IsDefaultOrEmpty)
             return compilation;

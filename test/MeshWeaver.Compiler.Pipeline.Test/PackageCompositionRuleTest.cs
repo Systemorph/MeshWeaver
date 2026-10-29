@@ -189,7 +189,7 @@ public sealed class PackageCompositionRuleTest : IDisposable
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
 
         SourceGeneratorLoader.CanDefineGenerators(helper).Should().BeFalse();
-        SourceGeneratorLoader.Discover([helper, generator], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
+        SourceGeneratorLoader.Discover([helper, generator], new SourceGeneratorLedger(), "Test/Type", Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
             .Should().ContainSingle();
     }
 
@@ -225,7 +225,7 @@ public sealed class PackageCompositionRuleTest : IDisposable
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
 
         SourceGeneratorLoader.RuntimeAssetOf(stub).Should().Be(runtime);
-        SourceGeneratorLoader.Discover([stub, b, generator], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
+        SourceGeneratorLoader.Discover([stub, b, generator], new SourceGeneratorLedger(), "Test/Type", Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
             .Should().ContainSingle();
         System.Runtime.Loader.AssemblyLoadContext.Default.Assemblies
             .Single(a => a.GetName().Name == depName).Location.Should().Be(runtime);

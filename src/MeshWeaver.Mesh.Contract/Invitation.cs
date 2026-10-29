@@ -69,6 +69,17 @@ public record Invitation
     public string? Message { get; init; }
 
     /// <summary>
+    /// The language the invitation email is written in, as a tag from
+    /// <c>MeshWeaver.Messaging.Locales.Supported</c> (<c>en</c>, <c>de</c>). The invitee has no
+    /// account yet, so there is no profile to read a language from: the INVITING host picks it, and
+    /// it defaults to the host's own language (their <c>AccessContext.Locale</c>), stamped when the
+    /// invitation is created (#7482). <c>null</c> on invitations written before the field existed,
+    /// which render in English.
+    /// </summary>
+    [Browsable(false)]
+    public string? Locale { get; init; }
+
+    /// <summary>
     /// Optional path of the Space this person was invited to (set by
     /// <c>SpaceInviteService</c> when inviting a not-yet-onboarded email to a specific Space).
     /// When set, the invitation email addresses the Space by name and links straight to it
