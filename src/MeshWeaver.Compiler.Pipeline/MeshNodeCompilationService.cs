@@ -43,6 +43,10 @@ internal class MeshNodeCompilationService(
     private readonly Action<CSharpCompilation, Exception>? _captureEmitFailure =
         EmitReferenceCaptureScheduler.ForCi(hub);
 
+    // Which build of each source generator this service's compiles loaded, and for which NodeType:
+    // a second, different build is refused naming both (#7444). An instance on this mesh singleton.
+    private readonly SourceGeneratorLedger _generatorLedger = new();
+
     // Compile pool for the bare-async leaf (CompilationInputs assembly): a plain
     // Observable.FromAsync deadlocks under a blocking subscriber because SubscribeOn
     // only moves the subscribe, not the await continuation. The pool runs the leaf
@@ -2422,8 +2426,11 @@ internal class MeshNodeCompilationService(
             references,
             parsePath: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
             ct);
+        // A different build of a generator another NodeType already loaded into this process throws
+        // SourceGeneratorBuildConflictException (a CompilationException) naming both NodeTypes, and
+        // the terminal write-back parks this one at CompilationStatus=Error with that message (#7444).
         var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
-            authored, nugetAssemblyPaths, logger, ct, out var nodeGeneratedTrees);
+            authored, nugetAssemblyPaths, _generatorLedger, node.Path, logger, ct, out var nodeGeneratedTrees);
         // Option C (Doc/Architecture/InMeshImpersonation): references to impersonation APIs in the
         // AUTHORED source AND in what a NODE-SUPPLIED generator (one the node #r'd) emitted — judged
         // after generation, because such a generator's output is the author's code (#6619 review);
