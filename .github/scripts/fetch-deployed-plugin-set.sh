@@ -1,23 +1,35 @@
 #!/usr/bin/env bash
 # fetch-deployed-plugin-set.sh <out-dir> [<repo>]
 #
-# Downloads the NEWEST published plugin module set — the four module bundles
-# (MeshWeaver.AI, .Markdown.Collaboration, .Maps, .Payments.Stripe) that the newest main-cd run on
-# `main` packed against the platform it promoted — into <out-dir>. That platform is what the fleet
-# self-rolls to, so these are the plugin BYTES the running portals load: the "plugin N" of the
-# compatibility ladder (Doc/Architecture/PlatformCompatibilityLadder, policy
-# platform-backwards-compatibility). The compatibility gate then links THESE unchanged bytes against a
-# candidate platform (this pull request's core build).
+# Downloads the NEWEST published plugin module set — EVERY module bundle the sealed `plugins`
+# publication carries, as the newest promoted main-cd run on `main` handed it on
+# (`published-module-set`: the bundles plus the publication's own `modules/_index`) — into <out-dir>.
+# That platform is what the fleet self-rolls to, so these are the plugin BYTES the running portals
+# load: the "plugin N" of the compatibility ladder (Doc/Architecture/PlatformCompatibilityLadder,
+# policy platform-backwards-compatibility). The compatibility gate then links THESE unchanged bytes
+# against a candidate platform (this pull request's core build).
 #
-# 🚨 Fails RED — never "nothing to check" — when no run carries all four: a verdict over no plugins
-# is not a verdict, and a gate that passed on a missing input is the skip-trapdoor AGENTS.md forbids.
-# Needs GH_TOKEN with actions:read (the workflow's own token suffices; artifacts of this public
-# repository are readable from fork pull requests too).
+# 🚨 THE WHOLE PUBLICATION, proven (MeshWeaver#7409). This used to fetch four hard-coded modules
+# (AI, Markdown.Collaboration, Maps, Payments.Stripe), so a core change that broke any other published
+# module passed the ladder green having checked nothing for it. Now the set is the publication's own
+# index, and check-ladder-coverage.py refuses a module the index lists but no downloaded bundle
+# provides.
+#
+# 🚨 Fails RED — never "nothing to check" — when no promoted run carries a set: a verdict over no
+# plugins is not a verdict, and a gate that passed on a missing input is the skip-trapdoor AGENTS.md
+# forbids. Needs GH_TOKEN with actions:read (the workflow's own token suffices; artifacts of this
+# public repository are readable from fork pull requests too).
 set -euo pipefail
 
 out="${1:?usage: fetch-deployed-plugin-set.sh <out-dir> [<repo>]}"
 repo="${2:-${GITHUB_REPOSITORY:-Systemorph/MeshWeaver}}"
-modules=(MeshWeaver.AI MeshWeaver.Markdown.Collaboration MeshWeaver.Maps MeshWeaver.Payments.Stripe)
+full_set="published-module-set"
+# TRANSITION ONLY: the per-module artifacts main-cd handed on before #7409. Read ONLY while no
+# unexpired `published-module-set` exists on main at all (main-cd uploads the full set FIRST, so
+# once one exists a run carrying only these cannot be newer). The narrower coverage is said out
+# loud as a warning — it is four modules' evidence, never presented as the publication's.
+legacy_modules=(MeshWeaver.AI MeshWeaver.Markdown.Collaboration MeshWeaver.Maps MeshWeaver.Payments.Stripe)
+coverage_check="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-ladder-coverage.py"
 
 mkdir -p "$out"
 # 🚨 EVERY lookup goes through github-api-get.py, never `gh api … || continue` (2026-10-27). That
@@ -53,11 +65,24 @@ stop_unless_absent() {
 # core pull request's ladder went red over a set that existed. The question is "the newest unexpired
 # bundle set from a promoted main-cd run on main", so it is asked of the artifact listing itself, newest
 # first; retention (not a run count) is the only horizon.
-listing=$(api "repos/$repo/actions/artifacts?name=module-bundle-${modules[0]}&per_page=100") || {
-  rc=$?; [ "$rc" -ne 4 ] || rc=1
-  stop_unless_absent "$rc" "listing the module-bundle-${modules[0]} artifacts on $repo"
+# main_runs_of <artifact-name> — the run ids (newest first) on main that hold an unexpired artifact of
+# that name. A 404 for the listing is an empty answer; anything else that is not an answer stops RED.
+main_runs_of() {
+  local listing rc=0
+  listing=$(api "repos/$repo/actions/artifacts?name=$1&per_page=100") || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -ne 4 ] || return 0
+    stop_unless_absent "$rc" "listing the $1 artifacts on $repo"
+  fi
+  jq -r '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main") | .workflow_run.id] | unique_by(.) | reverse | .[]' <<<"$listing"
 }
-runs=$(jq -r '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main") | .workflow_run.id] | unique_by(.) | reverse | .[]' <<<"$listing")
+
+runs=$(main_runs_of "$full_set")
+shape="full"
+if [ -z "$runs" ]; then
+  runs=$(main_runs_of "module-bundle-${legacy_modules[0]}")
+  shape="legacy"
+fi
 
 chosen=""
 chosen_sha=""
@@ -69,25 +94,37 @@ for run in $runs; do
   arts=$(api "repos/$repo/actions/runs/$run/artifacts?per_page=100") || { stop_unless_absent $? "listing the artifacts of run $run"; continue; }
   names=$(jq -r '[.artifacts[] | select(.expired == false) | .name] | join(" ")' <<<"$arts")
   complete=1
-  for m in "${modules[@]}"; do
-    case " $names " in *" module-bundle-$m "*) ;; *) complete=0 ;; esac
-  done
+  if [ "$shape" = "full" ]; then
+    case " $names " in *" $full_set "*) ;; *) complete=0 ;; esac
+  else
+    for m in "${legacy_modules[@]}"; do
+      case " $names " in *" module-bundle-$m "*) ;; *) complete=0 ;; esac
+    done
+  fi
   [ "$complete" -eq 1 ] || continue
   jobs=$(api "repos/$repo/actions/runs/$run/jobs?per_page=100") || { stop_unless_absent $? "listing the jobs of run $run"; continue; }
   promoted=$(jq -r '[.jobs[] | select(.name | startswith("Promote:")) | .conclusion] | first // empty' <<<"$jobs")
   if [ "$promoted" = "success" ]; then chosen="$run"; chosen_sha=$(jq -r '.head_sha' <<<"$run_json"); break; fi
 done
 
-[ -n "$chosen" ] || { echo "::error::no COMPLETED main-cd run on main that still holds an unexpired module-bundle artifact both PROMOTED its set and holds all four module-bundle-* artifacts (${modules[*]}) — the deployed plugin set is not available, so no compatibility verdict can be given. A green main-cd run re-publishes them (published-modules reads the sealed plugins publication); do NOT waive this check."; exit 1; }
+[ -n "$chosen" ] || { echo "::error::no COMPLETED main-cd run on main that still holds an unexpired $full_set artifact (or, before the first one exists, all four legacy module-bundle-* artifacts) also PROMOTED its set — the deployed plugin set is not available, so no compatibility verdict can be given. A green main-cd run re-publishes it (published-modules reads the sealed plugins publication); do NOT waive this check."; exit 1; }
 
-for m in "${modules[@]}"; do
-  gh run download "$chosen" -R "$repo" -n "module-bundle-$m" -D "$out/$m" \
-    || { echo "::error::run $chosen advertises module-bundle-$m but it could not be downloaded — if gh printed a rate limit above, this is NO VERDICT: re-run after the reset"; exit 1; }
-done
-n=$(find "$out" -name '*.module.nupkg' | wc -l | tr -d ' ')
-[ "$n" -eq "${#modules[@]}" ] || { echo "::error::expected ${#modules[@]} module bundles from run $chosen, found $n"; exit 1; }
+if [ "$shape" = "full" ]; then
+  gh run download "$chosen" -R "$repo" -n "$full_set" -D "$out" \
+    || { echo "::error::run $chosen advertises $full_set but it could not be downloaded — if gh printed a rate limit above, this is NO VERDICT: re-run after the reset"; exit 1; }
+  # 🚨 Every module the publication's index lists must be on the ladder (#7409) — or RED.
+  python3 "$coverage_check" --index "$out/$full_set.index" --bundles-dir "$out"
+else
+  for m in "${legacy_modules[@]}"; do
+    gh run download "$chosen" -R "$repo" -n "module-bundle-$m" -D "$out/$m" \
+      || { echo "::error::run $chosen advertises module-bundle-$m but it could not be downloaded — if gh printed a rate limit above, this is NO VERDICT: re-run after the reset"; exit 1; }
+  done
+  n=$(find "$out" -name '*.module.nupkg' | wc -l | tr -d ' ')
+  [ "$n" -eq "${#legacy_modules[@]}" ] || { echo "::error::expected ${#legacy_modules[@]} module bundles from run $chosen, found $n"; exit 1; }
+  echo "::warning::LADDER COVERAGE NOT MEASURED: no promoted main-cd run on main holds a $full_set yet, so this ladder links only the ${#legacy_modules[@]} legacy per-module bundles (${legacy_modules[*]}) — NOT every module the sealed plugins publication carries (#7409). The next promoted main-cd run hands on the whole publication."
+fi
 sha="$chosen_sha"
-echo "deployed plugin set: main-cd run $chosen (platform commit $sha) — $(find "$out" -name '*.module.nupkg' -exec basename {} \; | sort | tr '\n' ' ')"
+echo "deployed plugin set: main-cd run $chosen (platform commit $sha, $shape set) — $(find "$out" -name '*.module.nupkg' -exec basename {} \; | sort | tr '\n' ' ')"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  { echo "run=$chosen"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
+  { echo "run=$chosen"; echo "sha=$sha"; echo "shape=$shape"; } >> "$GITHUB_OUTPUT"
 fi
