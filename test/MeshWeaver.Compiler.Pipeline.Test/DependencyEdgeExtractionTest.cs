@@ -568,7 +568,9 @@ public class DependencyEdgeExtractionTest
     /// change to the module breaks the consumer's compile — but the compiler discards that code, so the
     /// image carries no <c>AssemblyRef</c> for it. Six shapes, each on its own module: <c>if (false)</c>,
     /// <c>false &amp;&amp; …</c>, <c>true || …</c>, a constant ternary's dead arm, <c>while (false)</c>,
-    /// <c>for (…; false; …)</c>, and a named <c>const bool</c> condition. Under BOTH optimisation levels
+    /// <c>for (…; false; …)</c>, a named <c>const bool</c> condition, conditions built from <c>?:</c>,
+    /// <c>nameof</c> and <c>sizeof</c>, and a <c>foreach</c> whose extension <c>GetEnumerator</c> no
+    /// name spells. Under BOTH optimisation levels
     /// (the bake emits Debug) every one is still a module edge. On unfixed code the shapes whose
     /// AssemblyRef the compiler dropped were missing.
     /// Negative control: a constant-TRUE branch is edged once from the image, a non-constant condition
@@ -596,8 +598,27 @@ public class DependencyEdgeExtractionTest
             ("DepGraphProbeWhileFalse", "DepGraphProbe.WhileFalse", "PWhile"),
             ("DepGraphProbeForFalse", "DepGraphProbe.ForFalse", "PFor"),
             ("DepGraphProbeConstFlag", "DepGraphProbe.ConstFlag", "PConst"),
+            ("DepGraphProbeTernaryCondition", "DepGraphProbe.TernaryCondition", "PTerCond"),
+            ("DepGraphProbeNameofCondition", "DepGraphProbe.NameofCondition", "PNameof"),
+            ("DepGraphProbeSizeofCondition", "DepGraphProbe.SizeofCondition", "PSizeof"),
         };
-        var dead = deadShapes.Select(s => Ext(s.Assembly, s.Ns, s.Method)).ToArray();
+        var dead = deadShapes.Select(s => Ext(s.Assembly, s.Ns, s.Method))
+            // A use NO name spells: a foreach over an int binds this module's extension GetEnumerator.
+            .Append(EmitModule("DepGraphProbeImplicitForeach", """
+                namespace DepGraphProbe.ImplicitForeach;
+                /// <summary>An extension enumerator a foreach binds without naming it.</summary>
+                public static class E
+                {
+                    /// <summary>Discarded with its branch.</summary>
+                    public static System.Collections.Generic.IEnumerator<int> GetEnumerator(this int count)
+                    {
+                        for (var i = 0; i < count; i++)
+                            yield return i;
+                    }
+                }
+                """))
+            .ToArray();
+        deadShapes = [.. deadShapes, ("DepGraphProbeImplicitForeach", "DepGraphProbe.ImplicitForeach", "GetEnumerator")];
         var live = Ext("DepGraphProbeIfTrue", "DepGraphProbe.IfTrue", "PLive");
         var flagged = Ext("DepGraphProbeRuntimeFlag", "DepGraphProbe.RuntimeFlag", "PFlag");
         var unused = Ext("DepGraphProbeNeverUsed", "DepGraphProbe.NeverUsed", "PNever");
@@ -613,6 +634,10 @@ public class DependencyEdgeExtractionTest
                 using DepGraphProbe.WhileFalse;
                 using DepGraphProbe.ForFalse;
                 using DepGraphProbe.ConstFlag;
+                using DepGraphProbe.TernaryCondition;
+                using DepGraphProbe.NameofCondition;
+                using DepGraphProbe.SizeofCondition;
+                using DepGraphProbe.ImplicitForeach;
                 using DepGraphProbe.IfTrue;
                 using DepGraphProbe.RuntimeFlag;
                 public static class P
@@ -626,6 +651,10 @@ public class DependencyEdgeExtractionTest
                     public static void W() { while (false) { "x".PWhile(); } }
                     public static void F() { for (var i = 0; false; i++) { "x".PFor(); } }
                     public static void C() { if (Off) { "x".PConst(); } }
+                    public static void TC() { if (true ? false : true) { "x".PTerCond(); } }
+                    public static void N() { if (nameof(P) == "Other") { "x".PNameof(); } }
+                    public static void S() { if (sizeof(int) == 8) { "x".PSizeof(); } }
+                    public static void Fe() { if (false) { foreach (var i in 3) { } } }
                     public static void L() { if (true) { "x".PLive(); } }
                     public static void R() { if (Flag) { "x".PFlag(); } }
                 }

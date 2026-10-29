@@ -659,9 +659,24 @@ public static class DependencyEdgeExtraction
             // module it uses still breaks this type — yet emits no IL and leaves no AssemblyRef:
             // `if (false) { … }`, `false && …`, `true || …`, a constant ternary's dead arm, `while (false)`,
             // `for (…; false; …)`. Every name in such a branch is bound like an erased call's arguments.
+            // Such a branch also binds members NO name spells (an extension GetEnumerator behind a
+            // foreach, an awaiter, a Deconstruct, a collection initializer's Add, a user-defined operator
+            // or conversion), so every other node in it is bound through BoundSymbols as well.
             foreach (var unreachable in ConstantUnreachableBranches(root, () => model ??= compilation.GetSemanticModel(tree), ct))
-                foreach (var inner in unreachable.DescendantNodesAndSelf().OfType<SimpleNameSyntax>())
-                    erased.Add(inner);
+                foreach (var inner in unreachable.DescendantNodesAndSelf())
+                {
+                    if (inner is SimpleNameSyntax simpleName)
+                    {
+                        erased.Add(simpleName);
+                        continue;
+                    }
+                    if (pending.Count == 0)
+                        continue;
+                    model ??= compilation.GetSemanticModel(tree);
+                    foreach (var symbol in BoundSymbols(inner, model, ct))
+                        if (symbol is not null)
+                            Record(symbol);
+                }
             foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>())
             {
                 if (pending.Count == 0)
@@ -674,28 +689,31 @@ public static class DependencyEdgeExtraction
                 if (symbols.IsEmpty && model.GetTypeInfo(name, ct).Type is { } type)
                     symbols = [type];
                 foreach (var symbol in symbols)
-                {
-                    var declared = symbol switch
-                    {
-                        IAliasSymbol alias => alias.Target,
-                        IMethodSymbol method => (method.ReducedFrom ?? method).OriginalDefinition,
-                        _ => symbol.OriginalDefinition,
-                    };
-                    if (declared is INamespaceSymbol
-                        || declared.ContainingAssembly is not { } owner
-                        || !pending.TryGetValue(owner, out var reference))
-                        continue;
-                    found[owner.Identity.Name] = new DependencyEdge
-                    {
-                        Target = owner.Identity.Name,
-                        Kind = DependencyEdgeKinds.Module,
-                        TargetBuildMvid = MvidOf(reference),
-                    };
-                    pending.Remove(owner);
-                }
+                    Record(symbol);
             }
         }
         return found.Values;
+
+        void Record(ISymbol symbol)
+        {
+            var declared = symbol switch
+            {
+                IAliasSymbol alias => alias.Target,
+                IMethodSymbol method => (method.ReducedFrom ?? method).OriginalDefinition,
+                _ => symbol.OriginalDefinition,
+            };
+            if (declared is INamespaceSymbol
+                || declared.ContainingAssembly is not { } owner
+                || !pending.TryGetValue(owner, out var reference))
+                return;
+            found[owner.Identity.Name] = new DependencyEdge
+            {
+                Target = owner.Identity.Name,
+                Kind = DependencyEdgeKinds.Module,
+                TargetBuildMvid = MvidOf(reference),
+            };
+            pending.Remove(owner);
+        }
     }
 
     /// <summary>
@@ -707,8 +725,8 @@ public static class DependencyEdgeExtraction
     /// </summary>
     /// <remarks>
     /// Only a condition that CAN be constant is bound — one built solely from literals, names, member
-    /// accesses, parentheses, casts, <c>default</c> and unary/binary operators (no call, no assignment, no
-    /// element access, no pattern) — so the cost stays local bindings, never a second full binding
+    /// accesses, parentheses, casts, <c>default</c>, <c>sizeof</c>, an opaque <c>nameof</c>, <c>?:</c> and
+    /// unary/binary operators (no other call, no assignment, no element access, no pattern) — so the cost stays local bindings, never a second full binding
     /// pass. <paramref name="model"/> is created on first need.
     /// </remarks>
     private static IEnumerable<SyntaxNode> ConstantUnreachableBranches(
@@ -757,8 +775,12 @@ public static class DependencyEdgeExtraction
 
     /// <summary>Whether <paramref name="expression"/> is built only from shapes a C# constant can take.</summary>
     private static bool CanBeConstant(ExpressionSyntax expression) =>
-        expression.DescendantNodesAndSelf().All(n => n switch
+        // A nameof(…) is OPAQUE: a constant whatever its operand names, and the operand is never
+        // descended into, so it cannot admit an ordinary call.
+        expression.DescendantNodesAndSelf(descendIntoChildren: n => !IsNameof(n)).All(n => n switch
         {
+            InvocationExpressionSyntax invocation => IsNameof(invocation),
+            ConditionalExpressionSyntax or SizeOfExpressionSyntax => true,
             LiteralExpressionSyntax or IdentifierNameSyntax or QualifiedNameSyntax or AliasQualifiedNameSyntax
                 or PredefinedTypeSyntax or ParenthesizedExpressionSyntax or CastExpressionSyntax
                 or DefaultExpressionSyntax or CheckedExpressionSyntax or GenericNameSyntax or TypeArgumentListSyntax
@@ -770,6 +792,12 @@ public static class DependencyEdgeExtraction
                                              && !binary.IsKind(SyntaxKind.AsExpression),
             _ => false,
         });
+
+    private static bool IsNameof(SyntaxNode node) =>
+        node is InvocationExpressionSyntax
+        {
+            Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" }, ArgumentList.Arguments.Count: 1,
+        };
 
     /// <summary>The names under <paramref name="ns"/> whose use the compiler can ERASE from the
     /// emitted image: every type name (an attribute type's also without its <c>Attribute</c>

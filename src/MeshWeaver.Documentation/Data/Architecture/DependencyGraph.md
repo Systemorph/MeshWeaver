@@ -196,9 +196,11 @@ the body of `if (false)` (the else of `if (true)`), the right operand of `false 
 `true || …`, a constant `?:`'s dead arm, the body of `while (false)` and of `for (…; false; …)` with
 its incrementors — a named `const bool` condition included. Measured under both optimisation levels
 (the bake emits Debug): every one of those shapes leaves NO `AssemblyRef`, so every name in such a
-branch is bound like an erased call's arguments. Only a condition built solely from shapes a constant
-can take (literals, names, member accesses, parentheses, casts, `default`, operators — never a call)
-is bound to ask whether it is constant. Only those nodes are bound, so this never costs a second
+branch is bound like an erased call's arguments, and so is every use no name spells (an extension
+`GetEnumerator` behind a `foreach`, an awaiter, a `Deconstruct`, a collection initializer's `Add`, a
+user-defined operator or conversion). Only a condition built solely from shapes a constant can take
+(literals, names, member accesses, parentheses, casts, `default`, `sizeof`, `?:`, an opaque `nameof`,
+operators — never another call) is bound to ask whether it is constant. Only those nodes are bound, so this never costs a second
 binding pass.
 
 🚨 **Why not "a symbol whose containing assembly is another NodeType's assembly".** A NodeType
