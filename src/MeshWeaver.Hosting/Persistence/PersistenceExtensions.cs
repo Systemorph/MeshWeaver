@@ -873,6 +873,13 @@ public static class PersistenceExtensions
             sp.GetRequiredService<InProcessMeshChangeFeed>());
         services.TryAddSingleton<IMeshInvalidationFeed>(sp =>
             sp.GetRequiredService<InProcessMeshChangeFeed>());
+        // #7380 — the durable record of creates refused while the store was unreachable, re-issued
+        // once by PendingWriteRecovery when the store answers again. The journal directory (a volume
+        // that is not the database) is optional; without it an intent lives for the process.
+        services.TryAddSingleton(sp => new PendingWriteLedger(
+            sp.GetService<IConfiguration>()?[PendingWriteLedger.JournalDirectoryKey],
+            sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded,
+            sp.GetService<ILogger<PendingWriteLedger>>()));
         // Mesh-wide content-type resolver: the ONE $type→CLR-Type map for dynamically-compiled
         // NodeTypes, reachable from every hub (incl. the domain-agnostic cache hub) and retained
         // for the process lifetime. Populated at MeshDataSource.WithContentType; consulted by the
