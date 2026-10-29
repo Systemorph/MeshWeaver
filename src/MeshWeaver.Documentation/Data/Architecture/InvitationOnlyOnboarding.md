@@ -21,9 +21,11 @@ Turn it on with one flag (see [Feature Flags](/Doc/Architecture/FeatureFlags)):
 Features__Onboarding__InvitationOnly=true
 ```
 
-> **Acceptance model — verified-email allowlist.** There is no token link. The identity provider
-> (Entra, Google, …) proves the user owns the email; a **Pending** invitation matching that verified
-> email unlocks onboarding, after which the invitation flips to **Accepted**. The first-user
+> **Acceptance model — verified-email allowlist.** The address onboarding uses is always a
+> VERIFIED one, and it is never typed: either the identity provider (Entra, Google, …) delivered it
+> as an email claim, or the invitation email's **signed link** proved it (see
+> [The invitation link token](#the-invitation-link-token)). A **Pending** invitation matching that
+> verified email unlocks onboarding, after which the invitation flips to **Accepted**. The first-user
 > bootstrap exception still applies — a brand-new deployment with zero User nodes always lets the
 > very first user in, so it can never lock itself out. The one other way in is the
 > **own-directory exemption**: where Microsoft is the only sign-in route, the tenant names one
@@ -42,8 +44,9 @@ Features__Onboarding__InvitationOnly=true
    `EmailSentAt` is null, sends through `IEmailSender`, and stamps `EmailSentAt` so it never
    re-sends. Decoupling it from the creation entry point means an invitation created from the
    settings tab, from MCP (`create`), or from a REST call is emailed exactly once.
-3. The invitee signs in via any configured IdP. `OnboardingMiddleware` finds no User node for the
-   email and redirects to `/onboarding`.
+3. The invitee follows the email's link (`/auth/invite?token=…`), signs in via any configured IdP,
+   and lands on the invited Space. `OnboardingMiddleware` finds no User node for the email and
+   redirects to `/onboarding`, where the address is shown read-only — there is no field to type into.
 4. The onboarding gate looks up a Pending invitation for the verified email. If found, the profile
    form is shown; on submit the user is created **and the invitation flips to Accepted**. If not
    found, the page shows **"Invitation Required"** and `CreateUser` is refused — unless the
@@ -84,6 +87,40 @@ It is deliberately a separate field from `Note`. The platform fills `Note` with 
 description ("Invited to space …", "Invited to group … as …"), and that text must never reach the
 invitee's inbox. An address that already has an account is granted at once and is sent no
 invitation email, so the message only travels with an invitation.
+
+### The invitation link token
+
+An invited person was once asked to TYPE an email whenever their sign-in provider returned no email
+claim, and the typed, never-verified address became the key for the invitation admission and for
+every pending Space grant that fires on `User.email` (MeshWeaver.Plugins#4515). The link in the
+invitation email now carries a signed token, and the onboarding page has no editable email at all.
+
+- **Minted** by the invitation emailer when it sends: `InvitationLinkToken.Issue` protects the
+  invitation's path, its `Id`, the invited address and the Space with ASP.NET Core Data Protection —
+  the key ring the portal's sign-in cookies already use, shared by every replica — through a
+  time-limited protector. The crypto is the platform's; nothing here signs by hand.
+- **Single-purpose**: the protector purpose `Memex.Invitation.OnboardingLink.v1` isolates it from
+  every other protected payload, so no other token can be replayed as an invitation.
+- **Time-bounded**: valid for 14 days from the send; an expired token fails to unprotect exactly as
+  an altered one does. A person who misses it is re-invited, which mints a new invitation and email.
+- **Bound to the invitation node**: it binds only while `Admin/Invitation/{slug}` still holds that
+  exact invitation (`Id`), Pending, for that address. A re-invite, an acceptance or a revocation
+  retires every token minted before it.
+
+Following the link (`InvitationLinkController`, `/auth/invite`):
+
+| Session | Result |
+|---|---|
+| Not signed in | Sign-in, then back to the link |
+| Token altered, expired or foreign | Refused — `/onboarding?inviteRefused=invalid` |
+| Verified email claim equal to the token's address | Navigates to the invited Space |
+| Verified email claim for a DIFFERENT address | Refused (`wrongAccount`): a token for one address never onboards another |
+| No verified address, invitation still current | The session cookie is re-issued carrying the token's address (as a provider with an email claim would have issued it); then the invited Space |
+| No verified address, invitation no longer current | Refused (`notPending`) |
+
+The onboarding page reads only the verified address. With none — a provider that returned no email
+claim and no invitation link followed — it explains how to get one and shows no form; a self-sign-up
+on an open portal therefore needs a provider that delivers an email claim.
 
 ---
 

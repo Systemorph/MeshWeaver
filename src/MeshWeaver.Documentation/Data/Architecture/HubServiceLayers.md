@@ -79,7 +79,17 @@ by `RootAndModuleSingletonsBuildInOneLockOrderTest`, `AScopedRootServiceIsNeverB
 and asserting that both constructions were inside their builds at once.
 
 A cycle is refused by name: through constructors by the resolve chain, through a factory where the
-same thread re-enters a shared instance it is building. A fault is **not cached**: the next resolve
+same thread re-enters a shared instance it is building, and — for a TRANSIENT, which has no instance to
+re-enter — where the same thread asks the same scope again for a transient whose resolve chain
+RESTARTED (it was asked by a factory, a deferred `Func<T>`/`Lazy<T>`, or a caller) while that build is
+still running (MeshWeaver#7400). The re-entry key is (scope, thread, service, cycle identity): the
+registration's identity, except that a source's stand-in — minted afresh on every lookup — is keyed by
+what it stands in for, or by the level whose source made it, so a cycle made only of stand-ins is still
+seen. Same-thread re-entry of the same registration while it is being built is never legitimate: the
+factory would be asked the same question again and never terminate. A decorator that resolves ANOTHER
+registration of its service (`ResolveRegistration`) has another key and is untouched. The in-flight set is
+instance state of the container root, an entry living exactly as long as the build it marks
+(`ATransientFactoryCycleIsRefusedNotRecursedTest`). A fault is **not cached**: the next resolve
 builds afresh, so a transient construction fault never becomes a permanent one (which is why a slot is
 a lock and a flag, not a `Lazy<T>` — a `Lazy` in `ExecutionAndPublication` mode caches the exception).
 

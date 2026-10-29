@@ -115,6 +115,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import errno
 import os
 import re
 import shutil
@@ -461,13 +462,27 @@ class FileStore(Store):
         # 🚨 The probe name must be unique ACROSS PODS, not per process: see scratch_token(). It is
         # created exclusively ('x'), so a name collision could never again pass as a write.
         probe = self.root / f".mw-store-write-probe.{scratch_token()}"
+        # 🚨 A probe this job CREATED is removed on the failure path too (MeshWeaver#7375). The
+        # exclusive create can succeed and the write after it fail — ENOSPC on a full share is the
+        # measured case — and returning from the `except` alone left the file at the share root,
+        # where nothing prunes: ~49 of them on /ci-artifacts after one fill.
+        created = False
         try:
             with open(probe, "x") as f:
+                created = True
                 f.write("x")
             self._probe_written(probe)
             probe.unlink()
         except OSError as e:
-            return f"{self.root} is not writable by this job: {e}"
+            why = f"{self.root} is not writable by this job: {e}"
+            # No `probe.exists()` gate: on the share it can itself raise (EIO), outside any guard,
+            # and turn the diagnostic into a traceback with the probe still left behind.
+            if created:
+                try:
+                    probe.unlink(missing_ok=True)
+                except OSError as cleanup:
+                    return f"{why} — and its write probe {probe.name} could not be removed: {cleanup}"
+            return why
         return ""
 
     def _probe_written(self, probe: Path) -> None:
@@ -979,6 +994,42 @@ def self_test() -> int:
                   outer_said == "" and outer.inner == "", f"outer={outer_said!r} inner={outer.inner!r}")
             check("file: the overlapped probes leave nothing behind",
                   not list(share.glob(".mw-store-write-probe.*")))
+
+            # #7375: the create succeeds and the WRITE fails (ENOSPC on a full share). The store is
+            # reported unreachable AND the probe it created is gone — not left at the share root.
+            class FullShare(FileStore):
+                def _probe_written(self, probe: Path) -> None:
+                    raise OSError(errno.ENOSPC, "No space left on device")
+
+            full_said = FullShare(str(share)).reachable()
+            check("file: a probe whose write fails reports the store unreachable",
+                  "not writable" in full_said and "No space left" in full_said, full_said)
+            check("file: …and removes the probe it created (#7375)",
+                  not list(share.glob(".mw-store-write-probe.*")),
+                  [p.name for p in share.glob(".mw-store-write-probe.*")])
+
+            # …and the cleanup is not gated on `exists()`, which on a mounted share can itself raise
+            # (EIO) — that escaped as a traceback and skipped the unlink (#7375 review).
+            real_exists = Path.exists
+
+            def eio_exists(self_, *a, **k):
+                if self_.name.startswith(".mw-store-write-probe."):
+                    raise OSError(errno.EIO, "Input/output error")
+                return real_exists(self_, *a, **k)
+
+            Path.exists = eio_exists
+            try:
+                try:
+                    eio_said = FullShare(str(share)).reachable()
+                except OSError as escaped:
+                    eio_said = f"ESCAPED: {escaped}"
+            finally:
+                Path.exists = real_exists
+            check("file: an erroring exists() neither escapes nor masks the write failure",
+                  "not writable" in eio_said and "No space left" in eio_said, eio_said)
+            check("file: …and the probe is still removed",
+                  not list(share.glob(".mw-store-write-probe.*")),
+                  [p.name for p in share.glob(".mw-store-write-probe.*")])
 
             # …and the same two pods putting ONE key: the second pod's whole put lands inside the
             # first's copy→rename window. With a pid-named staging file the second copy overwrote

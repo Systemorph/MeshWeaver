@@ -521,7 +521,7 @@ It refuses two things:
 
 A policy that already is one commits, so a legacy policy stays editable. A first commit of a hub's own node is the create path's.
 
-There is no delivery-time interpretation of patches. Judging the patch TEXT when it arrived had to re-implement the owner's merge, and it saw a predecessor that a queued write could change before the merge. The one case the commit point cannot see is a data change to an owner that has not loaded its node, since nothing is held under the key. `PolicyPlacementDataValidator` covers it: it establishes the node from storage first, and refuses as not loaded when the read answers nothing. The layout read behind create-time placement is established only by a complete answer. An incomplete snapshot, or a record that does not read as a `PartitionDefinition`, refuses the create as Unavailable.
+There is no delivery-time interpretation of patches. Judging the patch TEXT when it arrived had to re-implement the owner's merge, and it saw a predecessor that a queued write could change before the merge. The one case the commit point cannot see is a data change to an owner that has not loaded its node, since nothing is held under the key. `PolicyPlacementDataValidator` covers it: it establishes the node from storage first, and refuses as not loaded when the read answers nothing. The layout read behind create-time placement has two halves. An anchored query establishes only whether the `Admin/Partition/{partition}` record EXISTS; the record's content — its `TableMappings` — is then read through `GetMeshNodeStream` on that path, as System, never from the query's snapshot (#7359). A query is eventually consistent: a snapshot taken before a mapping change would carry the old layout and accept a policy under a newly mapped satellite segment. Existence is established only by a complete answer. An incomplete snapshot, a record the stream does not serve, or one that does not read as a `PartitionDefinition`, refuses the create as Unavailable.
 
 Every route matches the type name case-insensitively, as NodeType resolution does. The upsert's transition gate (`NodeTypeTransitionGate`) reads the stored node when the caller did not, which covers a lost create race. It also holds each validator to one verdict: an empty completion is a refusal. An update of a node that is already a policy is not judged, so a legacy policy stays editable. A partition layout that could not be read refuses the write as Unavailable. It is never taken to be the standard layout. "Under a satellite segment" means what the partition's EFFECTIVE storage mappings say: `PartitionDefinition.TableMappings` on its `Admin/Partition` record, read as System, or the standard layout when it has none. They are matched as `ResolveTable` matches them, case-insensitively, so `_storage` and a custom segment count. The refusal is localized, and it names the main-node scope where the policy belongs, which is where a satellite's access is decided (`SatelliteAccessRule` delegates to the `MainNode`; a storage binding asks for Update on the partition root). A static declaration under a satellite segment still applies to that path's own fold. It is code-reviewed and the platform ships none. Pinned by `RuntimeInheritanceBreakingPolicyTest`.
 
@@ -2432,6 +2432,29 @@ left an open admission open. The test holds the store's write of the sync config
 as long as the test needs it, and checks the instrument first: the store still reads one-way
 (`DeclaredPointReadOwnershipAndSelfReadTest.APartitionThatStopsBeingSystemOwned_WithdrawsTheDeclaration_BeforeTheStoreHasTheRow`,
 with a second partition rewritten under the same hold but kept one-way as the positive control).
+
+**Both live inputs attach their signals BEFORE the first read, and an ownership re-read is bounded**
+(#7367). Each live decision here — the ownership re-check and the standard read's input set — used to
+seed its first read with `StartWith`, which emits the seed before it subscribes its source. The first
+read therefore ran before the invalidation feed's handler was attached, and a commit that landed
+after that read captured its value was announced to nobody: the old decision stood until some other
+signal arrived (a synchronous store read widens that window). Both now start from
+`AttachedThenSeeded`, which subscribes the signals first and only then emits the seed. The ownership
+re-read taken on each signal is also held to the permission-establishment budget until its FIRST
+answer (`FollowOwnership`); past it the partition is not owned. Without that bound, a re-read that
+stalled after a withdrawal kept the previous ownership decision in force for as long as it stalled.
+The budget bounds the whole continuous unanswered period, not each re-read: a signal that replaces a
+re-read still in flight continues the same period, so signals arriving faster than the budget cannot
+restart the deadline and hold a stalled re-check open (the `BoundPendingPeriods` shape).
+The trade-off is decided for failing closed: `false` ends an admitted subscription, and every sync
+writes `_GitSync`, so an ownership re-read that cannot answer within the budget ends the open declared
+reads of that partition's types. That is how every other permission check classifies a timeout
+(undetermined, refused), and the reader re-subscribes to a fresh decision. A re-read in flight
+withdraws nothing, so a sync that rewrites the config without changing its ownership does not blink
+an open read. Pinned by `DeclaredReadLiveInputsTest`: the commit lands inside the first read, on a
+hot feed that, like the process feed, drops an announcement no handler hears; the `StartWith` shape
+under the same commit is the instrument's negative control, and an unchanged ownership and a re-read
+answered inside the budget are the positive controls; signals every few seconds over a stalled re-read pin the single deadline per unanswered period.
 
 **A hub's point read of its OWN path is decided locally** (#7298, F8). The declaration reads the node
 from its owner. When the deciding hub IS the owner, that is its own-node stream, with no round-trip.

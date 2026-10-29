@@ -148,13 +148,18 @@ internal static class NodePageProjections
     private static bool IsHeaderless(MeshNode? node)
         => node?.IsExcludedFromContext(MeshNodeVisibility.HeaderContext) == true;
 
-    private static HeaderView ProjectHeader(
+    /// <summary>
+    /// Projects the header from the node. The title is the node's name in the VIEWER's language
+    /// (<see cref="NodeTextTranslations.LocalizedName"/>): a translated name the content declares,
+    /// or a platform-default name such as a declared policy's "Access Policy" (MeshWeaver#7371).
+    /// </summary>
+    internal static HeaderView ProjectHeader(
         MeshNode? node, MeshNode? partitionRoot, string hubPath, string visibleStyle, Viewer viewer)
     {
         var tile = IconTile.Of(MeshNodeImageHelper.ResolveNodeIcon(node, partitionRoot), node?.Icon);
         return new HeaderView(
             IsHeaderless(node) ? Hidden : visibleStyle,
-            node?.Name ?? node?.Id ?? hubPath,
+            node?.LocalizedName(viewer.Locale) ?? node?.Id ?? hubPath,
             tile.Icon, tile.Size, tile.Fit, tile.Style,
             MetaLine.Of(MeshNodeLayoutAreas.BuildMetaEntries(node, viewer.ZoneId), viewer.Locale));
     }

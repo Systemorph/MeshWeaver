@@ -427,7 +427,28 @@ def read_run_jobs(get: Get, core_token: str, run_id: object) -> list[dict] | Non
     code, page = get(f"repos/{CORE}/actions/runs/{run_id}/jobs?per_page=100&filter=latest", core_token)
     if code != 200 or not isinstance(page, dict):
         return None
-    return [j for j in page.get("jobs", []) if isinstance(j, dict)]
+    jobs = [j for j in page.get("jobs", []) if isinstance(j, dict)]
+    if jobs:
+        return jobs
+    # 🚨 A RE-RUN THAT NEVER STARTED (main-cd #11961/#11966, 2026-10-29): attempt 1 ran every job, the
+    # transient-retry lane re-ran it, and attempt 2 was cancelled in the pending slot before it created a
+    # job — so `filter=latest` answers ZERO records and a ladder that PASSED reads `missing`. Only an
+    # attempt with no record at all is passed over (it ran nothing, so it undid nothing); the newest
+    # earlier attempt that ran is read instead. Core's resolver reads a seal the same way (`seal_jobs`).
+    code, run = get(f"repos/{CORE}/actions/runs/{run_id}", core_token)
+    if code != 200 or not isinstance(run, dict):
+        return None
+    # The walk starts AT the freshly reported attempt, inclusive: the empty `filter=latest` answer and
+    # this read are two requests, and a re-run created between them makes the fresh number NEWER than
+    # the attempt that answered empty — skipping it could pass over a ladder that attempt re-ran and lost.
+    for attempt in range(int(run.get("run_attempt") or 1), 0, -1):
+        code, page = get(f"repos/{CORE}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100", core_token)
+        if code != 200 or not isinstance(page, dict):
+            return None
+        rows = [j for j in page.get("jobs", []) if isinstance(j, dict)]
+        if rows:
+            return rows
+    return jobs
 
 
 def ladder_of(jobs: list[dict] | None) -> str | None:
@@ -925,6 +946,34 @@ def self_test() -> int:
     st, text = judge(c, "ambiguous", ctl(c))
     check("judge: an AMBIGUOUS ladder is refused with its OWN sentence",
           st == "refused" and "SEVERAL jobs" in text and "does not link" not in text, text)
+    # ── a re-run that never started does not erase what attempt 1 ran (main-cd #11961/#11966) ──
+    ladder_ok = [{"name": "Compatibility: the published module set links against this platform (ladder)",
+                  "status": "completed", "conclusion": "success"}]
+
+    def runs_api(attempts: dict[int, list[dict]], latest: int, fresh: int | None = None) -> Get:
+        """`latest` answers the `filter=latest` read; `fresh` is the attempt the run read reports
+        AFTER it — newer when a re-run is created between the two requests."""
+        def get(url: str, token: str) -> tuple[int, object]:
+            m = re.search(r"/runs/7/attempts/(\d+)/jobs", url)
+            if m:
+                return 200, {"jobs": attempts.get(int(m.group(1)), [])}
+            if "/runs/7/jobs" in url:
+                return 200, {"jobs": attempts.get(latest, [])}
+            if url.endswith("/runs/7"):
+                return 200, {"id": 7, "run_attempt": fresh or latest}
+            return 404, None
+        return get
+    check("jobs: an attempt 2 that created no job → attempt 1's records (its ladder still PASSED)",
+          ladder_of(read_run_jobs(runs_api({1: ladder_ok, 2: []}, 2), "t", 7)) == "success")
+    check("jobs: negative control — a MATERIALISED attempt 2 is read as is (a ladder it lost stays lost)",
+          ladder_of(read_run_jobs(runs_api({1: ladder_ok, 2: [{**ladder_ok[0], "conclusion": "failure"}]}, 2), "t", 7))
+          == "failure")
+    check("jobs: negative control — the freshly reported attempt is read FIRST (empty attempt 2, a newer "
+          "attempt 3 that lost the ladder → failure, never attempt 1's pass)",
+          ladder_of(read_run_jobs(runs_api({1: ladder_ok, 2: [], 3: [{**ladder_ok[0], "conclusion": "failure"}]},
+                                           2, fresh=3), "t", 7)) == "failure")
+    check("jobs: negative control — a first attempt with no job reads no job (`missing`, never invented)",
+          ladder_of(read_run_jobs(runs_api({1: []}, 1), "t", 7)) == "missing")
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         decl = Path(tmp) / "ci.json"

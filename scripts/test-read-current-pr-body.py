@@ -93,6 +93,25 @@ def http_error(status, headers=None, body=""):
                                   io.BytesIO(body.encode("utf-8")))
 
 
+class FailingBody(io.BytesIO):
+    """An error body whose read fails mid-connection (reset, timeout, short read)."""
+
+    def __init__(self, failure):
+        super().__init__(b"")
+        self.failure = failure
+
+    def read(self, *args):
+        raise self.failure
+
+
+def unreadable_http_error(status, failure, headers=None):
+    message = email.message.Message()
+    for key, value in (headers or {}).items():
+        message[key] = value
+    return urllib.error.HTTPError("https://api.github.com/x", status, "error", message,
+                                  FailingBody(failure))
+
+
 class Truncated(io.BytesIO):
     """A response whose connection closed before the full Content-Length body arrived."""
 
@@ -182,6 +201,32 @@ class ApiBudgetTest(unittest.TestCase):
         with self.assertRaises(reader.ApiUnavailable) as caught:
             always.get(budget=30)
         self.assertIn("transport failure: IncompleteRead", caught.exception.sentence())
+
+    def test_error_body_read_failure_is_transient_then_no_verdict_never_a_traceback(self):
+        # #7457: the error body is read over the same connection; a reset/timeout there must not
+        # escape the HTTPError handler (exit 1, "defect") — it is an outage, so NO VERDICT.
+        for status in (503, 502, 429, 403):
+            for failure in (TimeoutError("read timed out"), ConnectionResetError("reset"),
+                            http.client.IncompleteRead(b"{", 40)):
+                with self.subTest(status=status, failure=type(failure).__name__):
+                    api = FakeApi(unreadable_http_error(status, failure), {"number": 1})
+                    self.assertEqual(api.get(), {"number": 1})
+                    self.assertEqual(api.calls, 2)
+                    always = FakeApi(*[unreadable_http_error(status, failure) for _ in range(50)])
+                    with self.assertRaises(reader.ApiUnavailable) as caught:
+                        always.get(budget=30)
+                    self.assertIn(f"HTTP {status}", caught.exception.sentence())
+                    self.assertIn("error body unreadable", caught.exception.sentence())
+
+    def test_error_body_read_failure_keeps_deliberate_refusals_immediate(self):
+        # Negative control: 401/404 are refusals whatever their body says, so an unreadable body
+        # changes nothing — refused at once, no retry.
+        for status in (401, 404):
+            with self.subTest(status=status):
+                api = FakeApi(unreadable_http_error(status, TimeoutError("read timed out")))
+                with self.assertRaises(reader.ApiRefused):
+                    api.get()
+                self.assertEqual(api.calls, 1)
 
     def test_deliberate_refusals_fail_at_once_without_retry(self):
         for status, body in ((404, '{"message":"Not Found"}'), (401, "{}"),

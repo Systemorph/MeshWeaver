@@ -383,7 +383,11 @@ never a skip.
 `partitions`, a map `{set: [package, …]}`: an uncapped package (or one whose cap admits `latest`) builds
 on `latest`, and a capped package builds on the highest COMPLETE deployment in its range. A package with no
 fit is RED, never a silent pick of `latest` or of a version below its floor. The floor is applied the
-same way in every step (validation, the range, the partition): `PlatformFloor.Evaluate`'s order. The mode
+same way in every step (validation, the range, the partition): `PlatformFloor.Evaluate`'s order. A set name
+is ordered by its RUN in every spelling the resolver handles: `/hosts` rows are canonicalised, which
+rewrites a retired `3.0.0-rc9.ci.7824` as `3.0.0-rc9-ci.7824`, and the run reader used to see no `ci`
+label in that spelling and fall back to comparing equal numeric cores, so a build BELOW a package's run
+floor was admitted (#7390). The run is now read through the same set parser the range uses. The mode
 is OFF by default. No consumer passes the flag until the control instance serves a `latest` deployment,
 because the mode has no fallback to the newest sealed set. That holds for the run's baseline too: in this
 mode a consumer job never keeps `PLATFORM_BASELINE`; it verifies the deployment it selected or is RED.

@@ -214,6 +214,23 @@ public static class ShippedPrebuiltBundles
     /// <param name="io">The file operations to perform (<see cref="BundleShareIo.Real"/> in production).</param>
     internal static PublicationPointer ResolvePublicationPointer(
         string sourceDirectory, CancellationToken cancellationToken, ILogger? logger, BundleShareIo io)
+        => ResolvePublicationPointer(sourceDirectory, cancellationToken, logger, io, LogLevel.Warning);
+
+    /// <summary>
+    /// <see cref="ResolvePublicationPointer(string, CancellationToken, ILogger?, BundleShareIo)"/> with
+    /// the level a REFUSED pointer (not a single directory name, or naming a generation that is not on
+    /// disk) is logged at. Readers keep Warning. A collection pass passes Information and counts the
+    /// refusals from <see cref="PublicationPointer.Fault"/> on its one outcome line instead — one
+    /// Warning per bad source would break that pass's one-line contract (#7349).
+    /// </summary>
+    /// <param name="sourceDirectory">The source publication directory.</param>
+    /// <param name="cancellationToken">Cancellation of the worker that owns the read.</param>
+    /// <param name="logger">Diagnostics for a refused pointer.</param>
+    /// <param name="io">The file operations to perform.</param>
+    /// <param name="refusedPointerLevel">The level of the refused-pointer diagnostics.</param>
+    internal static PublicationPointer ResolvePublicationPointer(
+        string sourceDirectory, CancellationToken cancellationToken, ILogger? logger, BundleShareIo io,
+        LogLevel refusedPointerLevel)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var pointer = Path.Combine(sourceDirectory, PublicationPointerFileName);
@@ -254,7 +271,7 @@ public static class ShippedPrebuiltBundles
             || Path.IsPathRooted(named)
             || named.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
         {
-            logger?.LogWarning(
+            logger?.Log(refusedPointerLevel,
                 "ShippedPrebuiltBundles: {Pointer} names '{Named}', which is not a single "
                 + "directory name — a publication pointer may only address a subdirectory of its "
                 + "own source directory. Reading {SourceDirectory} as its own publication "
@@ -270,7 +287,7 @@ public static class ShippedPrebuiltBundles
         cancellationToken.ThrowIfCancellationRequested();
         if (!generationExists)
         {
-            logger?.LogWarning(
+            logger?.Log(refusedPointerLevel,
                 "ShippedPrebuiltBundles: {Pointer} names generation '{Named}', which is not on "
                 + "disk — reading {SourceDirectory} as its own publication directory instead. A "
                 + "generation the pointer names must outlive the pointer",

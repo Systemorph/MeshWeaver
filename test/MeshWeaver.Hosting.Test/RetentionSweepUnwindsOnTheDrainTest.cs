@@ -370,4 +370,161 @@ public class RetentionSweepUnwindsOnTheDrainTest : IDisposable
         Volatile.Read(ref faults).Should().Be(0, "a pass the pool cancelled is not a faulted pass");
         Volatile.Read(ref records).Should().Be(0, "an interrupted pass records no finished result");
     }
+
+    // ---- #7443: the removal itself is fenced, entry by entry ------------------------------------
+
+    /// <summary>
+    /// The real file system, where every removal of ONE entry is counted and the FIRST one is where the
+    /// lease deadline lands: it cancels the token while that entry is being removed, as the lease's
+    /// unsubscribe does when a pass outlives half its hold.
+    /// </summary>
+    private sealed class DeadlineOnFirstRemoval(CancellationTokenSource cts) : BundleShareIo
+    {
+        public int Removals;
+
+        private void Removing()
+        {
+            if (Interlocked.Increment(ref Removals) == 1)
+                cts.Cancel();
+        }
+
+        public override void DeleteFile(string path) { Removing(); base.DeleteFile(path); }
+        public override void DeleteEmptyDirectory(string path) { Removing(); base.DeleteEmptyDirectory(path); }
+    }
+
+    /// <summary>
+    /// 🚨 A lease deadline that lands while an identity is being removed stops the removal at the NEXT
+    /// entry (#7443). On unfixed code the default removal was ONE <c>Directory.Delete(dir, recursive)</c>
+    /// that observed no token: it never went through the share seam, so the cancel never arrived, and
+    /// the pass removed every collectable identity — on a stalled share, after the lease had lapsed and
+    /// another replica could hold it.
+    /// </summary>
+    [Fact]
+    public void ALeaseDeadlineMidRemoval_StopsTheRemovalAtTheNextEntry()
+    {
+        StoreWithThreeCollectable();
+        foreach (var identity in new[] { "s-c1", "s-c2", "s-c3" })
+            SealedWithThreeArchives(identity, "plugins", Now - TimeSpan.FromDays(230));
+        using var cts = new CancellationTokenSource();
+        var io = new DeadlineOnFirstRemoval(cts);
+
+        Assert.ThrowsAny<OperationCanceledException>(() => PrebuiltBundleStore.SweepCore(
+            root, Live, "4.0.0-ci.1", [], [], retention, Now, cts.Token, logger: null, deleteDirectory: null, io));
+
+        io.Removals.Should().Be(1,
+            "the entry in flight when the deadline lands finishes, and nothing after it is removed (#7443)");
+        new[] { "s-c1", "s-c2", "s-c3" }.Should().OnlyContain(id => Directory.Exists(Path.Combine(root, id)),
+            "an identity the cut pass had not finished — and every one it had not reached — stays for the next holder's pass");
+        Directory.Exists(Path.Combine(root, Live)).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Negative control: with nothing cancelling it, the fenced removal removes exactly the plan —
+    /// whole trees, a nested subdirectory included — and nothing else.
+    /// </summary>
+    [Fact]
+    public void AnUncutPass_WithTheFencedRemoval_RemovesExactlyThePlan()
+    {
+        StoreWithThreeCollectable();
+        var nested = Path.Combine(SourceOf("s-c1"), "nested", "deeper");
+        Directory.CreateDirectory(nested);
+        File.WriteAllBytes(Path.Combine(nested, "x.bin"), new byte[8]);
+        // Back-dated like the rest of the identity, so the nested tree does not make s-c1 look recent.
+        var old = (Now - TimeSpan.FromDays(230)).UtcDateTime;
+        File.SetLastWriteTimeUtc(Path.Combine(nested, "x.bin"), old);
+        foreach (var dir in new[] { nested, Path.GetDirectoryName(nested)!, SourceOf("s-c1"), Path.Combine(root, "s-c1") })
+            Directory.SetLastWriteTimeUtc(dir, old);
+        // Its own source, never the one the pass reads: here nothing cuts the pass.
+        using var unrelated = new CancellationTokenSource();
+        var io = new DeadlineOnFirstRemoval(unrelated);
+
+        var result = PrebuiltBundleStore.SweepCore(
+            root, Live, "4.0.0-ci.1", [], [], retention, Now, CancellationToken.None, logger: null, deleteDirectory: null, io);
+
+        result.AbortReason.Should().BeNull();
+        result.FailedDeletes.Should().Be(0, "every removal of the plan succeeded");
+        result.DeletedIdentities.Should().Be(3);
+        io.Removals.Should().BeGreaterThan(3, "the removal went entry by entry through the share seam");
+        new[] { "s-c1", "s-c2", "s-c3" }.Should().OnlyContain(id => !Directory.Exists(Path.Combine(root, id)));
+        Directory.Exists(Path.Combine(root, Live)).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 A removal handed a directory LINK removes the link and never walks its target — the ROOT of the
+    /// removal included (review of #7528). The scan lists identities with
+    /// <c>Directory.EnumerateDirectories</c>, which returns a link like any directory, so a collectable
+    /// identity can be one; a removal that listed it deleted the target's files, outside the store.
+    /// Control: the same removal of a real directory removes its files.
+    /// </summary>
+    [Fact]
+    public void ARootLink_IsRemovedAsTheLink_AndItsTargetStaysIntact()
+    {
+        var outside = Path.Combine(root, "..", $"mw-retention-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outside);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(outside, "precious.bin"), new byte[8]);
+            Directory.CreateDirectory(Path.Combine(outside, "sub"));
+            File.WriteAllBytes(Path.Combine(outside, "sub", "also.bin"), new byte[8]);
+            var link = Path.Combine(root, "s-linked");
+            Directory.CreateSymbolicLink(link, outside);
+
+            PrebuiltBundleStore.DeleteTree(link, CancellationToken.None, BundleShareIo.Real);
+
+            new DirectoryInfo(link).Exists.Should().BeFalse("the link itself is removed");
+            File.Exists(Path.Combine(outside, "precious.bin")).Should().BeTrue("a link's target is never walked");
+            File.Exists(Path.Combine(outside, "sub", "also.bin")).Should().BeTrue("not even below its top level");
+
+            // Control: a real directory IS removed, files and all.
+            var real = Path.Combine(root, "s-real");
+            Directory.CreateDirectory(Path.Combine(real, "sub"));
+            File.WriteAllBytes(Path.Combine(real, "sub", "x.bin"), new byte[8]);
+            PrebuiltBundleStore.DeleteTree(real, CancellationToken.None, BundleShareIo.Real);
+            Directory.Exists(real).Should().BeFalse("a real directory is removed entry by entry");
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The listing a removal reads is itself fenced: a deadline that lands WHILE a directory is being
+    /// listed stops the removal before the next entry is even listed, let alone removed (review of #7528).
+    /// </summary>
+    private sealed class DeadlineInsideTheListing(CancellationTokenSource cts) : BundleShareIo
+    {
+        public int Listed;
+        public int Removals;
+
+        public override IEnumerable<string> ListFiles(string path, SearchOption option = SearchOption.TopDirectoryOnly)
+        {
+            foreach (var file in base.ListFiles(path, option))
+            {
+                Listed++;
+                cts.Cancel();
+                yield return file;
+            }
+        }
+
+        public override void DeleteFile(string path) { Removals++; base.DeleteFile(path); }
+        public override void DeleteEmptyDirectory(string path) { Removals++; base.DeleteEmptyDirectory(path); }
+    }
+
+    [Fact]
+    public void ADeadlineInsideTheListing_StopsTheRemovalBeforeAnyEntryIsRemoved()
+    {
+        var dir = Path.Combine(root, "s-listed");
+        Directory.CreateDirectory(dir);
+        foreach (var name in new[] { "a.zip", "b.zip", "c.zip" })
+            File.WriteAllBytes(Path.Combine(dir, name), new byte[8]);
+        using var cts = new CancellationTokenSource();
+        var io = new DeadlineInsideTheListing(cts);
+
+        Assert.ThrowsAny<OperationCanceledException>(() => PrebuiltBundleStore.DeleteTree(dir, cts.Token, io));
+
+        io.Listed.Should().Be(1, "the listing stops at the entry on which the deadline landed");
+        io.Removals.Should().Be(0, "nothing is removed once the deadline is seen");
+        Directory.GetFiles(dir).Should().HaveCount(3);
+    }
 }

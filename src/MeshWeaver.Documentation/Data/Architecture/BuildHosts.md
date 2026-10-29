@@ -488,7 +488,7 @@ an armed set reaches `build-latest` within about 15 minutes, and no platform rol
 build host is outside the platform's delivery.
 
 **The runner image.** Deploy's `build-host.yml` builds its `deploy/build-host/Dockerfile`
-(the .NET 10 SDK, bash, python3, git, bubblewrap, Deploy's `build-run.py`, and the platform's
+(the .NET 10 SDK, bash, python3, git, jq, bubblewrap, Deploy's `build-run.py`, and the platform's
 `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py` with the sibling it loads,
 `node-repo-scope.py`, `ci-artifact-store.py` and `meshweaver-plugin-build`). The Dockerfile fetches
 every source BY COMMIT inside the build (`DEPLOY_COMMIT`, and `PLATFORM_COMMIT` = the set's own
@@ -520,6 +520,29 @@ image through:
                  "buildHosts.latest.portalDigest":"sha256:…","buildHosts.latest.runnerDigest":"sha256:…"},
  "policy":"build-hosts-follow-latest","trigger":"build-host-latest", …}
 ```
+
+**The channel names only a SEALED set, read by the same instrument every consumer reads.**
+MeshWeaver.Plugins builds on the `latest` channel's set through the resolver's FREEZE path — that one
+set, sealed and its images present, or RED — so a channel that names a set the resolver does not call
+sealed reds every Plugins run. Two halves keep them in agreement:
+
+- *The seal is read off the attempt that ran.* `resolve-platform.py` (`seal_jobs`) reads a run's trio
+  (promote, verify, the platform bake) from its latest attempt, unless that attempt created no job at
+  all; then it reads the newest earlier attempt that did, and says so. Measured 2026-10-29 on main-cd
+  #11961 and #11966: attempt 1 sealed and armed the set and ended `failure` on a satellite
+  compatibility leg outside the trio; the transient-retry lane re-ran it; attempt 2 was cancelled in
+  main-cd's one pending slot before it created a job; `/jobs?filter=latest` answered zero records and
+  the resolver called the set "cancelled before any seal job ran". Every Plugins run on that channel set
+  was RED for hours, although the set was sealed and its images were present. An attempt that DID
+  materialise is read exactly as before, so a trio job a re-run re-ran and lost still unseals the set.
+  The walk re-reads the run's attempt number AFTER the empty answer and starts AT it, inclusive: the
+  listing and the jobs read are two requests, and a re-run created between them would otherwise be
+  skipped together with any trio job it lost. `arm-promoted-set.py` (`read_run_jobs`) walks the same way.
+- *The hand-over waits for the seal.* Arming does not wait for `verify-images` or the platform bake, so
+  the newest ARMED set can be one the resolver does not yet call sealed. MeshWeaver.Deploy's `handover`
+  asks core's resolver at `main` (`--no-registry --freeze <set>`) before it signs anything, and holds
+  while the answer is not sealed. The receiver never moves a channel backwards, so `build-latest` stays
+  on its previous sealed set until the new one seals.
 
 **`build-stable` follows the main-passed ceiling — daily.** Until core's `stable` promoter exists,
 `stable` IS the newest sealed set MeshWeaver.Plugins' own `main` has passed on. Its own workflow,
@@ -641,7 +664,15 @@ fixes can merge while the host closes its gaps one by one. That is a third execu
   stages do not claim equivalence, `executor=host-forced`. When stages are declared, the run is
   queued on the host (one signed `build-request`, exactly as for `host`), so the host runs what it can
   and publishes its own `build` / `build/<stage>` check runs. Those check runs are NOT required
-  contexts: they show the host's real result, red where a gap remains.
+  contexts, so they never conclude `failure`: they conclude **`neutral`**, and the title carries the
+  would-be verdict (`shadow — would be RED: compile-check failed`, `shadow — would be GREEN: …`), with
+  the summary unchanged. A red X on every pull request for a check that gates nothing read as a broken
+  fleet; a neutral one with its verdict in the title says exactly what the host found.
+- **How the instance knows.** The `build-request` carries the admission's own answer,
+  `"executor": "host"` or `"executor": "host-forced"`, so the operations instance projects the check
+  runs from the SAME decision the lanes act on (this routing file plus the stages' `ciEquivalent`) and
+  never re-derives it. A run every one of whose requests said `host-forced` is a shadow run; one
+  `host` request (the repository claims parity) makes its checks conclude `success` / `failure` again.
 - **The owed gap is named, never a red.** The executor job prints each `owes` item of
   `.github/build-stages.json` as a `::warning::` annotation (a repository with no declaration owes
   "no host stages"). In core, `Consolidate test results` repeats that as a warning pointing at the
@@ -787,6 +818,26 @@ would replace, and the claim is refused until that list is empty.
   through the host's own paths, never a hard-coded `/host/`, the lane's allow file, the warning
   baseline when ci.yml passes one, the gate seeded with its own bake, the Tests-area ratchet over the
   log, the log handed back as an artifact).
+- **A gate stage is the WHOLE gate, and every check reaches its exit code (#7456).** Two holes a
+  substring cannot see. (1) A tester narrowed with `--shard k/n` gates one slice, and the host route
+  runs no `gate-shard-merge.py` of its own, so nothing would notice the missing slices: a narrowed
+  gate is red unless the stage runs EVERY literal slice `1..n` and folds them with
+  `gate-shard-merge.py --shards n` (a slice from a variable or a loop is red — the guard cannot read
+  it). (2) The runner executes a stage with `bash -c`, which adds no failure propagation, so
+  `compile; gate | tee; ratchet` exits with the ratchet's code — measured by EXECUTING it against stub
+  tools: a compile that exits 1 followed by a green gate and ratchet is a stage exit of 0. A gate stage
+  is therefore red unless it is `set -e` (with `-o pipefail` when a check is piped), or every check is
+  handled by hand the way every satellite writes it today under `set -uo pipefail`: the compile
+  `|| exit`, the gate's `${PIPESTATUS[0]}` (or `$?`) and the ratchet's `$?` captured right after them
+  into variables the stage `exit`s with. The self-test executes both shapes and the unsafe one.
+  The guard reads the stage in order and checks every invocation of every check: each gate slice,
+  `gate-shard-merge.py`, the compile and the ratchet.
+  - `set -e` counts only where it is in force. A `set -e` written after the checks, or undone by
+    `set +e`, does not count.
+  - `gate | tee || exit` counts only under pipefail. Without it, the `|| exit` tests `tee`.
+  - A captured status must reach an `exit` before anything assigns its variable again. Two slices
+    captured into one name lose the first slice's failure.
+  - A `--shard` token the guard cannot read as a slice, quoted ones included, is red.
 - **The rule lives once**, in `.github/scripts/check-build-stages.py` (`--profile core|node-repo`,
   `--self-test` with a negative control per breach). Core runs it through `core-build-stages.py
   --check` in `dotnet-test.yml`'s `workflow-shell` job; every satellite runs it through the shared
@@ -938,6 +989,18 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
   suites run inside a host's sandbox — the shards' browser tests need the headless browser and font
   set the build-host image carries from MeshWeaver.Deploy#50 on.
+- **Two host-only reds, neither from the fan-out.** Measured on build-latest: shard 7 and shard 0 were
+  red on #7308 (serial) and on #7506 and #7515 (fanned out) while the same commits were green on Actions.
+  Both reproduce in a host-shaped container (the .NET 10 SDK image, the runner's exact `bwrap` flags,
+  the shard's bins at `<checkout>/.core-tests/shard-<i>/`), so the parallel fan-out is not the cause.
+  **Shard 7:** `PluginPublicationProvenanceTest` runs the publication workflow's own `run:` steps, which
+  call `jq`; Actions' runner ships it and the runner image did not, so 11 tests failed on
+  `step.sh: jq: command not found` (11 of 891 without jq, 0 with it). The image now installs jq and
+  prints its version at build. **Shard 0:** `AStampThatFindsAnotherReplicasClaim_IsNotHeld` waited for a
+  holder number, which also matches a claim whose STAMP has not reached that silo's mirror yet; a stamp
+  that finds another claim writes nothing and reports the mirror, so a lagging mirror read as "A's stamp
+  landed over B's claim". It now waits for the exact settled claim (5 of 6 runs red before, 0 of 10 after,
+  in the container). A host's slower mirror propagation exposed the wait; it did not cause it.
 
 **The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
 credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`
