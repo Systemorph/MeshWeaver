@@ -50,6 +50,7 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new MeshNode(GrantedPartition) { Name = "Granted Space", NodeType = "Markdown" },
                 new MeshNode("Page", GrantedPartition) { Name = "Granted Page", NodeType = "Markdown" },
                 new MeshNode("ScopeProbe", "AccessAssignment") { Name = "Scope Probe", NodeType = "Markdown" },
+                new MeshNode(OtherUser) { Name = "Other User", NodeType = "User", MainNode = OtherUser },
                 AssignmentNodeFactory.UserRole(TokenUser, "Editor", GrantedPartition));
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -363,6 +364,69 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     private const string TypeNamedPath = "AccessAssignment/ScopeProbe";
+
+    /// <summary>Another person's User node — public-read to every signed-in user by a HUB-level rule.</summary>
+    private const string OtherUser = "other-user";
+
+    /// <summary>
+    /// 🚨 THE HUB-RULE PIN (review of #7585). A User hub grants Read to every signed-in caller through
+    /// a hub-level rule, which the delivery gate used to accept before any fold ran — so the cap never
+    /// saw a routed read there. A relay token must be refused; a read-scoped one is the control.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AHubLevelReadGrant_DoesNotLiftTheCap_OnARoutedRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var relay = BecomeToken(ApiTokenScope.Relay);
+        (await RoutedRead(OtherUser, relay, ct)).Should().StartWith("refused:",
+            "a relay token reads no node, whatever a hub-level rule grants signed-in users");
+
+        var reader = BecomeToken(ApiTokenScope.Read);
+        (await RoutedRead(OtherUser, reader, ct)).Should().Be("served",
+            "the control: a read-scoped token is served the public profile exactly as before");
+    }
+
+    private Task<string> RoutedRead(string path, AccessContext identity, CancellationToken ct) =>
+        RequestHub
+            .Observe(new GetDataRequest(new UnifiedReference("data:")),
+                o => o.WithTarget(new Address(path)).WithAccessContext(identity))
+            .Take(1)
+            .Select(_ => "served")
+            .Catch((DeliveryFailureException ex) => Observable.Return("refused:" + ex.Failure.ErrorType + ": " + ex.Failure.Message))
+            .Should().Within(TestTimeouts.Convergence).Emit("the routed read must answer", ct);
+
+    /// <summary>
+    /// 🚨 THE RECORD-TYPE PIN (review of #7585). The hash index outlives its record, so a record
+    /// deleted and recreated at the same path as another type — carrying ApiToken-shaped content with
+    /// no scopes — must not authenticate: only a token record does. A legacy index that carries the
+    /// record itself, and a token record, still authenticate (the controls).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task OnlyATokenRecord_Authenticates_NotARecreatedLookalike()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string raw = "mw_scoped-token-lookalike";
+        var hash = ValidateTokenRequest.HashToken(raw);
+        var options = Mesh.JsonSerializerOptions;
+        const string recordPath = TokenUser + "/_Api/lookalike";
+        var index = new MeshNode(ApiTokenVerdict.IndexPath(hash))
+        {
+            NodeType = ApiTokenNodeType.NodeType,
+            Content = JsonSerializer.SerializeToElement(new ApiTokenIndex { TokenHash = hash, TokenPath = recordPath }, options),
+        };
+        MeshNode Record(string nodeType) => MeshNode.FromPath(recordPath) with
+        {
+            NodeType = nodeType,
+            Content = JsonSerializer.SerializeToElement(new ApiToken { TokenHash = hash, UserId = TokenUser }, options),
+        };
+        Task<ValidateTokenResponse> Decide(MeshNode record) => ApiTokenVerdict
+            .Decide(raw, path => Observable.Return<MeshNode?>(path == index.Path ? index : path == recordPath ? record : null), options)
+            .FirstAsync().Timeout(Budget).Await(ct);
+
+        (await Decide(Record("Markdown"))).Success.Should().BeFalse(
+            "a recreated non-token node with token-shaped content must not authenticate");
+        (await Decide(Record(ApiTokenNodeType.NodeType))).Success.Should().BeTrue("the control: a token record does");
+    }
 
     private Task<string> StreamRead(string path, CancellationToken ct) =>
         Mesh.GetWorkspace().GetMeshNodeStream(path)

@@ -439,7 +439,11 @@ public static class AccessControlPipeline
                         // here so the reactive pipeline below only handles the remaining checks.
                         foreach (var check in attr.GetPermissionChecks(delivery, hubPath))
                         {
-                            if (hubPermissions != null && hubPermissions.HasPermission(check.Permission, delivery, userId))
+                            // 🛡️ A hub-level grant never lifts the API-token scope cap (review of
+                            // #7585): a capped check falls through to the fold, which applies it.
+                            if (hubPermissions != null
+                                && ApiTokenScope.AllowsPermission(trustedCaller, check.Permission)
+                                && hubPermissions.HasPermission(check.Permission, delivery, userId))
                                 continue;
                             pendingChecks = pendingChecks.Add(check);
                         }

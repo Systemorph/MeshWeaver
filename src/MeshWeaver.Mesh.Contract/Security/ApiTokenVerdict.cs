@@ -67,7 +67,13 @@ public static class ApiTokenVerdict
                     if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
                         return Observable.Return(ValidateTokenResponse.Fail("Invalid token"));
                     return ReadOne(read, index.TokenPath)
-                        .SelectMany(tokenNode => DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
+                        .SelectMany(tokenNode => IsForeignTyped(tokenNode)
+                            // 🛡️ Only a TOKEN RECORD authenticates (review of #7585). The index outlives
+                            // its record, so a record deleted and recreated at the same path as another
+                            // type — carrying ApiToken-shaped content with no scopes — would otherwise
+                            // authenticate past every rule that protects token records.
+                            ? Observable.Return(ValidateTokenResponse.Fail("Token not found"))
+                            : DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
                 }
 
                 // A legacy index node carries the token record itself.
@@ -76,6 +82,11 @@ public static class ApiTokenVerdict
             .Catch((Exception ex) => Observable.Return(
                 ValidateTokenResponse.Unavailable($"Validation error: {ex.GetType().Name}: {ex.Message}")));
     }
+
+    /// <summary>A record that NAMES a type other than an API-token record. An untyped read (no
+    /// type on the node) is left to the content checks, exactly as before.</summary>
+    private static bool IsForeignTyped(MeshNode? node)
+        => node is { NodeType: { Length: > 0 } type } && !ApiTokenScope.IsTokenRecordType(type);
 
     private static IObservable<ValidateTokenResponse> DecideToken(
         ApiToken? apiToken, string hash, Func<string, IObservable<MeshNode?>> read, JsonSerializerOptions options)

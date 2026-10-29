@@ -1464,7 +1464,12 @@ authenticates a token. From there:
   type is a token record (`ApiTokenScope.IsTokenRecordType`, case-insensitive) is refused, except a
   delete by a token holding `tokens` (`AccessControlPipeline.CapScopedTokenRecordWrite`). A scoped
   token never rewrites a token record — neither stripping its scopes nor retyping it out of the
-  rule's sight while the verdict still authenticates its content; it revokes by deleting.
+  rule's sight while the verdict still authenticates its content; it revokes by deleting. And only a token RECORD authenticates: the hash index outlives its record, so `ApiTokenVerdict`
+  refuses a record at the indexed path that names another type, which a record deleted and recreated
+  as a lookalike would. A legacy index that carries the record itself is still read as before.
+- **A hub-level grant never lifts the cap.** The delivery gate accepts a hub rule's grant (for
+  example the User node's public read) only for a permission the caller's scopes allow; a capped
+  check falls through to the fold, which applies the cap.
 
 **Unknown values.** The set is open, so a value is never rejected for not being one of the
 platform's constants — that would re-close it. A value no site claims simply allows nothing: a
