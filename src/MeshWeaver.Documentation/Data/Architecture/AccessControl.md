@@ -2445,6 +2445,12 @@ emits nothing. The in-memory row filter (`ValidateRead`) is bounded and fails cl
 - a validator that faults refuses the row instead of ending the query;
 - the check is bounded by the permission-establishment budget, and past it the row is withheld.
 
+A run that could not read part of its scope is incomplete, and an incomplete run removes nothing it
+could not read (MeshWeaver#7399). It still removes every held row it READ and REFUSED. Each run
+records its refusals apart from its dropped reads, so a revoked reader never keeps a row just because
+some other read in the same run failed. `AnIncompleteLiveRequeryStillRemovesARefusedRowTest` in
+`test/MeshWeaver.Hosting.Test/` pins this.
+
 A fault in the follow itself ends the query, because a listing that can no longer follow access
 must not go on serving rows. A System query follows nothing, because no grant moves it.
 

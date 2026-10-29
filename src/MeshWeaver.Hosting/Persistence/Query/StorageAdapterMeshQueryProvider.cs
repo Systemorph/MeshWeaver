@@ -604,9 +604,21 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         .SelectMany(node =>
                         {
                             if (node is MeshNode meshNode)
-                                return useSecurityFilter
-                                    ? ValidateRead(meshNode, userId).Where(valid => valid).Select(_ => (object)meshNode)
-                                    : Observable.Return<object>(meshNode);
+                            {
+                                if (!useSecurityFilter)
+                                    return Observable.Return<object>(meshNode);
+                                // 🚨 MeshWeaver#7365: the run records what the check DECIDED, apart from
+                                // what it could not read, so an incomplete live run still removes a
+                                // held row it read and refused.
+                                return ValidateRead(meshNode, userId)
+                                    .Do(valid =>
+                                    {
+                                        if (!valid && !string.IsNullOrEmpty(meshNode.Path))
+                                            completeness?.RecordRefusedRead(meshNode.Path);
+                                    })
+                                    .Where(valid => valid)
+                                    .Select(_ => (object)meshNode);
+                            }
                             return Observable.Return(node);
                         }))
                 // Concat preserves query order (query #0's hits before #1's) — same ordering
@@ -1004,6 +1016,18 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
         /// <summary>Marks this run's snapshot as short of what the query asked for.</summary>
         public void RecordDroppedRead() => dropped = true;
+
+        private ImmutableHashSet<string> refused = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The paths this run READ and the read check REFUSED (MeshWeaver#7365). Distinct from a dropped
+        /// read: a refused row was seen and decided, so even an INCOMPLETE run removes it from the rows
+        /// a reader holds — a revoked reader must never keep a row because some OTHER read failed.
+        /// </summary>
+        public ImmutableHashSet<string> RefusedPaths => Volatile.Read(ref refused);
+
+        /// <summary>Records a row this run read and refused for the reader.</summary>
+        public void RecordRefusedRead(string path) => ImmutableInterlocked.Update(ref refused, set => set.Add(path));
     }
 
     /// <summary>
@@ -1677,7 +1701,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // say WHICH live run was short; a field would mark every other concurrent caller's
             // snapshot incomplete and never clear (see ReadCompleteness).
             var completeness = new ReadCompleteness();
-            IObservable<(List<(string? Path, T Item)> Rows, List<double>? Scores, bool Complete)> RunQuery(
+            IObservable<(List<(string? Path, T Item)> Rows, List<double>? Scores, bool Complete,
+                ImmutableHashSet<string> Refused)> RunQuery(
                 ReadCompleteness runCompleteness) =>
                 RunRankedQueryNodes(request, options, useSecurityFilter,
                         projectSelect: typeof(T) != typeof(MeshNode),
@@ -1696,7 +1721,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         }
                         // Read AFTER the run's reads have all answered — RunRankedQueryNodes emits
                         // once, over the collected walk — so the verdict is final for this run.
-                        return (results, scores, !runCompleteness.AnyReadDropped);
+                        return (results, scores, !runCompleteness.AnyReadDropped,
+                            runCompleteness.RefusedPaths);
                     });
 
             // Subscribe to persistence.Changes BEFORE running the initial query so
@@ -1903,7 +1929,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                                     newResults =>
                                     {
                                         ProcessBatch(
-                                            newResults.Rows, newResults.Complete, currentItems, parsedQuery, observer);
+                                            newResults.Rows, newResults.Complete, newResults.Refused,
+                                            currentItems, parsedQuery, observer);
                                         HoldMainNodes();
                                     },
                                     ex => observer.OnError(ex)));
@@ -1983,6 +2010,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     private void ProcessBatch<T>(
         List<(string? Path, T Item)> newResults,
         bool complete,
+        IReadOnlySet<string> refused,
         Dictionary<string, T> currentItems,
         ParsedQuery parsedQuery,
         IObserver<QueryResultChange<T>> observer)
@@ -2017,7 +2045,20 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             }
             currentItems.Clear();
         }
-        else if (currentItems.Keys.Any(path => !newItems.ContainsKey(path)))
+        else
+        {
+            // 🚨 MeshWeaver#7365: an incomplete run keeps what it could not READ, never what it read
+            // and REFUSED. A revoked reader must not keep a row because some other read failed.
+            var refusedHeld = currentItems
+                .Where(held => !newItems.ContainsKey(held.Key) && refused.Contains(held.Key))
+                .ToList();
+            foreach (var (path, item) in refusedHeld)
+            {
+                removedItems.Add(item);
+                currentItems.Remove(path);
+            }
+        }
+        if (!complete && currentItems.Keys.Any(path => !newItems.ContainsKey(path)))
         {
             logger?.LogWarning(
                 "[StorageAdapterMeshQueryProvider.ProcessBatch] live re-query was INCOMPLETE (a read was dropped) — "
