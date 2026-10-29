@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -72,6 +73,18 @@ public sealed class IoPoolSiloTeardown(
     /// (default 30 s, unchanged) so a TEST can let it EXPIRE and read the report that expiry
     /// produces — the only place the offending pool and leaf are named (#2480).</para></summary>
     private static readonly TimeSpan DefaultJoinBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long the stop waits for the stacks of the leaves that outlived the join (#7277): one dump of
+    /// the process and one read of it. Past it the stop goes on and says the stacks did not arrive.
+    /// </summary>
+    internal static readonly TimeSpan StackCaptureBudget = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// The stack reader — mesh-scoped (this observer is a silo singleton), holding the DAC pin for the
+    /// process. Test seam (<c>InternalsVisibleTo</c>): a reader with no DAC makes every capture fail.
+    /// </summary>
+    internal BlockedThreadStacks Stacks { private get; init; } = new();
 
     // Captured on OnStart while the container is provably alive, read on OnStop which may run
     // AFTER the container is gone (see the type remarks). Volatile because start and stop are
@@ -174,8 +187,7 @@ public sealed class IoPoolSiloTeardown(
             // shutdown must continue, and the log below is the only attribution a later SIGSEGV gets.
             .Select(_ => true)
             .Catch<bool, Exception>(_ => Observable.Return(false))
-            .Do(joined => Report(joined, registry, budget))
-            .Select(_ => Unit.Default)
+            .SelectMany(joined => Report(joined, registry, budget))
             .FirstAsync()
             .ObserveCompletion(
                 ex => logger.LogError(ex,
@@ -197,12 +209,12 @@ public sealed class IoPoolSiloTeardown(
     /// <see cref="IoPoolRegistry.UnreportedResiduals"/> reads the pools the join was waiting on
     /// directly (#2480 — 18 occurrences of a bare sentence before it did).</para>
     /// </summary>
-    private void Report(bool joined, IoPoolRegistry registry, TimeSpan budget)
+    private IObservable<Unit> Report(bool joined, IoPoolRegistry registry, TimeSpan budget)
     {
         if (joined)
         {
             logger.LogInformation("IoPoolSiloTeardown: pooled I/O joined — no pool thread is running");
-            return;
+            return Observable.Return(Unit.Default);
         }
 
         // Never downgrade this: the silo is about to release (and any remaining ALC to unload) over
@@ -221,6 +233,87 @@ public sealed class IoPoolSiloTeardown(
                   + "join never completed: that is a defect in IoPoolRegistry.Dispose's Zip, "
                   + "NOT a leaf ignoring its token)"
                 : string.Join(" | ", stuck));
+        return ReportBlockedStacks(stuck, registry);
+    }
+
+    /// <summary>
+    /// 🚨 For every SYNCHRONOUS leaf that outlived the join, the stack of the thread it is holding —
+    /// read ONCE, from one dump of this process (<see cref="BlockedThreadStacks"/>), and logged as one
+    /// Warning per leaf beside the expiry above (#7277).
+    ///
+    /// <para><b>Why.</b> A synchronous leaf (a blocking leaf, or a <c>SubscribeThroughPool</c>
+    /// subscribe) holds its thread until it returns and takes no token, so the expiry's site — one
+    /// <c>MeshQuery</c> fan-out type for every query in the process — and its "ignored its cancellation
+    /// token" wording cannot say what it is waiting on. Its thread's stack can: the blocking frame is
+    /// at the top. An async leaf holds no thread, so it has no stack to read.</para>
+    ///
+    /// <para>Bounded by <see cref="StackCaptureBudget"/> and run on its own thread, never a pool's —
+    /// every pool is disposed by now. A capture that fails or does not arrive in time is said so, per
+    /// leaf, with the thread it was after; it never fails the stop.</para>
+    /// </summary>
+    private IObservable<Unit> ReportBlockedStacks(IReadOnlyList<IoPoolRegistry.PoolResidual> stuck, IoPoolRegistry registry)
+    {
+        var leaves = stuck
+            .SelectMany(r => r.SynchronousLeaves.Select(leaf => (r.Pool, Leaf: leaf)))
+            .ToArray();
+        if (leaves.Length == 0)
+            return Observable.Return(Unit.Default);
+        var threads = leaves.Select(l => l.Leaf.ManagedThreadId).Distinct().ToArray();
+        return Observable.Start(() => Stacks.Capture(threads), NewThreadScheduler.Default)
+            .Timeout(StackCaptureBudget)
+            .Do(byThread =>
+            {
+                foreach (var (pool, leaf) in leaves)
+                {
+                    // 🚨 The thread id names a thread, not the leaf: a leaf that returned between the
+                    // expiry's snapshot and the dump handed its thread back, and the stack read from
+                    // it is then whatever that thread ran next. The ticket is the leaf's own, and a
+                    // synchronous leaf holds its thread for as long as the ticket lives — live both
+                    // before and after the dump means the stack is the leaf's.
+                    if (!registry.IsLeafInFlight(pool, leaf))
+                    {
+                        logger.LogWarning(
+                            "IoPoolSiloTeardown: the {Pool} leaf {Site} outlived the join on managed thread {Thread} "
+                            + "but returned before its stack could be read — the dump's stack of that thread is "
+                            + "NOT attributed to it",
+                            pool, leaf.Site, leaf.ManagedThreadId);
+                        continue;
+                    }
+                    logger.LogWarning(
+                        "IoPoolSiloTeardown: the {Pool} leaf {Site} still holds managed thread {Thread} after the join "
+                        + "expired — the frame it is stuck in is at the top of that thread's stack, read once from a "
+                        + "dump of this process:{Stack}",
+                        pool, leaf.Site, leaf.ManagedThreadId,
+                        byThread.TryGetValue(leaf.ManagedThreadId, out var stack) ? stack : " (not in the capture)");
+                }
+            })
+            .Select(_ => Unit.Default)
+            .Catch<Unit, Exception>(ex =>
+            {
+                foreach (var (pool, leaf) in leaves)
+                {
+                    // The same ticket check as above: a leaf that returned meanwhile does not "still
+                    // hold" anything, whether or not the capture worked.
+                    if (!registry.IsLeafInFlight(pool, leaf))
+                    {
+                        logger.LogWarning(
+                            "IoPoolSiloTeardown: the {Pool} leaf {Site} outlived the join on managed thread {Thread} "
+                            + "but returned before its stack could be read — the dump's stack of that thread is "
+                            + "NOT attributed to it",
+                            pool, leaf.Site, leaf.ManagedThreadId);
+                        continue;
+                    }
+                    logger.LogWarning(
+                        "IoPoolSiloTeardown: the {Pool} leaf {Site} still holds managed thread {Thread} after the join "
+                        + "expired, and its stack could not be read ({Reason}) — read it from a dump of this pod with "
+                        + "AnalyzeDump (clrstack) instead",
+                        pool, leaf.Site, leaf.ManagedThreadId,
+                        ex is TimeoutException
+                            ? $"the capture did not finish within {StackCaptureBudget}"
+                            : $"{ex.GetType().Name}: {ex.Message}");
+                }
+                return Observable.Return(Unit.Default);
+            });
     }
 }
 
