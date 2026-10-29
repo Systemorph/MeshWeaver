@@ -253,7 +253,10 @@ jobs:
   report:
     name: "The red has an audience: one issue, one signed event"
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 10
+    # 30, not 10: a rate-limited GitHub API is WAITED OUT to its reset (MW_API_OUTAGE_WAIT_MINUTES on
+    # the ledger step, 22), because a reporter that gives up files nothing — the empty room again
+    # (MeshWeaver#7416). Only an outage spends that time; past it the step exits 3, NO VERDICT.
+    timeout-minutes: 30
     # A REQUIREMENT on every caller (a called workflow can only narrow its caller's grant), and it
     # REPLACES the defaults: `contents: read` is listed explicitly because a block that names only
     # `issues` takes `contents` away — and the caller's map must carry all three or the run ends in
@@ -370,6 +373,9 @@ jobs:
           # NEVER ci-failure — that is main-cd.yml's delivery alert; the script refuses that label outright.
           LEDGER_LABEL: ${{ inputs.label }}
           LEDGER_SEVERITY: ${{ inputs.severity }}
+          # A rate limit / 5xx is retried to its reset inside this budget, then NO VERDICT (exit 3) —
+          # never "grant `issues: write`" to a caller that granted it (MeshWeaver#7416, #7448).
+          MW_API_OUTAGE_WAIT_MINUTES: "22"
         run: |
           set -euo pipefail
           export LEDGER_EVENT_OUT="$RUNNER_TEMP/event.json"
