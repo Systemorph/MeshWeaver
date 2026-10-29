@@ -302,12 +302,28 @@ public sealed class IoPoolRegistry : IDisposable
         /// </summary>
         public IReadOnlyList<string> Sites { get; init; } = [];
 
+        /// <summary>
+        /// The residual's SYNCHRONOUS leaves — a blocking leaf or a <c>SubscribeThroughPool</c>
+        /// subscribe — with the managed thread each one is still holding, so a caller whose join
+        /// expired can read that thread's stack (#7277). Not part of <see cref="ToString"/>: the
+        /// sites already name them there.
+        /// </summary>
+        public IReadOnlyList<SynchronousLeaf> SynchronousLeaves { get; init; } = [];
+
         /// <inheritdoc />
         public override string ToString() =>
             Sites.Count == 0
                 ? $"{Pool}={Residual}"
                 : $"{Pool}={Residual} [{string.Join(" | ", Sites)}]";
     }
+
+    /// <summary>
+    /// One synchronous leaf still in flight: its site (as <see cref="PoolResidual.Sites"/> names it)
+    /// and the managed thread it holds until it returns.
+    /// </summary>
+    /// <param name="Site">The leaf's call site.</param>
+    /// <param name="ManagedThreadId">The managed thread the leaf started on and is still holding.</param>
+    public readonly record struct SynchronousLeaf(string Site, int ManagedThreadId);
 
     /// <summary>
     /// The budget a host's terminal drain holds shutdown for while waiting on <see cref="Disposed"/>
@@ -343,7 +359,8 @@ public sealed class IoPoolRegistry : IDisposable
             .Where(kvp => !_reported.ContainsKey(kvp.Key))
             .Select(kvp => new PoolResidual(kvp.Key, kvp.Value.CurrentInFlight)
             {
-                Sites = kvp.Value.PendingLeafSites
+                Sites = kvp.Value.PendingLeafSites,
+                SynchronousLeaves = kvp.Value.PendingSynchronousLeaves,
             })
             .ToArray();
 
