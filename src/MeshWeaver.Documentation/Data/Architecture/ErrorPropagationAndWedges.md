@@ -261,6 +261,44 @@ What this does NOT establish is the reader that blocked in production. The sweep
 path, and whatever lock or wait it reached, was not captured, because no stack was taken at the
 wedge. With this change such a reader stalls its own stream's hub, not the process.
 
+### A stream's terminal never runs its readers on the raising turn (#7548)
+
+The previous section moved the verdict onto the stream's own `sync/{id}` hub, and that hub is
+where the next wedge appeared. On memex-cloud's serving image, `sync/qdl4…` sat at
+`RunLevel=Starting … openGates=1 … Executing(DeliveryFailure, 2019462ms)`. Its last line was
+`[SYNC_STREAM] OnError … Owner=Auth/_EaCredential/<user>`. That line came from a background sweep
+that reads one credential node per user, about 90 s after the pod booted. Later the same address
+logged `DISPOSAL DEADLOCK DETECTED`.
+
+`SynchronizationStream.OnError` publishes the terminal first. Only after that does it settle its
+hub with `FailStartup` and `OpenGate`. The node-stream cache fans the terminal out to every
+reader of the path from one shared subject, one reader after another and inline. A reader's error
+arm is where it chains its next step: the sweep's `Catch` ran the rest of the sweep, including the
+next user's reads, on the sync hub's action block. When that continuation did not return, three
+things followed:
+
+- every later reader of the same path was never told;
+- the hub stayed at `Starting` with its gate closed;
+- its `ShutdownRequest` queued FIFO behind the turn, so the hub could never be torn down.
+
+The cache's shared view (`MeshNodeStreamCache.SharedView`) now hands each reader its terminal as
+its own pooled work item. The raising turn returns at once and the hub settles. A reader that
+blocks in its error path holds only itself, and the other readers still hear the error. This is
+ordering-safe: an error is the last notification a reader receives, and every value before it was
+delivered synchronously and has already returned. Data emissions are unchanged and still run on
+the stream's turn.
+
+This is pinned by `AStreamTerminalNeverRunsReadersOnTheSyncHubTurnTest`. Two readers subscribe to
+one absent node, and the first one parks in its error callback. The second must receive the same
+NotFound while the first is still parked. Before the change it hears nothing.
+
+**What this does NOT establish** is the call in the sweep's continuation that never returned. The
+logs bound it: it is reached after the fourth credential NotFound and before the next user's
+credential read. They do not name it. Finding it needs a stack from a wedged process (a dump of
+the pod while a hub reports `Executing(DeliveryFailure, …)` for minutes). With this change that
+call holds one pooled thread, not a hub, so it is still a defect to find. It just no longer pins
+a stream.
+
 ### Long-running operations (activity → activity log)
 
 An import / compile / mirror runs as an activity. A fault must not strand the activity "Running" forever — it writes `Status = Error` with the message onto the activity node, which the activity log and any progress reader render. Persistence at the bottom of the stack never re-gates and never fail-closes a write that was already approved; it forwards. See [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) and [Activity Operations](/Doc/Architecture/ActivityOperations).
