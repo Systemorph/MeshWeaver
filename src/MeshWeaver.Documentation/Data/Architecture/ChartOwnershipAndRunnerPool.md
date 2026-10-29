@@ -36,6 +36,16 @@ followed it (MeshWeaver.Deploy#5) and is frozen the same way: `deploy/build-host
 A chart change belongs in MeshWeaver.Deploy. The gate's message says so, and its
 self-test proves it refuses a modification and an addition and lets a pure deletion through.
 
+Two shapes no well-meant edit reaches are refused as well (#7391). A non-deletion **at a directory
+above a frozen path** — move `deploy/aks` aside and add the symlink `deploy/aks -> ../editable-aks`
+— lists every frozen child as a deletion and one addition that no frozen prefix matches, yet
+re-opens the whole subtree for editing through the link; so an addition, modification or retype at
+any ancestor of a frozen path is a violation, while deleting there stays allowed. And a saved
+`--diff-file` listing is read **strictly**: the whole status token must be one git prints (`Dgarbage`
+used to read as a deletion), and a record must carry the number of path fields its status needs, none
+empty (`R100` with no destination used to count as nothing). An unreadable record stops the read and
+is itself a violation.
+
 ## The chart lives here; the application it deploys does not
 
 `deploy/helm/` is in the platform repo, so `Chart Gate` and `Chart Drift` correctly run here — **a

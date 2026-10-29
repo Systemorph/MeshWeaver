@@ -39,8 +39,11 @@ WHAT THIS GATE DOES
 It consumes the surface-removal REPORT that `check-type-forwards.py --surface-json` already
 computes — one detector, proven by one set of self-tests, never a second one — and:
 
-  * removals empty  -> PASS. Measured on this repo: `main~25 -> main` removes ZERO public types,
-    so an ordinary pull request never meets this gate at all. `main~100 -> main` removes 116, all
+  * removals empty  -> PASS, UNLESS the body DECLARES a counterpart (MeshWeaver#7397): a
+    declared `Pairs-with:` is resolved whatever the detector found, because the author is asserting
+    a coupling the detector cannot see — a PackageReference or PackageVersion leaving core. Measured
+    on this repo: `main~25 -> main` removes ZERO public types, so an ordinary pull request (which
+    declares nothing) never meets this gate at all. `main~100 -> main` removes 116, all
     of them the Maps/Indexing carve-out (#2941) — the exact wave that produced #2689's incident
     shapes 4 and 5.
   * removals non-empty -> the pull-request body MUST carry a `Pairs-with:` declaration, and every
@@ -445,10 +448,21 @@ def evaluate(surface: dict, body: str, fleet: set[str], resolve,
         f"Base tree holds {projects_at_base} `{PROJECT_SUFFIX}` file(s); "
         f"this diff deletes or renames {len(removed_projects)} of them."
     )
+    declarations = parse_declarations(body)
     if not removed and not removed_projects:
-        out.append("No public type or member left src/ and no project path moved in this diff — "
-                   "no cross-repo pair to gate.")
-        return 0, out
+        # 🚨 A DECLARED pair is resolved even when the detector found nothing (MeshWeaver#7397).
+        # The detector sees public types, public members and project paths — not a
+        # PackageReference or PackageVersion leaving core, which a satellite can depend on just as
+        # hard (#7205 dropped YamlDotNet; #7179 dropped pins a satellite read versionless). An
+        # author who writes `Pairs-with:` is asserting a coupling the detector cannot see, and a
+        # gate that returned before reading it held nothing while the body claimed it did.
+        if not any(isinstance(d, (PairRef, Unparseable)) for d in declarations):
+            out.append("No public type or member left src/ and no project path moved in this "
+                       "diff — no cross-repo pair to gate.")
+            return 0, out
+        out.append("No public type or member left src/ and no project path moved, but the body "
+                   "DECLARES a counterpart — resolving it, because the declaration is the author "
+                   "asserting a coupling the detector cannot see (a dependency or pin removal).")
 
     for entry in removed[:40]:
         out.append(f"  [{entry.get('category')}] {entry.get('assembly')} :: {entry.get('fullName')}")
@@ -468,7 +482,6 @@ def evaluate(surface: dict, body: str, fleet: set[str], resolve,
             f"a counterpart may live in: {', '.join(sorted(fleet))}."
         )
 
-    declarations = parse_declarations(body)
     bad = [d for d in declarations if isinstance(d, Unparseable)]
     if bad:
         for d in bad:
@@ -911,6 +924,37 @@ PROJECT_SELF_TESTS: list[tuple] = [
         {"publicTypesAtBase": _HEALTHY, "removed": []},
         "", _resolver(_pr()), {"projectsAtBase": 2, "removed": []}, _FLEET, False,
         ("below the floor", "green on zero"),
+    ),
+    (
+        # 🚨 THE #7397 SHAPE. #7205 dropped a package dependency from core (no public type, no
+        # project path) and DECLARED its satellite counterpart; before the fix this row PASSED
+        # with "no cross-repo pair to gate" while the counterpart was still open.
+        "a DECLARED counterpart is resolved though the detector found no removal — OPEN holds it",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Drops a package dependency.\n\nPairs-with: Systemorph/MeshWeaver.Plugins#4227\n",
+        _resolver(_pr(merged=False, state="open")), _NO_PROJECTS, _FLEET, False,
+        ("DECLARES a counterpart", "still OPEN", "must land LAST"),
+    ),
+    (
+        "…and once that declared counterpart has merged, the change may follow",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Pairs-with: Systemorph/MeshWeaver.Plugins#4227\n",
+        _resolver(_pr()), _NO_PROJECTS, _FLEET, True,
+        ("ok  Systemorph/MeshWeaver.Plugins#4227", "may follow"),
+    ),
+    (
+        "…a malformed declaration on a no-removal diff FAILS rather than reading as none",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Pairs-with: MeshWeaver.Plugins 4227\n",
+        _resolver(_pr()), _NO_PROJECTS, _FLEET, False,
+        ("Unparseable declaration",),
+    ),
+    (
+        "…and `Pairs-with: none` on a no-removal diff still passes",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Pairs-with: none — nothing outside core consumed the dropped package\n",
+        _raising_resolver("must not be called"), _NO_PROJECTS, _FLEET, True,
+        ("no cross-repo pair to gate",),
     ),
     (
         "an ordinary diff that moves no project still never meets the gate",

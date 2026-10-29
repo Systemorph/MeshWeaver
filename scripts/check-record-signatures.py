@@ -184,9 +184,72 @@ def _strip_bom(text: str) -> str:
     return text.lstrip("\ufeff")
 
 
+# 🚨 A COMMENT is not a parameter (MeshWeaver#7366). `split_params` splits on top-level commas
+# and `parse_param` takes the last token as the name, so a `//` line between two parameters
+# whose prose holds a comma became a PHANTOM parameter, and a comment ending in an identifier
+# was swallowed into the next parameter's TYPE. Measured on core#5077: `UserOnboardingRequest`
+# read as 8 -> 10 parameters for a real 7 -> 8, with five lines of prose printed as the type of
+# `Locale`. Rewording such a comment then read as a type change on a record whose signature did
+# not move — and, worse, a comment GAINING a comma while a real parameter left kept the count
+# equal. So comments go before anything is counted, on BOTH sides of the comparison, because both
+# pass through here.
+#
+# String and char literals are copied verbatim (a `//` inside `"https://…"` is not a comment);
+# `@"…"` verbatim strings use `""` as their only escape, and a raw `"""…"""` literal runs to the
+# next `"""`. Newlines inside a block comment are kept so nothing downstream sees two tokens
+# fused into one.
+def _strip_comments(text: str) -> str:
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            end = text.find("\n", i)
+            i = n if end == -1 else end
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            end = text.find("*/", i + 2)
+            stop = n if end == -1 else end + 2
+            out.append(" " + "\n" * text.count("\n", i, stop))
+            i = stop
+            continue
+        if text.startswith('"""', i):
+            end = text.find('"""', i + 3)
+            stop = n if end == -1 else end + 3
+            out.append(text[i:stop])
+            i = stop
+            continue
+        if ch in "\"'":
+            verbatim = ch == '"' and i > 0 and text[i - 1] == "@" or (
+                ch == '"' and i > 1 and text[i - 2 : i] in ("$@", "@$"))
+            j = i + 1
+            while j < n:
+                c = text[j]
+                if verbatim:
+                    if c == '"':
+                        if j + 1 < n and text[j + 1] == '"':
+                            j += 2
+                            continue
+                        break
+                    j += 1
+                    continue
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == ch or c == "\n":
+                    break
+                j += 1
+            out.append(text[i : j + 1])
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def records_in(source: str) -> dict[str, list[Param]]:
     """Every public record's primary-constructor parameter list, by record name."""
-    source = _strip_bom(source)
+    source = _strip_comments(_strip_bom(source))
     found: dict[str, list[Param]] = {}
     for m in RECORD_RE.finditer(source):
         open_idx = source.index("(", m.end() - 1)
@@ -375,6 +438,40 @@ def self_test() -> int:
     a = records_in("public record A([property: JsonPropertyName(\"x\")] string X, params int[] Rest);")["A"]
     check("an attribute is stripped, not counted", len(a) == 2 and a[0].name == "X")
     check("a params modifier is stripped", a[1].name == "Rest")
+
+    # ── comments inside a parameter list are not parameters (#7366) ─────────────────────
+    # The core#5077 shape: line comments between parameters, holding commas, an em dash, a
+    # trailing identifier and a `//` inside a string default that must SURVIVE.
+    commented = (
+        "public sealed record Onboarding(\n"
+        "    string Username,\n"
+        "    string Email,\n"
+        "    // The viewer's language (\"de\"), from the onboarding form's language picker —\n"
+        "    // which itself defaults to the browser's, so the point of use reads it anyway.\n"
+        "    string? Locale = null,\n"
+        "    /* a block comment, with a comma,\n"
+        "       spanning lines */ string Home = \"https://example.com/a,b\",\n"
+        "    // not learning it, and is pinned to no learning path.\n"
+        "    bool IsPlatformBootstrap = false);\n"
+    )
+    oc = records_in(commented).get("Onboarding") or []
+    check("comment text is not counted as parameters (#7366: real arity is 5)",
+          [p.name for p in oc] == ["Username", "Email", "Locale", "Home", "IsPlatformBootstrap"])
+    check("…and a comment is not swallowed into the next parameter's TYPE",
+          [p.type for p in oc] == ["string", "string", "string?", "string", "bool"])
+    reworded = commented.replace("so the point of use reads it anyway", "so callers, again, read it")
+    check("rewording a comment inside a parameter list is NOT a signature change",
+          not compare("Onboarding", oc, records_in(reworded).get("Onboarding") or [], "x.cs"))
+    dropped = commented.replace("    string Email,\n", "    // Email moved, see the profile record,\n")
+    check("a real parameter leaving while a comment gains a comma is still an arity change",
+          [x.kind for x in compare("Onboarding", oc,
+                                   records_in(dropped).get("Onboarding") or [], "x.cs")] == ["arity"])
+    check("a `//` inside a string literal is not a comment",
+          records_in('public record U(string Url = "http://x", int N = 1);').get("U") is not None
+          and [p.name for p in records_in('public record U(string Url = "http://x", int N = 1);')["U"]]
+          == ["Url", "N"])
+    check("a commented-OUT record is not a record",
+          "Gone" not in records_in("// public record Gone(int A);\npublic record Here(int A);"))
 
     # ── the transitional allowance, end to end through run() ─────────────────────────
     #
