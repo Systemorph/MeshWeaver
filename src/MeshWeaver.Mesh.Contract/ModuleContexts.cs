@@ -1135,6 +1135,10 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             }
             generation.Context.Unload();
         }
+        // The registry's half of MeshWeaver#7373: a subject holds every observer until it unsubscribes,
+        // so completing it at teardown releases a subscriber that never ended its own subscription —
+        // nothing a cache of the modules' contributions left behind outlives the registry's mesh.
+        versionChanged.OnCompleted();
     }
 }
 

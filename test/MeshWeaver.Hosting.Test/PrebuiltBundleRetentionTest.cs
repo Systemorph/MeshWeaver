@@ -1041,6 +1041,87 @@ public class PrebuiltBundleRetentionTest : IDisposable
                 "every pass, an aborted one included, carries the one tag an operator queries for");
     }
 
+    // ---- #7349: one Warning per pass, whatever else goes wrong ---------------------------------
+
+    /// <summary>
+    /// #7349 — a ledger that cannot be written (here: <c>_retention</c> is a FILE) rides on the
+    /// pass's ONE Warning outcome; it never adds a second Warning. Report-only and armed alike.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AFailedLedgerWrite_TravelsOnTheOneOutcome_NeverASecondWarning(bool armed)
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Sealed("s-old", "plugins", DaysAgo(500));
+        File.WriteAllText(Path.Combine(root, PrebuiltBundleStore.RetentionDirectoryName), "not a directory");
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = armed }, Now,
+            CancellationToken.None, log);
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle(
+                "a failed ledger append must not become a second shipped Warning")
+            .Which.Message.Should().Contain("pass outcome").And.Contain("The ledger was NOT written");
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                                          && e.Message.Contains("could not append to the ledger"),
+            "the exception detail is kept, below Warning");
+    }
+
+    /// <summary>NEGATIVE CONTROL — a ledger that IS written adds nothing to the outcome line.</summary>
+    [Fact]
+    public void AWrittenLedger_LeavesTheOutcomeLineWithoutALedgerClause()
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = false }, Now,
+            CancellationToken.None, log);
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().NotContain("ledger was NOT written").And.Contain("0 source pointer(s) refused");
+    }
+
+    /// <summary>
+    /// #7349 — N dangling <c>_current</c> pointers are COUNTED on the one outcome, never logged as N
+    /// Warnings of their own. Report-only and armed alike.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DanglingPointers_AreCountedOnTheOutcome_NotOneWarningEach(bool armed)
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Pointer("s-a", "plugins", "gone-1", DaysAgo(2));
+        Pointer("s-b", "plugins", "gone-2", DaysAgo(2));
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = armed }, Now,
+            CancellationToken.None, log);
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle(
+                "N bad pointers must not become N+1 shipped Warning lines")
+            .Which.Message.Should().Contain("2 source pointer(s) refused");
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                                          && e.Message.Contains("which is not on disk"));
+    }
+
+    /// <summary>
+    /// The level is lowered for RETENTION only — a reader resolving the same dangling pointer still
+    /// warns, because for a reader it is a serving problem, not a counted pass statistic.
+    /// </summary>
+    [Fact]
+    public void AReaderResolvingADanglingPointer_StillWarns()
+    {
+        Pointer("s-a", "plugins", "gone-1");
+        var log = new OutcomeLogger();
+
+        ShippedPrebuiltBundles.ResolvePublicationPointer(Path.Combine(root, "s-a", "plugins"), CancellationToken.None, log);
+
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+                                          && e.Message.Contains("which is not on disk"));
+    }
+
     private sealed class OutcomeLogger : Microsoft.Extensions.Logging.ILogger
     {
         public System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = new();

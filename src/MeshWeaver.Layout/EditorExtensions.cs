@@ -38,7 +38,7 @@ public static class EditorExtensions
     /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
         Func<T, UiControl> result)
-        => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
+        => EditWithCompanion(host.Hub.ServiceProvider, Observable.Return(instance), (i, _, _) => result(i), host.ViewerLocale());
     /// <summary>
     /// Renders an auto-generated editor for <paramref name="type"/> bound to the data context keyed by <paramref name="id"/>.
     /// </summary>
@@ -47,7 +47,7 @@ public static class EditorExtensions
     /// <param name="id">Data context key used to read and write field values.</param>
     /// <returns>An <see cref="EditorControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static UiControl Edit(this LayoutAreaHost host, Type type, string id)
-        => host.Hub.ServiceProvider.Edit(type, id);
+        => EditType(host.Hub.ServiceProvider, type, id, host.ViewerLocale());
     /// <summary>
     /// Renders an auto-generated editor for <paramref name="instance"/> bound to the data context keyed by <paramref name="id"/>.
     /// </summary>
@@ -56,7 +56,7 @@ public static class EditorExtensions
     /// <param name="id">Data context key used to read and write field values.</param>
     /// <returns>An <see cref="EditorControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance, string id)
-        => host.Hub.ServiceProvider.Edit(Observable.Return(instance), id);
+        => EditObservable(host.Hub.ServiceProvider, Observable.Return(instance), id, host.ViewerLocale());
     /// <summary>
     /// Renders an auto-generated editor for <paramref name="instance"/> and an observable companion
     /// control built by <paramref name="result"/>, stacked vertically.
@@ -67,7 +67,7 @@ public static class EditorExtensions
     /// <returns>A stacked control containing the editor and the companion.</returns>
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
         Func<T, IObservable<UiControl>> result)
-        => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
+        => EditWithCompanion(host.Hub.ServiceProvider, Observable.Return(instance), (i, _, _) => result(i), host.ViewerLocale());
     /// <summary>
     /// Renders an auto-generated editor for <paramref name="instance"/> using reflected properties.
     /// </summary>
@@ -75,7 +75,7 @@ public static class EditorExtensions
     /// <param name="instance">The object to edit.</param>
     /// <returns>An <see cref="EditorControl"/> with one field per public property of <typeparamref name="T"/>.</returns>
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance)
-        => host.Hub.ServiceProvider.Edit(Observable.Return(instance));
+        => EditObservable(host.Hub.ServiceProvider, Observable.Return(instance), null, host.ViewerLocale());
     /// <summary>
     /// Renders an auto-generated editor for <paramref name="instance"/> and a companion control
     /// built by <paramref name="result"/>, stacked vertically.
@@ -193,11 +193,24 @@ public static class EditorExtensions
         this IServiceProvider serviceProvider,
         IObservable<T> observable
         , string id)
-        => observable.Bind(_ =>
+        => EditObservable(serviceProvider, observable, id, AmbientViewerLocale(serviceProvider));
+
+    /// <summary>
+    /// The one body of the observable-bound editor, with the viewer's language passed EXPLICITLY.
+    /// The <see cref="LayoutAreaHost"/> overloads pass the language of the viewer the host captured,
+    /// so a form built after an async gate — where the ambient context is gone — still describes its
+    /// fields in the viewer's language (MeshWeaver#7383).
+    /// </summary>
+    private static EditorControl EditObservable<T>(
+        IServiceProvider serviceProvider, IObservable<T> observable, string? id, string? viewerLocale)
+    {
+        Func<EditorControl, PropertyInfo, EditorControl> map =
+            (editor, property) => serviceProvider.MapToSkinnedControl<EditorControl, EditorSkin>(editor, property, viewerLocale);
+        return observable.Bind(_ =>
                 typeof(T).GetProperties()
-                    .Aggregate(new EditorControl() { Style = "width: 100%;" },
-                        serviceProvider.MapToControl<EditorControl, EditorSkin>),
-            id);
+                    .Aggregate(new EditorControl() { Style = "width: 100%;" }, map),
+            id!);
+    }
     /// <summary>
     /// Primary type-based implementation: renders an auto-generated editor for <paramref name="type"/>
     /// bound to the data context keyed by <paramref name="id"/>. One form field is generated per public property.
@@ -207,9 +220,12 @@ public static class EditorExtensions
     /// <param name="id">Data context key used to read and write field values.</param>
     /// <returns>An <see cref="EditorControl"/> bound to the data at <paramref name="id"/>.</returns>
     public static EditorControl Edit(this IServiceProvider serviceProvider, Type type, string id)
+        => EditType(serviceProvider, type, id, AmbientViewerLocale(serviceProvider));
+
+    private static EditorControl EditType(IServiceProvider serviceProvider, Type type, string id, string? viewerLocale)
         => type.GetProperties()
                     .Aggregate(new EditorControl(),
-                        serviceProvider.MapToControl<EditorControl, EditorSkin>) with
+                        (editor, property) => serviceProvider.MapToSkinnedControl<EditorControl, EditorSkin>(editor, property, viewerLocale)) with
         { DataContext = LayoutAreaReference.GetDataPointer(id), Style = "width: 100%;" };
 
 
@@ -226,9 +242,16 @@ public static class EditorExtensions
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
+        => EditWithCompanion(serviceProvider, observable, result, AmbientViewerLocale(serviceProvider));
+
+    private static UiControl EditWithCompanion<T>(
+        IServiceProvider serviceProvider,
+        IObservable<T> observable,
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result,
+        string? viewerLocale)
     {
         var id = Guid.NewGuid().AsString();
-        var editor = serviceProvider.Edit(observable, id);
+        var editor = EditObservable(serviceProvider, observable, id, viewerLocale);
         return Controls
             .Stack
             .WithView(editor)
@@ -249,9 +272,16 @@ public static class EditorExtensions
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
         Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result)
+        => EditWithCompanion(serviceProvider, observable, result, AmbientViewerLocale(serviceProvider));
+
+    private static UiControl EditWithCompanion<T>(
+        IServiceProvider serviceProvider,
+        IObservable<T> observable,
+        Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result,
+        string? viewerLocale)
     {
         var id = Guid.NewGuid().AsString();
-        var editor = serviceProvider.Edit(observable, id);
+        var editor = EditObservable(serviceProvider, observable, id, viewerLocale);
         return Controls
             .Stack
             .WithView(editor)
@@ -566,6 +596,20 @@ public static class EditorExtensions
         PropertyInfo propertyInfo)
         where T : ContainerControlWithItemSkin<T, TSkin, PropertySkin>
         where TSkin : Skin<TSkin>
+        => serviceProvider.MapToSkinnedControl<T, TSkin>(editor, propertyInfo, AmbientViewerLocale(serviceProvider));
+
+    /// <summary>
+    /// The skinned field builder with the viewer's language passed EXPLICITLY — the skin's
+    /// description is fixed when the form is BUILT, so the language must be the viewer's at that
+    /// moment, not whatever the ambient context happens to hold (MeshWeaver#7383).
+    /// </summary>
+    private static T MapToSkinnedControl<T, TSkin>(
+        this IServiceProvider serviceProvider,
+        T editor,
+        PropertyInfo propertyInfo,
+        string? viewerLocale)
+        where T : ContainerControlWithItemSkin<T, TSkin, PropertySkin>
+        where TSkin : Skin<TSkin>
     {
         if (propertyInfo.GetCustomAttribute<BrowsableAttribute>()?.Browsable == false)
             return editor;
@@ -574,9 +618,6 @@ public static class EditorExtensions
         var propertySkinLabel = propertyInfo.GetEditorLabel();
         string? label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
-        // The viewer's language, read off the AccessContext rather than ambient culture (see
-        // ViewerLocaleOf). Resolved once here so the per-skin lambda does no repeated DI lookup.
-        var viewerLocale = serviceProvider.GetService<AccessService>().ViewerLocale();
         var xmlDocs = serviceProvider.GetRequiredService<ITypeRegistry>().XmlDocs();
 
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
@@ -616,8 +657,9 @@ public static class EditorExtensions
             return editor.WithView((host, _) =>
             {
                 // #4284: same gap as the unskinned dispatch above — no branch, property dropped.
+                // The options render on THIS host, so they take its captured viewer's language.
                 var id = Guid.NewGuid().AsString();
-                host.UpdateData(id, ConvertEnumToOptions(enumType, viewerLocale));
+                host.UpdateData(id, ConvertEnumToOptions(enumType, ViewerLocaleOf(host)));
                 return RenderListControl(host, Controls.Select, jsonPointerReference, id).WithAriaLabel(propertySkinLabel);
             }, skinConfiguration);
         if (propertyInfo.PropertyType.IsNumber())
@@ -1016,7 +1058,17 @@ public static class EditorExtensions
     /// and one user's UI could pick up another user's language.
     /// </summary>
     private static string? ViewerLocaleOf(LayoutAreaHost host)
-        => host.ViewerAccess.ViewerLocale();
+        => host.ViewerLocale();
+
+    /// <summary>
+    /// The viewer's language for a form built WITHOUT a host (the <see cref="IServiceProvider"/> and
+    /// <see cref="IMessageHub"/> overloads): the ambient AccessContext, which is the viewer's only
+    /// while the caller runs on the render turn. A layout area that builds its form after an async
+    /// gate calls the <see cref="LayoutAreaHost"/> overloads instead, which pass the language of the
+    /// viewer the host captured (MeshWeaver#7383).
+    /// </summary>
+    private static string AmbientViewerLocale(IServiceProvider serviceProvider)
+        => serviceProvider.GetService<AccessService>().ViewerLocale();
 
     private static string GetToggleableDisplayName(PropertyInfo property, LayoutAreaHost host)
     {

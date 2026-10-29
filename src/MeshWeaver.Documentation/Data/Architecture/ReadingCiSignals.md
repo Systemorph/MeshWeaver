@@ -204,7 +204,14 @@ re-adds the skip (`&& success()`, `!failure()`). The SUCCESS half is held too, b
 alert on a red is a false green: it must `needs:` every job as well, and each top-level `&&` conjunct of
 its `if:` is `success()`, `always()`/`!cancelled()` paired with `needs.<n>.result == 'success'` for every
 direct need, a `needs.<n>.outputs.<o>` comparison, or an event/ref guard that is true for a scheduled run
-on main — so `failure()`, an `||` over needs, and `${{ false }}` are refused. And a cause is compared only when every failed job
+on main — so `failure()`, an `||` over needs, and `${{ false }}` are refused. "Every job" counts a
+job reached only through an intermediate whose `if:` keeps the implicit success() (no status function,
+or `success()` as a required `&&` conjunct — `&&` binds tighter than `||`, so an `if:` with a top-level `||` has no required conjunct at all); behind `always()`, `!cancelled()`, `failure()`,
+`success() || …` or `!success()` the intermediate can succeed on a red, so its needs must be listed
+directly. And the failure half's `if:` is evaluated JOINTLY over every combination of its direct needs'
+results — `success`, `failure`, or `skipped` where a red ancestor can skip that need — other than
+all-green (#7458): `needs.b.result == 'failure'` misses `b` SKIPPED behind a red `a`, and a predicate
+checked one red at a time misses two reds at once. And a cause is compared only when every failed job
 carries an error signature: a caller that passes none, or a job that printed no error, reads `n/a`,
 never "same". Known
 debt sits in `.github/scheduled-lane-reporters.allow` with a reason per line; that list only shrinks —
