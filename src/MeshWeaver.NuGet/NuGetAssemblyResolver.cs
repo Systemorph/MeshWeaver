@@ -25,6 +25,12 @@ namespace MeshWeaver.NuGet;
 /// only for an identity the folder cannot answer. A floating or ranged root request still asks
 /// the feed which version to take; an exact version never does.
 ///
+/// <para>The package FOLDERS are NuGet's own, in NuGet's order: the global-packages folder, then
+/// every fallback package folder (<c>NUGET_FALLBACK_PACKAGES</c>, or the configured
+/// <c>fallbackPackageFolders</c> — <see cref="SettingsUtility.GetFallbackPackageFolders(ISettings)"/>). A
+/// fallback folder is READ-ONLY: a package found complete there is used where it lies, never copied,
+/// repaired or downloaded; only an identity no folder holds is installed into the global folder.</para>
+///
 /// <para>The resolution is REACTIVE (<see cref="Resolve"/>). The NuGet SDK is Task-based, so its
 /// calls are one leaf run through the Http <see cref="IIoPool"/>; one resolution per inputs is
 /// shared through an instance <see cref="PromiseCache{TKey,TValue}"/>, which keeps a success and
@@ -61,6 +67,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     private readonly MsLogging.ILogger<NuGetAssemblyResolver> logger;
     private readonly ISettings _settings;
     private readonly string? _globalPackagesFolder;
+    private readonly IReadOnlyList<string>? _fallbackPackageFolders;
     private readonly NuGetLogger _nugetLogger;
     private readonly INuGetPackageCache _packageCache;
 
@@ -127,6 +134,9 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     /// <param name="pool">The pool the NuGet SDK leaf runs on; <c>null</c> takes <see cref="IoPool.Unbounded"/>.</param>
     /// <param name="releaseLane">The lane released connections terminate on; <c>null</c> gives the resolver its own.</param>
     /// <param name="cachePool">The lane persistent-cache saves run on — never the resolution's pool; <c>null</c> takes <see cref="IoPool.Unbounded"/>.</param>
+    /// <param name="fallbackPackageFolders">The read-only fallback package folders; <c>null</c> takes NuGet's own
+    /// (<c>NUGET_FALLBACK_PACKAGES</c>, else the settings' <c>fallbackPackageFolders</c>). A parameter for the same
+    /// reason as <paramref name="globalPackagesFolder"/>: the environment variable overrides any setting.</param>
     internal NuGetAssemblyResolver(
         MsLogging.ILogger<NuGetAssemblyResolver> logger,
         ISettings settings,
@@ -135,13 +145,15 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
         TimeSpan? resolveBudget = null,
         IIoPool? pool = null,
         ReleaseLane? releaseLane = null,
-        IIoPool? cachePool = null)
+        IIoPool? cachePool = null,
+        IReadOnlyList<string>? fallbackPackageFolders = null)
     {
         _cachePool = cachePool ?? IoPool.Unbounded;
         _releaseLane = releaseLane ?? new ReleaseLane();
         this.logger = logger;
         _settings = settings;
         _globalPackagesFolder = globalPackagesFolder;
+        _fallbackPackageFolders = fallbackPackageFolders;
         _resolveBudget = resolveBudget ?? DefaultResolveBudget;
         _pool = pool ?? IoPool.Unbounded;
         _nugetLogger = new NuGetLogger(logger);
@@ -263,6 +275,11 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
         CancellationToken ct)
     {
         var packagesRoot = _globalPackagesFolder ?? SettingsUtility.GetGlobalPackagesFolder(_settings);
+        // Read per resolution, as NuGet's own restore does: the environment of THIS process decides.
+        var fallbackRoots = (_fallbackPackageFolders ?? SettingsUtility.GetFallbackPackageFolders(_settings))
+            .Where(f => !string.IsNullOrWhiteSpace(f)
+                && !string.Equals(Path.GetFullPath(f), Path.GetFullPath(packagesRoot), StringComparison.Ordinal))
+            .ToImmutableArray();
         var sources = LoadSources();
 
         // Honor nuget.config's packageSourceMapping. The repo config pins MeshWeaver.*/Memex.*
@@ -284,7 +301,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
             var identity = await ResolveIdentityAsync(
                 req, FilterSourcesForPackage(req.Id, sources, sourceMapping), framework, ct);
             targets.Add(identity);
-            await WalkDependenciesAsync(identity, packagesRoot, sources, sourceMapping, framework, available, ct);
+            await WalkDependenciesAsync(identity, packagesRoot, fallbackRoots, sources, sourceMapping, framework, available, ct);
         }
 
         var resolverContext = new PackageResolverContext(
@@ -322,7 +339,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
         {
             var info = available.First(a =>
                 string.Equals(a.Id, pkg.Id, StringComparison.OrdinalIgnoreCase) && a.Version == pkg.Version);
-            var installedPath = await EnsureInstalledAsync(info, packagesRoot, ct);
+            var installedPath = await EnsureInstalledAsync(info, packagesRoot, fallbackRoots, ct);
             versions[pkg.Id] = pkg.Version.ToNormalizedString();
 
             // 🚨 lib/<tfm>/ alone is NOT the runtime asset. A package may replace it per RID under
@@ -410,8 +427,9 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     }
 
     private async Task WalkDependenciesAsync(
-        PackageIdentity root, string packagesRoot, SourceRepository[] sources, PackageSourceMapping mapping,
-        NuGetFramework framework, HashSet<SourcePackageDependencyInfo> collected, CancellationToken ct)
+        PackageIdentity root, string packagesRoot, ImmutableArray<string> fallbackRoots, SourceRepository[] sources,
+        PackageSourceMapping mapping, NuGetFramework framework, HashSet<SourcePackageDependencyInfo> collected,
+        CancellationToken ct)
     {
         var queue = new Queue<PackageIdentity>();
         queue.Enqueue(root);
@@ -430,7 +448,9 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
             // choosing among versions is the feed's job — and fails with the named error while the
             // feed is down. Substituting installed versions was tried and rejected: it lets unrelated
             // folder contents change which versions resolve (NuGetRuntimeAssets.md, "Known limit").
-            var info = ReadInstalledDependencyInfo(current, packagesRoot, framework)
+            // The fallback folders are asked by the same rule, after the global folder (NuGet's order):
+            // a package a prepared cache holds complete is never fetched (MWPREP001).
+            var info = ReadInstalledDependencyInfo(current, packagesRoot, fallbackRoots, framework)
                 ?? await ResolveFromFeedAsync(current, packagesRoot, sources, mapping, framework, ct);
             if (info is null)
             {
@@ -507,9 +527,9 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     /// would. Returns <c>null</c> when the folder cannot answer, which sends the caller to the feed.
     /// </summary>
     private SourcePackageDependencyInfo? ReadInstalledDependencyInfo(
-        PackageIdentity identity, string packagesRoot, NuGetFramework framework)
+        PackageIdentity identity, string packagesRoot, ImmutableArray<string> fallbackRoots, NuGetFramework framework)
     {
-        var nuspec = ReadCompleteInstall(identity, packagesRoot);
+        var nuspec = FindCompleteInstall(identity, packagesRoot, fallbackRoots)?.Nuspec;
         if (nuspec is null) return null;
         var group = NuGetFrameworkUtility.GetNearest(
             nuspec.GetDependencyGroups(), framework, g => g.TargetFramework);
@@ -534,6 +554,22 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     private NuspecReader? ReadCompleteInstall(PackageIdentity identity, string packagesRoot) =>
         ReadCompleteFolder(identity, packagesRoot,
             new VersionFolderPathResolver(packagesRoot).GetInstallPath(identity.Id, identity.Version));
+
+    /// <summary>
+    /// The first package folder — the global one, then each fallback folder in order — holding
+    /// <paramref name="identity"/> complete by <see cref="ReadCompleteInstall"/>'s rule; <c>null</c> when none does.
+    /// A fallback folder is only ever READ: a refused folder there is logged and skipped, never repaired.
+    /// </summary>
+    private (string InstallPath, NuspecReader Nuspec)? FindCompleteInstall(
+        PackageIdentity identity, string packagesRoot, ImmutableArray<string> fallbackRoots)
+    {
+        foreach (var folder in fallbackRoots.Insert(0, packagesRoot))
+        {
+            if (ReadCompleteInstall(identity, folder) is { } nuspec)
+                return (new VersionFolderPathResolver(folder).GetInstallPath(identity.Id, identity.Version), nuspec);
+        }
+        return null;
+    }
 
     /// <summary>
     /// <see cref="ReadCompleteInstall"/> over an explicit <paramref name="installPath"/>, so a staging
@@ -603,7 +639,8 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     /// </summary>
     internal Action<PackageIdentity>? OnInstallFolderRefused { get; set; }
 
-    private async Task<string> EnsureInstalledAsync(SourcePackageDependencyInfo info, string packagesRoot, CancellationToken ct)
+    private async Task<string> EnsureInstalledAsync(
+        SourcePackageDependencyInfo info, string packagesRoot, ImmutableArray<string> fallbackRoots, CancellationToken ct)
     {
         var identity = new PackageIdentity(info.Id, info.Version);
         // The v3 layout lower-cases the id AND the version folder — the same path the install
@@ -613,6 +650,9 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
         // and only under the lock below), so using it without the lock is safe.
         if (ReadCompleteInstall(identity, packagesRoot) is not null)
             return installedPath;
+        // A fallback folder holding it complete is used where it lies — read-only, no lock, no download.
+        if (FindCompleteInstall(identity, packagesRoot, fallbackRoots) is { } fallback)
+            return fallback.InstallPath;
 
         OnInstallFolderRefused?.Invoke(identity);
 
