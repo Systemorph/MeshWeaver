@@ -448,4 +448,83 @@ public class RetentionSweepUnwindsOnTheDrainTest : IDisposable
         new[] { "s-c1", "s-c2", "s-c3" }.Should().OnlyContain(id => !Directory.Exists(Path.Combine(root, id)));
         Directory.Exists(Path.Combine(root, Live)).Should().BeTrue();
     }
+
+    /// <summary>
+    /// 🚨 A removal handed a directory LINK removes the link and never walks its target — the ROOT of the
+    /// removal included (review of #7528). The scan lists identities with
+    /// <c>Directory.EnumerateDirectories</c>, which returns a link like any directory, so a collectable
+    /// identity can be one; a removal that listed it deleted the target's files, outside the store.
+    /// Control: the same removal of a real directory removes its files.
+    /// </summary>
+    [Fact]
+    public void ARootLink_IsRemovedAsTheLink_AndItsTargetStaysIntact()
+    {
+        var outside = Path.Combine(root, "..", $"mw-retention-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outside);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(outside, "precious.bin"), new byte[8]);
+            Directory.CreateDirectory(Path.Combine(outside, "sub"));
+            File.WriteAllBytes(Path.Combine(outside, "sub", "also.bin"), new byte[8]);
+            var link = Path.Combine(root, "s-linked");
+            Directory.CreateSymbolicLink(link, outside);
+
+            PrebuiltBundleStore.DeleteTree(link, CancellationToken.None, BundleShareIo.Real);
+
+            new DirectoryInfo(link).Exists.Should().BeFalse("the link itself is removed");
+            File.Exists(Path.Combine(outside, "precious.bin")).Should().BeTrue("a link's target is never walked");
+            File.Exists(Path.Combine(outside, "sub", "also.bin")).Should().BeTrue("not even below its top level");
+
+            // Control: a real directory IS removed, files and all.
+            var real = Path.Combine(root, "s-real");
+            Directory.CreateDirectory(Path.Combine(real, "sub"));
+            File.WriteAllBytes(Path.Combine(real, "sub", "x.bin"), new byte[8]);
+            PrebuiltBundleStore.DeleteTree(real, CancellationToken.None, BundleShareIo.Real);
+            Directory.Exists(real).Should().BeFalse("a real directory is removed entry by entry");
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The listing a removal reads is itself fenced: a deadline that lands WHILE a directory is being
+    /// listed stops the removal before the next entry is even listed, let alone removed (review of #7528).
+    /// </summary>
+    private sealed class DeadlineInsideTheListing(CancellationTokenSource cts) : BundleShareIo
+    {
+        public int Listed;
+        public int Removals;
+
+        public override IEnumerable<string> ListFiles(string path, SearchOption option = SearchOption.TopDirectoryOnly)
+        {
+            foreach (var file in base.ListFiles(path, option))
+            {
+                Listed++;
+                cts.Cancel();
+                yield return file;
+            }
+        }
+
+        public override void DeleteFile(string path) { Removals++; base.DeleteFile(path); }
+        public override void DeleteEmptyDirectory(string path) { Removals++; base.DeleteEmptyDirectory(path); }
+    }
+
+    [Fact]
+    public void ADeadlineInsideTheListing_StopsTheRemovalBeforeAnyEntryIsRemoved()
+    {
+        var dir = Path.Combine(root, "s-listed");
+        Directory.CreateDirectory(dir);
+        foreach (var name in new[] { "a.zip", "b.zip", "c.zip" })
+            File.WriteAllBytes(Path.Combine(dir, name), new byte[8]);
+        using var cts = new CancellationTokenSource();
+        var io = new DeadlineInsideTheListing(cts);
+
+        Assert.ThrowsAny<OperationCanceledException>(() => PrebuiltBundleStore.DeleteTree(dir, cts.Token, io));
+
+        io.Listed.Should().Be(1, "the listing stops at the entry on which the deadline landed");
+        io.Removals.Should().Be(0, "nothing is removed once the deadline is seen");
+        Directory.GetFiles(dir).Should().HaveCount(3);
+    }
 }

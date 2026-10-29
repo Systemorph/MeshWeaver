@@ -1093,24 +1093,31 @@ public static class PrebuiltBundleStore
     /// <para><b>What is still not fenced.</b> ONE entry's own syscall: a single <c>unlink</c> that blocks
     /// on the share cannot be interrupted, and it lands when it returns. That is one file, never the
     /// rest of a tree.</para>
-    /// <para>A directory LINK is removed as a link — its target is never walked, the same rule
+    /// <para>A directory LINK — the root itself included — is removed as a link; its target is never walked, the same rule
     /// <see cref="Directory.Delete(string, bool)"/> follows.</para>
     /// </remarks>
     internal static void DeleteTree(string directory, CancellationToken cancellationToken, BundleShareIo io)
     {
-        foreach (var file in io.ListFiles(directory).ToArray())
+        cancellationToken.ThrowIfCancellationRequested();
+        // 🚨 A LINK is removed as the link BEFORE anything lists it — the root included. The scan lists
+        // identity directories with Directory.EnumerateDirectories, which returns a directory link like
+        // any directory, so a collectable identity can BE a link; listing it would walk its target and
+        // delete files outside the bundle store (the recursive Directory.Delete this replaced removed
+        // only the link).
+        if (new DirectoryInfo(directory).LinkTarget is not null)
+        {
+            io.DeleteEmptyDirectory(directory);
+            return;
+        }
+        // Each listing is materialized with a token check per entry (OrdinalListing), so a cut pass is
+        // seen inside a slow listing, not only after it.
+        foreach (var file in ShippedPrebuiltBundles.OrdinalListing(io.ListFiles(directory), cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             io.DeleteFile(file);
         }
-        foreach (var sub in io.EnumerateDirectories(directory))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (new DirectoryInfo(sub).LinkTarget is not null)
-                io.DeleteEmptyDirectory(sub);
-            else
-                DeleteTree(sub, cancellationToken, io);
-        }
+        foreach (var sub in ShippedPrebuiltBundles.OrdinalListing(io.ListDirectories(directory), cancellationToken))
+            DeleteTree(sub, cancellationToken, io);
         cancellationToken.ThrowIfCancellationRequested();
         io.DeleteEmptyDirectory(directory);
     }
