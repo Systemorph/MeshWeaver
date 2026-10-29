@@ -237,6 +237,7 @@ public class AnUnavailableCreateIsReissuedOnceTest(ITestOutputHelper output) : M
     /// answers — it never faults, which would end the process-wide recovery watcher (review of #7586).
     /// </summary>
     [Fact(Timeout = 60_000)]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")] // the delete is made to fail with a Unix mode
     public async Task ASettlementWhoseJournalCannotBeCleaned_DoesNotFault()
     {
         var ct = TestContext.Current.CancellationToken;
