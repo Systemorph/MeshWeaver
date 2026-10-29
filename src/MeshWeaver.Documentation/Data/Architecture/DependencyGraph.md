@@ -191,9 +191,15 @@ method, or a partial method declared without an implementation — known by name
 (an already-edged module's conditional method still erases another module's member in its
 arguments), the compilation's own source (decided by the declared symbol, so an aliased attribute
 counts) and the framework's `Debug`, `Trace`, `Debugger` and `Contract`, and confirmed by binding that
-one invocation. Only those nodes are bound, so this never costs a second binding pass. Not yet
-covered: a module member used only in code the compiler discards as constant-false
-(`if (false) { … }`, `false && …`) — tracked as a follow-up.
+one invocation. Code the compiler discards as constant-UNREACHABLE is covered the same way (#7449):
+the body of `if (false)` (the else of `if (true)`), the right operand of `false && …` and
+`true || …`, a constant `?:`'s dead arm, the body of `while (false)` and of `for (…; false; …)` with
+its incrementors — a named `const bool` condition included. Measured under both optimisation levels
+(the bake emits Debug): every one of those shapes leaves NO `AssemblyRef`, so every name in such a
+branch is bound like an erased call's arguments. Only a condition built solely from shapes a constant
+can take (literals, names, member accesses, parentheses, casts, `default`, operators — never a call)
+is bound to ask whether it is constant. Only those nodes are bound, so this never costs a second
+binding pass.
 
 🚨 **Why not "a symbol whose containing assembly is another NodeType's assembly".** A NodeType
 compile is never referenced against another NodeType's emitted assembly: its reference set is the
