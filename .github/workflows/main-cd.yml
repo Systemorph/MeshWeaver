@@ -4187,8 +4187,10 @@ jobs:
       contents: read
       id-token: write
     env:
-      # 🚨 THE ONE DECLARATION of the module set this platform is judged against — `<package>=<module>`
-      # pairs. Read by the steps below AND, out of this file, by `portal-image`'s one-producer gate
+      # 🚨 THE ONE DECLARATION of the modules handed on PER MODULE (`module-bundle-<Module>`, what the
+      # satellites compose) — `<package>=<module>` pairs. It is NOT the ladder's coverage: the ladder
+      # links every module the sealed publication carries (MeshWeaver#7409, `published-module-set`).
+      # Read by the steps below AND, out of this file, by `portal-image`'s one-producer gate
       # (check-platform-reference-set.sh: no published module's name may also ship in the host's
       # /app). One list, so the two can never drift; it replaced `plugins-modules.with.modules`.
       PUBLISHED_MODULES: >-
@@ -4219,7 +4221,15 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
         run: bash .github/scripts/acr-login.sh
-      - name: "Read the four module bundles from the SEALED `plugins` publication for this identity"
+      # 🚨 EVERY module the sealed `plugins` publication carries, never a hand-kept list
+      # (MeshWeaver#7409): the ladder used to link only the four PUBLISHED_MODULES, so a core change
+      # breaking Mail, Teams, Mcp, an AI provider — any other published module — passed it green
+      # having checked nothing for them. `--packages '*'` takes the publication's own index; the
+      # index travels with the bundles (`published-module-set`) so every ladder reading them proves
+      # it linked the whole publication (check-ladder-coverage.py). PUBLISHED_MODULES stays the
+      # per-module handover the satellites compose (`module-bundle-<Module>`) and the one-producer
+      # gate's set; it must be a SUBSET of the publication, which the loop below asserts.
+      - name: "Read EVERY module bundle the SEALED `plugins` publication carries for this identity"
         env:
           TESTER: ${{ needs.compat-images.outputs.image }}
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
@@ -4233,10 +4243,14 @@ jobs:
           # The job's PUBLISHED_MODULES declaration (`<package>=<module>` pairs) is the one list.
           read -r -a mappings <<< "$(printf '%s' "$PUBLISHED_MODULES" | tr '\n' ' ')"
           [ "${#mappings[@]}" -ge 1 ] || { echo "::error::PUBLISHED_MODULES declares no module — nothing would be judged"; exit 1; }
-          packages=""; for mapping in "${mappings[@]}"; do packages="$packages ${mapping%%=*}"; done
           out="$RUNNER_TEMP/published"; rm -rf "$out"; mkdir -p "$out"
+          index="$RUNNER_TEMP/published-module-set.index"; rm -f "$index"
           bash .github/scripts/compose-sealed-modules.sh --identity "$identity" \
-            --packages "${packages# }" --upstreams plugins --out "$out" --storage-target "$target"
+            --packages '*' --upstreams plugins --out "$out" --storage-target "$target" --index-out "$index"
+          # The WHOLE publication, proven against its own index before anything is handed on.
+          python3 .github/scripts/check-ladder-coverage.py --index "$index" --bundles-dir "$out"
+          set_dir="$RUNNER_TEMP/published-module-set"; rm -rf "$set_dir"; mkdir -p "$set_dir"
+          cp "$out"/*.module.nupkg "$set_dir/" && cp "$index" "$set_dir/published-module-set.index"
           # One artifact per MODULE, under the names every consumer already reads
           # (module-bundle-<Module>). The package → module map is the satellites' own declaration
           # (`registry-modules: AI Essentials Stripe Maps`). Exactly one bundle per package, or RED.
@@ -4247,7 +4261,15 @@ jobs:
             [ "$(printf '%s' "$found" | grep -c . || true)" = "1" ] || { echo "::error::the sealed plugins publication for $identity yielded $(printf '%s' "$found" | grep -c . || true) bundle(s) for $pkg, expected exactly 1"; exit 1; }
             mkdir -p "$stage/$module" && cp "$found" "$stage/$module/"
           done
-          echo "published module set for identity $identity: $(find "$stage" -name '*.module.nupkg' | wc -l | tr -d ' ') bundle(s) — read from the sealed plugins publication, built by its own lane" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "published module set for identity $identity: $(find "$set_dir" -name '*.module.nupkg' | wc -l | tr -d ' ') bundle(s) on the ladder (the whole sealed plugins publication), $(find "$stage" -name '*.module.nupkg' | wc -l | tr -d ' ') handed on per module — built by its own lane" | tee -a "$GITHUB_STEP_SUMMARY"
+      # FIRST, before the per-module handover: a run that carries any `module-bundle-*` therefore
+      # carries the whole set too, so the PR ladder's fetch never has to guess which shape a run is.
+      - name: "Hand on: published-module-set (every bundle + the publication's index — the ladder's input)"
+        uses: actions/upload-artifact@v7
+        with:
+          name: published-module-set
+          path: ${{ runner.temp }}/published-module-set/
+          if-no-files-found: error
       - name: "Hand on: module-bundle-MeshWeaver.AI"
         uses: actions/upload-artifact@v7
         with:
@@ -4620,9 +4642,17 @@ jobs:
       - name: "Download the published module set (read from the sealed publication by published-modules)"
         uses: actions/download-artifact@v8
         with:
-          pattern: module-bundle-*
-          merge-multiple: true
+          name: published-module-set
           path: ${{ runner.temp }}/deployed-plugins
+      # 🚨 The ladder links EVERY module the sealed publication carries (MeshWeaver#7409) — proven here
+      # against the publication's own index, so a module the publication carries and no bundle provides
+      # turns this rung RED instead of passing it unchecked.
+      - name: "The ladder covers the whole publication (every module its index lists)"
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/check-ladder-coverage.py \
+            --index "$RUNNER_TEMP/deployed-plugins/published-module-set.index" \
+            --bundles-dir "$RUNNER_TEMP/deployed-plugins"
       - name: "Read the compatibility epoch the deployed set was built on"
         id: epoch
         env:
