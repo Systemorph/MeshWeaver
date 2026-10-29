@@ -84,13 +84,20 @@ public static class GroupInviteExtensions
     /// <see cref="EventSubscription"/>, so an invitee lands the identical membership + grant on sign-up.</summary>
     public static IObservable<GroupInviteOutcome> InviteToGroup(
         this IMessageHub hub, string groupPath, string email, string? invitedBy, string? role = null)
+        // The invitation email's language (#7482): the inviter's own, read HERE on the inviter's turn —
+        // the lookup and the writes below run as System, whose context carries no language.
+        => InviteToGroupIn(hub, groupPath, email, invitedBy, role,
+            SpaceInviteService.InvitationLocale(null, hub.ServiceProvider.GetRequiredService<AccessService>()));
+
+    /// <summary><see cref="InviteToGroup"/> with the invitation email's language already resolved, so a
+    /// caller that defers the invite (<see cref="InviteAllToGroup"/>) reads the inviter's language on the
+    /// inviter's turn, never on whichever context later subscribes.</summary>
+    private static IObservable<GroupInviteOutcome> InviteToGroupIn(
+        IMessageHub hub, string groupPath, string email, string? invitedBy, string? role, string emailLocale)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var normalizedEmail = email.Trim();
-        // The invitation email's language (#7482): the inviter's own, read HERE on the inviter's turn —
-        // the lookup and the writes below run as System, whose context carries no language.
-        var emailLocale = SpaceInviteService.InvitationLocale(null, accessService);
 
         // Look up an existing account by email (one-shot initial snapshot) — as System, see
         // SpaceInviteService.AccountLookup (#4309): as the inviting admin the mirror-pinned read answers
@@ -131,9 +138,13 @@ public static class GroupInviteExtensions
             .ToArray();
         if (valid.Count == 0)
             return Observable.Return(new GroupBulkInviteResult { Entries = invalidEntries });
+        // The inviter's language, read NOW (#7482): each per-email invite below is deferred to subscription
+        // and to the previous invite's completion, whose context is not the inviter's.
+        var emailLocale = SpaceInviteService.InvitationLocale(
+            null, hub.ServiceProvider.GetRequiredService<AccessService>());
 
         return valid
-            .Select(email => Observable.Defer(() => hub.InviteToGroup(groupPath, email, invitedBy, role)
+            .Select(email => Observable.Defer(() => InviteToGroupIn(hub, groupPath, email, invitedBy, role, emailLocale)
                 .Select(outcome => new GroupBulkInviteEntry(email, outcome == GroupInviteOutcome.Added
                     ? GroupBulkInviteStatus.Added
                     : GroupBulkInviteStatus.Invited))))

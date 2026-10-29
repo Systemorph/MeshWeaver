@@ -61,6 +61,29 @@ public class InvitationEmailTest
         Assert.Contains("Memex öffnen", WebUtility.HtmlDecode(html));
     }
 
+    private const string SignedLink = "https://portal.example.com/auth/invite?token=CfDJ8signed";
+
+    /// <summary>The sender's signed invitation link is the button's target, unchanged, in the Space variant.</summary>
+    [Fact]
+    public void TheSignedInviteLink_IsTheSpaceInvitationsButton_Unchanged()
+    {
+        var (_, html) = InvitationEmail.Build(SpaceInvite("de"), "Team Space", "https://portal.example.com", SignedLink);
+
+        Assert.Contains($"href=\"{SignedLink}\"", WebUtility.HtmlDecode(html));
+        Assert.DoesNotContain("https://portal.example.com/TeamSpace", html);
+    }
+
+    /// <summary>The sender's signed invitation link is the button's target, unchanged, in the deployment-wide variant.</summary>
+    [Fact]
+    public void TheSignedInviteLink_IsTheDeploymentWideInvitationsButton_Unchanged()
+    {
+        var (_, html) = InvitationEmail.Build(
+            new Invitation { Email = "invitee@acme.com", Locale = "en" }, null, "https://portal.example.com", SignedLink);
+
+        Assert.Contains($"href=\"{SignedLink}\"", WebUtility.HtmlDecode(html));
+        Assert.DoesNotContain("href=\"https://portal.example.com\"", html);
+    }
+
     [Fact]
     public void TheHostsMessage_IsInTheEmail_AndTheAdminNoteIsNot()
     {

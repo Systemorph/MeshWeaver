@@ -13,8 +13,10 @@ namespace MeshWeaver.Graph;
 /// the same language (<see cref="EmailTemplate.Build(string, IReadOnlyList{string}, string, string, string, string)"/>).
 ///
 /// <para>When the invitation targets a Space or group (<see cref="Invitation.SpacePath"/> set) it
-/// addresses it by <c>spaceName</c> (falling back to the path) and links straight to it
-/// (<c>{baseUrl}/{SpacePath}</c>); otherwise it renders the deployment-wide invitation. The host's
+/// addresses it by <c>spaceName</c> (falling back to the path); otherwise it renders the
+/// deployment-wide invitation. Either way the button links to the sender's minted invitation link when
+/// one is given (the signed <c>/auth/invite?token=…</c> link), unchanged, and otherwise to the Space
+/// (<c>{baseUrl}/{SpacePath}</c>) or the portal. The host's
 /// personal <see cref="Invitation.Message"/>, when present, is its own paragraph, HTML-encoded by the
 /// template; the admin-facing <see cref="Invitation.Note"/> never reaches the email. Pure and static,
 /// so the sender (MeshWeaver.Plugins' <c>InvitationEmailSender</c>) and tests render the same bytes.</para>
@@ -28,10 +30,16 @@ public static class InvitationEmail
     /// <param name="invitation">The invitation being emailed.</param>
     /// <param name="spaceName">The display name of <see cref="Invitation.SpacePath"/>, or null for the path.</param>
     /// <param name="baseUrl">The portal's public base URL, or null for an email without a link.</param>
+    /// <param name="inviteUrl">The link the sender minted for this invitation (the signed
+    /// <c>/auth/invite?token=…</c> link, <c>InvitationOnlyOnboarding</c> → "The invitation link token"). When
+    /// given it is the button's target in BOTH variants, unchanged: an invitee whose sign-in provider returns
+    /// no verified email can onboard only through it. Null falls back to the Space (or portal) URL.</param>
     /// <returns>The subject line and the HTML body.</returns>
-    public static (string Subject, string Html) Build(Invitation invitation, string? spaceName, string? baseUrl)
+    public static (string Subject, string Html) Build(
+        Invitation invitation, string? spaceName, string? baseUrl, string? inviteUrl = null)
     {
         ArgumentNullException.ThrowIfNull(invitation);
+        var link = string.IsNullOrWhiteSpace(inviteUrl) ? null : inviteUrl;
         var locale = Locales.Resolve(invitation.Locale);
         string T(string key) => LocalizationCatalog.Get(key, locale);
         // notification.* keys carry NAMED placeholders ({space}) by catalog rule.
@@ -43,18 +51,19 @@ public static class InvitationEmail
         if (string.IsNullOrWhiteSpace(invitation.SpacePath))
         {
             var subject = T("notification.email.invitation.genericSubject");
+            var portalUrl = link ?? (hasBase ? baseUrl : null);
             return (subject, EmailTemplate.Build(
                 heading: subject,
                 paragraphs: Paragraphs(T("notification.email.invitation.genericBody"), invitation.Message),
-                ctaLabel: hasBase ? T("notification.email.invitation.openMemex") : null,
-                ctaUrl: hasBase ? baseUrl : null,
+                ctaLabel: portalUrl is null ? null : T("notification.email.invitation.openMemex"),
+                ctaUrl: portalUrl,
                 footerNote: signInHint,
                 locale: locale));
         }
 
         var spacePath = invitation.SpacePath!.Trim();
         var display = string.IsNullOrWhiteSpace(spaceName) ? spacePath : spaceName!.Trim();
-        var spaceUrl = hasBase ? $"{baseUrl!.TrimEnd('/')}/{spacePath.TrimStart('/')}" : null;
+        var spaceUrl = link ?? (hasBase ? $"{baseUrl!.TrimEnd('/')}/{spacePath.TrimStart('/')}" : null);
         var spaceSubject = TSpace("notification.email.invitation.spaceSubject", display);
         return (spaceSubject, EmailTemplate.Build(
             heading: spaceSubject,

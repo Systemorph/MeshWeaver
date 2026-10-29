@@ -99,10 +99,12 @@ A null or blank pick is the host's own language, read on the host's turn before 
 lookup and writes; a group invitation (`InviteToGroup`) stamps the host's language the same way. The
 value is always a supported tag (`Locales.Resolve`), and it is never read from the process culture.
 
-`InvitationEmail.Build(invitation, spaceName, baseUrl)` (MeshWeaver.Graph) renders the subject and
-the HTML body in that language: every line comes from the catalog
+`InvitationEmail.Build(invitation, spaceName, baseUrl, inviteUrl)` (MeshWeaver.Graph) renders the
+subject and the HTML body in that language: every line comes from the catalog
 (`notification.email.invitation.*`), the host's personal message is its own paragraph, and the
-standing footer of `EmailTemplate` follows the same tag. An invitation written before the field
+standing footer of `EmailTemplate` follows the same tag. `inviteUrl` is the signed link the sender
+minted (next section); when given, the button points at it unchanged in both the Space and the
+deployment-wide variant, and only without it does the button fall back to the Space or the portal. An invitation written before the field
 existed carries no language and renders in English. The emailer in MeshWeaver.Plugins
 (`InvitationEmailSender.BuildInviteEmail`) is the one that sends it: until it builds its email through
 this method, the email it sends keeps its own English text whatever the invitation says.
