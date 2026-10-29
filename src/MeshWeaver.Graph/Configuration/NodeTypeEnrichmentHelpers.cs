@@ -1850,9 +1850,10 @@ internal static class NodeTypeEnrichmentHelpers
                 OverlayCopy(OverlayCause.StateUndetermined);
             return Observable.Return(
                 WithOverlaySelfHeal(
-                    WithCompilationErrorOverlay(node, nodeType,
+                    WithKeyedCompilationErrorOverlay(node, nodeType,
                         def.CompilationError
                             ?? $"The compile state of NodeType '{nodeType}' could not be determined.",
+                        errorText: def.CompilationErrorText,
                         guidance: undeterminedGuidance,
                         intro: undeterminedIntro,
                         callToAction: undeterminedCta,
@@ -1870,7 +1871,7 @@ internal static class NodeTypeEnrichmentHelpers
         // diagnostics the NodeType's own Overview offers.
         return Observable.Return(
             WithOverlaySelfHeal(
-                WithCompilationErrorOverlay(node, nodeType, error,
+                WithKeyedCompilationErrorOverlay(node, nodeType, error, def.CompilationErrorText,
                     activityPath: def.LastCompilationActivityPath),
                 meshHub, nodeType, typeNode.Version, logger));
     }
@@ -3253,13 +3254,32 @@ internal static class NodeTypeEnrichmentHelpers
         string? intro = null,
         string? callToAction = null,
         string? activityPath = null)
+        // 🚨 The public signature is unchanged on purpose: an added optional parameter REPLACES a
+        // method's signature, and a module bundle compiled against the old one would fail with
+        // MissingMethodException. The keyed form (#7355) goes through the internal twin below.
+        => WithKeyedCompilationErrorOverlay(node, nodeType, error, errorText: null,
+            guidance, intro, callToAction, activityPath);
+
+    /// <summary>
+    /// <see cref="WithCompilationErrorOverlay"/> with the error's keyed form (#7355), rendered in the
+    /// viewer's language when it reproduces <paramref name="error"/> (<see cref="KeyedTexts.Localize"/>).
+    /// </summary>
+    internal static MeshNode WithKeyedCompilationErrorOverlay(
+        MeshNode node,
+        string nodeType,
+        string? error,
+        System.Collections.Immutable.ImmutableList<KeyedText>? errorText,
+        string? guidance = null,
+        string? intro = null,
+        string? callToAction = null,
+        string? activityPath = null)
     {
         // Nothing to overlay: hand the node back untouched and let the factory apply the
         // default chain (exactly once) around whatever configuration it already carries.
         if (string.IsNullOrEmpty(error))
             return node;
 
-        var overlay = CreateCompilationErrorConfiguration(error, guidance, intro, callToAction, activityPath);
+        var overlay = CreateCompilationErrorConfiguration(error, guidance, intro, callToAction, activityPath, errorText);
         // Fallback-hub contract: the overlay hub serves what its default config CAN
         // (the error Overview layout, node data binding, Ping) — but everything else,
         // notably typed requests the broken assembly would have registered (which
@@ -3663,7 +3683,8 @@ internal static class NodeTypeEnrichmentHelpers
     private static Func<MessageHubConfiguration, MessageHubConfiguration>
         CreateCompilationErrorConfiguration(
             string errorMessage, string? guidance, string? intro = null,
-            string? callToAction = null, string? activityPath = null)
+            string? callToAction = null, string? activityPath = null,
+            System.Collections.Immutable.ImmutableList<KeyedText>? errorText = null)
     {
         // The markdown is assembled at RENDER time, so the compile-log anchor can be
         // localized off the viewing user's AccessContext (host.Localize) rather than
@@ -3671,7 +3692,10 @@ internal static class NodeTypeEnrichmentHelpers
         return config => config.AddLayout(layout =>
             layout.WithNodePage(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
                 Observable.Return<UiControl?>(
-                    BuildCompilationErrorMarkdown(errorMessage, guidance, intro, callToAction,
+                    // #7355 — a keyed platform refusal renders in the viewer's language.
+                    BuildCompilationErrorMarkdown(
+                        KeyedTexts.Localize(errorMessage, errorText, host.ViewerLocale()) ?? errorMessage,
+                        guidance, intro, callToAction,
                         activityPath, host.Localize("ui.viewCompileLog"))),
                 EmergencyPageProvenance));
     }

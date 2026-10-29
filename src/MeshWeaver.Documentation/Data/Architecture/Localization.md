@@ -374,6 +374,28 @@ does not name costs nothing — whereas a template naming an argument that was n
 literal `{changed}` on screen, because `GetNamed` deliberately keeps an unknown name VISIBLE rather
 than blanking it.
 
+#### A compile refusal on a NodeType record — the same shape, self-validating (#7355)
+
+The compile watcher's refusals (`PrebuiltAssemblySeeder.RequiredParkReason`,
+`UntrackedPartitionParkReason`, `UnknownModuleMembershipParkReason`, `ClosedTypeSet.RefusalFor`) and
+the two delivery-hold notices that land in `NodeTypeDefinition.CompilationError`
+(`TooFarBehindNotice`, `IncompatibleNotice`, each with its `Gate:` reason) are written by System into
+a record every viewer reads. Each producer now has a keyed twin (`…ParkText`, `RefusalText`,
+`…Text`) returning `KeyedText` parts (`MeshWeaver.Mesh`: a `compile.*` key plus NAMED arguments),
+and the gate settle stamps them as `NodeTypeDefinition.CompilationErrorText`
+(`BuildDeliveryHold.StampErrorText`). The NodeType page's Error/Unavailable arms and the instance
+error overlay render through `KeyedTexts.Localize(english, parts, viewerLocale)`.
+
+🚨 **The English stays the wire value, and the parts are used only while they REPRODUCE it.**
+`KeyedTexts.Reproduces` renders the parts in English and compares them to the stored
+`CompilationError`. A later writer that replaces the text without the parts — a Roslyn diagnostic, a
+park re-serve with a prepended import finding, any record written before #7355 — therefore renders
+verbatim and can never be shown as a sentence it no longer says. `CompileRefusalTextTest` holds every
+keyed twin equal to its English producer, so the two cannot drift; `ClosedTypeSet.IsRefusal`, the
+logs and every test that reads the English are untouched. Verbatim upstream text inside a refusal
+(the discovery reason, a gate reason with no keyed form) rides as an argument
+(`compile.refusal.verbatim`), the same boundary as the transcript.
+
 ### The catalog has a second home, and it goes stale SILENTLY
 
 The web clients carry their own copy at `MeshWeaver.Plugins/clients/react/src/i18n/strings.{en,de}.json`
