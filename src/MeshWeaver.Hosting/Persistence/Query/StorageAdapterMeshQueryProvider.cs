@@ -285,10 +285,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     // The score is ALSO handed on (#6830 review): MeshQuery.ClipMergedInitial
                     // re-sorts every Initial by its Scores and then path, so ranking here without
                     // reporting the rank made every row 0 there and the merge answered PATH order.
+                    // The leading key is SearchRanking's tier (#7381): an exact name match and a
+                    // Space rank first, the fuzzy score orders within a tier — the same rule the
+                    // Postgres generator applies, so both executors clip the same rows.
                     var text = parsedQuery.TextSearch;
                     relevance = new Dictionary<object, double>(ReferenceEqualityComparer.Instance);
                     foreach (var n in matchedNodes)
-                        relevance[n] = _evaluator.GetFuzzyScore(n, text);
+                        relevance[n] = SearchRanking.Boost(n as MeshNode, text) + _evaluator.GetFuzzyScore(n, text);
                     var scoreOf = relevance;
                     sorted = matchedNodes
                         .OrderByDescending(n => scoreOf[n])
