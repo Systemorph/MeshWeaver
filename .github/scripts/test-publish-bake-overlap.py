@@ -178,6 +178,8 @@ if sub == "directory":
     if action == "exists":
         if opts.get("--query", [""])[0] != "exists" or not out_tsv:
             die("only `--query exists -o tsv` is modelled for directory exists: " + raw)
+        if os.environ.get("MOCK_AZ_FAIL_DIR_EXISTS"):
+            sys.stderr.write("stub-az: simulated failure answering directory exists for %s\n" % name); sys.exit(1)
         emit("true" if d.is_dir() else "false"); sys.exit(0)
     if action == "create":
         d.mkdir(parents=True, exist_ok=True); sys.exit(0)
@@ -2177,6 +2179,8 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         run_registry_lock_cases(h, work)
         run_superseded_guard_cases(h, work)
         run_wrapper_contention_cases(h, work)
+        run_scope_none_delivery_cases(h, work)
+        run_scope_none_workflow_cases()
 
 
 LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
@@ -3050,6 +3054,292 @@ def run_superseded_guard_cases(h: "Harness", work: Path) -> None:
               r.returncode != 0 and "registry does not carry the live publication" in out and live in out,
               f"rc={r.returncode}")
     check("…and the guard ran under the lock and released it", leases_held(h) == [], " ".join(leases_held(h)) or "none")
+
+
+DELIVER = HERE / "deliver-live-publication.sh"
+WORKFLOW = HERE.parent / "workflows" / "node-repo-publish-bake.yml"
+
+# A recorder in place of push-bundle-publication.sh. `--published-commit` answers the tag from a
+# file ("<commit> <layout> <current layout>", nothing when absent; MOCK_REGISTRY_UNREADABLE makes it
+# fail the way an unreachable registry does). A push records its arguments, copies the directory it
+# was handed (what would reach the registry) and moves the "tag" to that directory's source commit
+# in the CURRENT layout — what the real publisher does when it pushes.
+REGISTRY_RECORDER = """#!/usr/bin/env bash
+set -euo pipefail
+dir=""; ro=0
+for a in "$@"; do [ "$a" = "--published-commit" ] && ro=1; done
+if [ "$ro" -eq 1 ]; then
+  [ -z "${MOCK_REGISTRY_UNREADABLE:-}" ] || { echo "oras: Get https://registry.example/v2/: connection refused" >&2; exit 1; }
+  [ -f "$MOCK_REGISTRY_TAG" ] && cat "$MOCK_REGISTRY_TAG"
+  exit 0
+fi
+printf '%s\\n' "$*" >> "$MOCK_REGISTRY_PUSH_ARGS"
+while [ $# -gt 0 ]; do case "$1" in --dir) dir="$2"; shift 2 ;; *) shift ;; esac; done
+rm -rf "$MOCK_REGISTRY_DELIVERED"; cp -R "$dir" "$MOCK_REGISTRY_DELIVERED"
+printf '%s 2 2\\n' "$(tr -d '[:space:]' < "$dir/source-commit.txt")" > "$MOCK_REGISTRY_TAG"
+echo "bundle-publication: index=sha256:recorded"
+"""
+
+
+def run_scope_none_delivery_cases(h: "Harness", work: Path) -> None:
+    # MeshWeaver#7323: a lane run whose scope is `none` (the shares already hold this content) used to
+    # skip the registry entirely, so a tag left stale or absent by a sealing run's FAILED registry push
+    # stayed that way for every later run of that content — its own re-run included. Before this
+    # change deliver-live-publication.sh did not exist, so every case below is red on that tree.
+    recorder = work / "registry-recorder-7323.sh"
+    recorder.write_text(REGISTRY_RECORDER)
+    recorder.chmod(0o755)
+    tag = work / "registry-tag-7323"
+    delivered = work / "registry-delivered-7323"
+    push_args = work / "registry-push-args-7323"
+    live_sha = "e" * 40
+    tester, portal = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+    bake = Bake(work, "sealing-7323", live_sha)
+    share_dest = h.shelf_root / ACCOUNT / SHARE / DEST
+    meta_dest = h.shelf_root / ".meta" / ACCOUNT / SHARE / DEST
+
+    def seal_live() -> tuple[Path, str]:
+        """A REAL generation-layout publication by the current publisher — platform record included —
+        so the comparison below covers every sidecar the publisher writes today."""
+        h.reset()
+        r = h.publish(bake, "Systemorph/MeshWeaver.Plugins", "7323", {
+            "BAKE_PUBLICATION_LAYOUT": "generation", "BAKE_PLATFORM_SET": "3.1.11076",
+            "BAKE_TESTER_REF": f"meshweaver.azurecr.io/mw-plugin-test@{tester}",
+            "BAKE_PORTAL_REF": f"meshweaver.azurecr.io/memex-portal-ai@{portal}"})
+        gen = (share_dest / POINTER).read_text().strip() if (share_dest / POINTER).is_file() else ""
+        if r.returncode != 0 or not gen:
+            raise RuntimeError(f"fixture: the sealing publication failed (rc={r.returncode}): "
+                               f"{(r.stdout + r.stderr)[-400:]}")
+        return share_dest / gen, gen
+
+    def tree(root: Path) -> dict[str, bytes]:
+        if not root.is_dir():
+            return {}
+        return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+    def deliver(registry_names: str | None, run_id: str, **extra: str) -> subprocess.CompletedProcess:
+        if delivered.exists():
+            shutil.rmtree(delivered)
+        if push_args.exists():
+            push_args.unlink()
+        if registry_names is None:
+            if tag.exists():
+                tag.unlink()
+        else:
+            tag.write_text(registry_names + "\n")
+        e = dict(os.environ)
+        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
+        e.update(h.base_env())
+        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE", "GH_TOKEN", "MOCK_GH_AHEAD",
+                  "MOCK_REGISTRY_UNREADABLE", "BAKE_CONTENT_REPOSITORY"):
+            e.pop(k, None)
+        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "BUNDLE_REGISTRY": "registry.example",
+                  "PUSH_BUNDLE_PUBLICATION": str(recorder), "MOCK_REGISTRY_TAG": str(tag),
+                  "MOCK_REGISTRY_DELIVERED": str(delivered), "MOCK_REGISTRY_PUSH_ARGS": str(push_args),
+                  "MOCK_AZ_ALLOW_SHOW": "1", "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+                  "GITHUB_RUN_ID": run_id,
+                  # The lane passes both, so a different commit is ORDERED by default: the stub
+                  # answers every other commit as OLDER than the live one (`behind`).
+                  "GH_TOKEN": "stub", "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+                  "MOCK_GH_AHEAD": live_sha})
+        e.update(extra)
+        return subprocess.run(["bash", str(LOCK_WRAPPER), "--", str(DELIVER)], capture_output=True,
+                              text=True, env=e)
+
+    def tag_now() -> str:
+        return tag.read_text().strip() if tag.exists() else "<absent>"
+
+    def tail(r: subprocess.CompletedProcess) -> str:
+        return repr((r.stdout + r.stderr)[-300:])
+
+    print("\nscope=none: a run that bakes nothing still proves — or repairs — the registry tag (#7323):")
+    gen_dir, gen = seal_live()
+    live = tree(gen_dir)
+    check("FIXTURE: the live publication is a real generation holding every sidecar the publisher writes",
+          {"_complete", "source-commit.txt", "platform-set.json", "platform-surface.json",
+           "repository.txt", "architecture.txt", "modules/_index"} <= set(live)
+          and len([k for k in live if k.endswith(".zip")]) == len(BUNDLES),
+          f"generation {gen}: {sorted(live)}")
+
+    r = deliver(f"{live_sha} 2 2", "9301")
+    check("the tag already names the live commit in the current layout: verified, nothing downloaded or pushed",
+          r.returncode == 0 and "Verified" in r.stdout and not delivered.exists() and not push_args.exists(),
+          f"rc={r.returncode}; {tail(r)}")
+    newer = "f" * 40
+    r = deliver(f"{newer} 2 2", "9302", GH_TOKEN="stub", BAKE_CONTENT_REPOSITORY="Systemorph/MeshWeaver.Plugins",
+                MOCK_GH_AHEAD=newer)
+    check("the tag names a NEWER commit containing the live one: verified, the tag is not moved back",
+          r.returncode == 0 and "NEWER" in r.stdout and not push_args.exists() and tag_now() == f"{newer} 2 2",
+          f"rc={r.returncode}; tag {tag_now()}")
+
+    for label, names in (("stale (an older commit)", f"{'b' * 40} 2 2"), ("ABSENT", None),
+                         ("the live commit in an OLDER layout", f"{live_sha} 1 2")):
+        before = names or "<absent>"
+        r = deliver(names, "9303")
+        got = tree(delivered)
+        # NEGATIVE CONTROL, by construction: the pre-state is one a `scope=none` run left untouched.
+        check(f"NEGATIVE CONTROL: the tag is {label} before the run — the state scope=none used to leave",
+              before != f"{live_sha} 2 2", f"tag before: {before}")
+        check(f"a tag that is {label} receives the LIVE SHARE publication, byte for byte, and moves to it",
+              r.returncode == 0 and got == live and tag_now() == f"{live_sha} 2 2"
+              and "Registry repaired" in r.stdout,
+              f"rc={r.returncode}; delivered {sorted(got)} vs live {sorted(live)}; tag {tag_now()}; {tail(r)}")
+    # THE DISCRIMINATING FIXTURE (as test-publication-pointer-readers.py): a flat copy at the prefix
+    # with the SAME names and DIFFERENT bytes. A delivery that ignored `_current` would push the flat
+    # bytes; the reader's rules push the generation's.
+    for name, text in (("source-commit.txt", "b" * 40 + "\n"), (SENTINEL, f"{BUNDLES[0]}\n"),
+                       (BUNDLES[0], "a flat decoy no reader serves\n")):
+        (share_dest / name).write_text(text)
+    r = deliver(f"{'b' * 40} 2 2", "9303")
+    got = tree(delivered)
+    check("…from the generation `_current` names, never the flat copy beside it",
+          r.returncode == 0 and got == live and tag_now() == f"{live_sha} 2 2",
+          f"rc={r.returncode}; delivered {sorted(got)}; tag {tag_now()}; {tail(r)}")
+    args = push_args.read_text() if push_args.exists() else ""
+    check("…pushed with the publishing path's flags: --skip-if-published and the run's immutable tag",
+          "--skip-if-published" in args and "--tag-run 9303" in args, args.strip())
+    check("…under the lock, which it released", leases_held(h) == [], " ".join(leases_held(h)) or "none")
+
+    def restamp(rel: str, **fields) -> None:
+        mp = meta_dest / gen / (rel + ".json")
+        md = json.loads(mp.read_text())
+        for k, v in fields.items():
+            if v is None:
+                md.pop(k, None)
+            else:
+                md[k] = v
+        mp.write_text(json.dumps(md))
+
+    stale = f"{'b' * 40} 2 2"
+    gen_dir, gen = seal_live()
+    (gen_dir / BUNDLES[0]).write_text("bytes no publisher stamped\n")
+    r = deliver(stale, "9304")
+    check("a share file that does not hash to its own digest stamp is NOT delivered: red, nothing pushed",
+          r.returncode != 0 and "Refusing to deliver it" in (r.stdout + r.stderr) and not push_args.exists()
+          and tag_now() == stale, f"rc={r.returncode}; tag {tag_now()}; {tail(r)}")
+
+    # Copilot on the first draft (#6878): a MISSING publication stamp was counted as an owner, so a set
+    # stamped by nobody passed as "one publication". Every file unstamped is exactly that shape.
+    gen_dir, gen = seal_live()
+    for p in sorted(gen_dir.rglob("*")):
+        if p.is_file():
+            restamp(str(p.relative_to(gen_dir)), publication=None)
+    r = deliver(stale, "9305")
+    check("a publication whose files carry NO publication stamp is refused — '-' is never an owner",
+          r.returncode != 0 and "carries no publication stamp" in (r.stdout + r.stderr)
+          and not push_args.exists() and tag_now() == stale, f"rc={r.returncode}; {tail(r)}")
+    gen_dir, gen = seal_live()
+    restamp("platform-set.json", publication="Systemorph-MeshWeaver-other-run-1")
+    r = deliver(stale, "9306")
+    check("a set stamped by TWO publications is refused as a mix",
+          r.returncode != 0 and "not ONE publication" in (r.stdout + r.stderr) and not push_args.exists(),
+          f"rc={r.returncode}; {tail(r)}")
+
+    # Copilot on #7545: a tag naming a commit that cannot be ORDERED against the live one was "stale",
+    # so the repair ran — and the publisher's own fallback on an unorderable compare republishes,
+    # rolling a NEWER tag backwards. Both unorderable shapes: the compare refused, and no token.
+    for label, extra in (("the compare API refused", {"MOCK_GH_FAIL": "1"}), ("no GH_TOKEN", {"GH_TOKEN": ""})):
+        gen_dir, gen = seal_live()
+        r = deliver(f"{newer} 2 2", "9309", **extra)
+        check(f"a tag naming a commit that cannot be ordered ({label}) is RED, nothing pushed, the tag not moved",
+              r.returncode != 0 and "could not be ORDERED" in (r.stdout + r.stderr) and not push_args.exists()
+              and tag_now() == f"{newer} 2 2", f"rc={r.returncode}; tag {tag_now()}; {tail(r)}")
+
+    # Copilot on #7545: a FAILED `directory exists` for the generation `_current` names read as
+    # "absent" and fell back to the flat prefix — here an OLDER publication the tag already names, so
+    # the run went green ("Verified") while `_current` served a newer generation.
+    gen_dir, gen = seal_live()
+    older = "b" * 40
+    for name, text in (("source-commit.txt", older + "\n"), (SENTINEL, f"{BUNDLES[0]}\n"),
+                       (BUNDLES[0], "an older flat publication\n")):
+        (share_dest / name).write_text(text)
+    r = deliver(f"{older} 2 2", "9310", MOCK_AZ_FAIL_DIR_EXISTS="1")
+    check("a generation whose existence az could not answer is RED — never a fallback to the flat prefix",
+          r.returncode != 0 and "could not say whether generation" in (r.stdout + r.stderr)
+          and "Verified" not in r.stdout and not push_args.exists(), f"rc={r.returncode}; {tail(r)}")
+
+    # Copilot on #7545: a publication without modules/_index (which the publisher always writes) was
+    # delivered module-free and reported repaired.
+    gen_dir, gen = seal_live()
+    (gen_dir / "modules" / "_index").unlink()
+    r = deliver(stale, "9311")
+    check("a publication missing modules/_index is refused as INCOMPLETE, nothing pushed",
+          r.returncode != 0 and "carries no modules/_index" in (r.stdout + r.stderr) and not push_args.exists()
+          and tag_now() == stale, f"rc={r.returncode}; tag {tag_now()}; {tail(r)}")
+
+    gen_dir, gen = seal_live()
+    r = deliver(stale, "9307", MOCK_REGISTRY_UNREADABLE="1")
+    check("a registry that cannot be READ is red and nothing is pushed — never 'absent', never repaired blind",
+          r.returncode != 0 and "could not be" in (r.stdout + r.stderr) and not push_args.exists(),
+          f"rc={r.returncode}; {tail(r)}")
+    h.reset()
+    r = deliver(stale, "9308")
+    check("a share holding no sealed publication is red, not a green over an unproven tag",
+          r.returncode != 0 and "no SEALED publication" in (r.stdout + r.stderr) and not push_args.exists(),
+          f"rc={r.returncode}; {tail(r)}")
+    check("…and every refusal released the lock", leases_held(h) == [], " ".join(leases_held(h)) or "none")
+
+
+def workflow_steps(text: str, job: str) -> list[dict[str, str]]:
+    """The steps of one job of a workflow, as {name, if, run, uses, id} — read from the TEXT, so the
+    harness needs no YAML library. A step starts at `      - ` under the job's `steps:`."""
+    lines = text.splitlines()
+    try:
+        start = lines.index(f"  {job}:")
+    except ValueError:
+        return []
+    steps: list[dict[str, str]] = []
+    cur: dict[str, str] | None = None
+    in_steps = False
+    for line in lines[start + 1:]:
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
+            break                                   # the next job
+        if line.strip() == "steps:":
+            in_steps = True
+            continue
+        if not in_steps:
+            continue
+        m = re.match(r"^      - (name|uses|id|if|run):\s*(.*)$", line)
+        if m:
+            cur = {m.group(1): m.group(2).strip()}
+            steps.append(cur)
+            continue
+        m = re.match(r"^        (name|if|run|uses|id|continue-on-error):\s*(.*)$", line)
+        if m and cur is not None:
+            cur[m.group(1)] = m.group(2).strip()
+    return steps
+
+
+def run_scope_none_workflow_cases() -> None:
+    # The script above only helps if the lane RUNS it on `scope=none`, with everything it needs: the
+    # storage login, the platform checkout it lives in, a venv the lock wrapper can build (Copilot on
+    # the first draft: the probe/heal steps were gated off on exactly this path, so a runner without
+    # ensurepip would fail the lock), ORAS and the registry login. Read off the workflow itself.
+    print("\nthe lane runs the scope=none registry repair, with every step it depends on (#7323):")
+    steps = workflow_steps(WORKFLOW.read_text(), "publish-bake") if WORKFLOW.is_file() else []
+    check("the publish-bake job's steps were read (a guard whose subject moved must go red)",
+          len(steps) > 40, f"{len(steps)} step(s) in {WORKFLOW}")
+    idx = {s.get("name", s.get("uses", "")).strip('"'): i for i, s in enumerate(steps)}
+    repair = next((i for i, s in enumerate(steps) if "deliver-live-publication.sh" in s.get("run", "")), None)
+    check("a step runs deliver-live-publication.sh under the prefix lock exactly when the scope is `none`",
+          repair is not None and "bake-publication-lock.sh --" in steps[repair].get("run", "")
+          and steps[repair].get("if", "") == "steps.scope.outputs.scope == 'none'"
+          and "continue-on-error" not in steps[repair],
+          repr(steps[repair] if repair is not None else None))
+    for name in ("Azure login (OIDC)", "Fetch the canonical publish script (platform repo)",
+                 "Prove this runner's python3 can build a venv", "Install ORAS (pinned, from the platform checkout)",
+                 "Log in to the fleet registry (publisher)"):
+        i = idx.get(name)
+        cond = steps[i].get("if", "") if i is not None else "<missing step>"
+        check(f"'{name}' runs before the repair and is not gated off on `scope=none`",
+              i is not None and repair is not None and i < repair and "scope" not in cond,
+              f"if: {cond or '<none>'}")
+    for name in ("Heal — an interpreter with pip, only because the probe failed",
+                 "Assert the healed interpreter builds a venv"):
+        i = idx.get(name)
+        cond = steps[i].get("if", "") if i is not None else "<missing step>"
+        check(f"'{name}' fires on a failed probe whatever the scope",
+              cond == "steps.venv-probe.outputs.ok != 'true'", f"if: {cond}")
 
 
 def main() -> int:
