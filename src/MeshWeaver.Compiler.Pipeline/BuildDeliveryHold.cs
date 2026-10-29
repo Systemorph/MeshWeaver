@@ -244,15 +244,30 @@ public static class BuildDeliveryHold
     /// there is one, follows as further parts (<see cref="WithGate"/>).</summary>
     /// <param name="def">The record whose adopted build was refused.</param>
     /// <param name="maxMinorVersionsBehind">The bound that refused it.</param>
+    /// <remarks>The distance and the bound are FACTS (numbers and the config key), never English
+    /// phrases: the key is chosen by their shape (measured or not, bound enabled or disabled), so a
+    /// German viewer reads no English fragment inside the German sentence (#7550 review).</remarks>
     public static ImmutableList<KeyedText> TooFarBehindText(NodeTypeDefinition def, int maxMinorVersionsBehind)
-        => [KeyedText.Of("compile.hold.tooFarBehind",
+    {
+        var behind = ModuleVersionCompatibility.MinorVersionsBehind(def.AdoptedModuleVersion, def.CurrentModuleVersion);
+        var disabled = maxMinorVersionsBehind < 0;
+        var key = (behind is null, disabled) switch
+        {
+            (false, false) => "compile.hold.tooFarBehind",
+            (true, false) => "compile.hold.tooFarBehind.unmeasured",
+            (false, true) => "compile.hold.tooFarBehind.unbounded",
+            (true, true) => "compile.hold.tooFarBehind.unmeasuredUnbounded",
+        };
+        return [KeyedText.Of(key,
             ("adoptedVersion", ModuleVersionCompatibility.Display(def.AdoptedModuleVersion)),
             ("adoptedFingerprint", Short(def.AdoptedSourceFingerprint)),
             ("currentVersion", ModuleVersionCompatibility.Display(def.CurrentModuleVersion)),
             ("currentFingerprint", Short(def.CurrentSourceFingerprint)),
-            ("distance", StaleAdoptionBound.DescribeDistance(def.AdoptedModuleVersion, def.CurrentModuleVersion)),
-            ("bound", StaleAdoptionBound.DescribeBound(maxMinorVersionsBehind)),
+            ("behind", behind?.ToString(CultureInfo.InvariantCulture) ?? ""),
+            ("maxBehind", maxMinorVersionsBehind.ToString(CultureInfo.InvariantCulture)),
+            ("configKey", StaleAdoptionBound.ConfigKey),
             ("framework", NodeTypeCompilationHelpers.FrameworkVersion))];
+    }
 
     /// <summary>The keyed form of <see cref="IncompatibleNotice"/> (#7355).</summary>
     /// <param name="def">The record whose adopted build was refused.</param>

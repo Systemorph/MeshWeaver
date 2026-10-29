@@ -70,6 +70,7 @@ public sealed class AReinstallLandsEveryAuthoredNodeTypeMemberTest
         if (type == typeof(List<string>)) return new List<string> { "changed" };
         if (type == typeof(IReadOnlyList<string>)) return new[] { "changed" };
         if (type == typeof(ImmutableList<string>)) return ImmutableList.Create("changed");
+        if (type == typeof(ImmutableList<KeyedText>)) return ImmutableList.Create(KeyedText.Of("changed"));
         if (type == typeof(Dictionary<string, object>)) return new Dictionary<string, object> { ["changed"] = "yes" };
         if (type == typeof(IReadOnlyDictionary<string, long>)) return new Dictionary<string, long> { ["changed"] = 1 };
         if (type == typeof(ImmutableSortedDictionary<string, string>))

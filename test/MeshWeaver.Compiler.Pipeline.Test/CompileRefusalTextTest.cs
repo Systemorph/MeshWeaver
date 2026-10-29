@@ -111,6 +111,41 @@ public class CompileRefusalTextTest
         BuildDeliveryHold.StampErrorText(recompiled, null, null).CompilationErrorText.Should().BeNull();
     }
 
+    /// <summary>
+    /// The too-far-behind notice carries its distance and its bound as FACTS, so a German viewer
+    /// reads them in German. They were English phrases bound into the German sentence ("7 minor
+    /// version(s) behind", "bound 5 (…)"), so the German notice still read half English. Every shape
+    /// (measured or not, bound enabled or disabled) still reproduces its English exactly.
+    /// </summary>
+    [Fact]
+    public void TheTooFarBehindNotice_ReadsGerman_ForEveryShapeOfDistanceAndBound()
+    {
+        var cases = new (string Name, NodeTypeDefinition Def, int Bound, string GermanDistance, string GermanBound)[]
+        {
+            ("measured, bounded", Held("1.2.0", "1.9.0"), 5, "7 Minor-Version(en) zurück", "Grenze 5 ("),
+            ("unmeasured, bounded", Held("not-a-version", "1.9.0"), 5, "Abstand nicht messbar", "Grenze 5 ("),
+            ("measured, disabled", Held("1.2.0", "1.9.0"), -1, "7 Minor-Version(en) zurück", "die Grenze ist DEAKTIVIERT"),
+            ("unmeasured, disabled", Held("not-a-version", "1.9.0"), -1, "Abstand nicht messbar", "die Grenze ist DEAKTIVIERT"),
+        };
+
+        foreach (var (name, def, bound, germanDistance, germanBound) in cases)
+        {
+            var english = BuildDeliveryHold.TooFarBehindNotice(def, bound);
+            var parts = BuildDeliveryHold.TooFarBehindText(def, bound);
+            KeyedTexts.Render(parts, "en").Should().Be(english, $"'{name}' must reproduce its English exactly");
+
+            var german = KeyedTexts.Localize(english, parts, "de")!;
+            german.Should().StartWith("Build liegt zu weit hinter seiner Quelle zurück", name)
+                .And.Contain(germanDistance, name)
+                .And.Contain(germanBound, name)
+                .And.Contain(StaleAdoptionBound.ConfigKey, $"'{name}': the config key itself is not translated");
+            german.Should().NotContain("minor version(s) behind", name)
+                .And.NotContain("distance not measurable", name)
+                .And.NotContain("bound is DISABLED", name)
+                .And.NotContain("bound 5", name);
+        }
+    }
+
     /// <summary>A record written before #7355 carries no keys and renders verbatim.</summary>
     [Fact]
     public void ALegacyRecordWithoutKeys_RendersItsStoredText()
