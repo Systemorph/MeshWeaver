@@ -5,6 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reactive;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
@@ -407,22 +408,121 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
             (parsedQuery.Filter as MeshWeaver.Mesh.QueryComparison)?.Condition.Values is { } vs
                 ? string.Join("|", vs) : "(complex)",
             items.Count);
-        return RowFilter(items, request)
-            .Select(visible => new QueryResultChange<T>
-            {
-                ChangeType = QueryChangeType.Initial,
-                Items = visible,
-                // Score the matched items when the query carries a text-search term.
-                // For pure filter / namespace / nodeType queries we leave Scores=null so
-                // the aggregator falls back to insertion order — there's no relevance
-                // signal to surface ("give me all Threads in this namespace" is
-                // unordered with respect to score).
-                Scores = ComputeScores(visible, parsedQuery),
-                Query = parsedQuery,
-                Version = 0,
-                Timestamp = DateTimeOffset.UtcNow
-            });
+        QueryResultChange<T> Initial(List<T> visible) => new()
+        {
+            ChangeType = QueryChangeType.Initial,
+            Items = visible,
+            // Score the matched items when the query carries a text-search term.
+            // For pure filter / namespace / nodeType queries we leave Scores=null so
+            // the aggregator falls back to insertion order — there's no relevance
+            // signal to surface ("give me all Threads in this namespace" is
+            // unordered with respect to score).
+            Scores = ComputeScores(visible, parsedQuery),
+            Query = parsedQuery,
+            Version = 0,
+            Timestamp = DateTimeOffset.UtcNow
+        };
+
+        // Rows decided per viewer are FOLLOWED for the life of the query (MeshWeaver#7365); everything
+        // else is decided once and the query completes, exactly as before.
+        var decided = items.OfType<MeshNode>().Where(RequiresRowFilter).ToList();
+        if (_nodeValidators is null || AccessFollowServices is null || decided.Count == 0)
+            return RowFilter(items, request).Select(Initial);
+        var viewer = ResolveViewer(request);
+        if (string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal))
+            return FilterReadable(items, item => item as MeshNode, viewer).Select(Initial);
+        return FollowAccess(items, decided, viewer, parsedQuery, Initial);
     }
+
+    /// <summary>
+    /// 🚨 <b>An open query follows grant changes on its declared rows</b> (MeshWeaver#7365). The rows
+    /// this provider serves live in memory and never change, but their READ verdict does: a grant or a
+    /// revocation on an ancestor's <c>_Access</c>, a group membership, a role. This provider used to
+    /// decide each declared row once, emit its <c>Initial</c> and complete, so a revoked reader kept the
+    /// row for as long as the query stayed open and a newly granted reader never received it. Storage
+    /// supplies no delta for a row it does not hold, so nothing downstream could correct it.
+    ///
+    /// <para>The re-check signals are the storage executor's (<see cref="SecuredQueryAccessFollow.RecheckTriggers"/>),
+    /// anchored on the decided rows' own paths and MainNodes. Each signal re-runs the row filter (coalesced,
+    /// one run at a time) and the result is diffed against what the reader holds: a revoked row leaves as
+    /// <see cref="QueryChangeType.Removed"/>, a newly readable one arrives as <see cref="QueryChangeType.Added"/>,
+    /// and a signal that changes nothing for this reader emits nothing. A fault in the signals ends the query —
+    /// a listing that can no longer follow access must not go on serving rows.</para>
+    /// </summary>
+    private IObservable<QueryResultChange<T>> FollowAccess<T>(
+        List<T> items, List<MeshNode> decided, string viewer, ParsedQuery parsedQuery,
+        Func<List<T>, QueryResultChange<T>> initial)
+    {
+        var anchors = decided
+            .SelectMany(n => new[] { n.Path, n.MainNode })
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Select(p => p!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return Observable.Defer(() =>
+        {
+            // Per subscription; mutated only inside the coalesced pipeline, which runs one at a time.
+            Dictionary<string, T>? held = null;
+            long version = 0;
+            return SecuredQueryAccessFollow.RecheckTriggers(AccessFollowServices, viewer, anchors)
+                .Select(_ => System.Reactive.Unit.Default)
+                // Subscribed AFTER the triggers, so a grant that lands while the first run reads is
+                // never missed: it queues one follow-up run.
+                .Merge(Observable.Return(System.Reactive.Unit.Default))
+                .CoalesceWhileRunning(() => FilterReadable(items, item => item as MeshNode, viewer))
+                .SelectMany<List<T>, QueryResultChange<T>>(visible =>
+                {
+                    var now = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var item in visible)
+                        if (item is MeshNode { Path: { Length: > 0 } path })
+                            now[path] = item;
+                    if (held is null)
+                    {
+                        held = now;
+                        return [initial(visible)];
+                    }
+                    var removed = held.Where(h => !now.ContainsKey(h.Key)).Select(h => h.Value).ToList();
+                    var added = now.Where(n => !held.ContainsKey(n.Key)).Select(n => n.Value).ToList();
+                    held = now;
+                    var frames = new List<QueryResultChange<T>>(2);
+                    if (removed.Count > 0)
+                        frames.Add(new QueryResultChange<T>
+                        {
+                            ChangeType = QueryChangeType.Removed,
+                            Items = removed,
+                            Query = parsedQuery,
+                            Version = ++version,
+                            Timestamp = DateTimeOffset.UtcNow,
+                        });
+                    if (added.Count > 0)
+                        frames.Add(new QueryResultChange<T>
+                        {
+                            ChangeType = QueryChangeType.Added,
+                            Items = added,
+                            Scores = ComputeScores(added, parsedQuery),
+                            Query = parsedQuery,
+                            Version = ++version,
+                            Timestamp = DateTimeOffset.UtcNow,
+                        });
+                    return frames;
+                })
+                .Do(_ => { }, ex => _logger?.LogWarning(ex,
+                    "[StaticNodeQueryProvider] the access follow of an open secured query faulted — ending the query"));
+        });
+    }
+
+    /// <summary>
+    /// The services an open secured query follows grant changes through
+    /// (<see cref="SecuredQueryAccessFollow.RecheckTriggers"/>) and the permission-establishment budget its
+    /// per-row Read check is bounded by. Set by the mesh's registration; when null (a provider built
+    /// without a mesh) declared rows are decided once and the query completes after its Initial.
+    /// An <c>init</c> property rather than a constructor parameter, so no published constructor signature moves.
+    /// </summary>
+    public IServiceProvider? AccessFollowServices { get; init; }
+
+    private string ResolveViewer(MeshQueryRequest request)
+        => QueryIdentityResolver.ResolveAndReport(
+            request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId, _logger).UserId;
 
     /// <summary>
     /// 🚨 <b>A declared node is row-filtered like a stored one — unless it is platform VOCABULARY.</b>
@@ -443,9 +543,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
     {
         if (_nodeValidators is null || !items.Any(i => i is MeshNode n && RequiresRowFilter(n)))
             return Observable.Return(items);
-        var viewer = QueryIdentityResolver.ResolveAndReport(
-            request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId, _logger).UserId;
-        return FilterReadable(items, item => item as MeshNode, viewer);
+        return FilterReadable(items, item => item as MeshNode, ResolveViewer(request));
     }
 
     /// <summary>
@@ -562,11 +660,26 @@ public class StaticNodeQueryProvider : IMeshQueryProvider, IDisposable
             Node = node,
             AccessContext = new AccessContext { ObjectId = viewer },
         };
+        // 🚨 Bounded and FAIL-CLOSED (MeshWeaver#7365), the rule StorageAdapterMeshQueryProvider.ValidateRead
+        // holds: an open query re-runs this check on every grant change, so a row is shown only on an
+        // ESTABLISHED grant. A validator that completes without a verdict refuses the row (`.All` over an
+        // empty answer was true, so silence admitted it), a validator that faults refuses the row instead
+        // of ending the query, and past the permission-establishment budget the row is withheld.
+        var budget = (AccessFollowServices?.GetService(typeof(MeshOperationOptions)) as MeshOperationOptions
+                      ?? new MeshOperationOptions()).PermissionEstablishmentBudget;
         return relevant
-            .Select(v => v.Validate(context).Take(1))
+            .Select(v => v.Validate(context).Take(1).Select(r => r.IsValid).DefaultIfEmpty(false))
             .ToInlineObservable()
             .Concat()
-            .All(r => r.IsValid);
+            .All(valid => valid)
+            .Timeout(budget)
+            .Catch((Exception ex) =>
+            {
+                _logger?.LogWarning(ex,
+                    "[StaticNodeQueryProvider] Read check on {Path} for {User} reached no verdict within {Budget} — the row is withheld",
+                    node.Path, viewer, budget);
+                return Observable.Return(false);
+            });
     }
 
     /// <summary>
