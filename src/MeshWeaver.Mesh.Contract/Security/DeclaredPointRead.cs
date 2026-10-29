@@ -308,8 +308,10 @@ public static class DeclaredPointRead
         IObservable<bool> Evaluate() => NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Read) is { } rule
             ? rule.HasAccess(context, userId)
             : hub.CheckPermission(path, userId, Permission.Read);
-        return OffTheGate(ReadInputsChanged(hub, access, node, viewer, userId)
-                .StartWith(false))
+        // 🚨 The signals are ATTACHED before the first evaluation is seeded (MeshWeaver#7367): a seed
+        // emitted ahead of them let a commit that landed after the first evaluation read its inputs,
+        // but before the feed handler attached, go unannounced — the verdict kept the old decision.
+        return OffTheGate(AttachedThenSeeded(ReadInputsChanged(hub, access, node, viewer, userId), false))
             .Select(withdraw => (evaluation: Classified(
                 access.RunAs(viewer, () => Observable.Defer(Evaluate).Take(1).Timeout(budget)),
                 path, userId, logger).Select(outcome => (PermissionCheckOutcome?)outcome), withdraw))
@@ -755,18 +757,86 @@ public static class DeclaredPointRead
     {
         var options = hub.JsonSerializerOptions;
         var syncPath = AccessAssignmentGuard.SyncConfigPath(partition);
-        return OwnershipChanged(hub, partition)
-            .StartWith(Unit.Default)
-            .Select(_ => hub.ReadStoredNode(syncPath)
+        var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
+        var logger = Logger(hub);
+        return FollowOwnership(
+            OwnershipChanged(hub, partition),
+            () => hub.ReadStoredNode(syncPath)
                 .Take(1)
                 .DefaultIfEmpty(null)
                 .Select(stored => stored is null
                     ? Observable.Return(false)
                     : OwnerCurrent(hub, access, syncPath).Select(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)))
-                .Switch())
+                .Switch(),
+            budget,
+            Scheduler.Default,
+            () => logger?.LogWarning(
+                "The ownership of {Partition} could not be re-read within the permission-establishment budget ({Budget}) — not system-owned, its declarations refused",
+                partition, budget));
+    }
+
+    /// <summary>
+    /// The live ownership decision of <see cref="SystemOwned"/>, composed over its two inputs: the
+    /// signals that can change it (<paramref name="changed"/>) and ONE re-read of it
+    /// (<paramref name="read"/>), taken first and again on every signal (MeshWeaver#7367).
+    ///
+    /// <para>🚨 <b>Signals first.</b> The signals are attached BEFORE the first read is taken
+    /// (<see cref="AttachedThenSeeded{T}"/>), so a commit that lands after that read captured its value
+    /// is announced to this subscription and re-read — never missed in a setup window.</para>
+    ///
+    /// <para>🚨 <b>Every re-read is bounded</b> by the permission-establishment budget until its FIRST
+    /// answer; past it the partition is NOT owned. Without a bound, a re-read that stalled after a
+    /// withdrawal kept the previous decision in force for as long as it stalled. The budget bounds the
+    /// whole CONTINUOUS unanswered period, not each re-read (the <see cref="BoundPendingPeriods"/>
+    /// shape): a signal that replaces a re-read still in flight continues the SAME period and never
+    /// restarts its deadline, so signals arriving faster than the budget cannot hold a stalled
+    /// re-check — and with it the previous decision — open indefinitely. Only an answer ends the period. The trade-off is
+    /// decided for fail-closed: a <c>false</c> ends an admitted subscription
+    /// (<c>RevisionAdmission.AdmitEachRevision</c> treats it as terminal), and every sync writes
+    /// <c>_GitSync</c>, so an ownership re-read that cannot answer within the budget ends the open
+    /// declared reads of that partition's types. That is the same classification every other
+    /// permission check makes of a timeout (undetermined — refused), and the reader re-subscribes
+    /// to a fresh decision; the alternative — keeping a decision nobody can re-establish — is the
+    /// hole. A re-read in flight withdraws nothing, so a sync that rewrites the config without
+    /// changing its ownership does not blink an open read.</para>
+    /// </summary>
+    /// <param name="changed">Fires whenever the ownership may have changed.</param>
+    /// <param name="read">One re-read of the ownership: its first value decides, later values follow it live.</param>
+    /// <param name="budget">How long one re-read may take to answer.</param>
+    /// <param name="scheduler">Where the budget runs.</param>
+    /// <param name="onStalled">Called when a re-read did not answer within the budget.</param>
+    internal static IObservable<bool> FollowOwnership(
+        IObservable<Unit> changed, Func<IObservable<bool>> read, TimeSpan budget, IScheduler scheduler, Action? onStalled = null)
+        => AttachedThenSeeded(changed, Unit.Default)
+            // Each re-read is pending (null) until it answers; a replacement re-read starts pending too.
+            .Select(_ => Observable.Defer(read).Select(owned => (bool?)owned).StartWith((bool?)null))
+            .Switch()
+            // One unanswered period: consecutive pending markers collapse, so its deadline starts once.
+            .DistinctUntilChanged()
+            .Select(owned => owned is { } answered
+                ? Observable.Return(answered)
+                : Observable.Timer(budget, scheduler).Select(_ =>
+                {
+                    onStalled?.Invoke();
+                    return false;
+                }))
             .Switch()
             .DistinctUntilChanged();
-    }
+
+    /// <summary>
+    /// <paramref name="signals"/> with <paramref name="seed"/> emitted once they are ATTACHED — the
+    /// shape every live decision here starts from (MeshWeaver#7367). <c>StartWith</c> emits its seed
+    /// before it subscribes its source, so the first evaluation it seeds runs before the
+    /// invalidation feed's handler is attached, and a commit landing in between is announced to
+    /// nobody. Here the signals are subscribed first (in order, on the subscribing thread), then
+    /// the seed is emitted; the output is serialized.
+    /// </summary>
+    /// <typeparam name="T">The signal type.</typeparam>
+    /// <param name="signals">What re-triggers the decision.</param>
+    /// <param name="seed">What triggers the first decision.</param>
+    internal static IObservable<T> AttachedThenSeeded<T>(IObservable<T> signals, T seed)
+        => Observable.Merge(ImmediateScheduler.Instance, signals, Observable.Return(seed, ImmediateScheduler.Instance));
 
     /// <summary>
     /// Fires on every commit that can change whether <paramref name="partition"/> is system-owned —
