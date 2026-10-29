@@ -111,17 +111,21 @@ def _opener():
 
 
 def api_get(path, *, token, base_url=None, budget_seconds=DEFAULT_BUDGET_SECONDS,
-            urlopen=None, sleep=time.sleep, clock=time.time):
-    """GET one REST path; JSON on success, ApiUnavailable / ApiRefused otherwise."""
+            urlopen=None, sleep=time.sleep, clock=time.time, accept="application/vnd.github+json",
+            raw=False, user_agent="MeshWeaver-read-current-pr-body"):
+    """GET one REST path; JSON on success (the decoded text when `raw`), ApiUnavailable /
+    ApiRefused otherwise. Every CI caller that asks GitHub something shares THIS classification
+    (probe-fleet-read.py, check-cross-repo-pair.py, transitional_allow.py, check-shared-rules.py,
+    github-api-get.py) — a second copy is how "lacks a grant, or is rate-limited" got written."""
     base_url = (base_url or os.environ.get("GITHUB_API_URL") or "https://api.github.com").rstrip("/")
     urlopen = urlopen or _opener()
     deadline = clock() + budget_seconds
     attempt = 0
     while True:
         request = urllib.request.Request(f"{base_url}/{path}", headers={
-            "Accept": "application/vnd.github+json",
+            "Accept": accept,
             "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "MeshWeaver-read-current-pr-body",
+            "User-Agent": user_agent,
         })
         if token:
             # Unredirected: urllib copies ordinary headers onto a redirect to ANY host
@@ -130,7 +134,8 @@ def api_get(path, *, token, base_url=None, budget_seconds=DEFAULT_BUDGET_SECONDS
         headers, reset_epoch = None, None
         try:
             with urlopen(request, timeout=30) as response:
-                return json.loads(response.read().decode("utf-8"))
+                text = response.read().decode("utf-8")
+                return text if raw else json.loads(text)
         except urllib.error.HTTPError as error:
             headers = error.headers
             # The error body is read over the same connection, so it can fail exactly like the

@@ -320,28 +320,43 @@ def failures(judgements: list[Judgement]) -> list[Judgement]:
 # ─────────────────────────────── the API resolver ───────────────────────────────
 
 
-def _api(url: str, token: str) -> dict:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "meshweaver-transitional-allow-gate",
-        },
-    )
+def _api(url: str, token: str, urlopen=None, sleep=None, clock=None) -> dict:
+    """One GET through the shared classifier. An OUTAGE (rate limit, 5xx, no connection past the
+    budget) raises `AllowResolutionError` whose message STARTS with "NO VERDICT — GitHub API …":
+    still never an allowance, but the red names an outage to re-run after rather than a grant the
+    token "lacks, or is rate-limited" (MeshWeaver#7448)."""
+    reader = _github_reader()
+    prefix = "https://api.github.com/"
+    if not url.startswith(prefix):
+        raise AllowResolutionError(f"{url} is not under {prefix}")
+    path = url[len(prefix):]
+    kwargs = {k: v for k, v in (("urlopen", urlopen), ("sleep", sleep), ("clock", clock)) if v is not None}
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — fixed https host
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
+        return reader.api_get(path, token=token, user_agent="meshweaver-transitional-allow-gate", **kwargs)
+    except reader.ApiUnavailable as e:
+        raise AllowResolutionError(e.sentence()) from e
+    except reader.ApiRefused as e:
+        code = str(e).split()[1] if len(str(e).split()) > 1 else "?"
         meaning = {
-            401: "the token is invalid or expired",
-            403: "the token is valid but lacks pull-requests:read here, or is rate-limited",
-            404: "no such issue or pull request in this repository",
-        }.get(e.code, f"HTTP {e.code}")
-        raise AllowResolutionError(f"{url} -> {e.code}: {meaning}") from e
-    except (urllib.error.URLError, TimeoutError, ValueError) as e:
-        raise AllowResolutionError(f"{url} -> could not reach api.github.com: {e}") from e
+            "401": "the token is invalid or expired",
+            "403": "the token is valid but lacks pull-requests:read here (a plain refusal, not a rate limit)",
+            "404": "no such issue or pull request in this repository",
+        }.get(code, f"HTTP {code}")
+        raise AllowResolutionError(f"{url} -> {code}: {meaning}") from e
+    except ValueError as e:
+        raise AllowResolutionError(f"{url} -> the answer is not JSON: {e}") from e
+
+
+def _github_reader():
+    """`scripts/read-current-pr-body.py` — the ONE GitHub REST classification every CI gate shares:
+    a rate-limit 403/429, a 5xx or a dropped connection is retried to its reset inside a bounded
+    budget and otherwise reported as NO VERDICT, never as a missing grant (MeshWeaver#7448)."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "scripts" / "read-current-pr-body.py"
+    spec = importlib.util.spec_from_file_location("read_current_pr_body", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def github_resolver(token: str, repo: str | None = None, fetch=_api):
