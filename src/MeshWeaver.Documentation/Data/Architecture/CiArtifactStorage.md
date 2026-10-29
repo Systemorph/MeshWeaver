@@ -556,6 +556,13 @@ self-test rules put a second same-pid writer inside the first one's window (prob
 put copy→rename), and both were proved red against the pid-named version with the incident's exact
 message.
 
+A probe the job CREATED is removed on the failure path as well (#7375). The exclusive create can
+succeed and the write after it fail — ENOSPC on a full share is the measured case — and the probe used
+to be unlinked only on the success path, so each failed probe stayed at the share root, where neither
+the pruner nor the collector looks (about 49 of them on `/ci-artifacts` after one fill). A cleanup that
+itself fails is named in the returned reason rather than swallowed. Probes left by a pod killed
+mid-probe cannot be removed by the pod, and are not covered by this.
+
 ### How the module bundle splits in two
 
 `node-repo-module-pack.yml` takes `artifact-store` and `artifact-store-id` inputs. In `file:` mode:

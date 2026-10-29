@@ -49,7 +49,9 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
                 AssignmentNodeFactory.Policy($"{StaticStorage}/_Storage",
                     new PartitionAccessPolicy { BreaksInheritance = true }),
                 new MeshNode(CustomPartition) { Name = CustomPartition, NodeType = "Markdown" },
-                CustomPartitionRecord());
+                CustomPartitionRecord(),
+                new MeshNode(DriftPartition) { Name = DriftPartition, NodeType = "Markdown" },
+                PartitionOwnership.PartitionDefinitionNode(new MeshNode(DriftPartition) { Name = DriftPartition }, "standard layout, remapped at runtime"));
 
     private const string CustomPartition = "LedgerSpace";
 
@@ -705,32 +707,125 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
 
     /// <summary>
     /// An incomplete answer, or a record that does not read, is not "no record": neither establishes
-    /// the standard layout.
+    /// the standard layout. Existence comes from the listing, content from the record's node stream.
     /// </summary>
     [Fact]
     public void AnIncompleteOrUnreadableLayoutRead_IsNotEstablished()
     {
         var options = Mesh.JsonSerializerOptions;
-        PolicyPlacementValidator.ClassifyLayout(
+        PolicyPlacementValidator.ClassifyRecord(
                 new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, SnapshotIncomplete = true },
-                "LedgerSpace", options)
+                "LedgerSpace")
             .Established.Should().BeFalse("a dropped read is not confirmed absence");
-        PolicyPlacementValidator.ClassifyLayout(
+        PolicyPlacementValidator.ClassifyRecord(
                 new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, SilentProviders = ["pg"] },
-                "LedgerSpace", options)
+                "LedgerSpace")
             .Established.Should().BeFalse("a silent provider is not confirmed absence");
-        PolicyPlacementValidator.ClassifyLayout(
+        PolicyPlacementValidator.ClassifyRecord(
                 new QueryResultChange<MeshNode>
                 {
                     ChangeType = QueryChangeType.Initial,
-                    Items = [new MeshNode("LedgerSpace", "Admin/Partition") { NodeType = "Partition", Content = "not a definition" }],
+                    Items = [new MeshNode("OtherSpace", "Admin/Partition") { NodeType = "Partition" }],
                 },
+                "LedgerSpace")
+            .Established.Should().BeFalse("a listing that answers some other record is not confirmed absence");
+        PolicyPlacementValidator.ClassifyRecord(
+                new QueryResultChange<MeshNode>
+                {
+                    ChangeType = QueryChangeType.Initial,
+                    Items = [new MeshNode("LedgerSpace", "Admin/Partition") { NodeType = "Partition" }],
+                },
+                "LedgerSpace")
+            .Should().Be((true, "Admin/Partition/LedgerSpace"), "a listed record names the path whose stream is read");
+        PolicyPlacementValidator.ClassifyRecordContent(
+                new MeshNode("LedgerSpace", "Admin/Partition") { NodeType = "Partition", Content = "not a definition" },
                 "LedgerSpace", options)
             .Established.Should().BeFalse("a record that does not read is not confirmed absence");
-        PolicyPlacementValidator.ClassifyLayout(
+        PolicyPlacementValidator.ClassifyRecordContent(null, "LedgerSpace", options)
+            .Established.Should().BeFalse("a listed record the stream did not serve is not confirmed absence");
+        PolicyPlacementValidator.ClassifyRecord(
                 new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial },
+                "LedgerSpace")
+            .Should().Be((true, (string?)null), "control: a complete answer without a record is the standard layout");
+    }
+
+    /// <summary>
+    /// #7359 — deterministic: the listing answers a STALE snapshot of the record (standard mappings),
+    /// the record's own stream already carries the new <c>_Drift</c> mapping. The layout must be the
+    /// stream's; judging against the snapshot would accept a policy the fold never reads.
+    /// </summary>
+    [Fact]
+    public async Task TheLayout_IsTheRecordsCurrentContent_NotTheListingsSnapshot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var options = Mesh.JsonSerializerOptions;
+        var stale = PartitionOwnership.PartitionDefinitionNode(new MeshNode("LedgerSpace") { Name = "LedgerSpace" }, "before the remap");
+        var current = stale with
+        {
+            Content = ((PartitionDefinition)stale.Content!) with
+            {
+                TableMappings = new(PartitionDefinition.DefaultSegmentTableMappings()) { ["_Drift"] = "drifts" },
+            },
+        };
+        var listing = Observable.Return(new QueryResultChange<MeshNode>
+        {
+            ChangeType = QueryChangeType.Initial,
+            Items = [stale],
+        });
+        string? readPath = null;
+
+        var layout = await PolicyPlacementValidator.ComposeLayoutRead(
+                listing,
+                path => { readPath = path; return Observable.Return<MeshNode?>(current); },
                 "LedgerSpace", options)
-            .Should().Be((true, (PartitionDefinition?)null), "control: a complete answer without a record is the standard layout");
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        layout.Established.Should().BeTrue();
+        layout.Definition!.TableMappings.Should().ContainKey("_Drift",
+            "the record's CURRENT mapping decides the placement, not the listing's snapshot");
+        readPath.Should().Be(stale.Path, "the record found by the listing is read through its own stream");
+    }
+
+    private const string DriftPartition = "DriftSpace";
+
+    /// <summary>
+    /// #7359 — the layout is the record's CURRENT content, never a query snapshot. The partition's
+    /// record starts with the standard mappings; a System write then maps a new segment
+    /// <c>_Drift</c> to its own table. A policy under <c>_Drift</c> is stored where the fold never
+    /// reads it, so it must be refused — judged against the mapping the record carries NOW, not the
+    /// one a listing answered before the change.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task APolicyUnderASegmentMappedAfterTheRecordWasListed_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var recordPath = $"{PartitionNodeType.Namespace}/{DriftPartition}";
+
+        IObservable<MeshNode> remap;
+        using (Access.ImpersonateAsSystem())
+            remap = Mesh.GetWorkspace().GetMeshNodeStream(recordPath).Update(node => node with
+            {
+                Content = node.ContentAs<PartitionDefinition>(Mesh.JsonSerializerOptions)! with
+                {
+                    TableMappings = new(PartitionDefinition.DefaultSegmentTableMappings()) { ["_Drift"] = "drifts" },
+                },
+            });
+        await remap.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // Precondition: the record's own stream carries the new mapping.
+        using (Access.ImpersonateAsSystem())
+            await Mesh.GetWorkspace().GetMeshNodeStream(recordPath)
+                .Where(n => n.ContentAs<PartitionDefinition>(Mesh.JsonSerializerOptions)?.TableMappings?.ContainsKey("_Drift") == true)
+                .Should().Within(TestTimeouts.Convergence).Emit("the remap landed on the record", cancellationToken: ct);
+
+        Access.SetCircuitContext(TestUsers.Admin);
+        var scope = $"{DriftPartition}/area/_Drift";
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.CreateNode(AssignmentNodeFactory.Policy(scope, new PartitionAccessPolicy { BreaksInheritance = true }))
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+
+        failure.Should().NotBeNull("the record maps `_Drift` to its own table NOW — a policy there is never read by the fold");
+        failure!.Message.Should().Contain($"'{DriftPartition}/area/_Policy'");
     }
 
     /// <summary>The fold reads a policy only under the id <c>_Policy</c>; any other id is refused.</summary>

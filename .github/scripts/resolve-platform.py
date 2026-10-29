@@ -2704,7 +2704,18 @@ def _split_version(text: str | None) -> tuple[list[int], list[str]] | None:
 
 def _build_ordinal(text: str | None) -> int | None:
     """The CD run a version was published by, or None — `PlatformReleaseOrder.BuildOrdinal`: `-dev`
-    is 0, a `ci`/`edge` label followed by a number decides, else a SemVer-era patch above 0."""
+    is 0, a `ci`/`edge` label followed by a number decides, else a SemVer-era patch above 0.
+
+    🚨 A SET NAME is read by `set_run` FIRST (MeshWeaver#7390). The build hosts' rows are
+    CANONICALISED (`canonical_set_name`), which rewrites the retired `3.0.0-rc9.ci.7824` as
+    `3.0.0-rc9-ci.7824` — and that spelling splits into the identifiers `rc9-ci` and `7824`, so no
+    `ci` label is followed by a number and this returned None while `set_run` read 7824.
+    `floor_admits` then fell back to EQUAL cores and admitted a build below a package's run floor
+    (`floor_admits('3.0.0-ci.7900', '3.0.0-rc9-ci.7824')` was True). Every set spelling the resolver
+    writes or reads goes through `set_run`, so the two can no longer disagree on one."""
+    run = set_run(text)
+    if run is not None:
+        return run
     split = _split_version(text)
     if split is None:
         return None
@@ -3317,6 +3328,20 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
         parts = partition_packages([B("Line", "3.1.0", None, None, None)], built, built.latest())
         check("NEGATIVE: an uncapped package with release floor 3.1.0 builds on latest 3.1.10412",
               parts == {"3.1.10412": ["Line"]}, parts)
+    # ── #7390: a CANONICALISED retired-notation set orders by its run, like the raw spelling ──
+    check("a canonicalised retired set (3.0.0-rc9-ci.7824) is below a run floor 3.0.0-ci.7900",
+          not floor_admits("3.0.0-ci.7900", "3.0.0-rc9-ci.7824")
+          and not floor_admits("3.0.0-ci.7900", "3.0.0-rc9.ci.7824")
+          and floor_admits("3.0.0-ci.7800", "3.0.0-rc9-ci.7824")
+          and _build_ordinal("3.0.0-rc9-ci.7824") == set_run("3.0.0-rc9-ci.7824") == 7824,
+          (_build_ordinal("3.0.0-rc9-ci.7824"), set_run("3.0.0-rc9-ci.7824")))
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.0.0-rc9.ci.7824", True), ("3.0.0-ci.7950", True))}) as api:
+        rows = HttpBuildHosts(api.url).deployed()
+        fit = highest_in_range("3.0.0-ci.7900", 9999, rows)
+        check("the range over canonicalised /hosts rows never picks a retired build below the floor",
+              [r.version for r in rows] == ["3.0.0-rc9-ci.7824", "3.0.0-ci.7950"]
+              and fit is not None and fit.version == "3.0.0-ci.7950"
+              and highest_in_range("3.0.0-ci.7960", 9999, rows) is None, (rows, fit))
     deployed_rows = [Deployed("3.1.10398", 10398, True), Deployed("3.0.0-ci.9000", 9000, True)]
     fit = highest_in_range("3.1.0", 10400, deployed_rows)
     check("the range honours a release floor: 3.1.0 admits 3.1.10398, never 3.0.0-ci.9000",
