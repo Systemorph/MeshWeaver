@@ -1405,6 +1405,30 @@ a future "just check the claims" is a regression, not a shortcut.
 
 Pinned by `ApiTokenCapabilityFreshnessTest` (core) and `PaywallRealGateShapeTests` (plugins).
 
+## A token's principal is bound to its writer
+
+An API token record's `UserId` is the principal every token verdict authenticates as (core
+`ApiTokenVerdict`, and the Plugins `ApiTokenService.Validate`). So no writer except System may choose
+it (`ApiTokenPrincipalBinding`):
+
+- a node that newly carries a token (a create, or a write that turns a node into one) names only the
+  WRITER, with no service identity. A service token is the one exception: it names a service object
+  id only from inside that service's own token namespace, with the matching identity path, which only
+  the platform admin surface can write;
+- a node that already carries a token keeps its principal and its service identity path. A revoke or
+  a relabel lands; a rename never does.
+
+The credential is recognised by its CONTENT, read exactly as the verdict reads it
+(`ApiTokenVerdict.ReadToken`), never by the node type, so retyping a node cannot hide a credential from
+the rule. It is enforced at both write seams: the create chain (`RlsNodeValidator`, ahead of the
+own-scope shortcut that otherwise lets a person write anything into their own partition) and the
+owner's commit point (`ApiTokenPrincipalCommitGuard`, an `IEntityCommitGuard`), which every routed
+update, merge patch and data change meets. Binding at the write side covers both verdicts at once.
+
+Pinned by `ApiTokenPrincipalBindingTest` (the owner of a token cannot rename its principal to System
+or to another person; a person creates a token only for themselves, whatever the node is typed as;
+the owner's relabel and their own token are the controls).
+
 ---
 
 # Build principals — a repository the mesh trusts, with no secret to keep

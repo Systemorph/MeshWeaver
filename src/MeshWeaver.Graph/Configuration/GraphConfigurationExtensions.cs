@@ -448,6 +448,10 @@ public static class GraphConfigurationExtensions
                 // an owner meets, at the commit point (IEntityCommitGuard). Stateless. See PolicyCommitGuard.
                 services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.PolicyCommitGuard>();
 
+                // An API token's principal is bound to the caller that writes it, at the commit point
+                // every routed write meets. See ApiTokenPrincipalBinding.
+                services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.ApiTokenPrincipalCommitGuard>();
+
                 // The create BOUNDARY's half of CreatableTypes (#4077). Until this, a parent
                 // NodeType's whitelist was honoured by the Create FORM alone and the write boundary
                 // asked nothing about it — so a direct CreateNodeRequest, an agent tool call, or a
