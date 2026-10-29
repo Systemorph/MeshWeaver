@@ -205,6 +205,68 @@ a permission they may well hold". Introducing a third type is an API change with
 attached — a design, not a branch — and it should be taken together with the same question for the
 delete, move and upsert verbs, whose terminal arms have not been swept for this condition at all.
 
+## Who re-issues an `Unavailable` create (#7380)
+
+`Unavailable` tells the caller that re-issuing the same request is meaningful. Until #7380 nothing
+said who does it. A NodeType release re-cut has its own re-issue
+([Release Failure Classes](../ReleaseFailureClasses), #7072), but every other writer's create was
+simply lost unless that writer retried. During the 2026-10-22 database restart, the creates that were
+eventually made again were made by an unrelated trigger 76 minutes later. Notifications and other
+bookkeeping writes were never re-issued at all.
+
+The platform now re-issues them, once:
+
+1. **The refused create is recorded as an intent.** The create handler's store-unreachable arm
+   answers `Unavailable` as before. It also records a `PendingWrite` in the mesh-scoped
+   `PendingWriteLedger`. The intent holds the node exactly as requested (same id), the resolved
+   requester, and the AccessContext the request was delivered with.
+   - The intent cannot go to the store that just refused it. With
+     `Mesh:PendingWrites:JournalDirectory` set to a volume that is not the database, each intent is
+     also a journal file. The file is written before the intent counts as recorded and removed once
+     the intent is settled. A process that starts reads the journal, so an intent survives a restart.
+   - Without that key, an intent lives for the process. It still outlives the caller and the
+     activation that was refused, which a retry inside the caller would not.
+   - Each path holds one intent. A second refusal of the same path replaces the first.
+2. **The recovery watcher re-issues it when the store answers again.** `PendingWriteRecovery`
+   is armed on the mesh hub. It acts on `StoreReachability.StoreAnswersAgain`: a declared
+   change-feed gap (the LISTEN connection resumed) or a commit the store announced. Each piece of
+   evidence takes every pending intent out of the ledger and re-issues it. The re-issue is a
+   `CreateNodeRequest` carrying the original `CreatedBy`, posted with the original AccessContext,
+   so the owner authorises it exactly as it would have authorised the first attempt.
+   - There is no timer, no poll and no widened bound. While the store stays away, no evidence
+     arrives and nothing is re-issued.
+3. **Once, then a verdict.** Each re-issue settles as one of three verdicts, and every verdict is
+   logged and published on `PendingWriteLedger.Outcomes`:
+
+   | Verdict | Meaning |
+   |---|---|
+   | `Landed` | the create went through |
+   | `AlreadyPresent` | another writer, often the caller itself, created the node meanwhile |
+   | `Dropped` | the re-issue was refused again, for any reason; reported at Warning, naming the path and the writer |
+
+   The re-issue is marked `CreateNodeRequest.ReissuedAfterUnavailable`, so a second
+   `Unavailable` is never recorded again. A pending write is re-issued once and never retried for
+   ever.
+
+**What is never re-issued.** A create that was judged is never re-issued: refused for permission,
+for validation, or because the path exists. Only the store-unreachable arm records an intent.
+
+**Not covered yet:** the bulk create (`CreateNodesRequest`), whose unreachable arm may have landed
+part of the batch, and the update, delete and move verbs. Each needs its own decision about what
+"the same request" means.
+
+Evidence: `AnUnavailableCreateIsReissuedOnceTest` (MeshWeaver.Hosting.Test), using the
+fault-injection store's `RefuseWritesAsUnreachable` and a declared feed gap.
+
+| Test | What it shows |
+|---|---|
+| `ARefusedCreate_LandsOnce_WhenTheStoreAnswersAgain` | The create lands as the original writer. Further evidence writes nothing more. |
+| `ACreateRefusedAgain_IsReportedAndDropped_NeverLooped` | The refused re-issue is dropped. It is not re-issued after the store is back. |
+| `APendingWrite_SurvivesInTheJournal_UntilItIsSettled` | A new ledger reads a journalled intent back. Settling it removes the file. |
+| `ARefusedForPermissionCreateIsNeverReissuedTest` | Negative control: a permission refusal is never recorded and never re-issued. |
+
+With the recording removed from the handler, the first test fails: no intent is ever recorded.
+
 ## The trail
 
 | | |
