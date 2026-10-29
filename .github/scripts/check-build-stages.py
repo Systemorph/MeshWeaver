@@ -87,6 +87,8 @@ CORE_RESTORE_PARITY = [
     ("dotnet restore MeshWeaver.slnx", "the whole solution, the closure the `build` stage restores"),
     ("-p:Configuration=Release", "Release, as the build's `-c Release` restores"),
     ("-p:CIRun=true", "the CI build switch the build passes, which conditions package references"),
+    ("dotnet restore .github/nuget-warm/ResolverFixturePackages.csproj",
+     "the packages NuGetAssemblyResolver fetches at test time, which no project's closure holds"),
 ]
 CORE_RUN_PARITY = [
     ("--require-sha \"${MW_BUILD_SHA", "the tests that run are the run's own commit's — never another set's image"),
@@ -638,7 +640,8 @@ def _core_doc(total: int = 2) -> dict:
                 "timeoutMinutes": 20} for i in range(total)]
     stages.append({"name": "doc-gate", "kind": "test", "command": f"python3 deploy/core-tests/core-tests.py doc-gate {roots} --repo .", "timeoutMinutes": 25})
     return {"owes": ["one thing"], "stages": stages,
-            "restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true", "timeoutMinutes": 20}}
+            "restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true"
+                                   " && dotnet restore .github/nuget-warm/ResolverFixturePackages.csproj", "timeoutMinutes": 20}}
 
 
 NODE_CI = """jobs:

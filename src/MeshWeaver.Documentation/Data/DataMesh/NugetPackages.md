@@ -140,6 +140,8 @@ The restore is a pure library operation. It does not shell out to `dotnet restor
 | Outbound HTTPS | `api.nuget.org` — default ACA egress allows this |
 | Writable cache directory | The Aspire AppHost sets `NUGET_PACKAGES=/tmp/nuget-cache` for the portal resource |
 
+A package already installed — in the global-packages folder or in a NuGet fallback folder (`NUGET_FALLBACK_PACKAGES`) — is used where it lies and never downloaded again; see [Offline-first resolution](/Doc/Architecture/NuGetRuntimeAssets#offline-first-resolution).
+
 ## Related
 
 - [Interactive Markdown](/Doc/DataMesh/InteractiveMarkdown) — how code cells and `--render` areas work
