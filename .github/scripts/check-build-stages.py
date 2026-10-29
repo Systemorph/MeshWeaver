@@ -39,7 +39,9 @@ command — so a stage cannot quietly shed a check it has:
              host's reference set); `node-repo-gate.yml` ⇒ `gate` (the tester and dotnet through the
              host's own paths — never a hard-coded `/host/`, the gate's allow file, the warning baseline
              when ci.yml passes one, the gate seeded with its own bake, the Tests-area ratchet over the
-             log, the log handed back as an H9 artifact).
+             log, the log handed back as an H9 artifact); the gate is never narrowed to a `--shard`
+             slice it does not complete and fold, and every check reaches the stage's exit code
+             (`set -e` + pipefail, or each exit code captured and exited with) — #7456.
 
 ABSENCE. A repository with no declaration is NOT MIGRATED: build-executor.py answers `actions` for it
 and every heavy leg runs on GitHub as before, so nothing reads green that did not run. Without
@@ -401,6 +403,8 @@ def node_repo_problems(doc: dict, workflow_text: Optional[str]) -> list[str]:
             out += _markers(want, cmd, needles)
             for opt, value, why in options:
                 out += _option_problems(want, cmd, opt, value, why)
+            out += gate_shard_problems(want, cmd)
+            out += fail_fast_problems(want, cmd)
         if HARD_CODED_HOST.search(cmd):
             out.append(f"stage `{want}` hard-codes a `/host/…` path — the runner binds only $MW_BUILD_GATE_HOST / $MeshWeaverRefs into the sandbox")
     return out
@@ -431,6 +435,103 @@ def compile_refs_problems(name: str, cmd: str) -> list[str]:
             continue
         out.append(f"stage `{name}` passes `--refs ${var}`, which is not `${COMPILE_REFS_VAR}` (nor assigned from it) — "
                    "naming the prepared set elsewhere in the command does not make compile-check read it")
+    return out
+
+
+SHARD_ARG = re.compile(r"--shard(?![A-Za-z0-9_-])(?:[ \t]+|=)[\"']?([^\s\"';|&)]*)")
+MERGE_SHARDS = re.compile(r"gate-shard-merge\.py\b[^;|&]*--shards(?:[ \t]+|=)[\"']?(\d+)\b")
+
+
+def gate_shard_problems(name: str, cmd: str) -> list[str]:
+    """A gate stage that narrows the tester with `--shard k/n` gates ONE slice. The host route skips the Actions
+    lane's gate-shard-merge.py, so nothing later notices the missing slices — one slice would stand in for the
+    whole gate (#7456). Narrowing is green only when the stage runs EVERY slice 1..n with literal arguments AND
+    folds them with gate-shard-merge.py `--shards n`; a slice this guard cannot read (a variable, a loop) is red."""
+    slices = SHARD_ARG.findall(cmd)
+    if not slices:
+        return []
+    parsed = [re.fullmatch(r"(\d+)/(\d+)", s) for s in slices]
+    if not all(parsed):
+        return [f"stage `{name}` narrows the gate with `--shard` {sorted(set(slices))}, which this guard cannot read as "
+                "literal `k/n` slices — a host stage must run the WHOLE gate (or every literal slice and fold them), "
+                "since the host route runs no gate-shard-merge.py of its own"]
+    totals = {int(m.group(2)) for m in parsed}
+    if len(totals) != 1:
+        return [f"stage `{name}` runs slices of different shard counts {sorted(totals)} — one gate has one count"]
+    total = totals.pop()
+    ran = {int(m.group(1)) for m in parsed}
+    missing = sorted(set(range(1, total + 1)) - ran)
+    out = []
+    if missing or not ran <= set(range(1, total + 1)):
+        out.append(f"stage `{name}` runs slice(s) {sorted(ran)} of {total} with `--shard` — slice(s) {missing or 'out of range'} "
+                   "never run, so a host green would gate part of the tree the Actions lane gates whole")
+    merged = MERGE_SHARDS.findall(cmd)
+    if not merged or any(int(n) != total for n in merged):
+        out.append(f"stage `{name}` narrows the gate with `--shard k/{total}` but does not fold the slices with "
+                   f"gate-shard-merge.py `--shards {total}` — nothing would notice a slice that never produced a verdict")
+    return out
+
+
+_SET_E = re.compile(r"(^|[;\n]\s*)set\s+(-[A-Za-z]*e[A-Za-z]*\b[^;\n]*)")
+
+
+def _statements(cmd: str) -> list[str]:
+    return [s.strip() for s in re.split(r";|\n", cmd) if s.strip()]
+
+
+def _captured_after(stmts: list[str], i: int, source: str) -> Optional[str]:
+    """The variable statement i+1 assigns from `source` (`$?` or `${PIPESTATUS[0]}`), if any."""
+    if i + 1 >= len(stmts):
+        return None
+    m = re.fullmatch(rf"([A-Za-z_][A-Za-z0-9_]*)=\"?{re.escape(source)}\"?", stmts[i + 1])
+    return m.group(1) if m else None
+
+
+def _exits_with(cmd: str, var: str) -> bool:
+    return re.search(rf"exit\s+\"?\$\{{?{re.escape(var)}\b", cmd) is not None
+
+
+def fail_fast_problems(name: str, cmd: str) -> list[str]:
+    """Every check the gate stage runs must reach the stage's exit code. `bash -c` adds no failure propagation, so
+    compile → gate → ratchet written as three plain statements exits with the RATCHET's code: a compile that exits 1
+    followed by a green gate and ratchet is a green stage (#7456). Two shapes are fail-fast:
+
+      * `set -e` (with `-o pipefail` when a check is piped), or
+      * the satellites' validated hand capture — the compile `|| exit`, the gate's status captured right after it
+        (`${PIPESTATUS[0]}` when piped into `tee`, else `$?`) and the ratchet's `$?` captured right after it, each
+        captured variable reaching an `exit "$var"`; a check written LAST needs no capture (its code is the stage's).
+    """
+    pipes = re.search(r"(?<![|])\|(?![|])", cmd) is not None
+    m = _SET_E.search(cmd)
+    if m and (not pipes or "pipefail" in m.group(2)):
+        return []
+    stmts = _statements(cmd)
+    out: list[str] = []
+
+    def check(marker: str, what: str) -> None:
+        idx = [i for i, s in enumerate(stmts) if re.search(marker, s)]
+        if not idx:
+            return  # a missing check is the parity markers' finding, not this one's
+        i = idx[-1]
+        s = stmts[i]
+        if re.search(r"\|\|\s*exit\b", s):
+            return
+        piped = re.search(r"(?<![|])\|(?![|])", s) is not None
+        if piped:
+            var = _captured_after(stmts, i, "${PIPESTATUS[0]}")
+        else:
+            var = _captured_after(stmts, i, "$?")
+            if var is None and i == len(stmts) - 1:
+                return
+        if var is None or not _exits_with(cmd, var):
+            how = "`${PIPESTATUS[0]}` (it is piped)" if piped else "`$?`"
+            out.append(f"stage `{name}` does not propagate the {what}'s exit code — it is neither `set -e`"
+                       f"{' with `-o pipefail`' if pipes else ''}, nor `|| exit`, nor captured from {how} into a variable "
+                       "the stage exits with; a failing earlier check followed by green later ones would exit 0")
+
+    check(r"[\"'}]\s+compile\s", "compile step")  # the tester invocation, never an `echo "… the compile …"`
+    check(r"--seed(?![A-Za-z0-9_-])", "gate run")
+    check(r"check-test-suites\.py --gate-log", "Tests-area ratchet")
     return out
 
 
@@ -490,11 +591,55 @@ NODE_CI = """jobs:
 """
 
 
+# The gate as this fixture once wrote it: three plain statements, so `bash -c` exits with the RATCHET's code and a
+# failed compile reads green (#7456). Kept as the executing negative control.
+_UNSAFE_GATE = ("t=\"${MW_BUILD_GATE_HOST:?}/mw-plugin-test.dll\"; d=\"${MW_BUILD_PORTAL_DOTNET:?}\"; a=\"${MeshWeaverRefs:?}\"; \"$d\" \"$t\" compile . "
+                "--allow plugin-gate.allow --output b; \"$d\" \"$t\" . --allow plugin-gate.allow --seed b | tee \"${MW_BUILD_ARTIFACTS:?}/gate-log/gate.log\"; "
+                "python3 scripts/check-test-suites.py --gate-log x")
+
+# Every satellite's gate stage today (measured on each node repo's .github/build-stages.json): `set -uo pipefail`
+# with each exit code captured by hand. It must stay green.
+_SATELLITE_GATE = ('set -uo pipefail; tester="${MW_BUILD_GATE_HOST:?no tester}/mw-plugin-test.dll"; dn="${MW_BUILD_PORTAL_DOTNET:?no dotnet}"; '
+                   'app="${MeshWeaverRefs:?no app}"; shared="$(dirname "$dn")/shared"; [ -f "$tester" ] || { echo "::error::no tester at $tester"; exit 2; }; '
+                   'bake="${MW_BUILD_OUTPUTS:?}/gate-bake"; mkdir -p "$bake"; "$dn" "$tester" compile . --app "$app" --shared-frameworks "$shared" '
+                   '--allow plugin-gate.allow --output "$bake" || exit $?; [ -s "$bake/framework-mvid.txt" ] || { echo "::error::the compile wrote no bake identity"; exit 1; }; '
+                   'logdir="${MW_BUILD_ARTIFACTS:?}/gate-log"; mkdir -p "$logdir"; log="$logdir/gate.log"; '
+                   '"$dn" "$tester" . --app "$app" --allow plugin-gate.allow --seed "$bake" 2>&1 | tee "$log"; gate=${PIPESTATUS[0]}; '
+                   'python3 scripts/check-test-suites.py --gate-log "$log"; ratchet=$?; if [ "$gate" -ne 0 ]; then exit "$gate"; fi; exit "$ratchet"')
+
+
+def _run_stage(command: str, compile_exit: int) -> int:
+    """EXECUTE a gate stage against stub tools: the tester's `compile` exits `compile_exit`, every other check is green."""
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        stubs = os.path.join(root, "bin")
+        host = os.path.join(root, "host")
+        for d in (stubs, host, os.path.join(root, "shared"), os.path.join(root, "artifacts", "gate-log")):
+            os.makedirs(d)
+        open(os.path.join(host, "mw-plugin-test.dll"), "w").close()
+        dn = os.path.join(root, "dotnet")
+        with open(dn, "w") as f:
+            # A green compile writes its bake identity under --output, as the tester does.
+            f.write(f'#!/bin/sh\nif [ "$2" = compile ]; then\n  [ {compile_exit} -ne 0 ] && exit {compile_exit}\n'
+                    '  prev=; for a in "$@"; do if [ "$prev" = --output ]; then mkdir -p "$a"; echo m > "$a/framework-mvid.txt"; fi; prev=$a; done\n'
+                    'fi\nexit 0\n')
+        py = os.path.join(stubs, "python3")
+        with open(py, "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        for path in (dn, py):
+            os.chmod(path, 0o755)
+        env = dict(os.environ, PATH=stubs + os.pathsep + os.environ.get("PATH", ""), MW_BUILD_GATE_HOST=host,
+                   MW_BUILD_PORTAL_DOTNET=dn, MeshWeaverRefs=root, MW_BUILD_OUTPUTS=os.path.join(root, "out"),
+                   MW_BUILD_ARTIFACTS=os.path.join(root, "artifacts"))
+        # The runner's shape: `bash -c <command>`, which adds no failure propagation of its own.
+        return subprocess.run(["bash", "-c", command], cwd=root, env=env, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode
+
+
 def _node_doc() -> dict:
     cc = "python3 \"${MW_PLATFORM_SCRIPTS:?}/compile-check.py\" --refs \"${MW_BUILD_COMPILE_REFS:?}\" # MW_ALLOW_FILE=scripts/compile-check.allow"
-    gate = ("t=\"${MW_BUILD_GATE_HOST:?}\"; d=\"${MW_BUILD_PORTAL_DOTNET:?}\"; a=\"${MeshWeaverRefs:?}\"; \"$d\" \"$t\" compile . "
-            "--allow plugin-gate.allow --output b; \"$d\" \"$t\" . --allow plugin-gate.allow --seed b | tee \"${MW_BUILD_ARTIFACTS:?}/gate-log/gate.log\"; "
-            "python3 scripts/check-test-suites.py --gate-log x")
+    gate = "set -euo pipefail; " + _UNSAFE_GATE
     return {"owes": ["one thing"], "stages": [{"name": "compile-check", "kind": "build", "command": cc, "timeoutMinutes": 40},
                                               {"name": "gate", "kind": "test", "command": gate, "timeoutMinutes": 45}]}
 
@@ -696,6 +841,48 @@ def _self_test() -> int:
         red(suffixed, "node-repo", f"passes `{opt}`", f"a debt-free claim whose gate passes `{opt} {value}.expanded` (a SUFFIXED path)", wf)
         second = mutate(honest, lambda d, o=opt: d["stages"][1].update(command=d["stages"][1]["command"] + f" {o} other.allow"))
         red(second, "node-repo", f"passes `{opt}`", f"a debt-free claim whose gate adds a second `{opt} other.allow` (argparse keeps the last)", wf)
+    print("fail-fast (#7456) — every check reaches the stage's exit code:")
+    claim = lambda d: d.update(owes=[], ciEquivalent=True)  # noqa: E731
+    sat = mutate(node, lambda d: (claim(d), d["stages"][1].update(command=_SATELLITE_GATE)))
+    expect(problems(json.dumps(sat), "node-repo", NODE_CI)[0] == [],
+           "the satellites' `set -uo pipefail` + hand-captured exit codes is green")
+    unsafe = mutate(node, lambda d: (claim(d), d["stages"][1].update(command=_UNSAFE_GATE)))
+    red(unsafe, "node-repo", "does not propagate the compile step's exit code", "compile; gate | tee; ratchet with no set -e")
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command="set -e; " + _UNSAFE_GATE))), "node-repo",
+        "does not propagate the gate run's exit code", "`set -e` without pipefail over a gate piped into tee")
+    for broken, needle, what in (
+            ('--output "$bake" || exit $?;', '--output "$bake";', "compile step", ),
+            ("gate=${PIPESTATUS[0]}", "gate=$?", "gate run"),
+            ('if [ "$gate" -ne 0 ]; then exit "$gate"; fi; ', "", "gate run"),
+            ("ratchet=$?; ", "", "Tests-area ratchet")):
+        cmd = _SATELLITE_GATE.replace(broken, needle)
+        expect(cmd != _SATELLITE_GATE, f"self-test fixture: the satellite gate without `{broken}` was built")
+        red(mutate(node, lambda d, c=cmd: (claim(d), d["stages"][1].update(command=c))), "node-repo",
+            f"does not propagate the {what}'s exit code", f"a satellite gate that drops `{broken}`")
+    # EXECUTING controls: the runner's `bash -c`, the tester's compile exiting 1, the gate and ratchet green.
+    expect(_run_stage(_UNSAFE_GATE, compile_exit=1) == 0,
+           "EXECUTED: the unsafe shape exits 0 over a failed compile (the hazard is real, not hypothetical)")
+    expect(_run_stage(node["stages"][1]["command"], compile_exit=1) != 0, "EXECUTED: the fixture's fail-fast gate exits non-zero over a failed compile")
+    expect(_run_stage(_SATELLITE_GATE, compile_exit=1) != 0, "EXECUTED: the satellites' hand-captured gate exits non-zero over a failed compile")
+    expect(_run_stage(node["stages"][1]["command"], compile_exit=0) == 0, "EXECUTED: the fail-fast gate is green when every check is green")
+    expect(_run_stage(_SATELLITE_GATE, compile_exit=0) == 0, "EXECUTED: the satellites' gate is green when every check is green")
+    print("narrowed gate (#7456) — one slice never stands in for the whole gate:")
+    gate_cmd = node["stages"][1]["command"]
+    one = gate_cmd.replace("--seed b", "--shard 1/4 --seed b")
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=one))), "node-repo", "never run",
+        "a single `--shard 1/4` slice standing in for the gate")
+    every = gate_cmd.replace("\"$d\" \"$t\" . --allow plugin-gate.allow --seed b",
+                             "; ".join(f"\"$d\" \"$t\" . --allow plugin-gate.allow --shard {k}/4 --seed b" for k in range(1, 5)))
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=every))), "node-repo", "does not fold the slices",
+        "every slice run but never folded with gate-shard-merge.py")
+    folded = every + "; python3 gate-shard-merge.py --logs l --shards 4 --gate-result success --out o"
+    expect(not any("--shard" in p for p in problems(json.dumps(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=folded)))),
+                                                    "node-repo", NODE_CI)[0]),
+           "every literal slice 1..4 folded with gate-shard-merge.py --shards 4 passes the shard rule")
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=folded.replace("--shards 4", "--shards 3")))), "node-repo",
+        "does not fold the slices", "slices folded under the wrong --shards count")
+    red(mutate(node, lambda d: (claim(d), d["stages"][1].update(command=gate_cmd.replace("--seed b", "--shard \"$i/4\" --seed b")))),
+        "node-repo", "cannot read as literal", "a slice taken from a variable (a loop this guard cannot read)")
     red(node, "node-repo", "calls none of", "a ci.yml that calls no shared heavy lane", "jobs:\n  x:\n    runs-on: y\n")
     red(node, "node-repo", "is absent", "no ci.yml to derive the owed stages from", None)
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every breach is red, every honest declaration is green'}")
