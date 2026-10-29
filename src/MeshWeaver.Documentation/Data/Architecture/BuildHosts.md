@@ -83,6 +83,18 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
 - **an unreadable endpoint is RED, naming why**: 403 at once (the token's repository or run does not
   match the build), 401 after one token refresh, 404 after a five-minute grace (the run may not be registered
   yet), transport errors and 5xx after six consecutive failures.
+- 🚨 **a redirect is a refusal, never followed.** Every call of the shared `Http` transport carries a
+  bearer (the OIDC token on a log read, the runtime's request token on the OIDC mint), and urllib's
+  default handler re-sends the `Authorization` header to whatever a 3xx names — another host, or an
+  https→http downgrade; the `https://` check on `api-url` guards the first hop only. So the transport
+  never follows one: it answers the 3xx as its status before any byte reaches the target, and the
+  follower turns it into a RED at once, without a retry (MeshWeaver.Plugins#4514; the same rule as
+  MeshWeaver.Plugins `scripts/build-probe.py`). The self-test proves it against the real transport
+  over loopback — a cross-origin 302 whose target records every `Authorization` it receives, with a
+  direct call to that target as the control — plus an https→http 301 against the handler and a 302
+  against the follower. Every consumer of the transport inherits it (`build-artifacts-fetch.py`,
+  `host-shard-results.py`, MeshWeaver.Plugins `scripts/host-gate-log.py`), and each already reads a
+  non-200 status as RED.
 - **a `skipped` gap is a warning with the count** — the host keeps the newest 2,000 lines.
 - **the log is drained before the verdict**, so the last error lines print first.
 - **the RUN ends the follow, not the stage.** The log page carries `runState` and `runTerminal`;

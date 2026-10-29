@@ -54,8 +54,10 @@ namespace MeshWeaver.Graph.Security;
 /// An update of a node that is ALREADY a policy is never judged, so a legacy policy stays editable. The
 /// type name matches case-insensitively, the way NodeType resolution matches it.</para>
 ///
-/// <para><b>An unread layout is not the standard one.</b> The partition record is read as System, with
-/// an anchored query. A read that faults or never answers REFUSES the write as
+/// <para><b>An unread layout is not the standard one.</b> The partition record is read as System: its
+/// existence from an anchored query, its content from the record's own node stream (never the query's
+/// snapshot, which can carry a layout from before a mapping change). A read that faults or never
+/// answers REFUSES the write as
 /// <see cref="NodeRejectionReason.Unavailable"/>. Only a completed read with no record falls back to
 /// the standard layout. Not an <see cref="IOwnerEnforcedNodeValidator"/>: this is placement
 /// integrity, and the caller must see the refusal before the write is issued.</para>
@@ -98,55 +100,111 @@ public sealed class PolicyPlacementValidator(IMessageHub hub) : INodeValidator, 
     }
 
     /// <summary>
-    /// The partition's record, read as System with an ANCHORED query (no listing limit to fall
-    /// short of). <c>Established</c> is false when the read did not complete with an answer; a
-    /// completed read with no record is established, with a null definition.
+    /// The partition's record, read as System in two halves (CQRS, #7359):
+    /// <list type="number">
+    /// <item><b>Existence</b> from an ANCHORED query (no listing limit to fall short of), classified
+    /// by <see cref="ClassifyRecord"/>. A stale negative here is the closed direction only in the
+    /// sense that the record is created once with the partition; an incomplete answer establishes
+    /// nothing.</item>
+    /// <item><b>Content</b> from <c>GetMeshNodeStream(Admin/Partition/{partition})</c> — the owner's
+    /// live state, never the query's snapshot. A query is eventually consistent: a snapshot taken
+    /// before a <see cref="PartitionDefinition.TableMappings"/> change still carries the OLD
+    /// layout, and judging against it accepts a policy under a newly mapped satellite segment —
+    /// stored where the fold never reads it, the very defect this validator exists to refuse.</item>
+    /// </list>
+    /// <c>Established</c> is false when either half did not complete with an answer; a completed
+    /// existence read with no record is established, with a null definition.
     /// </summary>
     private IObservable<(bool Established, PartitionDefinition? Definition)> ReadLayout(string partition)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
-        return access.RunAsSystem(() => meshService.Query<MeshNode>(new MeshQueryRequest
-                {
-                    Query = $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType} id:{partition}",
-                    Skip = 0,
-                    Limit = 10,
-                }))
-            .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-            .Take(1)
-            .Select(change => ClassifyLayout(change, partition, options))
-            .DefaultIfEmpty((Established: false, Definition: null));
+        return ComposeLayoutRead(
+            access.RunAsSystem(() => meshService.Query<MeshNode>(new MeshQueryRequest
+            {
+                Query = $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType} id:{partition}",
+                Skip = 0,
+                Limit = 10,
+            })),
+            recordPath => access.RunAsSystem(() => hub.GetMeshNodeStream(recordPath).Select(n => (MeshNode?)n)),
+            partition,
+            options);
     }
 
     /// <summary>
-    /// What one answer of the layout read establishes. Pure.
+    /// The layout read's composition, with its two sources passed in: existence from
+    /// <paramref name="listing"/>'s first Initial/Reset answer (<see cref="ClassifyRecord"/>), content
+    /// ONLY from <paramref name="readRecord"/> (<see cref="ClassifyRecordContent"/>). The listing's own
+    /// items are never read for content — a snapshot can predate a mapping change (#7359).
+    /// </summary>
+    /// <param name="listing">The anchored listing of the partition's record.</param>
+    /// <param name="readRecord">The record's live read by path (its node stream, as System).</param>
+    /// <param name="partition">The partition whose layout is read.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <returns>Whether the layout is established, and the record's current definition.</returns>
+    public static IObservable<(bool Established, PartitionDefinition? Definition)> ComposeLayoutRead(
+        IObservable<QueryResultChange<MeshNode>> listing,
+        Func<string, IObservable<MeshNode?>> readRecord,
+        string partition,
+        JsonSerializerOptions options)
+        => listing
+            .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Take(1)
+            .Select(change => ClassifyRecord(change, partition))
+            .DefaultIfEmpty((Established: false, RecordPath: null))
+            .SelectMany(existence => !existence.Established
+                ? Observable.Return<(bool Established, PartitionDefinition? Definition)>((false, null))
+                : existence.RecordPath is null
+                    ? Observable.Return<(bool Established, PartitionDefinition? Definition)>((true, null))
+                    : readRecord(existence.RecordPath)
+                        .Take(1)
+                        .Select(record => ClassifyRecordContent(record, partition, options))
+                        .DefaultIfEmpty((Established: false, Definition: null)));
+
+    /// <summary>
+    /// The EXISTENCE half of the layout read: what one answer of the anchored listing establishes
+    /// about whether the partition's record exists, and where. Pure. Its content is deliberately not
+    /// read — that comes from the record's own node stream (<see cref="ClassifyRecordContent"/>).
     /// <list type="bullet">
     /// <item>An INCOMPLETE answer (<see cref="QueryResultChange{T}.SnapshotIncomplete"/>, or a provider in
     /// <see cref="QueryResultChange{T}.SilentProviders"/>) establishes nothing: its empty list is not
     /// "no record".</item>
-    /// <item>A returned record whose content does not read as a <see cref="PartitionDefinition"/> for this
-    /// partition establishes nothing either: it is not confirmed absence.</item>
-    /// <item>Only a complete answer without a record is the standard layout.</item>
+    /// <item>A complete answer without a record is the standard layout (established, no path).</item>
+    /// <item>A complete answer whose records carry none with this partition's id establishes nothing.</item>
     /// </list>
     /// </summary>
-    /// <param name="change">The read's Initial/Reset answer.</param>
-    /// <param name="partition">The partition whose record was read.</param>
-    /// <param name="options">The hub's serializer options.</param>
-    /// <returns>Whether the layout is established, and the record's definition when there is one.</returns>
-    public static (bool Established, PartitionDefinition? Definition) ClassifyLayout(
-        QueryResultChange<MeshNode> change, string partition, System.Text.Json.JsonSerializerOptions options)
+    /// <param name="change">The listing's Initial/Reset answer.</param>
+    /// <param name="partition">The partition whose record was listed.</param>
+    /// <returns>Whether existence is established, and the record's path when it exists.</returns>
+    public static (bool Established, string? RecordPath) ClassifyRecord(
+        QueryResultChange<MeshNode> change, string partition)
     {
         if (change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 })
             return (false, null);
         var records = (change.Items ?? []).Where(n => n is not null).ToList();
         if (records.Count == 0)
             return (true, null);
-        var definition = records
-            .Select(n => n.ContentAs<PartitionDefinition>(options))
-            .FirstOrDefault(d => d is not null
-                && string.Equals(d.Namespace, partition, StringComparison.OrdinalIgnoreCase));
-        return definition is null ? (false, null) : (true, definition);
+        var record = records.FirstOrDefault(n => string.Equals(n.Id, partition, StringComparison.OrdinalIgnoreCase));
+        return record is null ? (false, null) : (true, record.Path);
+    }
+
+    /// <summary>
+    /// The CONTENT half of the layout read: the record as its node stream serves it. Pure. A record
+    /// that is absent or whose content does not read as a <see cref="PartitionDefinition"/> for this
+    /// partition establishes nothing — it is not confirmed absence.
+    /// </summary>
+    /// <param name="record">The record's current node, or null.</param>
+    /// <param name="partition">The partition whose record was read.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <returns>Whether the layout is established, and the record's definition.</returns>
+    public static (bool Established, PartitionDefinition? Definition) ClassifyRecordContent(
+        MeshNode? record, string partition, JsonSerializerOptions options)
+    {
+        var definition = record?.ContentAs<PartitionDefinition>(options);
+        return definition is not null && string.Equals(definition.Namespace, partition, StringComparison.OrdinalIgnoreCase)
+            ? (true, definition)
+            : (false, null);
     }
 
     /// <summary>
