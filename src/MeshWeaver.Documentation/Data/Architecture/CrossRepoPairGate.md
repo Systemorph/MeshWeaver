@@ -84,6 +84,28 @@ It is also rare enough to be free. Measured on 2026-09-02:
 So an ordinary pull request never meets this gate at all, and the one window that does is exactly
 the wave that produced two of the issue's five incidents.
 
+#### A project PATH is surface too (#7415)
+
+A repository whose CI **checks core out** and `ProjectReference`s a project by its path breaks the
+moment that `.csproj` is deleted or renamed — `MSB9008` plus `CS0246` — although no public type left
+`src/`. #7297 deleted `memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj`.
+The surface report scans `src/` only, so for that file it reported nothing, and
+MeshWeaver.Deploy's REQUIRED `Chart guards (vs platform)` went red on every Deploy pull request
+(first on Deploy#36) until Deploy re-pointed its guards at a Plugins checkout.
+
+So the gate reads a **second removal list**: the `.csproj` files the diff deletes or renames,
+merge base → HEAD, rename-aware (`git diff -z --name-status -M --diff-filter=DR -- '*.csproj'`).
+A rename counts, because the OLD path is what a consumer names. It has its own control arm — a base
+tree holding fewer than 20 project files is a listing that read the wrong tree or nothing, and
+fails — and either list being non-empty asks for the same declaration. The verdict then prints
+every repository a counterpart may be declared in, read from the register.
+
+The gate still does not and cannot know WHO references a path (policy
+`dependents-verify-on-their-side`): it makes the question unavoidable on the one diff that can
+cause the break, and makes the answer expressible — see `pair-only-repos` below. A declaring
+author who names only some of the consumers still lands the deleting half; the dependent's own
+checks remain the signal for the rest.
+
 ### 2 · The declaration
 
 When the set is non-empty, the pull-request **body** must carry one of:
@@ -116,7 +138,13 @@ repository's default branch**.
   gate's first incident is about — merged into `feat/collaboration-module`, not `main`. That reads
   as "landed" in every summary view and shipped nothing.
 - **A repository outside the fleet register** (`.github/shared-rules.json`) fails; the register is
-  the closed set, read at run time rather than hard-coded.
+  the closed set, read at run time rather than hard-coded. The set is the register's `repos` plus
+  its `pair-only-repos`: repositories that consume core by checkout but carry no shared rule blocks,
+  so the shared-rules gate must not read them. MeshWeaver.Deploy is the one entry (#7415) — before
+  it, `Pairs-with: Systemorph/MeshWeaver.Deploy#…` was refused as "not a sibling repository", so
+  #7297's author could not have declared the half that broke even had they known. A repository
+  added there is also added to the job's fleet-reader mint; the job's probe reads both lists and
+  fails on any repository the token cannot list pull requests in.
 - **An unresolvable counterpart** fails. Present is not valid: 401, 403, 404 and a transport failure
   each get their own sentence, because they take very different fixes.
 
@@ -1335,8 +1363,13 @@ Every script runs `--self-test` **first** in its job, and every job fails it:
   difference, a gained `protected abstract` (with `private protected`, `protected virtual`
   and a non-abstract field alongside it as negatives), a non-abstract class, and an
   `internal abstract` class that is out of scope entirely.
-- `check-cross-repo-pair.py --self-test` — 28 cases, including the passing ones. A gate that always
-  failed would score identically without them. Five prove the member and sweep rules above.
+- `check-cross-repo-pair.py --self-test` — every case, including the passing ones. A gate that always
+  failed would score identically without them. Five prove the member and sweep rules above. The
+  project-path cases (#7415) replay #7297's own deleted file (it PASSED before, as "no cross-repo
+  pair to gate") and a rename, prove a Deploy counterpart is declarable and held while open, fail
+  on a missing or starved project report, refuse an unexpected listing record and a malformed
+  `pair-only-repos`, and run the listing end to end over a real throwaway repository (a deletion
+  and a rename found, a modified project and a deleted non-project file ignored).
 - `check-package-pin-removal.py --self-test` — the eighth shape, replayed against #3344's own commit.
 - `check-interface-addition.py --self-test` — the tenth shape. It fires on #3446's three obliging
   members; stays silent on a diff that adds none and on a declared one; refuses a fenced, commented,
