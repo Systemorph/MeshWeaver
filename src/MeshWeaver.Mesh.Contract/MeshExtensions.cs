@@ -1030,7 +1030,7 @@ public static class MeshExtensions
         }
         ledger.Record(
                 new PendingWrite(refused.Node, refused.CreatedBy, writer, DateTimeOffset.UtcNow,
-                    $"{fault.GetType().Name}: {fault.Message}"),
+                    $"{fault.GetType().Name}: {fault.Message}", refused.AuthorshipFrom, refused.Argument),
                 hub.JsonSerializerOptions)
             .Subscribe(
                 _ => { },

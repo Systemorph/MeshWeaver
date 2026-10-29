@@ -28,12 +28,18 @@ namespace MeshWeaver.Mesh;
 /// re-issue is posted as, so it is authorised exactly as the original would have been.</param>
 /// <param name="RefusedAt">When the store refused it.</param>
 /// <param name="Reason">The refusal, as the handler logged it.</param>
+/// <param name="AuthorshipFrom">The refused request's <see cref="CreateNodeRequest.AuthorshipFrom"/>,
+/// replayed unchanged so a preserving copy keeps its source's authorship.</param>
+/// <param name="Argument">The refused request's <see cref="CreateNodeRequest.Argument"/>, replayed
+/// unchanged so the node's initialization message is delivered on the re-issue too.</param>
 public sealed record PendingWrite(
     MeshNode Node,
     string? CreatedBy,
     AccessContext? Writer,
     DateTimeOffset RefusedAt,
-    string Reason)
+    string Reason,
+    string? AuthorshipFrom = null,
+    object? Argument = null)
 {
     /// <summary>The path the write targets: its identity in the ledger.</summary>
     public string Path => Node.Path;
@@ -300,7 +306,7 @@ public static class PendingWriteRecovery
                 .Where(batch => !batch.IsEmpty)
                 // Bounded: a store that just came back is not handed every refused create at once.
                 .Select(batch => batch
-                    .Select(write => Reissue(meshHub, write).SelectMany(ledger.Settle))
+                    .Select(write => Reissue(meshHub, write).SelectMany(outcome => SettleIsolated(ledger, outcome, logger)))
                     .MergeBounded(ReissueConcurrency))
                 .Concat()
                 .Subscribe(
@@ -312,6 +318,42 @@ public static class PendingWriteRecovery
     }
 
     /// <summary>
+    /// Settles one re-issued intent without letting its cleanup end the watcher. A journal file that
+    /// cannot be removed is reported by name at Error and left in place (a restart then re-issues a
+    /// create that already landed, which answers <see cref="PendingWriteVerdict.AlreadyPresent"/>);
+    /// it never faults the recovery subscription, which would abandon the batch already taken and
+    /// every later recovery on this process (review of #7586).
+    /// </summary>
+    /// <param name="ledger">The ledger.</param>
+    /// <param name="outcome">What became of the re-issue.</param>
+    /// <param name="logger">Where a cleanup failure is reported.</param>
+    public static IObservable<PendingWriteOutcome> SettleIsolated(
+        PendingWriteLedger ledger, PendingWriteOutcome outcome, ILogger? logger) =>
+        ledger.Settle(outcome)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogError(ex,
+                    "[PendingWrite] {Verdict} {Path}, but its journal entry could not be removed — it is left in "
+                    + "place and the recovery goes on; a restart re-issues it once more", outcome.Verdict, outcome.Write.Path);
+                return Observable.Return(outcome);
+            });
+
+    /// <summary>
+    /// The request a pending create is re-issued as: the refused request as it was recorded —
+    /// node, requester, authorship source and initialization argument — marked
+    /// <see cref="CreateNodeRequest.ReissuedAfterUnavailable"/>, and nothing else changed.
+    /// </summary>
+    /// <param name="write">The pending create.</param>
+    public static CreateNodeRequest ReissueRequest(PendingWrite write) =>
+        new(write.Node)
+        {
+            CreatedBy = write.CreatedBy,
+            AuthorshipFrom = write.AuthorshipFrom,
+            Argument = write.Argument,
+            ReissuedAfterUnavailable = true,
+        };
+
+    /// <summary>
     /// Re-issues one pending create and classifies the answer. Never faults: a fault is a
     /// <see cref="PendingWriteVerdict.Dropped"/> outcome naming it.
     /// </summary>
@@ -319,11 +361,7 @@ public static class PendingWriteRecovery
     /// <param name="write">The pending create.</param>
     public static IObservable<PendingWriteOutcome> Reissue(IMessageHub meshHub, PendingWrite write)
     {
-        var request = new CreateNodeRequest(write.Node)
-        {
-            CreatedBy = write.CreatedBy,
-            ReissuedAfterUnavailable = true,
-        };
+        var request = ReissueRequest(write);
         var target = meshHub.NodeOperationTarget();
         return Observable.Defer(() => meshHub.NodeOperationIssuingHub()
                 .Observe(request, o =>

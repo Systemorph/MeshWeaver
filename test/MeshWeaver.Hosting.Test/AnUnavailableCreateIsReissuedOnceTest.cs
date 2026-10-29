@@ -196,6 +196,79 @@ public class AnUnavailableCreateIsReissuedOnceTest(ITestOutputHelper output) : M
                 Directory.Delete(directory, recursive: true);
         }
     }
+
+    /// <summary>
+    /// The re-issue replays the refused request AS RECORDED — its initialization argument and its
+    /// authorship source included (review of #7586). Rebuilt from the node and requester alone, it
+    /// would land without the initialization message and report Landed, or re-stamp a preserving
+    /// copy with the mover's authorship.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TheReissue_CarriesTheRefusedRequestsArgumentAndAuthorship()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), $"mw-pending-writes-{Guid.NewGuid():N}");
+        try
+        {
+            var write = new PendingWrite(NodeAt(NewPath()), Writer, new AccessContext { ObjectId = Writer },
+                DateTimeOffset.UtcNow, "DbException: injected", AuthorshipFrom: "source/original", Argument: "init-payload");
+            using (var before = new PendingWriteLedger(directory, IoPool.Unbounded))
+                await before.Record(write, Mesh.JsonSerializerOptions)
+                    .Should().Within(TestTimeouts.Convergence).Emit("the intent is journalled", ct);
+            using var after = new PendingWriteLedger(directory, IoPool.Unbounded);
+            await after.LoadJournal(Mesh.JsonSerializerOptions)
+                .Should().Within(TestTimeouts.Convergence).Emit("the journal is read", ct);
+
+            var request = PendingWriteRecovery.ReissueRequest(after.TakeAll().Single());
+            request.ReissuedAfterUnavailable.Should().BeTrue();
+            request.AuthorshipFrom.Should().Be("source/original", "a preserving copy keeps its source's authorship");
+            request.Argument.Should().NotBeNull("the initialization message is delivered on the re-issue too");
+            request.Argument!.ToString().Should().Contain("init-payload");
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A journal entry that cannot be removed is reported and left in place, and the settlement still
+    /// answers — it never faults, which would end the process-wide recovery watcher (review of #7586).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ASettlementWhoseJournalCannotBeCleaned_DoesNotFault()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), $"mw-pending-writes-{Guid.NewGuid():N}");
+        try
+        {
+            using var ledger = new PendingWriteLedger(directory, IoPool.Unbounded);
+            var write = new PendingWrite(NodeAt(NewPath()), Writer, new AccessContext { ObjectId = Writer },
+                DateTimeOffset.UtcNow, "DbException: injected");
+            await ledger.Record(write, Mesh.JsonSerializerOptions)
+                .Should().Within(TestTimeouts.Convergence).Emit("the intent is journalled", ct);
+            // A directory whose entries cannot be removed: the journal delete fails.
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+            var outcome = new PendingWriteOutcome(write, PendingWriteVerdict.Landed, null);
+            var faulted = await ledger.Settle(outcome).Materialize().Take(1)
+                .Should().Within(TestTimeouts.Convergence).Emit("the raw settlement answers", ct);
+            faulted.Kind.Should().Be(NotificationKind.OnError, "CONTROL: the journal delete really fails here");
+
+            var settled = await PendingWriteRecovery.SettleIsolated(ledger, outcome, null).Materialize().Take(1)
+                .Should().Within(TestTimeouts.Convergence).Emit("the isolated settlement answers", ct);
+            settled.Kind.Should().Be(NotificationKind.OnNext, "a cleanup failure must not fault the recovery");
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
 }
 
 /// <summary>
