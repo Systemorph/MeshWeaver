@@ -92,6 +92,34 @@ nodes.Select(n => Lookup(n)).MergeBounded(NodeCopyHelper.DefaultBatchSize)
 Rx's other fan-in operators are not affected: both `Concat` overloads already drain through a loop
 or a trampoline, and an unbounded `Merge()` / `SelectMany` keeps no queue.
 
+## A bound over legs that already posted bounds nothing
+
+`MergeBounded(n)` limits how many inners are **subscribed** at once. It limits how many requests
+are **in flight** only when each inner does its work on Subscribe. `IMessageHub.Observe(request)`
+does not: it registers the response subject and **posts at the call**. So a fan-out built as
+`items.Select(x => hub.Observe(new XRequest(x))).ToObservable().MergeBounded(n)` (or with a
+`.ToArray()`) posts EVERY request the moment the legs are built — and the operator enumerates its
+source inline, so "built" means "as soon as the merge starts". The bound then limits only how many
+ANSWERS are awaited.
+
+That is the shape behind [MeshWeaver#7464](https://github.com/Systemorph/MeshWeaver/issues/7464):
+the content indexer's part writer (`MeshDocumentSink.WriteParts`, MeshWeaver.Plugins) put one
+extracted zip's ~9,400 part creates on the node-operations hub at once, and 7,875 of them reached no
+verdict within their 30 s deadline, all at stage `write`. The sink was fixed in
+MeshWeaver.Plugins#4566 by building each leg from the cold `IMeshService.CreateOrUpdateNode`.
+`NodeCopyHelper` carried the same shape for every level of a copied subtree (a document's parts
+all sit on one level); each leg is now wrapped in `Observable.Defer`.
+
+**The rule:** a leg handed to a bounded merge must be **cold** — `IMeshService.CreateNode` /
+`CreateOrUpdateNode` (already `Observable.Defer`), or `Observable.Defer(() => hub.Observe(…))`.
+Never call `hub.Observe(request)` while building the legs. The bound is right; raising or lowering
+it changes nothing while the posts escape it.
+
+`CopyWritesAreBoundedTest` (MeshWeaver.Graph.Test) pins the copy: a creation validator parks every
+create under the copy's target, the peak must reach the bound, must not exceed it over a negative
+window, and every node must land once released. On the unfixed helper it fails with *"5 of 24
+sibling creates were in flight together"* at a bound of 4.
+
 ## Enforcement
 
 - `BoundedMergeStackDepthTest` (MeshWeaver.Messaging.Hub.Test) measures the stack depth at which the

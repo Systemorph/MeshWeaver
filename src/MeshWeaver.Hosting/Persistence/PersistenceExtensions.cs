@@ -767,7 +767,9 @@ public static class PersistenceExtensions
             sp.GetServices<IPartitionStorageProvider>(),
             sp.GetService<ILogger<StorageAdapterMeshQueryProvider>>(),
             sp.GetService<IoPoolRegistry>(),
-            sp.GetService<StorageAdapterQueryProviderOptions>()));
+            sp.GetService<StorageAdapterQueryProviderOptions>(),
+            // What an open secured query follows grants on (MeshWeaver#7365), read at subscribe time.
+            sp));
     }
 
     /// <summary>
