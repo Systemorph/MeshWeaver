@@ -46,6 +46,23 @@ computes — one detector, proven by one set of self-tests, never a second one �
   * removals non-empty -> the pull-request body MUST carry a `Pairs-with:` declaration, and every
     declared counterpart must already be MERGED into its repository's DEFAULT BRANCH.
 
+A PROJECT PATH IS SURFACE TOO (MeshWeaver#7415)
+-----------------------------------------------
+A repository whose CI checks this one out and `ProjectReference`s a project BY PATH breaks when
+that `.csproj` is deleted or renamed — MSB9008 plus CS0246 — although no public type left `src/`.
+MeshWeaver#7297 deleted `memex/aspire/Memex.Portal.ServiceDefaults/…csproj`; the surface report
+(which scans `src/` only) reported nothing that concerned it, and MeshWeaver.Deploy's REQUIRED
+`Chart guards (vs platform)` went red on every Deploy pull request until Deploy adapted. So the
+diff's deleted and renamed `.csproj` files (`--base`, merge base to HEAD, rename-aware) are a
+second removal list with its own control arm (a base tree with fewer than
+MIN_PROJECTS_AT_BASE project files is a scan that read nothing), and either list being non-empty
+asks for the same declaration. A rename is a removal: the old path is what a consumer names.
+
+The repositories a counterpart may be DECLARED in are the register's `repos` plus its
+`pair-only-repos` — repositories that consume this one by checkout but carry no shared rule
+blocks (MeshWeaver.Deploy). Before #7415 a `Pairs-with:` naming Deploy was refused as "not a
+sibling", so the author of #7297 could not have declared the half that broke even had they known.
+
 DECLARATION SYNTAX (in the pull-request body, one per line)
 ----------------------------------------------------------
     Pairs-with: Systemorph/MeshWeaver.Plugins#904
@@ -92,6 +109,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -108,6 +126,12 @@ THIS_REPO = "Systemorph/MeshWeaver"
 # types across 35 assemblies. The floor is set an order of magnitude below that, so it survives a
 # carve-out wave and still fails outright on a scan that read a fraction of the tree.
 MIN_PUBLIC_TYPES_AT_BASE = 500
+
+# The same control arm for the PROJECT-PATH list (#7415). MEASURED 2026-10-28: the tree carries 64
+# `.csproj` files (67 at #7297's base). A floor well below that survives a carve-out and still
+# fails a listing that read the wrong tree or nothing at all.
+MIN_PROJECTS_AT_BASE = 20
+PROJECT_SUFFIX = ".csproj"
 
 # `Pairs-with:` — optionally bulleted and/or bolded, as a pull-request body naturally writes it.
 DECLARATION_RE = re.compile(
@@ -256,7 +280,8 @@ def read_fleet(root: Path) -> set[str]:
     """
     path = root / FLEET_REGISTER
     try:
-        repos = json.loads(path.read_text(encoding="utf-8"))["repos"]
+        register = json.loads(path.read_text(encoding="utf-8"))
+        repos = register["repos"]
     except (OSError, ValueError, KeyError, TypeError) as e:
         raise PairResolutionError(f"cannot read the fleet register {FLEET_REGISTER}: {e}") from e
     fleet = {r for r in repos if isinstance(r, str) and r != THIS_REPO}
@@ -265,7 +290,64 @@ def read_fleet(root: Path) -> set[str]:
             f"{FLEET_REGISTER} lists {len(fleet)} sibling repo(s) — the register did not expand, "
             "so no declaration could be validated against it"
         )
-    return fleet
+    # Repositories that consume this one by CHECKOUT (and so can be the counterpart of a removal)
+    # but carry no shared rule blocks, so they are not in `repos` (#7415: MeshWeaver.Deploy).
+    # Optional; a present key of the wrong shape is unreadable, never ignored.
+    extra = register.get("pair-only-repos", [])
+    if not isinstance(extra, list) or not all(isinstance(r, str) and "/" in r for r in extra):
+        raise PairResolutionError(
+            f"{FLEET_REGISTER} `pair-only-repos` must be a list of owner/repo names, got {extra!r}"
+        )
+    return fleet | {r for r in extra if r != THIS_REPO}
+
+
+# ─────────────────────────────── the project-path report ───────────────────────────────
+
+
+def _git(root: Path, *args: str) -> str:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], check=True, capture_output=True, text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        detail = getattr(e, "stderr", "") or str(e)
+        raise PairResolutionError(f"git {' '.join(args)} failed: {detail.strip()}") from e
+
+
+def parse_name_status_z(raw: str) -> list[dict]:
+    """Parse `git diff -z --name-status` into removal entries.
+
+    `-z` because a plain listing C-quotes a non-ASCII path. A deletion is `D\\0path\\0`; a rename
+    is `R<score>\\0old\\0new\\0`. Any other status in a listing filtered to D/R is a parse failure,
+    never a skipped record.
+    """
+    fields = raw.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
+    out: list[dict] = []
+    i = 0
+    while i < len(fields):
+        status = fields[i]
+        if status == "D" and i + 1 < len(fields):
+            out.append({"path": fields[i + 1], "status": "deleted"})
+            i += 2
+        elif status.startswith("R") and i + 2 < len(fields):
+            out.append({"path": fields[i + 1], "status": "renamed", "to": fields[i + 2]})
+            i += 3
+        else:
+            raise PairResolutionError(f"unexpected record in the project-path listing: {fields[i:i + 3]!r}")
+    return out
+
+
+def project_report(root: Path, base: str) -> dict:
+    """The `.csproj` files this diff deletes or renames, merge base -> HEAD, with the denominator."""
+    at_base = sum(
+        1 for p in _git(root, "ls-tree", "-r", "-z", "--name-only", base).split("\0")
+        if p.endswith(PROJECT_SUFFIX)
+    )
+    listing = _git(root, "diff", "-z", "--name-status", "-M", "--diff-filter=DR", base, "HEAD",
+                   "--", f"*{PROJECT_SUFFIX}")
+    return {"projectsAtBase": at_base, "removed": parse_name_status_z(listing)}
 
 
 # ─────────────────────────────── the API resolver ───────────────────────────────
@@ -317,9 +399,29 @@ def github_resolver(token: str):
 # ─────────────────────────────── the verdict ───────────────────────────────
 
 
-def evaluate(surface: dict, body: str, fleet: set[str], resolve) -> tuple[int, list[str]]:
-    """Returns (exit code, lines to print). Every failure path returns 1; there is no other."""
+def evaluate(surface: dict, body: str, fleet: set[str], resolve,
+             projects: dict | None) -> tuple[int, list[str]]:
+    """Returns (exit code, lines to print). Every failure path returns 1; there is no other.
+
+    `projects` is the project-path report (`project_report`). It is REQUIRED: `None` means the
+    listing never ran, and a gate that read no project paths must not pass on "none left".
+    """
     out: list[str] = []
+
+    if not isinstance(projects, dict):
+        return 1, ["::error::No project-path report — the deleted/renamed `.csproj` listing never "
+                   "ran, so a project path leaving this repo (MeshWeaver#7415) would go unseen."]
+    projects_at_base = projects.get("projectsAtBase")
+    if not isinstance(projects_at_base, int) or projects_at_base < MIN_PROJECTS_AT_BASE:
+        return 1, [
+            f"::error::The project-path report says the base tree holds {projects_at_base} "
+            f"`{PROJECT_SUFFIX}` file(s), below the floor of {MIN_PROJECTS_AT_BASE}. The listing "
+            "read the wrong tree or nothing, so 'no project path left' would be a green on zero "
+            "evidence. Check that the merge base was fetched."
+        ]
+    removed_projects = projects.get("removed")
+    if not isinstance(removed_projects, list):
+        return 1, ["::error::The project-path report has no `removed` list."]
 
     at_base = surface.get("publicTypesAtBase")
     if not isinstance(at_base, int) or at_base < MIN_PUBLIC_TYPES_AT_BASE:
@@ -339,14 +441,32 @@ def evaluate(surface: dict, body: str, fleet: set[str], resolve) -> tuple[int, l
         f"Base tree declares {at_base} public top-level type(s) under src/; "
         f"this diff removes {len(removed)} public type(s) or member(s)."
     )
-    if not removed:
-        out.append("No public type or member left src/ in this diff — no cross-repo pair to gate.")
+    out.append(
+        f"Base tree holds {projects_at_base} `{PROJECT_SUFFIX}` file(s); "
+        f"this diff deletes or renames {len(removed_projects)} of them."
+    )
+    if not removed and not removed_projects:
+        out.append("No public type or member left src/ and no project path moved in this diff — "
+                   "no cross-repo pair to gate.")
         return 0, out
 
     for entry in removed[:40]:
         out.append(f"  [{entry.get('category')}] {entry.get('assembly')} :: {entry.get('fullName')}")
     if len(removed) > 40:
         out.append(f"  … and {len(removed) - 40} more.")
+    for entry in removed_projects[:40]:
+        moved = f" -> {entry['to']}" if entry.get("to") else ""
+        out.append(f"  [project-{entry.get('status')}] {entry.get('path')}{moved}")
+    if len(removed_projects) > 40:
+        out.append(f"  … and {len(removed_projects) - 40} more.")
+    if removed_projects:
+        out.append(
+            "A project path leaving this repo breaks every repository whose CI checks this one out "
+            "and ProjectReferences that path (MSB9008 + CS0246) — MeshWeaver#7415: #7297 moved a "
+            "project and MeshWeaver.Deploy's required `Chart guards (vs platform)` went red on every "
+            "Deploy pull request. This gate cannot see who references it; check each repository "
+            f"a counterpart may live in: {', '.join(sorted(fleet))}."
+        )
 
     declarations = parse_declarations(body)
     bad = [d for d in declarations if isinstance(d, Unparseable)]
@@ -363,7 +483,8 @@ def evaluate(surface: dict, body: str, fleet: set[str], resolve) -> tuple[int, l
     if not declarations:
         out.append(
             f"::error::This pull request removes {len(removed)} public type(s) or member(s) from "
-            "src/ and declares no counterpart. Public surface leaving this repo can red a plugin "
+            f"src/ and moves {len(removed_projects)} project path(s), and declares no counterpart. "
+            "Public surface leaving this repo can red a plugin "
             "repo's trunk hours later, on pull requests that did not make the change "
             "(MeshWeaver#2689). Add ONE line to the pull-request body:"
         )
@@ -723,10 +844,122 @@ SELF_TESTS: list[tuple] = [
 ]
 
 
+# ── a PROJECT PATH leaving this repo (#7415) ──
+_NO_PROJECTS = {"projectsAtBase": 64, "removed": []}
+# MeshWeaver#7297 exactly: no public type left src/, one project file deleted outside it.
+_PROJECTS_7297 = {"projectsAtBase": 67, "removed": [
+    {"path": "memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj",
+     "status": "deleted"},
+]}
+_PROJECTS_RENAMED = {"projectsAtBase": 64, "removed": [
+    {"path": "src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj", "status": "renamed",
+     "to": "src/MeshWeaver.Hosting.Core/MeshWeaver.Hosting.Core.csproj"},
+]}
+_FLEET_WITH_DEPLOY = _FLEET | {"Systemorph/MeshWeaver.Deploy"}
+
+# (label, surface, body, resolver, projects, fleet, should_pass, substrings)
+PROJECT_SELF_TESTS: list[tuple] = [
+    (
+        # 🚨 THE #7415 SHAPE. Before it, this row PASSED: the surface report was empty, so the
+        # gate said "no cross-repo pair to gate" while Deploy's required check was about to go red.
+        "a DELETED project file with no declaration fails, though no public type left src/",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "chore(platform): core drops memex/ (delete half)",
+        _resolver(_pr()), _PROJECTS_7297, _FLEET, False,
+        ("declares no counterpart", "[project-deleted] memex/aspire/Memex.Portal.ServiceDefaults",
+         "MSB9008"),
+    ),
+    (
+        "a RENAMED project file is a removal too — the old path is what a consumer names",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Rename the hosting project.",
+        _resolver(_pr()), _PROJECTS_RENAMED, _FLEET, False,
+        ("declares no counterpart",
+         "[project-renamed] src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj -> "),
+    ),
+    (
+        "…the move names every repository a counterpart may live in, read from the register",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Pairs-with: Systemorph/MeshWeaver.Plugins#4333\n",
+        _resolver(_pr()), _PROJECTS_7297, _FLEET_WITH_DEPLOY, True,
+        ("Systemorph/MeshWeaver.Deploy", "may follow"),
+    ),
+    (
+        # 🚨 Before #7415 the register had no way to name a checkout consumer that carries no
+        # shared rule blocks, so this declaration was refused as "not a sibling repository".
+        "a counterpart in a PAIR-ONLY repository (MeshWeaver.Deploy) is declarable and resolved",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Pairs-with: Systemorph/MeshWeaver.Plugins#4333\nPairs-with: Systemorph/MeshWeaver.Deploy#37\n",
+        _resolver(_pr()), _PROJECTS_7297, _FLEET_WITH_DEPLOY, True,
+        ("ok  Systemorph/MeshWeaver.Deploy#37", "may follow"),
+    ),
+    (
+        "…and an OPEN Deploy counterpart holds the deleting half, like any other",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Pairs-with: Systemorph/MeshWeaver.Deploy#37\n",
+        _resolver(_pr(merged=False, state="open")), _PROJECTS_7297, _FLEET_WITH_DEPLOY, False,
+        ("still OPEN",),
+    ),
+    (
+        "a missing project-path report FAILS — the listing never ran",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "", _resolver(_pr()), None, _FLEET, False,
+        ("No project-path report",),
+    ),
+    (
+        "a project-path report whose base tree holds almost no project file FAILS",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "", _resolver(_pr()), {"projectsAtBase": 2, "removed": []}, _FLEET, False,
+        ("below the floor", "green on zero"),
+    ),
+    (
+        "an ordinary diff that moves no project still never meets the gate",
+        {"publicTypesAtBase": _HEALTHY, "removed": []},
+        "Fixes a typo.", _resolver(_pr()), _NO_PROJECTS, _FLEET, True,
+        ("no project path moved",),
+    ),
+]
+
+
+def _git_fixture_report() -> tuple[bool, str]:
+    """End to end over a REAL repository: the listing finds a deletion and a rename, counts the
+    base denominator, and ignores a modified project and a deleted non-project file."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _git(root, "init", "-q")
+        _git(root, "config", "user.email", "self-test@example.com")
+        _git(root, "config", "user.name", "self-test")
+        _git(root, "config", "commit.gpgsign", "false")
+        for i in range(MIN_PROJECTS_AT_BASE + 5):
+            d = root / "src" / f"P{i}"
+            d.mkdir(parents=True)
+            (d / f"P{i}.csproj").write_text(f"<Project><!-- {i} --></Project>\n", encoding="utf-8")
+        (root / "notes.md").write_text("x\n", encoding="utf-8")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "base")
+        base = _git(root, "rev-parse", "HEAD").strip()
+        (root / "src/P0/P0.csproj").unlink()
+        (root / "src/P1").rename(root / "src/P1Moved")
+        (root / "src/P1Moved/P1.csproj").rename(root / "src/P1Moved/P1Moved.csproj")
+        (root / "src/P2/P2.csproj").write_text("<Project><!-- changed --></Project>\n", encoding="utf-8")
+        (root / "notes.md").unlink()
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", "head")
+        report = project_report(root, base)
+    got = sorted((e["status"], e["path"], e.get("to", "")) for e in report["removed"])
+    want = [("deleted", "src/P0/P0.csproj", ""),
+            ("renamed", "src/P1/P1.csproj", "src/P1Moved/P1Moved.csproj")]
+    ok = report["projectsAtBase"] == MIN_PROJECTS_AT_BASE + 5 and got == want
+    return ok, f"projectsAtBase={report['projectsAtBase']} removed={got}"
+
+
 def self_test() -> int:
+    import tempfile
     failed = 0
-    for label, surface, body, resolve, should_pass, expected in SELF_TESTS:
-        code, lines = evaluate(surface, body, _FLEET, resolve)
+
+    def check(label, code, lines, should_pass, expected) -> None:
+        nonlocal failed
         text = "\n".join(lines)
         passed = code == 0
         missing = [s for s in expected if s not in text]
@@ -742,13 +975,50 @@ def self_test() -> int:
         else:
             print(f"ok: {label}")
 
+    for label, surface, body, resolve, should_pass, expected in SELF_TESTS:
+        code, lines = evaluate(surface, body, _FLEET, resolve, _NO_PROJECTS)
+        check(label, code, lines, should_pass, expected)
+    for label, surface, body, resolve, projects, fleet, should_pass, expected in PROJECT_SELF_TESTS:
+        code, lines = evaluate(surface, body, fleet, resolve, projects)
+        check(label, code, lines, should_pass, expected)
+
+    extra = 0
+    # The `-z` listing parser: a deletion and a rename parse; any other record is a FAILURE.
+    extra += 1
+    parsed = parse_name_status_z("D\0a/A.csproj\0R097\0b/B.csproj\0c/C.csproj\0")
+    if parsed != [{"path": "a/A.csproj", "status": "deleted"},
+                  {"path": "b/B.csproj", "status": "renamed", "to": "c/C.csproj"}]:
+        failed += 1
+        print(f"SELF-TEST FAILED: the -z listing parser read {parsed!r}")
+    else:
+        print("ok: the -z listing parser reads a deletion and a rename")
+    extra += 1
+    try:
+        parse_name_status_z("M\0a/A.csproj\0")
+    except PairResolutionError:
+        print("ok: an unexpected listing record fails closed")
+    else:
+        failed += 1
+        print("SELF-TEST FAILED: an unexpected listing record was skipped instead of failing")
+
+    extra += 1
+    ok, detail = _git_fixture_report()
+    if ok:
+        print(f"ok: the project-path listing over a real repository ({detail})")
+    else:
+        failed += 1
+        print(f"SELF-TEST FAILED: the project-path listing over a real repository read {detail}")
+
     # A register that did not expand must fail closed, and that is not reachable through
     # `evaluate` — it happens while READING the register, so it is proven separately.
     for register, why in [
         ({"repos": [THIS_REPO]}, "a register naming only this repo validates nothing"),
         ({"nope": []}, "a register with no `repos` key is unreadable"),
+        ({"repos": [THIS_REPO, "Systemorph/MeshWeaver.Plugins", "Systemorph/Memex"],
+          "pair-only-repos": "Systemorph/MeshWeaver.Deploy"},
+         "a `pair-only-repos` that is not a list is unreadable, never ignored"),
     ]:
-        import tempfile
+        extra += 1
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".github").mkdir()
@@ -761,10 +1031,27 @@ def self_test() -> int:
                 failed += 1
                 print(f"SELF-TEST FAILED: {why} — read_fleet returned instead of failing")
 
+    # …and a PAIR-ONLY repository is part of the declarable set (#7415).
+    extra += 1
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".github").mkdir()
+        (root / FLEET_REGISTER).write_text(json.dumps({
+            "repos": [THIS_REPO, "Systemorph/MeshWeaver.Plugins", "Systemorph/Memex"],
+            "pair-only-repos": ["Systemorph/MeshWeaver.Deploy"],
+        }), encoding="utf-8")
+        fleet = read_fleet(root)
+    if fleet == {"Systemorph/MeshWeaver.Plugins", "Systemorph/Memex", "Systemorph/MeshWeaver.Deploy"}:
+        print("ok: a pair-only repository is declarable")
+    else:
+        failed += 1
+        print(f"SELF-TEST FAILED: read_fleet with a pair-only repository returned {sorted(fleet)}")
+
+    total = len(SELF_TESTS) + len(PROJECT_SELF_TESTS) + extra
     if failed:
-        print(f"\n{failed} self-test(s) failed — the gate cannot be trusted.")
+        print(f"\n{failed} of {total} self-test(s) failed — the gate cannot be trusted.")
         return 1
-    print(f"\nAll {len(SELF_TESTS) + 2} self-tests passed.")
+    print(f"\nAll {total} self-tests passed.")
     return 0
 
 
@@ -780,13 +1067,18 @@ def main() -> int:
         "attacker-controlled text and interpolating it into a shell command is an injection.",
     )
     ap.add_argument("--root", default=".", help="repository root (for the fleet register)")
+    ap.add_argument(
+        "--base",
+        help="the MERGE BASE to list deleted/renamed project files against (#7415) — the same "
+        "commit the surface report was computed from",
+    )
     ap.add_argument("--self-test", action="store_true", help="prove the gate is not vacuous")
     args = ap.parse_args()
 
     if args.self_test:
         return self_test()
-    if not args.surface_json or not args.pr_body_file:
-        ap.error("--surface-json and --pr-body-file are required unless --self-test is given")
+    if not args.surface_json or not args.pr_body_file or not args.base:
+        ap.error("--surface-json, --pr-body-file and --base are required unless --self-test is given")
 
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
@@ -813,7 +1105,13 @@ def main() -> int:
         print(f"::error::{e}")
         return 1
 
-    code, lines = evaluate(surface, body, fleet, github_resolver(token))
+    try:
+        projects = project_report(Path(args.root), args.base)
+    except PairResolutionError as e:
+        print(f"::error::Cannot list the project files this diff deletes or renames: {e}")
+        return 1
+
+    code, lines = evaluate(surface, body, fleet, github_resolver(token), projects)
     for line in lines:
         print(line)
     return code
