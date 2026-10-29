@@ -63,7 +63,7 @@ internal sealed class BlockedThreadStacks(string? dacPath = null)
             // The PINNED DAC, by path — never ClrMD's own resolution, which may find another copy
             // (a symbol server, a file locator) that the pin does not hold and its unload would then
             // pull out from under every thread that ran it.
-            using var runtime = target.ClrVersions[0].CreateRuntime(dac);
+            using var runtime = CreateRuntime(target.ClrVersions[0]);
             return managedThreadIds.Distinct().ToDictionary(
                 id => id,
                 id => runtime.Threads.FirstOrDefault(t => t.ManagedThreadId == id) is { } thread
@@ -75,6 +75,32 @@ internal sealed class BlockedThreadStacks(string? dacPath = null)
             if (File.Exists(path))
                 File.Delete(path);
         }
+    }
+
+    /// <summary>
+    /// The runtime of the dump, read through the pinned DAC. 🚨 On Linux a <see cref="DumpType.Normal"/>
+    /// minidump does not carry the version resource of <c>libcoreclr.so</c> — ClrMD reads the dump's
+    /// runtime version as <c>0.0</c> and its DAC check then refuses the matching DAC
+    /// (<c>Mismatched dac. Dac version: 10.0.…, expected: 0.0.</c> — measured on the CI shard and in a
+    /// <c>dotnet/sdk:10.0</c> container; macOS dumps carry the version). Where the version IS readable,
+    /// ClrMD's own check stands. Where it is not, the identity is proven another way: the dump is of
+    /// THIS process, so the runtime it names must be loaded from the very directory the pinned DAC
+    /// sits in — the DAC that runtime ships with. Any other directory is refused, never guessed.
+    /// </summary>
+    private ClrRuntime CreateRuntime(ClrInfo clr)
+    {
+        if (clr.Version != default(Version) && clr.Version != new Version(0, 0))
+            return clr.CreateRuntime(dac);
+        var runtimeDirectory = Path.GetDirectoryName(clr.ModuleInfo.FileName);
+        var dacDirectory = Path.GetDirectoryName(dac);
+        if (string.IsNullOrEmpty(runtimeDirectory)
+            || !string.Equals(Path.GetFullPath(runtimeDirectory), Path.GetFullPath(dacDirectory!),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"the dump does not carry its runtime's version, and its runtime '{clr.ModuleInfo.FileName}' is not "
+                + $"loaded from the directory of the pinned DAC '{dac}' — the DAC cannot be proven to match, so the "
+                + "stacks are not read");
+        return clr.CreateRuntime(dac, ignoreMismatch: true);
     }
 
     private static string Format(ClrThread thread)

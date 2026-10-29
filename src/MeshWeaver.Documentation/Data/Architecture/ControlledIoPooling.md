@@ -762,10 +762,16 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   data-access library (DAC) that ClrMD loads is pinned for the life of the process, because unloading
   it crashes any thread that ran it when that thread exits. ClrMD is handed that pinned DAC by path.
   A host with no DAC beside its runtime refuses the capture rather than let ClrMD resolve an unpinned
-  copy elsewhere. A thread id names a thread, not a leaf: a leaf that returned between the expiry's
+  copy elsewhere. On Linux a `Normal` minidump does not carry the version of `libcoreclr.so`, so
+  ClrMD reads the runtime as version `0.0` and its own check refuses the matching DAC
+  (`Mismatched dac … expected: 0.0`). There the match is proven by location instead: the dump is of
+  this process, so the runtime it names must be loaded from the directory the pinned DAC sits in, and
+  any other directory is refused. Where the dump does carry the version, ClrMD's own check stands.
+  A thread id names a thread, not a leaf: a leaf that returned between the expiry's
   snapshot and the dump has handed its thread back. So each leaf carries its own ticket, which is
   rechecked after the dump. A leaf whose ticket is gone is reported as having returned before its
-  stack could be read, and is never given the stack of whatever its thread ran next. An async leaf
+  stack could be read, and is never given the stack of whatever its thread ran next — whether the
+  capture succeeded or failed. An async leaf
   holds no thread, so it gets no stack. Pinned by
   `IoPoolSiloTeardownTest.WhenTheJoinBudgetExpires_ABlockedSubscribeIsReportedWithTheFrameItIsStuckIn`,
   `ALeafThatReturnsBeforeTheDump_IsNotGivenTheStackOfWhatItsThreadRanNext` and

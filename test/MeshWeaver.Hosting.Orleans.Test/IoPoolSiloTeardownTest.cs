@@ -423,6 +423,102 @@ public class IoPoolSiloTeardownTest
         refused!.Message.Should().Contain(missing, "the refusal names the DAC it looked for");
     }
 
+    /// <summary>
+    /// 🚨 The ticket check holds on the FAILED-capture path too. A capture that throws (here: no DAC to
+    /// pin) used to report every residual leaf as "still holds managed thread … could not be read" —
+    /// including one that had already returned, which is the same misattribution the ticket exists to
+    /// prevent (measured on CI, where a Linux dump's DAC mismatch failed the capture).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task WhenTheCaptureFails_ALeafThatReturnedIsStillNotReportedAsHoldingItsThread()
+    {
+        var (messages, release) = await StopWithAFailingCapture(releaseAtExpiry: true, TestContext.Current.CancellationToken);
+        try
+        {
+            messages.Should().NotContain(
+                m => m.Contains("still holds managed thread", StringComparison.Ordinal),
+                "a leaf that returned holds nothing, whether or not the capture worked");
+            messages.Should().ContainSingle(
+                m => m.Contains("returned before its stack could be read", StringComparison.Ordinal),
+                "it is reported as having returned — named, never silently dropped");
+        }
+        finally
+        {
+            release();
+        }
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL for the test above: with the same failing capture, a leaf that is STILL parked
+    /// is reported as holding its thread, with the reason its stack could not be read.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task WhenTheCaptureFails_ALeafStillParkedIsReportedWithWhyItsStackIsMissing()
+    {
+        var (messages, release) = await StopWithAFailingCapture(releaseAtExpiry: false, TestContext.Current.CancellationToken);
+        try
+        {
+            messages.Should().ContainSingle(
+                m => m.Contains("still holds managed thread", StringComparison.Ordinal)
+                     && m.Contains("could not be read", StringComparison.Ordinal),
+                "a leaf still parked is reported, and the failed capture says why its stack is missing");
+        }
+        finally
+        {
+            release();
+        }
+    }
+
+    private static async Task<(IReadOnlyList<string> Messages, Action Release)> StopWithAFailingCapture(bool releaseAtExpiry, CancellationToken ct)
+    {
+        var registry = new IoPoolRegistry(new IoPoolOptions { SiloJoinBudget = TimeSpan.FromMilliseconds(300) });
+        var services = new ServiceCollection();
+        services.AddSingleton(registry);
+        var provider = services.BuildServiceProvider();
+        var logger = new CapturingLogger();
+        var noDac = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"no-dac-{Guid.NewGuid():N}", "libmscordaccore.so");
+        var observer = (ILifecycleObserver)new IoPoolSiloTeardown(provider, logger) { Stacks = new BlockedThreadStacks(noDac) };
+        await observer.OnStart(ct);
+
+        var entered = new AsyncSubject<Unit>();
+        var release = 0;
+        var source = Observable.Create<int>(_ =>
+        {
+            ParkedInsideTheSubscribe(entered, () => Volatile.Read(ref release) == 1);
+            return Disposable.Empty;
+        });
+        var leaf = registry.Get(IoPoolNames.Query).SubscribeThroughPool(source).Subscribe(_ => { }, _ => { });
+        void Release()
+        {
+            Volatile.Write(ref release, 1);
+            leaf.Dispose();
+            provider.Dispose();
+        }
+
+        if (releaseAtExpiry)
+            logger.OnLog = (level, message) =>
+            {
+                if (level != LogLevel.Error || !message.Contains("did not finish within", StringComparison.Ordinal))
+                    return;
+                Volatile.Write(ref release, 1);
+                SpinWait.SpinUntil(
+                    () => registry.UnreportedResiduals().All(r => r.SynchronousLeaves.Count == 0), Budget);
+            };
+
+        try
+        {
+            await entered.Should().Within(Budget).Emit(
+                "precondition: the subscribe must be running before the join is asked to wait for it");
+            await observer.OnStop(ct);
+        }
+        catch
+        {
+            Release();
+            throw;
+        }
+        return (logger.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Message).ToArray(), Release);
+    }
+
     /// <summary>The blocking frame the report must name. Not inlined, so it is a frame of its own.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ParkedInsideTheSubscribe(AsyncSubject<Unit> entered, Func<bool> released)

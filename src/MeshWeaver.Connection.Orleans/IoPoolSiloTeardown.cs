@@ -80,8 +80,11 @@ public sealed class IoPoolSiloTeardown(
     /// </summary>
     internal static readonly TimeSpan StackCaptureBudget = TimeSpan.FromSeconds(20);
 
-    // Mesh-scoped (this observer is a silo singleton), holding the DAC pin for the process.
-    private readonly BlockedThreadStacks _stacks = new();
+    /// <summary>
+    /// The stack reader — mesh-scoped (this observer is a silo singleton), holding the DAC pin for the
+    /// process. Test seam (<c>InternalsVisibleTo</c>): a reader with no DAC makes every capture fail.
+    /// </summary>
+    internal BlockedThreadStacks Stacks { private get; init; } = new();
 
     // Captured on OnStart while the container is provably alive, read on OnStop which may run
     // AFTER the container is gone (see the type remarks). Volatile because start and stop are
@@ -256,7 +259,7 @@ public sealed class IoPoolSiloTeardown(
         if (leaves.Length == 0)
             return Observable.Return(Unit.Default);
         var threads = leaves.Select(l => l.Leaf.ManagedThreadId).Distinct().ToArray();
-        return Observable.Start(() => _stacks.Capture(threads), NewThreadScheduler.Default)
+        return Observable.Start(() => Stacks.Capture(threads), NewThreadScheduler.Default)
             .Timeout(StackCaptureBudget)
             .Do(byThread =>
             {
@@ -288,6 +291,18 @@ public sealed class IoPoolSiloTeardown(
             .Catch<Unit, Exception>(ex =>
             {
                 foreach (var (pool, leaf) in leaves)
+                {
+                    // The same ticket check as above: a leaf that returned meanwhile does not "still
+                    // hold" anything, whether or not the capture worked.
+                    if (!registry.IsLeafInFlight(pool, leaf))
+                    {
+                        logger.LogWarning(
+                            "IoPoolSiloTeardown: the {Pool} leaf {Site} outlived the join on managed thread {Thread} "
+                            + "but returned before its stack could be read — the dump's stack of that thread is "
+                            + "NOT attributed to it",
+                            pool, leaf.Site, leaf.ManagedThreadId);
+                        continue;
+                    }
                     logger.LogWarning(
                         "IoPoolSiloTeardown: the {Pool} leaf {Site} still holds managed thread {Thread} after the join "
                         + "expired, and its stack could not be read ({Reason}) — read it from a dump of this pod with "
@@ -296,6 +311,7 @@ public sealed class IoPoolSiloTeardown(
                         ex is TimeoutException
                             ? $"the capture did not finish within {StackCaptureBudget}"
                             : $"{ex.GetType().Name}: {ex.Message}");
+                }
                 return Observable.Return(Unit.Default);
             });
     }
