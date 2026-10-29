@@ -30,6 +30,10 @@
          (AReinstallLandsEveryAuthoredNodeTypeMemberTest). The PluginCatalog suite lives in
          MeshWeaver.Plugins against a pinned core, so the pin of a core change sits here. -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
+    <!-- The module reload's activation-hold pin (AModuleReloadStepHoldsItsActivationTest, #7324)
+         needs a real grain — the retirement it pins exists only on the Orleans host — and parks the
+         landing through the executor's internal Arm overload. -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
   </ItemGroup>
 
   <ItemGroup>

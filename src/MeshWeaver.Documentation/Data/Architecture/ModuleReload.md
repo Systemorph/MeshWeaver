@@ -57,6 +57,21 @@ initialization), so exactly one process drives a request however many replicas h
 a `stream.Update` on that node and every step is idempotent: an activation torn down mid-step simply
 runs the step again when the node is next read.
 
+🚨 **Each step HOLDS the activation** (`hub.BeginAsyncOperation()`, taken when the step starts and
+released exactly once when it completes, faults or is unsubscribed). A request is written and read by
+System only, so its activation retires the moment its last subscriber goes
+([Retiring an Activation](../RetiringAnActivation)), and nothing a step does counts as a subscriber: an
+all-modules landing reloads module after module, each bounded only per package, without writing to its
+node in between. Unheld, the activation was retired mid-landing and the next read started the landing
+over ([#7324](https://github.com/Systemorph/MeshWeaver/issues/7324): one request re-entered `Landing` 13
+times). A held activation is not retired under its step; a retirement that fell due during it is taken
+when the step ends. The hold defers only that idle retirement — a recycle, a drain or a host stop still
+tears the hub down, and when one does under a step in flight the executor logs ONE Warning,
+`the request's hub was torn down while its {step} step was in flight`, carrying the hub's
+`DisposalAttribution` (who tore it down, and why). The step lines and the dispose reasons are
+Information, which the cluster does not ship, so that Warning is the reading that names what restarted
+a step. Pinned by `AModuleReloadStepHoldsItsActivationTest` (MeshWeaver.Hosting.Orleans.Test).
+
 1. **Resolve and land.** The modules come from the install records (`Plugins/*` that declare a
    compiled module). Per module, `RegistryUpdateReconciler.ReloadModule` asks the configured registries
    in order — the first that serves the package answers — through
