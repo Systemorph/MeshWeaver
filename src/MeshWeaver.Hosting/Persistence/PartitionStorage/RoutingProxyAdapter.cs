@@ -206,16 +206,91 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 🚨 A remote delete that FAILED is a fault, never the path (#7446): the partition hub's
+    /// <see cref="DeleteBatchResponse.Error"/> is raised, so a failed delete can no longer read as a
+    /// removed node. A path no partition hub owns keeps <see cref="IStorageAdapter.Delete"/>'s
+    /// tolerance and emits itself.
+    /// </remarks>
     public IObservable<string> Delete(string path)
         => _router.AddressFor(path).SelectMany(addr =>
             addr is null
                 ? Observable.Return(path)
-                : _callerHub
-                    .Observe<DeleteBatchResponse>(
-                        new DeleteBatchRequest(ImmutableList.Create(path)),
-                        o => o.WithTarget(addr))
-                    .Take(1)
-                    .Select(d => d.Message.Error != null ? path : d.Message.DeletedPaths.FirstOrDefault() ?? path));
+                : DeleteRun(addr, ImmutableList.Create(path)).Select(_ => path));
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Strict, from the owner's own answer: true only when the partition hub reports THIS path among
+    /// <see cref="DeleteBatchResponse.DeletedPaths"/> (its adapter's <see cref="IStorageAdapter.DeleteMany"/>
+    /// is built on <see cref="IStorageAdapter.DeleteIfExists"/>). The interface default would answer
+    /// true for every delete, including a failed one (#7446). An unowned path was not removed: false.
+    /// </remarks>
+    public IObservable<bool> DeleteIfExists(string path)
+        => _router.AddressFor(path).SelectMany(addr =>
+            addr is null
+                ? Observable.Return(false)
+                : DeleteRun(addr, ImmutableList.Create(path))
+                    .Select(removed => removed.Contains(path, StringComparer.Ordinal)));
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// One <see cref="DeleteBatchRequest"/> per CONSECUTIVE RUN of paths owned by the same partition
+    /// hub, posted sequentially in the caller's order (children first — the order is contract), and
+    /// the result is what the hubs REPORT removed, never the request. Paths no partition hub owns are
+    /// absent from the result. A run that fails raises a
+    /// <see cref="BatchDeletePartiallyAppliedException"/> naming every path removed so far — the
+    /// earlier runs' and the failing run's own <see cref="DeleteBatchResponse.DeletedPaths"/> (#7396,
+    /// #7446) — and no later run is sent.
+    /// </remarks>
+    public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+    {
+        if (paths.Count == 0)
+            return Observable.Return<IReadOnlyList<string>>(ImmutableList<string>.Empty);
+
+        return paths
+            .Select(p => _router.AddressFor(p).Take(1).Select(addr => (Path: p, Address: addr)))
+            .ToInlineObservable().Concat().ToList()
+            .SelectMany(pairs =>
+            {
+                var runs = ImmutableList.CreateBuilder<(Address? Address, ImmutableList<string> Paths)>();
+                foreach (var (path, address) in pairs)
+                {
+                    if (runs.Count > 0 && Equals(runs[^1].Address, address))
+                        runs[^1] = (address, runs[^1].Paths.Add(path));
+                    else
+                        runs.Add((address, ImmutableList.Create(path)));
+                }
+                return DeleteRuns(runs.ToImmutable(), 0, ImmutableList<string>.Empty);
+            });
+    }
+
+    private IObservable<IReadOnlyList<string>> DeleteRuns(
+        ImmutableList<(Address? Address, ImmutableList<string> Paths)> runs, int index, ImmutableList<string> removed)
+    {
+        if (index == runs.Count)
+            return Observable.Return<IReadOnlyList<string>>(removed);
+        var run = runs[index];
+        if (run.Address is null)
+            return DeleteRuns(runs, index + 1, removed);
+        return DeleteRun(run.Address, run.Paths)
+            .Catch((Exception error) => Observable.Throw<ImmutableList<string>>(
+                BatchDeletePartiallyAppliedException.Including(error, removed)))
+            .SelectMany(deleted => DeleteRuns(runs, index + 1, removed.AddRange(deleted)));
+    }
+
+    /// <summary>
+    /// One <see cref="DeleteBatchRequest"/> to <paramref name="address"/>: the paths its adapter
+    /// reports removed, or — when it answers with an <see cref="DeleteBatchResponse.Error"/> — that
+    /// error, carrying whatever the hub says it removed before failing.
+    /// </summary>
+    private IObservable<ImmutableList<string>> DeleteRun(Address address, ImmutableList<string> paths)
+        => _callerHub
+            .Observe<DeleteBatchResponse>(new DeleteBatchRequest(paths), o => o.WithTarget(address))
+            .Take(1)
+            .SelectMany(d => d.Message.Error != null
+                ? Observable.Throw<ImmutableList<string>>(BatchDeletePartiallyAppliedException.Including(
+                    new InvalidOperationException(d.Message.Error), d.Message.DeletedPaths))
+                : Observable.Return(d.Message.DeletedPaths));
 
     /// <inheritdoc/>
     public IObservable<bool> Exists(string path)

@@ -154,6 +154,23 @@ public IObservable<MeshNode> Write(MeshNode node, JsonSerializerOptions opt)
 
 The message travels from the caller hub directly to the partition-storage hub. There is no intermediate "storage routing hub" on the path — that would be a useless serialisation point and an extra dispatcher hop.
 
+### A delete reports what the owner removed (#7446)
+
+The proxy answers a delete from the partition hub's `DeleteBatchResponse`, never from the request:
+
+- `Delete(path)` raises the owner's `Error`. It used to emit the path either way, so a delete the
+  store refused read as a removed node.
+- `DeleteIfExists(path)` is true only when the owner names the path in `DeletedPaths`; an unowned
+  path answers false. The interface default answered true for every delete.
+- `DeleteMany(paths)` sends one `DeleteBatchRequest` per consecutive run of paths owned by the same
+  partition hub, in the caller's (children-first) order, and returns what the hubs report removed —
+  a path no hub owns is absent. A run that fails raises `BatchDeletePartiallyAppliedException`
+  naming every path removed so far (earlier runs plus the failing run's own `DeletedPaths`), and no
+  later run is sent.
+
+`RoutingProxyDeleteReportsWhatTheOwnerRemovedTest` pins all three over real hubs, with only the
+store's fault injected.
+
 ---
 
 ## Backends
