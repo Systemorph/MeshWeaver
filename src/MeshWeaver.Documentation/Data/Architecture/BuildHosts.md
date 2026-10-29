@@ -868,10 +868,15 @@ would replace, and the claim is refused until that list is empty.
   could never warm it: the first trunk build that needs a new package would be red, and nothing would
   ever be promoted.
 - **Core declares the host's warm restore.** `.github/build-stages.json` carries
-  `"restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true", "timeoutMinutes": 20}`
-  — the build's own closure. The host reads it from the default branch's tip, never from a run's own tree,
-  and runs it once per restore key to fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py`
-  validates its shape and, for core, reds a restore that drifts from the build's solution and properties.
+  `"restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true && dotnet restore .github/nuget-warm/ResolverFixturePackages.csproj", "timeoutMinutes": 20}`
+  — the build's own closure, then the packages `NuGetAssemblyResolver` fetches at TEST time (`#r "nuget:…"` in
+  executable doc cells and samples, the resolver's live-feed tests: Humanizer, Humanizer.Core, Markdig,
+  MathNet.Numerics, Microsoft.Data.SqlClient at the exact versions they name, with their closures). No project in
+  the solution references those, so before they were declared every run downloaded them again; the resolver reads
+  the warm cache as a NuGet fallback folder ([NuGet Runtime Assets](../NuGetRuntimeAssets#offline-first-resolution)).
+  The host reads it from the default branch's tip, never from a run's own tree, and runs it once per restore key to
+  fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py` validates its shape and, for core, reds
+  a restore that drifts from the build's solution and properties or drops the resolver fixtures.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
