@@ -77,9 +77,22 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
   sequentially and may sum past one job (MeshWeaver.Plugins declares compile-check 40 + gate 45 =
   85 min). So when the window ends with the follower's stage's verdict already IN but the run not
   terminal, the follower exits with that verdict and a warning that the stage's **Check Run** is the
-  authority (a later restart of the stage changes the Check Run, not the finished job). A repository
-  whose single stage can outlast the window requires the instance's `build/<stage>` Check Runs
-  instead of the follow job's context.
+  authority (a later restart of the stage changes the Check Run, not the finished job).
+- 🔁 **a window that ends with NO verdict is resumed, not stranded** (the follow lifecycle,
+  MeshWeaver.Plugins#4501). The host prepares and then runs the stages one after another, so a stage
+  can end hours after admission (MeshWeaver.Plugins: up to 195 min) while its follow job is cut at
+  45. Such a window exits `NO_VERDICT_EXIT` (3, never 1), and the lane fails in its own step, named
+  exactly `No verdict within the follow window`. That NAME is a wire contract: once the stage's
+  verdict is in, the operations instance (MeshWeaver.Plugins `Hosting/Build`, `BuildFollowResume`)
+  reads each requesting run's jobs, and when it finds that step failed and the run completed, it
+  re-runs the run's failed jobs — once per run and attempt. The re-run follower reads a terminal run
+  at its first poll and exits with the stage's verdict at once, and GitHub re-runs its dependents
+  with it, so the shim job owning the required context re-judges with the real verdict. A follower
+  still running when the verdict lands reads it itself, and needs nothing. No job waits past its
+  cap, and the only waiting is the operations instance's own projection pass, in code. A red read IN
+  the window (the stage failed) is an ordinary red (1) and is never re-run. `build-follow.py
+  --check-workflow .github/workflows/build-follow.yml` (core CI) holds the step and the exit code
+  together.
 - **an unreadable endpoint is RED, naming why**: 403 at once (the token's repository or run does not
   match the build), 401 after one token refresh, 404 after a five-minute grace (the run may not be registered
   yet), transport errors and 5xx after six consecutive failures.
@@ -357,6 +370,21 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    deadline passed during the hand-over") — a stage finishing near the limit never holds its claim
    past the pod's grace. The run's workspace is removed only after every receipt was
    acknowledged; a workspace whose receipts were not is kept and swept after two run deadlines.
+   🚨 **A receipt carries the OUTCOME of the stage that handed it over** — `stageState`,
+   `succeeded` or `failed` (MeshWeaver.Deploy#52). A RED stage hands its artifacts over too, marked
+   `failed`, so the evidence of why it is red (a shard's `.trx` files, markers and logs) reaches
+   consolidation; its verdict stays red. A receipt never means "the stage succeeded" by itself, so
+   every reader reads the marker: `build-artifacts-fetch.py` takes ONLY `succeeded` receipts by
+   default — a failed stage's artifacts are never published and never ratcheted as a green gate log,
+   and a selection whose every receipt is failed is RED naming the stage — while
+   `host-shard-results.py` asks for failed ones explicitly (`include_failed=True`). A value other than
+   `succeeded` or `failed` — an explicit `null` included — is refused in EVERY mode, never defaulted to
+   green and never dropped silently beside a succeeded receipt. Only a receipt WITHOUT the field
+   predates the marker: such a host handed over only a green stage's files, plus a red stage's
+   `diagnostics/` unit, which the build API marks from the stage's own recorded verdict. The order the
+   halves land in: the readers (this repository and MeshWeaver.Plugins' build API and
+   `scripts/host-gate-log.py`) first, then the host (MeshWeaver.Deploy `build-run.py`), which is the
+   only half that starts handing a red stage's files over.
    On the RATCHET side, a node repository whose `gate` stage ran on a host reads that stage's
    `gate-log/gate.log` through the composite action `.github/actions/host-gate-log` (`api-url` = the
    build-executor lane's output, `store` = `vars.MW_ARTIFACT_STORE`, the job holding
@@ -365,8 +393,8 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    `$MW_BUILD_ARTIFACTS` after each successful stage, so the gate stage's receipts repeat an earlier
    modules stage's bundles), and `host-gate-log.py` then refuses anything but ONE non-empty `gate.log`
    whose LAST `=== mw-plugin-test summary ===` block ends in the tester's terminal verdict
-   (`ALL GREEN.` / `GREEN — …` / `GATE FAILED …`) — nothing handed over (a red host gate hands nothing
-   over), an empty, truncated or foreign log, or a second file in the unit are each RED. The repository then runs the
+   (`ALL GREEN.` / `GREEN — …` / `GATE FAILED …`) — nothing handed over, a log handed over by a
+   FAILED gate stage (`stageState: failed`), an empty, truncated or foreign log, or a second file in the unit are each RED. The repository then runs the
    SAME `check-test-suites.py --gate-log` it runs over an Actions gate's log, so the ratchet reads the
    tester's own console on both executors — never the host's verdict, never the declared command's
    text. One copy for every satellite; MeshWeaver.Plugins#4482 built the same read for Plugins.
@@ -868,10 +896,15 @@ would replace, and the claim is refused until that list is empty.
   could never warm it: the first trunk build that needs a new package would be red, and nothing would
   ever be promoted.
 - **Core declares the host's warm restore.** `.github/build-stages.json` carries
-  `"restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true", "timeoutMinutes": 20}`
-  — the build's own closure. The host reads it from the default branch's tip, never from a run's own tree,
-  and runs it once per restore key to fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py`
-  validates its shape and, for core, reds a restore that drifts from the build's solution and properties.
+  `"restore": {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true && dotnet restore .github/nuget-warm/ResolverFixturePackages.csproj", "timeoutMinutes": 20}`
+  — the build's own closure, then the packages `NuGetAssemblyResolver` fetches at TEST time (`#r "nuget:…"` in
+  executable doc cells and samples, the resolver's live-feed tests: Humanizer, Humanizer.Core, Markdig,
+  MathNet.Numerics, Microsoft.Data.SqlClient at the exact versions they name, with their closures). No project in
+  the solution references those, so before they were declared every run downloaded them again; the resolver reads
+  the warm cache as a NuGet fallback folder ([NuGet Runtime Assets](../NuGetRuntimeAssets#offline-first-resolution)).
+  The host reads it from the default branch's tip, never from a run's own tree, and runs it once per restore key to
+  fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py` validates its shape and, for core, reds
+  a restore that drifts from the build's solution and properties or drops the resolver fixtures.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
@@ -968,7 +1001,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `host-shard-results.py`:
   1. `GET {api}/{repo}/{sha}/artifacts?channel=…` — the receipts, read and shape-checked by
      `build-artifacts-fetch.py`'s reader, kept for the shard's own stage `test-shard-<i>` and its unit
-     directory `testResults-shard<i>/`;
+     directory `testResults-shard<i>/` — a RED shard's receipts (`stageState: failed`) included, because
+     its results are what consolidation must read;
   2. `GET {api}/{repo}/{sha}/artifacts/{sha256}?channel=…` — each receipt's bytes by content hash,
      written under `--out` with its relative path PRESERVED (two `.trx` of one name in two projects
      do not collide), at most the receipt's size plus one byte read, redirects refused so the bearer

@@ -76,10 +76,10 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
     /// false leaves out the completion marker and the dll (a half-extracted folder).
     /// </summary>
     private void Install(string id, string version, string? dependsOnId = null, string? dependsOnVersion = null,
-        string? declaredId = null, bool complete = true)
+        string? declaredId = null, bool complete = true, string? into = null)
     {
         var claimed = declaredId ?? id;
-        var folder = Path.Combine(PackagesFolder, id.ToLowerInvariant(), version.ToLowerInvariant());
+        var folder = Path.Combine(into ?? PackagesFolder, id.ToLowerInvariant(), version.ToLowerInvariant());
         Directory.CreateDirectory(Path.Combine(folder, "lib", "net10.0"));
         var dependencies = dependsOnId is null
             ? string.Empty
@@ -127,6 +127,120 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
                 dependencies.Select(d => new PackageDependency(d.Id, VersionRange.Parse(d.Range))).ToArray()));
         using var stream = File.Create(Path.Combine(LocalFeed, $"{id.ToLowerInvariant()}.{version}.nupkg"));
         builder.Save(stream);
+    }
+
+    private string FallbackFolder => Path.Combine(root, "fallback");
+
+    /// <summary>
+    /// A resolver whose ONLY fallback package folder is <see cref="FallbackFolder"/> — passed explicitly, so a host
+    /// that sets <c>NUGET_FALLBACK_PACKAGES</c> for this test process cannot change what the case reads — and whose
+    /// persistent cache counts every install attempt: an install consults the cache before any download.
+    /// </summary>
+    private NuGetAssemblyResolver FallbackResolver(CountingPackageCache cache) => new(
+        NullLogger<NuGetAssemblyResolver>.Instance,
+        Settings.LoadSpecificSettings(root, "nuget.config"),
+        PackagesFolder,
+        packageCache: cache,
+        fallbackPackageFolders: [FallbackFolder]);
+
+    /// <summary>
+    /// The prepared-cache case (MWPREP001): the whole closure lies COMPLETE in a fallback package folder, and a
+    /// reachable feed serves the same packages. The resolution must take them where they lie — nothing is
+    /// installed into the global-packages folder, no install is even attempted, every path points into the
+    /// fallback folder. Before fallback folders were read, both packages were downloaded from the feed on every
+    /// run although the host's warm cache held them.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task FallbackFolder_HoldingTheClosure_IsUsedWithNoDownload()
+    {
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        Install("Acme.Offline.A", "1.0.0", "Acme.Offline.B", "1.0.0", into: FallbackFolder);
+        Install("Acme.Offline.B", "1.0.0", into: FallbackFolder);
+        Publish("Acme.Offline.A", "1.0.0", ("Acme.Offline.B", "1.0.0"));
+        Publish("Acme.Offline.B", "1.0.0");
+        var cache = new CountingPackageCache();
+
+        var result = await FallbackResolver(cache).ResolveAsync(
+            [new NuGetPackageReference("Acme.Offline.A", "1.0.0")],
+            targetFramework: null,
+            ct: TestContext.Current.CancellationToken);
+
+        result.ResolvedVersions.Should().ContainKey("Acme.Offline.B").WhoseValue.Should().Be("1.0.0");
+        result.AssemblyPaths.Should().HaveCount(2)
+            .And.OnlyContain(p => p.StartsWith(FallbackFolder, StringComparison.Ordinal),
+                "a package the fallback folder holds complete is used where it lies");
+        cache.Attempts.Should().BeEmpty("no package was installed, so none was downloaded");
+        Directory.EnumerateFileSystemEntries(PackagesFolder).Should()
+            .BeEmpty("nothing is copied or downloaded into the global-packages folder");
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL: the fallback folder holds the root but not its dependency, so the dependency — and
+    /// only it — still goes down the download path into the global-packages folder.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task FallbackFolder_MissingADependency_DownloadsOnlyThatOne()
+    {
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        Install("Acme.Offline.A", "1.0.0", "Acme.Offline.B", "1.0.0", into: FallbackFolder);
+        Publish("Acme.Offline.A", "1.0.0", ("Acme.Offline.B", "1.0.0"));
+        Publish("Acme.Offline.B", "1.0.0");
+        var cache = new CountingPackageCache();
+
+        var result = await FallbackResolver(cache).ResolveAsync(
+            [new NuGetPackageReference("Acme.Offline.A", "1.0.0")],
+            targetFramework: null,
+            ct: TestContext.Current.CancellationToken);
+
+        cache.Attempts.Should().Equal(["Acme.Offline.B 1.0.0"], "only the package no folder holds is installed");
+        result.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.A.dll", StringComparison.Ordinal)
+            && p.StartsWith(FallbackFolder, StringComparison.Ordinal));
+        result.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal)
+            && p.StartsWith(PackagesFolder, StringComparison.Ordinal));
+        File.Exists(Path.Combine(InstallFolder("Acme.Offline.B", "1.0.0"), ".nupkg.metadata"))
+            .Should().BeTrue("the downloaded package is a complete v3 install in the global folder");
+    }
+
+    /// <summary>
+    /// A fallback folder is READ-ONLY: a half-extracted package there (no completion marker) is not used and
+    /// not repaired — the package is installed into the global folder, and the fallback copy is left alone.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task IncompleteFallbackFolder_IsNeitherUsedNorRepaired()
+    {
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        Install("Acme.Offline.B", "1.0.0", complete: false, into: FallbackFolder);
+        Publish("Acme.Offline.B", "1.0.0");
+        var cache = new CountingPackageCache();
+        var fallbackCopy = Path.Combine(FallbackFolder, "acme.offline.b", "1.0.0");
+
+        var result = await FallbackResolver(cache).ResolveAsync(
+            [new NuGetPackageReference("Acme.Offline.B", "1.0.0")],
+            targetFramework: null,
+            ct: TestContext.Current.CancellationToken);
+
+        cache.Attempts.Should().Equal(["Acme.Offline.B 1.0.0"]);
+        result.AssemblyPaths.Should().ContainSingle()
+            .Which.Should().StartWith(PackagesFolder);
+        File.Exists(Path.Combine(fallbackCopy, ".nupkg.metadata")).Should().BeFalse("the fallback folder is never written");
+        File.Exists(Path.Combine(fallbackCopy, "acme.offline.b.nuspec")).Should().BeTrue("the fallback folder is never deleted");
+    }
+
+    /// <summary>A persistent cache that never holds anything and records every install that consulted it.</summary>
+    private sealed class CountingPackageCache : INuGetPackageCache
+    {
+        private ImmutableList<string> attempts = ImmutableList<string>.Empty;
+
+        public ImmutableList<string> Attempts => attempts;
+
+        public Task<bool> TryHydrateAsync(string packageId, string version, string targetPackageFolder, CancellationToken ct)
+        {
+            ImmutableInterlocked.Update(ref attempts, a => a.Add($"{packageId} {version}"));
+            return Task.FromResult(false);
+        }
+
+        public Task SaveAsync(string packageId, string version, string sourcePackageFolder, CancellationToken ct) =>
+            Task.CompletedTask;
     }
 
     private string InstallFolder(string id, string version) =>

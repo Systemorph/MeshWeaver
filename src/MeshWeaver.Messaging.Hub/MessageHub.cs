@@ -4276,17 +4276,28 @@ public sealed class MessageHub : IMessageHub
         var advance = true;
         try
         {
-            if (drainedOk)
+            // 🚨 The verdict is read off the SAME snapshot the failure would name. The poll samples
+            // every QuiescePollInterval and the deadline is a separate timer, so a reply that lands
+            // after the last sample and before this line used to arrive here as drainedOk=false
+            // with NOTHING pending — and set the sticky QuiescingTimedOut flag over an answered
+            // callback, failing the test class with a report that itself said nothing leaked.
+            // Nothing pending at the verdict IS drained (QuiesceVerdict.Of); the documented
+            // contract has always been "the budget elapses with callbacks still pending".
+            var stuck = drainedOk ? [] : SnapshotPendingCallbacks();
+            var owed = stuck.Where(c => AReplyIsOwedByAShuttingDownLocalHub(c.Target)).ToArray();
+            var verdict = QuiesceVerdict.Of(drainedOk, stuck.Length, owed.Length, quiesceRearms, MaxQuiesceRearms);
+            if (verdict == QuiesceVerdict.Outcome.Drained)
             {
                 TryLog(LogLevel.Information,
-                    "[QUIESCE-OK] {Address}: drained {Count} callback(s) in {Elapsed}ms",
+                    drainedOk
+                        ? "[QUIESCE-OK] {Address}: drained {Count} callback(s) in {Elapsed}ms"
+                        : "[QUIESCE-OK] {Address}: drained {Count} callback(s) in {Elapsed}ms — the last reply "
+                          + "landed between the final poll and the deadline, so nothing was pending at the verdict",
                     Address, initialPendingSnapshot.Length, quiesceSw.ElapsedMilliseconds);
             }
             else
             {
-                var stuck = SnapshotPendingCallbacks();
-                var owed = stuck.Where(c => AReplyIsOwedByAShuttingDownLocalHub(c.Target)).ToArray();
-                if (owed.Length > 0 && quiesceRearms < MaxQuiesceRearms)
+                if (verdict == QuiesceVerdict.Outcome.ReArm)
                 {
                     // Accepted work, still being answered: the sibling that owes each reply is in
                     // this mesh and shutting down, so it WILL answer before it goes. Re-arm the
@@ -4326,22 +4337,10 @@ public sealed class MessageHub : IMessageHub
                 // QuiescingTimedOut=true as a dispose failure. Forces visibility on leaked
                 // Observe subscriptions instead of silently extending dispose budgets.
                 QuiescingTimedOut = true;
-                QuiescingTimeoutDetail = stuck.Length == 0
-                    // 🚨 NOT the leaked-callback failure, and it must not read like one. The poll
-                    // said "not drained" and by the time the verdict was rendered the dictionary
-                    // was EMPTY — every callback resolved inside the hand-off between the last
-                    // poll tick and this line. There is nothing outstanding and so nothing to name;
-                    // a report that says "0 pending callback(s): <none>" looks like the diagnostic
-                    // failed to collect evidence, which sends an investigation hunting for a leak
-                    // that is not there. 26 of the 30 quiesce-leak records in a local trace were
-                    // this shape (TodoDataChangeWorkflowTest, TodoGraphIntegrationTest,
-                    // TodoViewsTest) — all indistinguishable, at a glance, from issue #981.
-                    ? $"drained DURING the {QuiesceTimeout.TotalSeconds:F2}s timeout hand-off: the poll "
-                      + "reported not-drained, but no callback was outstanding by the time the verdict "
-                      + "was rendered. Nothing leaked here — this is the detector racing its own "
-                      + "budget, NOT a pending callback. Do not confuse it with a report that names "
-                      + "a request and an age."
-                    : $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}{fates}";
+                // Only reached with callbacks still pending (QuiesceVerdict.Of): an empty snapshot
+                // is the Drained verdict above, so this always names a request and an age.
+                QuiescingTimeoutDetail =
+                    $"{stuck.Length} pending callback(s) after {QuiesceTimeout.TotalSeconds:F2}s: {detail}{fates}";
                 try { CancelCallbacks(); }
                 catch (Exception cancelEx)
                 {
