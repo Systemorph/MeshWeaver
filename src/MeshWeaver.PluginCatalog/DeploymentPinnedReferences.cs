@@ -93,12 +93,23 @@ public static class DeploymentPinnedReferences
         var access = hub.ServiceProvider.GetService<AccessService>();
         var scope = ScopeOf(hub.ServiceProvider.GetService<IConfiguration>(),
             hub.ServiceProvider.GetService<PluginCatalogOptions>());
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+        // 🚨 #7378 — a CI lane frozen on a platform set is a consumer too: its filed freeze
+        // references are read beside the records and reports, and an unreadable one refuses the pass
+        // exactly as an unreadable report does.
         return access.RunAsSystem(() =>
             Records(meshService, DeploymentNodeType)
                 .Zip(Records(meshService, DeploymentReportService.InventoryNodeType),
-                    (deployments, inventories) => Resolve(
-                        deployments, inventories, hub.JsonSerializerOptions, DateTimeOffset.UtcNow, StaleAfter,
-                        scope, logger)));
+                    Records(meshService, PlatformFreezeReferences.NodeType),
+                    (deployments, inventories, freezes) =>
+                    {
+                        var now = DateTimeOffset.UtcNow;
+                        return Resolve(
+                                deployments, inventories, hub.JsonSerializerOptions, now, StaleAfter, scope, logger)
+                            .AddRange(PlatformFreezeReferences.Resolve(
+                                freezes, hub.JsonSerializerOptions, now,
+                                PlatformFreezeReferences.LocationOf(configuration), logger));
+                    }));
     }
 
     /// <summary>
@@ -607,7 +618,29 @@ public static class DeploymentPinnedReferences
             .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(nodeType)))
             .Take(1)
             .Timeout(EnumerationBudget)
-            .Select(change => change.Items.Where(n => n.State == MeshNodeState.Active).ToList());
+            .Select(change => CompleteActiveItems(change, nodeType));
+
+    /// <summary>
+    /// The active records of a listing that was read COMPLETELY. A frame naming silent providers, or
+    /// marked <see cref="QueryResultChange{T}.SnapshotIncomplete"/>, is a FLOOR that may be missing
+    /// references, and read as a listing it would let retention collect what an unread reference
+    /// protects. So it throws, which aborts the pass: incomplete licenses no deletion (#7378).
+    /// </summary>
+    /// <param name="change">The listing's first frame.</param>
+    /// <param name="nodeType">The node type listed, for the refusal.</param>
+    /// <exception cref="InvalidOperationException">The listing is incomplete.</exception>
+    internal static IReadOnlyList<MeshNode> CompleteActiveItems(QueryResultChange<MeshNode> change, string nodeType)
+    {
+        if (change.SilentProviders is { Count: > 0 } silent)
+            throw new InvalidOperationException(
+                $"the {nodeType} listing is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] did not "
+                + "answer, so the references it would contribute are unknown and nothing may be collected");
+        if (change.SnapshotIncomplete)
+            throw new InvalidOperationException(
+                $"the {nodeType} listing is INCOMPLETE: a provider dropped part of its read, so the references "
+                + "it would contribute are unknown and nothing may be collected");
+        return change.Items.Where(n => n.State == MeshNodeState.Active).ToList();
+    }
 
     /// <summary>A Deployment record's pin, or null when the record pins nothing.</summary>
     public static PinnedPlatformReference? DeploymentPinOf(MeshNode node, JsonSerializerOptions options)
