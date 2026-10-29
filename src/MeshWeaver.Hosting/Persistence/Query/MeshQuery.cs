@@ -1566,7 +1566,14 @@ public partial class MeshQuery : IMeshQueryCore
             // on every item: the score order is kept and the tiebreak (empty for non-nodes, so
             // stable) keeps it a total order over EVERY item, rather than the provider-arrival
             // order the OrderBy branch used to leave behind.
-            merged = hits.OrderByDescending(h => h.Score)
+            //
+            // The LEADING key is SearchRanking's tier (#7381): an exact name match and a Space
+            // rank first whatever score their provider reported, so a provider that does not add
+            // the boost to its own scores still cannot push a fuzzy hit above them. Tier 0 for every
+            // row of a query with no free text, so filter-only ordering is untouched.
+            var textSearch = parsed.TextSearch;
+            merged = hits.OrderByDescending(h => SearchRanking.Tier(h.Item, textSearch))
+                .ThenByDescending(h => h.Score)
                 .ThenBy(PathTiebreak, StringComparer.Ordinal);
         }
         // 🚨 The Skip below is only paging if the sequence it skips over has a TOTAL order.
