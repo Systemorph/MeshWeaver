@@ -42,6 +42,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -427,9 +428,13 @@ def parse_labels(raw: str) -> list:
     """`LABELS` (comma-separated, as ci-change-set.py --labels reads it) → the sorted, de-duplicated names. A name
     no GitHub label could have (too long, a control character) is malformed input — exit 2, never dropped quietly:
     a dropped `full-run` would narrow a host run the Actions legs run in full."""
+    # A control character (C0, DEL, C1 — Unicode category Cc) is refused in the RAW value, before any trimming: a
+    # stripped "full-run\n" would otherwise pass as "full-run" and an all-control value as no labels at all.
+    if any(unicodedata.category(c) == "Cc" for c in (raw or "")):
+        raise BadInput(f"LABELS carries a control character ({(raw or '')[:60]!r}) — no pull-request label name has one")
     names = sorted({n.strip() for n in (raw or "").split(",") if n.strip()})
     for n in names:
-        if len(n) > MAX_LABEL_LENGTH or any(ord(c) < 32 for c in n):
+        if len(n) > MAX_LABEL_LENGTH:
             raise BadInput(f"LABELS carries {n[:60]!r}, which is not a pull-request label name")
     if len(names) > MAX_LABELS:
         raise BadInput(f"LABELS carries {len(names)} names — a pull request has at most {MAX_LABELS}")
@@ -572,7 +577,7 @@ def self_test() -> int:
     check("labels/env without LABELS reads as unknown (None)", inputs_from_env(e0).labels is None)
     check("labels/env LABELS=\"\" reads as none ([])", inputs_from_env({**e0, "LABELS": ""}).labels == [])
     check("labels/env LABELS reads the comma-separated names", inputs_from_env({**e0, "LABELS": "full-run,ci"}).labels == ["ci", "full-run"])
-    for bad in ("x" * 51, "a\nb", ",".join(f"l{n}" for n in range(101))):
+    for bad in ("x" * 51, "a\nb", "full-run\n", "\n", "\t", "full-\x7frun", "full-\x85run", ",".join(f"l{n}" for n in range(101))):
         try:
             parse_labels(bad)
             check(f"labels/{bad[:12]!r} is refused as malformed", False, "accepted")
