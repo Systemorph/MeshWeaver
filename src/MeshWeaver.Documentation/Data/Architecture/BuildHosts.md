@@ -521,6 +521,29 @@ image through:
  "policy":"build-hosts-follow-latest","trigger":"build-host-latest", …}
 ```
 
+**The channel names only a SEALED set, read by the same instrument every consumer reads.**
+MeshWeaver.Plugins builds on the `latest` channel's set through the resolver's FREEZE path — that one
+set, sealed and its images present, or RED — so a channel that names a set the resolver does not call
+sealed reds every Plugins run. Two halves keep them in agreement:
+
+- *The seal is read off the attempt that ran.* `resolve-platform.py` (`seal_jobs`) reads a run's trio
+  (promote, verify, the platform bake) from its latest attempt, unless that attempt created no job at
+  all; then it reads the newest earlier attempt that did, and says so. Measured 2026-10-29 on main-cd
+  #11961 and #11966: attempt 1 sealed and armed the set and ended `failure` on a satellite
+  compatibility leg outside the trio; the transient-retry lane re-ran it; attempt 2 was cancelled in
+  main-cd's one pending slot before it created a job; `/jobs?filter=latest` answered zero records and
+  the resolver called the set "cancelled before any seal job ran". Every Plugins run on that channel set
+  was RED for hours, although the set was sealed and its images were present. An attempt that DID
+  materialise is read exactly as before, so a trio job a re-run re-ran and lost still unseals the set.
+  The walk re-reads the run's attempt number AFTER the empty answer and starts AT it, inclusive: the
+  listing and the jobs read are two requests, and a re-run created between them would otherwise be
+  skipped together with any trio job it lost. `arm-promoted-set.py` (`read_run_jobs`) walks the same way.
+- *The hand-over waits for the seal.* Arming does not wait for `verify-images` or the platform bake, so
+  the newest ARMED set can be one the resolver does not yet call sealed. MeshWeaver.Deploy's `handover`
+  asks core's resolver at `main` (`--no-registry --freeze <set>`) before it signs anything, and holds
+  while the answer is not sealed. The receiver never moves a channel backwards, so `build-latest` stays
+  on its previous sealed set until the new one seals.
+
 **`build-stable` follows the main-passed ceiling — daily.** Until core's `stable` promoter exists,
 `stable` IS the newest sealed set MeshWeaver.Plugins' own `main` has passed on. Its own workflow,
 MeshWeaver.Deploy's `.github/workflows/build-host-stable.yml` (daily `schedule`, 05:41 UTC; `stable` is refused on any
