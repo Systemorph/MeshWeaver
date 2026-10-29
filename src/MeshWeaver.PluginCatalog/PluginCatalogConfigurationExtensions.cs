@@ -621,7 +621,7 @@ public static class PluginCatalogConfigurationExtensions
             Icon = "/static/NodeTypeIcons/box.svg",
             // Bookkeeping a store files under its operational space, never pickable content.
             IsSatelliteType = false,
-            ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+            ExcludeFromContext = ImmutableHashSet.Create("search", "create", "content"),
             HubConfiguration = config => config
                 .AddMeshDataSource(s => s.WithContentType<PlatformFreezeReference>()),
         };
