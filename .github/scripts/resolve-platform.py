@@ -709,6 +709,37 @@ def run_jobs(fetch: Fetch, run_id: int) -> list[dict]:
     return run_jobs_of(fetch, CORE_REPO, run_id)
 
 
+def seal_jobs(fetch: Fetch, run: dict, log: Callable[[str], None] = print) -> list[dict]:
+    """The job records a run's SEAL is read from: the latest attempt's, unless that attempt never
+    materialised a single job — then the newest EARLIER attempt that did.
+
+    🚨 A RE-RUN THAT NEVER STARTED ERASED A SEAL (2026-10-29, main-cd #11961 and #11966). Attempt 1
+    sealed the set — promote, verify and the platform bake all `success`, the set armed and handed to
+    the `latest` build host — and ended `failure` on a leg OUTSIDE the trio (a satellite compatibility
+    compile). The transient-retry lane re-ran its failed jobs; attempt 2 queued behind main-cd's ONE
+    pending slot and was cancelled before it created a job. `/jobs?filter=latest` then answers ZERO
+    records, the run reads `completed`/`cancelled`, and `verdict` called the set "cancelled before any
+    seal job ran". Every Plugins run on the `latest` channel's set went RED at its freeze path for
+    hours, although the set was sealed and its images were present.
+
+    Nothing is relaxed: an attempt that DID materialise is read exactly as before (a partial re-run
+    re-creates a record for every job, the un-re-run ones included, #4491), so a trio job it re-ran and
+    lost still unseals the set. Only an attempt with no record at all — which can have undone nothing,
+    because it ran nothing — is passed over, and that is said."""
+    run_id = int(run["id"])
+    jobs = run_jobs(fetch, run_id)
+    attempt = int(run.get("run_attempt") or 1)
+    if jobs or attempt <= 1:
+        return jobs
+    for earlier in range(attempt - 1, 0, -1):
+        rows = run_jobs_of_attempt(fetch, CORE_REPO, run_id, earlier)
+        if rows:
+            log(f"  (#{run.get('run_number')}: attempt {attempt} created no job — "
+                f"its seal is read from attempt {earlier}, the newest attempt that ran)")
+            return rows
+    return jobs
+
+
 def platform_version(fetch: Fetch, sha: str, log: Callable[[str], None] = print) -> str | None:
     """The line (`3.0.0`) core's Directory.Build.props declares AT this commit, or None. The set's
     name is `<line>-ci.<run number>` (core: "derives the ci.<n> suffix from $GITHUB_RUN_NUMBER").
@@ -2068,7 +2099,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             # exactly that case; `head_sha` matching still counts, so the ordinary run where the
             # two agree behaves as before, and a receipt that cannot be read leaves the honest "no
             # evidence that this is the frozen run" rather than inventing one.
-            jobs = run_jobs(fetch, int(run["id"]))
+            jobs = seal_jobs(fetch, run, log)
             v = verdict(jobs, run)
             # A run that is still sealing is worth waiting for on a release trigger: the dispatch
             # arrives the moment `promote` finishes, minutes before the platform bake seals. Only
@@ -2079,8 +2110,8 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 log(f"  {label} is still sealing ({what}) — waiting up to {remaining}s for it")
                 sleep(min(POLL_SECONDS, max(remaining, 1)))
                 fresh = fetch(f"/repos/{CORE_REPO}/actions/runs/{run['id']}")
-                run = {**run, **{k: fresh[k] for k in ("status", "conclusion") if k in fresh}}
-                jobs = run_jobs(fetch, int(run["id"]))
+                run = {**run, **{k: fresh[k] for k in ("status", "conclusion", "run_attempt") if k in fresh}}
+                jobs = seal_jobs(fetch, run, log)
                 v = verdict(jobs, run)
             # The receipt, read at most once per run and only where the answer can CHANGE a decision
             # — a sha freeze under `--verify-source`. Every other path asks for no extra read and
@@ -3817,6 +3848,47 @@ def self_test() -> int:
          lambda: choose(_fetch_for(two, {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}),
                         _registry(full), tester, portal, freeze=C, log=logs.append),
          lambda msg: "matched no" in msg)
+    # 11b — 🚨 A RE-RUN THAT NEVER STARTED DOES NOT UNSEAL (2026-10-29, main-cd #11961/#11966). The set
+    # sealed in attempt 1 (trio green, armed, handed to the `latest` build host); attempt 1 ended
+    # `failure` on a leg outside the trio; the transient-retry lane re-ran it and attempt 2 was cancelled
+    # in the pending slot before it created a job. `filter=latest` answers ZERO records — the reading
+    # that turned every Plugins run on the channel's set RED at this freeze path.
+    def rerun_fetch(attempts: dict[int, list[dict]], latest: int, conclusion: str = "cancelled") -> Fetch:
+        runs = [_run(8207, A, conclusion=conclusion) | {"run_attempt": latest}, _run(8203, B)]
+        base = _fetch_for(runs, {1000 + 8203: _jobs()})
+
+        def fetch(path: str) -> dict:
+            m = re.search(rf"/runs/{1000 + 8207}/attempts/(\d+)/jobs", path)
+            if m:
+                rows = attempts.get(int(m.group(1)), [])
+                return {"total_count": len(rows), "jobs": rows}
+            if f"/runs/{1000 + 8207}/jobs" in path:
+                rows = attempts.get(latest, [])
+                return {"total_count": len(rows), "jobs": rows}
+            return base(path)
+        return fetch
+    case("freeze on a set sealed in attempt 1 whose re-run was cancelled before any job → taken", True,
+         lambda: choose(rerun_fetch({1: _jobs(), 2: []}, latest=2), _registry(full), tester, portal,
+                        freeze="3.0.0-ci.8207", log=logs.append),
+         lambda c: c.sha == A and any("attempt 2 created no job" in l and "attempt 1" in l for l in logs))
+    case("…and the newest-sealed scan takes it too (not passed over as cancelled)", True,
+         lambda: choose(rerun_fetch({1: _jobs(), 2: []}, latest=2), _registry(full), tester, portal,
+                        log=logs.append),
+         lambda c: c.sha == A)
+    # Negative controls: the fold reads ONLY an empty attempt past — never a materialised one, never
+    # an attempt-1 run that ran nothing, never a trio the earlier attempt itself did not seal.
+    case("negative control: a re-run that MATERIALISED and lost promote → RED under the freeze", False,
+         lambda: choose(rerun_fetch({1: _jobs(), 2: _jobs(promote="cancelled")}, latest=2), _registry(full),
+                        tester, portal, freeze="3.0.0-ci.8207", log=logs.append),
+         lambda msg: "not a sealed set" in msg)
+    case("negative control: attempt 1 itself unsealed, attempt 2 empty → RED under the freeze", False,
+         lambda: choose(rerun_fetch({1: _jobs(bake="failure"), 2: []}, latest=2), _registry(full),
+                        tester, portal, freeze="3.0.0-ci.8207", log=logs.append),
+         lambda msg: "not a sealed set" in msg)
+    case("negative control: a first attempt cancelled before any job → RED under the freeze", False,
+         lambda: choose(rerun_fetch({1: []}, latest=1), _registry(full), tester, portal,
+                        freeze="3.0.0-ci.8207", log=logs.append),
+         lambda msg: "cancelled before any seal job ran" in msg)
     # 12 — a run on another branch is never a candidate; --no-registry answers without digests.
     case("other-branch runs ignored", True,
          lambda: choose(_fetch_for([_run(8210, C, branch="release/x"), *two],
