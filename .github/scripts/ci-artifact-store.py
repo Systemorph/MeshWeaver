@@ -115,6 +115,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import errno
 import os
 import re
 import shutil
@@ -461,13 +462,25 @@ class FileStore(Store):
         # 🚨 The probe name must be unique ACROSS PODS, not per process: see scratch_token(). It is
         # created exclusively ('x'), so a name collision could never again pass as a write.
         probe = self.root / f".mw-store-write-probe.{scratch_token()}"
+        # 🚨 A probe this job CREATED is removed on the failure path too (MeshWeaver#7375). The
+        # exclusive create can succeed and the write after it fail — ENOSPC on a full share is the
+        # measured case — and returning from the `except` alone left the file at the share root,
+        # where nothing prunes: ~49 of them on /ci-artifacts after one fill.
+        created = False
         try:
             with open(probe, "x") as f:
+                created = True
                 f.write("x")
             self._probe_written(probe)
             probe.unlink()
         except OSError as e:
-            return f"{self.root} is not writable by this job: {e}"
+            why = f"{self.root} is not writable by this job: {e}"
+            if created and probe.exists():
+                try:
+                    probe.unlink()
+                except OSError as cleanup:
+                    return f"{why} — and its write probe {probe.name} could not be removed: {cleanup}"
+            return why
         return ""
 
     def _probe_written(self, probe: Path) -> None:
@@ -979,6 +992,19 @@ def self_test() -> int:
                   outer_said == "" and outer.inner == "", f"outer={outer_said!r} inner={outer.inner!r}")
             check("file: the overlapped probes leave nothing behind",
                   not list(share.glob(".mw-store-write-probe.*")))
+
+            # #7375: the create succeeds and the WRITE fails (ENOSPC on a full share). The store is
+            # reported unreachable AND the probe it created is gone — not left at the share root.
+            class FullShare(FileStore):
+                def _probe_written(self, probe: Path) -> None:
+                    raise OSError(errno.ENOSPC, "No space left on device")
+
+            full_said = FullShare(str(share)).reachable()
+            check("file: a probe whose write fails reports the store unreachable",
+                  "not writable" in full_said and "No space left" in full_said, full_said)
+            check("file: …and removes the probe it created (#7375)",
+                  not list(share.glob(".mw-store-write-probe.*")),
+                  [p.name for p in share.glob(".mw-store-write-probe.*")])
 
             # …and the same two pods putting ONE key: the second pod's whole put lands inside the
             # first's copy→rename window. With a pid-named staging file the second copy overwrote
