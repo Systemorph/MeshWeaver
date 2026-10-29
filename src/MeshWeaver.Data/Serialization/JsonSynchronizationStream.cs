@@ -299,13 +299,6 @@ public static class JsonSynchronizationStream
         reduced.OnError(error);
     }
 
-    /// <summary>
-    /// How far up the hub tree the recycle re-arm looks for the local instance of a rejecting
-    /// owner (see <c>LocalInstanceOf</c>). Real trees are two or three deep — mesh → cache/client
-    /// → sync — so this is only a guard against a malformed parent chain.
-    /// </summary>
-    private const int MaxHostLookupDepth = 8;
-
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
     // recognized by AccessService.ImpersonateAsSystem and PostgreSqlMeshQuery's
@@ -1331,45 +1324,12 @@ public static class JsonSynchronizationStream
                     .DefaultIfEmpty(Unit.Default);
             }
 
-            // The local hub instance serving `address`, or null when none does. A pure probe —
-            // HostedHubCreation.Never is a dictionary lookup that must never activate a hub as a
-            // side effect.
-            //
-            // 🚨 It walks UP, because the subscriber is almost never the owner's host: a per-node
-            // hub is hosted by the MESH hub, while `hub` here is whoever opened the stream — a
-            // `cache/{meshId}` or client hub, i.e. a SIBLING under that same mesh. And it cannot
-            // shortcut through DI: every hub registers ITSELF as `IMessageHub` in its own service
-            // collection (MessageHubConfiguration.ConfigureServices), so
-            // `hub.ServiceProvider.GetService<IMessageHub>()` hands back `hub`. The parent link is
-            // `Configuration.ParentHub`, which resolves `IMessageHub` from the PARENT provider.
-            // Depth-capped: the chain is finite by construction (a root hub has no parent), and
-            // the cap only ensures a malformed tree degrades to today's behaviour rather than
-            // spinning. Failures answer `null`, which likewise means "re-ask now", exactly as
-            // before this gate existed.
+            // The local hub instance serving `address`, or null when none does — the ONE lookup the
+            // write rider uses too (LocalTeardownJoin, #7326). It walks UP from the subscriber,
+            // because a per-node hub is hosted by the MESH hub while `hub` here is a sibling under
+            // it, and a failed probe answers null ("re-ask now"), exactly as before this gate.
             IMessageHub? LocalInstanceOf(Address address)
-            {
-                try
-                {
-                    var h = hub;
-                    for (var depth = 0; h is not null && depth < MaxHostLookupDepth; depth++)
-                    {
-                        if (h.GetHostedHub(address, HostedHubCreation.Never) is { } found)
-                            return found;
-                        h = h.Configuration.ParentHub;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // ParentHub re-resolves from ParentServiceProvider, which can already be
-                    // disposed when a whole tree is going down. Probing must never throw into
-                    // the NACK path.
-                    logger.LogDebug(ex,
-                        "Stream {StreamId}: could not probe the local instance of {Owner}",
-                        reduced.StreamId, address);
-                }
-
-                return null;
-            }
+                => LocalTeardownJoin.LocalInstanceOf(hub, address, logger);
 
             // 🚨 THE LOST INITIAL — and why the first heartbeat comes EARLY.
             //

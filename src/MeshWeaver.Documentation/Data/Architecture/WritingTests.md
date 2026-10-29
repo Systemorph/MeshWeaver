@@ -407,6 +407,25 @@ await nothingElse;
 
 ---
 
+### ❌ A "never through" assertion made on one sample
+
+"The type goes `AdoptedVerified` → `AdoptedVerified`, never through `StaleAdopted`" is a claim about **every** state between two points, so a single read afterwards cannot make it. An unconditioned point read samples a value that may still be moving: it fails on a transient the claim allows (#7338: one read caught a `Compiled` stamp landing mid-transition), and it passes on a transient the claim forbids, if the state has settled back by the time of the read. Turning the read into a wait (`DefinitionWhen(d => d.BuildProvenance is AdoptedVerified)`) is worse: it is satisfied by a run that went through the forbidden state and came back, so the assertion can no longer fail at all.
+
+**Record the whole transition instead.** Subscribe to the live stream BEFORE the step that could move the value, collect every emission, stop after the step's outcome is established, and assert on the recorded sequence. The live stream replays the current state on subscribe, so the recording also proves the premise.
+
+```csharp
+var provenances = ImmutableList<BuildProvenance>.Empty;
+using var recording = Definitions.Subscribe(
+    d => ImmutableInterlocked.Update(ref provenances, list => list.Add(d.BuildProvenance)));
+/* the step under test, then the waits that establish its outcome */
+recording.Dispose();
+Volatile.Read(ref provenances).Should().AllSatisfy(p => p.Should().Be(BuildProvenance.AdoptedVerified));
+```
+
+Then decide what a transient on that path MEANS, from the product code, before you decide what the test should accept. In #7338 the transient was the setup's own compile: the first import dispatches a compile, and its success stamp (`ApplyCompileSuccess`, which always writes `Compiled` because Roslyn built those bytes here) landed after the test had seeded the adoption. That stamp is honest, because it names the bytes the record now points at, so the fix was in the fixture (wait for the initial build and its release request to settle before seeding). It was not a product change. `ANodeTypesSourcesWaitForItsBundleTest` records the transition across the held import.
+
+---
+
 ### ❌ A reachability assertion that collects before teardown has finished
 
 ```csharp
