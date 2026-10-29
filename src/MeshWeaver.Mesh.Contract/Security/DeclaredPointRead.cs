@@ -331,7 +331,7 @@ public static class DeclaredPointRead
     ///   <item><description>the custom-role catalog's own emissions — the fold resolves a role from ONE
     ///     catalog value and does not re-emit on a role change or deletion;</description></item>
     ///   <item><description>access-input commits on the invalidation feed that can reach this node
-    ///     (<see cref="AffectsRead"/>: grants, policies and sync configs on its scopes, memberships,
+    ///     (<see cref="AffectsRead(MeshChangeEvent, System.Collections.Immutable.ImmutableHashSet{string})"/>: grants, policies and sync configs on its scopes, memberships,
     ///     roles, path-placed typeless deletions) — the content a rule reads from storage
     ///     (<c>{space}/_GitSync</c>) is among them;</description></item>
     ///   <item><description>every declared feed gap.</description></item>
@@ -470,6 +470,17 @@ public static class DeclaredPointRead
     /// unknown only when its PATH places it: the node or one of its scopes, or a group membership.
     /// </summary>
     internal static bool AffectsRead(MeshChangeEvent change, System.Collections.Immutable.ImmutableHashSet<string> scopes)
+        => AffectsRead(change, scopes.Contains);
+
+    /// <summary>
+    /// <see cref="AffectsRead(MeshChangeEvent, System.Collections.Immutable.ImmutableHashSet{string})"/>
+    /// for a decision whose scopes are a PREDICATE rather than a set. An open secured query decides
+    /// many rows, under a whole subtree: a grant on any scope above or below its anchors can move one of
+    /// them (MeshWeaver#7365).
+    /// </summary>
+    /// <param name="change">The committed change.</param>
+    /// <param name="isScope">Whether a scope path (no leading or trailing slash; <c>""</c> is the root) is one the decision reads.</param>
+    internal static bool AffectsRead(MeshChangeEvent change, Func<string, bool> isScope)
     {
         if (string.Equals(change.NodeType, SecurityQueries.GroupMembershipNodeType, StringComparison.Ordinal)
             || string.Equals(change.NodeType, SecurityQueries.RoleNodeType, StringComparison.Ordinal))
@@ -485,12 +496,12 @@ public static class DeclaredPointRead
                 : ns.EndsWith("/" + accessSegment, StringComparison.OrdinalIgnoreCase)
                     ? ns[..^(accessSegment.Length + 1)]
                     : ns;
-            return scopes.Contains(scope);
+            return isScope(scope);
         }
         if (string.Equals(change.NodeType, PartitionAccessPolicyNodeType, StringComparison.Ordinal)
             || string.Equals(change.Id, PartitionPolicyId, StringComparison.OrdinalIgnoreCase)
             || string.Equals(change.Id, AccessAssignmentGuard.SyncConfigId, StringComparison.OrdinalIgnoreCase))
-            return scopes.Contains(ns);
+            return isScope(ns);
         // A deletion that carries NO node type (the delete pipeline's DeleteAndPublish publishes the
         // path alone — for EVERY deletion) is scoped by its PATH, never taken wholesale: a signal
         // withdraws the verdict until its re-check answers, so a mesh-wide match would blink every
@@ -500,7 +511,7 @@ public static class DeclaredPointRead
         // live folds — node, MainNode, Admin — carry what a role change does to this decision.
         if (change.Kind != MeshChangeKind.Deleted || !string.IsNullOrEmpty(change.NodeType))
             return false;
-        return scopes.Contains((change.Path ?? "").Trim('/'))
+        return isScope((change.Path ?? "").Trim('/'))
                || (change.Id ?? "").EndsWith(MembershipIdSuffix, StringComparison.OrdinalIgnoreCase);
     }
 
