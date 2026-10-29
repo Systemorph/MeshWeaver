@@ -26,7 +26,7 @@
 # decline under a green tick — the exact shape a gate must never take.
 set -euo pipefail
 
-identity="" packages="" upstreams="" out="" registry_url="" registry_key="" storage_target="" generations=""
+identity="" packages="" upstreams="" out="" registry_url="" registry_key="" storage_target="" generations="" index_out=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --identity)       identity="${2:-}";       shift 2 ;;
@@ -49,6 +49,11 @@ while [ $# -gt 0 ]; do
     # out of a directory named after plugins' generation — or out of nothing. An entry a source has
     # no value for (or no entry at all) means "resolve the pointer for that source yourself".
     --generations)    generations="${2:-}";    shift 2 ;;
+    # With `--packages '*'` only: write the ONE source's sealed module index (`modules/_index`, one
+    # bundle name per line) to this file, so the caller can prove that what it hands on is the WHOLE
+    # publication (MeshWeaver#7409 — main-cd's `published-modules` hands it to the ladder, which
+    # refuses a module the index lists but no bundle provides: check-ladder-coverage.py).
+    --index-out)      index_out="${2:-}";      shift 2 ;;
     *) echo "::error::compose-sealed-modules.sh: unknown argument '$1'"; exit 2 ;;
   esac
 done
@@ -68,6 +73,9 @@ if [ "$packages" = "*" ]; then
   [ $# -eq 1 ] || { echo "::error::compose-sealed-modules.sh: --packages '*' takes exactly ONE --upstreams source (got: $upstreams) — 'every package' across several seals is a union nobody sealed together"; exit 2; }
   ALL_PACKAGES=true
   ALL_SOURCE="$1"
+fi
+if [ -n "$index_out" ] && [ "$ALL_PACKAGES" != "true" ]; then
+  echo "::error::compose-sealed-modules.sh: --index-out applies to --packages '*' only — a caller-chosen package list is not the publication's index"; exit 2
 fi
 if [ -n "$registry_url" ]; then
   [ -n "$registry_key" ] || { echo "::error::compose-sealed-modules.sh: --registry-url needs --registry-key"; exit 2; }
@@ -395,4 +403,8 @@ while :; do
   fi
 done
 [ "$rc" = 0 ] || exit "$rc"
+if [ -n "$index_out" ]; then
+  cp "$work/$ALL_SOURCE.list" "$index_out"
+  echo "wrote the '$ALL_SOURCE' sealed module index ($(grep -c '[^[:space:]]' "$index_out" || true) bundle(s)) to $index_out"
+fi
 echo "composed=$composed"

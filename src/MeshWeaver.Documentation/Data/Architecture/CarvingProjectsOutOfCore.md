@@ -172,14 +172,12 @@ that a published plugin still binds is red, and it has exactly three answers:
 reached that way links green and fails at runtime, so search for it by hand (see `Graph/Apps`
 below).
 
-🚨 **The pull-request ladder links only FOUR plugins.** Its input is
-`.github/scripts/fetch-deployed-plugin-set.sh`, whose `modules=` list is fixed:
-`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps` and `.Payments.Stripe`. Every other published
-module is outside the check. That includes the `Mail.MicrosoftGraph`, `Mail.Gmail` and `OgCard`
-modules, and also `Memex.Portal.Shared`, which ships in the image rather than as a module. So a
-removal that only those consumers bind leaves the ladder **green with nothing checked**. A green
-ladder is evidence only for the four. A carve that removes types any other plugin binds needs its
-own compatibility check of those consumers:
+🚨 **The ladder links every module the sealed `plugins` publication carries — and nothing that
+ships outside it.** Until MeshWeaver#7409 its input was a fixed list of four modules; it is now the
+whole publication, proven against the publication's own index (see
+[Platform Compatibility Ladder](../PlatformCompatibilityLadder)). Two consumers are still outside it:
+`Memex.Portal.Shared`, which ships in the image rather than as a module, and any satellite's modules.
+A carve that removes types those bind needs its own compatibility check of them:
 - build each one from source against the candidate core, with Release `-warnaserror`;
 - or, better, link its published bytes against the candidate.
 
@@ -455,11 +453,10 @@ no epoch is declared:
 3. Only then does core's half merge.
 
 A portal that still holds a pre-move bundle when the new core rolls has that generation refused, and
-it picks up the published one; it does not crash. What the pull-request ladder check measures is
-core's own four module bundles (`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps`,
-`.Payments.Stripe`, `.github/scripts/fetch-deployed-plugin-set.sh`). Neither mail module is among
-them, so that check is not the guard for this break. The ORDER is the guard, and the pair gate
-(`Pairs-with:`) enforces the first step.
+it picks up the published one; it does not crash. When this was written the pull-request ladder
+measured only four module bundles and neither mail module was among them; since MeshWeaver#7409 it
+links every module of the sealed `plugins` publication, mail included. The ORDER is still the guard
+for this break, and the pair gate (`Pairs-with:`) enforces the first step.
 
 ## Two defects this survey found
 
