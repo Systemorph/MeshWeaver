@@ -56,6 +56,15 @@ public record CreateNodeRequest(MeshNode Node)
     /// pipeline (including its own permission check).
     /// </summary>
     public object? Argument { get; init; }
+
+    /// <summary>
+    /// Set by the platform's pending-write recovery (<see cref="PendingWriteRecovery"/>, #7380) on the
+    /// ONE re-issue of a create that was refused because the store could not be reached. A create
+    /// carrying it that is refused as unavailable AGAIN is not recorded as a pending write a second
+    /// time: the recovery reports it by name and drops it, so a pending write is never retried for
+    /// ever. Setting it on any other create only opts that create out of being re-issued.
+    /// </summary>
+    public bool ReissuedAfterUnavailable { get; init; }
 }
 
 /// <summary>

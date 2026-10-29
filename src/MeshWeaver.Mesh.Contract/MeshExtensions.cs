@@ -1010,6 +1010,35 @@ public static class MeshExtensions
     /// one — see <c>Doc/Architecture/DebuggingMessageFlow</c>.</para>
     /// See <c>Doc/Architecture/AsynchronousCalls</c>.
     /// </summary>
+    /// <summary>
+    /// #7380 — a create the store could not be reached for is recorded as a pending write, so the
+    /// platform re-issues it once, as the same writer, when the store answers again
+    /// (<see cref="PendingWriteRecovery"/>). The ONE re-issue itself is never recorded again: a
+    /// pending write that is refused a second time is reported and dropped by the recovery.
+    /// </summary>
+    private static void RecordPendingWrite(
+        IMessageHub hub, CreateNodeRequest refused, AccessContext? writer, Exception fault, ILogger logger)
+    {
+        if (refused.ReissuedAfterUnavailable)
+            return;
+        if (hub.ServiceProvider.GetService<PendingWriteLedger>() is not { } ledger)
+        {
+            logger.LogWarning(
+                "[CreateNode] {Path}: no PendingWriteLedger on this host, so the create refused as unavailable is "
+                + "NOT recorded and nothing will re-issue it", refused.Node.Path);
+            return;
+        }
+        ledger.Record(
+                new PendingWrite(refused.Node, refused.CreatedBy, writer, DateTimeOffset.UtcNow,
+                    $"{fault.GetType().Name}: {fault.Message}", refused.AuthorshipFrom, refused.Argument),
+                hub.JsonSerializerOptions)
+            .Subscribe(
+                _ => { },
+                recordFault => logger.LogError(recordFault,
+                    "[CreateNode] {Path}: the create refused as unavailable could NOT be recorded as a pending write, "
+                    + "so nothing will re-issue it — the writer must repeat it", refused.Node.Path));
+    }
+
     private static IMessageDelivery HandleCreateNodeRequest(
         IMessageHub hub,
         IMessageDelivery<CreateNodeRequest> request)
@@ -1821,6 +1850,7 @@ public static class MeshExtensions
                         Respond(CreateNodeResponse.FailWith(
                             StoreReachability.NodeCreationNotAttempted(node.Path),
                             NodeCreationRejectionReason.Unavailable));
+                        RecordPendingWrite(hub, capturedRequest, request.AccessContext, ex, logger);
                     }
                     else if (ex is InvalidOperationException)
                     {
