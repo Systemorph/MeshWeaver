@@ -158,15 +158,16 @@ public class TestTimeoutsTest
         using var _ = new EnvironmentVariable("GITHUB_ACTIONS", factor is null ? null : "true");
         using var __ = new EnvironmentVariable("MW_TEST_TIMEOUT_FACTOR", factor);
 
-        // Both re-enqueue-covering tests carry this literal: LateNackReenqueueTest and
-        // LateNackReenqueueCorrelationTest. One constant, because they must not drift apart.
+        // Every re-enqueue-covering test carries this literal: LateNackReenqueueTest,
+        // LateNackReenqueueCorrelationTest and AWriteDuringItsOwnersRecycleLandsTest (its terminal
+        // wait is TestTimeouts.WriteConvergence). One constant, because they must not drift apart.
         const int reEnqueueTestTimeoutMs = 600_000;
         Assert.True(
             reEnqueueTestTimeoutMs > TestTimeouts.WriteTestMilliseconds,
             $"the re-enqueue tests' [Fact(Timeout = {reEnqueueTestTimeoutMs})] must exceed "
             + $"TestTimeouts.WriteTestMilliseconds ({TestTimeouts.WriteTestMilliseconds}), or xunit "
             + "kills the test before its inner wait can report what it was waiting for. Raise the "
-            + "literal in BOTH files — do not lower this bound.");
+            + "literal in EVERY such file — do not lower this bound.");
     }
 
     /// <summary>The ordering of the three convergence scales holds wherever it runs.</summary>

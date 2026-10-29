@@ -171,6 +171,17 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
         PrebuiltAssemblySeeder.RequirePrebuilt(Mesh.ServiceProvider).Should().BeTrue(
             "the premise of this case: the mesh now refuses a local compile");
 
+        // 🚨 "Never through" is a claim about EVERY state the type passes through, so it is
+        // asserted over the whole transition, never over one sample of it (#7338). The recording
+        // starts BEFORE the import that could move the type and ends after the hold has been
+        // established; a point read afterwards would pass a type that went AdoptedVerified →
+        // StaleAdopted/Compiled → AdoptedVerified, and a wait-until-AdoptedVerified would pass it by
+        // construction. The live stream replays the current state first, so the recording also
+        // holds the premise.
+        var provenances = ImmutableList<BuildProvenance>.Empty;
+        using var recording = Definitions.Subscribe(
+            d => ImmutableInterlocked.Update(ref provenances, list => list.Add(d.BuildProvenance)));
+
         // ── 2. Commit B moves the type's sources, and NO bundle carries the fingerprint they make ──
         await Sync.ReimportAtCommit(Space, CommitB, UserId)
             .Timeout(TestTimeouts.CrossSilo).Await(cancellationToken);
@@ -204,8 +215,13 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
         var stillAdopted = await Definition(cancellationToken);
         stillAdopted.CurrentSourceFingerprint.Should().Be(adoptedFingerprint,
             "CurrentSourceFingerprint does not move until a matching bundle exists");
-        stillAdopted.BuildProvenance.Should().Be(BuildProvenance.AdoptedVerified,
-            "the type goes AdoptedVerified → AdoptedVerified, never through StaleAdopted");
+        recording.Dispose();
+        var observed = Volatile.Read(ref provenances);
+        Output.WriteLine($"provenance across the held import: {string.Join(" → ", observed)}");
+        observed.Should().NotBeEmpty("the live stream replays the type's current state on subscribe");
+        observed.Should().AllSatisfy(p => p.Should().Be(BuildProvenance.AdoptedVerified,
+            "the type goes AdoptedVerified → AdoptedVerified, never through StaleAdopted — and on a "
+            + "mesh that refuses a local compile, never through Compiled either"));
 
         // …and the hold is PER TYPE: the rest of the Space took commit B.
         (await NotesNameWhen("Notes at B", cancellationToken)).Should().Be("Notes at B",
