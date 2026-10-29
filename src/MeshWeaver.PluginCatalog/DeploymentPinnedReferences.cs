@@ -618,7 +618,29 @@ public static class DeploymentPinnedReferences
             .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(nodeType)))
             .Take(1)
             .Timeout(EnumerationBudget)
-            .Select(change => change.Items.Where(n => n.State == MeshNodeState.Active).ToList());
+            .Select(change => CompleteActiveItems(change, nodeType));
+
+    /// <summary>
+    /// The active records of a listing that was read COMPLETELY. A frame naming silent providers, or
+    /// marked <see cref="QueryResultChange{T}.SnapshotIncomplete"/>, is a FLOOR that may be missing
+    /// references, and read as a listing it would let retention collect what an unread reference
+    /// protects. So it throws, which aborts the pass: incomplete licenses no deletion (#7378).
+    /// </summary>
+    /// <param name="change">The listing's first frame.</param>
+    /// <param name="nodeType">The node type listed, for the refusal.</param>
+    /// <exception cref="InvalidOperationException">The listing is incomplete.</exception>
+    internal static IReadOnlyList<MeshNode> CompleteActiveItems(QueryResultChange<MeshNode> change, string nodeType)
+    {
+        if (change.SilentProviders is { Count: > 0 } silent)
+            throw new InvalidOperationException(
+                $"the {nodeType} listing is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] did not "
+                + "answer, so the references it would contribute are unknown and nothing may be collected");
+        if (change.SnapshotIncomplete)
+            throw new InvalidOperationException(
+                $"the {nodeType} listing is INCOMPLETE: a provider dropped part of its read, so the references "
+                + "it would contribute are unknown and nothing may be collected");
+        return change.Items.Where(n => n.State == MeshNodeState.Active).ToList();
+    }
 
     /// <summary>A Deployment record's pin, or null when the record pins nothing.</summary>
     public static PinnedPlatformReference? DeploymentPinOf(MeshNode node, JsonSerializerOptions options)

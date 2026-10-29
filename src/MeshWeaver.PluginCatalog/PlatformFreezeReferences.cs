@@ -132,12 +132,29 @@ public static class PlatformFreezeReferences
     /// lane. One lane holds one reference, so a re-filing refreshes it and a freeze moved to another
     /// set replaces it; binding the key to the authenticated sender means one key can never
     /// overwrite (and so un-protect) another sender's freeze.
+    ///
+    /// <para>The readable slugs are lossy (<c>CI Gate</c> and <c>CI_Gate</c> slug alike) and their
+    /// <c>--</c> separator can occur inside a slug, so they alone are ambiguous across senders. The
+    /// id therefore ends in a hash of the length-framed ORIGINAL tuple, which keeps distinct tuples
+    /// distinct; the slugs stay only so the path is readable.</para>
     /// </summary>
     /// <param name="registeredInstance">The authenticated sender.</param>
     /// <param name="repository">The repository that froze.</param>
     /// <param name="lane">The lane that froze.</param>
     public static string IdOf(string registeredInstance, string repository, string lane) =>
-        $"{Slug(registeredInstance)}--{Slug(repository)}--{Slug(lane)}";
+        $"{Slug(registeredInstance)}--{Slug(repository)}--{Slug(lane)}--{TupleHash(registeredInstance, repository, lane)}";
+
+    private static string TupleHash(params string[] parts)
+    {
+        var framed = new StringBuilder();
+        foreach (var part in parts)
+        {
+            var value = part.Trim();
+            framed.Append(value.Length.ToString(CultureInfo.InvariantCulture)).Append(':').Append(value);
+        }
+        var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(framed.ToString()));
+        return Convert.ToHexStringLower(hash.AsSpan(0, 8));
+    }
 
     private static string Slug(string value)
     {

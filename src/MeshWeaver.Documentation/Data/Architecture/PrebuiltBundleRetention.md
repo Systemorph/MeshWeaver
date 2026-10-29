@@ -167,8 +167,10 @@ Now a freeze is a record:
   `registry-url`, no key, or a refusal) is **red**, naming what to provision, because a freeze the
   registry does not know about is exactly the state this exists to end.
 - **The store stamps it** (`PlatformFreezeReferences.File`). It files the node at
-  `{Hosting:OperationalSpace}/PlatformFreezes/<instance>--<repository>--<lane>`, as node type
-  `Hosting/PlatformFreeze`. The sender's `registeredInstance`, `filedAt` and `expiresAt` are
+  `{Hosting:OperationalSpace}/PlatformFreezes/<instance>--<repository>--<lane>--<hash>`, as node type
+  `Hosting/PlatformFreeze`. The slugs are for reading; `<hash>` is taken over the length-framed
+  original instance, repository and lane, because slugs alone are lossy and their `--` separator can
+  occur inside one, so two different senders or lanes could otherwise land on the same id. The sender's `registeredInstance`, `filedAt` and `expiresAt` are
   discarded: a lane says what it froze on, never how long the store keeps it. The key binds the
   record to the authenticated sender, so one key cannot overwrite (and so un-protect) another
   sender's freeze. The route itself is mapped by the registry host, beside
@@ -180,7 +182,10 @@ Now a freeze is a record:
   a `PinnedPlatformReference` on its `set`, which keeps the identity its marker names (rule 4),
   reported as `pinned by CI freeze <repository> <lane> …`. An expired one protects nothing and is
   logged. A reference whose set or expiry cannot be read **refuses the pass**, and a node of the
-  type anywhere but the filing location is not read.
+  type anywhere but the filing location is not read. So does a listing that was read only in part:
+  a first frame naming silent providers or marked `SnapshotIncomplete` refuses the pass for all
+  three reference sources (`DeploymentPinnedReferences.CompleteActiveItems`), because it may be
+  missing the very reference that protects a set.
 
 Evidence: `PlatformFreezeRetentionReferenceTest` (MeshWeaver.Hosting.Test) —
 `AFrozenSet_IsNotPruned_AndAnUnreferencedOldSetBesideItIs` (the frozen set is kept, and the

@@ -160,6 +160,42 @@ public class PlatformFreezeRetentionReferenceTest : IDisposable
     }
 
     [Fact]
+    public void AnIncompleteListing_RefusesThePass_AndACompleteOneIsRead()
+    {
+        var frozen = Freeze(FrozenSet, Now + TimeSpan.FromDays(3));
+
+        Action silent = () => DeploymentPinnedReferences.CompleteActiveItems(
+            new QueryResultChange<MeshNode> { Items = [frozen], SilentProviders = ["Postgres:satellite"] },
+            PlatformFreezeReferences.NodeType);
+        Action partial = () => DeploymentPinnedReferences.CompleteActiveItems(
+            new QueryResultChange<MeshNode> { Items = [], SnapshotIncomplete = true },
+            PlatformFreezeReferences.NodeType);
+
+        silent.Should().Throw<InvalidOperationException>("a provider that never answered may hold a freeze")
+            .Which.Message.Should().Contain("INCOMPLETE").And.Contain("Postgres:satellite");
+        partial.Should().Throw<InvalidOperationException>("an empty floor is not an empty listing")
+            .Which.Message.Should().Contain("INCOMPLETE");
+        // Negative control: the same frame, complete, is read.
+        DeploymentPinnedReferences.CompleteActiveItems(
+                new QueryResultChange<MeshNode> { Items = [frozen] }, PlatformFreezeReferences.NodeType)
+            .Should().ContainSingle();
+    }
+
+    [Fact]
+    public void TheReferenceKey_IsUnambiguous_AcrossSendersAndLanes()
+    {
+        // Two senders whose readable slugs would join to the same id.
+        PlatformFreezeReferences.IdOf("satellite", "a--org/repo", "workflow/plan")
+            .Should().NotBe(PlatformFreezeReferences.IdOf("satellite--a", "org/repo", "workflow/plan"));
+        // Two lanes of one sender whose names slug alike.
+        PlatformFreezeReferences.IdOf("satellite", "org/repo", "CI Gate")
+            .Should().NotBe(PlatformFreezeReferences.IdOf("satellite", "org/repo", "CI_Gate"));
+        // Negative control: the same lane re-filing lands on its own record, so a renewal refreshes it.
+        PlatformFreezeReferences.IdOf("satellite", "org/repo", "ci/gate")
+            .Should().Be(PlatformFreezeReferences.IdOf("satellite", "org/repo", "ci/gate"));
+    }
+
+    [Fact]
     public void ABodyWithoutASet_IsRefusedBeforeAnythingIsFiled() =>
         PlatformFreezeReferences.Refusal(new PlatformFreezeReference { Repository = "o/r", Lane = "l" })
             .Should().Contain("names no `set`");
@@ -197,7 +233,8 @@ public class PlatformFreezeFilingTest(ITestOutputHelper output) : MonolithMeshTe
         var path = await PlatformFreezeReferences.File(Mesh, "satellite-ci", body, filedAt)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
-        path.Should().Be($"{Location}/satellite-ci--org_satellite--ci_gate");
+        path.Should().Be($"{Location}/{PlatformFreezeReferences.IdOf("satellite-ci", "Org/Satellite", "ci/gate")}");
+        path.Should().StartWith($"{Location}/satellite-ci--org_satellite--ci_gate--");
         var stored = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
             .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
