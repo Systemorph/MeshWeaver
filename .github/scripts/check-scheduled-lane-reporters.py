@@ -115,6 +115,7 @@ def if_text(job: dict) -> str:
 # A status function in an `if:` replaces the implicit success(), so the job can run — and SUCCEED —
 # after one of its own needs failed.
 _STATUS_OVERRIDE = re.compile(r"\b(?:always|failure|cancelled)\(\)")
+_STATUS_CALL = re.compile(r"\b(always|failure|cancelled|success)\s*\(\s*\)", re.I)
 
 
 def propagates_failure(job: dict) -> bool:
@@ -129,6 +130,9 @@ def propagates_failure(job: dict) -> bool:
     cond = if_text(job).strip()
     if cond.startswith("${{") and cond.endswith("}}"):
         cond = cond[3:-2]
+    # Spell every status call one way first: `!success( )` or `Success ()` is the same call, and a
+    # prefilter that missed it read the job as keeping the implicit success() (Copilot on #7512).
+    cond = _STATUS_CALL.sub(lambda m: m.group(1).lower() + "()", cond)
     if not re.search(r"\b(?:always|failure|cancelled|success)\(\)", cond):
         return True
     if _STATUS_OVERRIDE.search(cond):
@@ -696,6 +700,16 @@ jobs:
         ("#7512 success half `success() && true || <schedule>` closes the ledger on a red", pair.replace(
             "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
             "  green:\n    needs: [b]\n    if: \"${{ success() && true || github.event_name == 'schedule' }}\""), "", True),
+        # Copilot on #7512 (second round) — a status call spelled with whitespace or another case is the same call.
+        ("#7512 intermediate `!success( )` (whitespace) hides a's red", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: '${{ !success( ) }}', runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("#7512 intermediate `Always ()` (case, whitespace) hides a's red", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: '${{ Always () }}', runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("#7512 control: intermediate `success( ) && guard` still propagates", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: \"success( ) && github.ref == 'refs/heads/main'\", runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", False),
         ("`on:` as a list with schedule, no reporter","on: [schedule, push]\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n", "", True),
     ]
     failures = 0
