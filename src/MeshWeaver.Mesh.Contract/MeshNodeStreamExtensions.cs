@@ -3757,6 +3757,17 @@ public static class MeshNodeStreamExtensions
             // timeout-shaped indeterminate — for EmitNull callers, whose documented contract is
             // "indeterminate ⇒ treat as absent").
             var shuttingDownNacks = 0;
+            // 🚨 PROBES ISSUED, counted apart from NACKs received (#7395). The two differ by one
+            // exactly when the budget ran out with the LAST probe still unanswered — no NACK, no
+            // data — and that is a different fact from "every probe was refused ShuttingDown": the
+            // re-probe reached something (the dying activation, a successor still activating, a
+            // reply that was lost) that never answered. Measured on memex-cloud after #7418 rolled:
+            // "still recycling (ShuttingDown) after 1 probe(s) over 15.0s" — one NACK at +0.7 s,
+            // then 14 s in which the re-probe was outstanding — read as a recycler outlasting the
+            // budget, which it was not, and with none of the reader/target diagnostics the plain
+            // timeout carries, so the reading could not say where the re-probe went.
+            var probesIssued = 0;
+            var lastProbeIssuedAt = TimeSpan.Zero;
             Exception? lastRecyclingNack = null;
             // 🚨 The DISTINCT owner activations seen across the re-probe loop — the datum that
             // separates the two failures this loop can end in, which have opposite fixes:
@@ -3797,15 +3808,63 @@ public static class MeshNodeStreamExtensions
             // Routed by onTimeout the same way the plain timeout is: EmitNull callers opted
             // into "indeterminate ⇒ absent" and get the Unavailable outcome (null via
             // GetMeshNode); Throw callers get the error surfaced.
+            // The reader's and the owner's state at the moment the budget ran out — the two halves
+            // that decide WHERE an unanswered probe went. Shared by the plain timeout and the
+            // recycling verdict whose last probe was never answered.
+            string ReaderAndTargetDiagnostics()
+            {
+                string diagnostics;
+                // The pending-request snapshot must come from the ISSUING hub — that is where our
+                // GetDataRequest's callback is registered and where a lost reply shows as pending.
+                try { diagnostics = issuingHub.GetPendingRequestDiagnostics(); }
+                catch (Exception diagEx) { diagnostics = $"<diagnostics unavailable: {diagEx.GetType().Name}>"; }
+                // …and the OWNER's state, which is what actually decides the verdict. The reader's
+                // snapshot alone proves only that the reader is innocent (idle queues + our request
+                // still pending = "the reply never came"), leaving "owner never activated" and
+                // "owner answered, reply lost" indistinguishable. HostedHubCreation.Never is a pure
+                // probe — a dictionary lookup that must NEVER activate the hub as a side effect of
+                // diagnosing it.
+                string targetState;
+                try
+                {
+                    targetState = string.Equals(hub.Address.ToString(), path, StringComparison.Ordinal)
+                        ? "Target: this hub itself."
+                        : hub.GetHostedHub(new Address(path), HostedHubCreation.Never) is { } owner
+                            ? $"Target: {owner.GetPendingRequestDiagnostics()}"
+                            : $"Target: NO LOCAL HUB at '{path}' — it never activated here (or is owned "
+                              + "by another silo), so no reply was ever going to be produced.";
+                }
+                catch (Exception targetEx)
+                {
+                    targetState = $"<target diagnostics unavailable: {targetEx.GetType().Name}>";
+                }
+                return $"Reader: {diagnostics} {targetState}";
+            }
+
             void EmitRecyclingExhausted()
             {
                 int distinctOwners;
                 lock (owners) distinctOwners = owners.Count;
+                var nacks = Volatile.Read(ref shuttingDownNacks);
+                var issued = Volatile.Read(ref probesIssued);
+                // 🚨 Say which of the two endings this was (#7395). Every probe refused ShuttingDown
+                // is a recycler that outlasted the budget; a last probe that got NO answer is not —
+                // it is the plain "never answered" timeout, reached after a recycle, and it carries
+                // that timeout's diagnostics so the reading can tell the dying activation from a
+                // successor still activating from a lost reply.
+                var ending = issued > nacks
+                    ? $"answered ShuttingDown {nacks} time(s), and then the re-probe issued at "
+                      + $"{lastProbeIssuedAt.TotalSeconds:F1}s ({issued} probe(s) issued in all) was NEVER "
+                      + $"ANSWERED over the remaining {(started.Elapsed - lastProbeIssuedAt).TotalSeconds:F1}s "
+                      + $"(budget {budget.TotalSeconds:F0}s) — neither refused nor served. The address was "
+                      + "recycling, so this is NOT absence; but it did not stay refusing for the whole budget "
+                      + "either: the re-probe reached something that never replied. "
+                      + ReaderAndTargetDiagnostics()
+                    : $"was still recycling (ShuttingDown) after {nacks} probe(s) over "
+                      + $"{started.Elapsed.TotalSeconds:F1}s (budget {budget.TotalSeconds:F0}s) — the address is "
+                      + "recycling, NOT absent." + RecyclingShape(distinctOwners);
                 var error = new AddressRecyclingException(
-                    $"GetMeshNode('{path}'): the owning hub was still recycling (ShuttingDown) after "
-                    + $"{Volatile.Read(ref shuttingDownNacks)} probe(s) over {started.Elapsed.TotalSeconds:F1}s "
-                    + $"(budget {budget.TotalSeconds:F0}s) — the address is recycling, NOT absent. "
-                    + RecyclingShape(distinctOwners)
+                    $"GetMeshNode('{path}'): the owning hub {ending}"
                     + " Surfacing rather than returning null, which the caller cannot tell apart from "
                     + "'node not found'. Retry the read once the address has reactivated.",
                     lastRecyclingNack);
@@ -3847,35 +3906,10 @@ public static class MeshNodeStreamExtensions
                     return;
                 }
                 var elapsed = started.Elapsed;
-                string diagnostics;
-                // The pending-request snapshot must come from the ISSUING hub — that is where our
-                // GetDataRequest's callback is registered and where a lost reply shows as pending.
-                try { diagnostics = issuingHub.GetPendingRequestDiagnostics(); }
-                catch (Exception diagEx) { diagnostics = $"<diagnostics unavailable: {diagEx.GetType().Name}>"; }
-                // …and the OWNER's state, which is what actually decides the verdict. The reader's
-                // snapshot alone proves only that the reader is innocent (idle queues + our request
-                // still pending = "the reply never came"), leaving "owner never activated" and
-                // "owner answered, reply lost" indistinguishable. HostedHubCreation.Never is a pure
-                // probe — a dictionary lookup that must NEVER activate the hub as a side effect of
-                // diagnosing it.
-                string targetState;
-                try
-                {
-                    targetState = string.Equals(hub.Address.ToString(), path, StringComparison.Ordinal)
-                        ? "Target: this hub itself."
-                        : hub.GetHostedHub(new Address(path), HostedHubCreation.Never) is { } owner
-                            ? $"Target: {owner.GetPendingRequestDiagnostics()}"
-                            : $"Target: NO LOCAL HUB at '{path}' — it never activated here (or is owned "
-                              + "by another silo), so no reply was ever going to be produced.";
-                }
-                catch (Exception targetEx)
-                {
-                    targetState = $"<target diagnostics unavailable: {targetEx.GetType().Name}>";
-                }
                 var message =
                     $"GetMeshNode('{path}') timed out after {elapsed.TotalSeconds:F1}s "
                     + $"(budget {budget.TotalSeconds:F0}s) — the owning per-node hub never answered the "
-                    + $"GetDataRequest. This is NOT 'node not found'. Reader: {diagnostics} {targetState}";
+                    + $"GetDataRequest. This is NOT 'node not found'. {ReaderAndTargetDiagnostics()}";
                 // Best-effort log. This runs on the CTS timer thread and the hub (with its
                 // ServiceProvider) may already be torn down — an exception escaping here would
                 // be an unobserved fault on a pool thread, i.e. exactly the class of failure
@@ -3920,6 +3954,10 @@ public static class MeshNodeStreamExtensions
                 // Pinned by GetMeshNodeReProbeKeepsCallerIdentityTest.
                 var probe = new SingleAssignmentDisposable();
                 innerSubscription.Disposable = probe;
+                // Stamped BEFORE the post, so the count can never trail a NACK the post provokes
+                // synchronously (the nested re-probe above).
+                lastProbeIssuedAt = started.Elapsed;
+                Interlocked.Increment(ref probesIssued);
                 try
                 {
                     // 🚨 Register the response subject BEFORE posting. Observe<TResponse> pre-registers the

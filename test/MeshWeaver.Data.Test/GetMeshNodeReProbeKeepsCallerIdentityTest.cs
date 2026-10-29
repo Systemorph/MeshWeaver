@@ -118,4 +118,75 @@ public class GetMeshNodeReProbeKeepsCallerIdentityTest(ITestOutputHelper output)
             "the re-probe is the SAME read, so it must carry the SAME identity the read was issued "
             + "with — never none, and never one borrowed from the thread the NACK happened to land on");
     }
+
+    /// <summary>
+    /// 🚨 <b>A re-probe that is NEVER ANSWERED is not "still recycling"</b> (#7395, after #7418).
+    ///
+    /// <para>The owner here refuses the first probe <see cref="ErrorType.ShuttingDown"/> and then
+    /// receives the re-probe and answers nothing — the shape memex-cloud logged on a build that
+    /// contains #7418: one NACK at +0.7 s, then 14 s of silence, reported as
+    /// <c>still recycling (ShuttingDown) after 1 probe(s) over 15.0s</c>. That sentence claims a
+    /// recycler outlasted the budget, which it did not, and it carried none of the reader/target
+    /// diagnostics the plain timeout prints, so the reading could not tell where the re-probe went.
+    /// The verdict must say the re-probe was issued and never answered, how long it was outstanding,
+    /// and carry those diagnostics.</para>
+    /// </summary>
+    [HubFact]
+    public async Task ReProbeNeverAnswered_IsReportedAsUnanswered_NotAsStillRecycling()
+    {
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var probes = 0;
+
+        // The OWNER: NACKs the first probe as recycling, takes the second and never answers it.
+        var owner = Mesh.GetHostedHub(
+            CreateClientAddress(),
+            c => c
+                .WithHandler<GetDataRequest>((hub, d) =>
+                {
+                    if (Interlocked.Increment(ref probes) == 1)
+                        using (access.SwitchAccessContext(null))
+                            hub.Post(
+                                new DeliveryFailure(d)
+                                {
+                                    ErrorType = ErrorType.ShuttingDown,
+                                    Message = $"hub {hub.Address} is shutting down",
+                                },
+                                o => o.WithTarget(d.Sender).WithRequestIdFrom(d));
+                    return d.Processed();
+                })
+                .WithPostingIdentity(PostingIdentity.System));
+        owner.Should().NotBeNull();
+        await owner!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+
+        var issuing = Mesh.GetHostedHub(CreateClientAddress(), c => c);
+        issuing.Should().NotBeNull();
+        await issuing!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+
+        var outcomes = new System.Reactive.Subjects.ReplaySubject<NodeReadOutcome>();
+        using (access.SwitchAccessContext(Reader))
+            issuing.GetMeshNodeOutcome(owner.Address.ToString(), TestTimeouts.Quick, ReadTimeoutBehavior.EmitNull)
+                .Subscribe(outcomes);
+
+        var outcome = await outcomes.Should().Within(TestTimeouts.Convergence).Emit(
+            "the read must settle when its budget ends");
+        Output.WriteLine($"[TEST] outcome={outcome.Status}; probes received={Volatile.Read(ref probes)}; "
+                         + $"error={outcome.Failure?.Message}");
+
+        Volatile.Read(ref probes).Should().Be(2,
+            "PRECONDITION: the re-probe reached the owner — what is under test is how its silence is reported");
+        outcome.Status.Should().Be(NodeReadStatus.Unavailable,
+            "the address was recycling and then silent: indeterminate, never absent");
+        var error = outcome.Failure.Should().BeOfType<AddressRecyclingException>(
+            "it is still an availability fact the compile pipeline classifies as Unavailable").Which;
+        error.Message.Should().Contain("NEVER ANSWERED",
+            "the last probe got no answer at all — reporting it as 'still recycling' is the false "
+            + "diagnosis memex-cloud logged after #7418");
+        error.Message.Should().Contain("2 probe(s) issued",
+            "the verdict must count the probes it ISSUED, not only the NACKs it received");
+        error.Message.Should().NotContain("still recycling (ShuttingDown) after 1 probe(s)",
+            "one NACK followed by silence is not a recycler that refused for the whole budget");
+        error.Message.Should().Contain("Reader:",
+            "an unanswered probe carries the reader/target diagnostics the plain timeout carries, so "
+            + "the next reading can say where the re-probe went");
+    }
 }
