@@ -76,6 +76,13 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
         if (userId == WellKnownUsers.System)
             return Observable.Return(NodeValidationResult.Valid());
 
+        // 🛡️ An API token's principal is bound to its writer (ApiTokenPrincipalBinding) — ahead of the
+        // own-scope shortcut, which would otherwise let a person write any token into their own partition.
+        if (context.Operation is NodeOperation.Create or NodeOperation.Update
+            && ApiTokenPrincipalBinding.Refusal(context.ExistingNode, context.Node, userId,
+                context.AccessContext?.Locale, _hub.JsonSerializerOptions) is { } principalRefusal)
+            return Observable.Return(NodeValidationResult.Unauthorized(principalRefusal));
+
         // 🚨 The instance-level anonymous switch (Access:DenyAnonymous — AnonymousAccess). The
         // permission fold already refuses the anonymous subject, but the chain below consults a
         // hub rule and a per-type INodeTypeAccessRule FIRST, and either may answer without ever

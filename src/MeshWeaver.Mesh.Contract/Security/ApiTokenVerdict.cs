@@ -122,6 +122,16 @@ public static class ApiTokenVerdict
 
     /// <summary>Reads the content in whatever shape it arrives — typed on the owning hub, a
     /// JsonElement from a store or across a hub boundary.</summary>
+    /// <summary>
+    /// The <see cref="ApiToken"/> a node carries, read EXACTLY as the verdict reads it — typed content,
+    /// or a raw JSON element deserialized as one — or null. The ONE reading the write rules use to
+    /// recognise a credential, so a write cannot produce a node the verdict would authenticate that the
+    /// rules did not see as one.
+    /// </summary>
+    /// <param name="node">The node.</param>
+    /// <param name="options">The serializer options.</param>
+    public static ApiToken? ReadToken(MeshNode? node, JsonSerializerOptions options) => ContentOf<ApiToken>(node, options);
+
     private static T? ContentOf<T>(MeshNode? node, JsonSerializerOptions options) where T : class
     {
         if (node is null)
