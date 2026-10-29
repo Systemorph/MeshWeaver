@@ -61,7 +61,20 @@ public class ObjectPolymorphicConverter(
         }
         if (!warnedUnregisteredRead.TryAdd(typeName, 0))
             return;
-        logger.LogWarning(
+        // 🚨 #7318 — during a replica's boot registration window this sentence is not decidable
+        // yet: a runtime-compiled NodeType's content type registers only when the registration pass
+        // reaches it, and boot-time readers run before that. The registry keeps the warning and
+        // writes it at the settle iff the name still does not resolve; outside the window (and on a
+        // host without the pass) it is written here, at the read, as always.
+        var deferredName = typeName;
+        if (contentTypeRegistry?.DeferUnresolvedWarning(deferredName, () => LogUnregistered(deferredName)) == true)
+            return;
+        LogUnregistered(typeName);
+    }
+
+    private void LogUnregistered(string typeName)
+    {
+        logger?.LogWarning(
             "Received '$type':'{TypeName}' which is NOT registered in this (receiving) hub — it can only be read "
             + "as an untyped JsonElement (the value renders empty / reactive waits time out). Register it in this "
             + "hub too (WithType(typeof({TypeName}), nameof({TypeName}))): a $type must be registered in the "
