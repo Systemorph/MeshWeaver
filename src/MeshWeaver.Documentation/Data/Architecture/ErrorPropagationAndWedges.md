@@ -288,9 +288,20 @@ ordering-safe: an error is the last notification a reader receives, and every va
 delivered synchronously and has already returned. Data emissions are unchanged and still run on
 the stream's turn.
 
+A FORCED end is the exception to "its own pooled work item". The cache's own teardown and a
+committed delete end readers through `Entry.EndReaders`, and the teardown does it for every path
+in one sweep. One pool item per terminal would deliver that sweep's terminals concurrently. A
+consumer composing two node reads would then take them on two threads at once, which is the Rx
+gate lock-order deadlock the shared `ReleaseLane` exists to prevent. Forced ends therefore go down
+that lane, one at a time and still off the raising turn. Upstream faults stay on the pool, because
+a reader that blocks in its error path must hold only itself and never the mesh's lane. This is
+pinned by `CacheTeardownTerminalsAreDeliveredOneAtATimeTest`.
+
 This is pinned by `AStreamTerminalNeverRunsReadersOnTheSyncHubTurnTest`. Two readers subscribe to
 one absent node, and the first one parks in its error callback. The second must receive the same
-NotFound while the first is still parked. Before the change it hears nothing.
+NotFound while the first is still parked. Before the change it hears nothing. A second reader that
+was answered synchronously inside its own subscribe took the negative-cache shortcut instead of
+joining the fan-out. The test reports that case as inconclusive, never as a pass.
 
 **What this does NOT establish** is the call in the sweep's continuation that never returned. The
 logs bound it: it is reached after the fourth credential NotFound and before the next user's

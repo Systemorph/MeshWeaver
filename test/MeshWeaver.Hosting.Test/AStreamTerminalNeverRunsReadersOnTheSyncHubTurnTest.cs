@@ -72,12 +72,27 @@ public class AStreamTerminalNeverRunsReadersOnTheSyncHubTurnTest(ITestOutputHelp
                 });
 
         // Reader 2 is any other reader of the same node, subscribed before the verdict arrives.
+        // 🚨 It must JOIN the shared fan-out (review of #7589). Had the verdict already landed, its
+        // subscribe would take GetStreamRaw's negative-cache shortcut instead — an Observable.Throw
+        // delivered synchronously, on THIS thread, inside the Subscribe call — and it would be told
+        // whatever the fan-out does, so the test would pass with the inline fan-out it exists to
+        // forbid. That case is detected and reported by name below, never counted as a pass.
+        var subscribingThread = Environment.CurrentManagedThreadId;
+        var subscribing = 1;
+        var answeredInsideSubscribe = 0;
         var secondReader = new AsyncSubject<string>();
         using var second = access.RunAsSystem(() => workspace.GetMeshNodeStream(path))
             .Subscribe(
                 _ => { secondReader.OnNext("value"); secondReader.OnCompleted(); },
-                ex => { secondReader.OnNext(ex.GetType().Name); secondReader.OnCompleted(); },
+                ex =>
+                {
+                    if (Volatile.Read(ref subscribing) == 1 && Environment.CurrentManagedThreadId == subscribingThread)
+                        Volatile.Write(ref answeredInsideSubscribe, 1);
+                    secondReader.OnNext(ex.GetType().Name);
+                    secondReader.OnCompleted();
+                },
                 () => { secondReader.OnNext("completed-empty"); secondReader.OnCompleted(); });
+        Volatile.Write(ref subscribing, 0);
         try
         {
             await parkedReaderEntered.Should().Within(TestTimeouts.Convergence)
@@ -90,6 +105,10 @@ public class AStreamTerminalNeverRunsReadersOnTheSyncHubTurnTest(ITestOutputHelp
                       + "inline on the turn that raised it",
                     cancellationToken: TestContext.Current.CancellationToken);
 
+            Volatile.Read(ref answeredInsideSubscribe).Should().Be(0,
+                "INCONCLUSIVE, not a pass: the second reader was answered synchronously inside its own "
+                + "Subscribe (the negative-cache shortcut), so it never joined the shared fan-out this "
+                + "test is about");
             answer.Should().Be(nameof(DeliveryFailureException),
                 "the second reader receives the same NotFound verdict");
             Volatile.Read(ref parkExpired).Should().Be(0,

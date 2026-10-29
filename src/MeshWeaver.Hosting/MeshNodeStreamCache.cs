@@ -219,7 +219,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         /// <remarks>No catch here: every reader is attached through <c>SharedView</c>, which delivers
         /// the terminal to each reader in isolation, so one throwing reader cannot cut the others
         /// off.</remarks>
-        public void EndReaders(Exception reason) => readers.OnError(reason);
+        public void EndReaders(Exception reason)
+        {
+            // Marked BEFORE the terminal goes out: SharedView reads it to send this terminal down
+            // the shared release lane rather than the pool (see there).
+            Volatile.Write(ref endedByForce, 1);
+            readers.OnError(reason);
+        }
+
+        /// <summary>Whether this entry's terminal is a FORCED end (<see cref="EndReaders"/> — the
+        /// cache's own teardown sweep, or a committed delete) rather than an upstream fault.</summary>
+        public bool EndedByForce => Volatile.Read(ref endedByForce) == 1;
+
+        private int endedByForce;
 
         /// <summary>Unconditional evict mark for the forced paths (node delete /
         /// storm-breaker stale entry / cache disposal). Idempotent.</summary>
@@ -1615,21 +1627,38 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     // reader that blocks holds only itself. This is ordering-safe: an error is the
                     // last notification a reader ever receives, and every OnNext before it was
                     // delivered synchronously and has already returned.
+                    //
+                    // 🚨 But a FORCED end goes down the shared release lane, never one pool item per
+                    // reader (review of #7589). The cache's teardown ends every reader of every path
+                    // in ONE sweep; a pool item each delivers those terminals CONCURRENTLY, and a
+                    // consumer composing two node reads then takes them on two threads at once — the
+                    // Rx gate lock-order deadlock ReleaseLane exists to prevent. On the lane they run
+                    // one at a time, still off the turn that raised them. Upstream faults stay on the
+                    // pool: one stream raises one, and a reader that blocks in its error path must hold
+                    // only itself, never the mesh's lane.
                     sub = entry.Replay.Subscribe(
                         observer.OnNext,
-                        error => TaskPoolScheduler.Default.Schedule(() =>
+                        error =>
                         {
-                            if (Volatile.Read(ref detached) != 0)
-                                return;
-                            try { observer.OnError(error); }
-                            catch (Exception thrown)
+                            void Deliver()
                             {
-                                logger.LogWarning(thrown,
-                                    "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
-                                    + "terminal ({Terminal}); the other readers of the path are still told",
-                                    path, error.Message);
+                                if (Volatile.Read(ref detached) != 0)
+                                    return;
+                                try { observer.OnError(error); }
+                                catch (Exception thrown)
+                                {
+                                    logger.LogWarning(thrown,
+                                        "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
+                                        + "terminal ({Terminal}); the other readers of the path are still told",
+                                        path, error.Message);
+                                }
                             }
-                        }),
+
+                            if (entry.EndedByForce)
+                                _releaseLane.Refuse<System.Reactive.Unit>(() => error).Subscribe(_ => { }, _ => Deliver());
+                            else
+                                TaskPoolScheduler.Default.Schedule(Deliver);
+                        },
                         observer.OnCompleted);
                 }
                 catch
