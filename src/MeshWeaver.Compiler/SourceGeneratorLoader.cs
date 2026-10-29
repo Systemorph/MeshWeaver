@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 
@@ -21,9 +22,20 @@ internal static class SourceGeneratorLoader
     /// Returns the source generators found across <paramref name="assemblyPaths"/> (the node's
     /// <c>#r</c>-resolved assemblies — a SMALL, node-specific set, never the full framework
     /// reference list). Non-generator assemblies contribute nothing.
+    ///
+    /// <para>🚨 A generator (or a generator's helper) whose simple name this process already holds in
+    /// a DIFFERENT build is refused with <see cref="SourceGeneratorBuildConflictException"/>, naming
+    /// <paramref name="loadedFor"/> and the NodeType the other build was loaded for (#7444). The same
+    /// build asked for again, from any path, is the already-loaded assembly.</para>
     /// </summary>
-    public static ImmutableArray<ISourceGenerator> Discover(IEnumerable<string> assemblyPaths, ILogger logger)
+    /// <param name="assemblyPaths">The candidate assemblies.</param>
+    /// <param name="ledger">The record of which build was loaded for which NodeType.</param>
+    /// <param name="loadedFor">The NodeType (or project) whose compile asks for these generators.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static ImmutableArray<ISourceGenerator> Discover(
+        IEnumerable<string> assemblyPaths, SourceGeneratorLedger ledger, string loadedFor, ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(ledger);
         var paths = assemblyPaths
             .Where(p => !string.IsNullOrEmpty(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -35,8 +47,8 @@ internal static class SourceGeneratorLoader
         var builder = ImmutableArray.CreateBuilder<ISourceGenerator>();
         foreach (var path in paths.Where(CanDefineGenerators))
         {
-            PreloadDependencies(path, byName, preloaded, logger);
-            builder.AddRange(LoadFrom(path, logger));
+            PreloadDependencies(path, byName, preloaded, ledger, loadedFor, logger);
+            builder.AddRange(LoadFrom(path, ledger, loadedFor, logger));
         }
         return builder.ToImmutable();
     }
@@ -49,24 +61,32 @@ internal static class SourceGeneratorLoader
     /// SqlClient stub) never is.
     /// </summary>
     private static void PreloadDependencies(
-        string path, IReadOnlyDictionary<string, string> byName, HashSet<string> preloaded, ILogger logger)
+        string path, IReadOnlyDictionary<string, string> byName, HashSet<string> preloaded,
+        SourceGeneratorLedger ledger, string loadedFor, ILogger logger)
     {
         foreach (var reference in ReferencedNames(path))
         {
             if (!byName.TryGetValue(reference, out var dependency) || !preloaded.Add(reference))
                 continue;
-            if (MeshWeaver.NuGet.PackageAssemblyProbe.HostIdentityOf(reference) is not null)
-                continue; // the host binds it
+            // The host binds what it serves, unless it is serving it only because an earlier
+            // compile's generator preloaded it: that one is a generator helper, and a different
+            // build of it must be refused below rather than skipped (#7444).
+            if (ledger.Recorded(reference) is null
+                && MeshWeaver.NuGet.PackageAssemblyProbe.HostIdentityOf(reference) is not null)
+                continue;
             // The candidates are COMPILE assets; what loads is the package's RUNTIME asset — a
             // RID-specific library's lib/ copy is a stub that, once in the default context, every
             // NodeType context would unify with as the host's copy. Its dependencies are read from
             // the RUNTIME image too: the stub may not reference what the implementation needs.
             if (RuntimeAssetOf(dependency) is not { } runtimeAsset)
                 continue;
-            PreloadDependencies(runtimeAsset, byName, preloaded, logger);
+            PreloadDependencies(runtimeAsset, byName, preloaded, ledger, loadedFor, logger);
             try
             {
-                Assembly.LoadFrom(runtimeAsset);
+                // A helper is part of the generator's build: a different build of it already
+                // loaded for another NodeType is refused like the generator itself (#7444) —
+                // SourceGeneratorBuildConflictException is not among the caught types below.
+                LoadBuild(runtimeAsset, ledger, loadedFor);
             }
             catch (Exception ex) when (ex is IOException or BadImageFormatException or FileLoadException)
             {
@@ -167,21 +187,96 @@ internal static class SourceGeneratorLoader
         }
     }
 
-    private static ImmutableArray<ISourceGenerator> LoadFrom(string path, ILogger logger)
+    /// <summary>
+    /// The build at <paramref name="path"/>, read from its metadata without loading it: simple name,
+    /// version and module version id. Null when the file has no readable assembly metadata.
+    /// </summary>
+    internal static GeneratorBuild? BuildAt(string path, string loadedFor)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            if (!pe.HasMetadata) return null;
+            var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+            if (!reader.IsAssembly) return null;
+            var definition = reader.GetAssemblyDefinition();
+            return new GeneratorBuild(
+                reader.GetString(definition.Name), definition.Version,
+                reader.GetGuid(reader.GetModuleDefinition().Mvid), path, loadedFor);
+        }
+        catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException
+                                      or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Loads the build at <paramref name="path"/> into the default context for
+    /// <paramref name="loadedFor"/>, or refuses it (#7444). The default context holds ONE assembly
+    /// per simple name for the life of the process, so:
+    /// <list type="bullet">
+    ///   <item>the SAME build (same module version id) already loaded is returned as it is, from
+    ///   whichever path it was loaded;</item>
+    ///   <item>a DIFFERENT build of a name the ledger recorded, or that the default context already
+    ///   holds, throws <see cref="SourceGeneratorBuildConflictException"/> naming both builds and
+    ///   both NodeTypes: never a silent fall-back to the first build, never a second load.</item>
+    /// </list>
+    /// A name the host itself ships (its trusted platform assemblies) is the host's to bind and keeps
+    /// the plain load: that is not a generator another NodeType brought.
+    /// </summary>
+    internal static Assembly LoadBuild(string path, SourceGeneratorLedger ledger, string loadedFor)
+    {
+        if (BuildAt(path, loadedFor) is not { } candidate || IsHostShipped(candidate.Name))
+            return Assembly.LoadFrom(path);
+
+        var claimed = ledger.Claim(candidate);
+        if (!claimed.IsSameBuildAs(candidate))
+            throw new SourceGeneratorBuildConflictException(claimed, candidate);
+
+        var resident = Resident(candidate.Name) ?? Assembly.LoadFrom(path);
+        if (resident.ManifestModule.ModuleVersionId == candidate.Mvid)
+            return resident;
+
+        // The default context holds another build that this ledger did not put there (another
+        // mesh in the same process, or a load outside the compile path). Undo the claim, since
+        // this build was never loaded, and name what is there.
+        if (ReferenceEquals(claimed, candidate))
+            ledger.Withdraw(candidate);
+        throw new SourceGeneratorBuildConflictException(
+            new GeneratorBuild(candidate.Name, resident.GetName().Version ?? new Version(0, 0),
+                resident.ManifestModule.ModuleVersionId,
+                string.IsNullOrEmpty(resident.Location) ? "(no location)" : resident.Location,
+                "a compile this process did not record"),
+            candidate);
+    }
+
+    private static Assembly? Resident(string simpleName)
+        => AssemblyLoadContext.Default.Assemblies.FirstOrDefault(a =>
+            string.Equals(a.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsHostShipped(string simpleName)
+        => AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is string tpa
+           && tpa.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+               .Any(p => string.Equals(Path.GetFileNameWithoutExtension(p), simpleName, StringComparison.OrdinalIgnoreCase));
+
+    private static ImmutableArray<ISourceGenerator> LoadFrom(
+        string path, SourceGeneratorLedger ledger, string loadedFor, ILogger logger)
     {
         if (!CanDefineGenerators(path))
             return ImmutableArray<ISourceGenerator>.Empty;
 
         // A generator is a process-wide build TOOL loaded into the default (non-collectible)
-        // context — never the per-node collectible ALC (which it would pin and leak).
-        // Assembly.LoadFrom is idempotent per path (the runtime returns the already-loaded
-        // assembly), so no memo cache is needed.
+        // context, never the per-node collectible ALC (which it would pin and leak). LoadBuild
+        // returns an already-loaded SAME build and refuses a different one (#7444), so no memo
+        // cache is needed and no second build ever loads.
         Assembly assembly;
         try
         {
-            assembly = Assembly.LoadFrom(path);
+            assembly = LoadBuild(path, ledger, loadedFor);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not SourceGeneratorBuildConflictException)
         {
             // Unloadable #r assembly — not a usable generator. Surface, don't fail the compile.
             logger.LogDebug(ex, "SourceGeneratorLoader: could not load {Path} for generator discovery", path);
