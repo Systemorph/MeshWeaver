@@ -42,7 +42,8 @@ above a frozen path** — move `deploy/aks` aside and add the symlink `deploy/ak
 re-opens the whole subtree for editing through the link; so an addition, modification or retype at
 any ancestor of a frozen path is a violation, while deleting there stays allowed. And a saved
 `--diff-file` listing is read **strictly**: the whole status token must be one git prints (`Dgarbage`
-used to read as a deletion), and a record must carry the number of path fields its status needs, none
+used to read as a deletion). Only `C`, `R` and `M` carry a score, and a score never exceeds 100, so a
+scored deletion such as `D100` is refused rather than exempted. And a record must carry the number of path fields its status needs, none
 empty (`R100` with no destination used to count as nothing). An unreadable record stops the read and
 is itself a violation.
 

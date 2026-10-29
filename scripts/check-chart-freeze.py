@@ -89,8 +89,18 @@ FROZEN = (
 # The status TOKENS `git diff --name-status` prints (C and R do not occur with --no-renames). The
 # WHOLE token is validated, not its first letter (MeshWeaver#7391): `Dgarbage` once read as a
 # deletion and passed. A copy or rename carries a similarity score (`R100`); a modification may
-# carry a dissimilarity score under `-B`.
-STATUS_RE = re.compile(r"(?:[ADMTUXB]\d{0,3}|[CR]\d{1,3})")
+# carry a dissimilarity score under `-B`. No other status is scored — a scored deletion (`D100`)
+# is not something git prints, and reading it as a deletion would exempt it — and a score is a
+# percentage, so it never exceeds 100.
+STATUS_RE = re.compile(r"(?:[ADTUXB]|M(?P<m>\d{1,3})?|[CR](?P<cr>\d{1,3}))")
+
+
+def _valid_status(status: str) -> bool:
+    m = STATUS_RE.fullmatch(status)
+    if not m:
+        return False
+    score = m.group("m") or m.group("cr")
+    return score is None or int(score) <= 100
 
 
 def _matches(path: str, prefixes: tuple[str, ...]) -> bool:
@@ -130,7 +140,7 @@ def violations(listing: str) -> list[tuple[str, str]]:
         # A C or R entry carries two paths; --no-renames should never produce one, but read both.
         width = 3 if status[:1] in ("C", "R") else 2
         paths = fields[i + 1:i + width]
-        if (not STATUS_RE.fullmatch(status) or len(paths) != width - 1
+        if (not _valid_status(status) or len(paths) != width - 1
                 or any(not p for p in paths)):
             # Past an unreadable field the status/path pairing is lost, so nothing after it can be
             # read either: one violation names where reading stopped.
@@ -237,6 +247,12 @@ def self_test() -> int:
          "M\0\0", 1),
         ("a scored modification (-B) still reads",
          "M073\0deploy/helm/values.yaml\0", 1),
+        ("a SCORED deletion is not a deletion (git never scores one)",
+         "D100\0deploy/helm/values.yaml\0", 1),
+        ("a score above 100 is malformed, never a silent pass",
+         "R101\0docs/x.yaml\0docs/y.yaml\0", 1),
+        ("…and a rename scored at the 100 bound between unfrozen paths stays clean",
+         "R100\0docs/x.yaml\0docs/y.yaml\0", 0),
     ]
     failed = 0
     for name, text, expected in cases:

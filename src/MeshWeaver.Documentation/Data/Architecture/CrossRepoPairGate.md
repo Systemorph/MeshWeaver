@@ -851,7 +851,19 @@ comparison (both pass through `records_in()`), with string and char literals cop
 parsed differently — `NodeCompilationResult` (`IMeshNodeCompilationService.cs`) read as 10
 parameters for its real 9 — so the defect was live, not latent. The self-test carries the #5077
 shape, a reworded comment, a comment gaining a comma while a parameter leaves, and a `//` inside a
-string default; removing the strip reddens three of them. `check-type-forwards.py` reads positional
+string default; removing the strip reddens three of them.
+
+The strip is only as good as its literal scanner. If it mis-bounds a literal, the text it leaves
+outside a string can open a phantom `/*` that swallows every record after it, so an arity change
+there passes. Two literal shapes are therefore scanned in full:
+
+- A raw literal opened by N ≥ 3 quotes closes only at N quotes, so a four-quote literal may hold
+  `"""`.
+- An interpolated string's `{…}` holes are scanned as code, so `$"{string.Concat("/*", "x")}"`
+  neither ends the outer string nor opens a comment.
+
+The self-test carries both shapes with a record after them, and both fail on a scanner that
+ignores them. `check-type-forwards.py` reads positional
 record parameters too (`_positional_parameters`), for their NAMES only, and shares the blindness:
 measured on the same record it indexes two phantom members, `Structured` and `table`, the last
 words before a comma in its comments. It was not changed here, because it is a subject of the

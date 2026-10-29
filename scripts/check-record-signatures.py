@@ -195,9 +195,81 @@ def _strip_bom(text: str) -> str:
 # pass through here.
 #
 # String and char literals are copied verbatim (a `//` inside `"https://…"` is not a comment);
-# `@"…"` verbatim strings use `""` as their only escape, and a raw `"""…"""` literal runs to the
-# next `"""`. Newlines inside a block comment are kept so nothing downstream sees two tokens
-# fused into one.
+# `@"…"` verbatim strings use `""` as their only escape, and a raw literal opened by N >= 3
+# quotes runs to the next N quotes (a four-quote literal may hold `"""`). An interpolated `$"…"`
+# string's `{…}` holes are scanned as CODE, so a nested literal such as
+# `$"{string.Concat("/*", "x")}"` neither ends the outer string nor opens a comment. A literal
+# the scanner mis-bounds is not harmless: text it leaves outside a string can open a phantom
+# `/*` that swallows every record after it, and an arity change there would pass. Newlines inside
+# a block comment are kept so nothing downstream sees two tokens fused into one.
+def _skip_hole(text: str, j: int) -> int:
+    """`j` is just past an interpolation hole's `{`; returns the index just past its `}`."""
+    n, depth = len(text), 0
+    while j < n:
+        c = text[j]
+        if c in "\"'":
+            j = _skip_literal(text, j)
+            continue
+        if c in "{([":
+            depth += 1
+        elif c in "})]":
+            if depth == 0 and c == "}":
+                return j + 1
+            depth -= 1
+        j += 1
+    return n
+
+
+def _skip_literal(text: str, i: int) -> int:
+    """`text[i]` opens a string or char literal; returns the index just past its end."""
+    n = len(text)
+    if text[i] == "'":
+        j = i + 1
+        while j < n:
+            c = text[j]
+            if c == "\\":
+                j += 2
+                continue
+            if c in "'\n":
+                return j + 1
+            j += 1
+        return n
+    p = i
+    while p > 0 and text[p - 1] in "$@":
+        p -= 1
+    prefix = text[p:i]
+    interpolated, verbatim = "$" in prefix, "@" in prefix
+    run = 0
+    while i + run < n and text[i + run] == '"':
+        run += 1
+    if run >= 3 and not verbatim:
+        close = text.find('"' * run, i + run)
+        return n if close == -1 else close + run
+    j = i + 1
+    while j < n:
+        c = text[j]
+        if verbatim:
+            if c == '"':
+                if j + 1 < n and text[j + 1] == '"':
+                    j += 2
+                    continue
+                return j + 1
+        else:
+            if c == "\\":
+                j += 2
+                continue
+            if c in '"\n':
+                return j + 1
+        if interpolated and c == "{":
+            if j + 1 < n and text[j + 1] == "{":
+                j += 2
+                continue
+            j = _skip_hole(text, j + 1)
+            continue
+        j += 1
+    return n
+
+
 def _strip_comments(text: str) -> str:
     out: list[str] = []
     i, n = 0, len(text)
@@ -213,34 +285,10 @@ def _strip_comments(text: str) -> str:
             out.append(" " + "\n" * text.count("\n", i, stop))
             i = stop
             continue
-        if text.startswith('"""', i):
-            end = text.find('"""', i + 3)
-            stop = n if end == -1 else end + 3
+        if ch in "\"'":
+            stop = _skip_literal(text, i)
             out.append(text[i:stop])
             i = stop
-            continue
-        if ch in "\"'":
-            verbatim = ch == '"' and i > 0 and text[i - 1] == "@" or (
-                ch == '"' and i > 1 and text[i - 2 : i] in ("$@", "@$"))
-            j = i + 1
-            while j < n:
-                c = text[j]
-                if verbatim:
-                    if c == '"':
-                        if j + 1 < n and text[j + 1] == '"':
-                            j += 2
-                            continue
-                        break
-                    j += 1
-                    continue
-                if c == "\\":
-                    j += 2
-                    continue
-                if c == ch or c == "\n":
-                    break
-                j += 1
-            out.append(text[i : j + 1])
-            i = j + 1
             continue
         out.append(ch)
         i += 1
@@ -472,6 +520,21 @@ def self_test() -> int:
           == ["Url", "N"])
     check("a commented-OUT record is not a record",
           "Gone" not in records_in("// public record Gone(int A);\npublic record Here(int A);"))
+    # A mis-bounded literal leaves text outside any string, where a `/*` becomes a phantom
+    # comment that swallows every record after it — and an arity change there would pass.
+    four_quote = 'var s = """"\nhas """ /* inside\n"""";\npublic record After(int A, int B);\n'
+    check("a four-quote raw literal holding three quotes does not hide the record after it",
+          [p.name for p in records_in(four_quote).get("After") or []] == ["A", "B"])
+    nested = ('var s = $"{string.Concat("/*", "x")}";\npublic record After(int A, int B);\n'
+              'var t = "*/";\n')
+    check("a literal nested in an interpolation hole does not open a comment",
+          [p.name for p in records_in(nested).get("After") or []] == ["A", "B"])
+    check("…and `{{` in an interpolated string is an escaped brace, not a hole",
+          [p.name for p in records_in('var s = $"{{ /* }}";\npublic record After(int A);\n')
+           .get("After") or []] == ["A"])
+    check("a verbatim string opening with an escaped quote is not a raw literal",
+          [p.name for p in records_in('var s = @"""x"" /*";\npublic record After(int A);\n')
+           .get("After") or []] == ["A"])
 
     # ── the transitional allowance, end to end through run() ─────────────────────────
     #
