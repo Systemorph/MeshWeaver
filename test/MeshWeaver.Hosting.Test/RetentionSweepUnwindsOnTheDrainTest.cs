@@ -370,4 +370,82 @@ public class RetentionSweepUnwindsOnTheDrainTest : IDisposable
         Volatile.Read(ref faults).Should().Be(0, "a pass the pool cancelled is not a faulted pass");
         Volatile.Read(ref records).Should().Be(0, "an interrupted pass records no finished result");
     }
+
+    // ---- #7443: the removal itself is fenced, entry by entry ------------------------------------
+
+    /// <summary>
+    /// The real file system, where every removal of ONE entry is counted and the FIRST one is where the
+    /// lease deadline lands: it cancels the token while that entry is being removed, as the lease's
+    /// unsubscribe does when a pass outlives half its hold.
+    /// </summary>
+    private sealed class DeadlineOnFirstRemoval(CancellationTokenSource cts) : BundleShareIo
+    {
+        public int Removals;
+
+        private void Removing()
+        {
+            if (Interlocked.Increment(ref Removals) == 1)
+                cts.Cancel();
+        }
+
+        public override void DeleteFile(string path) { Removing(); base.DeleteFile(path); }
+        public override void DeleteEmptyDirectory(string path) { Removing(); base.DeleteEmptyDirectory(path); }
+    }
+
+    /// <summary>
+    /// 🚨 A lease deadline that lands while an identity is being removed stops the removal at the NEXT
+    /// entry (#7443). On unfixed code the default removal was ONE <c>Directory.Delete(dir, recursive)</c>
+    /// that observed no token: it never went through the share seam, so the cancel never arrived, and
+    /// the pass removed every collectable identity — on a stalled share, after the lease had lapsed and
+    /// another replica could hold it.
+    /// </summary>
+    [Fact]
+    public void ALeaseDeadlineMidRemoval_StopsTheRemovalAtTheNextEntry()
+    {
+        StoreWithThreeCollectable();
+        foreach (var identity in new[] { "s-c1", "s-c2", "s-c3" })
+            SealedWithThreeArchives(identity, "plugins", Now - TimeSpan.FromDays(230));
+        using var cts = new CancellationTokenSource();
+        var io = new DeadlineOnFirstRemoval(cts);
+
+        Assert.ThrowsAny<OperationCanceledException>(() => PrebuiltBundleStore.SweepCore(
+            root, Live, "4.0.0-ci.1", [], [], retention, Now, cts.Token, logger: null, deleteDirectory: null, io));
+
+        io.Removals.Should().Be(1,
+            "the entry in flight when the deadline lands finishes, and nothing after it is removed (#7443)");
+        new[] { "s-c1", "s-c2", "s-c3" }.Should().OnlyContain(id => Directory.Exists(Path.Combine(root, id)),
+            "an identity the cut pass had not finished — and every one it had not reached — stays for the next holder's pass");
+        Directory.Exists(Path.Combine(root, Live)).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Negative control: with nothing cancelling it, the fenced removal removes exactly the plan —
+    /// whole trees, a nested subdirectory included — and nothing else.
+    /// </summary>
+    [Fact]
+    public void AnUncutPass_WithTheFencedRemoval_RemovesExactlyThePlan()
+    {
+        StoreWithThreeCollectable();
+        var nested = Path.Combine(SourceOf("s-c1"), "nested", "deeper");
+        Directory.CreateDirectory(nested);
+        File.WriteAllBytes(Path.Combine(nested, "x.bin"), new byte[8]);
+        // Back-dated like the rest of the identity, so the nested tree does not make s-c1 look recent.
+        var old = (Now - TimeSpan.FromDays(230)).UtcDateTime;
+        File.SetLastWriteTimeUtc(Path.Combine(nested, "x.bin"), old);
+        foreach (var dir in new[] { nested, Path.GetDirectoryName(nested)!, SourceOf("s-c1"), Path.Combine(root, "s-c1") })
+            Directory.SetLastWriteTimeUtc(dir, old);
+        // Its own source, never the one the pass reads: here nothing cuts the pass.
+        using var unrelated = new CancellationTokenSource();
+        var io = new DeadlineOnFirstRemoval(unrelated);
+
+        var result = PrebuiltBundleStore.SweepCore(
+            root, Live, "4.0.0-ci.1", [], [], retention, Now, CancellationToken.None, logger: null, deleteDirectory: null, io);
+
+        result.AbortReason.Should().BeNull();
+        result.FailedDeletes.Should().Be(0, "every removal of the plan succeeded");
+        result.DeletedIdentities.Should().Be(3);
+        io.Removals.Should().BeGreaterThan(3, "the removal went entry by entry through the share seam");
+        new[] { "s-c1", "s-c2", "s-c3" }.Should().OnlyContain(id => !Directory.Exists(Path.Combine(root, id)));
+        Directory.Exists(Path.Combine(root, Live)).Should().BeTrue();
+    }
 }

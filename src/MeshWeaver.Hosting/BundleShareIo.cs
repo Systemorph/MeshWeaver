@@ -61,4 +61,14 @@ internal class BundleShareIo
     /// <param name="bundlePath">The bundle archive.</param>
     public virtual Plugin.Packaging.BundleReader.Manifest? ReadManifest(string bundlePath) =>
         Plugin.Packaging.BundleReader.ReadManifest(bundlePath);
+
+    /// <summary><see cref="File.Delete(string)"/> — ONE entry of a fenced tree removal
+    /// (<c>PrebuiltBundleStore.DeleteTree</c>).</summary>
+    /// <param name="path">The file to remove.</param>
+    public virtual void DeleteFile(string path) => File.Delete(path);
+
+    /// <summary><see cref="Directory.Delete(string)"/> of a directory already emptied (or a directory
+    /// link, which removes the link and never its target) — ONE entry of a fenced tree removal.</summary>
+    /// <param name="path">The directory to remove.</param>
+    public virtual void DeleteEmptyDirectory(string path) => Directory.Delete(path);
 }
