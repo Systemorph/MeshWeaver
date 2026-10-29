@@ -403,6 +403,18 @@ public sealed class InstanceComboAssembler
                             Error = IndeterminateListingError(spec, spec.GitRef, snapshot.CommitSha),
                         }, Absent: false));
 
+                // 🚨 A NON-empty selection from a truncated listing is just as indeterminate
+                // (MeshWeaver#7316): the tree names SOME of the module's files and omits others it
+                // never listed, so the file set is incomplete in a way nothing downstream can see.
+                // Not even a matching moduleVersion proves it — that is read from the manifest.lock
+                // the listing happened to name, not from the files it left out. Never Materialized.
+                if (!snapshot.ListingIsComplete)
+                    return Observable.Return(new ModuleOutcome(plan, baseline with
+                    {
+                        Status = ModuleAssemblyStatus.Failed,
+                        Error = PartialListingError(spec, spec.GitRef, snapshot.CommitSha, files.Count),
+                    }, Absent: false));
+
                 if (files.Select(f => InvalidPathReason(f.Path)).FirstOrDefault(r => r is not null)
                     is { } pathReason)
                     return Observable.Return(new ModuleOutcome(plan, baseline with
@@ -460,6 +472,17 @@ public sealed class InstanceComboAssembler
             : $"folder '{spec.FolderFilter}/'")
         + " is not in the part that was listed. A partial listing cannot show that it is absent, "
         + "so it is neither materialised nor retired.";
+
+    /// <summary>Why a NON-empty selection from a TRUNCATED listing is not a materialisation
+    /// (<see cref="RepoSnapshot.ListingIsComplete"/> false, MeshWeaver#7316).</summary>
+    private static string PartialListingError(FetchSpec spec, string gitRef, string? commit, int listed) =>
+        "indeterminate listing: the tree of "
+        + $"'{spec.RepositoryUrl}' at '{gitRef}'" + (commit is null ? "" : $" ({commit})")
+        + $" was TRUNCATED; it names {listed} file(s) of "
+        + (spec.FolderFilter is null
+            ? (spec.Subdirectory is null ? "the fetch" : $"subdirectory '{spec.Subdirectory}'")
+            : $"folder '{spec.FolderFilter}/'")
+        + " but a partial listing cannot show the set is complete, so the module is not materialised.";
 
     /// <summary>The source repository's default branch, as every git transport resolves it.</summary>
     private const string HeadRef = "HEAD";
