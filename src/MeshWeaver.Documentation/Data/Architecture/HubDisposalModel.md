@@ -186,6 +186,12 @@ it leaves the registry, so the wait ends by construction (a cycle breaker,
 subscription that never got its reply is a real bug, not a teardown oddity. Either
 path then posts `DisposeHostedHubs` from `OnQuiesceComplete`'s `finally`.
 
+What is pending **at the verdict** decides, never which signal fired first (`QuiesceVerdict`). The
+drain is sampled every 50 ms and the deadline is its own timer, so a reply that lands after the
+last sample reaches the verdict as "deadline first" with nothing pending. That is a drain: an
+answered callback is not a leak, and flagging it failed test classes whose own report said nothing
+leaked.
+
 > 🚨 **Known blind spot: the verdict does not see children that have already LEFT.**
 > A hosted hub removes itself from its parent's registry in its own ShutDown phase —
 > before the parent's teardown completes — so `AnyHubQuiescingTimedOut()`, which walks
