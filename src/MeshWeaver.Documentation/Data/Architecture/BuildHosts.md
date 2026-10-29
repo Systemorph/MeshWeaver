@@ -357,6 +357,20 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    deadline passed during the hand-over") — a stage finishing near the limit never holds its claim
    past the pod's grace. The run's workspace is removed only after every receipt was
    acknowledged; a workspace whose receipts were not is kept and swept after two run deadlines.
+   🚨 **A receipt carries the OUTCOME of the stage that handed it over** — `stageState`,
+   `succeeded` or `failed` (MeshWeaver.Deploy#52). A RED stage hands its artifacts over too, marked
+   `failed`, so the evidence of why it is red (a shard's `.trx` files, markers and logs) reaches
+   consolidation; its verdict stays red. A receipt never means "the stage succeeded" by itself, so
+   every reader reads the marker: `build-artifacts-fetch.py` takes ONLY `succeeded` receipts by
+   default — a failed stage's artifacts are never published and never ratcheted as a green gate log,
+   and a selection whose every receipt is failed is RED naming the stage — while
+   `host-shard-results.py` asks for failed ones explicitly (`include_failed=True`). Any value but
+   `succeeded` is refused by the default reader, never defaulted to green. A receipt WITHOUT the field
+   predates the marker: such a host handed over only a green stage's files, plus a red stage's
+   `diagnostics/` unit, which the build API marks from the stage's own recorded verdict. The order the
+   halves land in: the readers (this repository and MeshWeaver.Plugins' build API and
+   `scripts/host-gate-log.py`) first, then the host (MeshWeaver.Deploy `build-run.py`), which is the
+   only half that starts handing a red stage's files over.
    On the RATCHET side, a node repository whose `gate` stage ran on a host reads that stage's
    `gate-log/gate.log` through the composite action `.github/actions/host-gate-log` (`api-url` = the
    build-executor lane's output, `store` = `vars.MW_ARTIFACT_STORE`, the job holding
@@ -365,8 +379,8 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    `$MW_BUILD_ARTIFACTS` after each successful stage, so the gate stage's receipts repeat an earlier
    modules stage's bundles), and `host-gate-log.py` then refuses anything but ONE non-empty `gate.log`
    whose LAST `=== mw-plugin-test summary ===` block ends in the tester's terminal verdict
-   (`ALL GREEN.` / `GREEN — …` / `GATE FAILED …`) — nothing handed over (a red host gate hands nothing
-   over), an empty, truncated or foreign log, or a second file in the unit are each RED. The repository then runs the
+   (`ALL GREEN.` / `GREEN — …` / `GATE FAILED …`) — nothing handed over, a log handed over by a
+   FAILED gate stage (`stageState: failed`), an empty, truncated or foreign log, or a second file in the unit are each RED. The repository then runs the
    SAME `check-test-suites.py --gate-log` it runs over an Actions gate's log, so the ratchet reads the
    tester's own console on both executors — never the host's verdict, never the declared command's
    text. One copy for every satellite; MeshWeaver.Plugins#4482 built the same read for Plugins.
@@ -968,7 +982,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `host-shard-results.py`:
   1. `GET {api}/{repo}/{sha}/artifacts?channel=…` — the receipts, read and shape-checked by
      `build-artifacts-fetch.py`'s reader, kept for the shard's own stage `test-shard-<i>` and its unit
-     directory `testResults-shard<i>/`;
+     directory `testResults-shard<i>/` — a RED shard's receipts (`stageState: failed`) included, because
+     its results are what consolidation must read;
   2. `GET {api}/{repo}/{sha}/artifacts/{sha256}?channel=…` — each receipt's bytes by content hash,
      written under `--out` with its relative path PRESERVED (two `.trx` of one name in two projects
      do not collide), at most the receipt's size plus one byte read, redirects refused so the bearer

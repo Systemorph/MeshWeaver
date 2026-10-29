@@ -4,9 +4,13 @@
 H9 of the standing build hosts (Doc/Architecture/BuildHosts → "Core's own route"). A host
 `test-shard-<i>` stage leaves the `test` job's results tree under
 `$MW_BUILD_ARTIFACTS/testResults-shard<i>/` (deploy/core-tests/core-tests.py: `test/**/*.trx`,
-`test/test-results.log`, `collected-logs/**`); after the stage SUCCEEDS the host uploads every file
-to its artifact store, reads it back, and only then reports one receipt per file
-`{"stage","unit","key","sha256","bytes"}`.
+`test/test-results.log`, `collected-logs/**`); after the stage finishes, GREEN OR RED, the host uploads
+every file to its artifact store, reads it back, and only then reports one receipt per file
+`{"stage","unit","key","sha256","bytes","stageState"}` (MeshWeaver.Deploy#52). `stageState` is the
+stage's outcome: a RED shard's tree is handed over too, marked `failed`, because its `.trx` files,
+markers and logs are exactly what consolidation must read. So this script, unlike the publish lane,
+reads a failed shard's receipts (`receipts_of(..., include_failed=True)`); the shard's own red
+verdict stays the verdict, and the consolidated results only say WHY.
 
 Core is a PUBLIC repository and runs NO job on the self-hosted pool and holds no handle on the
 runners' shared store, so this script fetches everything from the build API over HTTPS with the
@@ -25,7 +29,8 @@ collect-results consolidates a host shard exactly as an Actions one.
     host-shard-results.py --self-test
 
 RED, never green, naming what is wrong, on:
-  * no receipt for the shard's tree (a RED host shard hands nothing over — its own red is the verdict);
+  * no receipt for the shard's tree (a host that predates MeshWeaver.Deploy#52 hands a RED shard's tree
+    over not at all; its own red is the verdict);
   * a receipt whose unit escapes the tree (`..`, absolute, control characters) or lies outside its shape
     (a FOREIGN file: not a `.trx` under test/, not test/test-results.log, not under collected-logs/);
   * two receipts naming one path with different content;
@@ -108,7 +113,7 @@ def plan(receipts: list[dict], shard: int) -> dict[str, dict]:
         tree[rel] = r
     if not tree:
         raise Red(f"shard {shard} handed back NO results (no receipt under {prefix}) — a host shard that ran "
-                  "hands its tree over after it succeeds; nothing to consolidate is never a pass")
+                  "hands its tree over when it finishes; nothing to consolidate is never a pass")
     if LOG not in tree:
         raise Red(f"shard {shard} handed back no {LOG} — its tree is not the `test` job's")
     return tree
@@ -260,7 +265,7 @@ def main(argv: list[str]) -> int:
             raise Red(f"the build API answered HTTP {status} for {repo}@{sha[:12]}'s receipts (403: the token's run "
                       f"is not this run's; 404: no host-executed run; 3xx: a redirect is refused)")
         try:
-            receipts = fetch.receipts_of(body, f"test-shard-{shard}")
+            receipts = fetch.receipts_of(body, f"test-shard-{shard}", include_failed=True)
         except fetch.Red as e:
             raise Red(str(e))
         written = fetch_tree(plan(receipts, shard), a.out, api_getter(base, token, a.channel))
@@ -301,7 +306,7 @@ def self_test() -> int:
 
     def run(rows: list[dict], getter=serve, shard: int = 1, name: str = "") -> list[str]:
         out = os.path.join(tmp, name or str(len(os.listdir(tmp))))
-        return fetch_tree(plan(fetch.receipts_of(rows, f"test-shard-{shard}"), shard), out, getter)
+        return fetch_tree(plan(fetch.receipts_of(rows, f"test-shard-{shard}", include_failed=True), shard), out, getter)
 
     def red(rows: list[dict], getter=serve, shard: int = 1) -> bool:
         try:
@@ -324,6 +329,16 @@ def self_test() -> int:
     check("a receipt repeated by a later stage with the SAME content is one file",
           not red(good + [dict(good[1])]))
     check("RED: no receipt at all (a red host shard handed nothing over)", red([]))
+    # MeshWeaver.Deploy#52: a RED shard hands its tree over, every receipt marked `failed` — consolidation reads it.
+    failed_tree = [dict(r, stageState="failed") for r in good[:4]]
+    try:
+        got = run(failed_tree, name="failed-shard")
+        check("a FAILED shard's tree (stageState failed) is fetched for consolidation",
+              "test/test-results.log" in got and len(got) == 4, got)
+    except (Red, fetch.Red) as e:
+        check("a FAILED shard's tree (stageState failed) is fetched for consolidation", False, e)
+    check("negative control: the same tree marked succeeded is fetched exactly as before",
+          not red([dict(r, stageState="succeeded") for r in good]))
     check("RED: only another shard's tree", red([dict(r, unit=r["unit"].replace("shard1", "shard2")) for r in good[:4]]))
     check("RED: the receipts are another STAGE's", red([dict(r, stage="test-shard-2") for r in good]))
     check("RED: no test/test-results.log (not the `test` job's tree)", red(good[1:]))
