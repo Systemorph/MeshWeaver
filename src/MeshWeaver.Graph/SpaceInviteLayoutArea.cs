@@ -36,8 +36,17 @@ public static class SpaceInviteLayoutArea
             ["email"] = "",
             ["role"] = Role.Editor.Id,
             ["pin"] = true,
+            ["message"] = "",
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
+        // The host's personal greeting — it travels in the invitation email (Invitation.Message).
+        // An existing account is granted at once and gets no email, so the message is optional.
+        var messageField = new TextAreaControl(new JsonPointerReference("message"))
+        {
+            Label = host.Localize("ui.invitePersonalMessage"),
+            Placeholder = host.Localize("ui.invitePersonalMessageHint"),
+            DataContext = dataContext,
+        }.WithRows(3);
 
         var emailField = (new TextFieldControl(new JsonPointerReference("email"))
             { Label = "Email address", DataContext = dataContext })
@@ -70,6 +79,7 @@ public static class SpaceInviteLayoutArea
                 .WithView(emailField)
                 .WithView(roleSelect)
                 .WithView(inviteButton))
+            .WithView(messageField)
             .WithView(pinCheck);
 
         return Observable.Return<UiControl?>(stack);
@@ -80,6 +90,7 @@ public static class SpaceInviteLayoutArea
         var email = form.GetValueOrDefault("email")?.ToString()?.Trim();
         var role = form.GetValueOrDefault("role")?.ToString()?.Trim();
         var pin = form.GetValueOrDefault("pin") is true or "true" or "True";
+        var message = form.GetValueOrDefault("message")?.ToString();
         if (string.IsNullOrEmpty(email) || !email.Contains('@'))
         {
             ShowDialog(ctx, "Please enter a valid **email address**.");
@@ -92,7 +103,7 @@ public static class SpaceInviteLayoutArea
             ctx.Host.Hub, sp.GetRequiredService<IMeshService>(), sp.GetRequiredService<AccessService>());
         var invitedBy = sp.GetService<AccessService>()?.Context?.ObjectId;
 
-        svc.Invite(spacePath, email, role, pin, invitedBy).Subscribe(
+        svc.Invite(spacePath, email, role, pin, invitedBy, message).Subscribe(
             outcome => ShowDialog(ctx, outcome == SpaceInviteOutcome.Granted
                 ? $"**{email}** already has an account — granted **{role}** on this Space."
                 : $"Invited **{email}** as **{role}**. They'll get access automatically when they sign up."),

@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph.Test;
 /// 🚨 An invite-by-email resolves the invitee AS SYSTEM, and grants an existing account whoever is
 /// inviting — issue #4309.
 ///
-/// <para><b>The defect.</b> <see cref="SpaceInviteService.GrantOrScheduleAccess"/> and
+/// <para><b>The defect.</b> <see cref="SpaceInviteService.GrantOrScheduleAccess(string, string, string, bool, string?, string?)"/> and
 /// <see cref="GroupInviteExtensions.InviteToGroup"/> decided "already on the system" with a
 /// <c>nodeType:User content.email:…</c> query issued as the CALLER. A path-less <c>nodeType:User</c>
 /// read is pinned to the <c>auth</c> mirror, and on Postgres that schema is row-level-filtered by the

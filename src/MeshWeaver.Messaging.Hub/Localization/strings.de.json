@@ -723,6 +723,8 @@
   "ui.regenerate": "Neu erzeugen",
   "ui.recompile": "Neu kompilieren",
   "ui.invite": "Einladen",
+  "ui.invitePersonalMessage": "Persönliche Nachricht (optional)",
+  "ui.invitePersonalMessageHint": "Ein paar Worte für die Einladungs-E-Mail",
   "ui.revoke": "Widerrufen",
   "ui.disconnect": "Trennen",
   "ui.present": "Präsentieren",
