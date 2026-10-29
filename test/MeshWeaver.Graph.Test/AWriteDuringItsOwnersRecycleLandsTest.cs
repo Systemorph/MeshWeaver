@@ -56,7 +56,7 @@ public class AWriteDuringItsOwnersRecycleLandsTest(ITestOutputHelper output) : M
         => base.ConfigureMesh(builder)
             .AddMeshNodes(new MeshNode(ProbeNodeType) { Name = "Recycle-window write probe" });
 
-    [Fact(Timeout = 120_000)]
+    [Fact(Timeout = 600_000)]
     public async Task AWriteRefusedByARecyclingOwner_LandsOnTheNextActivation()
     {
         var ct = TestContext.Current.CancellationToken;

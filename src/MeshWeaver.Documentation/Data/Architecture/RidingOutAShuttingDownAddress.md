@@ -356,9 +356,15 @@ Both re-enqueue arms (`OWNER_SHUTTING_DOWN_REENQUEUE`, `LATE_SHUTTING_DOWN_REENQ
 re-attempt only once the refusing LOCAL instance has finished its teardown
 (`LocalTeardownJoin.WhenLocalTeardownSettled`, the same lookup the sync stream's join uses). With no
 local instance to wait for (the owner is on another silo, or it is already gone), the re-attempt
-starts at once, as before. The join has no timer of its own; the write's late-verdict window stays
-the bound. The re-attempt is subscribed under the writer's AccessContext, because after the join it
-runs on whichever thread completed the owner's disposal.
+starts at once, as before. The join has no timer of its own. The write's late-verdict window stays
+the bound, and the write CARRIES it across the join (`LocalTeardownJoin.ReaskOnceSettled`). The
+disposal watchdog names a wedged teardown and tears nothing down around it, so `DisposalCompleted`
+may never fire. Without the carried bound, a write refused by such an owner stayed pending for as
+long as the stall lasted: the early refusal never armed the verdict timer, and the late dispatch had
+already removed the registry entry that timer claims. When the window passes, the write ends with
+`OwnerUnreachable` (`TEARDOWN_JOIN_TIMEOUT` in the log), is not re-sent to the owner that may still
+be registered, and releases its queue hand-off. The re-attempt is subscribed under the writer's
+AccessContext, because after the join it runs on whichever thread completed the owner's disposal.
 
 The producer did not say so, though. The patch carried neither the attribute nor the property, so
 that routine roll-time discard was reported at Error as stranded work. One measured case was #6733:

@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +24,10 @@ namespace MeshWeaver.Messaging;
 /// would have without it.</para>
 ///
 /// <para>No timeout here, deliberately: the join must not out-run the answer it joins (#1317). The
-/// caller's own budget is the deadline that belongs to the caller.</para>
+/// caller's own budget is the deadline that belongs to the caller, and
+/// <see cref="ReaskOnceSettled{T}"/> is how a caller holds the join to it: a teardown that stalls
+/// (the disposal watchdog names such a turn and tears nothing down around it) must end the caller's
+/// wait with a named refusal, never leave it pending for as long as the stall lasts.</para>
 /// </summary>
 public static class LocalTeardownJoin
 {
@@ -95,4 +99,36 @@ public static class LocalTeardownJoin
                 .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
                 .DefaultIfEmpty(Unit.Default);
         });
+
+    /// <summary>
+    /// Runs <paramref name="reask"/> once <paramref name="join"/> answers — or, when it has not
+    /// answered within <paramref name="callersBound"/>, never runs it and fails with
+    /// <paramref name="expired"/> instead.
+    ///
+    /// <para>The bound is the CALLER's deadline, carried across the join. Without it, a teardown
+    /// that stalls leaves the re-ask, and the caller waiting on it, pending for as long as the stall
+    /// lasts. On expiry nothing is re-sent: the refusing instance may still be registered under its
+    /// address, so a re-ask would only be handed back to it. <paramref name="expired"/> runs exactly
+    /// once, at expiry, so a caller can release what it holds for the re-ask and name the
+    /// refusal.</para>
+    /// </summary>
+    /// <typeparam name="T">What the re-ask emits.</typeparam>
+    /// <param name="join">The join, normally <see cref="WhenLocalTeardownSettled"/>.</param>
+    /// <param name="callersBound">How long the caller may wait for the join.</param>
+    /// <param name="reask">The re-ask, subscribed only after the join answered in time.</param>
+    /// <param name="expired">The caller's terminal error when the join did not answer in time.</param>
+    /// <param name="scheduler">The clock; the default scheduler when omitted.</param>
+    public static IObservable<T> ReaskOnceSettled<T>(
+        this IObservable<Unit> join,
+        TimeSpan callersBound,
+        Func<IObservable<T>> reask,
+        Func<Exception> expired,
+        IScheduler? scheduler = null)
+        => join
+            .Take(1)
+            .Timeout(
+                callersBound,
+                Observable.Defer(() => Observable.Throw<Unit>(expired())),
+                scheduler ?? DefaultScheduler.Instance)
+            .SelectMany(_ => reask());
 }
