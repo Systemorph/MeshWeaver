@@ -86,8 +86,10 @@ public sealed record PrebuiltBundleRetentionLeaseVerdict(bool Held, PrebuiltBund
 /// all does not start;
 /// past it the pass is unsubscribed, which cancels the pool leaf at its next step boundary — so a
 /// pass has the other half of the hold to reach that boundary before another replica may take the
-/// lease. The bound is cooperative: a single synchronous directory removal that stalls past the whole
-/// remaining half-hold is not fenced at the store (a follow-up, filed to triage). A pass
+/// lease. The removal itself is fenced entry by entry (<c>PrebuiltBundleStore.DeleteTree</c>, #7443):
+/// the token is checked before every file and directory, so a cut pass stops at the entry it is on
+/// instead of finishing a whole identity's recursive removal under the next holder. What remains
+/// unfenced is ONE entry's own syscall stalling on the share — one file, never a tree. A pass
 /// that finishes — or faults — releases the lease at once; a pass cut short by teardown or the
 /// deadline leaves it to lapse.</para>
 /// </summary>

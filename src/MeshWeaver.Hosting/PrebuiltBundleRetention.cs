@@ -1078,6 +1078,44 @@ public static class PrebuiltBundleStore
     }
 
     /// <summary>
+    /// Removes <paramref name="directory"/> and everything under it ONE ENTRY AT A TIME, checking
+    /// <paramref name="cancellationToken"/> before every file and every directory (#7443).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why not <see cref="Directory.Delete(string, bool)"/>.</b> A recursive delete is one
+    /// synchronous call that observes no token. The retention lease bounds a pass at half its hold by
+    /// unsubscribing it, which cancels the pool leaf — but a cancel cannot reach into that call, so a
+    /// removal that stalled on a slow share went on deleting after the deadline, past the lease's lapse,
+    /// while another replica could already hold the lease. Checked per entry, a cut pass stops at the
+    /// entry it is on: what it removed stays removed, what it had not reached stays stored, and the
+    /// next pass re-plans the identity (which, its sentinel already gone, reads as unsealed to every
+    /// reader, exactly as a failed removal always has).</para>
+    /// <para><b>What is still not fenced.</b> ONE entry's own syscall: a single <c>unlink</c> that blocks
+    /// on the share cannot be interrupted, and it lands when it returns. That is one file, never the
+    /// rest of a tree.</para>
+    /// <para>A directory LINK is removed as a link — its target is never walked, the same rule
+    /// <see cref="Directory.Delete(string, bool)"/> follows.</para>
+    /// </remarks>
+    internal static void DeleteTree(string directory, CancellationToken cancellationToken, BundleShareIo io)
+    {
+        foreach (var file in io.ListFiles(directory).ToArray())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            io.DeleteFile(file);
+        }
+        foreach (var sub in io.EnumerateDirectories(directory))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (new DirectoryInfo(sub).LinkTarget is not null)
+                io.DeleteEmptyDirectory(sub);
+            else
+                DeleteTree(sub, cancellationToken, io);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        io.DeleteEmptyDirectory(directory);
+    }
+
+    /// <summary>
     /// Scan, plan, and — when <see cref="PrebuiltBundleRetention.Delete"/> is armed — collect, on
     /// the I/O pool. The stamps are the caller's (they come from the mesh, which is not a
     /// filesystem read).
@@ -1216,7 +1254,12 @@ public static class PrebuiltBundleStore
             return report;
         }
 
-        var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
+        // 🚨 FENCED, entry by entry (#7443): never `Directory.Delete(dir, recursive: true)`, one
+        // uninterruptible call that kept removing a whole identity after the lease deadline had
+        // unsubscribed the pass — on a stalled share, past the lease's lapse and into the next
+        // holder's pass. The token is checked before EVERY file and directory, so a cut pass stops at
+        // the entry it is on.
+        var delete = deleteDirectory ?? (dir => DeleteTree(dir, cancellationToken, io));
         var deletedIdentities = 0;
         var deletedGenerations = 0;
         var deletedMarkers = 0;

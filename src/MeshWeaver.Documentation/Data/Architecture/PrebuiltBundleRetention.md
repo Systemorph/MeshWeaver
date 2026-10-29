@@ -353,9 +353,13 @@ to change):
   finds another replica's claim there skips.
 - **The lease is bounded both ways.** The hold is most of the interval, and never less than an hour.
   A pass runs for at most half its hold: past that it is unsubscribed, and the pool leaf stops at its
-  next step boundary, with the other half of the hold to reach it. That bound is cooperative: one
-  synchronous directory removal that stalls past the whole remaining half-hold is not fenced at the
-  store, and is tracked as a follow-up. A pass that finishes or faults releases the lease at once. A pass cut short by
+  next step boundary, with the other half of the hold to reach it. The removal itself is one of
+  those boundaries per ENTRY (#7443): an identity or generation is removed file by file and
+  directory by directory (`PrebuiltBundleStore.DeleteTree`), with the token checked before each, so a
+  pass cut in the middle of an identity stops at the entry it is on. It was one recursive
+  `Directory.Delete`, which no cancel reaches, so a removal that stalled on a slow share went on
+  deleting past the lease's lapse, under the next holder. What remains unfenced is one entry's own
+  syscall stalling — one file, never a tree. A pass that finishes or faults releases the lease at once. A pass cut short by
   teardown or by the deadline leaves the lease to lapse, so a pass that dies holding it delays the
   next sweep by at most one hold.
 
