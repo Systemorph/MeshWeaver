@@ -1,0 +1,5 @@
+<Project>
+  <!-- Stops the upward walk to the repository's central package versions: the fixture packages in
+       ResolverFixturePackages.csproj are pinned at the versions the tests and doc cells name, which central
+       package management must not move. -->
+</Project>

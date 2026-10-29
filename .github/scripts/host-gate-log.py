@@ -3,8 +3,9 @@
 
 H9 of the standing build hosts (Doc/Architecture/BuildHosts §2 step 7). A repository's host `gate`
 stage writes the tester's console to `$MW_BUILD_ARTIFACTS/gate-log/gate.log`; after the stage
-SUCCEEDS the host uploads it to the shared CI artifact store, reads it back, and only then reports a
-receipt. This fetches the `gate` stage's receipts with core's build-artifacts-fetch.py (the run's
+finishes the host uploads it to the shared CI artifact store, reads it back, and only then reports a
+receipt carrying the stage's outcome, `stageState` (MeshWeaver.Deploy#52: a RED stage hands its files
+over too, marked `failed`). This fetches the `gate` stage's receipts with core's build-artifacts-fetch.py (the run's
 GitHub OIDC token — the same gate as the stage log; each object fetched by its locator and re-hashed
 against its receipt), then asserts what a ratchet needs before it may read the file:
 
@@ -24,8 +25,9 @@ shape MeshWeaver.Plugins#4482 built for Plugins, generalised here so the satelli
         --expect-store-id <id> --sha <head> [--channel latest] --out "$RUNNER_TEMP/gate-log/gate.log"
     host-gate-log.py --self-test
 
-RED, never green, on: anything build-artifacts-fetch.py refuses (no receipt — a RED host gate hands
-nothing over, an unreadable endpoint, a hash or size mismatch), and on each assertion above.
+RED, never green, on: anything build-artifacts-fetch.py refuses (no receipt; a gate log handed over
+by a FAILED gate stage, which that reader never takes as green; an unreadable endpoint; a hash or size
+mismatch), and on each assertion above.
 """
 from __future__ import annotations
 
