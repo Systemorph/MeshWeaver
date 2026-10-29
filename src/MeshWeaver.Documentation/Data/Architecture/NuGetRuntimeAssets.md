@@ -246,6 +246,19 @@ answer (#6863):
   answers: the identity must match, and the dependencies are the nuspec group nearest the target
   framework, which is what a feed's dependency info would have returned. No feed is contacted, so the
   same closure resolves online and offline.
+- **The package folders are NuGet's own, in NuGet's order**: the global-packages folder first, then
+  every FALLBACK package folder — `NUGET_FALLBACK_PACKAGES` (split on the platform's path separator), or
+  the configured `fallbackPackageFolders` when the variable is unset, exactly as
+  `SettingsUtility.GetFallbackPackageFolders` reads them for `dotnet restore`. A package complete in a
+  fallback folder (same completion rule as below, same lower-cased `{id}/{version}` layout) answers the
+  walk AND the install: its assemblies are used where they lie, with no download, no copy and no lock.
+  A fallback folder is READ-ONLY — one it refuses (half-extracted, wrong identity) is skipped and never
+  repaired; the package is then installed into the global folder as before. This is what lets a build
+  host's prepared cache serve the packages tests fetch at run time (MWPREP001): the host hands every
+  stage `NUGET_FALLBACK_PACKAGES=<cache>/nuget`, and the packages a test or an executable doc cell names
+  with `#r "nuget:…"` are warmed into that cache by core's declared default-branch restore, which also
+  restores `.github/nuget-warm/ResolverFixturePackages.csproj` ([Build Hosts](../BuildHosts)). Before the
+  resolver read fallback folders, every run downloaded those packages again although the cache held them.
 - **Complete** means NuGet's own completion marker is present: `.nupkg.metadata`, or the older
   `{id}.{version}.nupkg.sha512`. Both are written after extraction. The `.nuspec` must also declare
   exactly that id and version. ONE check (`ReadCompleteInstall`) decides this for the dependency walk
@@ -351,6 +364,12 @@ The first configured feed refuses every connection, and some cases add a local f
   share one resolution. These three used to ask api.nuget.org, and the unknown-package case timed
   out whenever the live feed was slow to answer one 404. Tests that need real packages from the live
   feed stay in `NuGetAssemblyResolverTest` and skip when it is unreachable.
+- A closure held complete in a FALLBACK folder, with a reachable feed serving the same packages, resolves
+  with every path inside the fallback folder, no install attempted (a counting persistent cache sees no
+  call) and the global folder left empty. Without the fallback read this case fails: both packages are
+  downloaded. Negative control: with the dependency absent from the fallback folder, exactly that one
+  package is installed into the global folder. A half-extracted package in a fallback folder is neither
+  used nor written: it is installed into the global folder and the fallback copy stays as it was.
 - Every interleaving wait in these tests is asserted. A missed window fails the test instead of
   passing without having exercised it.
 

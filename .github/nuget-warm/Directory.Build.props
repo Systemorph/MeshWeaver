@@ -1,0 +1,4 @@
+<Project>
+  <!-- Stops MSBuild's upward walk: the repository's Directory.Build.props (warnings, analyzers, the forced
+       security-override references) belongs to the solution's projects, not to this restore-only project. -->
+</Project>

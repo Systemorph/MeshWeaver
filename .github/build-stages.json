@@ -9,7 +9,7 @@
     "evidence: no stage has run on a host \u2014 a probe of every stage on build-latest must be green and agree with the Actions legs of the same commit"
   ],
   "restore": {
-    "command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true",
+    "command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true && dotnet restore .github/nuget-warm/ResolverFixturePackages.csproj",
     "timeoutMinutes": 20
   },
   "parallel": true,
