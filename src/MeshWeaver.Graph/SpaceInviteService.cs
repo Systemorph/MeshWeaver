@@ -57,8 +57,18 @@ public sealed class SpaceInviteService(
     /// included — would no longer bind.</remarks>
     public IObservable<SpaceInviteOutcome> Invite(
         string spacePath, string email, string role, bool pin, string? invitedBy, string? message)
+        => Invite(spacePath, email, role, pin, invitedBy, message, locale: null);
+
+    /// <summary>Invites <paramref name="email"/> to <paramref name="spacePath"/> with <paramref name="role"/>,
+    /// carrying the host's personal <paramref name="message"/> and the language the invitation email is
+    /// written in (<see cref="Invitation.Locale"/>, #7482). The invitee has no account yet, so the host
+    /// picks the language; <c>null</c> or blank <paramref name="locale"/> means the host's OWN language,
+    /// read off their <see cref="AccessContext.Locale"/> when this is called.</summary>
+    /// <remarks>An overload for the same reason as the one above.</remarks>
+    public IObservable<SpaceInviteOutcome> Invite(
+        string spacePath, string email, string role, bool pin, string? invitedBy, string? message, string? locale)
         => GrantOrScheduleAccess(spacePath, email, role, pin, invitedBy,
-            note: $"Invited to space {spacePath}", message: message);
+            note: $"Invited to space {spacePath}", message: message, locale: locale);
 
     /// <summary>
     /// The general grant-or-schedule primitive behind BOTH the Space invite and the granular Access
@@ -84,8 +94,21 @@ public sealed class SpaceInviteService(
     /// </summary>
     public IObservable<SpaceInviteOutcome> GrantOrScheduleAccess(
         string nodePath, string email, string role, bool pin, string? invitedBy, string? note, string? message)
+        => GrantOrScheduleAccess(nodePath, email, role, pin, invitedBy, note, message, locale: null);
+
+    /// <summary>
+    /// <see cref="GrantOrScheduleAccess(string, string, string, bool, string?, string?, string?)"/>, also
+    /// carrying the language the invitation email is written in (<see cref="Invitation.Locale"/>, #7482).
+    /// <c>null</c> or blank <paramref name="locale"/> is the INVITER's own language, read off their
+    /// <see cref="AccessContext.Locale"/> HERE, on the caller's turn: the account lookup and the writes
+    /// that follow run as System, whose context carries no language. Never the process culture.
+    /// </summary>
+    public IObservable<SpaceInviteOutcome> GrantOrScheduleAccess(
+        string nodePath, string email, string role, bool pin, string? invitedBy, string? note, string? message,
+        string? locale)
     {
         var normalizedEmail = email.Trim();
+        var emailLocale = InvitationLocale(locale, accessService);
 
         // Look up an existing account by email (one-shot initial snapshot) — as System, see AccountLookup.
         return meshService.Query<MeshNode>(AccountLookup(normalizedEmail))
@@ -97,9 +120,20 @@ public sealed class SpaceInviteService(
                 var existing = users.FirstOrDefault(u => EmailMatches(u, normalizedEmail));
                 return existing is not null
                     ? GrantNow(existing.Id, nodePath, role, pin)
-                    : ScheduleAndInvite(nodePath, normalizedEmail, role, pin, invitedBy, note, message);
+                    : ScheduleAndInvite(nodePath, normalizedEmail, role, pin, invitedBy, note, message, emailLocale);
             });
     }
+
+    /// <summary>
+    /// The language an invitation email is written in (#7482): the host's explicit pick when given,
+    /// otherwise the host's own language off <paramref name="accessService"/>'s current context —
+    /// always resolved to a supported tag (<see cref="Locales.Resolve"/>), never the process culture.
+    /// </summary>
+    /// <param name="requested">The host's pick, or null/blank for "my language".</param>
+    /// <param name="accessService">The inviter's access service, read on the inviter's turn.</param>
+    /// <returns>A tag from <see cref="Locales.Supported"/>.</returns>
+    internal static string InvitationLocale(string? requested, AccessService accessService)
+        => string.IsNullOrWhiteSpace(requested) ? accessService.ViewerLocale() : Locales.Resolve(requested);
 
     /// <summary>
     /// The read that resolves an invitee's account from their email — issued as
@@ -158,7 +192,8 @@ public sealed class SpaceInviteService(
     }
 
     private IObservable<SpaceInviteOutcome> ScheduleAndInvite(
-        string spacePath, string email, string role, bool pin, string? invitedBy, string? note, string? message)
+        string spacePath, string email, string role, bool pin, string? invitedBy, string? note, string? message,
+        string locale)
     {
         var subscription = new EventSubscription
         {
@@ -186,6 +221,7 @@ public sealed class SpaceInviteService(
             {
                 Email = email, InvitedBy = invitedBy, Note = note, SpacePath = spacePath,
                 Message = string.IsNullOrWhiteSpace(message) ? null : message.Trim(),
+                Locale = locale,
             },
         };
 
