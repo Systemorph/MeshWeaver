@@ -93,12 +93,23 @@ public static class DeploymentPinnedReferences
         var access = hub.ServiceProvider.GetService<AccessService>();
         var scope = ScopeOf(hub.ServiceProvider.GetService<IConfiguration>(),
             hub.ServiceProvider.GetService<PluginCatalogOptions>());
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+        // 🚨 #7378 — a CI lane frozen on a platform set is a consumer too: its filed freeze
+        // references are read beside the records and reports, and an unreadable one refuses the pass
+        // exactly as an unreadable report does.
         return access.RunAsSystem(() =>
             Records(meshService, DeploymentNodeType)
                 .Zip(Records(meshService, DeploymentReportService.InventoryNodeType),
-                    (deployments, inventories) => Resolve(
-                        deployments, inventories, hub.JsonSerializerOptions, DateTimeOffset.UtcNow, StaleAfter,
-                        scope, logger)));
+                    Records(meshService, PlatformFreezeReferences.NodeType),
+                    (deployments, inventories, freezes) =>
+                    {
+                        var now = DateTimeOffset.UtcNow;
+                        return Resolve(
+                                deployments, inventories, hub.JsonSerializerOptions, now, StaleAfter, scope, logger)
+                            .AddRange(PlatformFreezeReferences.Resolve(
+                                freezes, hub.JsonSerializerOptions, now,
+                                PlatformFreezeReferences.LocationOf(configuration), logger));
+                    }));
     }
 
     /// <summary>

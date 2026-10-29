@@ -137,16 +137,62 @@ Fleet Console — or in the pod's health payload beside `nodetype_bake` — is t
 Anything unreadable, and any pin that resolves to no marker, **aborts the whole pass** with nothing
 collected. The direction is right: incomplete licenses no deletion.
 
-🚨 **But rule 4's inventory is exactly two things** — `DeploymentPinnedReferences` reads
-`Hosting/Deployment` records' `pinnedImageTag`, and `Hosting/ModuleInventory` reports filed by
-*registered instances*. **A satellite CI gate pinned to an older platform build is neither.** A
-`MW_PLATFORM_REF` in MeshWeaver.Plugins, Reinsurance, SocialMedia, Manufacturing, Crm or Education is
-a value in a GitHub Actions workflow: it files no instance report, holds no Deployment record, and
-writes no adoption stamp into this mesh. Such an identity is therefore protected by rule 3 or rule 7
-and by nothing else — and satellite pins are continuous builds (`X.Y.<run>`, or the retired
-`X.Y.Z-ci.<n>`), so rule 3 does not apply. **Past 30 days, a satellite's pinned platform build is
-collectable.** (Until MeshWeaver#6990, a `3.1.<run>` pin was protected by accident, because rule 3
-mistook every plain CD build for a cut release. See below.)
+Rule 4's inventory is three things, all read by `DeploymentPinnedReferences.Read`:
+`Hosting/Deployment` records' `pinnedImageTag`, `Hosting/ModuleInventory` reports filed by
+*registered instances*, and the **CI freeze references** satellite lanes file (next section). A
+reference set that cannot be read, from any of the three, aborts the pass.
+
+### A CI freeze is a reference
+
+A satellite lane can be frozen on one platform set: the repository variable `MW_PLATFORM_REF`, read
+as `FREEZE` by the shared gate lane (`node-repo-gate.yml`). A frozen lane pulls that set's bundles
+from the plugin registry by identity, so the set must outlive the 30-day window for as long as the
+freeze is in force. Satellite sets are continuous builds (`X.Y.<run>`), so rule 3 never applies to
+them, and until #7378 nothing else did either: the freeze was a value in a GitHub Actions variable,
+with no report, no record and no stamp in the registry's mesh.
+
+Now a freeze is a record:
+
+| Field | Meaning | Written by |
+|---|---|---|
+| `set` | the platform set the freeze resolved to; its `_releases/<set>` marker names the identity | the lane |
+| `repository`, `lane` | who is frozen (`owner/name`, and `workflow/job`) | the lane |
+| `freeze`, `coreSha`, `run` | the variable as written, the set's core commit, the filing run | the lane (diagnostic) |
+| `registeredInstance` | the registry instance the lane's key AUTHENTICATED as | the store |
+| `filedAt`, `expiresAt` | filing time, and filing time plus one week | the store |
+
+- **The freeze path files it.** In the gate lane's `plan` job, every run that resolved its platform
+  through a freeze posts the reference to `POST /api/ci/platform-freezes` on its `registry-url`,
+  with the same `registry-key` it pulls bundles with. A frozen run that cannot file it (no
+  `registry-url`, no key, or a refusal) is **red**, naming what to provision, because a freeze the
+  registry does not know about is exactly the state this exists to end.
+- **The store stamps it** (`PlatformFreezeReferences.File`). It files the node at
+  `{Hosting:OperationalSpace}/PlatformFreezes/<instance>--<repository>--<lane>`, as node type
+  `Hosting/PlatformFreeze`. The sender's `registeredInstance`, `filedAt` and `expiresAt` are
+  discarded: a lane says what it froze on, never how long the store keeps it. The key binds the
+  record to the authenticated sender, so one key cannot overwrite (and so un-protect) another
+  sender's freeze. The route itself is mapped by the registry host, beside
+  `POST /api/instances/inventory`.
+- **It expires.** Each frozen run re-files and pushes the expiry a week out. A lifted freeze stops
+  protecting its set a week after its last frozen run, so an abandoned freeze cannot pin a set for
+  ever.
+- **Retention reads it as a pin** (`PlatformFreezeReferences.Resolve`). An unexpired reference adds
+  a `PinnedPlatformReference` on its `set`, which keeps the identity its marker names (rule 4),
+  reported as `pinned by CI freeze <repository> <lane> …`. An expired one protects nothing and is
+  logged. A reference whose set or expiry cannot be read **refuses the pass**, and a node of the
+  type anywhere but the filing location is not read.
+
+Evidence: `PlatformFreezeRetentionReferenceTest` (MeshWeaver.Hosting.Test) —
+`AFrozenSet_IsNotPruned_AndAnUnreferencedOldSetBesideItIs` (the frozen set is kept, and the
+negative control beside it, an old set nothing references, is collected),
+`WithoutTheFreeze_TheSameSetIsCollected`, `AnExpiredFreezeReference_NoLongerProtects`,
+`AFreezeWithNoReadableExpiry_RefusesThePass`, `AFreezeNodeOutsideTheFilingLocation_IsNotRead`; and
+`PlatformFreezeFilingTest.AFiledFreeze_IsStampedByTheStore_AndReadAsAPin`, which files on a real mesh
+and reads the pin back through `DeploymentPinnedReferences.Read`.
+
+Not covered: the publish-bake lane's freeze (`node-repo-publish-bake.yml`) PUBLISHES on the frozen
+set rather than pulling from the registry, so it files nothing. A lane that pins a set by digest
+(`image-digest` + `platform-image-digest`) rather than by a freeze is not a freeze either.
 
 ### Cut release or continuous build
 
@@ -176,13 +222,11 @@ Evidence: `ACutRelease_IsTheCleanVersionReleaseYmlPromotes_NeverAContinuousBuild
 `ContinuousSemVerBuilds_AreActuallyRemoved_AndCutReleasesStay`. All three fail with the hyphen-only
 predicate (measured by swapping it back in).
 
-That is precisely the #3876 failure mode (a pruned identity directory breaking a satellite gate) and
-the registry-side twin Memex#219 (*"ACR retention can delete a tag a committed overlay or a live
-workload references — twice now"*). Closing it means giving the satellites a first-class reference —
-a pin source that reads the fleet's `MW_PLATFORM_REF` values, or a report a satellite lane files the
-way an instance does. Until then, **arming deletion on the plugin registry instance is the dangerous
-half**, because that is the store a satellite's gate pulls from over the HTTP prebuilt surface; the
-gap must be closed, or the arming scoped to instances no CI lane pulls from.
+A frozen satellite lane was precisely the #3876 failure mode (a pruned identity directory breaking
+a satellite gate), and the registry-side twin of Memex#219 (*"ACR retention can delete a tag a
+committed overlay or a live workload references — twice now"*). The freeze reference above closes
+it for the registry, which is the store a satellite's gate pulls from over the HTTP prebuilt
+surface.
 
 ## Per-release surfaces follow their marker
 
@@ -417,7 +461,9 @@ once the owner has committed it, and the next tick asks again.
    reads completely — `StampedIdentities()` throws with no mesh hub or `IMeshService`, and a
    `PinnedPlatformReferenceSource` that errors aborts the pass. Either would abort every pass,
    silently, exactly as an unregistered sweep would.
-3. **Close the satellite gap**, or scope the arming away from the registry.
+3. **Close the satellite gap**, or scope the arming away from the registry. Closed by
+   [A CI freeze is a reference](#a-ci-freeze-is-a-reference) once the registry host maps
+   `POST /api/ci/platform-freezes`; until then a frozen lane is red at the filing step.
 4. **Arm deletion per instance**, by setting `PreWarm__PrebuiltBundleRetention__Delete: "true"` in
    that instance's record — which now reaches the container, because the chart renders the key.
 

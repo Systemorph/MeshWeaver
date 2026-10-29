@@ -44,6 +44,8 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreateModuleDiscoveryNodeType())
             .AddMeshNodes(CreateDefaultInstallLedgerNodeType())
             .AddMeshNodes(CreateRegistryReconcileLedgerNodeType())
+            // A CI lane's platform freeze, filed on the registry as a retention reference (#7378).
+            .AddMeshNodes(CreatePlatformFreezeNodeType())
             // "Reload module M on this instance" — the request node, its executor and the
             // per-process reporter (Doc/Architecture/ModuleReload).
             .AddModuleReload()
@@ -419,7 +421,9 @@ public static class PluginCatalogConfigurationExtensions
             // resolve the name, the value degraded back to a raw JsonElement, and the node still
             // materialised as nothing. Registering the real record and stamping nameof() is what
             // makes Ops/Modules/{deployment} readable as DeploymentReport.
-            .WithType(typeof(DeploymentReport), nameof(DeploymentReport));
+            .WithType(typeof(DeploymentReport), nameof(DeploymentReport))
+            // A CI lane's platform freeze as filed on the registry (#7378).
+            .WithType(typeof(PlatformFreezeReference), nameof(PlatformFreezeReference));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {
@@ -610,6 +614,18 @@ public static class PluginCatalogConfigurationExtensions
     // ledger above — WithType registers the CONTENT type, this registers the NODE type CreateNode
     // validates against; without it the write dies with "NodeType is not registered" and the
     // deferred-reconcile record this exists to keep would be silently lost.
+    private static MeshNode CreatePlatformFreezeNodeType() =>
+        new(PlatformFreezeReferences.NodeType)
+        {
+            Name = "Platform Freeze",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            // Bookkeeping a store files under its operational space, never pickable content.
+            IsSatelliteType = false,
+            ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+            HubConfiguration = config => config
+                .AddMeshDataSource(s => s.WithContentType<PlatformFreezeReference>()),
+        };
+
     private static MeshNode CreateRegistryReconcileLedgerNodeType() =>
         new(RegistryUpdateReconciler.LedgerNodeType)
         {
