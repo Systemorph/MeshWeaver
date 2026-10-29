@@ -787,7 +787,11 @@ public static class DeclaredPointRead
     ///
     /// <para>🚨 <b>Every re-read is bounded</b> by the permission-establishment budget until its FIRST
     /// answer; past it the partition is NOT owned. Without a bound, a re-read that stalled after a
-    /// withdrawal kept the previous decision in force for as long as it stalled. The trade-off is
+    /// withdrawal kept the previous decision in force for as long as it stalled. The budget bounds the
+    /// whole CONTINUOUS unanswered period, not each re-read (the <see cref="BoundPendingPeriods"/>
+    /// shape): a signal that replaces a re-read still in flight continues the SAME period and never
+    /// restarts its deadline, so signals arriving faster than the budget cannot hold a stalled
+    /// re-check — and with it the previous decision — open indefinitely. Only an answer ends the period. The trade-off is
     /// decided for fail-closed: a <c>false</c> ends an admitted subscription
     /// (<c>RevisionAdmission.AdmitEachRevision</c> treats it as terminal), and every sync writes
     /// <c>_GitSync</c>, so an ownership re-read that cannot answer within the budget ends the open
@@ -805,12 +809,17 @@ public static class DeclaredPointRead
     internal static IObservable<bool> FollowOwnership(
         IObservable<Unit> changed, Func<IObservable<bool>> read, TimeSpan budget, IScheduler scheduler, Action? onStalled = null)
         => AttachedThenSeeded(changed, Unit.Default)
-            .Select(_ => Observable.Defer(read)
-                .Timeout(Observable.Timer(budget, scheduler), _ => Observable.Never<long>())
-                .Catch((TimeoutException _) =>
+            // Each re-read is pending (null) until it answers; a replacement re-read starts pending too.
+            .Select(_ => Observable.Defer(read).Select(owned => (bool?)owned).StartWith((bool?)null))
+            .Switch()
+            // One unanswered period: consecutive pending markers collapse, so its deadline starts once.
+            .DistinctUntilChanged()
+            .Select(owned => owned is { } answered
+                ? Observable.Return(answered)
+                : Observable.Timer(budget, scheduler).Select(_ =>
                 {
                     onStalled?.Invoke();
-                    return Observable.Return(false);
+                    return false;
                 }))
             .Switch()
             .DistinctUntilChanged();

@@ -150,6 +150,69 @@ public class DeclaredReadLiveInputsTest
     }
 
     [Fact]
+    public void Signals_replacing_a_stalled_reread_inside_the_budget_do_not_restart_its_deadline()
+    {
+        // Review of #7513 (thread 4405913937): every signal replaces the re-read in flight. When the
+        // budget ran per re-read, signals arriving faster than it restarted the deadline forever and
+        // the previous decision (owned) stood indefinitely. The budget bounds the CONTINUOUS
+        // unanswered period: one deadline from the first unanswered signal, however many follow.
+        var scheduler = new TestScheduler();
+        var changed = new Subject<Unit>();
+        var reads = 0;
+        var stalls = 0;
+        // The first read answers owned; every re-read after a signal stalls.
+        IObservable<bool> Read() => reads++ == 0
+            ? Observable.Return(true).Concat(Observable.Never<bool>())
+            : Observable.Never<bool>();
+        var seen = ImmutableList<bool>.Empty;
+        using var _ = DeclaredPointRead.FollowOwnership(changed, Read, Budget, scheduler, () => stalls++)
+            .Subscribe(v => seen = seen.Add(v));
+
+        changed.OnNext(Unit.Default);
+        var signals = 1;
+        // A signal every 3 s, well inside the 10 s budget, up to just before the deadline.
+        while (scheduler.Clock + TimeSpan.FromSeconds(3).Ticks < Budget.Ticks)
+        {
+            scheduler.AdvanceBy(TimeSpan.FromSeconds(3).Ticks);
+            changed.OnNext(Unit.Default);
+            signals++;
+        }
+        Assert.True(signals >= 4, "INSTRUMENT: several replacement re-reads landed inside one budget");
+        Assert.Equal(new[] { true }, seen);
+
+        scheduler.AdvanceTo(Budget.Ticks);
+        Assert.Equal(new[] { true, false }, seen);
+        Assert.Equal(1, stalls);
+    }
+
+    [Fact]
+    public void An_answer_ends_the_unanswered_period_and_the_next_signal_starts_a_fresh_deadline()
+    {
+        // CONTROL: the period ends on an answer, so a later stall gets its own full budget.
+        var scheduler = new TestScheduler();
+        var changed = new Subject<Unit>();
+        var answers = ImmutableArray.Create(
+            Observable.Return(true).Concat(Observable.Never<bool>()),
+            Observable.Timer(TimeSpan.FromSeconds(8), scheduler).Select(_ => true).Concat(Observable.Never<bool>()),
+            Observable.Never<bool>());
+        var reads = 0;
+        var stalls = 0;
+        var seen = ImmutableList<bool>.Empty;
+        using var _ = DeclaredPointRead.FollowOwnership(changed, () => answers[reads++], Budget, scheduler, () => stalls++)
+            .Subscribe(v => seen = seen.Add(v));
+
+        changed.OnNext(Unit.Default);
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(9).Ticks);
+        changed.OnNext(Unit.Default);
+        scheduler.AdvanceBy(Budget.Ticks - 1);
+        Assert.Equal(new[] { true }, seen);
+
+        scheduler.AdvanceBy(1);
+        Assert.Equal(new[] { true, false }, seen);
+        Assert.Equal(1, stalls);
+    }
+
+    [Fact]
     public void An_ownership_reread_answered_within_the_budget_decides_and_no_deadline_fires()
     {
         // CONTROL: the budget bounds a re-read until its first answer, never the live follow after it.

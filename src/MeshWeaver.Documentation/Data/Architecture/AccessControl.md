@@ -2443,6 +2443,9 @@ signal arrived (a synchronous store read widens that window). Both now start fro
 re-read taken on each signal is also held to the permission-establishment budget until its FIRST
 answer (`FollowOwnership`); past it the partition is not owned. Without that bound, a re-read that
 stalled after a withdrawal kept the previous ownership decision in force for as long as it stalled.
+The budget bounds the whole continuous unanswered period, not each re-read: a signal that replaces a
+re-read still in flight continues the same period, so signals arriving faster than the budget cannot
+restart the deadline and hold a stalled re-check open (the `BoundPendingPeriods` shape).
 The trade-off is decided for failing closed: `false` ends an admitted subscription, and every sync
 writes `_GitSync`, so an ownership re-read that cannot answer within the budget ends the open declared
 reads of that partition's types. That is how every other permission check classifies a timeout
@@ -2451,7 +2454,7 @@ withdraws nothing, so a sync that rewrites the config without changing its owner
 an open read. Pinned by `DeclaredReadLiveInputsTest`: the commit lands inside the first read, on a
 hot feed that, like the process feed, drops an announcement no handler hears; the `StartWith` shape
 under the same commit is the instrument's negative control, and an unchanged ownership and a re-read
-answered inside the budget are the positive controls.
+answered inside the budget are the positive controls; signals every few seconds over a stalled re-read pin the single deadline per unanswered period.
 
 **A hub's point read of its OWN path is decided locally** (#7298, F8). The declaration reads the node
 from its owner. When the deciding hub IS the owner, that is its own-node stream, with no round-trip.
