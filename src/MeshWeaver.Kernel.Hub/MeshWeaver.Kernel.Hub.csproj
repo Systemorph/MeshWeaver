@@ -17,6 +17,9 @@
          while the ~350 framework assemblies stay de-duplicated across sessions) can only be
          asserted from inside. -->
     <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
+    <!-- KernelResultAreaFailureLocalizedTest: the result area's failure view (#7363) is composed by
+         an internal helper, asserted directly for the saturation refusal no script can trigger. -->
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
   </ItemGroup>
 
   <ItemGroup>

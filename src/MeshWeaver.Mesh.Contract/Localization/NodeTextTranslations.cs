@@ -126,13 +126,39 @@ public static class NodeTextTranslations
     }
 
     /// <summary>The localized display NAME of <paramref name="node"/>, falling back to its authored one.</summary>
+    /// <remarks>
+    /// Two sources, in order: the content's own <see cref="ILocalizedNodeText"/> translation, then a
+    /// PLATFORM-DEFAULT name — a name the platform itself writes onto every node of a type (every
+    /// declared partition policy is called "Access Policy"). Such a name is platform-owned text, so
+    /// it follows the viewer (MeshWeaver#7371). It is a catalog key
+    /// <c>node.defaultName.{NodeType}</c> whose ENGLISH value is the name the platform writes; a node
+    /// whose name is anything else — renamed by a person — keeps that name in every language.
+    /// </remarks>
     /// <param name="node">The node.</param>
     /// <param name="locale">The viewer's language tag.</param>
     /// <returns>The name, or null when the node has none in any language.</returns>
     public static string? LocalizedName(this MeshNode node, string? locale)
     {
         var text = For(node?.Content, locale)?.Name;
-        return Blank(text) ? node?.Name : text;
+        if (!Blank(text))
+            return text;
+        return PlatformDefaultName(node, locale) ?? node?.Name;
+    }
+
+    /// <summary>The catalog key prefix of a platform-default node name — see <see cref="LocalizedName"/>.</summary>
+    private const string DefaultNameKeyPrefix = "node.defaultName.";
+
+    private static string? PlatformDefaultName(MeshNode? node, string? locale)
+    {
+        if (node?.NodeType is not { Length: > 0 } nodeType || Blank(node.Name))
+            return null;
+        var key = DefaultNameKeyPrefix + nodeType;
+        if (!LocalizationCatalog.ContainsKey(key))
+            return null;
+        // Only the name the platform wrote is platform text; compare it to the English value.
+        return string.Equals(node.Name, LocalizationCatalog.Get(key, Locales.Default), StringComparison.Ordinal)
+            ? LocalizationCatalog.Get(key, locale)
+            : null;
     }
 
     /// <summary>The localized DESCRIPTION of <paramref name="node"/>, falling back to its authored one.</summary>
