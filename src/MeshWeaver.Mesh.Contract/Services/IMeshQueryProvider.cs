@@ -84,16 +84,26 @@ public interface IMeshQueryProvider
     /// <para>Default implementation bridges to the legacy
     /// <see cref="Query{T}"/> for back-compat during the migration. Concrete
     /// providers should override to take the hosted-hub path.</para>
+    /// <para>🚨 The bridge folds EVERY change kind, <see cref="QueryChangeType.Removed"/> included
+    /// (MeshWeaver#7365). It used to drop removals, so a row a provider removed — a deleted node, or a
+    /// row an open secured query withdrew after its reader's grant was revoked — stayed in this
+    /// snapshot for as long as it was open. The fold is per subscription.</para>
     /// </summary>
     IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
-        => Query<MeshNode>(request, options)
-            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset or QueryChangeType.Added or QueryChangeType.Updated)
+        => Observable.Defer(() => Query<MeshNode>(request, options)
             .Scan(
                 new Dictionary<string, QueryResult>(StringComparer.OrdinalIgnoreCase),
                 (acc, change) =>
                 {
                     if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
                         acc.Clear();
+                    if (change.ChangeType == QueryChangeType.Removed)
+                    {
+                        foreach (var removed in change.Items)
+                            if (!string.IsNullOrEmpty(removed.Path))
+                                acc.Remove(removed.Path);
+                        return acc;
+                    }
                     for (var i = 0; i < change.Items.Count; i++)
                     {
                         var node = change.Items[i];
@@ -103,7 +113,7 @@ public interface IMeshQueryProvider
                     }
                     return acc;
                 })
-            .Select(d => (IReadOnlyCollection<QueryResult>)d.Values.ToList());
+            .Select(d => (IReadOnlyCollection<QueryResult>)d.Values.ToList()));
 
     /// <summary>
     /// Unified autocomplete surface — a LIVE snapshot observable of <see cref="QueryResult"/>
