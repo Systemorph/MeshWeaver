@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
@@ -60,6 +61,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     // Observable.FromAsync, which deadlocks under a blocking subscriber. See
     // IoPoolExtensions and Doc/Architecture/AsynchronousCalls.md.
     private readonly IIoPool _ioPool;
+    // The mesh's services, read at subscribe time only: what an open secured query follows grants on
+    // (SecuredQueryAccessFollow) and the budget its per-row Read check is bounded by. Null for a
+    // provider built without a mesh (tests, tooling), which then follows nothing.
+    private readonly IServiceProvider? services;
     private long _version;
 
     /// <summary>
@@ -88,9 +93,11 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         IEnumerable<IPartitionStorageProvider>? partitionProviders = null,
         ILogger<StorageAdapterMeshQueryProvider>? logger = null,
         IoPoolRegistry? ioPoolRegistry = null,
-        StorageAdapterQueryProviderOptions? options = null)
+        StorageAdapterQueryProviderOptions? options = null,
+        IServiceProvider? services = null)
     {
         this.persistence = persistence;
+        this.services = services;
         this.accessService = accessService;
         this.meshConfiguration = meshConfiguration;
         this.nodeValidators = nodeValidators;
@@ -600,9 +607,21 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         .SelectMany(node =>
                         {
                             if (node is MeshNode meshNode)
-                                return useSecurityFilter
-                                    ? ValidateRead(meshNode, userId).Where(valid => valid).Select(_ => (object)meshNode)
-                                    : Observable.Return<object>(meshNode);
+                            {
+                                if (!useSecurityFilter)
+                                    return Observable.Return<object>(meshNode);
+                                // 🚨 MeshWeaver#7365: the run records what the check DECIDED, apart from
+                                // what it could not read, so an incomplete live run still removes a
+                                // held row it read and refused.
+                                return ValidateRead(meshNode, userId)
+                                    .Do(valid =>
+                                    {
+                                        if (!valid && !string.IsNullOrEmpty(meshNode.Path))
+                                            completeness?.RecordRefusedRead(meshNode.Path);
+                                    })
+                                    .Where(valid => valid)
+                                    .Select(_ => (object)meshNode);
+                            }
                             return Observable.Return(node);
                         }))
                 // Concat preserves query order (query #0's hits before #1's) — same ordering
@@ -1000,6 +1019,18 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
         /// <summary>Marks this run's snapshot as short of what the query asked for.</summary>
         public void RecordDroppedRead() => dropped = true;
+
+        private ImmutableHashSet<string> refused = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The paths this run READ and the read check REFUSED (MeshWeaver#7365). Distinct from a dropped
+        /// read: a refused row was seen and decided, so even an INCOMPLETE run removes it from the rows
+        /// a reader holds — a revoked reader must never keep a row because some OTHER read failed.
+        /// </summary>
+        public ImmutableHashSet<string> RefusedPaths => Volatile.Read(ref refused);
+
+        /// <summary>Records a row this run read and refused for the reader.</summary>
+        public void RecordRefusedRead(string path) => ImmutableInterlocked.Update(ref refused, set => set.Add(path));
     }
 
     /// <summary>
@@ -1261,16 +1292,39 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         if (relevant.Count == 0)
             return Observable.Return(true);
 
+        // 🚨 Bounded and FAIL-CLOSED (MeshWeaver#7365). Since an open query re-runs this check on every
+        // grant change, a row is shown only on an ESTABLISHED grant, and a verdict that cannot be
+        // established withholds it:
+        //  • a validator that completes WITHOUT a verdict refuses the row (DefaultIfEmpty(false)).
+        //    `.All` over an empty answer was true, so silence admitted the row on the other
+        //    validators' say. This is the same rule SyncedQueryDataSourceExtensions.CanRead and the
+        //    creation-validator runner hold (#2742);
+        //  • a validator that faults refuses the row. It used to fault the whole run, which ended
+        //    the query;
+        //  • the whole check is bounded by the permission-establishment budget, and past it the row
+        //    is refused.
+        // A refused row is simply not in this run's result, so an open query that held it removes it.
+        var budget = (services?.GetService(typeof(MeshOperationOptions)) as MeshOperationOptions ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
         return relevant
-            .Select(v => v.Validate(context).Take(1).Do(r =>
+            .Select(v => v.Validate(context).Take(1).Select(r =>
             {
                 if (!r.IsValid)
                     logger?.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
                         v.GetType().Name, node.Path, r.ErrorMessage);
-            }))
+                return r.IsValid;
+            }).DefaultIfEmpty(false))
             .ToInlineObservable()
             .Concat()
-            .All(r => r.IsValid);
+            .All(valid => valid)
+            .Timeout(budget)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "Read check on {Path} for {User} reached no verdict within {Budget} — the row is withheld",
+                    node.Path, userId, budget);
+                return Observable.Return(false);
+            });
     }
 
     /// <summary>
@@ -1650,7 +1704,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // say WHICH live run was short; a field would mark every other concurrent caller's
             // snapshot incomplete and never clear (see ReadCompleteness).
             var completeness = new ReadCompleteness();
-            IObservable<(List<(string? Path, T Item)> Rows, List<double>? Scores, bool Complete)> RunQuery(
+            IObservable<(List<(string? Path, T Item)> Rows, List<double>? Scores, bool Complete,
+                ImmutableHashSet<string> Refused)> RunQuery(
                 ReadCompleteness runCompleteness) =>
                 RunRankedQueryNodes(request, options, useSecurityFilter,
                         projectSelect: typeof(T) != typeof(MeshNode),
@@ -1669,7 +1724,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         }
                         // Read AFTER the run's reads have all answered — RunRankedQueryNodes emits
                         // once, over the collected walk — so the verdict is final for this run.
-                        return (results, scores, !runCompleteness.AnyReadDropped);
+                        return (results, scores, !runCompleteness.AnyReadDropped,
+                            runCompleteness.RefusedPaths);
                     });
 
             // Subscribe to persistence.Changes BEFORE running the initial query so
@@ -1711,6 +1767,17 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             var earlyBacklog = new List<DataChangeNotification>();
             var earlyLock = new object();
             var initialDone = false;
+            // The MainNodes the held rows' Read is decided through (a satellite reads through its
+            // MainNode, possibly in another partition). The access follow reads it at each signal;
+            // it is replaced after every run, on the run's own serialized thread.
+            var heldMainNodes = ImmutableHashSet<string>.Empty;
+            void HoldMainNodes()
+                => Volatile.Write(ref heldMainNodes, currentItems.Values
+                    .OfType<MeshNode>()
+                    .Select(n => n.MainNode)
+                    .Where(m => !string.IsNullOrEmpty(m))
+                    .Select(m => m!)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
             // Published under `earlyLock` in the same critical section that sets initialDone.
             Subject<DataChangeNotification>? liveBuffer = null;
             void Route(DataChangeNotification n)
@@ -1753,6 +1820,24 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // BEFORE the buffer, so teardown order is unchanged.
             disposables.Add(persistence.ChangeFeedGaps
                 .Subscribe(gap => Route(gap.ToRequeryTrigger())));
+            // 🚨 MeshWeaver#7365: a SECURED query also re-runs when a grant or a revocation lands that
+            // can move one of its rows, whether or not that write lies under the query's scope (an
+            // ancestor's _Access, a group membership, a role). The re-query re-decides every row through
+            // ValidateRead, so a revoked row leaves as Removed and a newly readable one arrives as Added.
+            // A separate subscription into the same Route, for the reason the gap subscription gives.
+            // The follow is the query's own: a fault in it ends the query, because a listing that can no
+            // longer follow access must not go on serving rows.
+            if (useSecurityFilter && !SecuredReadIsTheRawRead(request))
+                disposables.Add(SecuredQueryAccessFollow
+                    .RecheckTriggers(services, GetEffectiveUserId(request),
+                        scopeFilters.Select(sf => sf.BasePath).ToArray(),
+                        () => Volatile.Read(ref heldMainNodes))
+                    .Subscribe(Route, ex =>
+                    {
+                        logger?.LogWarning(ex,
+                            "[StorageAdapterMeshQueryProvider] the access follow of an open secured query faulted — ending the query");
+                        observer.OnError(ex);
+                    }));
 
             disposables.Add(
                 RunQuery(completeness).Subscribe(
@@ -1765,6 +1850,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             if (!string.IsNullOrEmpty(path))
                                 currentItems[path] = item;
                         }
+                        HoldMainNodes();
 
                         DataChangeNotification[] backlog;
                         var changeBuffer = new Subject<DataChangeNotification>();
@@ -1843,8 +1929,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             changeBuffer
                                 .CoalesceWhileRunning(() => RunQuery(new ReadCompleteness()))
                                 .Subscribe(
-                                    newResults => ProcessBatch(
-                                        newResults.Rows, newResults.Complete, currentItems, parsedQuery, observer),
+                                    newResults =>
+                                    {
+                                        ProcessBatch(
+                                            newResults.Rows, newResults.Complete, newResults.Refused,
+                                            currentItems, parsedQuery, observer);
+                                        HoldMainNodes();
+                                    },
                                     ex => observer.OnError(ex)));
 
                         // Publish the live buffer and flip the gate in ONE critical section, so
@@ -1922,6 +2013,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     private void ProcessBatch<T>(
         List<(string? Path, T Item)> newResults,
         bool complete,
+        IReadOnlySet<string> refused,
         Dictionary<string, T> currentItems,
         ParsedQuery parsedQuery,
         IObserver<QueryResultChange<T>> observer)
@@ -1956,7 +2048,20 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             }
             currentItems.Clear();
         }
-        else if (currentItems.Keys.Any(path => !newItems.ContainsKey(path)))
+        else
+        {
+            // 🚨 MeshWeaver#7365: an incomplete run keeps what it could not READ, never what it read
+            // and REFUSED. A revoked reader must not keep a row because some other read failed.
+            var refusedHeld = currentItems
+                .Where(held => !newItems.ContainsKey(held.Key) && refused.Contains(held.Key))
+                .ToList();
+            foreach (var (path, item) in refusedHeld)
+            {
+                removedItems.Add(item);
+                currentItems.Remove(path);
+            }
+        }
+        if (!complete && currentItems.Keys.Any(path => !newItems.ContainsKey(path)))
         {
             logger?.LogWarning(
                 "[StorageAdapterMeshQueryProvider.ProcessBatch] live re-query was INCOMPLETE (a read was dropped) — "
