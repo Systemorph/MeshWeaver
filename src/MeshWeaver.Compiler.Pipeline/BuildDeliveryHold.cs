@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using MeshWeaver.Mesh;
 using System.Globalization;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
@@ -237,6 +239,76 @@ public static class BuildDeliveryHold
            + $"A build of the current source (a successful compile, or a bundle for framework "
            + $"{NodeTypeCompilationHelpers.FrameworkVersion}) lifts it (Systemorph/Memex#668)."
            + (string.IsNullOrEmpty(gateReason) ? "" : $" Gate: {gateReason}");
+
+    /// <summary>The keyed form of <see cref="TooFarBehindNotice"/> (#7355). The gate's own reason, when
+    /// there is one, follows as further parts (<see cref="WithGate"/>).</summary>
+    /// <param name="def">The record whose adopted build was refused.</param>
+    /// <param name="maxMinorVersionsBehind">The bound that refused it.</param>
+    public static ImmutableList<KeyedText> TooFarBehindText(NodeTypeDefinition def, int maxMinorVersionsBehind)
+        => [KeyedText.Of("compile.hold.tooFarBehind",
+            ("adoptedVersion", ModuleVersionCompatibility.Display(def.AdoptedModuleVersion)),
+            ("adoptedFingerprint", Short(def.AdoptedSourceFingerprint)),
+            ("currentVersion", ModuleVersionCompatibility.Display(def.CurrentModuleVersion)),
+            ("currentFingerprint", Short(def.CurrentSourceFingerprint)),
+            ("distance", StaleAdoptionBound.DescribeDistance(def.AdoptedModuleVersion, def.CurrentModuleVersion)),
+            ("bound", StaleAdoptionBound.DescribeBound(maxMinorVersionsBehind)),
+            ("framework", NodeTypeCompilationHelpers.FrameworkVersion))];
+
+    /// <summary>The keyed form of <see cref="IncompatibleNotice"/> (#7355).</summary>
+    /// <param name="def">The record whose adopted build was refused.</param>
+    public static ImmutableList<KeyedText> IncompatibleText(NodeTypeDefinition def)
+        => [KeyedText.Of("compile.hold.incompatible",
+            ("adoptedVersion", ModuleVersionCompatibility.Display(def.AdoptedModuleVersion)),
+            ("adoptedFingerprint", Short(def.AdoptedSourceFingerprint)),
+            ("currentVersion", ModuleVersionCompatibility.Display(def.CurrentModuleVersion)),
+            ("currentFingerprint", Short(def.CurrentSourceFingerprint)),
+            ("framework", NodeTypeCompilationHelpers.FrameworkVersion))];
+
+    /// <summary>
+    /// A notice followed by its gate's reason, the keyed way the English notices append
+    /// <c>" Gate: {reason}"</c>. A gate reason with no keyed form is carried verbatim, so the parts
+    /// still reproduce the stored English and the frame still localizes.
+    /// </summary>
+    /// <param name="notice">The notice's parts.</param>
+    /// <param name="gateReason">The gate's English reason, or null.</param>
+    /// <param name="gateText">The gate reason's keyed form, when it has one.</param>
+    public static ImmutableList<KeyedText> WithGate(
+        ImmutableList<KeyedText> notice, string? gateReason, ImmutableList<KeyedText>? gateText)
+        => string.IsNullOrEmpty(gateReason)
+            ? notice
+            : notice.Add(KeyedText.Of("compile.hold.gate"))
+                .AddRange(KeyedTexts.Reproduces(gateText, gateReason)
+                    ? gateText!
+                    : [KeyedText.Of("compile.refusal.verbatim", ("text", gateReason))]);
+
+    /// <summary>
+    /// Stamps <see cref="NodeTypeDefinition.CompilationErrorText"/> on a settled record (#7355): the
+    /// parts kept when they still reproduce its <c>CompilationError</c>, otherwise the first candidate
+    /// that does — the gate's own refusal, or a hold notice followed by it — and none at all when no
+    /// candidate reproduces the text (a reader then renders the stored English verbatim). Pure.
+    /// </summary>
+    /// <param name="settled">The record a gate settle produced.</param>
+    /// <param name="gateReason">The gate's English reason.</param>
+    /// <param name="gateText">Its keyed form, or null.</param>
+    /// <param name="maxMinorVersionsBehind">The stale-adoption bound the settle used.</param>
+    /// <returns>The record with its keyed error text set or cleared.</returns>
+    public static NodeTypeDefinition StampErrorText(
+        NodeTypeDefinition settled, string? gateReason, ImmutableList<KeyedText>? gateText,
+        int maxMinorVersionsBehind = StaleAdoptionBound.DefaultMaxMinorVersionsBehind)
+    {
+        ArgumentNullException.ThrowIfNull(settled);
+        if (settled.CompilationError is not { } error)
+            return settled.CompilationErrorText is null ? settled : settled with { CompilationErrorText = null };
+        if (KeyedTexts.Reproduces(settled.CompilationErrorText, error))
+            return settled;
+        ImmutableList<KeyedText>?[] candidates =
+        [
+            gateText,
+            WithGate(TooFarBehindText(settled, maxMinorVersionsBehind), gateReason, gateText),
+            WithGate(IncompatibleText(settled), gateReason, gateText),
+        ];
+        return settled with { CompilationErrorText = candidates.FirstOrDefault(c => KeyedTexts.Reproduces(c, error)) };
+    }
 
     /// <summary>The incompatible-awaiting-bundle sentence for a refused build.</summary>
     public static string IncompatibleNotice(NodeTypeDefinition def, string? gateReason = null)

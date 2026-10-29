@@ -68,6 +68,16 @@ public sealed record ClosedTypeSet(bool IsClosed)
         + ". This process activates only NodeTypes its image registers in code; a type definition "
         + "stored in the database is never compiled, adopted or served here. Register the type in "
         + "the image's module, or open this node on a portal that serves in-mesh types.";
+
+    /// <summary>The keyed form of <see cref="RefusalFor"/> (#7355): rendered in the viewer's language,
+    /// and in English exactly that sentence (<c>CompileRefusalTextTest</c> holds them equal).</summary>
+    /// <param name="nodeType">The type that was asked for.</param>
+    /// <param name="instancePath">The node that asked for it, when there is one.</param>
+    public static System.Collections.Immutable.ImmutableList<KeyedText> RefusalText(string nodeType, string? instancePath = null) =>
+        string.IsNullOrEmpty(instancePath)
+            ? [KeyedText.Of("compile.refusal.closedTypeSet", ("nodeType", nodeType), ("configKey", ConfigKey))]
+            : [KeyedText.Of("compile.refusal.closedTypeSetReferenced",
+                ("nodeType", nodeType), ("configKey", ConfigKey), ("instance", instancePath))];
 }
 
 /// <summary>Registration and lookup for <see cref="ClosedTypeSet"/>.</summary>
