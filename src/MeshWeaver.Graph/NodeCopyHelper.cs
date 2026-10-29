@@ -347,7 +347,15 @@ public static class NodeCopyHelper
             NodeCopyEntry Entry(NodeCopyDisposition disposition, string? error = null) =>
                 new(node.Path, newPath, disposition) { Error = error };
 
-            var attempt = force
+            // 🚨 COLD — the request is posted when the bounded merge SUBSCRIBES this leg, never when
+            // the leg is built. IMessageHub.Observe(request) POSTS AT THE CALL, and the level's
+            // MergeBounded enumerates `levels[level].Select(CopyOne)` inline, so without the Defer
+            // every node of a level reached the node-operations hub the moment the level started and
+            // batchSize bounded only how many ANSWERS were awaited. A level of thousands of siblings
+            // (a document's parts sit on one level) then floods the write stage and its creates reach
+            // no verdict within their deadline — the shape of Systemorph/MeshWeaver#7464.
+            // CopyWritesAreBoundedTest pins it.
+            var attempt = Observable.Defer(() => force
                 ? issuingHub.Observe<CreateOrUpdateNodeResponse>(
                         new CreateOrUpdateNodeRequest(copiedNode), ConfigurePost)
                     .FirstAsync()
@@ -381,7 +389,7 @@ public static class NodeCopyHelper
                             return Entry(NodeCopyDisposition.SkippedExisting);
                         }
                         return Entry(NodeCopyDisposition.Failed, resp.Error);
-                    });
+                    }));
 
             // 🚨 NOT a swallow. The fault is RECORDED, it ends the descent, and it makes the whole
             // operation fail carrying the full inventory. What it stops is the merge aborting on
