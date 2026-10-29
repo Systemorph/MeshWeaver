@@ -123,6 +123,52 @@ public class SearchRanksExactNameAndSpaceFirstTest
         ids.Should().Equal(tierFree, "with every tier 0 the rule must leave the order untouched");
     }
 
+    /// <summary>
+    /// The fuzzy score has no lower bound: it subtracts a quarter of the searchable text's length.
+    /// An exactly named Space (tier 3) whose content is large enough scores below an exactly named
+    /// short page (tier 2) even with the tier boost added, so a provider that clipped by the boosted
+    /// sum alone dropped the Space under <c>limit:1</c> before the merge could restore tier order.
+    /// </summary>
+    [Fact]
+    public async Task ACappedQuery_KeepsTheHigherTier_WhateverItsContentSize()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string ns = "RankProbeLarge";
+        // A quarter of this length outweighs one TierWeight; 'x' carries none of the query letters.
+        var largeText = new string('x', 4_500_000);
+        var space = new MeshNode("vault", ns)
+        {
+            Name = "Ledger",
+            NodeType = SearchRanking.SpaceNodeType,
+            State = MeshNodeState.Active,
+            Content = JsonSerializer.Deserialize<object>(JsonSerializer.Serialize(new { text = largeText }), Options),
+        };
+        var page = new MeshNode("ledger-page", ns)
+        {
+            Name = "Ledger",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+        };
+        var store = new InMemoryStorageAdapter();
+        await store.Write(space, Options).Await(ct);
+        await store.Write(page, Options).Await(ct);
+        IMeshQueryCore query = new MeshQuery([new StorageAdapterMeshQueryProvider(persistence: store)], hub: null!);
+
+        // The premise: the boosted sum alone WOULD put the page first.
+        (SearchRanking.Boost(space, "Ledger") + Evaluator.GetFuzzyScore(space, "Ledger"))
+            .Should().BeLessThan(SearchRanking.Boost(page, "Ledger") + Evaluator.GetFuzzyScore(page, "Ledger"),
+                "the case must discriminate: only an explicit tier-first sort keeps the Space");
+
+        var change = await query
+            .Query<MeshNode>(new MeshQueryRequest { Query = $"namespace:{ns} Ledger limit:1" }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
+        change.Items.Select(n => n.Id).Should().Equal(["vault"],
+            "an exactly named Space (tier 3) leads an exactly named page (tier 2) under a load cap too");
+    }
+
     [Theory]
     [InlineData("Compliance", "sp-7", "Compliance", "Space", 3)]
     [InlineData("  compliance ", "x", "Compliance", "Markdown", 2)]

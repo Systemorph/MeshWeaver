@@ -31,9 +31,11 @@ public static class SearchRanking
     public const int SpaceTier = 1;
 
     /// <summary>
-    /// The score one tier is worth. Larger than any relevance score an executor computes (fuzzy
-    /// scores are in the low thousands, the Postgres ladder below 1 100), so adding
-    /// <c>tier × TierWeight</c> never lets a lower tier overtake a higher one.
+    /// The score one tier is worth. Larger than any POSITIVE relevance score an executor computes
+    /// (fuzzy scores are in the low thousands, the Postgres ladder below 1 100). The in-memory fuzzy
+    /// score has no lower bound — it subtracts a share of the text length — so a sort or clip that
+    /// must be tier-first sorts by <see cref="Tier(object?, string?)"/> explicitly rather than
+    /// relying on the boosted sum alone.
     /// </summary>
     public const double TierWeight = 1_000_000d;
 
