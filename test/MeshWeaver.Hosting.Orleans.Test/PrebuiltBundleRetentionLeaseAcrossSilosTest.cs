@@ -84,6 +84,22 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
+    /// <summary>A release in these tests never faults; one that did is a broken precondition, not a result.</summary>
+    private static void NoReleaseFault(Exception fault)
+        => throw new InvalidOperationException("PRECONDITION: releasing the lease faulted", fault);
+
+    /// <summary>
+    /// Writes the lease LAPSED, as System — the state a replacement owner reloads when the holder's claim
+    /// was acknowledged but never persisted (an Update is acked on its flush bound, before durability).
+    /// </summary>
+    private static Task<MeshNode> ReloadedLapsed(IMessageHub hub, CancellationToken ct)
+        => hub.ServiceProvider.GetService<AccessService>()
+            .RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(PrebuiltBundleRetentionLease.LeasePath)
+                .Update(node => node with { Content = PrebuiltBundleRetentionLeaseState.Lapsed })
+                .Take(1))
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
     /// <summary>A clock the test moves by hand.</summary>
     private sealed class ManualClock(DateTimeOffset start) : TimeProvider
     {
@@ -107,6 +123,8 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         public AsyncSubject<Unit> Started { get; } = new();
         public AsyncSubject<Unit> Release { get; } = new();
         public AsyncSubject<PrebuiltBundleRetentionLeaseVerdict> Skipped { get; } = new();
+        /// <summary>Signalled when the pass's subscription ends — completed, faulted, or cut by the lease.</summary>
+        public AsyncSubject<Unit> Ended { get; } = new();
 
         public IObservable<int> Run() => Observable.Defer(() =>
         {
@@ -114,6 +132,10 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
             Started.OnNext(Unit.Default);
             Started.OnCompleted();
             return Release.Select(_ => replica);
+        }).Finally(() =>
+        {
+            Ended.OnNext(Unit.Default);
+            Ended.OnCompleted();
         });
 
         public void OnSkipped(PrebuiltBundleRetentionLeaseVerdict verdict)
@@ -139,7 +161,7 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         {
             var index = i;
             PrebuiltBundleRetentionLease
-                .RunLeased(hubs[index], new ManualClock(now), Hold, $"silo-{index}", passes[index].Run, passes[index].OnSkipped)
+                .RunLeased(hubs[index], new ManualClock(now), Hold, $"silo-{index}", passes[index].Run, passes[index].OnSkipped, NoReleaseFault)
                 .Subscribe(
                     value => runs[index].OnNext(value),
                     ex => { runs[index].OnError(ex); completed[index].OnError(ex); },
@@ -188,7 +210,7 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         next.Release.OnNext(Unit.Default);
         next.Release.OnCompleted();
         var nextResult = await PrebuiltBundleRetentionLease
-            .RunLeased(hubs[loserIndex], new ManualClock(now), Hold, $"silo-{loserIndex}", next.Run, next.OnSkipped)
+            .RunLeased(hubs[loserIndex], new ManualClock(now), Hold, $"silo-{loserIndex}", next.Run, next.OnSkipped, NoReleaseFault)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
@@ -268,7 +290,8 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
                 .Where(lease => lease is not null && lease.Replica == Replica)
                 .Select(lease => lease!)
                 .Take(1),
-            verdict => throw new InvalidOperationException($"PRECONDITION: the lease is free at a fresh epoch, yet the pass skipped: {verdict}"));
+            verdict => throw new InvalidOperationException($"PRECONDITION: the lease is free at a fresh epoch, yet the pass skipped: {verdict}"),
+            NoReleaseFault);
 
         // …and started two holds later, when the pass ahead of it finished.
         clock.Advance(Hold * 2);
@@ -347,7 +370,8 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         late.Release.OnCompleted();
         var refused = await PrebuiltBundleRetentionLease
             .RunLeased(hub, new SteppingClock(t, t + PrebuiltBundleRetentionLease.PassDeadline(Hold)), Hold, "silo-late",
-                late.Run, verdict => throw new InvalidOperationException($"PRECONDITION: the lease is free at a fresh epoch: {verdict}"))
+                late.Run, verdict => throw new InvalidOperationException($"PRECONDITION: the lease is free at a fresh epoch: {verdict}"),
+                NoReleaseFault)
             .Materialize()
             .Where(n => n.Kind != System.Reactive.NotificationKind.OnNext)
             .FirstAsync()
@@ -365,13 +389,69 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         onTime.Release.OnCompleted();
         var ran = await PrebuiltBundleRetentionLease
             .RunLeased(hub, new SteppingClock(t + Hold, t + Hold + TimeSpan.FromMinutes(1)), Hold, "silo-ontime",
-                onTime.Run, verdict => throw new InvalidOperationException($"PRECONDITION: the lease was released: {verdict}"))
+                onTime.Run, verdict => throw new InvalidOperationException($"PRECONDITION: the lease was released: {verdict}"),
+                NoReleaseFault)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
         ran.Should().Be(0, "NEGATIVE CONTROL: with the deadline still ahead the pass runs");
         onTime.Entries.Should().Be(1);
         await Sees(hub, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
+    }
+
+    /// <summary>
+    /// 🚨 #7459 — a holder whose claim is LOST under it stops sweeping. The claim and the stamp are
+    /// acknowledged on commit, not on persistence; an owner that dies before they persist is replaced by
+    /// one that reloads the LAPSED lease, and another replica then takes it while the first holder still
+    /// sweeps. The lost persistence is reproduced deterministically by writing the lease lapsed while the
+    /// holder is parked mid-pass; silo B then takes it. The holder's pass must end — cancelled, not
+    /// faulted, so it does not release — and leave B's claim alone. NEGATIVE CONTROL: the first test of
+    /// this class parks a holder while the other replica's take is refused, and that holder is NOT cut.
+    /// </summary>
+    [Fact]
+    public async Task AHolderWhoseClaimIsLostUnderIt_StopsItsPass_AndLeavesTheNewHolderAlone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hubA = SiloMeshHub(0);
+        var hubB = SiloMeshHub(1);
+        const int Taker = 9;
+        var now = new DateTimeOffset(2508, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var holder = new ControlledPass(0);
+        var outcome = new ReplaySubject<Notification<int>>();
+        PrebuiltBundleRetentionLease
+            .RunLeased(hubA, new ManualClock(now), Hold, "silo-0", holder.Run,
+                verdict => throw new InvalidOperationException($"PRECONDITION: the lease is free at a fresh epoch: {verdict}"),
+                NoReleaseFault)
+            .Materialize()
+            .Subscribe(outcome);
+        await holder.Started.Timeout(TestTimeouts.Convergence).Await(ct);
+        await Sees(hubB, lease => lease.Replica == "silo-0" && lease.Until == now + Hold, ct);
+
+        // The owner lost the un-persisted claim: the lease reloads lapsed, and B takes it.
+        await ReloadedLapsed(hubB, ct);
+        await Sees(hubB, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
+        var taken = await PrebuiltBundleRetentionLease.Take(hubB, now, Hold, Taker, "silo-1")
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        taken.Held.Should().BeTrue("PRECONDITION: the reloaded lease is lapsed, so the other replica takes it");
+
+        var ended = await outcome
+            .Where(n => n.Kind != NotificationKind.OnNext)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        ended.Exception.Should().BeOfType<OperationCanceledException>(
+            "a holder whose claim is gone must stop — two replicas sweeping one store is what the lease exists to prevent");
+        await holder.Ended.Timeout(TestTimeouts.Convergence).Await(ct);
+        holder.Entries.Should().Be(1);
+
+        // B's take settled its STAMPED claim; A's mirror reaches it, and nothing of A's lands over it.
+        var after = await Sees(hubA, lease => lease.Claim == taken.Lease!.Claim, ct);
+        after.Replica.Should().Be("silo-1", "the stopped pass neither releases nor stamps over the new holder");
+        after.Holder.Should().Be(Taker);
+
+        await PrebuiltBundleRetentionLease.Release(hubB, Taker).Timeout(TestTimeouts.Convergence).Await(ct);
+        await Sees(hubA, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
     }
 
     /// <summary>

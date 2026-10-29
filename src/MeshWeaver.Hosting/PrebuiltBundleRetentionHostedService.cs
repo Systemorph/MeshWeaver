@@ -179,7 +179,14 @@ public sealed class PrebuiltBundleRetentionHostedService(
                         + "held by pass {Holder} on {HolderReplica} until {Until:O}, which runs the one sweep",
                         replica, root, PrebuiltBundleRetentionLease.LeasePath,
                         verdict.Lease.Holder, verdict.Lease.Replica ?? "(unnamed)", verdict.Lease.Until);
-            });
+            },
+            // The sweep's outcome is recorded whatever the release does (#7459): a release that faults is
+            // its own line, and the lease lapses at its hold's end — the pass is NOT reported as a fault.
+            releaseFault => logger.LogWarning(releaseFault,
+                "PrebuiltBundleRetention: {Replica} finished its pass over {Root} but could not release the lease at "
+                + "{Lease} — the pass's outcome stands; the lease lapses at its hold's end, so the next sweep on any "
+                + "replica waits for that instead of starting at once",
+                replica, root, PrebuiltBundleRetentionLease.LeasePath));
     }
 
     /// <summary>
