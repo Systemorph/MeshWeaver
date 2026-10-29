@@ -1405,6 +1405,86 @@ a future "just check the claims" is a regression, not a shortcut.
 
 Pinned by `ApiTokenCapabilityFreshnessTest` (core) and `PaywallRealGateShapeTests` (plugins).
 
+## Scoped API tokens — a cap, never a grant
+
+A token may carry an optional **`Scopes`** list (`ApiToken.Scopes`). A token **with** scopes can do
+at most what they allow — and, inside that, still only what its owner's live grants allow. A token
+**without** scopes (`null` or empty — every token minted before the field existed) is unscoped and
+behaves exactly as described above. The motivating consumer is the **device relay**, which runs on a
+person's own machine and holds a token only to keep one transport connection open: scoped to
+`relay`, a copy of that token cannot read or write a single node, call MCP or mint another token.
+
+The vocabulary is `ApiTokenScope` — an **open** set of string constants (policy
+`open-vocabulary-string-constants`), never an enum. The platform's starting set:
+
+| Scope | Kind | Allows |
+|---|---|---|
+| `read` | node | `Read` (and `Export`) on nodes the owner may read |
+| `write` | node | `Create`, `Update`, `Delete`, `Comment`, `Thread`, `Execute` on nodes the owner may write — not `Read` |
+| `mcp` | surface | calling the MCP endpoint at all |
+| `api` | surface | calling the portal's REST endpoints (everything that is not MCP) |
+| `relay` | surface | authenticating a transport connection (SignalR / gRPC), claiming the relay address of the token's **own** owner and answering its requests |
+| `tokens` | surface | writing API-token records — and only tokens scoped to a subset of the writer's own scopes |
+
+`Sync` and `Compile` are reachable by no scope: a scoped token never carries the privileged grants.
+
+**Where it is enforced.** The token's scopes travel `ApiToken.Scopes` → `ValidateTokenResponse.Scopes`
+(the shared verdict, `ApiTokenVerdict`) → `AccessContext.Scopes`, stamped by every site that
+authenticates a token. From there:
+
+- **Node scopes are a cap in the access layer**, so they hold on every surface that touches a node
+  (MCP tools, REST, a transport connection, a layout area) without each surface knowing about them:
+  - the permission fold (`PermissionEvaluator.GetEffectivePermissions`) ANDs every emission with
+    `ApiTokenScope.PermissionCap`, read off the same caller snapshot the API-token clamp reads;
+  - a node type's own access rule (`NodeTypeAccessRuleGate.Evaluate` / `EvaluatePermission`) is
+    never asked for an operation the cap excludes — a rule may grant where the fold would not
+    (a satellite's Delete as Update on its main node), and a capped token must not reach through it;
+  - the RLS node validator refuses a capped operation **before** its own-scope shortcut, which
+    otherwise grants a user everything in their own partition without asking the fold;
+  - the stream cache's read-verdict key carries the scopes, so a scoped token never shares a verdict
+    with an unscoped session of the same person — each value length-prefixed, because scope values
+    are free strings and a plain join would let `["read\u001fwrite"]` or `[""]` reproduce another
+    set's key; and the cap is applied **before** the cache's type-path shortcut (a path whose first
+    segment names a satellite type, served from the privileged shared stream without asking the
+    fold), so a token scoped to no read reads nothing there either;
+  - a **query** by a token whose scopes allow no read answers nothing, decided once at the query
+    boundary (`MeshService`) — because a listing never asks the fold: the SQL-backed providers filter
+    rows in the database against the viewer's projected grants, and the in-process providers rebuild
+    the row check's context from the viewer's id alone. A token that may read is capped to reading
+    anyway, so the providers' own filtering is the whole answer for it.
+- **Surface scopes are checked by the site that serves the surface** — `ApiTokenScope.Allows` /
+  `Refusal(context, scope)` with that site's OWN value. The HTTP middleware gates MCP and REST, the
+  transport registries gate the relay connection (MeshWeaver.Plugins).
+- **A capped token cannot widen itself.** A write to an `ApiToken` record by a scoped caller needs
+  `tokens`, and the record it writes must itself be scoped to a subset of the caller's scopes
+  (`ApiTokenScope.MintRefusal`) — otherwise `write` would be enough to mint an unscoped token, or to
+  patch the token's own record free of its cap. The RLS validator decides a create and a delete; it
+  is owner-enforced, so the canonical `GetMeshNodeStream(path).Update` never runs it. The owner's
+  delivery gate therefore holds the rule for every routed write: a scoped caller writing a node whose
+  type is a token record (`ApiTokenScope.IsTokenRecordType`, case-insensitive) is refused, except a
+  delete by a token holding `tokens` (`AccessControlPipeline.CapScopedTokenRecordWrite`). A scoped
+  token never rewrites a token record — neither stripping its scopes nor retyping it out of the
+  rule's sight while the verdict still authenticates its content; it revokes by deleting.
+
+**Unknown values.** The set is open, so a value is never rejected for not being one of the
+platform's constants — that would re-close it. A value no site claims simply allows nothing: a
+token carrying only `"bogus"` is refused everywhere, and every refusal **names the scopes the token
+carries** and the scope the operation needs. An unknown value is never read as "unscoped" or
+"all". A module that owns a surface declares its own scope and checks it at its own site; no
+registration and no change to core.
+
+**Why this is not the snapshot problem above.** A scope is not a copy of an authorization fact — it
+is a property of the credential, chosen when the token is minted, and it can only *remove*
+authority. A stale scope therefore fails closed: a grant made later still reaches the token, up to
+its cap, and a grant revoked later is gone for the token at once, because the grant itself is still
+read live.
+
+Pinned by `ScopedApiTokenTest` (refused outside its scopes, allowed inside them, unscoped
+unchanged, an unknown scope refused and named, no minting a wider token, no rewriting its own record
+through the routed update, no type-path read without `read`) and
+`PermissionProbeCacheKeyTests` (`A_scoped_token_never_shares_an_entry_with_an_unscoped_one`,
+`Scope_values_cannot_forge_another_scope_sets_key`).
+
 ---
 
 # Build principals — a repository the mesh trusts, with no secret to keep
