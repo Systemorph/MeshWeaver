@@ -219,7 +219,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         /// <remarks>No catch here: every reader is attached through <c>SharedView</c>, which delivers
         /// the terminal to each reader in isolation, so one throwing reader cannot cut the others
         /// off.</remarks>
-        public void EndReaders(Exception reason) => readers.OnError(reason);
+        public void EndReaders(Exception reason)
+        {
+            // Marked BEFORE the terminal goes out: SharedView reads it to send this terminal down
+            // the shared release lane rather than the pool (see there).
+            Volatile.Write(ref endedByForce, 1);
+            readers.OnError(reason);
+        }
+
+        /// <summary>Whether this entry's terminal is a FORCED end (<see cref="EndReaders"/> — the
+        /// cache's own teardown sweep, or a committed delete) rather than an upstream fault.</summary>
+        public bool EndedByForce => Volatile.Read(ref endedByForce) == 1;
+
+        private int endedByForce;
 
         /// <summary>Unconditional evict mark for the forced paths (node delete /
         /// storm-breaker stale entry / cache disposal). Idempotent.</summary>
@@ -1589,26 +1601,63 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 if (!entry.TryAddSubscriber())
                     continue;
                 IDisposable sub;
+                // Set when this reader unsubscribes, so a terminal still on its way to the pool is
+                // not delivered to an observer that has already left.
+                var detached = 0;
                 try
                 {
-                    // 🚨 The TERMINAL is delivered in isolation (#5011). The entry's subject
-                    // fans an error out by calling each reader in turn, and a reader that
-                    // throws from OnError (one subscribed with no error handler rethrows) would
-                    // abort that loop. Every reader after it would then stay subscribed to a
-                    // subject nothing writes again, which is the silent corpse
+                    // 🚨 The TERMINAL is delivered in isolation (#5011), and OFF the turn that
+                    // raised it (#7548).
+                    //
+                    // Isolation: the entry's subject fans an error out by calling each reader in
+                    // turn, and a reader that throws from OnError (one subscribed with no error
+                    // handler rethrows) would abort that loop. Every reader after it would then
+                    // stay subscribed to a subject nothing writes again, which is the silent corpse
                     // EndReaders exists to prevent. The throwing reader is named, not swallowed.
+                    //
+                    // Off the turn: the fault arrives on the stream's own sync/{id} hub, inside
+                    // SynchronizationStream.OnError and before that hub has settled
+                    // (FailStartup, OpenGate). A reader's error arm is where it chains its next
+                    // step (Catch, then the next read), so delivering inline ran that whole
+                    // continuation on the sync hub's action block. One reader that did not return
+                    // held every later reader of the path untold, held the hub at Starting with its
+                    // gate closed, and held its ShutdownRequest behind the turn. Production: 34 min
+                    // at Executing(DeliveryFailure, ...) on a serving replica. Each reader now gets
+                    // its terminal as its own pooled work item. The raising turn returns, and a
+                    // reader that blocks holds only itself. This is ordering-safe: an error is the
+                    // last notification a reader ever receives, and every OnNext before it was
+                    // delivered synchronously and has already returned.
+                    //
+                    // 🚨 But a FORCED end goes down the shared release lane, never one pool item per
+                    // reader (review of #7589). The cache's teardown ends every reader of every path
+                    // in ONE sweep; a pool item each delivers those terminals CONCURRENTLY, and a
+                    // consumer composing two node reads then takes them on two threads at once — the
+                    // Rx gate lock-order deadlock ReleaseLane exists to prevent. On the lane they run
+                    // one at a time, still off the turn that raised them. Upstream faults stay on the
+                    // pool: one stream raises one, and a reader that blocks in its error path must hold
+                    // only itself, never the mesh's lane.
                     sub = entry.Replay.Subscribe(
                         observer.OnNext,
                         error =>
                         {
-                            try { observer.OnError(error); }
-                            catch (Exception thrown)
+                            void Deliver()
                             {
-                                logger.LogWarning(thrown,
-                                    "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
-                                    + "terminal ({Terminal}); the other readers of the path are still told",
-                                    path, error.Message);
+                                if (Volatile.Read(ref detached) != 0)
+                                    return;
+                                try { observer.OnError(error); }
+                                catch (Exception thrown)
+                                {
+                                    logger.LogWarning(thrown,
+                                        "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
+                                        + "terminal ({Terminal}); the other readers of the path are still told",
+                                        path, error.Message);
+                                }
                             }
+
+                            if (entry.EndedByForce)
+                                _releaseLane.Refuse<System.Reactive.Unit>(() => error).Subscribe(_ => { }, _ => Deliver());
+                            else
+                                TaskPoolScheduler.Default.Schedule(Deliver);
                         },
                         observer.OnCompleted);
                 }
@@ -1619,6 +1668,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 }
                 return System.Reactive.Disposables.Disposable.Create(() =>
                 {
+                    Volatile.Write(ref detached, 1);
                     sub.Dispose();
                     // Refcount release ALSO restarts the idle window — "idle" is
                     // measured from the last unsubscribe, never mid-subscription.
