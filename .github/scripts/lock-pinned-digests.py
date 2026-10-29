@@ -1387,7 +1387,36 @@ def read_roster_document(path: Path) -> dict:
     extra = os.environ.get(PRIVATE_ROSTER_ENV, "").strip()
     if not extra:
         return document
-    return merge_roster(document, json.loads(extra))
+    return merge_roster(document, redact_private_prose(json.loads(extra)))
+
+
+# 🚨 THE PRIVATE ROSTER'S PROSE NEVER REACHES THE PUBLIC LOG (Plugins#4364). The identifiers are
+# masked (`mask_private_roster`), but a mask is an exact, CASE-SENSITIVE string: a `reason` or an
+# `estate` that names the client in its own words — capitalised, possessive, in a subscription's
+# display name — passed every mask and printed in plain text on every nightly run. So the prose is
+# replaced before any reader sees it: every string that is a sentence (it holds whitespace), and
+# every string under a key that is prose by definition, becomes this placeholder. Nothing reads
+# prose except to require it non-empty and to print it, so the placeholder keeps every validator's
+# verdict and prints nothing. Identifiers (`id`, `repo`, `host`, hosts and repositories as keys,
+# `rule`, `disposition`, …) never hold whitespace and stay as they are, masked.
+PRIVATE_PROSE_PLACEHOLDER = "(stated in the private roster; not printed in this public log)"
+PRIVATE_PROSE_KEYS = frozenset({"reason", "estate", "verdict", "mechanism", "operator", "runFrom",
+                                "measuredBy", "note", "notes", "comment", "_comment", "description"})
+
+
+def redact_private_prose(value, key: str | None = None):
+    """`value` with every prose string replaced by `PRIVATE_PROSE_PLACEHOLDER`. Pure.
+
+    Keys, types and emptiness are kept: an empty string stays empty and a non-string stays as it
+    is, so a validator that refuses a missing `reason` or a `null` estate still refuses it."""
+    if isinstance(value, dict):
+        return {k: redact_private_prose(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_private_prose(v, key) for v in value]
+    if isinstance(value, str) and value.strip() and (key in PRIVATE_PROSE_KEYS
+                                                     or any(c.isspace() for c in value)):
+        return PRIVATE_PROSE_PLACEHOLDER
+    return value
 ROSTER_STATES = {"live", "not-installed", "retired"}
 INSTANCE_PROBE_TIMEOUT = 25
 VERSION_ROUTE = "/api/version"
@@ -7329,10 +7358,19 @@ ingress:
               f"ARM 36b: the KEEP wording survived on an `out-of-estate` host: {_estate_block}")
         _declared_estate = str(
             (_committed_registries[_estate_host].get("retention") or {}).get("estate", ""))
-        check(_declared_estate[:40] and _declared_estate[:40] in _estate_block,
-              f"ARM 36b: the line does not NAME the estate the record names, so a reader is told "
-              f"that nobody here answers and not WHO does — which is what makes the list "
-              f"auditable: {_estate_block}")
+        # 🚨 THE ESTATE IS NAMED IN THE PRIVATE ROSTER, NEVER IN THIS PUBLIC LOG (Plugins#4364).
+        # This arm used to require the estate's words on the line — and the real estate's words
+        # are the client's subscription and tenant, printed in plain text on every nightly run.
+        # The line still says that somebody else decides and where that is recorded; WHO is in the
+        # private roster, which is where an auditor reads it.
+        check(bool(_declared_estate.strip()) and _declared_estate[:40] not in _estate_block,
+              f"ARM 36b: the line printed the PRIVATE roster's estate text into the public log — "
+              f"a client's subscription and tenant, in a client's own words, which no log mask "
+              f"catches: {_estate_block}")
+        check(f"decided by: {PRIVATE_PROSE_PLACEHOLDER}" in _estate_block,
+              f"ARM 36b: the line no longer says that the estate is recorded in the private "
+              f"roster, so a reader is told that nobody answers rather than where the answer "
+              f"is kept: {_estate_block}")
         # 🚨 THE NEGATIVE CONTROL: the branch must be chosen by the RULE, not by the disposition.
         # `cr.meshweaver.cloud` is `fleet-unlockable` too, and its references ARE a protected set.
         _keep_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN,
@@ -7767,6 +7805,37 @@ ingress:
                   f"beside the committed one: {_merged_roster} {_merged_problems}")
             check("Systemorph/Umbrella.Memex" in read_repository_roster(scratch)[0],
                   "ARM 35: the private roster's repository did not reach the repository table")
+            # 🚨 Plugins#4364: the private roster's PROSE never reaches a reader, so it can never be
+            # printed — a mask is exact and case-sensitive, and prose names a client in its own words.
+            os.environ[PRIVATE_ROSTER_ENV] = json.dumps({
+                "registries": {"acr.acme.example": {
+                    "disposition": "fleet-unlockable", "reason": "ACME's own registry",
+                    "retention": {"rule": "out-of-estate", "estate": "AcmeCorp",
+                                  "cleanupAuthorized": False, "issue": "x#1"}}},
+                "instances": [{"id": "acme-control", "repo": "Systemorph/Umbrella.Memex",
+                               "state": "not-installed",
+                               "reason": "ACME'S OWN estate, portal.example.com", "note": ""}]})
+            _doc = read_roster_document(folder / ROSTER_PATH)
+            _text = json.dumps(_doc)
+            check("ACME" not in _text and "AcmeCorp" not in _text,
+                  f"ARM 35: the private roster's prose reached the readers, so the report prints it "
+                  f"into the public log past every mask: {_text}")
+            _reg = _doc["registries"]["acr.acme.example"]
+            _inst = next(e for e in _doc["instances"] if e.get("id") == "acme-control")
+            check(_reg["reason"] == PRIVATE_PROSE_PLACEHOLDER
+                  and _reg["retention"]["estate"] == PRIVATE_PROSE_PLACEHOLDER
+                  and _inst["reason"] == PRIVATE_PROSE_PLACEHOLDER,
+                  f"ARM 35: a private prose field was dropped rather than replaced, so a validator "
+                  f"that requires it would red on a well-formed roster: {_doc}")
+            check(_reg["disposition"] == "fleet-unlockable" and _reg["retention"]["rule"] == "out-of-estate"
+                  and _reg["retention"]["cleanupAuthorized"] is False and _inst["state"] == "not-installed"
+                  and _inst["repo"] == "Systemorph/Umbrella.Memex" and _inst["note"] == ""
+                  and _reg["retention"]["issue"] == "x#1",
+                  f"ARM 35 (control): an identifier, a flag or an empty field of the private roster "
+                  f"was rewritten — only prose may be: {_doc}")
+            check(_doc["instances"][0].get("reason") == "ours",
+                  f"ARM 35 (control): the COMMITTED roster's prose was redacted; it is public "
+                  f"already and is the reviewed record: {_doc['instances']}")
             os.environ[PRIVATE_ROSTER_ENV] = json.dumps({
                 "repositories": {"Systemorph/Memex": {"reason": "overridden"}}})
             _, _clash = read_instance_roster(scratch)
