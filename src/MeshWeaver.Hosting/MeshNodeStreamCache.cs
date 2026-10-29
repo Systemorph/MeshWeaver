@@ -307,7 +307,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// and neither surface could be trusted to reproduce the other's result.</para>
     /// </summary>
     internal readonly record struct AccessCacheKey(
-        string Path, string UserId, bool IsApiToken, bool IsHub, string ClaimRoles);
+        string Path, string UserId, bool IsApiToken, bool IsHub, string ClaimRoles, string Scopes);
 
     /// <summary>
     /// Builds the probe key for a context. <paramref name="context"/>'s claim roles are folded in
@@ -321,7 +321,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             context.IsHub,
             context.Roles is null || context.Roles.Count == 0
                 ? string.Empty
-                : string.Join('\u001f', context.Roles.OrderBy(r => r, StringComparer.Ordinal)));
+                : string.Join('\u001f', context.Roles.OrderBy(r => r, StringComparer.Ordinal)),
+            // 🛡️ The API-token scope cap (ApiTokenScope) is folded into the verdict, so it is a
+            // dimension of the key: a scoped token must never take an unscoped session's entry for
+            // the same person (a cap bypass), nor leave its capped verdict for that session.
+            // Order-independent, like the roles; empty for an unscoped context.
+            context.Scopes is null || context.Scopes.Count == 0
+                ? string.Empty
+                : string.Join('\u001f', context.Scopes.OrderBy(r => r, StringComparer.Ordinal)));
 
     // 🚨 Idle release of read entries — the read-side counterpart of the write
     // cache's (_updateQueues) sliding expiration. Window/interval come from
