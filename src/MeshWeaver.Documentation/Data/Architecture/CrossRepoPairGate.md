@@ -125,6 +125,18 @@ line.** A typo'd declaration that read as "no declaration" would put the author 
 disagreement about whether a pair was declared, which is the same trapdoor as a gate that skips on
 a missing input.
 
+🚨 **A declaration is resolved even when the set is EMPTY** (#7397). The detector sees public
+types, public members and project paths — never a `PackageReference` or `PackageVersion` leaving
+core, which a satellite can depend on just as hard: #7205 dropped a package dependency a satellite
+still needed, and #7179 dropped pins a satellite read versionless. Both declared their counterpart,
+and before #7397 the gate returned "no cross-repo pair to gate" BEFORE reading the body, so the
+declaration held nothing while the body said it did. Now a `Pairs-with:` naming a pull request is
+resolved under the verdict below whatever the detector found, a malformed one fails, and
+`Pairs-with: none — …` (or no declaration) on an empty set still passes. An UNDECLARED
+dependency-only removal is still not seen — `Satellite package pins (removal declared)` asks for
+the `Satellite-pins:` statement there, and that statement orders nothing; the `Pairs-with:` line
+is what orders it.
+
 ### 3 · The verdict
 
 Each declared counterpart is resolved through the GitHub API and must be **merged into its
@@ -821,6 +833,42 @@ strip reddens the two BOM cases; forcing the floor above the real count reddens 
 case; and a `RECORD_RE` that stops matching entirely now reddens a **canary placed first** —
 previously it raised `KeyError` from a later case and buried the verdict in a traceback, which is
 harder to read than the defect it found.
+
+##### Comments are not parameters (#7366)
+
+`records_in()` slices a primary constructor's parameter list and `split_params()` splits it on
+top-level commas, taking the last token of each piece as the parameter's name. Neither removed
+comments, so a `//` line between two parameters whose prose holds a comma became a phantom
+parameter, and a comment ending in an identifier was swallowed into the next parameter's TYPE.
+Measured on core#5077: a record with 7 → 8 real parameters read as 8 → 10, with five lines of prose
+printed as one parameter's type. Two consequences follow, and the second is why it is worth fixing:
+rewording such a comment read as a type change on a record whose signature did not move, and a
+comment gaining a comma while a real parameter left kept the count equal — a real break hidden.
+
+Comments are now stripped from the source before anything is counted, on both sides of the
+comparison (both pass through `records_in()`), with string and char literals copied verbatim so a
+`//` inside `"https://…"` survives. A census over `src/` when the fix landed: 837 public records, ONE
+parsed differently — `NodeCompilationResult` (`IMeshNodeCompilationService.cs`) read as 10
+parameters for its real 9 — so the defect was live, not latent. The self-test carries the #5077
+shape, a reworded comment, a comment gaining a comma while a parameter leaves, and a `//` inside a
+string default; removing the strip reddens three of them.
+
+The strip is only as good as its literal scanner. If it mis-bounds a literal, the text it leaves
+outside a string can open a phantom `/*` that swallows every record after it, so an arity change
+there passes. Two literal shapes are therefore scanned in full:
+
+- A raw literal opened by N ≥ 3 quotes closes only at N quotes, so a four-quote literal may hold
+  `"""`.
+- An interpolated string's `{…}` holes are scanned as code, so `$"{string.Concat("/*", "x")}"`
+  neither ends the outer string nor opens a comment.
+
+The self-test carries both shapes with a record after them, and both fail on a scanner that
+ignores them. `check-type-forwards.py` reads positional
+record parameters too (`_positional_parameters`), for their NAMES only, and shares the blindness:
+measured on the same record it indexes two phantom members, `Structured` and `table`, the last
+words before a comma in its comments. It was not changed here, because it is a subject of the
+parser-delta control and a change to its counts needs its own declared pull request; it is filed
+for triage separately.
 
 ## Member-level detection (the sixth shape)
 
