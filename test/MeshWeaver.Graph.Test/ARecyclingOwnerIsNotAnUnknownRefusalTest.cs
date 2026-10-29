@@ -28,7 +28,9 @@ namespace MeshWeaver.Graph.Test;
 /// <see cref="NodeUpsertRejectionReason.Unknown"/>.</para>
 ///
 /// <para><b>This does not close the race</b>, which is the framework's to fix — it makes the
-/// refusal say which condition it is, so a caller can act on it.</para>
+/// refusal say which condition it is, so a caller can act on it. The race itself is closed in the
+/// write rider (#7326): <c>UpdateRemote</c> now waits for the refusing activation's teardown before
+/// it re-asks, pinned by <c>AWriteDuringItsOwnersRecycleLandsTest</c>.</para>
 /// </summary>
 public class ARecyclingOwnerIsNotAnUnknownRefusalTest
 {

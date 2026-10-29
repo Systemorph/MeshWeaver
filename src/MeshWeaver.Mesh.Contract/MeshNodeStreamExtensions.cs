@@ -2585,6 +2585,61 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     composite.Add(sub);
                             }
 
+                            // 🚨 THE JOIN A SHUTTINGDOWN RE-ASK MAKES (#7326) — rule 2 of
+                            // RidingOutAShuttingDownAddress: never re-ask immediately without one.
+                            // A ShuttingDown refusal comes from an owner that is still REGISTERED
+                            // under its address until its own teardown removes it, and a re-attempt
+                            // diffs against THIS write's leased mirror, which already has state —
+                            // so it posts at once, routing hands it straight back to the same dying
+                            // activation, and the whole MaxOwnerDisposingReenqueues budget burned
+                            // inside one teardown window (the retype-then-repair upsert:
+                            // #4484, #7326). The re-attempt therefore starts only once the refusing
+                            // LOCAL instance has finished its teardown; with no local instance to
+                            // wait for (the owner is on another silo, or already gone) it starts at
+                            // once, as before. The bound stays the caller's: the late verdict
+                            // window, never a timer of this join's own (#1317) — and it is CARRIED
+                            // across the join. A teardown that stalls (the disposal watchdog names
+                            // such a turn and tears nothing down around it) would otherwise leave
+                            // this write pending for as long as the stall lasts: the early refusal
+                            // never armed the verdict timer, and the late dispatch already removed
+                            // the registry entry that timer claims. On expiry the write is NOT
+                            // re-posted — the refusing owner may still be registered — the caller
+                            // gets OwnerUnreachable, and the queue hand-off is released.
+                            //
+                            // The re-attempt is SUBSCRIBED under the writer's identity:
+                            // UpdateRemote captures its AccessContext on subscribe, and after the
+                            // join that subscribe runs on whichever thread completed the owner's
+                            // disposal, where the ambient context is not the writer's.
+                            IObservable<MeshNode> AfterTheRefusingOwnerIsGone(
+                                Func<IObservable<MeshNode>> reattempt, Action? releaseHandOff = null)
+                            {
+                                var joinBound = LatePatchResponseRegistry.LateResponseWatchBound + VerdictBoundGrace;
+                                return LocalTeardownJoin
+                                    .WhenLocalTeardownSettled(_workspace.Hub, new Address(_path!), diagLogger)
+                                    .ReaskOnceSettled(
+                                        joinBound,
+                                        () => Observable.Create<MeshNode>(o =>
+                                        {
+                                            using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
+                                                ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
+                                                : null)
+                                                return reattempt().Subscribe(o);
+                                        }),
+                                        () =>
+                                        {
+                                            releaseHandOff?.Invoke();
+                                            diagLogger?.LogWarning(
+                                                "[UpdateRemote] TEARDOWN_JOIN_TIMEOUT hub={Hub} target={Path} bound={BoundSeconds}s corr={Corr} — the activation that refused this patch as ShuttingDown did not finish its teardown inside the caller's verdict bound; the patch was NOT re-posted and did not apply",
+                                                _workspace.Hub.Address, _path, joinBound.TotalSeconds, corr);
+                                            return new MeshNodeStreamException(new MeshNodeError(
+                                                MeshNodeErrorCode.OwnerUnreachable, _path!,
+                                                $"The owner of '{_path}' refused this update while shutting down, and its "
+                                                + $"teardown did not complete within {joinBound.TotalSeconds:0}s. The update "
+                                                + "did NOT apply and was not re-sent — re-read the node and re-apply if the "
+                                                + "change is required."));
+                                        });
+                            }
+
                             // 🚨 Arm the LATE-response watch BEFORE opening the bounded wait —
                             // exactly-once hand-off: a response racing the 2s timeout is either
                             // consumed by the still-pending Observe callback (which Completes the
@@ -2774,17 +2829,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     diagLogger?.LogWarning(
                                         "[UpdateRemote] LATE_SHUTTING_DOWN_REENQUEUE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — the owner refused the patch before handling it; re-enqueueing against the next activation",
                                         _workspace.Hub.Address, _path, attempt + 1, corr);
-                                    using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
-                                        ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
-                                        : null)
-                                    {
-                                        ChainTerminal(
-                                            UpdateRemote(update, attempt + 1, 0,
-                                                onLocalState: null,
-                                                correlationId: corr,
-                                                ownerSaidNeverApplied: true),
-                                            attachToCaller: false);
-                                    }
+                                    ChainTerminal(
+                                        AfterTheRefusingOwnerIsGone(() => UpdateRemote(update, attempt + 1, 0,
+                                            onLocalState: null,
+                                            correlationId: corr,
+                                            ownerSaidNeverApplied: true)),
+                                        attachToCaller: false);
                                     return;
                                 }
                                 diagLogger?.LogWarning(
@@ -3117,18 +3167,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             diagLogger?.LogWarning(
                                                 "[UpdateRemote] OWNER_SHUTTING_DOWN_REENQUEUE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — the owner refused the patch before handling it (ShuttingDown); re-enqueueing against the next activation",
                                                 _workspace.Hub.Address, _path, attempt + 1, corr);
-                                            using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
-                                                ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
-                                                : null)
-                                            {
-                                                ChainTerminal(UpdateRemote(update, attempt + 1, 0,
-                                                        onLocalState: onLocalState is null
-                                                            ? null
-                                                            : _ => onLocalState(null),
-                                                        correlationId: corr,
-                                                        ownerSaidNeverApplied: true),
-                                                    attachToCaller: true);
-                                            }
+                                            ChainTerminal(
+                                                AfterTheRefusingOwnerIsGone(() => UpdateRemote(update, attempt + 1, 0,
+                                                    onLocalState: onLocalState is null
+                                                        ? null
+                                                        : _ => onLocalState(null),
+                                                    correlationId: corr,
+                                                    ownerSaidNeverApplied: true),
+                                                    // Nothing landed: a join that expires releases the
+                                                    // queue slot exactly as the re-attempt would have.
+                                                    releaseHandOff: onLocalState is null
+                                                        ? null
+                                                        : () => onLocalState(null)),
+                                                attachToCaller: true);
                                         }
                                         else
                                         {
