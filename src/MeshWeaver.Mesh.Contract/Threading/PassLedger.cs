@@ -27,6 +27,12 @@ public static class PassOutcome
 
     /// <summary>The pass threw something other than the pool's cancel.</summary>
     public const string Faulted = "FAULTED";
+
+    /// <summary>
+    /// The pass ran and found nothing it governs (its root does not exist yet), so it planned and
+    /// removed nothing. Distinct from a pass that never ran — which writes no line at all.
+    /// </summary>
+    public const string Skipped = "SKIPPED";
 }
 
 /// <summary>

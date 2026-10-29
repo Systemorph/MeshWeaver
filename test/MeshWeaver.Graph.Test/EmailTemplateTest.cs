@@ -45,6 +45,40 @@ public class EmailTemplateTest
         Assert.Contains("been given access to Gate Test", html);
     }
 
+    /// <summary>
+    /// #7480: a newline inside one paragraph is a line break the reader sees. HTML collapses a raw
+    /// newline to a space, so a two-line sign-off rendered on one line; a caller cannot write
+    /// <c>&lt;br&gt;</c> itself because it is encoded.
+    /// </summary>
+    [Fact]
+    public void ANewlineInsideAParagraph_RendersAsALineBreak()
+    {
+        var html = EmailTemplate.Build(
+            heading: "Invitation",
+            paragraphs: ["Kind regards\nThe hosts", "First line\r\nsecond line"],
+            footerNote: "Hint one\nHint two");
+
+        Assert.Contains("Kind regards<br>The hosts</p>", html);
+        Assert.Contains("First line<br>second line</p>", html);
+        Assert.Contains("Hint one<br>Hint two</p>", html);
+        Assert.DoesNotContain("\n", html);
+    }
+
+    /// <summary>
+    /// Negative control: the inserted break is the ONLY markup — a caller's own <c>&lt;br&gt;</c> or
+    /// script stays encoded around it, and a paragraph without a newline gets no break.
+    /// </summary>
+    [Fact]
+    public void TheLineBreak_IsTheOnlyMarkup_CallerTextStaysEncoded()
+    {
+        var html = EmailTemplate.Build(
+            heading: "Invitation",
+            paragraphs: ["<br><script>x</script>\nnext", "single line"]);
+
+        Assert.Contains("&lt;br&gt;&lt;script&gt;x&lt;/script&gt;<br>next</p>", html);
+        Assert.Contains(">single line</p>", html);
+    }
+
     [Fact]
     public void EncodesCallerText_ButNotTheTrustedUrl()
     {

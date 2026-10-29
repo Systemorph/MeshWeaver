@@ -1447,12 +1447,16 @@ internal static class NodeTypeEnrichmentHelpers
                                 + $"collection={release.AssemblyCollection}, version={releaseVersion}";
                             return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
                                 .Take(1)
-                                .Select(result => (Result: result, Fault: (string?)null))
-                                .Catch<(NodeCompilationResult? Result, string? Fault), Exception>(ex =>
-                                    Observable.Return(((NodeCompilationResult?)null,
-                                        (string?)$"{ex.GetType().Name}: {ex.Message}")))
+                                .Select(result => (Result: result, Fault: (string?)null, BelowFloor: (DependencyFloorUnmetException?)null))
+                                .Catch<(NodeCompilationResult? Result, string? Fault, DependencyFloorUnmetException? BelowFloor), Exception>(ex =>
+                                    Observable.Return(ExtractionFault(ex)))
                                 .SelectMany(extraction =>
                                 {
+                                    // 🚨 #6195 — the same as the hot path: below the floor, no
+                                    // recompile can help this replica.
+                                    if (extraction.BelowFloor is { } belowFloor)
+                                        return RefuseBelowDependencyFloor(
+                                            node, nodeType, typeNode, def, meshHub, logger, pinnedBytes, belowFloor);
                                     // 🚨 #4471 — the same refusal as the hot path: a pinned
                                     // release whose bytes do not load is a diagnosis, never the
                                     // default configuration bound for the grain's life.
@@ -1610,12 +1614,16 @@ internal static class NodeTypeEnrichmentHelpers
                         .Take(1)
                         // A fault of the extraction itself is the same verdict as a result that
                         // records no location: the recorded build gave this process nothing to bind.
-                        .Select(result => (Result: result, Fault: (string?)null))
-                        .Catch<(NodeCompilationResult? Result, string? Fault), Exception>(ex =>
-                            Observable.Return(((NodeCompilationResult?)null,
-                                (string?)$"{ex.GetType().Name}: {ex.Message}")))
+                        .Select(result => (Result: result, Fault: (string?)null, BelowFloor: (DependencyFloorUnmetException?)null))
+                        .Catch<(NodeCompilationResult? Result, string? Fault, DependencyFloorUnmetException? BelowFloor), Exception>(ex =>
+                            Observable.Return(ExtractionFault(ex)))
                         .SelectMany(extraction =>
                         {
+                            // 🚨 #6195 — THIS replica is below the package's floor: no recompile
+                            // can change that, so never request one. See RefuseBelowDependencyFloor.
+                            if (extraction.BelowFloor is { } belowFloor)
+                                return RefuseBelowDependencyFloor(
+                                    node, nodeType, typeNode, def, meshHub, logger, latestBytes, belowFloor);
                             // 🚨 #4471 — never the silent default: see RefuseUnloadableBind.
                             if ((extraction.Fault ?? UnloadableBuildDetail(extraction.Result)) is { } unloadable)
                                 return RefuseUnloadableBind(
@@ -1659,6 +1667,13 @@ internal static class NodeTypeEnrichmentHelpers
         // snap that transient Error via BuildSlowPath's settle predicate; treating
         // it as a genuine failure overlaid the instance. Route it into the same
         // requireUsableBuild heal so it waits for the healed Ok instead.
+        //
+        // Status=Unavailable over a stale recorded build (a replica below its package's dependency
+        // floor leaves exactly that, #6195) is deliberately NOT routed here: the self-heal flips only
+        // Ok, so nothing would be coming and the activation would sit out the whole settle budget.
+        // It takes the "state undetermined" overlay below, whose version-gated self-heal re-binds
+        // the instance the moment the OWNER rebuilds it — and the owner's framework-stale kickoff
+        // does that on any replica that meets the floor (NodeTypeCompilationHelpers.IsSettledOnAStaleBuild).
         if (def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error
             && !string.IsNullOrEmpty(def.LatestAssemblyCollection)
             && !string.IsNullOrEmpty(def.LatestAssemblyPath)
@@ -1735,11 +1750,21 @@ internal static class NodeTypeEnrichmentHelpers
                 {
                     FrameworkStaleAction.Yield => YieldToNewerGeneration(judged),
                     FrameworkStaleAction.Overlay => OverlayFrameworkStale(),
-                    _ => TriggerRecompileAndRetry(
-                        node, nodeType, meshConfiguration, compilationService, meshHub,
-                        logger, recompileAttempts,
-                        reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
-                        requireUsableBuild: true),
+                    // 🚨 #6195 — a replica below the package's dependency floor never asks for the
+                    // shared recompile: nothing compiled anywhere can give IT the dependency it
+                    // lacks, and its own hydration would refuse the result. It serves the
+                    // below-floor diagnosis instead (RefuseBelowDependencyFloor).
+                    _ => UnlessBelowDependencyFloor(
+                        meshHub, nodeType,
+                        belowFloor => RefuseBelowDependencyFloor(
+                            node, nodeType, typeNode, judged, meshHub, logger,
+                            $"collection={judged.LatestAssemblyCollection}, path={judged.LatestAssemblyPath}",
+                            belowFloor),
+                        () => TriggerRecompileAndRetry(
+                            node, nodeType, meshConfiguration, compilationService, meshHub,
+                            logger, recompileAttempts,
+                            reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
+                            requireUsableBuild: true)),
                 };
 
             // 🚨 A replica on ANOTHER image stamped this record AFTER this process started, and this
@@ -2130,6 +2155,81 @@ internal static class NodeTypeEnrichmentHelpers
     /// reason, Nacks typed requests instead of ignoring them, and self-heals on the next NodeType
     /// write).</para>
     /// </summary>
+    /// <summary>
+    /// What a faulted configuration extraction means for the bind: a refusal by THIS replica's
+    /// dependency floor (#6195) kept as itself, every other fault as the loader's verdict text.
+    /// Pure.
+    /// </summary>
+    /// <param name="ex">The extraction's fault.</param>
+    internal static (NodeCompilationResult? Result, string? Fault, DependencyFloorUnmetException? BelowFloor)
+        ExtractionFault(Exception ex) =>
+        ex is DependencyFloorUnmetException belowFloor
+            ? (null, null, belowFloor)
+            : (null, $"{ex.GetType().Name}: {ex.Message}", null);
+
+    /// <summary>
+    /// 🚨 <b>#6195 — a build THIS replica refused to load because it does not meet the dependency
+    /// floor of the type's package is diagnosed locally, never "healed" by a shared recompile.</b>
+    ///
+    /// <para>Routed through <see cref="RefuseUnloadableBind"/>, the refusal reached
+    /// <see cref="TriggerRecompileAndRetry"/>, which flips the type's ONE shared record from
+    /// <c>Ok</c> to <c>Pending</c>. During a mixed-generation roll every cold instance activation on
+    /// a below-floor replica did that, so a healthy type was rebuilt over and over on whichever
+    /// replica owned it — and no rebuild can help: what is missing is a dependency of the
+    /// ACTIVATING replica, which a compile anywhere cannot change. So the instance serves the
+    /// no-code-change-needed diagnosis naming the unmet requirement, the record is left exactly as
+    /// it is, and the overlay's version-gated self-heal re-enriches once the type is written again
+    /// (a replica that meets the floor, or this one after its modules move).</para>
+    /// </summary>
+    private static IObservable<MeshNode> RefuseBelowDependencyFloor(
+        MeshNode node,
+        string nodeType,
+        MeshNode typeNode,
+        NodeTypeDefinition def,
+        IMessageHub meshHub,
+        ILogger? logger,
+        string bytes,
+        DependencyFloorUnmetException belowFloor)
+    {
+        logger?.LogWarning(
+            "EnrichWithNodeType: the recorded build of {NodeType} ({Bytes}) is NOT loaded on this replica "
+            + "for instance '{InstancePath}' — {Unmet}. No recompile is requested: the record stays as it "
+            + "is, and the replicas that meet the floor keep serving the build (#6195).",
+            nodeType, bytes, node.Path, belowFloor.Unmet);
+        var (intro, callToAction, guidance) = OverlayCopy(OverlayCause.StateUndetermined);
+        return Observable.Return(
+            WithOverlaySelfHeal(
+                WithCompilationErrorOverlay(node, nodeType,
+                    $"'{nodeType}' ({bytes}): {belowFloor.Unmet}",
+                    guidance: guidance,
+                    intro: intro,
+                    callToAction: callToAction,
+                    activityPath: def.LastCompilationActivityPath),
+                meshHub, nodeType, typeNode.Version, logger));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="proceed"/> unless THIS process is below the declared dependency floor of
+    /// <paramref name="nodeType"/>'s package (<see cref="INodeTypeDependencyFloor"/>, #6195), in which
+    /// case <paramref name="refuse"/> answers instead. No floor registered, or nothing judged, runs
+    /// <paramref name="proceed"/> exactly as before.
+    /// </summary>
+    private static IObservable<MeshNode> UnlessBelowDependencyFloor(
+        IMessageHub meshHub,
+        string nodeType,
+        Func<DependencyFloorUnmetException, IObservable<MeshNode>> refuse,
+        Func<IObservable<MeshNode>> proceed)
+    {
+        if (meshHub.ServiceProvider.GetService<INodeTypeDependencyFloor>() is not { } floor)
+            return proceed();
+        return floor.Unmet(nodeType)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .SelectMany(unmet => unmet is null
+                ? proceed()
+                : refuse(new DependencyFloorUnmetException(nodeType, unmet)));
+    }
+
     private static IObservable<MeshNode> RefuseUnloadableBind(
         MeshNode node,
         string nodeType,

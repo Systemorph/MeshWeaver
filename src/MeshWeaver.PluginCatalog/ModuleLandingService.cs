@@ -240,11 +240,17 @@ public sealed class ModuleLandingService : IDisposable
         Func<string?>? ownPlatform = null)
     {
         var modulesRoot = Path.Combine(baseDirectory, "modules");
-        if (!Directory.Exists(modulesRoot))
-            return 0;
-        var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
         // 🚨 The pass's one outcome line and its step boundary (#6991, #7049): see PassLedger.
         var ledger = new PassLedger(GcPassName, logger);
+        if (!Directory.Exists(modulesRoot))
+        {
+            // #7349: a pass with nothing to sweep still says it ran — otherwise the documented
+            // `pass outcome` query cannot tell it from a pass that never ran.
+            ledger.Record(PassOutcome.Skipped,
+                ": {ModulesRoot} does not exist — nothing to collect, removed 0 of 0 directory(ies)", modulesRoot);
+            return 0;
+        }
+        var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
         var readFaults = 0;
         void OnReadFault(string msg)
         {
@@ -851,7 +857,9 @@ public sealed class ModuleLandingService : IDisposable
     ///
     /// <para>🚨 <b>Serving routes only.</b> Anything that DECIDES from the record — a landing,
     /// the boot, the self-updater's restart check — keeps reading <see cref="GetActivation"/>,
-    /// which is authoritative by construction.</para>
+    /// which is authoritative by construction. The one decider that reads the snapshot is the
+    /// compile half of the dependency floor (<see cref="ServedLoadedPackageModuleReader"/>): it sits
+    /// on the activation path, and a lag can only leave a module unjudged, never misjudge one.</para>
     /// </summary>
     /// <returns>The served list; emits once and completes. A failed derivation faults this read
     /// and is not cached — the next read derives again.</returns>
