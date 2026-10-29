@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    RESTORE-ONLY. Never built, never in MeshWeaver.slnx. The packages NuGetAssemblyResolver fetches AT TEST TIME —
+    from `#r "nuget:…"` directives in executable doc cells and samples, and from the resolver's own integration
+    tests — are not in the solution's restore closure, so the build host's warm NuGet cache never held them and
+    every run downloaded them again (MWPREP001). The host's default-branch restore (.github/build-stages.json
+    `restore`) restores this project too, so they land in <cache>/nuget; the resolver reads that folder as a NuGet
+    fallback folder (NUGET_FALLBACK_PACKAGES) and downloads nothing it holds complete
+    (Doc/Architecture/NuGetRuntimeAssets, "Offline-first resolution").
+
+    Keep the list EXACT: the id and the version the directive or test names. A directive whose package is not
+    listed here still resolves — it is downloaded per run, as before.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <!-- The resolver walks every dependency a nuspec declares, framework-provided ones included; pruning would
+         leave exactly those out of the cache. -->
+    <RestoreEnablePackagePruning>false</RestoreEnablePackagePruning>
+    <!-- A fixture closure, not shipped code: an advisory on a pinned fixture version must not fail the warm. -->
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Doc/DataMesh/NugetPackages (executable cells); NuGetDirectiveParserTest. -->
+    <PackageReference Include="Humanizer.Core" Version="2.14.1" />
+    <PackageReference Include="Markdig" Version="0.37.0" />
+    <!-- NuGetAssemblyResolverTest: the Humanizer metapackage and its language satellites. -->
+    <PackageReference Include="Humanizer" Version="2.14.1" />
+    <!-- samples/Graph/Data/MathDemo/Matrix; Doc/DataMesh/NodeTypeWithNuGet; Doc/Architecture/ScriptExecutionDemo;
+         NuGetAssemblyResolverTest. -->
+    <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
+    <!-- NuGetAssemblyResolverTest, NuGetPackageHostWinsTest, NuGetPackagesLoadOnAFreshReplicaTest
+         (Azure.Core, Azure.Identity and MSAL come with it). -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.1" />
+  </ItemGroup>
+</Project>
