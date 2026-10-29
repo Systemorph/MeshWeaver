@@ -34,6 +34,14 @@ gate for direct links). Create an identity, issue a token (shown once), rotate a
 with the same label and term length is minted **first**, then the old one is revoked), revoke a token,
 grant access at a path with a role, revoke the identity.
 
+The tab is built from the standard controls only. **Create**, **Issue a token**, **Grant access**
+and **Revoke a service identity** are four separate, titled sections, each with its own form (the
+`Edit` macro; captions follow the viewer's language) and its own button. Revoking an identity is
+destructive and cannot be undone, so its button opens a confirmation dialog naming the identity, and
+nothing is revoked until **Revoke** is pressed there. Below the sections, the result line shows a new
+token once. The identity and token grids size every column to its content, so a label or a date is
+never cut; the token label takes the remaining width, and a narrow pane scrolls sideways instead.
+
 A grant **sets** the service's role at that scope — re-granting a different role replaces the
 previous one (one role per scope for a machine principal; compose several on the node's Access
 Control tab). A grant is written **as the admin**. A global admin is not a data superuser, so the grant succeeds

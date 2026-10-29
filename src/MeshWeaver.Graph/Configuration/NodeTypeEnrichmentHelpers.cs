@@ -954,10 +954,12 @@ internal static class NodeTypeEnrichmentHelpers
         // (JsonElement / JsonNode) mirror snapshot is the normal shape off a sync stream, and a
         // CLR test blinds this to an in-flight compile — see IsCompileSettled's remarks.
         var opts = options ?? System.Text.Json.JsonSerializerOptions.Default;
+        // `Observed` is false only for the synthetic StartWith arm: nothing has been READ yet.
         var inFlightLevel = typeStream
-            .Select(t => (Node: t, InFlight: IsCompileInFlight(t, opts)))
-            .StartWith((Node: (MeshNode)null!, InFlight: false)) // armed from subscribe (Phase A)
-            .DistinctUntilChanged(x => x.InFlight); // only transitions restart/cancel the budget
+            .Select(t => (Node: t, InFlight: IsCompileInFlight(t, opts), Observed: true))
+            .StartWith((Node: (MeshNode)null!, InFlight: false, Observed: false)) // armed from subscribe (Phase A)
+            // only transitions restart/cancel the budget — and the FIRST read is one (see below)
+            .DistinctUntilChanged(x => (x.InFlight, x.Observed));
 
         var noProgressDeadline = inFlightLevel
             .Select(x => x.InFlight
@@ -966,6 +968,18 @@ internal static class NodeTypeEnrichmentHelpers
                 // park is re-read on every re-arm: a compile that fails WHILE we wait parks the
                 // type on its terminal write, and the in-flight level drops to false immediately
                 // after — that re-arm must take the parked branch, not start a fresh 60 s.
+                // 🚨 But NEVER before the type has been read once. The park registry knows that no
+                // compile is coming; it does not know whether the type still names a USABLE build,
+                // and a parked type that does (the last good build after a failed N+1) is a real
+                // answer `settled` accepts. On a COLD stream the first read arrives after
+                // subscribe, so consulting the park on the synthetic arm faulted every activation
+                // onto the compile-error overlay before that answer could arrive — and the overlay's
+                // own self-heal recycles met the same fault, forever (Updates suite,
+                // AFailedNewBuild_KeepsTheOldOneServing_AndSaysWhy, red on main). The first read is
+                // a distinct level: by then `settled`, subscribed first, has seen it and won if it
+                // accepts it, and an unaccepted read still takes the parked branch at once.
+                : !x.Observed
+                ? Observable.Timer(noProgressBudget, clock).Select(_ => onNoProgress())
                 : Observable.Defer(() => parkedFault?.Invoke() is { } parked
                     ? Observable.Return(parked)     // already terminal — no budget to burn
                     : Observable.Timer(noProgressBudget, clock).Select(_ => onNoProgress())))
@@ -1836,9 +1850,10 @@ internal static class NodeTypeEnrichmentHelpers
                 OverlayCopy(OverlayCause.StateUndetermined);
             return Observable.Return(
                 WithOverlaySelfHeal(
-                    WithCompilationErrorOverlay(node, nodeType,
+                    WithKeyedCompilationErrorOverlay(node, nodeType,
                         def.CompilationError
                             ?? $"The compile state of NodeType '{nodeType}' could not be determined.",
+                        errorText: def.CompilationErrorText,
                         guidance: undeterminedGuidance,
                         intro: undeterminedIntro,
                         callToAction: undeterminedCta,
@@ -1856,7 +1871,7 @@ internal static class NodeTypeEnrichmentHelpers
         // diagnostics the NodeType's own Overview offers.
         return Observable.Return(
             WithOverlaySelfHeal(
-                WithCompilationErrorOverlay(node, nodeType, error,
+                WithKeyedCompilationErrorOverlay(node, nodeType, error, def.CompilationErrorText,
                     activityPath: def.LastCompilationActivityPath),
                 meshHub, nodeType, typeNode.Version, logger));
     }
@@ -3239,13 +3254,32 @@ internal static class NodeTypeEnrichmentHelpers
         string? intro = null,
         string? callToAction = null,
         string? activityPath = null)
+        // 🚨 The public signature is unchanged on purpose: an added optional parameter REPLACES a
+        // method's signature, and a module bundle compiled against the old one would fail with
+        // MissingMethodException. The keyed form (#7355) goes through the internal twin below.
+        => WithKeyedCompilationErrorOverlay(node, nodeType, error, errorText: null,
+            guidance, intro, callToAction, activityPath);
+
+    /// <summary>
+    /// <see cref="WithCompilationErrorOverlay"/> with the error's keyed form (#7355), rendered in the
+    /// viewer's language when it reproduces <paramref name="error"/> (<see cref="KeyedTexts.Localize"/>).
+    /// </summary>
+    internal static MeshNode WithKeyedCompilationErrorOverlay(
+        MeshNode node,
+        string nodeType,
+        string? error,
+        System.Collections.Immutable.ImmutableList<KeyedText>? errorText,
+        string? guidance = null,
+        string? intro = null,
+        string? callToAction = null,
+        string? activityPath = null)
     {
         // Nothing to overlay: hand the node back untouched and let the factory apply the
         // default chain (exactly once) around whatever configuration it already carries.
         if (string.IsNullOrEmpty(error))
             return node;
 
-        var overlay = CreateCompilationErrorConfiguration(error, guidance, intro, callToAction, activityPath);
+        var overlay = CreateCompilationErrorConfiguration(error, guidance, intro, callToAction, activityPath, errorText);
         // Fallback-hub contract: the overlay hub serves what its default config CAN
         // (the error Overview layout, node data binding, Ping) — but everything else,
         // notably typed requests the broken assembly would have registered (which
@@ -3649,7 +3683,8 @@ internal static class NodeTypeEnrichmentHelpers
     private static Func<MessageHubConfiguration, MessageHubConfiguration>
         CreateCompilationErrorConfiguration(
             string errorMessage, string? guidance, string? intro = null,
-            string? callToAction = null, string? activityPath = null)
+            string? callToAction = null, string? activityPath = null,
+            System.Collections.Immutable.ImmutableList<KeyedText>? errorText = null)
     {
         // The markdown is assembled at RENDER time, so the compile-log anchor can be
         // localized off the viewing user's AccessContext (host.Localize) rather than
@@ -3657,7 +3692,10 @@ internal static class NodeTypeEnrichmentHelpers
         return config => config.AddLayout(layout =>
             layout.WithNodePage(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
                 Observable.Return<UiControl?>(
-                    BuildCompilationErrorMarkdown(errorMessage, guidance, intro, callToAction,
+                    // #7355 — a keyed platform refusal renders in the viewer's language.
+                    BuildCompilationErrorMarkdown(
+                        KeyedTexts.Localize(errorMessage, errorText, host.ViewerLocale()) ?? errorMessage,
+                        guidance, intro, callToAction,
                         activityPath, host.Localize("ui.viewCompileLog"))),
                 EmergencyPageProvenance));
     }

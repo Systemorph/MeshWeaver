@@ -96,20 +96,18 @@ public static class GitHubIssuesTab
         var spacePath = SpaceRootPath(node?.Path ?? "");
 
         if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(GitSyncViews.Hint("GitHub Issues are available inside a Space."));
+            return stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.issues.onlyInSpace")));
 
         stack = stack.WithView(Controls.H2(host.Localize("ui.githubIssuesPrs")).WithStyle("margin:0 0 8px 0;"));
-        stack = stack.WithView(GitSyncViews.Note(
-            "Browse and act on the configured repository's issues and pull requests. Set the repository " +
-            "and connect GitHub in the **GitHub Sync** tab first."));
+        stack = stack.WithView(GitSyncViews.Note(host.Localize("ui.gitSync.issues.intro")));
 
         // ── Issues ─────────────────────────────────────────────────────────────
-        stack = stack.WithView(GitSyncViews.Section("Issues"));
+        stack = stack.WithView(GitSyncViews.Section(host.Localize("ui.gitSync.issues.section.issues")));
         stack = stack.WithView(Controls.Button(host.Localize("ui.syncIssues"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(c =>
             {
-                c.Host.UpdateData(ResultId, ActionNotice.Info("Syncing issues from GitHub…"));
+                c.Host.UpdateData(ResultId, ActionNotice.Info(LocalizationCatalog.Get("ui.gitSync.issues.syncing", c.Host.ViewerLocale())));
                 c.Host.Hub.SyncIssuesFromGitHub(spacePath, userId,
                         onActivityCreated: p => c.Host.UpdateData(ActivityPathId, p))
                     .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
@@ -128,20 +126,20 @@ public static class GitHubIssuesTab
             .Subscribe(
                 rows => host.UpdateData(IssuesGridId, rows),
                 // Surface a faulted synced query instead of a silently-frozen grid.
-                ex => host.UpdateData(ResultId, ActionNotice.Error($"Issue list stopped updating: {ex.Message}"))));
+                ex => host.UpdateData(ResultId, ActionNotice.Error(host.Localize("ui.gitSync.issues.listStopped", ex.Message)))));
         stack = stack.WithView(new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(IssuesGridId)))
             .WithColumn(new PropertyColumnControl<int> { Property = nameof(GitHubIssueRow.Number).ToCamelCase() }.WithTitle("#"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Title).ToCamelCase() }.WithTitle("Title"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.State).ToCamelCase() }.WithTitle("State"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Author).ToCamelCase() }.WithTitle("Author"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Labels).ToCamelCase() }.WithTitle("Labels"))
-            .WithColumn(new PropertyColumnControl<int> { Property = nameof(GitHubIssueRow.Comments).ToCamelCase() }.WithTitle("Comments"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Updated).ToCamelCase() }.WithTitle("Updated"))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Title).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.title")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.State).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.state")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Author).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.author")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Labels).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.labels")))
+            .WithColumn(new PropertyColumnControl<int> { Property = nameof(GitHubIssueRow.Comments).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.comments")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Updated).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.updated")))
             .WithItemSize(36)
             .Resizable());
 
         // ── Pull requests ────────────────────────────────────────────────────
-        stack = stack.WithView(GitSyncViews.Section("Pull requests"));
+        stack = stack.WithView(GitSyncViews.Section(host.Localize("ui.gitSync.issues.section.prs")));
         stack = stack.WithView(Controls.Button(host.Localize("ui.refreshPrs"))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(c =>
@@ -154,7 +152,7 @@ public static class GitHubIssuesTab
 
         // Seeded at render, for the same reason as the new-issue form above.
         host.UpdateData(MergeFormId, new Dictionary<string, object?> { ["prNumber"] = "" });
-        stack = stack.WithView(BuildMergeForm(spacePath, userId));
+        stack = stack.WithView(BuildMergeForm(spacePath, userId, host.ViewerLocale()));
 
         // Initial PR load (live from GitHub, never persisted).
         host.RegisterForDisposal(prs.ListAll(spacePath, null, userId)
@@ -164,12 +162,12 @@ public static class GitHubIssuesTab
             .Subscribe(rows => host.UpdateData(PrGridId, rows), _ => { }));
         stack = stack.WithView(new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(PrGridId)))
             .WithColumn(new PropertyColumnControl<int> { Property = nameof(GitHubPrRow.Number).ToCamelCase() }.WithTitle("#"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Title).ToCamelCase() }.WithTitle("Title"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Author).ToCamelCase() }.WithTitle("Author"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Status).ToCamelCase() }.WithTitle("Status"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Draft).ToCamelCase() }.WithTitle("Draft"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Branches).ToCamelCase() }.WithTitle("Head → Base"))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Updated).ToCamelCase() }.WithTitle("Updated"))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Title).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.title")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Author).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.author")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Status).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.status")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Draft).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.draft")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Branches).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.branches")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubPrRow.Updated).ToCamelCase() }.WithTitle(host.Localize("ui.gitSync.issues.col.updated")))
             .WithItemSize(36)
             .Resizable());
 
@@ -186,14 +184,14 @@ public static class GitHubIssuesTab
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;flex-wrap:wrap;");
         row = row.WithView(new TextFieldControl(new JsonPointerReference("title"))
         {
-            Label = "New issue title",
-            Placeholder = "e.g. Broken import on empty file",
+            Label = LocalizationCatalog.Get("ui.gitSync.issues.newTitle", locale),
+            Placeholder = LocalizationCatalog.Get("ui.gitSync.issues.newTitlePlaceholder", locale),
             DataContext = LayoutAreaReference.GetDataPointer(NewIssueFormId),
         }.WithWidth("320px"));
         row = row.WithView(new TextFieldControl(new JsonPointerReference("body"))
         {
-            Label = "Body (optional)",
-            Placeholder = "Describe the issue…",
+            Label = LocalizationCatalog.Get("ui.gitSync.issues.body", locale),
+            Placeholder = LocalizationCatalog.Get("ui.gitSync.issues.bodyPlaceholder", locale),
             DataContext = LayoutAreaReference.GetDataPointer(NewIssueFormId),
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.createIssue", locale))
@@ -205,28 +203,28 @@ public static class GitHubIssuesTab
                     var title = Str(d, "title");
                     if (string.IsNullOrWhiteSpace(title))
                     {
-                        c.Host.UpdateData(ResultId, ActionNotice.Error("Enter a title for the new issue."));
+                        c.Host.UpdateData(ResultId, ActionNotice.Error(LocalizationCatalog.Get("ui.gitSync.issues.enterTitle", c.Host.ViewerLocale())));
                         return;
                     }
                     issues.CreateIssue(spacePath, title, Str(d, "body"), null, userId).Subscribe(
-                        n => c.Host.UpdateData(ResultId, ActionNotice.Success($"Issue created — {n.Name}.")),
+                        n => c.Host.UpdateData(ResultId, ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.issues.created", c.Host.ViewerLocale(), n.Name))),
                         ex => c.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
     }
 
-    private static UiControl BuildMergeForm(string spacePath, string userId)
+    private static UiControl BuildMergeForm(string spacePath, string userId, string? locale)
     {
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;flex-wrap:wrap;");
         row = row.WithView(new TextFieldControl(new JsonPointerReference("prNumber"))
         {
-            Label = "Pull request # to merge",
-            Placeholder = "e.g. 42",
+            Label = LocalizationCatalog.Get("ui.gitSync.issues.mergeNumber", locale),
+            Placeholder = LocalizationCatalog.Get("ui.gitSync.issues.mergePlaceholder", locale),
             DataContext = LayoutAreaReference.GetDataPointer(MergeFormId),
         }.WithWidth("200px"));
-        row = row.WithView(MergeButton("Merge commit", GitHubMergeMethod.Merge, spacePath, userId));
-        row = row.WithView(MergeButton("Squash & merge", GitHubMergeMethod.Squash, spacePath, userId));
+        row = row.WithView(MergeButton(LocalizationCatalog.Get("ui.gitSync.issues.mergeCommit", locale), GitHubMergeMethod.Merge, spacePath, userId));
+        row = row.WithView(MergeButton(LocalizationCatalog.Get("ui.gitSync.issues.squashMerge", locale), GitHubMergeMethod.Squash, spacePath, userId));
         return row;
     }
 
@@ -239,10 +237,10 @@ public static class GitHubIssuesTab
                 {
                     if (!int.TryParse(Str(d, "prNumber"), out var number) || number <= 0)
                     {
-                        c.Host.UpdateData(ResultId, ActionNotice.Error("Enter the pull request number to merge."));
+                        c.Host.UpdateData(ResultId, ActionNotice.Error(LocalizationCatalog.Get("ui.gitSync.issues.enterNumber", c.Host.ViewerLocale())));
                         return;
                     }
-                    c.Host.UpdateData(ResultId, ActionNotice.Info($"Merging pull request #{number} ({method})…"));
+                    c.Host.UpdateData(ResultId, ActionNotice.Info(LocalizationCatalog.Get("ui.gitSync.issues.merging", c.Host.ViewerLocale(), number, method)));
                     c.Host.Hub.MergePullRequestOnGitHub(spacePath, number, method, userId,
                             onActivityCreated: p => c.Host.UpdateData(ActivityPathId, p))
                         .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));

@@ -61,10 +61,10 @@ public class GitSyncTabsUseStandardControlsTest(ITestOutputHelper output) : Mono
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
 
-    private ISynchronizationStream<JsonElement> Open(string tabId)
+    private ISynchronizationStream<JsonElement> Open(string tabId, string? locale = null)
     {
         TestUsers.DevLogin(Mesh, new AccessContext
-            { ObjectId = Person, Name = "GitSync Tabs Person", Email = $"{Person}@meshweaver.io" });
+            { ObjectId = Person, Name = "GitSync Tabs Person", Email = $"{Person}@meshweaver.io", Locale = locale });
         return GetClient().GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(Space),
                 new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = tabId });
@@ -193,6 +193,46 @@ public class GitSyncTabsUseStandardControlsTest(ITestOutputHelper output) : Mono
                 TestContext.Current.CancellationToken);
 
         HtmlAreas(frame).Should().BeEmpty("the Code workspace tab holds no hand-built markup");
+    }
+
+    /// <summary>
+    /// #7342 — the tabs' prose follows the VIEWER's language. A German viewer reads every heading,
+    /// hint and outcome banner in German; before, all of it was English literals.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task GitHubSync_ForAGermanViewer_RendersGerman()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var stream = Open(GitHubSyncSettingsTab.TabId, locale: "de");
+
+        var initial = await stream.Select(c => c.Value).Should().Within(Budget)
+            .Match(f => HasLabel(f, "Weitere Sync-Quellen")
+                    && HasLabel(f, "Ihr GitHub-Konto")
+                    && HasHint(f, "Keine weiteren Sync-Quellen."),
+                "the section headings and hints render in the viewer's language", ct);
+        HasLabel(initial, "Additional sync sources").Should().BeFalse("no English heading is left for a German viewer");
+
+        var add = Areas(initial).First(a => TypeOf(a.Control) == nameof(ButtonControl)
+            && Text(a.Control) == LocalizationCatalog.Get("ui.addSyncSource", "de")).Id;
+        Click(stream, add);
+        await stream.Select(c => c.Value).Should().Within(Budget)
+            .Match(f => Notices(f).Contains((MessageBarIntent.Error, "Geben Sie einen Namen für die neue Sync-Quelle ein.")),
+                "the outcome banner follows the viewer's language too", ct);
+    }
+
+    /// <summary>#7342 — the OAuth callback's banner and the Code workspace's hints, for a German viewer.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task OAuthBannerAndCodeWorkspace_ForAGermanViewer_RenderGerman()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Open($"{GitHubSyncSettingsTab.TabId}?connect=github-error&reason=access_denied", locale: "de")
+            .Select(c => c.Value).Should().Within(Budget)
+            .Match(f => Notices(f).Contains((MessageBarIntent.Error, "Die Verbindung mit GitHub ist fehlgeschlagen: access_denied")),
+                "the callback's error banner is German for a German viewer", ct);
+
+        await Open(WorkingTreeTab.TabId, locale: "de").Select(c => c.Value).Should().Within(Budget)
+            .Match(f => HasHint(f, "Verbinden Sie zuerst im Tab GitHub Sync ein GitHub-Repository."),
+                "the Code workspace's no-repository hint is German for a German viewer", ct);
     }
 
     /// <summary>The working-tree status: a clean tree is a hint, a dirty one a grid of its changes.</summary>

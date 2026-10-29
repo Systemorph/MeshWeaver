@@ -531,7 +531,7 @@ public static class EditorExtensions
         PropertyInfo propertyInfo)
     where T : ContainerControl<T>
     {
-        var label = propertyInfo.GetEditorLabel();
+        var label = propertyInfo.GetEditorLabel(AmbientViewerLocale(serviceProvider));
 
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
 
@@ -615,7 +615,7 @@ public static class EditorExtensions
             return editor;
 
         var displayAttribute = propertyInfo.GetCustomAttribute<DisplayAttribute>();
-        var propertySkinLabel = propertyInfo.GetEditorLabel();
+        var propertySkinLabel = propertyInfo.GetEditorLabel(viewerLocale);
         string? label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
         var xmlDocs = serviceProvider.GetRequiredService<ITypeRegistry>().XmlDocs();
@@ -718,11 +718,28 @@ public static class EditorExtensions
     ///
     /// <para>Kept in ONE place: MapToControl and the property-skin path both call it, so the field
     /// label and its skin label can never disagree.</para>
+    ///
+    /// <para>A declared name that is a KEY of the string catalog renders as that key's text in the
+    /// viewer's language (<paramref name="viewerLocale"/>), so a generated form's captions follow
+    /// the viewer like every other piece of chrome: <c>[DisplayName("serviceIdentities.field.role")]</c>
+    /// reads "Role" for an English viewer and "Rolle" for a German one. A name that is not a key is
+    /// shown as written, so every existing caption renders unchanged.</para>
     /// </summary>
-    private static string GetEditorLabel(this PropertyInfo propertyInfo)
-        => propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name
-           ?? propertyInfo.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
+    /// <param name="propertyInfo">The property the field edits.</param>
+    /// <param name="viewerLocale">The viewer's language tag; null resolves to English.</param>
+    internal static string GetEditorLabel(this PropertyInfo propertyInfo, string? viewerLocale)
+        => LocalizedCaption(
+               propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name
+               ?? propertyInfo.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName,
+               viewerLocale)
            ?? propertyInfo.Name.Wordify();
+
+    /// <summary>A declared caption in the viewer's language: the catalog's text when
+    /// <paramref name="declared"/> is a catalog key, otherwise <paramref name="declared"/> as written.</summary>
+    private static string? LocalizedCaption(string? declared, string? viewerLocale)
+        => declared is not null && LocalizationCatalog.ContainsKey(declared)
+            ? LocalizationCatalog.Get(declared, viewerLocale)
+            : declared;
 
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo) =>
         new(propertyInfo.Name.ToCamelCase()!);
@@ -763,7 +780,7 @@ public static class EditorExtensions
         // from — so the accessible name and the visible term can never disagree (WCAG
         // label-in-name). When `label` IS set the Fluent host paints its own associated <label>,
         // so an aria-label would only shadow it: leave it alone.
-        var ariaLabel = label is null ? propertyInfo.GetEditorLabel() : null;
+        var ariaLabel = label is null ? propertyInfo.GetEditorLabel(ViewerLocaleOf(host)) : null;
 
         if (BasicControls.TryGetValue(controlType, out var factory))
             return (UiControl)WithAccessibleName(
@@ -1072,7 +1089,7 @@ public static class EditorExtensions
 
     private static string GetToggleableDisplayName(PropertyInfo property, LayoutAreaHost host)
     {
-        return property.GetCustomAttribute<DisplayAttribute>()?.Name
+        return LocalizedCaption(property.GetCustomAttribute<DisplayAttribute>()?.Name, ViewerLocaleOf(host))
                ?? property.LocalizedDescription(ViewerLocaleOf(host))
                ?? property.Name.Wordify();
     }

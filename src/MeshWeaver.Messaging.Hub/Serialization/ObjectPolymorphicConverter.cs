@@ -38,30 +38,71 @@ public class ObjectPolymorphicConverter(
         + "what the value is nested in — if it is a mesh node's content, the read seam that holds the node "
         + "logs its path; for any other object payload, such as a message, this line is the only record)";
     private const int MaxTypeNameLogLength = 256;
+
+    // A deferred verdict is decided at the settle by looking the ORIGINAL '$type' up again (a
+    // truncated display name would never resolve, so a valid long name — a closed generic's full
+    // name is easily past 256 — would be warned as missing although it registered). Names longer
+    // than this are not deferred but warned at the read, so the deferred list stays bounded in
+    // bytes as well as in count.
+    private const int MaxDeferredTypeNameLength = 4096;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> warnedUnregisteredRead = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> warnedUnbindableRead = new();
     private int warnCapNoticed;
+
+    private static string DisplayName(string typeName) =>
+        typeName.Length > MaxTypeNameLogLength ? typeName[..MaxTypeNameLogLength] + "… (truncated)" : typeName;
 
     private void WarnUnregisteredDeserialization(string typeName)
     {
         if (logger is null)
             return;
-        if (typeName.Length > MaxTypeNameLogLength)
-            typeName = typeName[..MaxTypeNameLogLength] + "… (truncated)";
-        if (warnedUnregisteredRead.Count >= MaxWarnedTypeNames)
+        var displayName = DisplayName(typeName);
+        if (!IsFirstWarning(warnedUnregisteredRead, displayName))
+            return;
+        // 🚨 #7318 — during a replica's boot registration window this sentence is not decidable
+        // yet: a runtime-compiled NodeType's content type registers only when the registration pass
+        // reaches it, and boot-time readers run before that. The registry keeps the warning and
+        // writes it at the settle iff the ORIGINAL name still does not resolve; outside the window
+        // (and on a host without the pass) it is written here, at the read, as always.
+        if (typeName.Length <= MaxDeferredTypeNameLength
+            && contentTypeRegistry?.DeferUnresolvedWarning(typeName, () => LogUnregistered(displayName)) == true)
+            return;
+        LogUnregistered(displayName);
+    }
+
+    // The '$type' resolves mesh-wide but its JSON does not bind to that type: a DATA problem, never a
+    // missing registration — so it is never deferred to the boot window (the settle would find the
+    // name resolving and drop it) and never worded as "NOT registered". Once per name.
+    private void WarnUnbindableMeshWideType(string typeName)
+    {
+        if (logger is null)
+            return;
+        var displayName = DisplayName(typeName);
+        if (!IsFirstWarning(warnedUnbindableRead, displayName))
+            return;
+        logger.LogWarning(UnbindableRegisteredTypeWarning, displayName);
+    }
+
+    private bool IsFirstWarning(System.Collections.Concurrent.ConcurrentDictionary<string, byte> warned, string displayName)
+    {
+        if (warned.Count >= MaxWarnedTypeNames)
         {
             // Cap reached: stop caching (bounded memory) AND stop logging (bounded log volume) —
             // one notice marks the transition. Real systems have dozens of distinct types; only
             // payload-controlled junk '$type' storms ever get here.
             if (System.Threading.Interlocked.Exchange(ref warnCapNoticed, 1) == 0)
-                logger.LogWarning(
+                logger?.LogWarning(
                     "Unregistered-$type warning cap ({Max} distinct names) reached — further distinct "
                     + "unregistered '$type' values will not be logged (payload-controlled junk?).",
                     MaxWarnedTypeNames);
-            return;
+            return false;
         }
-        if (!warnedUnregisteredRead.TryAdd(typeName, 0))
-            return;
-        logger.LogWarning(
+        return warned.TryAdd(displayName, 0);
+    }
+
+    private void LogUnregistered(string typeName)
+    {
+        logger?.LogWarning(
             "Received '$type':'{TypeName}' which is NOT registered in this (receiving) hub — it can only be read "
             + "as an untyped JsonElement (the value renders empty / reactive waits time out). Register it in this "
             + "hub too (WithType(typeof({TypeName}), nameof({TypeName}))): a $type must be registered in the "
@@ -195,9 +236,23 @@ public class ObjectPolymorphicConverter(
                 if (recovered is not null)
                     return recovered;
 
-                // Genuinely unresolvable anywhere in the process: a type must be registered in the RECEIVING
-                // hub as well as the sending one. Warn once per type so the missing registration is found fast.
-                WarnUnregisteredDeserialization(typeName!);
+                // The name resolves mesh-wide, so the recovery failed on BINDING (e.g. an object where the
+                // record declares a string): a data problem, reported as such and never deferred. Asked
+                // again once the name resolves, so a registration landing between the two calls types the
+                // value instead of being reported as unbindable.
+                if (contentTypeRegistry is not null && contentTypeRegistry.TryResolveByDiscriminator(typeName, out _))
+                {
+                    recovered = contentTypeRegistry.TryRecover(cleanedElement, options);
+                    if (recovered is not null)
+                        return recovered;
+                    WarnUnbindableMeshWideType(typeName);
+                }
+                else
+                {
+                    // Genuinely unresolvable anywhere in the process: a type must be registered in the RECEIVING
+                    // hub as well as the sending one. Warn once per type so the missing registration is found fast.
+                    WarnUnregisteredDeserialization(typeName);
+                }
             }
         }
 

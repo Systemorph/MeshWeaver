@@ -327,6 +327,44 @@ them; their line says *"is registered, but the stored JSON does not bind"*. Thes
 the change and point at the data or the contract, never at the pass. The pre-change count was ≈130 per
 boot on memex-cloud and the same shape on memex.
 
+### The converter beneath the seams uses the same window
+
+The seams above sit on `ObjectPolymorphicConverter`, which has its own verdict for a `$type` it cannot
+resolve: `Received '$type':'X' which is NOT registered in this (receiving) hub`. Until
+[#7318](https://github.com/Systemorph/MeshWeaver/issues/7318) that line was written at the read, inside
+the window, so the deferral above stopped one layer short. Measured on memex-cloud (2026-10-27, pod
+`…d77d94-sql74`): about 90 distinct runtime-compiled content types logged it in the second before
+`Application started`, `SocialPost` among them, once per pod on every roll, and each was typed once the
+pass reached it. The line blamed a missing `WithType` on the receiving hub. No such registration was
+missing; the type had not been compiled on that replica yet.
+
+The window now covers the converter too. `IMeshContentTypeRegistry` carries it
+(`DeferUnresolvedWarningsUntilSettled`, `DeferUnresolvedWarning`, `SettleDeferredUnresolvedWarnings`),
+because the converter lives in `MeshWeaver.Messaging.Hub` and cannot see `ContentDegradationRegistry`.
+`DynamicContentTypeRegistrationHostedService` opens both windows when it is constructed and settles
+both on every terminal of the pass. At the settle, a deferred line is written once, by the converter
+that read the type, and only if the `$type` still does not resolve by name. An ambiguous name, which
+two declarations claim, still does not resolve, so its line is still written. All three members have
+default implementations, so other implementers keep the old behaviour of warning at the read.
+
+Two cases are never deferred:
+
+- **A name that resolves but does not bind.** When the `$type` resolves mesh-wide and the JSON still
+  does not bind to it (an object where the record declares a string), the problem is the data, not a
+  registration. The converter writes `Content for 'X' could not be deserialized` at the read, once per
+  name, even inside the window. Deferred, the settle would find the name resolving and drop the line,
+  leaving the payload an untyped `JsonElement` with no diagnostic.
+- **The settle looks up the original `$type`, never the display text.** The log line truncates a name
+  past 256 characters, but the deferral keeps the full name, so a valid long name is not reported missing
+  after it registered. A closed generic's full name is easily that long. A name past 4096 characters is
+  not deferred and is warned at the read, which keeps the deferred list bounded in bytes.
+
+**Pinned by** `BootRegistrationWindowDefersConverterWarningTest` (MeshWeaver.Hosting.Test). Its
+negative control is the same read with no window, which warns at the read.
+
+**Acceptance on a portal:** after the roll that carries this, `|~ "NOT registered in this \\(receiving\\) hub"`
+over a pod's first minute drops from about 90 lines to the types the pass could not register.
+
 ## A read never waits for the pass
 
 The window above stops the warning from claiming a verdict too early. It does not change what the
