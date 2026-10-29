@@ -37,6 +37,9 @@ public static class SpaceInviteLayoutArea
             ["role"] = Role.Editor.Id,
             ["pin"] = true,
             ["message"] = "",
+            // The invitation email's language (#7482). The invitee has no account, so the host picks;
+            // it starts at the host's OWN language, read explicitly off their AccessContext.
+            ["language"] = host.ViewerLocale(),
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
         // The host's personal greeting — it travels in the invitation email (Invitation.Message).
@@ -47,6 +50,14 @@ public static class SpaceInviteLayoutArea
             Placeholder = host.Localize("ui.invitePersonalMessageHint"),
             DataContext = dataContext,
         }.WithRows(3);
+        // Stores the tag ("de") and shows the endonym ("Deutsch"), like the profile's language picker;
+        // endonyms need no translation, the label does.
+        var languageSelect = (new SelectControl(new JsonPointerReference("language"), Array.Empty<object>())
+                .WithOptions((object)Locales.Supported
+                    .Select(tag => (Option)new Option<string>(
+                        tag, Locales.DisplayNames.TryGetValue(tag, out var name) ? name : tag))
+                    .ToArray()))
+            with { Label = host.Localize("ui.inviteEmailLanguage"), DataContext = dataContext };
 
         var emailField = (new TextFieldControl(new JsonPointerReference("email"))
             { Label = "Email address", DataContext = dataContext })
@@ -80,6 +91,7 @@ public static class SpaceInviteLayoutArea
                 .WithView(roleSelect)
                 .WithView(inviteButton))
             .WithView(messageField)
+            .WithView(languageSelect)
             .WithView(pinCheck);
 
         return Observable.Return<UiControl?>(stack);
@@ -91,6 +103,7 @@ public static class SpaceInviteLayoutArea
         var role = form.GetValueOrDefault("role")?.ToString()?.Trim();
         var pin = form.GetValueOrDefault("pin") is true or "true" or "True";
         var message = form.GetValueOrDefault("message")?.ToString();
+        var language = form.GetValueOrDefault("language")?.ToString();
         if (string.IsNullOrEmpty(email) || !email.Contains('@'))
         {
             ShowDialog(ctx, "Please enter a valid **email address**.");
@@ -103,7 +116,7 @@ public static class SpaceInviteLayoutArea
             ctx.Host.Hub, sp.GetRequiredService<IMeshService>(), sp.GetRequiredService<AccessService>());
         var invitedBy = sp.GetService<AccessService>()?.Context?.ObjectId;
 
-        svc.Invite(spacePath, email, role, pin, invitedBy, message).Subscribe(
+        svc.Invite(spacePath, email, role, pin, invitedBy, message, language).Subscribe(
             outcome => ShowDialog(ctx, outcome == SpaceInviteOutcome.Granted
                 ? $"**{email}** already has an account — granted **{role}** on this Space."
                 : $"Invited **{email}** as **{role}**. They'll get access automatically when they sign up."),

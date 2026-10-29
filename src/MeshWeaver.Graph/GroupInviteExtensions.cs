@@ -88,6 +88,9 @@ public static class GroupInviteExtensions
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var normalizedEmail = email.Trim();
+        // The invitation email's language (#7482): the inviter's own, read HERE on the inviter's turn —
+        // the lookup and the writes below run as System, whose context carries no language.
+        var emailLocale = SpaceInviteService.InvitationLocale(null, accessService);
 
         // Look up an existing account by email (one-shot initial snapshot) — as System, see
         // SpaceInviteService.AccountLookup (#4309): as the inviting admin the mirror-pinned read answers
@@ -105,7 +108,8 @@ public static class GroupInviteExtensions
                             ? EventSubscriptionOps.Grant(meshService, existing.Id, groupPath, role).Select(_ => m)
                             : Observable.Return(m))
                         .Select(_ => GroupInviteOutcome.Added)
-                    : ScheduleAndInvite(meshService, accessService, groupPath, normalizedEmail, invitedBy, role);
+                    : ScheduleAndInvite(meshService, accessService, groupPath, normalizedEmail, invitedBy, role,
+                        emailLocale);
             });
     }
 
@@ -179,7 +183,7 @@ public static class GroupInviteExtensions
 
     private static IObservable<GroupInviteOutcome> ScheduleAndInvite(
         IMeshService meshService, AccessService accessService, string groupPath, string email, string? invitedBy,
-        string? role)
+        string? role, string locale)
     {
         var subscription = new EventSubscription
         {
@@ -209,6 +213,7 @@ public static class GroupInviteExtensions
                     ? $"Invited to group {groupPath} as {role}"
                     : $"Invited to group {groupPath}",
                 SpacePath = groupPath,
+                Locale = locale,
             },
         };
 
