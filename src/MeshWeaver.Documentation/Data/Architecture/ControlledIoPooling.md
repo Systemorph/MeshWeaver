@@ -749,6 +749,19 @@ first-in-process script-reference build, on the Compile pool) on the strength of
   switch and off by default; off, it reads `(not captured — IoPoolOptions.CaptureLeafOpeners is off)`.
   Turn it on when the site is shared by many callers, as the `MeshQuery` fan-out type every query
   subscribes through is (MeshWeaver#7277). Pinned by `IoPoolResidualAgeAndOpenerTest`.
+- **Read a SYNCHRONOUS leaf's STACK.** When the silo join expires (`IoPoolSiloTeardown`), every
+  synchronous leaf still in flight — a blocking leaf, or a `SubscribeThroughPool` subscribe, which
+  holds its thread until it returns and takes no token — gets ONE Warning beside the expiry Error:
+  `the {Pool} leaf {Site} still holds managed thread {T} after the join expired`, followed by that
+  thread's managed stack, blocking frame on top (at most 40 frames). The stacks are read once per stop
+  from one `Normal` minidump of the process, written by the runtime's own dump writer over its
+  diagnostic port (the `createdump` behind `DOTNET_DbgEnableMiniDump`) and read back with ClrMD; the
+  file goes to the temp directory and is deleted once read. The capture runs on its own thread,
+  bounded by 20 s, and only on the expiry path; one that fails or runs late says so per leaf, naming
+  the thread, so `AnalyzeDump` (`clrstack`) on a crash dump of the pod is the fallback. The runtime's
+  data-access library (DAC) that ClrMD loads is pinned for the life of the process, because unloading
+  it crashes any thread that ran it when that thread exits. An async leaf holds no thread, so it gets
+  no stack. Pinned by `IoPoolSiloTeardownTest.WhenTheJoinBudgetExpires_ABlockedSubscribeIsReportedWithTheFrameItIsStuckIn`.
 
 Pinned by `IoPoolDrainCancelJoinTest` (deterministic: a `TestScheduler`-driven `Throttle` fired from a
 thread the test owns, with the two interleavings the deadlock needs made explicit).

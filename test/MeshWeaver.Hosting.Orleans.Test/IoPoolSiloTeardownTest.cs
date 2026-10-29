@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
@@ -288,5 +291,66 @@ public class IoPoolSiloTeardownTest
             // whole Budget and take the shard's teardown with it.
             Volatile.Write(ref release, 1);
         }
+    }
+
+    /// <summary>
+    /// 🚨 #7277: a SYNCHRONOUS leaf that outlives the join — a <c>SubscribeThroughPool</c> subscribe
+    /// that blocks, the shape of the production <c>Query=1</c> — is reported with the STACK of the
+    /// thread it holds, so the report names the frame it is stuck in. The expiry's site alone names
+    /// only the source observable's type, which one query fan-out shares with every query in the
+    /// process. On unfixed code no such Warning exists and the assertion below finds nothing.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task WhenTheJoinBudgetExpires_ABlockedSubscribeIsReportedWithTheFrameItIsStuckIn()
+    {
+        var registry = new IoPoolRegistry(new IoPoolOptions { SiloJoinBudget = TimeSpan.FromMilliseconds(300) });
+        var services = new ServiceCollection();
+        services.AddSingleton(registry);
+        await using var provider = services.BuildServiceProvider();
+        var logger = new CapturingLogger();
+        var observer = (ILifecycleObserver)new IoPoolSiloTeardown(provider, logger);
+        await observer.OnStart(TestContext.Current.CancellationToken);
+
+        // The subscribe itself blocks — no token reaches it, exactly like the MeshQuery fan-out's.
+        var entered = new AsyncSubject<Unit>();
+        var release = 0;
+        var source = Observable.Create<int>(_ =>
+        {
+            ParkedInsideTheSubscribe(entered, () => Volatile.Read(ref release) == 1);
+            return Disposable.Empty;
+        });
+        using var leaf = registry.Get(IoPoolNames.Query).SubscribeThroughPool(source).Subscribe(_ => { }, _ => { });
+
+        try
+        {
+            await entered.Should().Within(Budget).Emit(
+                "precondition: the subscribe must be running before the join is asked to wait for it");
+
+            await observer.OnStop(TestContext.Current.CancellationToken);
+
+            var stack = logger.Entries.Should().ContainSingle(
+                    e => e.Level == LogLevel.Warning && e.Message.Contains("still holds managed thread", StringComparison.Ordinal),
+                    "the leaf that outlived the join is reported ONCE with the stack of the thread it holds — "
+                    + "the reading #7277 could not take from the expiry line")
+                .Subject.Message;
+            stack.Should().Contain(IoPoolNames.Query, "the warning names the leaf's pool")
+                .And.Contain(nameof(ParkedInsideTheSubscribe),
+                    "and the frame the subscribe is stuck in — the top of its thread's stack, which is what "
+                    + "'fix the leaf' needs and what the site alone cannot give")
+                .And.NotContain("could not be read");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>The blocking frame the report must name. Not inlined, so it is a frame of its own.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ParkedInsideTheSubscribe(AsyncSubject<Unit> entered, Func<bool> released)
+    {
+        entered.OnNext(Unit.Default);
+        entered.OnCompleted();
+        SpinWait.SpinUntil(released, Budget);
     }
 }
