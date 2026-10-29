@@ -77,9 +77,22 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
   sequentially and may sum past one job (MeshWeaver.Plugins declares compile-check 40 + gate 45 =
   85 min). So when the window ends with the follower's stage's verdict already IN but the run not
   terminal, the follower exits with that verdict and a warning that the stage's **Check Run** is the
-  authority (a later restart of the stage changes the Check Run, not the finished job). A repository
-  whose single stage can outlast the window requires the instance's `build/<stage>` Check Runs
-  instead of the follow job's context.
+  authority (a later restart of the stage changes the Check Run, not the finished job).
+- 🔁 **a window that ends with NO verdict is resumed, not stranded** (the follow lifecycle,
+  MeshWeaver.Plugins#4501). The host prepares and then runs the stages one after another, so a stage
+  can end hours after admission (MeshWeaver.Plugins: up to 195 min) while its follow job is cut at
+  45. Such a window exits `NO_VERDICT_EXIT` (3, never 1), and the lane fails in its own step, named
+  exactly `No verdict within the follow window`. That NAME is a wire contract: once the stage's
+  verdict is in, the operations instance (MeshWeaver.Plugins `Hosting/Build`, `BuildFollowResume`)
+  reads each requesting run's jobs, and when it finds that step failed and the run completed, it
+  re-runs the run's failed jobs — once per run and attempt. The re-run follower reads a terminal run
+  at its first poll and exits with the stage's verdict at once, and GitHub re-runs its dependents
+  with it, so the shim job owning the required context re-judges with the real verdict. A follower
+  still running when the verdict lands reads it itself, and needs nothing. No job waits past its
+  cap, and the only waiting is the operations instance's own projection pass, in code. A red read IN
+  the window (the stage failed) is an ordinary red (1) and is never re-run. `build-follow.py
+  --check-workflow .github/workflows/build-follow.yml` (core CI) holds the step and the exit code
+  together.
 - **an unreadable endpoint is RED, naming why**: 403 at once (the token's repository or run does not
   match the build), 401 after one token refresh, 404 after a five-minute grace (the run may not be registered
   yet), transport errors and 5xx after six consecutive failures.
