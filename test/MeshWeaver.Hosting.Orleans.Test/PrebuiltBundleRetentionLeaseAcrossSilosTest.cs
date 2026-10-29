@@ -309,14 +309,23 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
             .Timeout(TestTimeouts.Convergence).Await(ct);
         stillOurs.Held.Should().BeTrue("NEGATIVE CONTROL: a stamp over its own claim holds the lease");
 
-        // A pauses across its hold's end; B takes the lapsed lease.
-        await Sees(hubB, lease => lease.Holder == Paused, ct);
+        // A pauses across its hold's end; B takes the lapsed lease. B must first see A's STAMPED claim — the
+        // state A paused in. `Holder == Paused` alone also matches A's claim BEFORE its stamp reached B's
+        // mirror (the holder ignores the stamped flag), and B would then claim from a base the owner has
+        // already moved past.
+        var stampedA = claimA | PrebuiltBundleRetentionLease.StampedFlag;
+        await Sees(hubB, lease => lease.Claim == stampedA, ct);
         var taken = await PrebuiltBundleRetentionLease.Take(hubB, t + Hold + TimeSpan.FromSeconds(1), Hold, Taker, "silo-1")
             .Timeout(TestTimeouts.Convergence).Await(ct);
         taken.Held.Should().BeTrue("PRECONDITION: A's hold has ended, so B takes the lease");
 
-        // A resumes and runs its stamp.
-        await Sees(hubA, lease => lease.Holder == Taker, ct);
+        // A resumes and runs its stamp — once it sees B's SETTLED lease, claim AND stamp. A stamp that finds
+        // another claim writes nothing and reports A's own mirror; waiting for `Holder == Taker` alone let
+        // that mirror still carry B's unstamped claim beside A's earlier replica name, which the assertions
+        // below then read as "A's stamp landed over B's claim". Measured: red on a Linux build host and in
+        // a host-shaped container, green on Actions — the mirror's lag, not the lease, decided it.
+        var settledB = taken.Lease!.Claim;
+        await Sees(hubA, lease => lease.Claim == settledB, ct);
         var resumed = await PrebuiltBundleRetentionLease.Stamp(hubA, claimA, "silo-0", t)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
