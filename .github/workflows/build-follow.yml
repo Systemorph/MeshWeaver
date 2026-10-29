@@ -37,6 +37,15 @@ name: Build follow — stream a standing build host's stage log
 # skipped job, whose skip GitHub would propagate to every `success()` job downstream). A missing api-url is RED,
 # named; a timeout is RED; an unreadable endpoint is RED; only the stage's own `succeeded` is green
 # (build-follow.py, whose --self-test runs first and must pass).
+#
+# 🔁 THE FOLLOW LIFECYCLE (MeshWeaver.Plugins#4501). The job starts at admission and is cut at 45 minutes, while a
+# stage can end hours later (the host prepares, then runs the stages one after another). A window that ends with the
+# stage still pending fails in the step `No verdict within the follow window` — and the operations instance, which
+# holds the verdict and the requesting run's id, re-runs the run's failed jobs once the verdict is in (MeshWeaver.Plugins
+# Hosting/Build, BuildFollowResume). The re-run reads a terminal run at its first poll and exits with the stage's
+# verdict; GitHub re-runs the shim job owning the required context with it. No job waits past its cap, and the only
+# waiting is the operations instance's own projection, in code. The step NAME is that wire contract
+# (build-follow.py NO_VERDICT_STEP, checked by `--check-workflow` in core's own CI).
 
 on:
   workflow_call:
@@ -91,7 +100,8 @@ on:
           How long to wait for the RUN to be terminal. At most 43: the job is hard-cut at 45 minutes,
           and the follower must reach its own verdict first. A run may be longer (its budget is the
           host's, up to 720 min): at the window's end a stage whose verdict is in exits with it, with a
-          warning that the stage's Check Run is the authority; a stage still pending is RED.
+          warning that the stage's Check Run is the authority; a stage still pending is RED, in the step
+          `No verdict within the follow window` — which the operations instance re-runs on once the verdict lands.
         required: false
         type: number
         default: 43
@@ -165,6 +175,7 @@ jobs:
         if: steps.executor.outputs.followed == 'true'
         run: python3 "$RUNNER_TEMP/build-follow.py" --self-test
       - name: Follow ${{ inputs.stage }} on build-${{ inputs.channel }}
+        id: follow
         if: steps.executor.outputs.followed == 'true'
         env:
           API_URL: ${{ inputs.api-url }}
@@ -179,5 +190,23 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${API_URL:-}" ] || { echo "::error::api-url is empty — set the caller's build API variable (e.g. vars.MW_BUILD_API); there is no host to follow"; exit 1; }
+          rc=0
           python3 "$RUNNER_TEMP/build-follow.py" --api-url "$API_URL" --stage "$STAGE" \
-            --repo "$REPO" --sha "$SHA" --channel "$CHANNEL" --timeout-minutes "$TIMEOUT" --audience "$AUDIENCE" --probe "$PROBE"
+            --repo "$REPO" --sha "$SHA" --channel "$CHANNEL" --timeout-minutes "$TIMEOUT" --audience "$AUDIENCE" --probe "$PROBE" || rc=$?
+          # 3 = the window ended with the stage still pending (build-follow.py NO_VERDICT_EXIT): handed to the
+          # next step, which fails BY NAME — the name the operations instance re-runs this job on. Any other red is this step's.
+          if [ "$rc" -eq 3 ]; then echo "no-verdict=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          exit "$rc"
+      # 🔁 THE FOLLOW LIFECYCLE (MeshWeaver.Plugins#4501). A stage can end hours after admission; this job is cut at 45
+      # minutes. When the window ends with no verdict, the job fails HERE, in a step whose NAME is a wire contract
+      # (build-follow.py NO_VERDICT_STEP): once the stage's verdict is in, the operations instance reads the run's jobs,
+      # finds this step failed, and re-runs the run's failed jobs — the re-run reads the verdict at its first poll, and
+      # GitHub re-runs the job owning the required context with it. Do not rename this step.
+      - name: No verdict within the follow window
+        if: steps.follow.outputs.no-verdict == 'true'
+        env:
+          STAGE: ${{ inputs.stage }}
+        run: |
+          echo "::error title=No verdict yet::$STAGE was still pending when the follow window ended — not judged. The operations instance re-runs this job when the stage's verdict lands; the job owning the required context re-runs with it."
+          echo "- ⏳ \`$STAGE\`: no verdict within the follow window — re-run by the operations instance when the verdict lands" >> "$GITHUB_STEP_SUMMARY"
+          exit 1

@@ -52,11 +52,26 @@ public sealed class DynamicContentTypeRegistrationHostedService(
     // content-types health check off this provider).
     private readonly ContentDegradationRegistry? _degradations = OpenRegistrationWindow(services);
 
+    // 🚨 #7318 — the SAME window for the wire-level verdict. The read seams above sit on top of
+    // ObjectPolymorphicConverter, which wrote its own "NOT registered in this (receiving) hub" line
+    // at the read, inside the window, for every runtime-compiled content type a boot-time reader
+    // touched — ~90 lines per pod on every roll, each recovered once the pass reached its type.
+    // Opened here, at construction, for the reason above; held so the settle closes the instance
+    // it opened.
+    private readonly Mesh.Services.IMeshContentTypeRegistry? _contentTypes = OpenConverterWindow(services);
+
     private static ContentDegradationRegistry? OpenRegistrationWindow(IServiceProvider services)
     {
         var degradations = services.GetService<ContentDegradationRegistry>();
         degradations?.DeferWarningsUntilRegistrationSettles();
         return degradations;
+    }
+
+    private static Mesh.Services.IMeshContentTypeRegistry? OpenConverterWindow(IServiceProvider services)
+    {
+        var contentTypes = services.GetService<Mesh.Services.IMeshContentTypeRegistry>();
+        contentTypes?.DeferUnresolvedWarningsUntilSettled();
+        return contentTypes;
     }
 
     /// <inheritdoc />
@@ -146,6 +161,9 @@ public sealed class DynamicContentTypeRegistrationHostedService(
     /// </summary>
     private void SettleDeferredWarnings(IMessageHub? mesh)
     {
+        // The wire-level warnings first: each is written by the converter that deferred it, and
+        // only for a $type that still resolves by no name now that the pass has had its chance.
+        _contentTypes?.SettleDeferredUnresolvedWarnings();
         if (_degradations is null)
             return;
         var contentTypes = mesh?.ServiceProvider.GetService<Mesh.Services.IMeshContentTypeRegistry>()

@@ -370,12 +370,15 @@ public static class CascadeBuild
         // parallel, and the cap holds across packages, so the number of concurrent Roslyn
         // compilations never exceeds MaxParallel however many packages are in flight (WorkGate).
         var typeGate = new WorkGate(options.MaxParallel);
+        // ONE generator ledger for the build, so a second, different build of a source generator is
+        // refused naming BOTH NodeTypes, whichever parallel worker compiles first (#7444).
+        var generatorLedger = new SourceGeneratorLedger();
 
         return Cascade.RunObservable<PackageBuild>(
                 selection,
                 DependenciesOf,
                 (id, deps) => BuildPackage(
-                        options, typeGate, id, typesByPackage.TryGetValue(id, out var types) ? types : [],
+                        options, typeGate, generatorLedger, id, typesByPackage.TryGetValue(id, out var types) ? types : [],
                         deps, byId, nodeSet, baseReferences, idOf, toolchainId, attribution, workDirectory, nugetResolver,
                         entriesByPackage, entriesLock, host.ModuleAssemblyPaths)
                     .Select(build => (build, build.IsGreen)),
@@ -477,6 +480,7 @@ public static class CascadeBuild
     private static IObservable<PackageBuild> BuildPackage(
         Options options,
         WorkGate gate,
+        SourceGeneratorLedger generatorLedger,
         string id,
         TreeNodeLoader.TreeNode[] types,
         IReadOnlyList<Cascade.NodeResult<PackageBuild>> deps,
@@ -552,7 +556,7 @@ public static class CascadeBuild
             var typeClock = Stopwatch.StartNew();
             try
             {
-                var compiled = NodeSetCompiler.CompileWithModules(
+                var compiled = NodeSetCompiler.CompileWithGeneratorLedger(
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
@@ -563,9 +567,10 @@ public static class CascadeBuild
                     // other's DLL/PDB/XML while the other is validating or reading them.
                     Path.Combine(packageDir, Guid.NewGuid().ToString("N"),
                         CodeConventions.SanitizeNodeName(candidate.Node.Path)),
+                    moduleAssemblyPaths: moduleAssemblyPaths,
+                    generatorLedger: generatorLedger,
                     resolveNuGet: TreeBake.BlockingNuGetResolution(nugetResolver),
-                    logger: options.Logger,
-                    moduleAssemblyPaths: moduleAssemblyPaths);
+                    logger: options.Logger);
                 return new TypeCompile(candidate, resolution, compiled, null, typeClock.Elapsed, Skipped: false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

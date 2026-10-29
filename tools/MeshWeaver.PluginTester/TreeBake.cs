@@ -650,6 +650,9 @@ public static class TreeBake
         var idOf = host.IdOf;
         var toolchainId = host.ToolchainId;
         var references = host.References;
+        // ONE generator ledger for the bake, so a second, different build of a source generator is
+        // refused naming BOTH NodeTypes, whichever parallel worker compiles first (#7444).
+        var generatorLedger = new SourceGeneratorLedger();
         // 🚨 Built on the FIRST reference-shaped failure only (metadata reads over the whole
         // reference set), and never on the success path. A CS0234/CS0246 that the reference set
         // explains is named as a REFERENCE-SET gap in the verdict itself — the thing four RED
@@ -708,7 +711,7 @@ public static class TreeBake
 
             try
             {
-                var compiled = NodeSetCompiler.CompileWithModules(
+                var compiled = NodeSetCompiler.CompileWithGeneratorLedger(
                     nodeSet, candidate.Node, definition.Sources, definition.Tests,
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
@@ -725,6 +728,7 @@ public static class TreeBake
                     resolveNuGet: BlockingNuGetResolution(nugetResolver),
                     logger: options.Logger,
                     moduleAssemblyPaths: host.ModuleAssemblyPaths,
+                    generatorLedger: generatorLedger,
                     ct: lifetime.Token);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake

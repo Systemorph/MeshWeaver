@@ -62,6 +62,10 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.CompilationError"/>.</summary>
     public string? CompilationError { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.CompilationErrorText"/> — the keyed form of the
+    /// error above (#7355). Mirrored because the sync seams mask it.</summary>
+    public ImmutableList<KeyedText>? CompilationErrorText { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CompilationDiagnostics"/>.</summary>
     public ImmutableList<DiagnosticInfo>? CompilationDiagnostics { get; init; }
 
@@ -229,6 +233,7 @@ public record NodeTypeCompileState
             {
                 CompilationStatus = definition.CompilationStatus,
                 CompilationError = definition.CompilationError,
+                CompilationErrorText = definition.CompilationErrorText,
                 CompilationDiagnostics = definition.CompilationDiagnostics,
                 LastCompileStartedAt = definition.LastCompileStartedAt,
                 LastCompileSucceededAt = definition.LastCompileSucceededAt,
@@ -276,7 +281,8 @@ public record NodeTypeCompileState
     /// <summary>Whether NO compile machinery has recorded anything yet — a never-compiled,
     /// never-requested type. An empty state is not worth a satellite node.</summary>
     public bool IsEmpty =>
-        CompilationStatus is null && CompilationError is null && CompilationDiagnostics is null
+        CompilationStatus is null && CompilationError is null && CompilationErrorText is null
+        && CompilationDiagnostics is null
         && LastCompileStartedAt is null && LastCompileSucceededAt is null
         && LastCompiledVersion is null && LastCompilationActivityPath is null
         && LatestReleasePath is null && RequestedReleasePath is null

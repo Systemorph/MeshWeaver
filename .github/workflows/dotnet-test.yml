@@ -2498,6 +2498,12 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-follow.py --self-test
 
+    # The follow lifecycle (MeshWeaver.Plugins#4501): a window that ends with no verdict fails in a step whose NAME the
+    # operations instance re-runs the job on. The contract lives in two files of this repo; this holds them together.
+    - name: "A follow window with no verdict fails in the step the operations instance re-runs on (contract)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-follow.py --check-workflow .github/workflows/build-follow.yml
+
     - name: "Who runs the heavy legs: host only when declared, said and queued; actions — said — on every failure (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-executor.py --self-test

@@ -116,31 +116,29 @@ public static class GitHubSyncSettingsTab
         var spacePath = SpaceRootPath(currentPath);
 
         if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(GitSyncViews.Hint("GitHub Sync is available inside a Space."));
+            return stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.tab.onlyInSpace")));
 
         stack = stack.WithView(Controls.H2(host.Localize("ui.githubSync")).WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(GitSyncViews.Hint(
-            "Export this Space to a GitHub repository, and re-import it at any commit. Your GitHub " +
-            "connection is personal — commits are authored as you."));
+        stack = stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.tab.intro")));
 
         // Surface the OAuth connect outcome. The callback redirects back here with
         // ?connect=github-ok | github-error&reason=... (the query rides on host.Reference.Id);
         // show the REAL reason instead of silently bouncing the user back not-connected.
-        var connectBanner = ConnectBanner(host.Reference.Id?.ToString());
+        var connectBanner = ConnectBanner(host.Reference.Id?.ToString(), host.ViewerLocale());
         if (connectBanner is not null)
             stack = stack.WithView(connectBanner);
 
         // ── 1. Your GitHub account ────────────────────────────────────────────
-        stack = stack.WithView(GitSyncViews.Section("Your GitHub account"));
+        stack = stack.WithView(GitSyncViews.Section(host.Localize("ui.gitSync.tab.section.account")));
         if (string.IsNullOrEmpty(userId))
-            stack = stack.WithView(GitSyncViews.Hint("Sign in to connect a GitHub account."));
+            stack = stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.tab.signInToConnect")));
         else
             // Live-bind to the user's credential stream so the state flips to "Connected" the instant
             // the OAuth callback's saved credential syncs in. (A one-shot read grabbed the synced
             // query's empty pre-sync snapshot and showed "Not connected" right after connecting.)
             stack = stack.WithView((h, _) => creds.GetStream(userId)
                 .Select(c => (UiControl?)RenderConnect(creds, userId, currentPath, c, oauth.IsConfigured, locale: host.ViewerLocale()))
-                .StartWith(GitSyncViews.Hint("Checking GitHub connection…")));
+                .StartWith(GitSyncViews.Hint(host.Localize("ui.gitSync.tab.checkingConnection"))));
 
         // ── 2. Repository ─────────────────────────────────────────────────────
         // The GitHub settings ARE a mesh node ({space}/_GitSync, GitHubSyncConfig). Edit it through
@@ -148,7 +146,7 @@ public static class GitHubSyncSettingsTab
         // (IMeshNodeStreamCache) and writes edits back via stream.Update — NO /data replica, NO save
         // subscription, NO Save button. Ensure the node exists first (create-on-absent), then just
         // DECLARE the editor bound to its path; all value resolution + persistence happen GUI-side.
-        stack = stack.WithView(GitSyncViews.Section("Repository"));
+        stack = stack.WithView(GitSyncViews.Section(host.Localize("ui.gitSync.tab.section.repository")));
         // Robust create-on-absent: gate the editor's render on EnsureConfigNode so a Space that was
         // NEVER configured gets its {space}/_GitSync node auto-created (via the safe GetQuery+CreateNode
         // path) BEFORE the editor binds to it — the editor then binds to an existing node instead of
@@ -157,8 +155,8 @@ public static class GitHubSyncSettingsTab
             .Select(_ => (UiControl?)MeshNodeContentEditorControl.ForType(
                 GitHubSyncService.ConfigPath(spacePath), typeof(GitHubSyncConfig)))
             .Catch<UiControl?, Exception>(ex => Observable.Return((UiControl?)ActionNotice.Error(
-                $"Couldn't initialize GitHub settings: {ex.Message}").ToControl()))
-            .StartWith(GitSyncViews.Hint("Loading repository settings…")));
+                host.Localize("ui.gitSync.tab.initFailed", ex.Message)).ToControl()))
+            .StartWith(GitSyncViews.Hint(host.Localize("ui.gitSync.loadingRepoSettings"))));
 
         // Which hosting service the URL names (MeshWeaver#5248) — derived from the URL, live, so the
         // line follows an edit of the Repository URL above.
@@ -172,10 +170,10 @@ public static class GitHubSyncSettingsTab
         // we stash the path so the progress panel below binds to it (live Messages/Status + Cancel).
         // The button row is direction-aware: an import-only source offers no commit, an
         // export-only source no checkout (the service enforces the same rule server-side).
-        stack = stack.WithView(GitSyncViews.Section("Sync"));
+        stack = stack.WithView(GitSyncViews.Section(host.Localize("ui.gitSync.tab.section.sync")));
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
             .Select(cfg => (UiControl?)BuildSyncButtons(spacePath, userId, sourceId: null,
-                cfg?.Direction ?? SyncDirection.Bidirectional))
+                cfg?.Direction ?? SyncDirection.Bidirectional, host.ViewerLocale()))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // Live activity progress panel: binds to the running operation's activity node — its
@@ -209,10 +207,8 @@ public static class GitHubSyncSettingsTab
         // with MORE repositories: each additional source is its own config node
         // ({space}/_GitSync/{sourceId}) with its own repo, branch and direction, edited through
         // the same standard node-content editor (bound directly to the node stream).
-        stack = stack.WithView(GitSyncViews.Section("Additional sync sources"));
-        stack = stack.WithView(GitSyncViews.Hint(
-            "Sync this Space with more repositories — each source has its own repository, branch and " +
-            "sync direction (bidirectional, export-only or import-only)."));
+        stack = stack.WithView(GitSyncViews.Section(host.Localize("ui.gitSync.tab.section.additionalSources")));
+        stack = stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.tab.additionalSourcesHint")));
         stack = stack.WithView((h, _) => sync.WatchConfigNodes(spacePath)
             .Select(nodes => (UiControl?)BuildAdditionalSources(h, sync, spacePath, userId, nodes))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
@@ -220,7 +216,7 @@ public static class GitHubSyncSettingsTab
         stack = stack.WithView(BuildAddSourceForm(sync, spacePath, locale: host.ViewerLocale()));
 
         // ── 5. Pull request (AI-drafted → user edits the bound node → submit) ──
-        stack = stack.WithView(GitSyncViews.Section("Pull request"));
+        stack = stack.WithView(GitSyncViews.Section(host.Localize("ui.gitSync.tab.section.pullRequest")));
         // The draft row stays a STATIC part of the tab, exactly as it rendered before Azure Repos
         // existed: the GitHub path's render shape is unchanged (MeshWeaver.Plugins' settings-tab suite
         // pins it). Policy azure-repos-two-way (MeshWeaver#6500): pull requests are not offered on an
@@ -253,9 +249,7 @@ public static class GitHubSyncSettingsTab
     /// direct children of the tab's stack — the shape it has always had.</summary>
     private static IEnumerable<UiControl> BuildDraftPullRequest(LayoutAreaHost host, PullRequestService prService, string spacePath)
     {
-        yield return GitSyncViews.Hint(
-            "Draft a pull request with AI, edit the title and body, then submit it to GitHub. " +
-            "The draft is a mesh node bound directly to the editor below — your edits save as you type.");
+        yield return GitSyncViews.Hint(host.Localize("ui.gitSync.tab.draftPrHint"));
 
         // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
         // the editor at that node by stashing its path in the PrPathId data id.
@@ -263,12 +257,12 @@ public static class GitHubSyncSettingsTab
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(ResultId, ActionNotice.Info("Asking the agent to draft a pull request…"));
+                ctx.Host.UpdateData(ResultId, ActionNotice.Info(LocalizationCatalog.Get("ui.gitSync.tab.draftingPr", ctx.Host.ViewerLocale())));
                 prService.CreateDraft(spacePath, headBranch: null, baseBranch: "main").Subscribe(
                     prNode =>
                     {
                         ctx.Host.UpdateData(PrPathId, prNode.Path);
-                        ctx.Host.UpdateData(ResultId, ActionNotice.Success("Draft created — edit the title and body below, then Submit."));
+                        ctx.Host.UpdateData(ResultId, ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.tab.draftCreated", ctx.Host.ViewerLocale())));
                     },
                     ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
@@ -282,9 +276,11 @@ public static class GitHubSyncSettingsTab
     {
         if (cred is { AccessToken.Length: > 0 } || cred is { GitHubLogin.Length: > 0 })
         {
-            var who = string.IsNullOrEmpty(cred!.GitHubLogin) ? "" : $" as {cred.GitHubLogin}";
+            var connected = string.IsNullOrEmpty(cred!.GitHubLogin)
+                ? LocalizationCatalog.Get("ui.gitSync.tab.connected", locale)
+                : LocalizationCatalog.Get("ui.gitSync.tab.connectedAs", locale, cred.GitHubLogin);
             var body = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:16px;align-items:center;");
-            body = body.WithView(Controls.Badge($"Connected{who}")
+            body = body.WithView(Controls.Badge(connected)
                 .WithBackgroundColor("var(--success, #107c10)")
                 .WithColor("var(--foreground-on-accent-rest, white)"));
             body = body.WithView(Controls.Spacer);
@@ -303,9 +299,7 @@ public static class GitHubSyncSettingsTab
         }
 
         if (!isConfigured)
-            return GitSyncViews.Note(
-                "GitHub OAuth is not configured on this server (set `GitHub:OAuth:ClientId` + " +
-                "`ClientSecret`).");
+            return GitSyncViews.Note(LocalizationCatalog.Get("ui.gitSync.tab.oauthNotConfigured", locale));
 
         // The OAuth flow is a browser redirect to the server endpoint /connect/github, which posts
         // back to /connect/github/callback, stores the token, and returns here. This MUST be a full
@@ -316,8 +310,8 @@ public static class GitHubSyncSettingsTab
         var returnPath = $"/{returnNodePath}/Settings/{TabId}";
         var connectUrl = $"/connect/github?returnPath={Uri.EscapeDataString(returnPath)}";
         return Controls.MessageBar(
-                "Not connected (one-time browser approval; authorize for the org whose repos you'll sync).")
-            .WithAction(Controls.Link("Connect GitHub →", connectUrl).WithTarget("_top"));
+                LocalizationCatalog.Get("ui.gitSync.tab.notConnected", locale))
+            .WithAction(Controls.Link(LocalizationCatalog.Get("ui.gitSync.tab.connectGitHub", locale), connectUrl).WithTarget("_top"));
     }
 
     // ── Provider (MeshWeaver#5248) ──
@@ -350,16 +344,14 @@ public static class GitHubSyncSettingsTab
     /// import-capable ones (the service enforces the same rule — this just hides what would
     /// be rejected). All operations run as activities feeding the shared progress panel.
     /// </summary>
-    private static UiControl BuildSyncButtons(string spacePath, string userId, string? sourceId, SyncDirection direction)
+    private static UiControl BuildSyncButtons(string spacePath, string userId, string? sourceId, SyncDirection direction, string? locale)
     {
         // Settings = SETUP only. The one-click GitHub actions (Sync now / Update to latest / Check
         // branch) moved to the dedicated "GitHub" node-menu dropdown once a repository is configured
         // — direction-gated there the same way. Re-import at a specific commit + the pull-request
         // workflow (input-driven) stay in this tab below. See GitHubSyncMenuProvider / GitHubActionArea.
         _ = (spacePath, userId, sourceId, direction);
-        return Controls.Markdown(
-            "One-click sync actions (Sync now / Update to latest / Check branch) are in the "
-            + "**GitHub** menu in the top bar (shown once a repository is configured).");
+        return Controls.Markdown(LocalizationCatalog.Get("ui.gitSync.tab.syncActionsInMenu", locale));
     }
 
     // ── Additional sync sources (one config node per source under {space}/_GitSync/) ──
@@ -391,7 +383,7 @@ public static class GitHubSyncSettingsTab
                 MeshNodeContentEditorControl.ForType(node.Path, typeof(GitHubSyncConfig)));
             source = source.WithView(ProviderLine(host, config));
             source = source.WithView(BuildSyncButtons(
-                spacePath, userId, sourceId, config?.Direction ?? SyncDirection.Bidirectional));
+                spacePath, userId, sourceId, config?.Direction ?? SyncDirection.Bidirectional, host.ViewerLocale()));
             source = source.WithView(Controls.Button(host.Localize("ui.removeSource"))
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(ctx =>
@@ -406,7 +398,7 @@ public static class GitHubSyncSettingsTab
             stack = stack.WithView(source);
         }
         if (!any)
-            stack = stack.WithView(GitSyncViews.Hint("No additional sync sources."));
+            stack = stack.WithView(GitSyncViews.Hint(host.Localize("ui.gitSync.tab.noAdditionalSources")));
         return stack;
     }
 
@@ -415,8 +407,8 @@ public static class GitHubSyncSettingsTab
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;");
         row = row.WithView(new TextFieldControl(new JsonPointerReference("name"))
         {
-            Label = "New sync source name",
-            Placeholder = "e.g. upstream, mirror, backup",
+            Label = LocalizationCatalog.Get("ui.gitSync.tab.newSourceName", locale),
+            Placeholder = LocalizationCatalog.Get("ui.gitSync.tab.newSourcePlaceholder", locale),
             DataContext = LayoutAreaReference.GetDataPointer(AddSourceFormId),
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.addSyncSource", locale))
@@ -428,12 +420,12 @@ public static class GitHubSyncSettingsTab
                     var name = Str(d, "name");
                     if (string.IsNullOrEmpty(name))
                     {
-                        ctx.Host.UpdateData(ResultId, ActionNotice.Error("Enter a name for the new sync source."));
+                        ctx.Host.UpdateData(ResultId, ActionNotice.Error(LocalizationCatalog.Get("ui.gitSync.tab.enterSourceName", ctx.Host.ViewerLocale())));
                         return;
                     }
                     sync.AddSyncSource(spacePath, name).Subscribe(
                         node => ctx.Host.UpdateData(ResultId,
-                            ActionNotice.Success($"Sync source '{name}' added — configure its repository and direction above.")),
+                            ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.tab.sourceAdded", ctx.Host.ViewerLocale(), name))),
                         ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
@@ -447,8 +439,8 @@ public static class GitHubSyncSettingsTab
         var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:8px;align-items:flex-end;");
         row = row.WithView(new TextFieldControl(new JsonPointerReference("commit"))
         {
-            Label = "Commit or branch to import",
-            Placeholder = "commit SHA or branch",
+            Label = LocalizationCatalog.Get("ui.gitSync.tab.commitToImport", locale),
+            Placeholder = LocalizationCatalog.Get("ui.gitSync.tab.commitPlaceholder", locale),
             DataContext = LayoutAreaReference.GetDataPointer(CommitFormId),
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.reimportAtCommit", locale))
@@ -460,7 +452,7 @@ public static class GitHubSyncSettingsTab
                     var commit = Str(d, "commit");
                     if (string.IsNullOrEmpty(commit))
                     {
-                        ctx.Host.UpdateData(ResultId, ActionNotice.Error("Enter a commit SHA or branch to re-import."));
+                        ctx.Host.UpdateData(ResultId, ActionNotice.Error(LocalizationCatalog.Get("ui.gitSync.tab.enterCommit", ctx.Host.ViewerLocale())));
                         return;
                     }
                     // Runs as an activity (progress + cancel via the panel above).
@@ -535,9 +527,9 @@ public static class GitHubSyncSettingsTab
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(ResultId, ActionNotice.Info("Asking GitHub for the pull-request status…"));
+                ctx.Host.UpdateData(ResultId, ActionNotice.Info(LocalizationCatalog.Get("ui.gitSync.tab.askingPrStatus", ctx.Host.ViewerLocale())));
                 prService.AskStatus(spacePath, prPath, userId).Subscribe(
-                    info => ctx.Host.UpdateData(ResultId, ActionNotice.Success($"GitHub reports this pull request is {info.Status}.")),
+                    info => ctx.Host.UpdateData(ResultId, ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.tab.prStatus", ctx.Host.ViewerLocale(), info.Status))),
                     ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
@@ -546,20 +538,20 @@ public static class GitHubSyncSettingsTab
         // Link row, bound to the PR node's immutable handle (number + url). The status is NOT shown
         // from a stored field — use "Check status on GitHub" to read it live.
         stack = stack.WithView((h, _) => prService.WatchPullRequest(prPath)
-            .Select(pr => (UiControl?)PullRequestLink(pr))
+            .Select(pr => (UiControl?)PullRequestLink(pr, locale))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
         return stack;
     }
 
-    private static UiControl PullRequestLink(GitHubPullRequest? pr)
+    private static UiControl PullRequestLink(GitHubPullRequest? pr, string? locale)
     {
         if (pr is null) return Controls.Stack.WithWidth("100%");
         if (pr.Number is { } n && pr.Url is { Length: > 0 } url)
             return Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:6px;align-items:baseline;flex-wrap:wrap;")
-                .WithView(Controls.Body("Pull request"))
+                .WithView(Controls.Body(LocalizationCatalog.Get("ui.gitSync.tab.section.pullRequest", locale)))
                 .WithView(Controls.Link($"#{n} ↗", url).WithOpenInNewTab())
-                .WithView(Controls.Body("opened on GitHub — use “Check status on GitHub” for its current state."));
-        return GitSyncViews.Hint("Draft — not yet opened on GitHub.");
+                .WithView(Controls.Body(LocalizationCatalog.Get("ui.gitSync.tab.prOpened", locale)));
+        return GitSyncViews.Hint(LocalizationCatalog.Get("ui.gitSync.tab.prDraftNotOpened", locale));
     }
 
     // ── small helpers ─────────────────────────────────────────────────────────
@@ -669,15 +661,16 @@ public static class GitHubSyncSettingsTab
 
     /// <summary>Renders a banner for the OAuth connect outcome carried on the area id's query
     /// (<c>?connect=github-ok|github-error&amp;reason=...</c>), or null when there's no connect result.</summary>
-    private static UiControl? ConnectBanner(string? referenceId)
+    private static UiControl? ConnectBanner(string? referenceId, string? locale)
     {
         if (string.IsNullOrEmpty(referenceId) || !referenceId.Contains('?')) return null;
         var query = System.Web.HttpUtility.ParseQueryString(referenceId[(referenceId.IndexOf('?') + 1)..]);
         return query["connect"] switch
         {
-            "github-ok" => ActionNotice.Success("GitHub connected.").ToControl(),
-            "github-error" => ActionNotice.Error("GitHub connect failed" +
-                (string.IsNullOrEmpty(query["reason"]) ? "." : $": {query["reason"]}")).ToControl(),
+            "github-ok" => ActionNotice.Success(LocalizationCatalog.Get("ui.gitSync.tab.connectOk", locale)).ToControl(),
+            "github-error" => ActionNotice.Error(string.IsNullOrEmpty(query["reason"])
+                ? LocalizationCatalog.Get("ui.gitSync.tab.connectFailed", locale)
+                : LocalizationCatalog.Get("ui.gitSync.tab.connectFailedReason", locale, query["reason"])).ToControl(),
             _ => null,
         };
     }

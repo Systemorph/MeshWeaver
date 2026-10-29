@@ -402,7 +402,8 @@ public class InMeshImpersonationReferencesTest
         var authored = CompileSource($"{Usings}\npublic static class Probe {{ }}");
 
         var generated = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
-            authored, [generatorPath], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            authored, [generatorPath], new SourceGeneratorLedger(), "Test/Probe",
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
             TestContext.Current.CancellationToken, out var nodeGenerated);
 
         Assert.Contains(nodeGenerated, t => t.FilePath.EndsWith("Forged.g.cs", StringComparison.Ordinal));

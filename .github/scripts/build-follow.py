@@ -69,6 +69,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Callable, Optional
 
 POLL_SECONDS = 10
@@ -193,6 +194,56 @@ class Failure(Exception):
     """A RED with a reason. Never caught into a pass."""
 
 
+class NoVerdict(Failure):
+    """The RED of a follow WINDOW that ended with the stage still pending: the run is not judged here. It exits
+    NO_VERDICT_EXIT (not 1), so build-follow.yml can name it in its own failing step (NO_VERDICT_STEP) — the
+    operations instance reads that step from the run's jobs and re-runs the follow when the verdict lands."""
+
+
+# The exit code of a window that ended with no verdict (NoVerdict); every other red is 1.
+NO_VERDICT_EXIT = 3
+# The step build-follow.yml FAILS on NO_VERDICT_EXIT. 🔌 A WIRE CONTRACT: the operations instance's follow
+# resume (MeshWeaver.Plugins Hosting/Build, BuildFollowResume.GaveUpStep) matches a FAILED step of exactly this
+# name to re-run the run once the stage's verdict is in — rename it in both places, or the resume stops.
+NO_VERDICT_STEP = "No verdict within the follow window"
+
+
+def exit_code(failure: Failure) -> int:
+    """The process exit code of a red: NO_VERDICT_EXIT for a window that ended without a verdict, else 1."""
+    return NO_VERDICT_EXIT if isinstance(failure, NoVerdict) else 1
+
+
+def workflow_contract_problems(text: str) -> list:
+    """What build-follow.yml must carry for the follow resume to find a window that ended with no verdict: the follow
+    step (`id: follow`) maps NO_VERDICT_EXIT to the `no-verdict` output, and a step named exactly NO_VERDICT_STEP runs
+    on that output and FAILS. Text checks over the one file, each naming what is missing."""
+    problems = []
+    follow = re.search(r"^\s+id: follow\s*\n((?:(?!      \S).*\n?)*)", text, re.M)
+    if not follow:
+        problems.append("the follow step carries no `id: follow` — the no-verdict output has no step to come from")
+    # Everything below reads the follow step's OWN body, with `\`-continued lines joined: a capture or a hand-over
+    # elsewhere in the file is not this step's.
+    step = follow.group(1).replace("\\\n", " ") if follow else ""
+    if f'"$rc" -eq {NO_VERDICT_EXIT}' not in step or 'echo "no-verdict=true" >> "$GITHUB_OUTPUT"' not in step:
+        problems.append(f"the follow step does not hand exit {NO_VERDICT_EXIT} (build-follow.py NO_VERDICT_EXIT) to the `no-verdict` output")
+    # Under `set -e` the follower's non-zero exit aborts the step BEFORE the hand-over unless it is captured on the
+    # invocation itself — then `no-verdict` is never published, the named step is skipped and nothing resumes the run.
+    if not re.search(r"^.*build-follow\.py\b.*\|\|\s*rc=\$\?\s*$", step, re.M):
+        problems.append("the follow step does not capture build-follow.py's exit status (`... || rc=$?` on the invocation) — "
+                        f"under `set -e` exit {NO_VERDICT_EXIT} aborts the step before the `no-verdict` hand-over")
+    m = re.search(rf"^      - name: {re.escape(NO_VERDICT_STEP)}\s*\n((?:        .*\n|\s*\n)*)", text, re.M)
+    if not m:
+        problems.append(f"no step named exactly `{NO_VERDICT_STEP}` — the operations instance re-runs a follow by that name, so "
+                        f"a window that ends with no verdict would never be resumed")
+    else:
+        body = m.group(1)
+        if "if: steps.follow.outputs.no-verdict == 'true'" not in body:
+            problems.append(f"`{NO_VERDICT_STEP}` does not run on the follow step's `no-verdict` output")
+        if not re.search(r"^\s+exit 1\s*$", body, re.M):
+            problems.append(f"`{NO_VERDICT_STEP}` does not fail (`exit 1`) — a window with no verdict would read green")
+    return problems
+
+
 def _escape_data(v: str) -> str:
     return v.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(LEGACY, LEGACY_BROKEN)
 
@@ -274,10 +325,10 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
                         f"{stage} {state} while the run is not terminal — exiting with that verdict; the "
                         f"stage's Check Run on the commit is the authority if the run restarts it")
                     break
-                raise Failure(
+                raise NoVerdict(
                     f"no verdict for {stage} within {timeout_minutes:g} minutes (last state "
-                    f"{state or 'none'}) — the run is NOT judged green; read the run node on the "
-                    f"operations instance")
+                    f"{state or 'none'}) — the run is NOT judged green; the operations instance re-runs "
+                    f"this job when the stage's verdict lands, and the run node there shows its progress")
             if clock() - token_at > TOKEN_REFRESH_SECONDS:
                 token = oidc_token(http, audience, env)
                 token_at = clock()
@@ -435,9 +486,17 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--timeout-minutes", type=float, default=MAX_TIMEOUT_MINUTES)
     ap.add_argument("--audience", default="")
     ap.add_argument("--probe", default="", help="a probe run's id (the claim's `probe`); rides on every log read")
+    ap.add_argument("--check-workflow", default="", help="check build-follow.yml carries the no-verdict step contract, then exit")
     a = ap.parse_args(argv)
     if a.self_test:
         return self_test()
+    if a.check_workflow:
+        problems = workflow_contract_problems(Path(a.check_workflow).read_text(encoding="utf-8"))
+        for p in problems:
+            print(f"::error title=build-follow.yml::{p}")
+        if not problems:
+            print(f"build-follow.yml: the follow step hands exit {NO_VERDICT_EXIT} to the step `{NO_VERDICT_STEP}`, which fails")
+        return 1 if problems else 0
     env = dict(os.environ)
     report: dict = {}
     try:
@@ -448,7 +507,7 @@ def main(argv: list[str]) -> int:
     except Failure as f:
         print(f"::error title=Build follow::{_escape_data(one_line(str(f)))}", flush=True)
         summary(env, f"- ❌ `{a.stage}`: {one_line(str(f))}" + summary_block(a.api_url, report))
-        return 1
+        return exit_code(f)
     summary(env, f"- ✅ `{a.stage}` succeeded on build-{a.channel}" + summary_block(a.api_url, report))
     return code
 
@@ -681,6 +740,44 @@ def self_test() -> int:
     check("run/window ends with the stage failed: red", code == 1 and err and "failed" in err, (code, err))
     code, err, _, _ = _run([_rpage([], 0, "running", "running", False)], timeout=1.0)
     check("run/window ends with the stage still pending: a timeout, not a green", code == 1 and err and "no verdict" in err, (code, err))
+    # 🔁 The follow lifecycle (MeshWeaver.Plugins#4501): ONLY a window that ended with the stage still pending is a
+    # NoVerdict (exit NO_VERDICT_EXIT, the step the operations instance re-runs on); a red verdict read in the window
+    # is an ordinary red (1) — re-running it would only read the same red again.
+    kinds = {}
+    for label, answers in (("pending", [_rpage([], 0, "running", "running", False)]),
+                           ("failed", [_rpage([], 0, "failed", "running", False)] * 200),
+                           ("silent", [])):
+        clock = _Clock()
+        try:
+            follow(api_url="https://control.example.com/api/builds", repo="MeshWeaver.Plugins", sha="a" * 40, stage="modules",
+                   channel="latest", timeout_minutes=1.0, audience="https://control.example.com",
+                   http=_FakeHttp(answers, clock), env={"ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example/t?x=1",
+                                                        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "req"},
+                   out=lambda o: None, clock=clock.now, sleep=clock.sleep)
+            kinds[label] = 0
+        except Failure as f:
+            kinds[label] = exit_code(f)
+    check("no-verdict/a window ending pending (or silent) exits NO_VERDICT_EXIT; a red verdict exits 1",
+          kinds == {"pending": NO_VERDICT_EXIT, "silent": NO_VERDICT_EXIT, "failed": 1}, kinds)
+    check("no-verdict/the exit code is distinct from every other red and from a pass", NO_VERDICT_EXIT not in (0, 1), NO_VERDICT_EXIT)
+    # The workflow contract (--check-workflow): a conforming step pair passes, and each break is named.
+    good = ("      - name: Follow x\n        id: follow\n        run: |\n          set -euo pipefail\n          rc=0\n"
+            "          python3 \"$RUNNER_TEMP/build-follow.py\" --api-url \"$API_URL\" \\\n            --sha \"$SHA\" || rc=$?\n"
+            "          if [ \"$rc\" -eq 3 ]; then echo \"no-verdict=true\" >> \"$GITHUB_OUTPUT\"; exit 0; fi\n"
+            f"      - name: {NO_VERDICT_STEP}\n        if: steps.follow.outputs.no-verdict == 'true'\n        run: |\n          echo x\n          exit 1\n")
+    check("contract/a conforming workflow passes", workflow_contract_problems(good) == [], workflow_contract_problems(good))
+    for label, broken, needle in (
+            ("renamed step", good.replace(f"name: {NO_VERDICT_STEP}", "name: Waited too long"), "no step named exactly"),
+            ("step never fails", good.replace("          exit 1\n", "          exit 0\n"), "does not fail"),
+            ("step on the wrong output", good.replace("no-verdict == 'true'", "other == 'true'"), "does not run on"),
+            ("exit not handed over", good.replace("-eq 3", "-eq 2"), "does not hand exit"),
+            ("no follow id", good.replace("        id: follow\n", ""), "no `id: follow`"),
+            ("exit status not captured (set -e aborts before the hand-over)", good.replace(" || rc=$?", ""), "does not capture"),
+            ("exit status captured in another step only",
+             good.replace(" || rc=$?", "") + "      - name: Other\n        run: |\n          python3 build-follow.py || rc=$?\n",
+             "does not capture")):
+        got = workflow_contract_problems(broken)
+        check(f"contract/{label} is named", any(needle in p for p in got), got)
 
     # 2. A skipped gap is LOUD, with the count.
     code, err, out, _ = _run([_page([(2050, "late line")], 2050, "running", skipped=48),

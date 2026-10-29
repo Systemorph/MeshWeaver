@@ -373,8 +373,9 @@ public class CompileWaitDoesNotTimeoutTest
     /// within 30s", on every boot, for as long as the type stayed broken.</para>
     ///
     /// <para>Red-before: with no parked probe the subscription sits silent until the budget
-    /// elapses. Green-after: the fault is raised with ZERO virtual time advanced, and carries the
-    /// recorded compile error so the overlay can name the real cause.</para>
+    /// elapses. Green-after: the fault is raised with ZERO virtual time advanced, on the first read
+    /// of the type, and carries the recorded compile error so the overlay can name the real
+    /// cause.</para>
     /// </summary>
     [Fact]
     public void ParkedType_FaultsImmediately_WithoutBurningTheBudget()
@@ -400,11 +401,51 @@ public class CompileWaitDoesNotTimeoutTest
                     "Store/Plugin", "CS0117: 'AiSettingsNodeType' does not contain 'AddSkillSource'"))
             .Subscribe(n => emitted = n, ex => error = ex);
 
+        // The first read: a parked Error with nothing usable, which this caller does not accept.
+        typeStream.OnNext(Node(CompilationStatus.Error));
+
         // NOT ONE TICK of virtual time advanced — the answer was already recorded.
         Assert.Null(emitted);
         var parked = Assert.IsType<NodeTypeParkedException>(error);
         Assert.Equal("Store/Plugin", parked.NodeTypePath);
         Assert.Contains("AddSkillSource", parked.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 A PARKED type that still names a usable build is an ANSWER, and the park must not fault
+    /// the wait before that answer has been read. A failed N+1 parks the type while its record keeps
+    /// the last good build N; a re-activation then reads the type on a COLD stream, whose first
+    /// value arrives after subscribe. Consulting the park on the synthetic subscribe arm faulted
+    /// every such activation onto the compile-error overlay before the read arrived, and the
+    /// overlay's self-heal recycles met the same fault (core Updates suite,
+    /// <c>AFailedNewBuild_KeepsTheOldOneServing_AndSaysWhy</c>, red on main five runs in six).
+    /// <para>Red-before: the fault is raised at subscribe and the usable node is never emitted.
+    /// Green-after: nothing is decided until the first read, which <c>settled</c> accepts.</para>
+    /// </summary>
+    [Fact]
+    public void ParkedType_WithAUsableBuild_OnAColdStream_EmitsTheBuild_NotTheFault()
+    {
+        var scheduler = new TestScheduler();
+        var typeStream = new Subject<MeshNode>();                // cold: no value at subscribe
+        var lastGood = Node(CompilationStatus.Error, withAssembly: true);
+        var settledUsable = typeStream
+            .Where(n => n.Content is NodeTypeDefinition d && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            .Take(1);
+
+        MeshNode? emitted = null;
+        Exception? error = null;
+        NodeTypeEnrichmentHelpers
+            .WaitForCompileSettled(typeStream, settledUsable, Budget,
+                () => new TimeoutException("no compile in flight"), scheduler,
+                options: null,
+                parkedFault: () => new NodeTypeParkedException("Store/Plugin", "CS1002: ; expected"))
+            .Subscribe(n => emitted = n, ex => error = ex);
+
+        Assert.Null(error);                                     // nothing read yet, nothing decided
+        typeStream.OnNext(lastGood);                            // the first read: N is still usable
+
+        Assert.Null(error);
+        Assert.Same(lastGood, emitted);
     }
 
     /// <summary>
