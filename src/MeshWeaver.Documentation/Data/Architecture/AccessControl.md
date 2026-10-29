@@ -1442,7 +1442,12 @@ authenticates a token. From there:
   - the RLS node validator refuses a capped operation **before** its own-scope shortcut, which
     otherwise grants a user everything in their own partition without asking the fold;
   - the stream cache's read-verdict key carries the scopes, so a scoped token never shares a verdict
-    with an unscoped session of the same person.
+    with an unscoped session of the same person;
+  - a **query** by a token whose scopes allow no read answers nothing, decided once at the query
+    boundary (`MeshService`) — because a listing never asks the fold: the SQL-backed providers filter
+    rows in the database against the viewer's projected grants, and the in-process providers rebuild
+    the row check's context from the viewer's id alone. A token that may read is capped to reading
+    anyway, so the providers' own filtering is the whole answer for it.
 - **Surface scopes are checked by the site that serves the surface** — `ApiTokenScope.Allows` /
   `Refusal(context, scope)` with that site's OWN value. The HTTP middleware gates MCP and REST, the
   transport registries gate the relay connection (MeshWeaver.Plugins).

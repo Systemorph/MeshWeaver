@@ -173,6 +173,37 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
             .IsGranted.Should().BeTrue();
     }
 
+    /// <summary>
+    /// 🚨 THE QUERY PIN. A listing does not go through the fold the cap lives in: SQL-backed
+    /// providers filter rows in the database, and the in-process providers rebuild the row check's
+    /// context from the viewer's id alone. So a token whose scopes allow no read gets NOTHING from
+    /// a query — decided once at the query boundary — while a read-scoped token and an unscoped one
+    /// see exactly the rows their owner may read.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AQuery_ReturnsNothingToATokenWithoutRead_AndRowsToOneWithIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        BecomeToken(ApiTokenScope.Relay);
+        (await Children(ct)).Should().BeEmpty("a token scoped to the relay reads nothing — not even through a listing");
+
+        BecomeToken(ApiTokenScope.Read);
+        (await Children(ct)).Should().Contain($"{GrantedPartition}/Page", "the read scope reads what its owner may read");
+
+        BecomeToken(null);
+        (await Children(ct)).Should().Contain($"{GrantedPartition}/Page", "an unscoped token is unchanged");
+    }
+
+    private Task<string[]> Children(CancellationToken ct) =>
+        Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{GrantedPartition} scope:children"))
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
+            .Take(1)
+            .Select(change => change.Items.Select(n => n.Path ?? "").ToArray())
+            .Timeout(Budget)
+            .Await(ct);
+
     // ── Allowed inside its scopes ───────────────────────────────────────────────────────────────
 
     /// <summary>The same token is allowed what its scopes cover: read with <c>read</c>, write with
