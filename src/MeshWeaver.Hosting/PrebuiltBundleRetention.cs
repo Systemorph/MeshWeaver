@@ -667,7 +667,10 @@ public static class PrebuiltBundleStore
             // resolution is the READERS' — ShippedPrebuiltBundles.ResolvePublicationPointer is the
             // same call PublicationDirectoryOf makes — so what this sweep calls unreachable and
             // what a portal can reach can never drift apart.
-            var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, cancellationToken, logger, io);
+            // Information, not Warning (#7349): a refused pointer is counted on the pass's ONE
+            // outcome line (PointerFault), never logged as one Warning per source.
+            var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(
+                sourceDirectory, cancellationToken, logger, io, LogLevel.Information);
             var publication = pointer.Directory;
             var sourceGenerations = ReadGenerations(sourceDirectory, sourceName, pointer, generationTallies, logger, cancellationToken, io);
             cancellationToken.ThrowIfCancellationRequested();
@@ -1174,21 +1177,23 @@ public static class PrebuiltBundleStore
         catch (Exception ex)
         {
             // 🚨 FAIL CLOSED: a partial listing is not a picture of the store, so it licenses nothing.
+            var failed = new PrebuiltBundleSweepResult(nowUtc, null, false, 0, 0, 0, 0, $"store could not be read: {ex.Message}");
+            var failedLedger = AppendLedger(root, failed, logger);
             ledger.Record(PassOutcome.Aborted, ex,
                 ": could not read {Root} — NOTHING collected. A store that cannot be "
-                + "enumerated completely can never be pruned safely", root);
-            var failed = new PrebuiltBundleSweepResult(nowUtc, null, false, 0, 0, 0, 0, $"store could not be read: {ex.Message}");
-            AppendLedger(root, failed, logger);
+                + "enumerated completely can never be pruned safely.{Ledger}", root, LedgerNote(failedLedger));
             return failed;
         }
 
         ledger.Step(cancellationToken);
+        var refusedPointers = RefusedPointers(scan);
         var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, pinned, retention, nowUtc);
         if (plan.AbortReason is not null)
         {
-            ledger.Record(PassOutcome.Aborted, ": {Summary}. NOTHING collected", plan.Summary);
             var aborted = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, plan.AbortReason);
-            AppendLedger(root, aborted, logger);
+            var abortedLedger = AppendLedger(root, aborted, logger);
+            ledger.Record(PassOutcome.Aborted, ": {Summary}. NOTHING collected. {RefusedPointers} source pointer(s) refused.{Ledger}",
+                plan.Summary, refusedPointers, LedgerNote(abortedLedger));
             return aborted;
         }
 
@@ -1198,12 +1203,14 @@ public static class PrebuiltBundleStore
             // only Warning+ to Loki — so it is a Warning, once per pass (boot + every Interval, per
             // replica), carrying the denominator and the per-rule kept tally but never a per-identity
             // list. The itemized lists below stay Information: they scale with the store.
+            var report = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, null);
+            var reportLedger = AppendLedger(root, report, logger);
             ledger.Record(PassOutcome.ReportOnly,
                 " (collection is not armed), nothing deleted. {Summary}. "
                 + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s) and "
-                + "{KeptSurfaces} release surface(s)",
+                + "{KeptSurfaces} release surface(s). {RefusedPointers} source pointer(s) refused.{Ledger}",
                 plan.Summary, plan.Protected.Count, plan.KeptTally, plan.ProtectedGenerations.Count,
-                plan.ProtectedSurfaces.Count);
+                plan.ProtectedSurfaces.Count, refusedPointers, LedgerNote(reportLedger));
             logger?.LogInformation(
                 "PrebuiltBundleRetention: {Summary}. DELETING NOTHING — collection is not armed. Would collect: {Collectable}. Would collect generations: {Generations}. Would retire release surfaces: {Surfaces}. Kept: {Kept}",
                 plan.Summary,
@@ -1211,8 +1218,6 @@ public static class PrebuiltBundleStore
                 plan.CollectableGenerations.IsEmpty ? "(nothing)" : string.Join(", ", plan.CollectableGenerations.Select(g => $"{g.Directory} ({PrebuiltBundleSweepPlan.Mb(g.Bytes)})")),
                 plan.CollectableSurfaces.IsEmpty ? "(nothing)" : string.Join(", ", plan.CollectableSurfaces.Select(f => f.Version)),
                 Describe(plan.Protected));
-            var report = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, null);
-            AppendLedger(root, report, logger);
             return report;
         }
 
@@ -1230,18 +1235,19 @@ public static class PrebuiltBundleStore
         // then thrown, never folded into a result that reads as a finished pass.
         ledger.OnInterrupted = () =>
         {
-            ledger.Record(PassOutcome.Interrupted,
-                ": the pool cancelled the pass (teardown) after removing "
-                + "{Identities} identity(ies), {Generations} superseded generation(s), {Markers} marker(s) and "
-                + "{Surfaces} release surface(s) reclaiming {Reclaimed}, {Failed} removal(s) failed. The rest of the plan "
-                + "stays and the next pass re-plans it. {Summary}",
-                deletedIdentities, deletedGenerations, deletedMarkers, deletedSurfaces,
-                PrebuiltBundleSweepPlan.Mb(deletedBytes), failedDeletes, plan.Summary);
             var interrupted = new PrebuiltBundleSweepResult(nowUtc, plan, true, deletedIdentities, deletedBytes,
                     deletedMarkers, failedDeletes,
                     "interrupted by the pool's cancel (teardown) — the rest of the plan is the next pass's")
                 { DeletedGenerations = deletedGenerations, DeletedSurfaces = deletedSurfaces };
-            AppendLedger(root, interrupted, logger, lines);
+            var interruptedLedger = AppendLedger(root, interrupted, logger, lines);
+            ledger.Record(PassOutcome.Interrupted,
+                ": the pool cancelled the pass (teardown) after removing "
+                + "{Identities} identity(ies), {Generations} superseded generation(s), {Markers} marker(s) and "
+                + "{Surfaces} release surface(s) reclaiming {Reclaimed}, {Failed} removal(s) failed. The rest of the plan "
+                + "stays and the next pass re-plans it. {Summary}. {RefusedPointers} source pointer(s) refused.{Ledger}",
+                deletedIdentities, deletedGenerations, deletedMarkers, deletedSurfaces,
+                PrebuiltBundleSweepPlan.Mb(deletedBytes), failedDeletes, plan.Summary, refusedPointers,
+                LedgerNote(interruptedLedger));
         };
 
         foreach (var identity in plan.Collectable)
@@ -1260,7 +1266,8 @@ public static class PrebuiltBundleStore
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var publication = ShippedPrebuiltBundles.ResolvePublicationPointer(
-                        Path.Combine(identity.Directory, source.Name), cancellationToken, logger, io).Directory;
+                        Path.Combine(identity.Directory, source.Name), cancellationToken, logger, io,
+                        LogLevel.Information).Directory;
                     var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
                     if (io.FileExists(sentinel))
                         File.Delete(sentinel);
@@ -1375,23 +1382,25 @@ public static class PrebuiltBundleStore
             }
         }
 
+        var result = new PrebuiltBundleSweepResult(nowUtc, plan, true, deletedIdentities, deletedBytes, deletedMarkers, failedDeletes, null)
+            { DeletedGenerations = deletedGenerations, DeletedSurfaces = deletedSurfaces };
+        // #7349: the ledger is written BEFORE the outcome, so a failed append rides on the one line.
+        var resultLedger = AppendLedger(root, result, logger, lines);
         // 🚨 #6991: the once-per-pass outcome at Warning (see the report-only branch for why); the
         // itemized kept list stays on the Information line after it.
         ledger.Record(PassOutcome.Collected,
             " {Identities} identity(ies), {Generations} superseded "
             + "generation(s) and {Surfaces} release surface(s) reclaiming {Reclaimed}, retired {Markers} marker(s), {Failed} removal(s) failed. {Summary}. "
-            + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s) and {KeptSurfaces} release surface(s)",
+            + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s) and {KeptSurfaces} release surface(s). "
+            + "{RefusedPointers} source pointer(s) refused.{Ledger}",
             deletedIdentities, deletedGenerations, deletedSurfaces, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers, failedDeletes,
-            plan.Summary, plan.Protected.Count, plan.KeptTally, plan.ProtectedGenerations.Count, plan.ProtectedSurfaces.Count);
+            plan.Summary, plan.Protected.Count, plan.KeptTally, plan.ProtectedGenerations.Count, plan.ProtectedSurfaces.Count,
+            refusedPointers, LedgerNote(resultLedger));
         logger?.LogInformation(
             "PrebuiltBundleRetention: {Summary}. COLLECTED {Identities} identity(ies), {Generations} superseded generation(s) and {Surfaces} release surface(s) reclaiming {Reclaimed}, retired {Markers} marker(s){Failed}. Kept: {Kept}",
             plan.Summary, deletedIdentities, deletedGenerations, deletedSurfaces, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers,
             failedDeletes == 0 ? "" : $" ({failedDeletes} removal(s) failed)",
             Describe(plan.Protected));
-
-        var result = new PrebuiltBundleSweepResult(nowUtc, plan, true, deletedIdentities, deletedBytes, deletedMarkers, failedDeletes, null)
-            { DeletedGenerations = deletedGenerations, DeletedSurfaces = deletedSurfaces };
-        AppendLedger(root, result, logger, lines);
         return result;
     }
 
@@ -1403,19 +1412,37 @@ public static class PrebuiltBundleStore
     /// <summary>The ledger path under a root.</summary>
     public static string LedgerPathOf(string root) => Path.Combine(root, RetentionDirectoryName, LedgerFileName);
 
-    private static void AppendLedger(string root, PrebuiltBundleSweepResult result, ILogger? logger, IReadOnlyList<string>? detail = null)
+    /// <summary>
+    /// Appends the pass's ledger entry. Returns null when it was written, otherwise why not.
+    ///
+    /// <para>🚨 Called BEFORE the pass's outcome is recorded, and its failure travels ON that one
+    /// Warning line (<see cref="LedgerNote"/>) — the exception detail itself goes to Information
+    /// (#7349). A second Warning from here would break the one-outcome-per-pass contract (#6996).
+    /// The ledger is a record of the pass, not a precondition of it; a share that cannot take one
+    /// more line is exactly the condition the pass exists to relieve.</para>
+    /// </summary>
+    private static string? AppendLedger(string root, PrebuiltBundleSweepResult result, ILogger? logger, IReadOnlyList<string>? detail = null)
     {
         try
         {
             var path = LedgerPathOf(root);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.AppendAllLines(path, (detail ?? []).Prepend(result.LedgerLine));
+            return null;
         }
         catch (Exception ex)
         {
-            // The ledger is a record of the pass, not a precondition of it; a share that cannot take
-            // one more line is exactly the condition the pass exists to relieve.
-            logger?.LogWarning(ex, "PrebuiltBundleRetention: could not append to the ledger under {Root}", root);
+            logger?.LogInformation(ex, "PrebuiltBundleRetention: could not append to the ledger under {Root}", root);
+            return $"{ex.GetType().Name}: {ex.Message}";
         }
     }
+
+    /// <summary>The outcome line's ledger clause: empty when the ledger was written.</summary>
+    private static string LedgerNote(string? ledgerFailure) =>
+        ledgerFailure is null ? string.Empty : $" The ledger was NOT written ({ledgerFailure}).";
+
+    /// <summary>How many sources the scan found with a refused or unreadable publication pointer
+    /// (<see cref="PrebuiltSourceEntry.PointerFault"/>) — counted on the outcome line (#7349).</summary>
+    private static int RefusedPointers(PrebuiltStoreScan scan) =>
+        scan.Identities.Sum(identity => identity.Sources.Count(source => source.PointerFault is not null));
 }
