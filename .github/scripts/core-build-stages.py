@@ -89,7 +89,13 @@ BUILD_COMMAND = (
 # (Configuration=Release, as `-c Release` sets; CIRun=true), through the repository's nuget.config — never a
 # `--source` (see above). A drifted command warms a closure the build does not read, and every run restores
 # per run again (MWPREP001).
-RESTORE_COMMAND = f"dotnet restore {SOLUTION} -p:Configuration=Release -p:CIRun=true"
+# It ALSO restores RESOLVER_FIXTURES: the packages NuGetAssemblyResolver fetches at TEST time (`#r "nuget:…"` in
+# executable doc cells and samples, the resolver's own integration tests). They are in no project's closure, so
+# without it every run downloaded them again; with it they are in <cache>/nuget, which the resolver reads as a
+# NuGet fallback folder (NUGET_FALLBACK_PACKAGES) and downloads nothing it holds complete.
+RESOLVER_FIXTURES = ".github/nuget-warm/ResolverFixturePackages.csproj"
+RESTORE_COMMAND = (f"dotnet restore {SOLUTION} -p:Configuration=Release -p:CIRun=true"
+                   f" && dotnet restore {RESOLVER_FIXTURES}")
 RESTORE_TIMEOUT_MINUTES = 20
 # What core's stages still check LESS than dotnet-test.yml's legs, or cannot yet deliver as a
 # verdict. Remove an entry only in the change that pays it (check-build-stages.py refuses the
@@ -454,8 +460,14 @@ def _self_test() -> int:
            "every shard records and gates with the checkout's own scripts (record-host-crash.py, check-untyped-content.sh)")
     expect(doc["stages"][0]["needs"] == ["nuget"], "the build reads the host's prepared package cache, and nothing else")
     expect("--source" not in doc["stages"][0]["command"], "the build restores through the repository's source mapping, never a --source")
-    expect(doc["restore"] == {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true", "timeoutMinutes": 20},
-           "the host's default-branch restore is declared: the build's solution and global properties, within the cap")
+    expect(doc["restore"] == {"command": "dotnet restore MeshWeaver.slnx -p:Configuration=Release -p:CIRun=true"
+                                         " && dotnet restore .github/nuget-warm/ResolverFixturePackages.csproj",
+                              "timeoutMinutes": 20},
+           "the host's default-branch restore is declared: the build's solution and global properties, then the "
+           "resolver's test-time packages, within the cap")
+    expect(os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nuget-warm",
+                                       "ResolverFixturePackages.csproj")),
+           "the resolver-fixture project the restore names exists")
     expect(f"dotnet build {SOLUTION} -c Release -p:CIRun=true" in doc["stages"][0]["command"],
            "the declared restore's properties are the build's own (-c Release = Configuration=Release, CIRun=true)")
     expect(doc["owes"] == OWES and doc.get("ciEquivalent") is (True if not OWES else None),
