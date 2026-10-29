@@ -28,11 +28,16 @@ and in both shapes the reporter job (the failure half, for the pair) must
   * `needs:` — directly or transitively — EVERY other job of the workflow except the reporters
     themselves. A job missing from the list fails without anyone hearing, which is the failure mode
     the reporter exists to remove. "Transitively" counts only through an intermediate that keeps the
-    implicit success(): one whose `if:` carries always()/!cancelled()/failure() can succeed after its
-    own need failed, so that need must be listed directly; and
+    implicit success() — no status function, or `success()` as a required positive `&&` conjunct:
+    one whose `if:` carries always()/!cancelled()/failure(), `success() || …` or `!success()` can
+    succeed after its own need failed, so that need must be listed directly; and
   * carry an `if:` with a status function that survives a failure (`always()`, `failure()` or
     `!cancelled()`). Without one GitHub applies the implicit `success()` and the reporter is SKIPPED
-    on exactly the runs it exists for.
+    on exactly the runs it exists for; and
+  * FIRE on every combination of its direct needs' results other than all-green — each need
+    'success', 'failure' or (unless its `if:` is bare always()/!cancelled() or it has no needs and no
+    `if:`) 'skipped', evaluated JOINTLY (#7458): a predicate that reads only 'failure' misses a need
+    SKIPPED behind a red ancestor, and one checked a single red at a time misses two reds at once.
 
 The SUCCESS half of the pair closes the alert, so a wrong one is a false green. It must `needs:` the
 same closure, and its `if:` must run on a scheduled green and never on a red: every top-level `&&`
@@ -55,6 +60,7 @@ scheduled workflows found, how many report, how many are allow-listed.
 from __future__ import annotations
 
 import argparse
+import itertools
 import re
 import sys
 import tempfile
@@ -109,15 +115,32 @@ def if_text(job: dict) -> str:
 # A status function in an `if:` replaces the implicit success(), so the job can run — and SUCCEED —
 # after one of its own needs failed.
 _STATUS_OVERRIDE = re.compile(r"\b(?:always|failure|cancelled)\(\)")
+_STATUS_CALL = re.compile(r"\b(always|failure|cancelled|success)\s*\(\s*\)", re.I)
 
 
 def propagates_failure(job: dict) -> bool:
-    """True when the job's `if:` keeps the implicit success(): a red ancestor then SKIPS it, so its
-    result is never 'success' on a red anywhere upstream and a check on it covers its own needs.
-    An EXPLICIT success() replaces the implicit one too, so `success() || <guard>` runs — and can
-    succeed — after its own need failed (Copilot on #7422): any `||` beside success() is an override."""
-    cond = if_text(job)
-    return not (_STATUS_OVERRIDE.search(cond) or (re.search(r"\bsuccess\(\)", cond) and "||" in cond))
+    """True when a red ancestor is guaranteed to SKIP the job, so its result is never 'success' on a
+    red anywhere upstream and a check on it covers its own needs. That holds for exactly two shapes:
+    no status function at all (the implicit success()), or an explicit `success()` that is a required
+    POSITIVE top-level `&&` conjunct. Anything else replaces the implicit success() and can run — and
+    succeed — after its own need failed: always()/failure()/cancelled(), `success() || <guard>`
+    (Copilot on #7422), and `!success()` (#7458 — no `||`, yet it runs precisely BECAUSE a need
+    failed). An expression this guard cannot read counts as an override: the reporter must then need
+    that job's own needs directly, which is the conservative reading."""
+    cond = if_text(job).strip()
+    if cond.startswith("${{") and cond.endswith("}}"):
+        cond = cond[3:-2]
+    # Spell every status call one way first: `!success( )` or `Success ()` is the same call, and a
+    # prefilter that missed it read the job as keeping the implicit success() (Copilot on #7512).
+    cond = _STATUS_CALL.sub(lambda m: m.group(1).lower() + "()", cond)
+    if not re.search(r"\b(?:always|failure|cancelled|success)\(\)", cond):
+        return True
+    if _STATUS_OVERRIDE.search(cond):
+        return False
+    tokens = _tokens(cond)
+    if tokens is None:
+        return False
+    return any("".join(conj) == "success()" for conj in _conjuncts(tokens))
 
 
 def closure(jobs: dict, start: str) -> set[str]:
@@ -170,7 +193,10 @@ def _tokens(cond: str) -> list[str] | None:
 
 
 def _conjuncts(tokens: list[str]) -> list[list[str]]:
-    """Split on top-level `&&`, after dropping parentheses that enclose the whole expression."""
+    """Split on top-level `&&`, after dropping parentheses that enclose the whole expression. `&&` binds
+    tighter than `||`, so an expression with a top-level `||` is a DISJUNCTION and has no required
+    conjuncts: it is returned whole, as ONE part (Copilot on #7512 — `success() && true || <guard>` was
+    split into a required `success()`, although the guard's branch runs it after a red)."""
     def wrapped(t: list[str]) -> bool:
         if len(t) < 2 or t[0] != "(" or t[-1] != ")":
             return False
@@ -183,6 +209,12 @@ def _conjuncts(tokens: list[str]) -> list[list[str]]:
         return True
     while wrapped(tokens):
         tokens = tokens[1:-1]
+    depth = 0
+    for tok in tokens:
+        depth += tok == "("
+        depth -= tok == ")"
+        if tok == "||" and depth == 0:
+            return [list(tokens)]
     parts: list[list[str]] = [[]]
     depth = 0
     for tok in tokens:
@@ -311,11 +343,36 @@ def success_condition_problem(job: dict) -> str | None:
 _REPORTER_IDENT = re.compile(_GUARD_IDENT.pattern[:-2] + r"|needs\.[\w\-]+\.result)$")
 
 
-def fire_condition_problem(job: dict) -> str | None:
-    """A failure reporter must FIRE on a scheduled run whenever ANY of its direct needs is red (Copilot on
-    #7422: `needs: [a, b]` with `if: always() && needs.a.result != 'success'` stays silent on b's red).
-    Evaluated per direct need: that need 'failure', every other 'success', a scheduled run on main, the
-    status functions as they read then. Anything outside the readable subset is a problem, never a pass."""
+# A reporter's direct needs are enumerated JOINTLY over every result a red run can give them; past this
+# many the 3^n combinations are not enumerated and the predicate is refused as unprovable.
+MAX_ENUMERATED_NEEDS = 10
+
+
+def possible_results(job: dict) -> tuple[str, ...]:
+    """The results a job can end with on a scheduled run that is red somewhere. A job with no needs and
+    no `if:` always runs, so it ends 'success' or 'failure'; any other job can also end 'skipped' — a
+    red ancestor skips a job that keeps the implicit success() (#7458: `a → b → reporter` with `a` red
+    leaves `b` SKIPPED, never 'failure'). An `if:` that is exactly `always()` or `!cancelled()` runs on
+    every run that is not cancelled, so a red cannot skip it (combo-verify.yml's `verdict`)."""
+    cond = re.sub(r"\s+", "", if_text(job))
+    if cond.startswith("${{") and cond.endswith("}}"):
+        cond = cond[3:-2]
+    if cond in ("always()", "!cancelled()") or not (needs_of(job) or cond):
+        return ("success", "failure")
+    return ("success", "failure", "skipped")
+
+
+def fire_condition_problem(job: dict, jobs: dict | None = None) -> str | None:
+    """A failure reporter must FIRE on a scheduled run whenever ANY of its direct needs is not green
+    (Copilot on #7422: `needs: [a, b]` with `if: always() && needs.a.result != 'success'` stays silent on
+    b's red). Evaluated JOINTLY over every combination of the direct needs' results — each 'success',
+    'failure' or (when it can be) 'skipped' — except the all-green one, on a scheduled run on main, with
+    the status functions as they read on a red (always()/failure() true, success()/cancelled() false).
+    One need red at a time is not enough (#7458): `always() && needs.b.result == 'failure'` is silent
+    when b is SKIPPED behind a red ancestor, and `needs.a.result == 'success' || needs.b.result ==
+    'success'` is silent only when BOTH are red. Anything outside the readable subset is a problem,
+    never a pass."""
+    jobs = jobs or {}
     raw = if_text(job).strip()
     if raw.startswith("${{") and raw.endswith("}}"):
         raw = raw[3:-2]
@@ -327,16 +384,22 @@ def fire_condition_problem(job: dict) -> str | None:
     if tokens is None:
         return f"`if: {raw.strip()}` is not an expression this guard can read"
     direct = needs_of(job)
-    for red in direct:
+    if len(direct) > MAX_ENUMERATED_NEEDS:
+        return (f"it has {len(direct)} direct needs — more than the {MAX_ENUMERATED_NEEDS} this guard enumerates "
+                "jointly, so it cannot prove its `if:` fires on every red; route them through a verdict job")
+    for combo in itertools.product(*(possible_results(jobs.get(n) or {}) for n in direct)):
+        if all(r == "success" for r in combo):
+            continue
         ctx = dict(SCHEDULED)
-        ctx.update({f"needs.{n}.result": ("failure" if n == red else "success") for n in direct})
+        ctx.update({f"needs.{n}.result": r for n, r in zip(direct, combo)})
         try:
             fires = _eval_guard(tokens, ctx, _REPORTER_IDENT)
         except ValueError:
             return (f"`if: {raw.strip()}` reads something beyond status functions, event/ref guards and "
                     "needs.<n>.result — this guard cannot prove it fires on every red")
         if not fires:
-            return f"its `if:` stays false on a scheduled run where needs.{red}.result is 'failure' — that red is never reported"
+            state = ", ".join(f"needs.{n}.result == '{r}'" for n, r in zip(direct, combo))
+            return f"its `if:` stays false on a scheduled run where {state} — that red is never reported"
     return None
 
 
@@ -400,7 +463,7 @@ def reporter_problems(jobs: dict) -> tuple[bool, list[str]]:
             problems.append(f"reporter job '{jid}' has no `if:` with always()/failure()/!cancelled() — the implicit "
                             "success() SKIPS it on every red it exists to report")
         else:
-            why = fire_condition_problem(jobs[jid])
+            why = fire_condition_problem(jobs[jid], jobs)
             if why:
                 problems.append(f"reporter job '{jid}': {why}")
     return True, problems
@@ -592,7 +655,62 @@ jobs:
         ("red predicate covers every direct need", pair.replace(
             "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
             "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result != 'success' || needs.b.result != 'success')"), "", False),
-        ("`on:` as a list with schedule, no reporter", "on: [schedule, push]\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n", "", True),
+        # #7458 — three shapes the per-need, `||`-only reading passed while a red went unreported:
+        ("#7458.1 intermediate `if: !success()` hides a's red (no `||`)", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: '${{ !success() }}', runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("#7458.1 fix: both halves need a directly past `!success()`", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: '${{ !success() }}', runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}").replace(
+            "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
+            "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result != 'success' || needs.b.result != 'success')").replace(
+            "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
+            "  green:\n    needs: [a, b]\n    if: always() && needs.a.result == 'success' && needs.b.result == 'success'"), "", False),
+        ("#7458.2 red `== 'failure'` silent when b is SKIPPED behind a", pair.replace(
+            "if: always() && needs.b.result != 'success'", "if: always() && needs.b.result == 'failure'"), "", True),
+        ("#7458.2 fix: `!= 'success'` also reports the skip", pair, "", False),
+        ("#7458.3 red `a ok || b ok` silent when BOTH fail", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}").replace(
+            "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
+            "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result == 'success' || needs.b.result == 'success')").replace(
+            "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
+            "  green:\n    needs: [a, b]\n    if: always() && needs.a.result == 'success' && needs.b.result == 'success'"), "", True),
+        ("#7458.3 fix: `a not ok || b not ok` reports both-red", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}").replace(
+            "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
+            "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result != 'success' || needs.b.result != 'success')").replace(
+            "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
+            "  green:\n    needs: [a, b]\n    if: always() && needs.a.result == 'success' && needs.b.result == 'success'"), "", False),
+        ("#7458.2 control: `== 'failure'` on an `if: always()` verdict that a red cannot skip", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: always(), runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}").replace(
+            "  red:\n    needs: [b]\n    if: always() && needs.b.result != 'success'",
+            "  red:\n    needs: [a, b]\n    if: always() && (needs.a.result != 'success' || needs.b.result == 'failure')").replace(
+            "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
+            "  green:\n    needs: [a, b]\n    if: always() && needs.a.result == 'success' && needs.b.result == 'success'"), "", False),
+        # Copilot on #7512 — `&&` binds tighter than `||`: no top-level `&&` conjunct of a disjunction is required.
+        ("#7512 intermediate `success() && true || <schedule>` runs b after a's red", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: \"${{ success() && true || github.event_name == 'schedule' }}\", runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("#7512 control: intermediate `success() && (true || <schedule>)` keeps success() required", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: \"${{ success() && (true || github.event_name == 'schedule') }}\", runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", False),
+        ("#7512 success half `success() && true || <schedule>` closes the ledger on a red", pair.replace(
+            "  green:\n    needs: [b]\n    if: always() && needs.b.result == 'success'",
+            "  green:\n    needs: [b]\n    if: \"${{ success() && true || github.event_name == 'schedule' }}\""), "", True),
+        # Copilot on #7512 (second round) — a status call spelled with whitespace or another case is the same call.
+        ("#7512 intermediate `!success( )` (whitespace) hides a's red", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: '${{ !success( ) }}', runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("#7512 intermediate `Always ()` (case, whitespace) hides a's red", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: '${{ Always () }}', runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", True),
+        ("#7512 control: intermediate `success( ) && guard` still propagates", pair.replace(
+            "  b: {needs: [a], runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}",
+            "  b: {needs: [a], if: \"success( ) && github.ref == 'refs/heads/main'\", runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}"), "", False),
+        ("`on:` as a list with schedule, no reporter","on: [schedule, push]\njobs:\n  a: {runs-on: x, timeout-minutes: 5, steps: [{run: echo}]}\n", "", True),
     ]
     failures = 0
     for name, body, allow, expect in cases:
