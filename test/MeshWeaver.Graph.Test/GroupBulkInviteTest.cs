@@ -218,4 +218,35 @@ public class GroupBulkInviteTest(ITestOutputHelper output) : MonolithMeshTestBas
                         && a.Roles.Any(r => r.Role == Role.Editor.Id && !r.Denied))
             .FirstAsync().Timeout(20.Seconds()).Await();
     }
+
+    /// <summary>
+    /// #7482: a bulk invite is BUILT on the inviter's turn and subscribed later, outside the inviter's
+    /// context — each per-email invite is deferred. Every invitation still carries the INVITER's language,
+    /// read when the bulk invite was built, never the context that happens to subscribe or complete.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task BulkInvite_SubscribedOutsideTheInvitersContext_StampsTheInvitersLanguage()
+    {
+        const string first = "erin@acme.com";
+        const string second = "fritz@acme.com";
+        await SeedGroupAsync(TestContext.Current.CancellationToken);
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        IObservable<GroupBulkInviteResult> invite;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = "admin", Name = "Admin", Locale = "de" }))
+            invite = Mesh.InviteAllToGroup(GroupPath, $"{first}\n{second}", invitedBy: "admin");
+
+        var result = await invite.FirstAsync().Timeout(30.Seconds()).Await();
+        Assert.Equal(2, result.InvitedCount);
+
+        foreach (var email in new[] { first, second })
+        {
+            var invitation = await Mesh.GetWorkspace()
+                .GetMeshNodeStream($"{InvitationNodeType.Namespace}/{SpaceInviteService.Slug(email)}")
+                .Select(n => n?.ContentAs<Invitation>(Mesh.JsonSerializerOptions))
+                .Where(inv => inv is not null && inv.Email == email)
+                .FirstAsync().Timeout(30.Seconds()).Await();
+            Assert.Equal("de", invitation!.Locale);
+        }
+    }
 }

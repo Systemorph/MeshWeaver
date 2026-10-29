@@ -380,9 +380,12 @@ internal static class NodeTypeCompilationHelpers
                     // 🚨 #2264: the TWO call sites of this local function need DIFFERENT
                     // FailedBuildInputs treatment, so `formedUnderLiveInputs` is not decoration —
                     // see ApplyGateSettle's doc for why.
-                    void SettleAsError(string? reason, bool formedUnderLiveInputs)
-                        => SettlePending(parkedDef => ApplyGateSettle(
-                            parkedDef, reason, formedUnderLiveInputs, guards.ModulesHash));
+                    // #7355 — `reasonText` is the reason's keyed form; it is stamped beside the English
+                    // (BuildDeliveryHold.StampErrorText) so the page renders it in the viewer's language.
+                    void SettleAsError(string? reason, bool formedUnderLiveInputs,
+                        System.Collections.Immutable.ImmutableList<KeyedText>? reasonText = null)
+                        => SettlePending(parkedDef => BuildDeliveryHold.StampErrorText(ApplyGateSettle(
+                            parkedDef, reason, formedUnderLiveInputs, guards.ModulesHash), reason, reasonText));
 
                     // 🚨 #3583 — A DELIVERY gate (no bundle for this identity, or a declined one)
                     // on a type that still names a usable build does NOT park it as an Error: the
@@ -392,7 +395,8 @@ internal static class NodeTypeCompilationHelpers
                     // honest. The registry is not parked for a hold: no Roslyn ran, there is no
                     // storm to contain, and the next Pending flip is exactly the re-check that
                     // lifts the hold once a bundle lands.
-                    bool SettleAsHold(NodeTypeDefinition pendingDefinition, string reason)
+                    bool SettleAsHold(NodeTypeDefinition pendingDefinition, string reason,
+                        System.Collections.Immutable.ImmutableList<KeyedText>? reasonText)
                     {
                         var usable = HasUsableBuild(pendingNode!, pendingDefinition, guards);
                         // Memex#668 — the mesh's stale-adoption bound decides whether the last
@@ -431,10 +435,11 @@ internal static class NodeTypeCompilationHelpers
                             var held = BuildDeliveryHold.Settle(
                                 parkedDef, HasUsableBuild(pendingNode!, parkedDef, guards), reason, staleBound);
                             if (held is null)
-                                return ApplyGateSettle(parkedDef, reason, true, guards.ModulesHash);
+                                return BuildDeliveryHold.StampErrorText(
+                                    ApplyGateSettle(parkedDef, reason, true, guards.ModulesHash), reason, reasonText, staleBound);
                             if (BuildDeliveryHold.EventOf(parkedDef, held, staleBound) is { } evt)
                                 BuildDeliveryHold.Notify(hub, hubPath, held, evt, logger, staleBound);
-                            return held;
+                            return BuildDeliveryHold.StampErrorText(held, reason, reasonText, staleBound);
                         });
                         return true;
                     }
@@ -444,7 +449,8 @@ internal static class NodeTypeCompilationHelpers
                     // would itself read as "module content" to IsModuleContent and outlive the
                     // incomplete discovery that caused the hold, so the authored source would never
                     // compile again. Nothing to serve → false, and the caller parks named.
-                    bool SettleAsUnknownMembershipHold(NodeTypeDefinition pendingDefinition, string reason)
+                    bool SettleAsUnknownMembershipHold(NodeTypeDefinition pendingDefinition, string reason,
+                        System.Collections.Immutable.ImmutableList<KeyedText>? reasonText)
                     {
                         if (BuildDeliveryHold.SettleUnknownMembership(
                                 pendingDefinition, HasUsableBuild(pendingNode!, pendingDefinition, guards), reason)
@@ -455,10 +461,10 @@ internal static class NodeTypeCompilationHelpers
                             + "serving and its provenance is kept, so the next release after a complete "
                             + "discovery decides afresh. {Reason}",
                             hubPath, reason);
-                        SettlePending(parkedDef =>
+                        SettlePending(parkedDef => BuildDeliveryHold.StampErrorText(
                             BuildDeliveryHold.SettleUnknownMembership(
                                 parkedDef, HasUsableBuild(pendingNode!, parkedDef, guards), reason)
-                            ?? ApplyGateSettle(parkedDef, reason, true, guards.ModulesHash));
+                            ?? ApplyGateSettle(parkedDef, reason, true, guards.ModulesHash), reason, reasonText));
                         return true;
                     }
 
@@ -744,6 +750,9 @@ internal static class NodeTypeCompilationHelpers
                             var reason = closedTypeSet
                                 ? ClosedTypeSet.RefusalFor(hubPath)
                                 : PrebuiltAssemblySeeder.RequiredParkReason(hubPath);
+                            var reasonText = closedTypeSet
+                                ? ClosedTypeSet.RefusalText(hubPath)
+                                : PrebuiltAssemblySeeder.RequiredParkText(hubPath);
                             logger?.LogError(
                                 "Compile watcher: {HubPath} is refused by {Key} — " +
                                 "PARKING with a named refusal instead of compiling. {Reason}",
@@ -764,7 +773,7 @@ internal static class NodeTypeCompilationHelpers
                             // #3583 — a type that still holds a build is HELD, not parked dead.
                             // Never on a closed set: there a held build is exactly what must not
                             // keep serving, so the refusal always settles the type at Error.
-                            if (!closedTypeSet && pendingDef is not null && SettleAsHold(pendingDef, reason))
+                            if (!closedTypeSet && pendingDef is not null && SettleAsHold(pendingDef, reason, reasonText))
                                 return;
                             registry?.OnCompileFailed(
                                 hub, hubPath, reason, deterministic: true,
@@ -772,7 +781,7 @@ internal static class NodeTypeCompilationHelpers
                             // The refusal genuinely IS formed under the live compile inputs — stamp
                             // them so the failed-verdict re-drive (#1793) doesn't treat this as
                             // "never attempted" and burn a needless automatic re-drive (#2264).
-                            SettleAsError(reason, formedUnderLiveInputs: true);
+                            SettleAsError(reason, formedUnderLiveInputs: true, reasonText);
                             return;
                         }
 
@@ -837,12 +846,16 @@ internal static class NodeTypeCompilationHelpers
                                         ? PrebuiltAssemblySeeder.UntrackedPartitionParkReason(hubPath, offeredByBundle)
                                         : PrebuiltAssemblySeeder.UnknownModuleMembershipParkReason(
                                             hubPath, unknownMembership);
+                                    var reasonText = unknownMembership is null
+                                        ? PrebuiltAssemblySeeder.UntrackedPartitionParkText(hubPath, offeredByBundle)
+                                        : PrebuiltAssemblySeeder.UnknownModuleMembershipParkText(
+                                            hubPath, unknownMembership);
                                     // #3583 — a type that still holds a build is HELD, not parked
                                     // dead: the last build keeps serving (same module MAJOR) or is
                                     // refused-but-not-errored (a MAJOR bump), and a person is told.
                                     if (unknownMembership is null
-                                            ? SettleAsHold(pendingDefinition, reason)
-                                            : SettleAsUnknownMembershipHold(pendingDefinition, reason))
+                                            ? SettleAsHold(pendingDefinition, reason, reasonText)
+                                            : SettleAsUnknownMembershipHold(pendingDefinition, reason, reasonText))
                                         return;
                                     logger?.LogError(
                                         "Compile watcher: {HubPath} is a module's content (or of unknown "
@@ -856,7 +869,7 @@ internal static class NodeTypeCompilationHelpers
                                         hub, hubPath, reason, deterministic: true,
                                         recipientUserId: null, sources: pendingDefinition.CurrentSourceVersions,
                                         logger);
-                                    SettleAsError(reason, formedUnderLiveInputs: true);
+                                    SettleAsError(reason, formedUnderLiveInputs: true, reasonText);
                                 },
                                 ex =>
                                 {

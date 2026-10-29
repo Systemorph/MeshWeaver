@@ -141,6 +141,23 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    runtime helpers behind one compile stub never share a key.
    An installed MODULE counts as host-shipped too: the NodeType context binds a module that satisfies
    the requested version AHEAD of a package's copy of the same name, matching the compile's choice.
+
+   **One build of a generator per process; a second build is refused (#7444).** Generators and their
+   helpers load into the DEFAULT context, which holds one assembly per simple name for the life of
+   the process. Two NodeTypes that ship different builds of the same generator therefore cannot both
+   have theirs, and before #7444 the one that compiled first won (activation order in the portal,
+   worker timing in the parallel bake): the other silently ran the wrong build or lost its
+   generator. Now every generator and generator helper is admitted through a `SourceGeneratorLedger`
+   that records, per simple name, the build (module version id) and the NodeType it was loaded for.
+   The same build asked for again, from any path, is the already-loaded assembly. A DIFFERENT build
+   throws `SourceGeneratorBuildConflictException`, a `CompilationException`, so the compile fails and
+   the runtime parks that NodeType at `CompilationStatus=Error` with a message naming BOTH NodeTypes
+   and BOTH builds (name, version, module version id, file). The default context stays the authority:
+   a different build already there that this ledger did not record (another mesh in the same
+   process, a load outside the compile path) is refused too, named by the file it loaded from. The
+   runtime compile service holds one ledger; a bake (`mw-plugin-test`) holds one per run. A name the
+   host itself ships (its trusted platform assemblies) is not a generator another NodeType brought
+   and keeps the plain load. The remedy is to align both NodeTypes on one build of the generator.
 3. **The host ships no assembly whose implementation is wider than its reference assembly.** In-mesh
    C# compiles against the host's IMPLEMENTATION assemblies (TPA), never against reference
    assemblies, so a package that keeps members in its `lib/` for binary compatibility while its
@@ -246,6 +263,19 @@ answer (#6863):
   answers: the identity must match, and the dependencies are the nuspec group nearest the target
   framework, which is what a feed's dependency info would have returned. No feed is contacted, so the
   same closure resolves online and offline.
+- **The package folders are NuGet's own, in NuGet's order**: the global-packages folder first, then
+  every FALLBACK package folder — `NUGET_FALLBACK_PACKAGES` (folders separated by `;` on EVERY platform — never the platform path separator: a `:`-joined list on Linux reads as ONE folder), or
+  the configured `fallbackPackageFolders` when the variable is unset, exactly as
+  `SettingsUtility.GetFallbackPackageFolders` reads them for `dotnet restore`. A package complete in a
+  fallback folder (same completion rule as below, same lower-cased `{id}/{version}` layout) answers the
+  walk AND the install: its assemblies are used where they lie, with no download, no copy and no lock.
+  A fallback folder is READ-ONLY — one it refuses (half-extracted, wrong identity) is skipped and never
+  repaired; the package is then installed into the global folder as before. This is what lets a build
+  host's prepared cache serve the packages tests fetch at run time (MWPREP001): the host hands every
+  stage `NUGET_FALLBACK_PACKAGES=<cache>/nuget`, and the packages a test or an executable doc cell names
+  with `#r "nuget:…"` are warmed into that cache by core's declared default-branch restore, which also
+  restores `.github/nuget-warm/ResolverFixturePackages.csproj` ([Build Hosts](../BuildHosts)). Before the
+  resolver read fallback folders, every run downloaded those packages again although the cache held them.
 - **Complete** means NuGet's own completion marker is present: `.nupkg.metadata`, or the older
   `{id}.{version}.nupkg.sha512`. Both are written after extraction. The `.nuspec` must also declare
   exactly that id and version. ONE check (`ReadCompleteInstall`) decides this for the dependency walk
@@ -351,6 +381,12 @@ The first configured feed refuses every connection, and some cases add a local f
   share one resolution. These three used to ask api.nuget.org, and the unknown-package case timed
   out whenever the live feed was slow to answer one 404. Tests that need real packages from the live
   feed stay in `NuGetAssemblyResolverTest` and skip when it is unreachable.
+- A closure held complete in a FALLBACK folder, with a reachable feed serving the same packages, resolves
+  with every path inside the fallback folder, no install attempted (a counting persistent cache sees no
+  call) and the global folder left empty. Without the fallback read this case fails: both packages are
+  downloaded. Negative control: with the dependency absent from the fallback folder, exactly that one
+  package is installed into the global folder. A half-extracted package in a fallback folder is neither
+  used nor written: it is installed into the global folder and the fallback copy stays as it was.
 - Every interleaving wait in these tests is asserted. A missed window fails the test instead of
   passing without having exercised it.
 

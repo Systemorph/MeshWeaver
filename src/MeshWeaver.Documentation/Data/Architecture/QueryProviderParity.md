@@ -225,6 +225,46 @@ when it stands alone; matching the two letters at the head of any value turned
 on either executor (#6844). The `name:(Alpha OR Orion)` cases in `NegationCorpus`, positive and
 negated, pin every listed value on both executors.
 
+## Free-text ranking: exact name and Space first — one key, both executors
+
+A reader who typed the name of a Space got slides, PDFs and pages that merely contained the word,
+ahead of the Space (MeshWeaver#7381). The two executors each ranked free text by their own score —
+the in-memory fuzzy score over the node's whole searchable text, which penalises length and rewards
+a match early in the path, and the Postgres name/id/description ladder — and neither knew what a
+Space was.
+
+The rule is now **one leading sort key, `SearchRanking.Tier`** (`MeshWeaver.Mesh.Contract`), read by
+both executors:
+
+| row | tier |
+|---|---|
+| `Name` or `Id` equals the whole typed text (case-insensitive, outer whitespace ignored) | +2 |
+| `NodeType` is `Space` | +1 |
+
+So an exactly named Space (3) leads an exactly named page (2), which leads a Space that only contains
+the words (1), which leads everything else (0). **Inside a tier each executor keeps its own score**
+— the scores answer different questions (see the free-text divergence below) and the tier does not
+pretend otherwise. A query with no free text is tier 0 everywhere, so a filter-only query, and an
+authored `sort:` (which always wins), are untouched.
+
+Where it applies:
+
+- **In memory** — `StorageAdapterMeshQueryProvider` and `StaticNodeQueryProvider` add
+  `SearchRanking.Boost` (`tier × TierWeight`, far above any score either produces) to each row's
+  relevance, so the rows they keep before their load cap are the right ones.
+- **The merge** — `MeshQuery.ClipMergedInitial` sorts by the tier FIRST, then the reported score, then
+  path. That is the guarantee across providers: a provider that does not add the boost still cannot
+  push a fuzzy hit above an exact name or a Space.
+- **Postgres** (MeshWeaver.Plugins) — the generators' relevance `ORDER BY` and the row scores the
+  provider reports lead with the same tier, so the SQL `LIMIT` keeps the rows the merge will rank first.
+
+`test/MeshWeaver.Fixture/SearchRankingCorpus.cs` is the shared corpus. Core's
+`SearchRanksExactNameAndSpaceFirstTest` runs it through `MeshQuery` over the in-memory store; the
+Postgres suite seeds the same nodes. Every case's leading rows are chosen so that the executor's
+score ALONE would put a different row first — the test asserts that too — so an executor that drops
+the tier fails rather than passing by coincidence. The negative control (`UnrelatedText`) matches no
+Space and no exact name; its order must be exactly the executor's tier-free ranking.
+
 ## What is still divergent
 
 The fallback closes the case where a selector is unknown to **both** providers. It does not close

@@ -227,6 +227,22 @@ paying one read per row of the mesh. Full contract: [Query Syntax](/Doc/DataMesh
 
 ---
 
+## How typed words are ranked
+
+When the search box holds words and the query carries no `sort:`, hits are ordered by relevance,
+and two kinds of hit always come first (MeshWeaver#7381):
+
+1. **An exact name** — a node whose name (or id) is exactly what was typed, ignoring case.
+2. **A Space** — so looking for a Space by its name finds the Space, not the slides and PDFs that
+   mention it.
+
+An exactly named Space leads an exactly named page, which leads a Space that only contains the words,
+which leads everything else; inside each group the usual relevance order holds. A typed or declared
+`sort:` (a catalog's default order included) replaces relevance entirely. The rule is the same on
+every backend — see [Query Provider Parity](/Doc/Architecture/QueryProviderParity).
+
+---
+
 ## Under the hood
 
 The area is built on the `MeshSearchControl` — a hidden query (always applied) plus a visible query

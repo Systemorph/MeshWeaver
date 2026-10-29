@@ -276,6 +276,29 @@ for. The two helpers do not resolve the caption the same way, and that predates 
 | `Edit<T>()` | `GetEditorLabel` | `[Display(Name = …)]` → `[DisplayName(…)]` → the property name word-split |
 | click-to-edit | `GetToggleableDisplayName` | `[Display(Name = …)]` → the viewer-localized `[Description]` / `[Translation]` → the property name word-split |
 
+### Captions in the viewer's language
+
+A declared caption that is a **key of the string catalog** renders as that key's text in the
+viewer's language — in `Edit<T>()` for `[Display(Name = …)]` and `[DisplayName(…)]`, and in the
+click-to-edit form for `[Display(Name = …)]`. A name that is not a key is shown exactly as written,
+so every existing caption renders unchanged.
+
+```csharp
+public sealed record GrantAccessForm
+{
+    [DisplayName("serviceIdentities.field.role")]   // "Role" for an English viewer, "Rolle" for a German one
+    [Description("The role granted at that path, e.g. Viewer or Editor.")]
+    [Translation("de", "Die Rolle, die auf diesem Pfad gewährt wird, z. B. Viewer oder Editor.")]
+    public string Role { get; init; } = "Editor";
+}
+```
+
+The caption is chrome, so it lives in the catalog with the rest of the page's chrome (both
+`strings.en.json` and `strings.de.json`, held complete by `LocalizationTest`); the description
+under it hangs off the declaration and is translated with `[Translation]`. Before this, a generated
+form's caption was English for every viewer while the description beneath it was translated.
+`EditorCaptionCatalogKeyTest` pins both halves — the key resolves, a literal does not change.
+
 🚨 So `[DisplayName("…")]` names an `Edit<T>()` field and does **not** name a click-to-edit one, which
 falls through to the wordified property name. That divergence is stated here rather than smoothed
 over: it is a question about the visible CAPTION, not about the accessible name, and changing it

@@ -81,6 +81,44 @@ public static class PrebuiltAssemblySeeder
             + "identity and architecture, then request a release to retry (MeshWeaver#2193 §A).";
     }
 
+    /// <summary>The keyed form of <see cref="RequiredParkReason"/> (#7355): rendered in the viewer's
+    /// language, and in English exactly that sentence (<c>CompileRefusalTextTest</c> holds them equal).</summary>
+    /// <param name="nodeTypePath">The refused NodeType.</param>
+    public static ImmutableList<KeyedText> RequiredParkText(string nodeTypePath)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        var package = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+        return [KeyedText.Of("compile.refusal.requirePrebuilt",
+            ("configKey", RequirePrebuiltConfigKey), ("path", nodeTypePath),
+            ("framework", LiveFrameworkMvid.ToString()), ("arch", ReleaseArchitecture.Live.ToString()),
+            ("package", package))];
+    }
+
+    /// <summary>The keyed form of <see cref="UnknownModuleMembershipParkReason"/> (#7355).</summary>
+    /// <param name="nodeTypePath">The refused NodeType.</param>
+    /// <param name="incompleteDiscovery">Why the discovery did not complete (verbatim upstream text).</param>
+    public static ImmutableList<KeyedText> UnknownModuleMembershipParkText(string nodeTypePath, string incompleteDiscovery)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        var partition = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+        return [KeyedText.Of("compile.refusal.unknownMembership",
+            ("path", nodeTypePath), ("partition", partition),
+            ("framework", LiveFrameworkMvid.ToString()), ("arch", ReleaseArchitecture.Live.ToString()),
+            ("discovery", incompleteDiscovery))];
+    }
+
+    /// <summary>The keyed form of <see cref="UntrackedPartitionParkReason"/> (#7355).</summary>
+    /// <param name="nodeTypePath">The refused NodeType.</param>
+    /// <param name="offered">Whether a bundle for this identity named the type and was declined.</param>
+    public static ImmutableList<KeyedText> UntrackedPartitionParkText(string nodeTypePath, bool offered)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        var partition = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+        return [KeyedText.Of(offered ? "compile.refusal.untrackedOffered" : "compile.refusal.untrackedNotOffered",
+            ("path", nodeTypePath), ("partition", partition),
+            ("framework", LiveFrameworkMvid.ToString()), ("arch", ReleaseArchitecture.Live.ToString()))];
+    }
+
     /// <summary>
     /// The NAMED refusal the compile watcher parks a NodeType of UNKNOWN module membership with
     /// (MeshWeaver#6930): it never adopted a bundle, its partition tracks no source, and the
