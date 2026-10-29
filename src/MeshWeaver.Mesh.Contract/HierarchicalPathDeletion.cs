@@ -44,6 +44,15 @@ namespace MeshWeaver.Mesh;
 public static class HierarchicalPathDeletion
 {
     /// <summary>
+    /// <see cref="Exception.Data"/> key under which a failed recursive delete carries the paths it
+    /// had already removed from storage (an <see cref="IReadOnlyList{T}"/> of <see cref="string"/>).
+    /// Every writer and reader of that entry — this class and the recursive-delete pipeline in
+    /// <see cref="MeshExtensions"/> — goes through this ONE constant, so the key cannot split
+    /// between a renamed constant and a forgotten literal (#7348).
+    /// </summary>
+    public const string DeletedPathsDataKey = "DeletedPaths";
+
+    /// <summary>
     /// Walks the path set bottom-up under <paramref name="rootPath"/> and
     /// invokes <paramref name="deleteOne"/> for each node after its
     /// descendants are deleted.
@@ -66,7 +75,8 @@ public static class HierarchicalPathDeletion
     /// successfully deleted before the operation completed or failed.
     /// On failure, the observable propagates the underlying exception; the
     /// already-recorded successful paths are still emitted via
-    /// <c>OnError.Data["DeletedPaths"]</c> for caller bookkeeping.
+    /// the exception's <see cref="Exception.Data"/> under <see cref="DeletedPathsDataKey"/> for
+    /// caller bookkeeping.
     /// </returns>
     public static IObservable<IReadOnlyList<string>> DeleteSubtree(
         string rootPath,
@@ -83,7 +93,7 @@ public static class HierarchicalPathDeletion
             .Select(_ => (IReadOnlyList<string>)deleted.ToImmutable())
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
-                ex.Data["DeletedPaths"] = (IReadOnlyList<string>)deleted.ToImmutable();
+                ex.Data[DeletedPathsDataKey] = (IReadOnlyList<string>)deleted.ToImmutable();
                 return Observable.Throw<IReadOnlyList<string>>(ex);
             });
     }

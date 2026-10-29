@@ -242,7 +242,7 @@ public class HierarchicalPathDeletionTests
         }
         catch (InvalidOperationException ex)
         {
-            var partial = ex.Data["DeletedPaths"] as IReadOnlyList<string>;
+            var partial = ex.Data[HierarchicalPathDeletion.DeletedPathsDataKey] as IReadOnlyList<string>;
             partial.Should().NotBeNull();
             partial!.Should().Equal("a/b/c", "a/b");
         }
