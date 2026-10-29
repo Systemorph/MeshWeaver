@@ -954,10 +954,12 @@ internal static class NodeTypeEnrichmentHelpers
         // (JsonElement / JsonNode) mirror snapshot is the normal shape off a sync stream, and a
         // CLR test blinds this to an in-flight compile — see IsCompileSettled's remarks.
         var opts = options ?? System.Text.Json.JsonSerializerOptions.Default;
+        // `Observed` is false only for the synthetic StartWith arm: nothing has been READ yet.
         var inFlightLevel = typeStream
-            .Select(t => (Node: t, InFlight: IsCompileInFlight(t, opts)))
-            .StartWith((Node: (MeshNode)null!, InFlight: false)) // armed from subscribe (Phase A)
-            .DistinctUntilChanged(x => x.InFlight); // only transitions restart/cancel the budget
+            .Select(t => (Node: t, InFlight: IsCompileInFlight(t, opts), Observed: true))
+            .StartWith((Node: (MeshNode)null!, InFlight: false, Observed: false)) // armed from subscribe (Phase A)
+            // only transitions restart/cancel the budget — and the FIRST read is one (see below)
+            .DistinctUntilChanged(x => (x.InFlight, x.Observed));
 
         var noProgressDeadline = inFlightLevel
             .Select(x => x.InFlight
@@ -966,6 +968,18 @@ internal static class NodeTypeEnrichmentHelpers
                 // park is re-read on every re-arm: a compile that fails WHILE we wait parks the
                 // type on its terminal write, and the in-flight level drops to false immediately
                 // after — that re-arm must take the parked branch, not start a fresh 60 s.
+                // 🚨 But NEVER before the type has been read once. The park registry knows that no
+                // compile is coming; it does not know whether the type still names a USABLE build,
+                // and a parked type that does (the last good build after a failed N+1) is a real
+                // answer `settled` accepts. On a COLD stream the first read arrives after
+                // subscribe, so consulting the park on the synthetic arm faulted every activation
+                // onto the compile-error overlay before that answer could arrive — and the overlay's
+                // own self-heal recycles met the same fault, forever (Updates suite,
+                // AFailedNewBuild_KeepsTheOldOneServing_AndSaysWhy, red on main). The first read is
+                // a distinct level: by then `settled`, subscribed first, has seen it and won if it
+                // accepts it, and an unaccepted read still takes the parked branch at once.
+                : !x.Observed
+                ? Observable.Timer(noProgressBudget, clock).Select(_ => onNoProgress())
                 : Observable.Defer(() => parkedFault?.Invoke() is { } parked
                     ? Observable.Return(parked)     // already terminal — no budget to burn
                     : Observable.Timer(noProgressBudget, clock).Select(_ => onNoProgress())))
