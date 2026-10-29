@@ -307,6 +307,11 @@ label and footer against that person's own `User.Locale` before handing them to 
 (including the default `Open` button label). The rule is not "never resolve at write time", it is
 *never resolve against a viewer you do not have*.
 
+`EmailTemplate` takes every string as plain text and encodes it, so a caller cannot write markup —
+and a newline inside a paragraph or the footer note is a line the reader sees: the template turns it
+into `<br>` AFTER encoding (#7480). A translated closing such as "Beste Grüsse" + newline + the
+sign-off is therefore one paragraph with a break, never two strings glued onto one line.
+
 **What stayed English, and why.** The same boundary as the transcript: the sentence the platform
 owns is keyed, verbatim upstream text is not. `ex.Message`, a Roslyn diagnostic, the captured
 startup log lines, a `PartitionContentOwnership` explanation and the composed
