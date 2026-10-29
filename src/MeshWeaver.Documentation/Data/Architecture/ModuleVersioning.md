@@ -689,6 +689,36 @@ what reads `main`'s committed tree directly — a GitSynced portal importing `ma
 new content under the old lock until settlement and treats that module as unchanged until then
 (`ModuleSyncDecision`). A failed settlement workflow is red on `main`, never silent.
 
+## Request the min version, then wait until it is deployed (policy `request-min-version-wait-until-deployed`)
+
+A floor says which platform a package needs. Main computes it once a green run has verified the
+sources (*Who writes the lock*). That covers what a run has OBSERVED. It cannot cover a change that
+needs a platform no run has built on yet. Such a change has to ASK for it, and the run has to wait for
+that platform.
+
+1. **Request in the same pull request.** A change that uses core surface the platform its tree
+   declares does not carry raises the floor that ships it. That is the package's `minMeshVersion`,
+   or the repository's tree floor (MeshWeaver.Plugins `scripts/platform-floor.json`) for a `src/`
+   host project, set to the first sealed core build that carries the surface. A `Requires-platform:`
+   line in the pull request body also requests it, for that pull request only. A floor raised by hand
+   is never lowered by the stamp.
+2. **The red names the request.** A pull request red on a missing type or member (`CS0117`,
+   `CS1061`, `CS0246`, `CS0234`, `CS0103`, `CS1501`, `CS1739`) is checked against core's history. If
+   core added that name after the commit the run built on, the run says which build first carries
+   it and which floor to raise. Otherwise it is the diff's own error.
+3. **Wait until it is deployed.** A pull request builds on the set its build server RUNS. A
+   requirement above that set builds nothing: the run reads `WAITING FOR PLATFORM` with a pending
+   `Waiting for platform` status, and is re-run once a build server carrying the requirement is
+   deployed. A set that is sealed but not deployed does not count. A wait unmet past its bound
+   (12 hours) is reported on the pull request, naming the requirement and the deployed set.
+4. **Tests run as the platform they were built against.** A test process reports the set its
+   reference assemblies came from (`MESHWEAVER_PLATFORM_VERSION`), so `PlatformBuildInfo.RunningPlatformVersion`
+   and every floor check in a test are real. A test that strips `minMeshVersion` from a fixture, or
+   pins a `RunningPlatformVersionOverride` to a run-less version, to get past a floor tests nothing.
+
+The mechanism, and the incidents behind it: MeshWeaver.Plugins `Hosting/PlatformResolution` →
+*Waiting for platform* (`get Hosting/PlatformResolution`).
+
 ## Before you open the PR
 
 On a main-owned repo, none of the generator steps below apply: commit no lock, and prove the diff
