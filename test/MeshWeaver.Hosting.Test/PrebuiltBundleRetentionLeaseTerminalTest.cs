@@ -142,4 +142,75 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
             "a cancelled pass may still be winding down its leaf — handing the store over under it would overlap two sweeps");
         outcome.Error.Should().BeOfType<OperationCanceledException>();
     }
+
+    // ── Lost: when the holder must stop (review of #7515) ─────────────────────────────────────────────
+
+    private static readonly DateTimeOffset ClaimedAt = new(2508, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    private static readonly TimeSpan HoldSpan = TimeSpan.FromHours(1);
+    private static readonly long OurClaim = PrebuiltBundleRetentionLease.ClaimFor(ClaimedAt + HoldSpan, 5) | PrebuiltBundleRetentionLease.StampedFlag;
+
+    private static PrebuiltBundleRetentionLeaseState Claimed(DateTimeOffset at, int nonce)
+        => new(PrebuiltBundleRetentionLease.ClaimFor(at + HoldSpan, nonce) | PrebuiltBundleRetentionLease.StampedFlag);
+
+    [Fact]
+    public void AClaimReplacedBeforeTheWatcherSawItsOwn_IsALoss()
+    {
+        // The claim was lost after Take returned and before the watcher's first own-claim snapshot: the
+        // live lease never carries it, only the replacement taken after it.
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var outcome = new Outcome<OperationCanceledException>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim));
+
+        live.OnNext(Claimed(ClaimedAt, 9));
+
+        outcome.Values.Should().ContainSingle(
+            "a foreign claim ending no earlier than ours was taken at or after ours — waiting to see our own first skips it forever");
+    }
+
+    [Fact]
+    public void ASnapshotFromBeforeTheClaim_IsNotALoss_AndALaterLossStillIs()
+    {
+        // CONTROL: what the live lease may replay from before this claim landed — the previous holder's
+        // ended claim, or lapsed — is not a loss; the claim then appears, and a loss after it counts.
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var outcome = new Outcome<OperationCanceledException>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim));
+
+        live.OnNext(Claimed(ClaimedAt - HoldSpan - TimeSpan.FromMinutes(1), 3));
+        live.OnNext(PrebuiltBundleRetentionLeaseState.Lapsed);
+        live.OnNext(new PrebuiltBundleRetentionLeaseState(OurClaim));
+        outcome.Values.Should().BeEmpty("stale snapshots from before the claim, then the claim itself");
+
+        live.OnNext(PrebuiltBundleRetentionLeaseState.Lapsed);
+        outcome.Values.Should().ContainSingle("the claim was seen and is gone");
+        outcome.Completed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ALeaseStreamThatFaults_IsACancellation_KeepingTheFault()
+    {
+        var fault = new InvalidOperationException("lease stream failed");
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var outcome = new Outcome<OperationCanceledException>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim));
+
+        live.OnNext(new PrebuiltBundleRetentionLeaseState(OurClaim));
+        live.OnError(fault);
+
+        outcome.Error.Should().BeNull("a fault of the watch must not reach the pass as an ordinary fault, which releases under its leaf");
+        outcome.Values.Should().ContainSingle().Which.InnerException.Should().BeSameAs(fault);
+    }
+
+    [Fact]
+    public void ALeaseStreamThatCompletes_IsACancellation()
+    {
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var outcome = new Outcome<OperationCanceledException>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim));
+
+        live.OnNext(new PrebuiltBundleRetentionLeaseState(OurClaim));
+        live.OnCompleted();
+
+        outcome.Values.Should().ContainSingle("a watch that ended can no longer see a loss — the guard must not vanish silently");
+    }
 }

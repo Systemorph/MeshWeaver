@@ -301,9 +301,10 @@ public static class PrebuiltBundleRetentionLease
     /// having been COMMITTED by the lease node's owner, and a commit is acknowledged before it is durable
     /// (<c>DataExtensions.ArmPatchAckWatcher</c> acks on its flush bound). An owner that dies before the
     /// claim persisted is replaced by one that reloads the LAPSED lease and grants it to another replica.
-    /// So the holder watches the live lease while its pass runs: once its own claim has been seen there,
-    /// any later state that does not carry it (lapsed, unreadable, or another pass's claim) ends the pass
-    /// with an <see cref="OperationCanceledException"/>, cancelling the pool leaf at its next step
+    /// So the holder watches the live lease while its pass runs (<see cref="Lost"/>): once its own claim has
+    /// been seen there, any later state that does not carry it (lapsed, unreadable, or another pass's claim)
+    /// — and, even before that, a claim taken at or after its own, or a lease stream that faults or ends —
+    /// ends the pass with an <see cref="OperationCanceledException"/>, cancelling the pool leaf at its next step
     /// boundary — the same cooperative bound as the deadline — and leaves the lease alone. COLD.</para>
     /// </summary>
     /// <typeparam name="TResult">The pass's result.</typeparam>
@@ -395,27 +396,64 @@ public static class PrebuiltBundleRetentionLease
 
     /// <summary>
     /// <paramref name="pass"/>, ended with an <see cref="OperationCanceledException"/> as soon as the live
-    /// lease — once it has been seen carrying <paramref name="stampedClaim"/> — carries anything else: the
-    /// lease node's owner reloaded a lease whose claim had not persisted, or another replica holds it.
-    /// Unsubscribing the pass cancels its pool leaf at the next step boundary. As System. COLD.
+    /// lease no longer names <paramref name="stampedClaim"/> (<see cref="Lost"/>): the lease node's owner
+    /// reloaded a lease whose claim had not persisted, another replica holds it, or the lease can no longer
+    /// be followed. Unsubscribing the pass cancels its pool leaf at the next step boundary. As System. COLD.
     /// </summary>
     private static IObservable<TResult> WhileHeld<TResult>(IMessageHub hub, long stampedClaim, IObservable<TResult> pass)
     {
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
+        var lost = Lost(
+                access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
+                    .Select(node => Read(node, options))),
+                stampedClaim)
+            .SelectMany(cancelled => Observable.Throw<TResult>(cancelled));
+        return pass.Publish(shared => shared.Merge(lost.TakeUntil(shared.LastOrDefaultAsync())));
+    }
+
+    /// <summary>
+    /// Emits ONE <see cref="OperationCanceledException"/> when the holder of <paramref name="stampedClaim"/>
+    /// must stop, read off the <paramref name="live"/> lease (#7459). Pure composition. COLD.
+    ///
+    /// <list type="bullet">
+    ///   <item><description><b>Lost after it was seen.</b> Once the live lease has carried this claim, any
+    ///     later state that does not (lapsed, unreadable, another pass's claim) is a loss.</description></item>
+    ///   <item><description><b>Replaced before it was seen</b> (review of #7515). The live lease may replay
+    ///     a snapshot from BEFORE this claim landed, so a foreign state seen first is not by itself a loss —
+    ///     but a foreign claim whose hold ends no earlier than this one's was taken at or after it, never
+    ///     before it (a claim is taken only over a hold that has ended), so it IS one. Waiting for this
+    ///     claim to appear first would skip it, and every later state, for as long as the pass runs.</description></item>
+    ///   <item><description><b>The lease can no longer be followed.</b> A fault of the live lease, or its
+    ///     completion, leaves the holder unable to see a loss, so it is one: a cancellation (the fault kept
+    ///     as its inner exception), never an ordinary pass fault — a pass that FAULTS releases at once, under
+    ///     a leaf that may still be winding down, while a cancelled one leaves the lease to lapse.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="live">The lease as the live stream carries it; <c>null</c> when its content cannot be read.</param>
+    /// <param name="stampedClaim">The claim the holder's stamp settled.</param>
+    internal static IObservable<OperationCanceledException> Lost(
+        IObservable<PrebuiltBundleRetentionLeaseState?> live, long stampedClaim)
+    {
         var unstamped = stampedClaim & ~StampedFlag;
+        var until = new PrebuiltBundleRetentionLeaseState(stampedClaim).Until;
         bool Ours(PrebuiltBundleRetentionLeaseState? lease) => lease is not null && (lease.Claim == stampedClaim || lease.Claim == unstamped);
-        var lost = access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
-                .Select(node => Read(node, options)))
-            .SkipWhile(lease => !Ours(lease))
+        bool Replaced(PrebuiltBundleRetentionLeaseState? lease) => lease is { Claim: > 0 } && !Ours(lease) && lease.Until >= until;
+        return live
+            .SkipWhile(lease => !Ours(lease) && !Replaced(lease))
             .Where(lease => !Ours(lease))
-            .Take(1)
-            .SelectMany(lease => Observable.Throw<TResult>(new OperationCanceledException(
+            .Select(lease => new OperationCanceledException(
                 "the prebuilt-bundle retention lease this pass held no longer names it (now: "
                 + (lease is null ? "unreadable" : lease.Claim <= 0 ? "lapsed" : $"pass {lease.Holder}")
                 + ") — its owner lost the claim or another replica took it, so this pass stops at its next "
-                + "step boundary rather than sweep beside another; the next pass re-plans what it did not reach")));
-        return pass.Publish(shared => shared.Merge(lost.TakeUntil(shared.LastOrDefaultAsync())));
+                + "step boundary rather than sweep beside another; the next pass re-plans what it did not reach"))
+            .Catch<OperationCanceledException, Exception>(fault => Observable.Return(new OperationCanceledException(
+                "the prebuilt-bundle retention lease this pass held can no longer be followed, so a loss could not be "
+                + "seen — the pass stops at its next step boundary and leaves the lease to lapse", fault)))
+            .Concat(Observable.Defer(() => Observable.Return(new OperationCanceledException(
+                "the prebuilt-bundle retention lease this pass held stopped being followed (its stream ended), so a "
+                + "loss could not be seen — the pass stops at its next step boundary and leaves the lease to lapse"))))
+            .Take(1);
     }
 
     /// <summary>
