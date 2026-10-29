@@ -142,3 +142,43 @@ public sealed class LoadedPackageModuleReader(ModuleLandingService landing) : IL
 /// assembly.</param>
 /// <param name="Seed">The image copy's <see cref="ImageModuleSeed"/>.</param>
 public sealed record ImageModuleCopy(string Leaf, ImageModuleSeed Seed);
+
+/// <summary>
+/// 🚨 The SAME reading as <see cref="LoadedPackageModuleReader"/>, taken off the landing service's
+/// maintained activation snapshot (<see cref="ModuleLandingService.GetServedActivation"/>) instead
+/// of a fresh walk of the volume per call — for the compile half of the dependency floor
+/// (<see cref="NodeTypeDependencyFloorReader"/>, MeshWeaver#6195), which sits on every compile and
+/// every hydration of an existing build, i.e. on the activation path.
+///
+/// <para><b>Why not the authoritative read.</b> <see cref="ModuleLandingService.GetActivation"/>
+/// derives the list from every module's record directory; on the fleet's Azure Files share that
+/// measured 7–9 s with 44 modules. Paid once per hydration, it put that latency in front of every
+/// instance activation of a packaged NodeType, and N concurrent activations ran N concurrent scans
+/// of the same share.</para>
+///
+/// <para><b>Why the snapshot is sound here.</b> The floor needs one fact per loaded module: the
+/// version of the generation leaf THIS process loaded. A generation's version never changes, and
+/// the loaded leaves are read live (<see cref="ModuleActivationStatus.LoadedModuleGenerations()"/>)
+/// on every call. A snapshot can only LAG — by at most
+/// <see cref="ModuleLandingService.ServedActivationFreshness"/> for another replica's landing; this
+/// process's own writes invalidate it at once — and a lagging snapshot that does not yet name a
+/// newly loaded leaf leaves that module UNJUDGED, which is the floor's abstain direction (the
+/// compile runs, as before the rule existed), never a false "unmet". The import half keeps the
+/// authoritative <see cref="LoadedPackageModuleReader"/>: it runs on a schedule, not on activation.</para>
+/// </summary>
+/// <param name="landing">The landing service whose served snapshot names each generation's version.</param>
+internal sealed class ServedLoadedPackageModuleReader(ModuleLandingService landing) : ILoadedPackageModules
+{
+    /// <inheritdoc />
+    public IObservable<ImmutableDictionary<string, LoadedPackageModule>> Read() =>
+        landing.GetServedActivation().Take(1)
+            // The image-seed reads stay off the caller's thread, on the same read lane the
+            // authoritative reading resolved them on.
+            // atomic-blocking-leaf: the in-process load map and the image copies' seed stamps
+            .SelectMany(activation => landing.ReadPool.InvokeBlocking(_ =>
+            {
+                var loaded = ModuleActivationStatus.LoadedModuleGenerations();
+                return LoadedPackageModuleReader.ResolveWithImageCopies(
+                    activation, loaded, LoadedPackageModuleReader.ImageCopiesOf(loaded));
+            }));
+}

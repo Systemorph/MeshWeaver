@@ -1118,13 +1118,19 @@ internal static class NodeTypeCompilationHelpers
         //   • Skips static-only types (nothing to Roslyn-compile).
         //   • ImpersonateAsSystem — a framework-internal self-heal, exactly like the other
         //     kickoffs (no inbound AccessContext → no "lacks Create" loop).
+        //   • 🚨 Eligibility-aware (#6195) — a process below the dependency floor of the type's
+        //     package skips it: its compile would be refused before Roslyn, so the flip would only
+        //     move the shared record through Pending for nothing. The kickoff of an owner that
+        //     MEETS the floor is what rebuilds a type a below-floor replica left Unavailable.
         var frameworkStaleKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
-                && def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error
-                && HasStaleFrameworkBuild(def, guards)
+                && IsSettledOnAStaleBuild(def, guards)
                 && !IsStaticOnlyNodeType(node, def)
                 && parkRegistry?.IsParked(hubPath) != true)
             .Take(1)
+            .SelectMany(node => MeetsDependencyFloorHere(hub, hubPath, "framework-stale kickoff", logger)
+                .Where(eligible => eligible)
+                .Select(_ => node))
             // 🚨 ASK THE STORE BEFORE REBUILDING. The record's CompiledFrameworkVersion says which
             // framework the LAST WRITE-BACK came from; it does not say whether bytes for OUR
             // framework exist. Those are different questions, and the assembly store answers the one
@@ -3414,11 +3420,19 @@ internal static class NodeTypeCompilationHelpers
     /// <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/> re-asked with the
     /// regenerated digest on the guards — the production predicate itself, so the lane and the
     /// predicate can never disagree about what it just proved.</param>
+    /// <param name="recordUnavailable">The record is <see cref="CompilationStatus.Unavailable"/> — a
+    /// replica below its package's dependency floor stamped it over the last good build (#6195).
+    /// 🚨 On a framework roll with a store HIT such a record is REBUILT, never skipped (review of
+    /// #7506): the skip leaves the correction to the instance-activation self-heal, and that heal
+    /// deliberately excludes <c>Unavailable</c>, so a skip stranded the type on the overlay on every
+    /// replica. The rebuild is bounded like every kickoff — once per hub lifetime, on a replica that
+    /// meets the floor — and publishes coordinates for the live framework.</param>
     internal static StaleBuildAction DecideStaleBuildAction(
         bool frameworkHeldStill,
         bool storeHasLiveFrameworkBytes,
         ReevaluationVerdict verdict,
-        bool usableAfterReevaluation)
+        bool usableAfterReevaluation,
+        bool recordUnavailable = false)
     {
         if (frameworkHeldStill)
             return verdict is ReevaluationVerdict.CarryForward && usableAfterReevaluation
@@ -3428,7 +3442,7 @@ internal static class NodeTypeCompilationHelpers
         // 🚨 The framework moved: NO path here returns RestampDependencyRecord.
         if (!storeHasLiveFrameworkBytes)
             return StaleBuildAction.Rebuild;
-        return verdict is ReevaluationVerdict.Rebuild
+        return verdict is ReevaluationVerdict.Rebuild || recordUnavailable
             ? StaleBuildAction.Rebuild
             : StaleBuildAction.Skip;
     }
@@ -3503,7 +3517,8 @@ internal static class NodeTypeCompilationHelpers
                             frameworkHeldStill: false,
                             storeHasLiveFrameworkBytes: true,
                             r.Result.Verdict,
-                            usableAfterReevaluation: false),
+                            usableAfterReevaluation: false,
+                            recordUnavailable: def?.CompilationStatus is CompilationStatus.Unavailable),
                         r.Result.Detail)));
     }
 
@@ -3943,6 +3958,57 @@ internal static class NodeTypeCompilationHelpers
     /// <summary>The node's content as a <see cref="NodeTypeDefinition"/>, or null.</summary>
     private static NodeTypeDefinition? DefinitionOf(IMessageHub hub, MeshNode? node) =>
         node?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+
+    /// <summary>
+    /// 🚨 The framework-stale kickoff's state predicate: a SETTLED record whose recorded build is
+    /// stale here (<see cref="HasStaleFrameworkBuild(NodeTypeDefinition, BuildGuards?)"/>).
+    ///
+    /// <para><see cref="CompilationStatus.Unavailable"/> counts as settled (#6195). A replica below
+    /// its package's dependency floor stamps it over a type's last good build and keeps that
+    /// build's coordinates — and with those coordinates present, the failed-verdict re-drive
+    /// (<see cref="HasStaleFailureVerdict"/>, which owns only the no-build case) and the
+    /// older-platform trigger (<see cref="HasFailureFromOlderPlatform"/>, <c>Error</c> only) both
+    /// decline it. Accepting only <c>Ok</c>/<c>Error</c> here left such a type on the Unavailable
+    /// overlay on every replica whose live build differs from the retained one, until a batch bake
+    /// or a person intervened. The same reasoning that admits <c>Error</c> admits it: the assembly
+    /// coordinates are written only by a SUCCESSFUL compile, so a failure carrying them is layered
+    /// on a good build.</para>
+    /// </summary>
+    /// <param name="def">The definition to judge.</param>
+    /// <param name="guards">The live build guards.</param>
+    internal static bool IsSettledOnAStaleBuild(NodeTypeDefinition def, BuildGuards? guards) =>
+        def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error or CompilationStatus.Unavailable
+        && HasStaleFrameworkBuild(def, guards);
+
+    /// <summary>
+    /// Whether THIS process meets the declared dependency floor of the package that owns
+    /// <paramref name="nodeTypePath"/> (<see cref="INodeTypeDependencyFloor"/>, #6195) — true when
+    /// no floor is registered or nothing could be judged. Cold; emits exactly once. A false answer
+    /// is logged once, naming <paramref name="what"/> was skipped.
+    /// </summary>
+    /// <param name="hub">The hub whose services carry the floor.</param>
+    /// <param name="nodeTypePath">The NodeType's path.</param>
+    /// <param name="what">What is skipped on an unmet floor, for the log line.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IObservable<bool> MeetsDependencyFloorHere(
+        IMessageHub hub, string nodeTypePath, string what, ILogger? logger)
+    {
+        if (hub.ServiceProvider.GetService<INodeTypeDependencyFloor>() is not { } floor)
+            return Observable.Return(true);
+        return floor.Unmet(nodeTypePath)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Select(unmet =>
+            {
+                if (unmet is null)
+                    return true;
+                logger?.LogInformation(
+                    "{What} of {NodeTypePath} SKIPPED on this replica — {Unmet}. A replica that meets the "
+                    + "floor rebuilds it (#6195).",
+                    what, nodeTypePath, unmet);
+                return false;
+            });
+    }
 
     // The twin of HasUsableBuild's modules-hash join (#1664 step 11): a build whose stamped
     // CompiledModulesHash differs from the live set is STALE the same way a framework mismatch
@@ -4789,7 +4855,10 @@ internal static class NodeTypeCompilationHelpers
     /// source set could not be established (<see cref="SourceDiscoveryUnavailableException"/>) or a
     /// mesh address the compile had to read was RECYCLING for the reader's whole budget
     /// (<see cref="AddressRecyclingException"/>). Both are availability facts about the mesh, never
-    /// statements about the code.
+    /// statements about the code. So is a compile THIS replica declined to run because it does not
+    /// meet the declared dependency floor of the type's package
+    /// (<see cref="DependencyFloorUnmetException"/>, #6195 — see <see cref="INodeTypeDependencyFloor"/>):
+    /// a replica that runs a satisfying dependency answers it differently.
     ///
     /// <para>🚨 One predicate, two consumers, and they MUST agree (#1701).
     /// <see cref="ApplyCompileFailure"/> uses it to stamp <see cref="CompilationStatus.Unavailable"/>
@@ -4827,9 +4896,44 @@ internal static class NodeTypeCompilationHelpers
     /// correct reading, not a hole — a bake whose process cannot emit has evaluated nothing.</para>
     /// </summary>
     internal static bool IsAvailabilityNonVerdict(Exception? error) =>
-        error is SourceDiscoveryUnavailableException or AddressRecyclingException
+        // 🚨 DependencyFloorUnmetException (#6195): THIS replica does not run what the package
+        // declares it needs, so the compile was never run — a fact about the replica, which a
+        // replica that meets the floor answers differently. Stamping it Error put one replica's
+        // module generation onto the record every replica reads.
+        error is SourceDiscoveryUnavailableException or AddressRecyclingException or DependencyFloorUnmetException
         || (error is not null
             && EmitPipeline.IsProcessEmitFailure(error.Data[EmitPipeline.EmitCanaryDataKey]));
+
+    /// <summary>
+    /// The LEAD of a failed compile's activity-log line, and its catalog key: which failure this
+    /// was, said before the detail. "Roslyn failed" in front of a failure Roslyn never saw is the
+    /// log-line version of the #1218 bug — so each cause that is NOT a Roslyn verdict names itself.
+    /// Pure; the detail after the colon rides as the key's <c>{detail}</c> argument (#3236).
+    /// </summary>
+    /// <param name="error">The attempt's fault, or null when the compile produced no assembly.</param>
+    internal static (string Lead, string Key) CompileFailureLead(Exception? error) => error switch
+    {
+        SourceDiscoveryUnavailableException =>
+            ("Compile NOT ATTEMPTED — source set could not be established",
+                "activity.compile.notAttempted"),
+        AddressRecyclingException =>
+            ("Compile NOT SETTLED — a mesh address it reads was recycling "
+             + "for the reader's whole budget",
+                "activity.compile.notSettled"),
+        // #6195: THIS replica does not run what the type's package requires, so Roslyn never ran.
+        DependencyFloorUnmetException =>
+            ("Compile NOT ATTEMPTED — this replica does not meet the dependency floor of the "
+             + "type's package",
+                "activity.compile.notAttemptedBelowFloor"),
+        // Roslyn SUCCEEDED here; the assembly store did not keep the bytes
+        // (a full volume, memex 2026-09-08). Saying "Roslyn failed" would send
+        // the reader to the source when the cause is the disk.
+        AssemblyPublicationException =>
+            ("Assembly NOT PUBLISHED — Roslyn produced it, but the assembly "
+             + "store did not keep the bytes, so no Release was minted",
+                "activity.compile.notPublished"),
+        _ => ("Roslyn failed", "activity.compile.roslynFailed"),
+    };
 
     /// <summary>
     /// Reports a terminal compile outcome that reached NO VERDICT — the two shapes
@@ -5539,24 +5643,7 @@ internal static class NodeTypeCompilationHelpers
                         // The LEAD is the sentence this code owns, so it carries the catalog key;
                         // the detail after the colon is Roslyn's own text, which no catalog can hold
                         // and which therefore rides as an ARGUMENT (#3236).
-                        var (failureLead, failureLeadKey) = outcome.Error switch
-                        {
-                            SourceDiscoveryUnavailableException =>
-                                ("Compile NOT ATTEMPTED — source set could not be established",
-                                    "activity.compile.notAttempted"),
-                            AddressRecyclingException =>
-                                ("Compile NOT SETTLED — a mesh address it reads was recycling "
-                                 + "for the reader's whole budget",
-                                    "activity.compile.notSettled"),
-                            // Roslyn SUCCEEDED here; the assembly store did not keep the bytes
-                            // (a full volume, memex 2026-09-08). Saying "Roslyn failed" would send
-                            // the reader to the source when the cause is the disk.
-                            AssemblyPublicationException =>
-                                ("Assembly NOT PUBLISHED — Roslyn produced it, but the assembly "
-                                 + "store did not keep the bytes, so no Release was minted",
-                                    "activity.compile.notPublished"),
-                            _ => ("Roslyn failed", "activity.compile.roslynFailed")
-                        };
+                        var (failureLead, failureLeadKey) = CompileFailureLead(outcome.Error);
                         var failureDetail = outcome.Error?.Message
                             ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs
                                 ? string.Join("; ", errs.Select(m => m.Message))
