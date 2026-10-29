@@ -475,9 +475,11 @@ class FileStore(Store):
             probe.unlink()
         except OSError as e:
             why = f"{self.root} is not writable by this job: {e}"
-            if created and probe.exists():
+            # No `probe.exists()` gate: on the share it can itself raise (EIO), outside any guard,
+            # and turn the diagnostic into a traceback with the probe still left behind.
+            if created:
                 try:
-                    probe.unlink()
+                    probe.unlink(missing_ok=True)
                 except OSError as cleanup:
                     return f"{why} — and its write probe {probe.name} could not be removed: {cleanup}"
             return why
@@ -1003,6 +1005,29 @@ def self_test() -> int:
             check("file: a probe whose write fails reports the store unreachable",
                   "not writable" in full_said and "No space left" in full_said, full_said)
             check("file: …and removes the probe it created (#7375)",
+                  not list(share.glob(".mw-store-write-probe.*")),
+                  [p.name for p in share.glob(".mw-store-write-probe.*")])
+
+            # …and the cleanup is not gated on `exists()`, which on a mounted share can itself raise
+            # (EIO) — that escaped as a traceback and skipped the unlink (#7375 review).
+            real_exists = Path.exists
+
+            def eio_exists(self_, *a, **k):
+                if self_.name.startswith(".mw-store-write-probe."):
+                    raise OSError(errno.EIO, "Input/output error")
+                return real_exists(self_, *a, **k)
+
+            Path.exists = eio_exists
+            try:
+                try:
+                    eio_said = FullShare(str(share)).reachable()
+                except OSError as escaped:
+                    eio_said = f"ESCAPED: {escaped}"
+            finally:
+                Path.exists = real_exists
+            check("file: an erroring exists() neither escapes nor masks the write failure",
+                  "not writable" in eio_said and "No space left" in eio_said, eio_said)
+            check("file: …and the probe is still removed",
                   not list(share.glob(".mw-store-write-probe.*")),
                   [p.name for p in share.glob(".mw-store-write-probe.*")])
 
