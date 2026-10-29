@@ -88,6 +88,25 @@ description ("Invited to space …", "Invited to group … as …"), and that te
 invitee's inbox. An address that already has an account is granted at once and is sent no
 invitation email, so the message only travels with an invitation.
 
+### The language of the invitation email
+
+The invitee has no account yet, so there is no profile to read a language from. **The inviting host
+picks it, and it defaults to the host's own language** (#7482). The Space **Invite** form has a
+**Language of the invitation email** picker (endonyms: English, Deutsch) that starts at the host's
+`AccessContext.Locale`; the pick travels on the invitation as `Invitation.Locale`
+(`SpaceInviteService.Invite(…, message, locale)`, or `GrantOrScheduleAccess(…, note, message, locale)`).
+A null or blank pick is the host's own language, read on the host's turn before the System-run
+lookup and writes; a group invitation (`InviteToGroup`) stamps the host's language the same way. The
+value is always a supported tag (`Locales.Resolve`), and it is never read from the process culture.
+
+`InvitationEmail.Build(invitation, spaceName, baseUrl)` (MeshWeaver.Graph) renders the subject and
+the HTML body in that language: every line comes from the catalog
+(`notification.email.invitation.*`), the host's personal message is its own paragraph, and the
+standing footer of `EmailTemplate` follows the same tag. An invitation written before the field
+existed carries no language and renders in English. The emailer in MeshWeaver.Plugins
+(`InvitationEmailSender.BuildInviteEmail`) is the one that sends it: until it builds its email through
+this method, the email it sends keeps its own English text whatever the invitation says.
+
 ### The invitation link token
 
 An invited person was once asked to TYPE an email whenever their sign-in provider returned no email
