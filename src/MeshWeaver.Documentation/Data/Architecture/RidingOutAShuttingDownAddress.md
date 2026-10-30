@@ -220,7 +220,11 @@ If you write code that must survive a `ShuttingDown` answer:
    even when its activation was on the same pod. So the reading of the next occurrence is:
    - the owner is `IsShuttingDown=True` with the refusing activation's tag: the dying activation
      accepted the re-probe and has not answered it;
-   - a `Started` owner with a new tag: a successor is still activating and holds the re-probe;
+   - a `Starting` owner with a new tag: a successor is still initializing, and the re-probe may
+     be parked behind its init gates (the `deferred` count says whether anything is);
+   - a `Started` owner with a new tag: a successor is up and running, so slow activation does NOT
+     explain the silence. The re-probe was either never delivered to it or answered and lost; a
+     new tag alone does not prove the successor holds it, so read its queue and pending callbacks;
    - "NO LOCAL HUB": nothing on this pod holds the address, so the re-probe is with another silo
      or Orleans.
 

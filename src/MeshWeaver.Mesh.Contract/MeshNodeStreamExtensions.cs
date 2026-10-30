@@ -3852,8 +3852,10 @@ public static class MeshNodeStreamExtensions
                 // The activation token and IsShuttingDown are printed beside the owner's state for
                 // the same question: the token is the one a ShuttingDown NACK carries, so a target
                 // that is STILL the refusing activation (shutting down, same token) is the dying
-                // hub holding the re-probe, and a Started successor with a new token is a slow
-                // reactivation.
+                // hub holding the re-probe. A successor with a new token says only that the address
+                // reactivated: at RunLevel=Starting it is still initializing (the re-probe may be
+                // deferred behind its gates), while at Started it is up, so slow activation does
+                // not explain the silence and its queue / pending callbacks must be read.
                 string targetState;
                 try
                 {
