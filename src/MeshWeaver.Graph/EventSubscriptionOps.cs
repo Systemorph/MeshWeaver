@@ -109,6 +109,51 @@ public static class EventSubscriptionOps
             return node with { Content = user with { PinnedPaths = [.. user.PinnedPaths, path] } };
         });
 
+    /// <summary>
+    /// Delivers a firing to the node at <paramref name="path"/>: writes <paramref name="delivery"/> onto
+    /// its content as the <c>eventDelivery</c> field (<see cref="WithDelivery"/>), through the node's
+    /// own stream, so the write routes to the node's owning hub and that hub's watcher acts on it.
+    /// Every other field of the content is left as it was.
+    /// </summary>
+    /// <param name="hub">The hub whose workspace issues the write.</param>
+    /// <param name="path">The node named by <see cref="EventSubscription.DeliverTo"/>.</param>
+    /// <param name="delivery">What fired, for whom, and on whose request.</param>
+    /// <returns>The node after the write. Cold.</returns>
+    public static IObservable<MeshNode> Deliver(IMessageHub hub, string path, EventDelivery delivery)
+        => hub.GetWorkspace().GetMeshNodeStream(path).Update(node =>
+            node with { Content = WithDelivery(node.Content, delivery, hub.JsonSerializerOptions) });
+
+    /// <summary>
+    /// <paramref name="content"/> as JSON with <paramref name="delivery"/> set on its
+    /// <c>eventDelivery</c> field (named through <paramref name="options"/>' naming policy). The content
+    /// may arrive typed or as a <see cref="JsonElement"/>; either way its other fields, its
+    /// <c>$type</c> included, are kept, so the owning hub re-types it on the way in. Pure.
+    /// </summary>
+    /// <param name="content">The node's current content, or null.</param>
+    /// <param name="delivery">The delivery to set.</param>
+    /// <param name="options">The mesh's serializer options.</param>
+    /// <returns>The content with the delivery set.</returns>
+    public static JsonObject WithDelivery(object? content, EventDelivery delivery, JsonSerializerOptions options)
+    {
+        var json = content switch
+        {
+            null => null,
+            JsonElement element => JsonNode.Parse(element.GetRawText()),
+            JsonNode node => node.DeepClone(),
+            _ => JsonSerializer.SerializeToNode(content, options),
+        };
+        var obj = json as JsonObject ?? new JsonObject();
+        obj[DeliveryField(options)] = JsonSerializer.SerializeToNode(delivery, options);
+        return obj;
+    }
+
+    /// <summary>The content field a delivery is written to: <c>EventDelivery</c> through the options'
+    /// naming policy (<c>eventDelivery</c> on the mesh). Pure.</summary>
+    /// <param name="options">The mesh's serializer options.</param>
+    /// <returns>The field name.</returns>
+    public static string DeliveryField(JsonSerializerOptions options)
+        => options.PropertyNamingPolicy?.ConvertName(nameof(EventDelivery)) ?? nameof(EventDelivery);
+
     /// <summary>Flips a subscription to its terminal state (Fired on success, Failed with the error otherwise).</summary>
     public static IObservable<MeshNode> SetStatus(
         IMessageHub hub, string subscriptionPath, EventSubscriptionStatus status, string? error = null)

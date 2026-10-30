@@ -582,8 +582,9 @@ public sealed class EventSubscriptionRunner(
 
             // Continuations this assembly cannot implement — their effects live ABOVE it in the
             // reference graph (PublishSocialPost is owned by MeshWeaver.Social, which references
-            // Graph). The owning module registers an IEventContinuationHandler; nothing is silently
-            // skipped, because an unhandled type still falls through to the throw below.
+            // Graph), or in a module's in-mesh source. The vocabulary is OPEN (string constants), so
+            // this arm is not a default that means something: it routes the value to whoever claims
+            // it, and a value nobody claims fails naming it.
             _ => ExternalContinuation(subscription, userId),
         };
 
@@ -604,20 +605,49 @@ public sealed class EventSubscriptionRunner(
     ///   hosts and hides the duplicate indefinitely.</item>
     /// </list>
     /// </summary>
+    /// <summary>
+    /// Hands the firing to the node named by <see cref="EventSubscription.DeliverTo"/>: an
+    /// <see cref="EventDelivery"/> written onto its content, as System, through its own stream. The
+    /// subscription is <c>Fired</c> once that write lands; what the module then does is reported on
+    /// its own node, which is where its owner looks.
+    /// </summary>
+    private IObservable<MeshNode> Deliver(EventSubscription subscription, string subjectId)
+    {
+        var delivery = new EventDelivery
+        {
+            SubscriptionId = subscription.Id,
+            ContinuationType = subscription.ContinuationType,
+            SubjectId = subjectId,
+            FiredAt = DateTimeOffset.UtcNow,
+            CreatedBy = subscription.CreatedBy,
+        };
+        return AsSystem(() => EventSubscriptionOps.Deliver(hub, subscription.DeliverTo!.Trim(), delivery));
+    }
+
     private IObservable<MeshNode> ExternalContinuation(EventSubscription subscription, string userId)
     {
+        // An explicit DeliverTo is the subscription's own statement of who acts: the owning module's
+        // node, whose hub reacts to the delivery. It is how in-mesh source owns a continuation.
+        if (!string.IsNullOrWhiteSpace(subscription.DeliverTo))
+            return Deliver(subscription, userId);
+
         var handlers = hub.ServiceProvider.GetServices<IEventContinuationHandler>()
-            .Where(h => h.ContinuationType == subscription.ContinuationType)
+            .Where(h => string.Equals(h.ContinuationType, subscription.ContinuationType, StringComparison.Ordinal))
             .ToList();
 
         if (handlers.Count == 1)
             return AsSystem(() => handlers[0].Execute(subscription, userId));
 
+        // Unknown stays unknown: logged by name here and recorded on the subscription by the caller's
+        // Failed write — never mapped onto a continuation that means something.
+        logger?.LogWarning(
+            "Event subscription {Id} has continuation {Continuation}, which {Count} handler(s) claim and which names no DeliverTo node",
+            subscription.Id, subscription.ContinuationType, handlers.Count);
         return Observable.Throw<MeshNode>(new InvalidOperationException(handlers.Count == 0
             ? $"Event subscription {subscription.Id} has continuation "
               + $"{subscription.ContinuationType}, which no IEventContinuationHandler is registered "
-              + "for. The module that owns it is not composed into this host — nothing will ever fire "
-              + "this subscription until it is."
+              + "for and which names no DeliverTo node. The module that owns it is not composed into "
+              + "this host — nothing will ever fire this subscription until it is."
             : $"Event subscription {subscription.Id} has continuation "
               + $"{subscription.ContinuationType}, which {handlers.Count} IEventContinuationHandlers "
               + $"claim ({string.Join(", ", handlers.Select(h => h.GetType().Name))}). Exactly one must "

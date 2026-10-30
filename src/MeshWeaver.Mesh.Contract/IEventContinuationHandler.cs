@@ -28,8 +28,12 @@ public interface IEventContinuationHandler
     /// <summary>The continuation this handler implements. EXACTLY one handler per type: the runner
     /// refuses to fire a continuation that two handlers claim, rather than taking whichever was
     /// registered first — that would make behaviour depend on registration order and hide the
-    /// duplicate indefinitely.</summary>
-    EventContinuationType ContinuationType { get; }
+    /// duplicate indefinitely.
+    ///
+    /// <para>An <see cref="EventContinuationType"/> constant, or one the module declares for itself:
+    /// the vocabulary is open, so a module claims its own value with no change to the platform. The
+    /// runner compares it ordinally with <see cref="EventSubscription.ContinuationType"/>.</para></summary>
+    string ContinuationType { get; }
 
     /// <summary>
     /// Runs the continuation for <paramref name="subscription"/> and emits the node it acted on.

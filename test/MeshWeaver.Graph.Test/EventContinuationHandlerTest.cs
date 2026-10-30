@@ -31,7 +31,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
     /// into the mesh's DI, never a static: a static would leak across the parallel test classes below.</summary>
     private sealed class RecordingHandler : IEventContinuationHandler
     {
-        public EventContinuationType ContinuationType => EventContinuationType.PublishSocialPost;
+        public string ContinuationType => EventContinuationType.PublishSocialPost;
         public string? SeenTargetPath { get; private set; }
         public string? SeenCreatedBy { get; private set; }
         public int Calls { get; private set; }
