@@ -2339,6 +2339,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-shell.py --self-test
 
+    # template-feed.yml runs after CD on main only, so its first execution would be in production.
+    # Proven here both ways: the derived list equals the template's pins plus their closure, and an
+    # id the template pins that no project packs, an own-line pin above its version, a pack missing
+    # a pinned id, a dependency outside the plan and a push to nuget.org are each RED (#4467).
+    - name: "The template feed packs exactly what the template restores, and is RED otherwise (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/template-feed.py --self-test
+
     - name: "Image-set reads retain registry failures"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-check-image-set.py

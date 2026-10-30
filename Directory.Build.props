@@ -1,5 +1,7 @@
 <Project>  <PropertyGroup>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- Only a project that HAS a README declares one: packing one without it fails NU5019, which is how
+         the template feed (.github/workflows/template-feed.yml, MeshWeaver.Plugins#4467) first met it. -->
+    <PackageReadmeFile Condition="Exists('$(MSBuildProjectDirectory)/README.md')">README.md</PackageReadmeFile>
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
@@ -28,7 +30,12 @@
          reads a project WITHOUT IsPackable=false as packable. So a project that quietly regains
          packability silently SPARES its published package from retirement — the subtraction fails
          toward leaving a dead package listed. Opting a project back in means intending to publish
-         it, and means adding a publish lane for it (this repository has none since the CLI moved). -->
+         it, and means adding a publish lane for it (this repository has none since the CLI moved).
+
+         The one lane that packs from this tree, template-feed.yml (policy template-feed-private), does
+         NOT opt a project back in: it passes -p:IsPackable=true on the command line for exactly the
+         packages a generated Memex template restores, and pushes them to the PRIVATE GitHub Packages
+         feed — never nuget.org, so the retirement subtraction above is untouched. -->
     <IsPackable>false</IsPackable>
     <!-- 🚨 #890: every executable here runs with Tiered PGO OFF (runtimeconfig System.Runtime.TieredPGO).
          On .NET 10 linux-x64 the Tier-1 JIT, in roughly one process in three of the in-mesh compile
@@ -358,7 +365,7 @@
     <FileVersion>$(_VersionNumeric).0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('$(MSBuildProjectDirectory)/README.md')" />
   </ItemGroup>
   <!-- Transitive security overrides — see the PackageVersion comment in Directory.Packages.props
        for the advisories and the dependency paths. No source fix exists yet: NuGet.Packaging 7.9.0
