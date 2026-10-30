@@ -476,9 +476,11 @@ to change):
   What is still NOT confirmed is persistence. A holder whose claim the owner committed, echoed live and
   then lost before it persisted runs until its watch sees the reloaded or superseding lease, and stops
   at the pass's next step boundary — so the overlap with a new holder is bounded by how fast the live
-  lease reaches the holder after the owner's loss, not closed. Closing that needs an acknowledgement
-  that means the write persisted, which is what an `Update` ack promises across the framework: a
-  data-layer decision this does not make.
+  lease reaches the holder after the owner's loss, not closed. An `Update` acknowledgement does NOT
+  promise that the write persisted (`ArmPatchAckWatcher` acks once the flush outlives its bound), so
+  closing it needs a DURABLE acknowledgement that the framework does not offer today. Adding one would
+  change what an `Update` ack promises across the framework: a data-layer decision for the owner,
+  which this does not make.
 
 🚨 **The claim is ONE number, and a lapsed claim is never `0`.** A remote `Update` reaches the owner
 as a three-way merge resolved per leaf (`MeshNodePatchMerge`). A string changed on both sides is
