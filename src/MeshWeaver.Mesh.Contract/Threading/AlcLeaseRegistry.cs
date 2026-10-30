@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -53,24 +54,41 @@ public sealed class AlcLeaseRegistry
     {
         private readonly object gate = new();
         private int inFlight;
+        // Who holds the leases, by the label each was taken under, and how many each. Updated under
+        // the same lock as the count, so the two always agree. A label names a KIND of holder (a
+        // module service type, a script session's binding), never an instance, so the map stays as
+        // small as the number of kinds.
+        private ImmutableDictionary<string, int> holders = ImmutableDictionary<string, int>.Empty.WithComparers(StringComparer.Ordinal);
 
         public BehaviorSubject<int> Count { get; } = new(0);
 
-        public void Enter()
+        public void Enter(string holder)
         {
             lock (gate)
+            {
+                holders = holders.SetItem(holder, holders.GetValueOrDefault(holder) + 1);
                 Count.OnNext(++inFlight);
+            }
         }
 
-        public void Leave()
+        public void Leave(string holder)
         {
             lock (gate)
+            {
+                var left = holders.GetValueOrDefault(holder) - 1;
+                holders = left > 0 ? holders.SetItem(holder, left) : holders.Remove(holder);
                 Count.OnNext(--inFlight);
+            }
         }
 
         public int Current
         {
             get { lock (gate) return inFlight; }
+        }
+
+        public ImmutableDictionary<string, int> Holders
+        {
+            get { lock (gate) return holders; }
         }
     }
 
@@ -81,18 +99,39 @@ public sealed class AlcLeaseRegistry
     /// is disposed. Hold it across the WHOLE call — including any await — because the window that
     /// matters is "a thread can still enter this code", not "a call has been issued".
     /// </summary>
-    public IDisposable Enter(AssemblyLoadContext context)
+    public IDisposable Enter(AssemblyLoadContext context) => Enter(context, UnnamedHolder);
+
+    /// <summary>
+    /// As <see cref="Enter(AssemblyLoadContext)"/>, recording WHO holds the lease: <paramref name="holder"/>
+    /// names the kind of holder (the module service a consumer leased, a script session's binding), and
+    /// <see cref="Holders"/> reports it while the lease is held — so a context left loaded because a lease
+    /// was never released says whose lease it was (MeshWeaver#7577), not only how many.
+    /// </summary>
+    public IDisposable Enter(AssemblyLoadContext context, string holder)
     {
+        ArgumentException.ThrowIfNullOrEmpty(holder);
         var entry = entries.GetOrAdd(context, _ => new Entry());
-        entry.Enter();
+        entry.Enter(holder);
         // Idempotent: a double-dispose must not decrement twice and fake a quiesce.
         var released = 0;
         return Disposable.Create(() =>
         {
             if (Interlocked.Exchange(ref released, 1) == 0)
-                entry.Leave();
+                entry.Leave(holder);
         });
     }
+
+    /// <summary>The label a lease taken without one is recorded under.</summary>
+    public const string UnnamedHolder = "(holder not named)";
+
+    /// <summary>
+    /// Who holds a lease on <paramref name="context"/> now, as <c>holder ×count</c>, ordered by holder —
+    /// empty when nobody does. Diagnostics: what a "left loaded" verdict prints.
+    /// </summary>
+    public IReadOnlyList<string> Holders(AssemblyLoadContext context) =>
+        entries.TryGetValue(context, out var entry)
+            ? [.. entry.Holders.OrderBy(h => h.Key, StringComparer.Ordinal).Select(h => $"{h.Key} ×{h.Value}")]
+            : [];
 
     /// <summary>Current lease count — 0 when nobody is inside the context. Diagnostics and tests;
     /// never gate an unload on reading this, gate on <see cref="Quiesced"/>.</summary>
@@ -149,9 +188,9 @@ public sealed class AlcLeaseRegistry
                 logger?.LogError(
                     exception,
                     "NOT unloading collectible context {What}: it still has {InFlight} in-flight "
-                    + "lease(s) after {Budget}. Leaving it loaded — unloading a context somebody "
-                    + "can still enter is the use-after-unload SIGSEGV.",
-                    what ?? context.Name, InFlight(context), budget);
+                    + "lease(s) after {Budget}, held by {Holders}. Leaving it loaded — unloading a context "
+                    + "somebody can still enter is the use-after-unload SIGSEGV.",
+                    what ?? context.Name, InFlight(context), budget, string.Join(", ", Holders(context)));
                 return Observable.Return(false);
             });
 }
