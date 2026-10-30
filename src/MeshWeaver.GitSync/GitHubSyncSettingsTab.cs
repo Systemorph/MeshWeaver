@@ -219,17 +219,18 @@ public static class GitHubSyncSettingsTab
         stack = stack.WithView(GitSyncViews.Section(host.Localize("ui.gitSync.tab.section.pullRequest")));
         // The draft row stays a STATIC part of the tab, exactly as it rendered before Azure Repos
         // existed: the GitHub path's render shape is unchanged (MeshWeaver.Plugins' settings-tab suite
-        // pins it). Policy azure-repos-two-way (MeshWeaver#6500): pull requests are not offered on an
-        // Azure Repos source, enforced where it cannot be
-        // bypassed — PullRequestService refuses every pull-request operation on an Azure Repos source,
-        // in the viewer's language — and the live notice below tells an Azure source's viewer so
+        // pins it). A hosting provider that does not offer pull requests (Azure Repos) is enforced
+        // where it cannot be bypassed — PullRequestService refuses every pull-request operation on
+        // such a source, in the viewer's language — and the live notice below tells its viewer so
         // before they click.
         foreach (var control in BuildDraftPullRequest(host, prService, spacePath))
             stack = stack.WithView(control);
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
-            .Select(cfg => GitRepositoryProvider.IsAzureRepos(cfg?.RepositoryUrl)
+            .Select(cfg => sync.HostingProviders.Refuse(cfg?.RepositoryUrl, GitHostingOperation.PullRequest) is not null
                 ? (UiControl?)Controls.Markdown(h.Localize("ui.gitSync.pullRequestsNotOffered"))
                 : (UiControl?)Controls.Stack.WithWidth("100%"))
+            .Catch<UiControl?, GitSyncRefusalException>(ambiguous =>
+                Observable.Return((UiControl?)Controls.Markdown(ambiguous.Refusal.Render(h.ViewerLocale()))))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // The PR editor + status, bound to the draft path the button stashes. Re-renders whenever
@@ -318,23 +319,32 @@ public static class GitHubSyncSettingsTab
 
     /// <summary>
     /// One line naming the hosting service a source syncs with, derived from its repository URL
-    /// (<see cref="GitRepositoryProvider.Classify"/>). An Azure Repos source says what it does not
-    /// offer (policy <c>azure-repos-two-way</c>). Nothing when no URL is set yet.
+    /// (<see cref="GitHostingProviders.Classify"/>): a hosting provider's own description
+    /// (<see cref="IGitHostingProvider.DisplayNameKey"/>), which says what it does not offer.
+    /// Nothing when no URL is set yet; a URL two providers claim shows that refusal.
     /// </summary>
     internal static UiControl ProviderLine(LayoutAreaHost host, GitHubSyncConfig? config)
     {
         if (config?.RepositoryUrl is not { Length: > 0 } url)
             return Controls.Stack.WithWidth("100%");
-        return Controls.Markdown(host.Localize(ProviderKey(url)));
+        try
+        {
+            return Controls.Markdown(host.Localize(
+                ProviderKey(host.Hub.ServiceProvider.GetRequiredService<GitHostingProviders>(), url)));
+        }
+        catch (GitSyncRefusalException ambiguous)
+        {
+            return Controls.Markdown(ambiguous.Refusal.Render(host.ViewerLocale()));
+        }
     }
 
     /// <summary>The localization key of <see cref="ProviderLine"/> for a repository URL.</summary>
-    internal static string ProviderKey(string repositoryUrl) => GitRepositoryProvider.Classify(repositoryUrl) switch
-    {
-        GitRepositoryProvider.AzureRepos => "ui.gitSync.provider.AzureRepos",
-        GitRepositoryProvider.GitHub => "ui.gitSync.provider.GitHub",
-        _ => "ui.gitSync.provider.Git",
-    };
+    internal static string ProviderKey(GitHostingProviders providers, string repositoryUrl)
+        => providers.For(repositoryUrl) is { } provider
+            ? provider.DisplayNameKey
+            : providers.Classify(repositoryUrl) == GitRepositoryProvider.GitHub
+                ? "ui.gitSync.provider.GitHub"
+                : "ui.gitSync.provider.Git";
 
     // ── Sync buttons (direction-aware, shared by the primary + additional sources) ──
 
