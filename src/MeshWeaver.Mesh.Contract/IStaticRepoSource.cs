@@ -115,7 +115,9 @@ public interface IStaticRepoSource
     /// 🚨 <b>The source does not mirror this node in EITHER direction</b> — it is never exported to
     /// the repo and never imported from it. Its absence from
     /// <see cref="EnumerateSourceNodes"/> is therefore <b>not evidence that it was deleted</b>, and
-    /// the prune MUST skip it. Path is the node's full mesh path. Default: nothing is excluded.
+    /// the prune MUST skip it — unless <see cref="IsRetiredFromMirror"/> says the exclusion is a
+    /// declared rule that retired a node this source previously imported (issue #7611). Path is the
+    /// node's full mesh path. Default: nothing is excluded.
     ///
     /// <para><b>Why this exists (issue #1326 — data loss).</b> The prune's rule was "absent from the
     /// source ⇒ mirror it away", guarded only by governance (<c>_</c>-prefixed segments), the
@@ -131,6 +133,26 @@ public interface IStaticRepoSource
     /// <param name="nodePath">Full mesh path of an existing node in the target partition.</param>
     /// <returns><c>true</c> when this source deliberately never carries the node.</returns>
     bool IsExcludedFromMirror(string nodePath) => false;
+
+    /// <summary>
+    /// 🚨 <b>The source's own DECLARED exclusion rules now exclude this node</b> — the narrow case
+    /// of <see cref="IsExcludedFromMirror"/> in which the exclusion is a rule the Space's owner
+    /// wrote (a GitSync Ignore pattern), not a slot the source never mirrors and not a hold
+    /// (a NodeType whose sources this instance must keep). For such a node the prune's
+    /// never-mirrored guard is lifted, and the node leaves the mesh when — and only when — the
+    /// source's prior import manifest records that this source put it there.
+    ///
+    /// <para><b>Why (issue #7611).</b> An Ignore pattern added AFTER the first import used to leave
+    /// the imported nodes in place for good: the prune skipped every ignored path (#1326), so they
+    /// were neither synced nor removed — a frozen projection the repository no longer controls. On a
+    /// one-way Space the write cap makes the Space system-owned, so no person, its Admin included,
+    /// could delete them either. Provenance is what keeps this from re-opening #1326: a node the mesh
+    /// minted under the same pattern was never in any manifest, so it is never a candidate.</para>
+    /// Default: nothing is retired.
+    /// </summary>
+    /// <param name="nodePath">Full mesh path of an existing node in the target partition.</param>
+    /// <returns><c>true</c> when the source's declared rules exclude a node it may previously have imported.</returns>
+    bool IsRetiredFromMirror(string nodePath) => false;
 
     /// <summary>
     /// Optional content-collection <b>imports</b> — assets a node references through its content

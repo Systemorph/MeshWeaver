@@ -147,6 +147,8 @@ public static class GraphConfigurationExtensions
             // HOSTS of the requested NodeTypes, read from its mesh hub's HostedHubsCollection.
             // Doc/Architecture/StaleStateUntilRecycle → "Recycling a type".
             builder.AddActivationRecycle();
+            // #7598 — the read-only token principal audit, run as System for a platform admin.
+            builder.AddTokenPrincipalAudit();
             // The installed-module fingerprint (#1644): resolves the mesh's InstalledModuleAssembly
             // set (empty when no modules) — stamped by compile write-backs as CompiledModulesHash.
             builder.ConfigureServices(s => s.AddSingleton(sp => InstalledModulesFingerprint.Live(sp)));

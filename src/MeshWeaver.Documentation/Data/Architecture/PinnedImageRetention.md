@@ -356,7 +356,18 @@ at the record's operator pin:
 
 Pushing the window onto a task that stays **disabled** passes both: it deletes nothing. That is the
 first governed run (#3438) — it installs the decided `--ago 30d` on the live task, after which
-`recordAheadOfRegistry` is stale and `verify` reds until the declaration is deleted.
+`recordAheadOfRegistry` is stale and `verify` reds until the declaration is deleted. `apply`'s own
+re-verify names the stale declaration as the next step and does not red on it, because `apply` is
+the act that made it stale.
+
+**A task's schedule is a timer trigger, not a task property.** `apply` writes the definition with
+`az acr task update --file` and the schedule with `az acr task timer update` on the trigger the task
+carries, or `timer add` when it carries none. `az acr task update` has no `--schedule` option. The
+first approved apply (`Ops/Actions/registry-retention-apply-3438` on the control instance, Memex run
+40555776172) passed one anyway and died `unrecognized arguments: --schedule 0 3 * * *` before it
+changed anything. `apply` had never run before, because it only runs as an approved change to the
+shared registry. `acr-retention-apply-selftest.py` now runs it on every pull request, offline,
+against an `az` that accepts exactly the options the real CLI accepts.
 
 🚨 **Measured 2026-10-09, the measured half refuses today**: the lock lane had been red on every
 nightly run since 2026-10-03 with *"installation `memex-cloud` reports core 57a6e5f and NO manifest in

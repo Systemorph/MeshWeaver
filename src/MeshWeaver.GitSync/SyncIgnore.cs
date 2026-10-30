@@ -116,6 +116,28 @@ public sealed class SyncIgnore
         return ignored;
     }
 
+    /// <summary>
+    /// True when <paramref name="relativePath"/> is ignored by a PATTERN — a rule the Space declares
+    /// (or <see cref="Default"/>) — and is NOT held (<see cref="WithHeldPaths"/>). This is the case
+    /// in which a node the sync previously imported may leave the mesh (issue #7611): its owner wrote
+    /// the rule. A held path never qualifies: a hold keeps a NodeType's sources this instance still
+    /// needs, which is the opposite of a retirement.
+    /// </summary>
+    /// <param name="relativePath">'/'-separated path relative to the Space root, no leading slash.</param>
+    /// <returns><c>true</c> when a configured pattern ignores the path and no hold covers it.</returns>
+    public bool IsIgnoredByPattern(string relativePath)
+    {
+        if (string.IsNullOrEmpty(relativePath))
+            return false;
+        if (!_heldPaths.IsEmpty && IsHeld(relativePath))
+            return false;
+        var ignored = false;
+        foreach (var (pattern, negated) in _rules)
+            if (pattern.IsMatch(relativePath))
+                ignored = !negated;
+        return ignored;
+    }
+
     /// <summary>A held path itself, or anything beneath one — node paths do not distinguish files
     /// from directories, so a hold covers its subtree exactly as a pattern match does.</summary>
     private bool IsHeld(string relativePath)

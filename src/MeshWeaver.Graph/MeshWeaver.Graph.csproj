@@ -18,6 +18,11 @@
          tracked for retirement separately from the (removed) Approvals grant. -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+    <!-- AnIgnorePatternRetiresWhatTheSyncImportedTest pins the import's never-mirrored guard
+         (StaticRepoImporter.SparedAsNeverMirrored) against GitSync's real InMemoryStaticRepoSource,
+         which only this suite references: a refusal entry in the manifest must not make an
+         Ignore-excluded node prunable (review on #7641). -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
     <!-- OrleansCompileActivityAccessTest seeds a NodeType whose compile state is deliberately
          "settled and nothing due", which means stamping FailedBuildInputs with the token the
          framework itself computes (NodeTypeCompilationHelpers.BuildInputsToken). Re-deriving that

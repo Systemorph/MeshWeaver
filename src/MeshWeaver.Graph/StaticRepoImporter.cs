@@ -1573,8 +1573,14 @@ public static class StaticRepoImporter
         // running the same fingerprint writes byte-identical content, so a snapshot that misses its
         // writes re-upserts rather than diverging. (The marker at import-{fingerprint} is a
         // short-circuit record, not a lock — a Running one is reclaimed, not obeyed.)
+        // 🚨 …and ALWAYS the source's own partition (review on #7641): when an Ignore pattern
+        // excludes every remaining child (`*`, or the last one), `nodes` is empty and no partition
+        // would be read — the snapshot comes back empty and the nodes the manifest records this
+        // source importing are never even evaluated for retirement. The manifest is per
+        // source.Partition, so that partition is always the one a prune may have to look at.
         var partitions = nodes
             .Select(n => FirstSegment(n.Path))
+            .Append(source.Partition)
             .Where(p => !string.IsNullOrEmpty(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -2176,9 +2182,24 @@ public static class StaticRepoImporter
                     // enumerate itself in full (a TRUNCATED GitHub tree — HTTP 200, partial body), the
                     // prune's premise is gone and nothing is removed at all (issue #3589).
                     var sourceListingIsComplete = source.ListingIsComplete;
+                    // 🚨 #7611: a node the source's own DECLARED rules now exclude (a GitSync Ignore
+                    // pattern added after it was imported) is no longer spared as never-mirrored. The
+                    // provenance guard inside ComputePrunableNodes still has to pass, so only a node
+                    // the prior manifest records this source putting here can leave; a node the mesh
+                    // minted under the same pattern (the #1326 Release/ case) never was, and stays.
+                    // Holds and never-mirrored slots are not "retired" (IsRetiredFromMirror) and
+                    // stay spared exactly as before. So does a path whose manifest entry is a REFUSAL
+                    // (review on #7641): it records a refused write, not that the source put the node
+                    // here — see SparedAsNeverMirrored.
                     var toPrune = ComputePrunableNodes(
                         existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode,
-                        source.IsExcludedFromMirror, sourceListingIsComplete);
+                        SparedAsNeverMirrored(source, manifest),
+                        sourceListingIsComplete);
+                    // 🚨 The retired-ancestor guard (WithoutRetiredAncestorsOfSurvivors) runs AFTER
+                    // the conflict policy below, never before it (review on #7641): a retired node the
+                    // guard keeps because of a surviving child must still reach the policy, or a
+                    // server edit of that node is never counted Preserved and the baseline advances
+                    // past it — deleting it on a later import once the child is gone.
 
                     // Never prune a node CREATED/changed on the server since the last sync when the
                     // policy protects it (two-way, OR prune-only protection for bidirectional spaces —
@@ -2202,6 +2223,18 @@ public static class StaticRepoImporter
                                 "[StaticRepoImport] {Partition}: keeping server-added {Path} (not pruned).",
                                 source.Partition, kept.Path);
                     }
+
+                    // 🚨 …and a RETIRED node is never deleted over a node that stays (review on
+                    // #7641). DeleteNode is recursive, so retiring `Sp/Other` would take a
+                    // mesh-minted `Sp/Other/Local` (or a Release record) with it — the very #1326
+                    // loss the provenance guard exists to prevent. Such a node is kept until its
+                    // subtree holds nothing that stays. The survivors include the nodes THIS import
+                    // writes (`existing` is the snapshot read before the upserts) and the nodes the
+                    // policy just kept (they are no longer in toPrune). Deterministic repros:
+                    // AnIgnorePatternRetiresWhatTheSyncImportedTest.RetiringAnImportedParent_NeverDeletesAPolicyProtectedChildEdit
+                    // and …RetiringAnEditedParent_CountsItsServerEditAsPreserved.
+                    toPrune = WithoutRetiredAncestorsOfSurvivors(
+                        toPrune, existing.Values.Concat(nodes), source.IsRetiredFromMirror);
 
                     // Collect the actually-pruned PATHS (not just a count): a pruned Source/Test
                     // node affects its owning NodeType exactly like a written one, so the recompile
@@ -2234,7 +2267,11 @@ public static class StaticRepoImporter
                     return NodeTypeInstanceProbe.Probe(hub, toPrune, logger).SelectMany(heldTypes =>
                     {
                         var heldPaths = heldTypes.Select(h => h.NodeTypePath).ToImmutableList();
-                        var toPruneAfterHold = NodeTypeInstanceProbe.WithoutHeld(toPrune, heldPaths);
+                        // …and once more over the HELD types: a held NodeType (and its subtree) stays,
+                        // so a retired ancestor of it must stay too (review on #7641).
+                        var toPruneAfterHold = WithoutRetiredAncestorsOfSurvivors(
+                            NodeTypeInstanceProbe.WithoutHeld(toPrune, heldPaths),
+                            existing.Values.Concat(nodes), source.IsRetiredFromMirror);
                         // Says it on the process log at Warning AND yields the keyed activity line.
                         var heldReport = NodeTypeInstanceProbe.Report(heldTypes, logger);
                         var stamped = NodeTypeInstanceProbe.Hold(
@@ -2965,6 +3002,66 @@ public static class StaticRepoImporter
         if (string.IsNullOrEmpty(path)) return string.Empty;
         var slash = path.IndexOf('/');
         return slash < 0 ? path : path[..slash];
+    }
+
+    /// <summary>
+    /// The never-mirrored guard <see cref="ComputePrunableNodes"/> receives on an import (issues
+    /// #1326 and #7611): <c>true</c> spares <paramref name="source"/>'s excluded path from the prune.
+    /// A path an owner's Ignore PATTERN now excludes (<see cref="IStaticRepoSource.IsRetiredFromMirror"/>)
+    /// is no longer spared — but only when <paramref name="manifest"/> records a SUCCESSFUL import of
+    /// it. A refusal entry (<see cref="RefusedTokenPrefix"/>) records that the source's write was
+    /// REFUSED, which is no evidence the source ever put the node there (review on #7641): the node
+    /// may be one the mesh created, and it stays spared exactly as before.
+    /// </summary>
+    /// <param name="source">The source being imported.</param>
+    /// <param name="manifest">The prior import manifest (path → token).</param>
+    /// <returns>The predicate: <c>true</c> = never-mirrored, never pruned.</returns>
+    internal static Func<string, bool> SparedAsNeverMirrored(
+        IStaticRepoSource source, IReadOnlyDictionary<string, string> manifest)
+        => path => source.IsExcludedFromMirror(path)
+                   && !(source.IsRetiredFromMirror(path)
+                        && manifest.TryGetValue(path, out var token)
+                        && !token.StartsWith(RefusedTokenPrefix, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Drops every RETIRED prune candidate (<paramref name="isRetired"/>, issue #7611) that has a
+    /// descendant which stays — an existing node that is not itself pruned and is not one of its
+    /// governance satellites. <c>DeleteNode</c> deletes a subtree, so pruning such a node would delete
+    /// the survivor with it (review on #7641). Candidates that are not retired are returned as before.
+    ///
+    /// <para>A retired NodeType definition kept this way keeps its own subtree too (its
+    /// <c>Source/</c> and <c>Test/</c>) — exactly as a held type does
+    /// (<see cref="NodeTypeInstanceProbe.WithoutHeld"/>). Every compiled type has a mesh-minted
+    /// <c>Release/</c> record beneath it, so without this an Ignore pattern over a type would keep
+    /// the definition, delete the sources it compiles from, and never put the type in front of the
+    /// instance probe (review on #7641).</para>
+    /// </summary>
+    /// <param name="toPrune">The prune candidates.</param>
+    /// <param name="existing">Every node that stays unless pruned: the partition snapshot the
+    /// candidates were chosen from PLUS the nodes the same import writes.</param>
+    /// <param name="isRetired">The source's retirement predicate.</param>
+    /// <returns>The candidates whose recursive delete removes nothing that stays.</returns>
+    internal static IReadOnlyList<MeshNode> WithoutRetiredAncestorsOfSurvivors(
+        IReadOnlyList<MeshNode> toPrune, IEnumerable<MeshNode> existing, Func<string, bool> isRetired)
+    {
+        if (toPrune.Count == 0 || !toPrune.Any(n => isRetired(n.Path)))
+            return toPrune;
+        var pruned = toPrune.Select(n => n.Path).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var survivors = existing
+            .Where(n => !string.IsNullOrEmpty(n.Path) && !pruned.Contains(n.Path) && !IsGovernance(n))
+            .Select(n => n.Path)
+            .ToImmutableArray();
+        var keptAncestors = toPrune
+            .Where(n => isRetired(n.Path)
+                        && survivors.Any(s => s.StartsWith(n.Path + "/", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        if (keptAncestors.Length == 0)
+            return toPrune;
+        var keptPaths = keptAncestors.Select(n => n.Path).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        return NodeTypeInstanceProbe.WithoutHeld(
+                toPrune.Where(n => !keptPaths.Contains(n.Path)),
+                NodeTypeInstanceProbe.NodeTypePathsAmong(keptAncestors))
+            .ToImmutableList();
     }
 
     /// <summary>True if <paramref name="path"/> equals <paramref name="root"/> or is a descendant.</summary>
