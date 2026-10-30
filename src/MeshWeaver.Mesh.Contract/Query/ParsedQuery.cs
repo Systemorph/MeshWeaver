@@ -59,6 +59,37 @@ public record ParsedQuery(
     public const string CrossPartitionQualifier = "partitions:all";
 
     /// <summary>
+    /// From <c>content:stored</c> — the caller wants each node's content EXACTLY AS STORED: the
+    /// stored JSON, handed back as a <see cref="System.Text.Json.JsonElement"/>, never deserialised
+    /// into a registered type and never re-typed on the way to the caller.
+    ///
+    /// <para>🚨 <b>Why it exists.</b> Re-typing is lossy in both directions: a typed object cannot
+    /// say whether a member was ABSENT from the stored JSON or held its declared value, and the
+    /// serializer omits a member holding its CLR default when it writes the object back. A reader
+    /// that matches content against something evaluated over the stored bytes elsewhere — the
+    /// in-process grant-rule check against the Postgres projection's <c>content-&gt;&gt;field</c>
+    /// (<c>GrantRuleEvaluator</c>, MeshWeaver#7426) — must therefore read the stored form, or the
+    /// two evaluators disagree on rows written by an older serializer.</para>
+    ///
+    /// <para><b>What a provider does with it.</b> A provider that STORES serialised JSON (Postgres)
+    /// returns that JSON as a <see cref="System.Text.Json.JsonElement"/> instead of deserialising it.
+    /// A provider that holds node objects in memory has no stored text to return: it hands back the
+    /// content it holds, unchanged. Either way the node-stream cache passes the content through
+    /// untouched (no materialisation for the caller's options). A provider that does not know the
+    /// flag returns what it always returned — the flag adds a guarantee, it removes nothing.</para>
+    ///
+    /// <para>An init-only PROPERTY, like <see cref="CrossPartition"/>, so the record's
+    /// primary-constructor arity — binary contract — is unchanged.</para>
+    /// </summary>
+    public bool StoredContent { get; init; }
+
+    /// <summary>
+    /// The qualifier that sets <see cref="StoredContent"/>. Spelled once here so callers declare it
+    /// by reference instead of by copied string.
+    /// </summary>
+    public const string StoredContentQualifier = "content:stored";
+
+    /// <summary>
     /// The ordering every clip site applies when the author wrote no <c>sort:</c> and the query
     /// carries no free-text term: newest first.
     /// </summary>
@@ -111,6 +142,27 @@ public record ParsedQuery(
         ?? (string.IsNullOrEmpty(TextSearch) && Source == QuerySource.Default
             ? DefaultFilterOrdering
             : null);
+
+    /// <summary>
+    /// Whether <paramref name="query"/> carries <see cref="StoredContentQualifier"/> — the same
+    /// test the parser makes, for a consumer that holds the query STRING (the node-stream cache
+    /// decides from it whether to materialise a result set for the caller's options).
+    /// </summary>
+    /// <param name="query">A mesh query string.</param>
+    /// <returns>True when the query asks for content exactly as stored.</returns>
+    public static bool AsksForStoredContent(string? query)
+        // A cheap substring prefilter first: this runs on every GetQuery call of a hot reader (the
+        // permission fold), and almost no query carries the qualifier. It tests only the VALUE,
+        // `stored`, because every form the parser accepts contains it while the full qualifier is
+        // absent from the quoted-value forms (`content:"stored"`, `content:'stored'`) — the
+        // prefilter may admit too much, never reject a form the parser accepts. The parse then
+        // decides, so a quoted literal or a negated term is not mistaken for it.
+        => !string.IsNullOrWhiteSpace(query)
+           && query.Contains(StoredContentValue, StringComparison.OrdinalIgnoreCase)
+           && new QueryParser().Parse(query).StoredContent;
+
+    /// <summary>The value half of <see cref="StoredContentQualifier"/>, present in every accepted form.</summary>
+    private const string StoredContentValue = "stored";
 
     /// <summary>
     /// An empty query with no filters.
