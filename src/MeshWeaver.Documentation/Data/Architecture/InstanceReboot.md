@@ -46,6 +46,33 @@ System. This is the same trust rule as [Module Reload](../ModuleReload).
 | `executionWindow` | DECLARED when the request is filed (`Reboot:ExecutionWindow`, default 3 h): the longest the request may go without recording progress and still count as in progress. See "A request that stops moving" |
 | `progressAt` | when it last recorded progress: stamped on every executor write (including each finished sync source) and on a re-arm |
 | `requestedEndIfStalledAt` | a reader that saw the request stalled asks its owner to end it; the owner answers and clears it |
+| `failureText`, `logText[]`, `steps[].detailText`, `replicas{}.checks[].detailText` | the keyed form of each English sentence beside it. See "Reading a request in your language" |
+
+### Reading a request in your language
+
+The request page (the node's Overview, `InstanceRebootLayoutAreas`) shows the facts, the failure, the
+steps, the modules, each replica's checks and the log, built from the platform's controls and bound
+to the request's own node stream. Each sentence the platform writes is stored twice. The English is
+the wire value that logs, tests and the watchdog read. Beside it is a keyed form (`RebootText`): a
+sequence of catalog keys (`reboot.*` in `strings.{en,de}.json`) with named arguments, each part glued
+to the one before it by punctuation only. This is the `KeyedText` carrier of the compile refusals
+(see [Localization](../Localization)), extended with the glue that the reboot's `; `, `, ` and
+bracket joins need.
+
+The page renders each keyed form in the viewer's language, taken from `ViewerLocale()` and never
+from the ambient culture. A keyed form is used only while its English rendering is exactly the
+stored English. Text that a later writer replaced, a request filed before the keys existed, and a
+check that writes no keyed detail (a module's own smoke check) are shown as written. `logText` is
+aligned with `log` from the end, because both only grow at the end and are trimmed at the front.
+
+Facts stay as written: versions, paths, process names, the reason a person typed, and sentences
+composed by another subsystem (a GitSync row's detail, a module's failure, a self-updater's
+selection detail). Step names, outcomes and statuses are shown through `reboot.step.*`,
+`reboot.outcome.*` and `reboot.status.*`, and an unknown value is shown by name.
+
+🚨 The `stalled: ` prefix in `failure` is a machine marker. `EndedAsStalled`, and the watchdog
+through it, reads it back. It is composed in English exactly as before and never passes through
+the catalog. The German viewer reads `festgefahren:` from the keyed form beside it.
 
 ## The five steps
 
