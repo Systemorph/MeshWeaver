@@ -73,6 +73,49 @@ public class MarkdownFrontMatterTolerantYamlTest
     }
 
     /// <summary>
+    /// #7352: a node's authorship (<see cref="MeshNode.CreatedBy"/> / <see cref="MeshNode.CreatedDate"/>)
+    /// survives a write and a read of its <c>.md</c> file to the exact instant — the move resume
+    /// (#6310) and the create rollback both recognise a node by these two values.
+    /// </summary>
+    [Fact]
+    public void Serialize_ThenParse_RoundTripsAuthorship()
+    {
+        var created = new DateTimeOffset(2026, 10, 30, 9, 15, 42, TimeSpan.Zero).AddTicks(1234560);
+        var node = new MeshNode("note", "team")
+        {
+            CreatedBy = "alice@example.com",
+            CreatedDate = created,
+            Content = new MarkdownContent { Content = "# Note" }
+        };
+
+        var back = Parser.Parse("/root/team/note.md", Parser.Serialize(node), "team/note.md")!;
+
+        Assert.Equal("alice@example.com", back.CreatedBy);
+        Assert.Equal(created, back.CreatedDate);
+        Assert.Equal(created.Offset, back.CreatedDate.Offset);
+    }
+
+    /// <summary>
+    /// #7352, the authored-tree half: a file that carries no authorship reads back unattributed (it
+    /// is never invented), and writing such a node emits no authorship keys — so an authored tree
+    /// is not churned by a save. A hand-mangled date degrades to unset instead of failing the file.
+    /// </summary>
+    [Fact]
+    public void Authorship_IsNeitherInventedOnRead_NorEmittedWhenUnset()
+    {
+        var authored = Parser.Parse("/root/team/page.md", "---\nName: Page\n---\n\n# Page", "team/page.md")!;
+        Assert.Null(authored.CreatedBy);
+        Assert.Equal(default, authored.CreatedDate);
+
+        var nl = Environment.NewLine;
+        Assert.Equal("---" + nl + "Name: Page" + nl + "---" + nl + nl + "# Page", Parser.Serialize(authored));
+
+        var mangled = Parser.Parse("/root/team/odd.md", "---\nName: Odd\nCreatedDate: last tuesday\n---\n\n# Odd", "team/odd.md")!;
+        Assert.Equal("Odd", mangled.Name);
+        Assert.Equal(default, mangled.CreatedDate);
+    }
+
+    /// <summary>
     /// Review of #7180: when Notes is the LAST emitted key its literal block ends the front matter,
     /// so a trim of the whole block cut an authored trailing space off its last line.
     /// </summary>
