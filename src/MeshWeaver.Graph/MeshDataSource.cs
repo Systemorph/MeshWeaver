@@ -904,8 +904,53 @@ public static class MeshDataSourceExtensions
     {
         /// <summary>The currently cached own-node snapshot (null until first emission).</summary>
         public volatile MeshNode? Current;
-        /// <summary>Whether the cached node has been deleted.</summary>
-        public volatile bool IsDeleted;
+        /// <summary>
+        /// Whether the cached node has been deleted. Setting it to <c>true</c> records a NEW deletion
+        /// (see <see cref="DeletionMark"/>); clearing it is the unconditional form — the own-node
+        /// change handler clears through <see cref="ClearDeletionIfUnchanged"/> instead.
+        /// </summary>
+        public bool IsDeleted
+        {
+            get => (System.Threading.Interlocked.Read(ref deletion) & 1L) != 0;
+            set
+            {
+                if (value) MarkDeleted();
+                else System.Threading.Interlocked.And(ref deletion, ~1L);
+            }
+        }
+
+        // Bit 0: deleted. The bits above: how many deletions this hub has recorded. One word, so a
+        // deletion and a conditional clear can never interleave half-way (ClearDeletionIfUnchanged).
+        private long deletion;
+
+        /// <summary>
+        /// The deletion state as of now, to hand back to <see cref="ClearDeletionIfUnchanged"/>.
+        /// Every deletion yields a new mark, so a mark taken before a deletion never equals one taken
+        /// after it.
+        /// </summary>
+        internal long DeletionMark => System.Threading.Interlocked.Read(ref deletion);
+
+        /// <summary>Records a deletion: sets the flag and advances the deletion count.</summary>
+        internal void MarkDeleted()
+        {
+            long seen, next;
+            do
+            {
+                seen = System.Threading.Interlocked.Read(ref deletion);
+                next = (((seen >> 1) + 1) << 1) | 1L;
+            }
+            while (System.Threading.Interlocked.CompareExchange(ref deletion, next, seen) != seen);
+        }
+
+        /// <summary>
+        /// 🚨 Clears the flag ONLY when no deletion was recorded since <paramref name="mark"/> was
+        /// taken — one compare-and-set, so a deletion landing concurrently is never overwritten. An
+        /// adoption asked for BEFORE a delete lands on the owner's turn, AFTER the delete marked the
+        /// node: the node it adopts is the deleted one, and clearing the flag for it would let the
+        /// dispose-time flush write that deleted node back once a recreate supersedes the tombstone.
+        /// </summary>
+        internal void ClearDeletionIfUnchanged(long mark)
+            => System.Threading.Interlocked.CompareExchange(ref deletion, mark & ~1L, mark);
 
         /// <summary>
         /// The own-node persistence sampler's save tracker for this hub — shared with
@@ -1812,6 +1857,9 @@ public static class MeshDataSourceExtensions
             // read returns the version the write landed at.
             if (newNode.Version == lastSelfWrite.Value)
                 return;
+            // Taken NOW, on the notification: the adoption below lands later, on the owner's turn, and
+            // a delete recorded in between must survive it (ClearDeletionIfUnchanged).
+            var deletionMark = cache.DeletionMark;
             // 🚨 `cache.IsDeleted` is NOT reset here — only once the adoption below has LANDED. The
             // flag says "the node this hub holds in RAM was deleted", and a recreate does not change
             // what this hub holds until it is adopted. A delete tears its owner down, and a recreate
@@ -1856,8 +1904,10 @@ public static class MeshDataSourceExtensions
                 hub.GetWorkspace().GetMeshNodeStream()
                     .AdoptPersisted(newNode)
                     .Subscribe(
-                        // The in-RAM node is the durable one now: this hub's own state is live again.
-                        _ => cache.IsDeleted = false,
+                        // The in-RAM node is the durable one now: this hub's own state is live again
+                        // — unless a delete was recorded after this adoption was asked for, in which
+                        // case the node it adopted is the deleted one and the mark stands.
+                        _ => cache.ClearDeletionIfUnchanged(deletionMark),
                         ex => TryLogWarning(hub, ex,
                             "Own-node refresh from change notification failed on {Hub}",
                             hub.Address));

@@ -173,7 +173,9 @@ hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
   refuses that adoption, so its dispose-time flush never writes the deleted node back over the
   recreate. Before this the owner cleared the mark as soon as the recreate's notification arrived,
   ahead of the refused adoption, and its flush resurrected the deleted node (the Feedback hand-over's
-  redirect was overwritten this way; pinned by `ADyingOwnerNeverOverwritesTheRecreateTest`).
+  redirect was overwritten this way; pinned by `ADyingOwnerNeverOverwritesTheRecreateTest`). The
+  mark is cleared only if no delete was recorded after that adoption was asked for: an update's
+  adoption still queued when the delete arrives adopts the deleted node, and must leave the mark set.
 - `CreateOrUpdateNodeRequest` — upsert; checks existence on the handler side and dispatches create or merge-patch update (see [CQRS](/Doc/Architecture/CqrsAndContentAccess)).
 - Identity is auto-captured from `AccessService` and carried across `.Subscribe()` boundaries — see [AccessContextPropagation](/Doc/Architecture/AccessContextPropagation).
 
