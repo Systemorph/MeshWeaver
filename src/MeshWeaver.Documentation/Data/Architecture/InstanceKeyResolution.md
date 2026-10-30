@@ -96,6 +96,27 @@ behind it, and the retry the 503 asks for reads the frame from memory. The `Unav
 names the path and says so, so the log line beside a 503 can no longer be mistaken for "the owning
 per-node hub never answered".
 
+## One budget for the whole resolution (#7484)
+
+The three legs run one after another, and each used to be bounded by the ten-second budget on its
+own. A resolution whose legs were each slow but each inside its bound therefore answered after up to
+thirty seconds. The registry's authentication hook gives the exchange ten seconds. So when the
+registry instance's node-stream cache hub wedged, the exchange's correct retryable 503 arrived after
+the hook had already given up and reported a bare 500 for every key whose mirrors were cold.
+
+The legs now share ONE budget (`InstanceRegistryAuthenticator.WithinBudget`). Whatever has not
+answered when it is spent is `Unavailable`: a retryable 503, never "unknown key". Each leg's
+hydration keeps running in the process-wide cache, so the retry finds it in memory. The plan ladder
+stays outside the deadline: it has its own query budget and snapshot, and cutting it would cancel the
+one read that warms that snapshot.
+
+The caller's own limit must exceed this budget for the 503 to reach it. Making the hook's
+"no answer in time" distinguishable from a 5xx is the hook's half, in the deployment repository.
+
+Pinned by `InstanceKeyResolutionAnswersWithinOneBudgetTest` (`MeshWeaver.Hosting.Test`, virtual time):
+three legs of four seconds each answer `Unavailable` at ten seconds, and three legs of three seconds
+each still resolve the instance.
+
 ## What did not change
 
 - The endpoints' contract: unknown key ⇒ the definite answer each surface already gives (401 on the
