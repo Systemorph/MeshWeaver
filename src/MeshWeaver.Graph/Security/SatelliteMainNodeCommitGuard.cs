@@ -10,7 +10,8 @@ namespace MeshWeaver.Graph.Security;
 /// <summary>
 /// 🛡️ The satellite rule's write half (<see cref="SatelliteAccessRule"/>, <see cref="MainNodeTrust.Repoints"/>)
 /// at the owner's COMMIT point, the one place every write that commits a node meets: a merge patch from
-/// <c>GetMeshNodeStream(path).Update</c>, an upsert's update branch, a data change. The owning hub's
+/// <c>GetMeshNodeStream(path).Update</c>, an upsert's update branch, a data change, and an own-hub write
+/// (<c>GetMeshNodeStream().Update</c> on the owning hub — an activity script, a rollback). The owning hub's
 /// delivery check decides access from the STORED node, so a proposal's <c>MainNode</c> is seen only here.
 ///
 /// <para><b>THE INVARIANT</b> (review of #7655). For every write by anyone but System that commits a

@@ -387,7 +387,7 @@ public static class WorkspaceOperations
                                 foreach (var (key, candidate) in instances.Instances)
                                 {
                                     var before = current?.Instances.GetValueOrDefault(key);
-                                    if (DataExtensions.FirstCommitRefusal(guards, g.Key.TypeSource!.CollectionName,
+                                    if (MeshWeaver.Mesh.EntityCommitGuards.FirstRefusal(guards,g.Key.TypeSource!.CollectionName,
                                             before, candidate, stream.Host.Address.Path, writer,
                                             stream.Host.JsonSerializerOptions) is not { } refusal)
                                         continue;

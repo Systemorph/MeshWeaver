@@ -2698,21 +2698,6 @@ public static class DataExtensions
     /// action-block turn (which wedged SubscribeRequest). The merge lambda is a PURE, bounded
     /// transform — no IO, no nested re-entrant subscribe.</para>
     /// </summary>
-    /// <summary>
-    /// The first <see cref="MeshWeaver.Mesh.IEntityCommitGuard"/> refusal for committing
-    /// <paramref name="after"/> in place of <paramref name="before"/>, or null. Synchronous: it runs
-    /// on the commit turn.
-    /// </summary>
-    internal static string? FirstCommitRefusal(
-        IReadOnlyList<MeshWeaver.Mesh.IEntityCommitGuard> guards, string collection, object? before,
-        object after, string ownerPath, AccessContext? writer, System.Text.Json.JsonSerializerOptions options)
-    {
-        foreach (var guard in guards)
-            if (guard.Refusal(collection, before, after, ownerPath, writer, options) is { } refusal)
-                return refusal;
-        return null;
-    }
-
     private static void ApplyMeshNodePatchInTurn<T>(
         ISynchronizationStream<T> stream,
         ISynchronizationStream<EntityStore> primary,
@@ -3223,7 +3208,7 @@ public static class DataExtensions
                     // it replaces, in THIS turn — after every earlier queued write has merged, and
                     // after the owner's own merge semantics (splices, stale-base three-way merges)
                     // produced the value that would commit. Refused here, nothing commits.
-                    if (FirstCommitRefusal(commitGuards, collectionName, liveEntity, merged,
+                    if (MeshWeaver.Mesh.EntityCommitGuards.FirstRefusal(commitGuards, collectionName, liveEntity, merged,
                             hub.Address.Path, request.AccessContext, jsonOpts) is { } commitRefusal)
                     {
                         hub.NoteRequestStage(request.Id, "PATCH_COMMIT_REFUSED");

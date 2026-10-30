@@ -14,8 +14,10 @@ namespace MeshWeaver.Mesh;
 /// to know what the write produces. Judged here, the rule sees the real result against the real
 /// predecessor, for every route that commits into the owner: a merge patch (every
 /// <c>GetMeshNodeStream(path).Update</c>, <c>IMeshService.UpdateNode</c> and the upsert's update
-/// branch), and a <c>DataChangeRequest</c> (a synced write-back, an entity-reference patch, or a
-/// node carried to a hub that is not its own).</para>
+/// branch), a <c>DataChangeRequest</c> (a synced write-back, an entity-reference patch, or a
+/// node carried to a hub that is not its own), and an OWN write — <c>GetMeshNodeStream().Update</c>
+/// issued on the owning hub itself (a rollback, an activity script). Every route asks the guards
+/// through <see cref="EntityCommitGuards.FirstRefusal"/>.</para>
 ///
 /// <para><b>Contract.</b> Synchronous and pure: it runs on the commit turn, so it must not read,
 /// wait or resolve anything. Return null to let the entity commit, or the refusal (already in the

@@ -6,6 +6,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -111,6 +112,39 @@ public class SatelliteMainNodeRepointTest(ITestOutputHelper output) : MonolithMe
         Output.WriteLine($"repoint to {Mine}: {answer}");
         answer.Should().StartWith("refused:", "an update never chooses a satellite's main node, even one its writer may write");
         (await Stored(ct)).MainNode.Should().Be(Doc, "the stored pointer still governs the comment");
+    }
+
+    /// <summary>
+    /// The same repoint issued on the satellite's OWN hub through its own stream, as a person — the
+    /// route code running on the owner takes (an activity script on its own hub, a rollback). That
+    /// write never reached the commit point, so the repoint landed. The control: an own write that
+    /// keeps the pointer lands.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task ARepointThroughTheSatellitesOwnStream_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedComment(ct);
+        var own = (Mesh.GetHostedHub(new Address(CommentPath), HostedHubCreation.Never)
+                   ?? throw new InvalidOperationException($"the owning hub of {CommentPath} is not active"))
+            .GetWorkspace().GetMeshNodeStream();
+        Task<string> OwnUpdate(Func<MeshNode, MeshNode> change)
+        {
+            Access.SetContext(Person(Writer));
+            return own.Update(change)
+                .Take(1)
+                .Select(_ => "landed")
+                .Catch((Exception ex) => Observable.Return("refused:" + ex.GetType().Name + ": " + ex.Message))
+                .Should().Within(Budget).Emit("the own write must answer", ct);
+        }
+
+        var answer = await OwnUpdate(n => n with { MainNode = Mine });
+        Output.WriteLine($"own-stream repoint to {Mine}: {answer}");
+        answer.Should().StartWith("refused:", "an own-hub write meets the same commit point as a routed one");
+        (await Stored(ct)).MainNode.Should().Be(Doc, "the stored pointer still governs the comment");
+
+        (await OwnUpdate(n => n with { Name = "c1 own edit" }))
+            .Should().Be("landed", "the control: an own write that keeps the pointer lands");
     }
 
     /// <summary>The negative control: the same writer's ordinary update, which keeps the pointer, lands.</summary>
