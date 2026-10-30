@@ -142,8 +142,18 @@ public static class TokenPrincipalAuditing
     /// <param name="node">The stored node.</param>
     /// <param name="options">Serializer options that read its content.</param>
     public static TokenPrincipalMismatch? Judge(MeshNode node, JsonSerializerOptions options)
+        => Judge(node, options, isIndexedTarget: false);
+
+    /// <summary>
+    /// The findings for ONE stored node, knowing whether an index row points at it. Pure.
+    /// </summary>
+    /// <param name="node">The stored node.</param>
+    /// <param name="options">Serializer options that read its content.</param>
+    /// <param name="isIndexedTarget">Whether an index row names this node as its token record: the
+    /// verdict then reads a token-typed node as the credential even inside the index namespace.</param>
+    public static TokenPrincipalMismatch? Judge(MeshNode node, JsonSerializerOptions options, bool isIndexedTarget)
     {
-        if (TokenOf(node, options) is not { TokenHash.Length: > 0 } token || string.IsNullOrEmpty(node.Path))
+        if (TokenOf(node, options, isIndexedTarget) is not { TokenHash.Length: > 0 } token || string.IsNullOrEmpty(node.Path))
             return null;
         var path = node.Path;
         var principal = token.UserId;
@@ -199,11 +209,19 @@ public static class TokenPrincipalAuditing
     /// <remarks>🛡️ A node is read as a POINTER only where <see cref="ApiTokenVerdict.Decide"/> reads
     /// pointers: a direct child of the global index namespace (review of #7619). Anywhere else the
     /// verdict reads the node as the credential itself, so a record carrying a stray
-    /// <c>tokenPath</c> is still judged — it cannot hide from the audit by looking like an index.</remarks>
-    private static ApiToken? TokenOf(MeshNode node, JsonSerializerOptions options)
+    /// <c>tokenPath</c> is still judged — it cannot hide from the audit by looking like an index.
+    /// A row in the index namespace that an index POINTS AT is read the way the verdict reads a
+    /// target (round 4): as the credential, when typed as a token record, whatever <c>tokenPath</c>
+    /// it carries itself — the verdict never follows a second pointer.</remarks>
+    /// <param name="node">The stored node.</param>
+    /// <param name="options">Serializer options that read its content.</param>
+    /// <param name="isIndexedTarget">Whether an index row names this node as its token record.</param>
+    private static ApiToken? TokenOf(MeshNode node, JsonSerializerOptions options, bool isIndexedTarget)
     {
         if (IsIndexRow(node) && Read<ApiTokenIndex>(node, options) is { TokenPath.Length: > 0 })
-            return null;
+            return isIndexedTarget && ApiTokenScope.IsTokenRecordType(node.NodeType)
+                ? Read<ApiToken>(node, options)
+                : null;
         return Read<ApiToken>(node, options);
     }
 
@@ -255,8 +273,16 @@ public static class TokenPrincipalAuditing
                     .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
                     .Select(g => g.First())
                     .ToImmutableList();
-                var tokens = nodes.Where(n => TokenOf(n, options) is { TokenHash.Length: > 0 }).ToImmutableList();
-                var mismatches = tokens.Select(n => Judge(n, options)).OfType<TokenPrincipalMismatch>()
+                // Every path an index row points at: the verdict reads such a target as the
+                // credential, even when it sits in the index namespace itself (review of #7619).
+                var indexedTargets = nodes.Where(IsIndexRow)
+                    .Select(n => Read<ApiTokenIndex>(n, options)?.TokenPath)
+                    .OfType<string>()
+                    .Where(p => p.Length > 0)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                bool IsTarget(MeshNode n) => indexedTargets.Contains(n.Path!);
+                var tokens = nodes.Where(n => TokenOf(n, options, IsTarget(n)) is { TokenHash.Length: > 0 }).ToImmutableList();
+                var mismatches = tokens.Select(n => Judge(n, options, IsTarget(n))).OfType<TokenPrincipalMismatch>()
                     .OrderBy(m => m.Path, StringComparer.Ordinal)
                     .ToImmutableList();
                 var partitions = changes.All(c => c.Partitions is null)

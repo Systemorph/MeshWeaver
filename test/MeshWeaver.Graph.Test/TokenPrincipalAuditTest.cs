@@ -198,6 +198,42 @@ public class TokenPrincipalAuditTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     /// <summary>
+    /// 🛡️ An index can point at a target that ALSO lives in the index namespace (review of #7619,
+    /// round 4). The verdict follows the pointer and reads a token-typed target as the credential,
+    /// without following any <c>tokenPath</c> the target carries itself — so the audit must judge
+    /// that target too, not skip it as one more pointer. An index row nothing points at stays a
+    /// pointer (the control: it is never counted as a credential).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnIndexedTargetInTheIndexNamespace_IsJudgedAsTheCredential()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var target = $"{ApiTokenVerdict.IndexNamespace}/cccccccccccc";
+        var raw = System.Text.Json.JsonDocument.Parse(
+            $$"""{"tokenHash":"{{Hash}}","userId":"{{WellKnownUsers.System}}","label":"mixed","tokenPath":"{{Alice}}/ApiToken/bound"}""").RootElement.Clone();
+        foreach (var node in new[]
+                 {
+                     new MeshNode("dddddddddddd", ApiTokenVerdict.IndexNamespace)
+                     {
+                         Name = "pointer", NodeType = "ApiToken",
+                         Content = new ApiTokenIndex { TokenHash = Hash, TokenPath = target },
+                     },
+                     new MeshNode("cccccccccccc", ApiTokenVerdict.IndexNamespace)
+                     {
+                         Name = "mixed", NodeType = "ApiToken", Content = raw,
+                     },
+                 })
+            await Access.RunAsSystem(() => NodeFactory.CreateNode(node))
+                .Should().Within(Budget).Emit($"seed {node.Path}", ct);
+
+        var result = await TokenPrincipalAuditing.Sweep(Mesh).Should().Within(Budget).Emit("the sweep must answer", ct);
+        result.Mismatches.Select(m => m.Path).Should().Contain(target,
+            "the verdict authenticates an indexed, token-typed target as a credential naming System");
+        result.Mismatches.Select(m => m.Path).Should().NotContain($"{ApiTokenVerdict.IndexNamespace}/dddddddddddd",
+            "the control: the pointer itself is not a credential");
+    }
+
+    /// <summary>
     /// A request found at Running when its hub activates was interrupted — the activation that ran it
     /// is gone — so it is closed as Failed instead of reading Running forever (review of #7619).
     /// </summary>
