@@ -47,6 +47,18 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
     /// segment strictly between the comment's owner (its main node) and where it lands.</summary>
     private const string DeniedCommenter = "sat-policy-denied-commenter";
 
+    /// <summary>A second partition where only <see cref="WellKnownUsers.Public"/> holds a grant.</summary>
+    private const string PublicPartition = "SatPolicyPublic";
+
+    /// <summary>A main node whose comment container denies PUBLIC the Commenter role.</summary>
+    private const string PublicSealed = PublicPartition + "/Sealed";
+
+    /// <summary>The same shape without a denial — the control for <see cref="PublicSealed"/>.</summary>
+    private const string PublicUnsealed = PublicPartition + "/Unsealed";
+
+    /// <summary>A signed-in identity with no grant of its own: everything it holds comes from Public.</summary>
+    private const string Nobody = "sat-policy-nobody";
+
     private static TimeSpan Budget => TestTimeouts.Quick;
 
     // ConfigureMeshBase: no blanket Public-admin grant, so each identity holds only its own grant.
@@ -65,7 +77,12 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
                 AssignmentNodeFactory.Policy($"{Tokened}/_Comment", new PartitionAccessPolicy { Api = false }),
                 AssignmentNodeFactory.UserRole(PartitionCommenter, Role.Commenter.Id, Partition),
                 AssignmentNodeFactory.UserRole(DeniedCommenter, Role.Commenter.Id, Partition),
-                AssignmentNodeFactory.UserRole(DeniedCommenter, Role.Commenter.Id, $"{Sealed}/_Comment", denied: true));
+                AssignmentNodeFactory.UserRole(DeniedCommenter, Role.Commenter.Id, $"{Sealed}/_Comment", denied: true),
+                new MeshNode(PublicPartition) { Name = PublicPartition, NodeType = "Markdown" },
+                new MeshNode("Sealed", PublicPartition) { Name = "Sealed", NodeType = "Markdown" },
+                new MeshNode("Unsealed", PublicPartition) { Name = "Unsealed", NodeType = "Markdown" },
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Commenter.Id, PublicPartition),
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Commenter.Id, $"{PublicSealed}/_Comment", denied: true));
 
     private static AccessContext Person(string id) => new() { ObjectId = id, Name = id };
 
@@ -116,6 +133,30 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
 
         (await ReadVerdict(rule!, Comment($"{Unsealed}/_Comment", Unsealed), ct, DeniedCommenter)).Should().BeTrue(
             "the control: a comment beneath a segment with no denial follows the main node");
+    }
+
+    /// <summary>
+    /// A signed-in caller's fold ORs in the <see cref="WellKnownUsers.Public"/> leg, so a role denied
+    /// to Public on a segment between the main node and the landing narrows what the caller holds
+    /// there just as a denial of the caller's own role does. The denial detector looked only at the
+    /// caller and its groups, so a caller whose only grant came from Public passed the satellite
+    /// checks through the main node (review of #7688).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ARoleDeniedToPublicBetweenMainNodeAndLanding_RefusesTheCreateAndTheRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rule = NodeTypeAccessRuleGate.Find(Mesh, "Comment", NodeOperation.Read)!;
+
+        (await CreateVerdict(Nobody, Comment($"{PublicUnsealed}/_Comment", PublicUnsealed), ct)).IsValid.Should().BeTrue(
+            "the control: Public's Commenter on the partition reaches a signed-in caller with no grant of its own");
+        (await ReadVerdict(rule, Comment($"{PublicUnsealed}/_Comment", PublicUnsealed), ct, Nobody)).Should().BeTrue(
+            "the control: the same read beneath a segment with no denial follows the main node");
+
+        (await CreateVerdict(Nobody, Comment($"{PublicSealed}/_Comment", PublicSealed), ct)).IsValid.Should().BeFalse(
+            "Commenter is denied to Public on Sealed/_Comment: the main node's inherited Public grant must not reach past it");
+        (await ReadVerdict(rule, Comment($"{PublicSealed}/_Comment", PublicSealed), ct, Nobody)).Should().BeFalse(
+            "a comment stored beneath Public's denial is not readable through the main node");
     }
 
     [Fact(Timeout = 60_000)]
