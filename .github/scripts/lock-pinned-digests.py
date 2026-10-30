@@ -1410,11 +1410,15 @@ def redact_private_prose(value, key: str | None = None):
     Keys, types and emptiness are kept: an empty string stays empty and a non-string stays as it
     is, so a validator that refuses a missing `reason` or a `null` estate still refuses it."""
     if isinstance(value, dict):
-        return {k: redact_private_prose(v, k) for k, v in value.items()}
+        # Under a prose key everything is prose, nested objects included: the readers stringify
+        # the whole value, so the enclosing key — not the inner one — decides.
+        return {k: redact_private_prose(v, key if key in PRIVATE_PROSE_KEYS else k)
+                for k, v in value.items()}
     if isinstance(value, list):
         return [redact_private_prose(v, key) for v in value]
+    # Whitespace INSIDE the value marks a sentence; padding does not — the readers `.strip()`.
     if isinstance(value, str) and value.strip() and (key in PRIVATE_PROSE_KEYS
-                                                     or any(c.isspace() for c in value)):
+                                                     or any(c.isspace() for c in value.strip())):
         return PRIVATE_PROSE_PLACEHOLDER
     return value
 ROSTER_STATES = {"live", "not-installed", "retired"}
@@ -7833,6 +7837,19 @@ ingress:
                   and _reg["retention"]["issue"] == "x#1",
                   f"ARM 35 (control): an identifier, a flag or an empty field of the private roster "
                   f"was rewritten — only prose may be: {_doc}")
+            # A prose key holding an OBJECT is still prose all the way down: the readers stringify
+            # it and print it, so a word inside it with no whitespace must not survive either.
+            _nested = redact_private_prose({"reason": {"tenant": "AcmeCorp", "list": ["AcmeCorp"]}})
+            check("AcmeCorp" not in json.dumps(_nested),
+                  f"ARM 35: a prose key's nested object kept its words, and the readers print it "
+                  f"stringified into the public log: {_nested}")
+            # Padding is not prose: the readers `.strip()` an identifier, so a padded one must keep
+            # its value and its verdict, never become the placeholder.
+            _padded = redact_private_prose({"id": " acme-x ", "state": " not-installed ",
+                                            "repo": " Systemorph/X "})
+            check(_padded == {"id": " acme-x ", "state": " not-installed ", "repo": " Systemorph/X "},
+                  f"ARM 35 (control): a padded identifier was rewritten as prose, so a roster the "
+                  f"readers accept after `.strip()` failed validation: {_padded}")
             check(_doc["instances"][0].get("reason") == "ours",
                   f"ARM 35 (control): the COMMITTED roster's prose was redacted; it is public "
                   f"already and is the reviewed record: {_doc['instances']}")
