@@ -2099,6 +2099,7 @@
   "profile.pictureError.notPermitted": "Sie dürfen dieses Bild nicht ändern.",
   "profile.pictureError.permissionUndetermined": "Die Berechtigungsprüfung wurde nicht abgeschlossen; es wurde nichts gespeichert. Versuchen Sie es erneut.",
   "store.profileSubscription": "Abo",
+  "store.adminInviteWithPlan": "Mit einem Plan einladen",
   "settings.dataSourcesIntro": "Registrierte Datenquellen-Repositories. Quellen aktivieren oder deaktivieren, Daten installieren oder Teilbäume exportieren.",
   "settings.whoAmI": "Wer bin ich",
   "settings.account": "Konto",

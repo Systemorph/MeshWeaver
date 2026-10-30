@@ -580,6 +580,8 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(EventSubscriptionStatus), nameof(EventSubscriptionStatus));
         typeRegistry.WithType(typeof(EventTriggerType), nameof(EventTriggerType));
         typeRegistry.WithType(typeof(EventContinuationType), nameof(EventContinuationType));
+        // What a DeliverTo node receives inside its own content (EventContinuationType.DeliverToNode).
+        typeRegistry.WithType(typeof(EventDelivery), nameof(EventDelivery));
         // ScheduledAction — the LEGACY predecessor EventSubscription supersedes. Still a built-in
         // NodeType, and EventSubscriptionRunner's startup migration reads it the same way, so it
         // needs the same registration: unresolvable, the migration silently folds nothing and an
