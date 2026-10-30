@@ -471,6 +471,86 @@ public class TolerantYamlTest
         Assert.Equal(new DateTimeOffset(2026, 10, 25, 10, 0, 0, TimeSpan.Zero), config.When);
     }
 
+    /// <summary>
+    /// #7398: a plain scalar bound to a <see cref="string"/> gets the text as WRITTEN, not the
+    /// core-schema value it resolves to — <c>00123</c> stays <c>"00123"</c> (not <c>"123"</c>),
+    /// <c>0x1F</c> stays <c>"0x1F"</c> (not <c>"31"</c>), <c>TRUE</c> stays <c>"TRUE"</c> — at every
+    /// position a string is declared: a property, a list element, a dictionary value, a nested
+    /// object, an aliased copy and a merged key.
+    /// </summary>
+    [Fact]
+    public void Binding_APlainScalarIntoAString_KeepsItsSourceSpelling()
+    {
+        var config = TolerantYaml.Deserialize<Config>("""
+            name: 00123
+            version: 0x1F
+            tags: [TRUE, 0o17, +5, 1., .INF, -007]
+            env:
+              A: False
+              B: &zip 08001
+              C: *zip
+            child:
+              <<: {name: 0x0A}
+              version: 1E3
+            """)!;
+        Assert.Equal("00123", config.Name);
+        Assert.Equal("0x1F", config.Version);
+        Assert.Equal(["TRUE", "0o17", "+5", "1.", ".INF", "-007"], config.Tags!);
+        Assert.Equal("False", config.Env!["A"]);
+        Assert.Equal("08001", config.Env["B"]);
+        Assert.Equal("08001", config.Env["C"]); // an alias is a copy of the spelling too
+        Assert.Equal("0x0A", config.Child!.Name); // and so is a merged key
+        Assert.Equal("1E3", config.Child.Version);
+    }
+
+    /// <summary>
+    /// The negative control for #7398: the SAME spellings bound to typed properties still bind as
+    /// the core-schema values, and the JSON tree <see cref="TolerantYaml.Parse"/> returns is
+    /// unchanged — numbers stay numbers, booleans stay booleans.
+    /// </summary>
+    [Fact]
+    public void Binding_TheSameSpellingsIntoTypedProperties_StillBindAsTheirValues()
+    {
+        var config = TolerantYaml.Deserialize<Config>("""
+            count: 0x1F
+            order: 00123
+            ratio: 1E3
+            enabled: TRUE
+            flag: False
+            """)!;
+        Assert.Equal(31, config.Count);
+        Assert.Equal(123, config.Order);
+        Assert.Equal(1000d, config.Ratio);
+        Assert.True(config.Enabled);
+        Assert.False(config.Flag);
+
+        var map = Map("name: 00123\nhex: 0x1F\nflag: TRUE\n");
+        Assert.Equal(JsonValueKind.Number, Kind(map["name"]));
+        Assert.Equal(123, map["name"]!.GetValue<int>());
+        Assert.Equal(31, map["hex"]!.GetValue<int>());
+        Assert.Equal(JsonValueKind.True, Kind(map["flag"]));
+    }
+
+    /// <summary>
+    /// The spelling is restored only where the tolerant string converter would have converted the
+    /// scalar: options without it keep System.Text.Json's own refusal of a number for a string.
+    /// </summary>
+    [Fact]
+    public void Binding_ANumericOnlyTarget_WithASourceGeneratedContextThatDeclaresNoString_StillBinds()
+    {
+        // Review of #7628: restoring a spelling must not ask the options for a STRING contract the caller
+        // never declared. A source-generated context with only `int` has none, and asking threw
+        // NotSupportedException for `00123` (a recorded spelling) while `123` (none) bound fine.
+        var options = IntOnlyYamlContext.Default.Options;
+        Assert.Equal(123, TolerantYaml.Deserialize<int>("123", options)); // NEGATIVE CONTROL: no spelling recorded
+        Assert.Equal(123, TolerantYaml.Deserialize<int>("00123", options));
+    }
+
+    [Fact]
+    public void Binding_WithoutTheTolerantStringConverter_ANumberIntoAStringStillFails() =>
+        Assert.Throws<JsonException>(() => TolerantYaml.Deserialize<Config>(
+            "name: 00123\n", new JsonSerializerOptions { PropertyNameCaseInsensitive = true }));
+
     [Fact]
     public void Binding_AnEmptyDocumentIsDefault_AndAMismatchIsAJsonException()
     {
@@ -1066,3 +1146,7 @@ public class TolerantYamlTest
         Assert.Equal(yaml, TolerantYaml.Serialize(TolerantYaml.Parse(yaml)));
     }
 }
+
+/// <summary>A source-generated context that declares <c>int</c> and nothing else — no string contract.</summary>
+[System.Text.Json.Serialization.JsonSerializable(typeof(int))]
+internal sealed partial class IntOnlyYamlContext : System.Text.Json.Serialization.JsonSerializerContext;
