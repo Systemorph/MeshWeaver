@@ -268,15 +268,23 @@ finishes it:
 | the SOURCE edited | either | refused — resuming would discard the source's edit; both kept |
 | a different node at the target | either | refused — a genuine collision |
 
-Once a retry has converged, a further one answers `SourceNotFound` and touches nothing. On the
-file-system store a node kept as `.md` front matter carries neither `CreatedBy` nor `CreatedDate`, so
-"the same node" cannot be established for it and its retry is refused like any collision; JSON-stored
-nodes on that store, and every node on Postgres, carry both. Pinned by
+Once a retry has converged, a further one answers `SourceNotFound` and touches nothing. "The same
+node" needs the store to keep `CreatedBy` and `CreatedDate`, and every store does: Postgres in its
+columns, the file-system store in a JSON node file and, for a node it keeps as `.md`, in the front
+matter (`CreatedBy:` / `CreatedDate:`, #7352). The front-matter keys are written only for a node that
+has them and are never invented on read, so an authored `.md` file that carries neither stays
+byte-identical on save — but such a node is unattributed, so a half-landed move of it is refused like
+any collision rather than resumed. The keys are for the STORE, not for a git mirror: a sync export
+writes `.md` (and `.cs`) files without the two stamps, exactly as before, so a mirror of hand-edited
+pages never gains a creator id and an instant per page. JSON files are the full node and keep them.
+Pinned by
 `MoveResumesAHalfLandedMoveTest` (the copy leg alone landed, root only; a source edit; a foreign
 target), `MoveConvergesAfterAFailedCopyLegTest` (a real move whose copy leg failed on a descendant,
 retried to convergence and once more; a target edit on a store without history) and
 `MoveResumesOverAnEditedTargetWithHistoryTest` (the file-system store, which keeps versions: a target
-edit resumes and is kept, a source edit is refused).
+edit resumes and is kept, a source edit is refused, a half-landed `.md` node resumes, a different
+`.md` node at the target is refused); the front-matter round trip is pinned by
+`MarkdownFrontMatterTolerantYamlTest`.
 
 ## A relocation carries what is on disk
 
