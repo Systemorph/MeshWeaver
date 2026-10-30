@@ -221,6 +221,28 @@ public sealed class NodeTypeAccessRuleSet
     }
 
     /// <summary>
+    /// Whether the rule that governs <paramref name="operation"/> for <paramref name="nodeType"/> is a
+    /// <typeparamref name="TRule"/>. The same selection as <see cref="Find"/>, but the type test is made
+    /// on the rule ITSELF, read under its lease: what <see cref="Find"/> hands out for a module's rule is
+    /// a lease wrapper, so a type test on that answer never sees the module's rule (review of #7655).
+    ///
+    /// <para>A module rule that cannot be produced governs its type as a denying rule (see
+    /// <c>Governing</c>), and counts as a <typeparamref name="TRule"/> here: nobody can read what it is,
+    /// so a caller that protects a class of node types fails closed on it.</para>
+    /// </summary>
+    /// <typeparam name="TRule">The rule type to test for.</typeparam>
+    /// <param name="nodeType">The node's <see cref="MeshNode.NodeType"/>; null/empty yields false.</param>
+    /// <param name="operation">The operation being decided.</param>
+    /// <returns>True when the governing rule is a <typeparamref name="TRule"/>.</returns>
+    public bool IsGovernedBy<TRule>(string? nodeType, NodeOperation operation) where TRule : class
+        => !string.IsNullOrEmpty(nodeType)
+           && Governing(nodeType, (_, rule) =>
+                   rule.SupportedOperations is var operations
+                   && (operations.Count == 0 || operations.Contains(operation))
+                   && rule is TRule)
+               is not null;
+
+    /// <summary>
     /// The rule that decides the NON-CRUD <paramref name="permission"/> (Comment, Thread, Execute, …)
     /// on a node of <paramref name="nodeType"/>, or <c>null</c> when none does. Same index and the same
     /// last-registration-wins selection as <see cref="Find"/>: the governing rule for the type must

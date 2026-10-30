@@ -130,6 +130,7 @@
   "access.anonymousDenied.signInRequired": "Sign in to access '{0}': this instance does not allow anonymous access.",
   "access.apiToken.principalFixed": "The token '{0}' belongs to '{1}': the principal of an existing API token never changes.",
   "access.apiToken.principalNotCaller": "The API token '{0}' names '{1}', but a token may name only the caller who writes it ('{2}').",
+  "access.mainNode.repointRefused": "'{0}' keeps its main node '{1}': an update never changes the main node a satellite belongs to.",
   "access.apiToken.foreignWrite": "An API token at '{0}' can only be written through its own node, but this write arrived at '{1}'. Nothing was changed.",
   "access.apiTokenScope.refused": "This API token is limited to the scopes [{0}]: {2} on '{3}' needs the scope '{1}'.",
   "access.apiTokenScope.mintRefused": "This API token is limited to the scopes [{0}] and cannot write the token record '{1}': {2}",
