@@ -2455,6 +2455,15 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/run-node-tests.py --self-test
 
+    # The host-built reference set (Doc/Architecture/LocalDevWorkflow → "Verify like CI on a Mac") is
+    # a contract between two files: this builder writes meshweaver-reference-set.json and
+    # compile-check.py classifies a flat directory by it. A rename on one side would turn every
+    # host-built set back into a refused "image" with no CI lane noticing, so the builder's self-test
+    # reads the contract FROM compile-check.py. Offline, no dotnet, under a second.
+    - name: "The host-built reference set and compile-check agree on its manifest (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-host-reference-set.py --self-test
+
     # The fresh merge every suite job runs (policy suites-test-fresh-merge) is proven both ways on
     # throwaway repositories: parents [main tip, head], main's NEWER change present, the identical
     # commit from a shallow and a full checkout, a conflict RED naming the path, and the negative

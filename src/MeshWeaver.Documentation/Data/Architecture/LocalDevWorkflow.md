@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Local Dev Workflow — restart, reload, debug"
-Abstract: "Three ways to apply code changes to a running portal — hot reload via dotnet watch, dashboard restart, process kill. When to use which, and what NOT to restart."
+Abstract: "Three ways to apply code changes to a running portal — hot reload via dotnet watch, dashboard restart, process kill. When to use which, what NOT to restart, and how to verify like CI on a Mac (host-built reference set, Testcontainers on Colima, leftover test containers)."
 Authors:
   - "Roland Buergi"
 Tags:
@@ -277,6 +277,95 @@ Navigate to `https://localhost:17200/structuredlogs?level=info` and filter by:
 | `Message contains "Could not deserialize"` | Type-registry mismatch — see [DebuggingMessageFlow.md](/Doc/Architecture/DebuggingMessageFlow) |
 
 For distributed traces across resources, open `https://localhost:17200/traces` and click any trace to see span timing across the AppHost, Portal, and Postgres boundary.
+
+---
+
+## Verify like CI on a Mac
+
+Three things used to make a Mac unable to verify the way CI does. Each one now has a supported route.
+
+### In-mesh C#: a reference set built on this host
+
+CI compiles and runs in-mesh C# (`<Type>/Source/*.cs`, `<Type>/Test/*.cs`) against the platform
+**image**. That means the tester image's `/app`, and in MeshWeaver.Plugins the portal image's `/app` with
+the tester's extra `MeshWeaver.*` assemblies laid over it. A Mac could not use either source:
+
+| Reference set | `compile-check.py` | `run-node-tests.py` | Why |
+|---|---|---|---|
+| image extraction (`--image`, `fetch-refs.py`) | ✅ compiles | ❌ exit 3 | The assemblies are built for Linux. A process that loads them on macOS aborts, so the harness refuses rather than report clean content as `BUILD FAILED`. It also needs registry access. |
+| core `src/*/bin` build | ❌ exit 4 | ❌ exit 2 | A library's `bin` holds only its own assembly, so there is no `System.Reactive.dll`. |
+| **host-built** (`build-host-reference-set.py`) | ✅ | ✅ | The image's own closure, published on this host. |
+
+`.github/scripts/build-host-reference-set.py` publishes that closure for this host's RID,
+framework-dependent: the tester (`tools/MeshWeaver.PluginTester`), plus the portal
+(`src/Memex.Portal.Distributed`) when you name a Plugins checkout. The portal is the base and the tester
+adds only the `MeshWeaver.*` assemblies the portal lacks, the same rule `platform-mount.py` applies in CI.
+The result is one flat directory, written next to a `meshweaver-reference-set.json` manifest.
+`compile-check.py` classifies the directory as layout `host-build` **only** because of that manifest.
+A flat directory without it is still an image extraction, and an image extraction missing its shared
+frameworks is still refused. The manifest records the core commit. The set is refused (exit 3) once that
+checkout's `origin/main` has moved past it, the same rule as a stale sibling checkout, so rebuild after
+you update core.
+
+```bash
+# 1. Build the set from your CORE worktree, naming the Plugins checkout you test (≈1–3 min).
+python3 <core>/.github/scripts/build-host-reference-set.py --plugins <plugins>
+REFS=$(python3 <core>/.github/scripts/build-host-reference-set.py --plugins <plugins> --print-path)
+
+# 2. The registry-served modules come from the Plugins checkout's own bin (never in an image).
+#    Build them against the same core (compile-check names exactly these when they are missing):
+dotnet build <plugins>/src/MeshWeaver.AI -c Release -p:MeshWeaverRoot=<core>/      # likewise .Markdown.Collaboration, .Maps
+
+# 3. Run the launchers against THIS core's scripts and THIS set (from the Plugins checkout):
+export MW_PLATFORM_SCRIPTS=<core>/.github/scripts
+python3 scripts/canonical-compile-check.py --modules Hosting --refs "$REFS"
+python3 devtools/run-node-tests.py Hosting --type InstanceAction --refs "$REFS"
+```
+
+Measured on darwin-arm64 (Apple silicon): the set held 224 assemblies; `canonical-compile-check.py
+--modules Hosting` compiled 48 of 48 NodeTypes clean in 64 s; `run-node-tests.py Hosting --type
+InstanceAction` ran 56 suites with 760 of 760 cases passing in 21 s. Old sets stay under
+`~/.cache/meshweaver/refs/host-*` (one per core commit) until you delete them.
+
+### Testcontainers on Colima: no hand-set variables
+
+On Colima a published port reaches the Mac's `localhost` only while Colima's port forwarder is up.
+When it is down, every Testcontainers fixture times out on `localhost:<port>`, even though the port is open
+on the VM's own address. Ryuk also fails, because it mounts the Mac-side socket path, which does not exist
+inside the VM. The hand workaround (a pgvector container started at the VM IP, `MW_TEST_PG_CONNECTION`,
+`TESTCONTAINERS_RYUK_DISABLED=true`) is no longer needed, and it is why containers were left behind.
+
+In MeshWeaver.Plugins, every project that references a `Testcontainers*` package compiles
+`src/Testing.Shared/LocalDockerEndpoint.cs`, a module initializer. When the current Docker endpoint is a
+Colima socket, it sets Testcontainers' documented Colima settings, each only while still unset:
+`DOCKER_HOST`, `TESTCONTAINERS_HOST_OVERRIDE` (the VM address from `colima list --json`, which needs a VM
+started with `--network-address`) and `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`. Ryuk
+then runs, so a killed test host's containers are reaped. For any other Docker endpoint, and on CI, it does
+nothing. A plain `dotnet test` works. Run it from the core checkout, whose `global.json` selects
+Microsoft.Testing.Platform:
+
+```bash
+cd <core> && dotnet test --project <plugins>/src/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj \
+  -c Release --no-build --filter-class MeshWeaver.Hosting.PostgreSql.Test.BlankDescriptionFilterPgTests
+```
+
+🚨 Never run `memex-local up` to get a database for a test. It runs `az acr login` against the default
+subscription.
+
+### Leftover test containers
+
+Every MeshWeaver fixture labels its container `org.meshweaver.test=<fixture>`, beside Testcontainers' own
+`org.testcontainers*` labels, and disposes it on teardown. Ryuk reaps the containers of a host that died
+first. For anything older, `scripts/clean-test-containers.py` in MeshWeaver.Plugins lists labelled test
+containers older than `--older-than` hours (default 12), and removes them with `--apply`. It removes an
+unlabelled container only when named with `--name`, and only for a Postgres image. It refuses `k8s_*`
+containers and anything carrying a Kubernetes or Compose label (the memex-local stack), even when named. It
+also refuses a running Postgres container that has a client connected.
+
+```bash
+python3 scripts/clean-test-containers.py                    # dry run
+python3 scripts/clean-test-containers.py --older-than 6 --apply
+```
 
 ---
 
