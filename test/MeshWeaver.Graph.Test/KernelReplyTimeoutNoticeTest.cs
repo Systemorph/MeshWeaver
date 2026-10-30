@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -92,7 +93,7 @@ public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : CSharpCell
             .Where(node => node is not null)
             .Select(node => node.ContentAs<ActivityLog>(options))
             .Where(log => log is not null
-                          && log.Messages.Any(m => m.MessageKey == CodeNodeType.NoKernelReplyYetKey))
+                          && log.Messages.Any(m => m.MessageKey == KernelReplyOverdue.NoticeKey))
             .FirstAsync()
             .Timeout(Bound)
             .Catch<ActivityLog?, TimeoutException>(ex => Observable.Throw<ActivityLog?>(
@@ -121,7 +122,7 @@ public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : CSharpCell
             log.Status.Should().Be(ActivityStatus.Running,
                 "the kernel has not answered YET; the run is still its own and nothing has failed");
             log.Messages.Should().Contain(
-                m => m.MessageKey == CodeNodeType.NoKernelReplyYetKey && m.LogLevel == Microsoft.Extensions.Logging.LogLevel.Warning,
+                m => m.MessageKey == KernelReplyOverdue.NoticeKey && m.LogLevel == Microsoft.Extensions.Logging.LogLevel.Information,
                 "the reader of the Output pane must see that the run is waiting on the kernel, in their language");
         }
         finally
@@ -156,7 +157,7 @@ public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : CSharpCell
         log.Status.Should().Be(ActivityStatus.Succeeded,
             "a late reply completes the run exactly as an in-time one would");
         log.ReturnValue?.ToString().Should().Be("7", "the script ran to its end");
-        log.Messages.Should().NotContain(m => m.MessageKey == CodeNodeType.NoKernelReplyYetKey,
+        log.Messages.Should().NotContain(m => m.MessageKey == KernelReplyOverdue.NoticeKey,
             "the kernel's answer supersedes the notice — a finished run must not still say it is waiting");
     }
 }
@@ -189,7 +190,167 @@ public class KernelReplyInTimeShowsNoNoticeTest(ITestOutputHelper output) : CSha
 
         snapshots[^1].Status.Should().Be(ActivityStatus.Succeeded, "the real kernel ran `1 + 1` in time");
         snapshots.Should().NotContain(
-            log => log.Messages.Any(m => m.MessageKey == CodeNodeType.NoKernelReplyYetKey),
+            log => log.Messages.Any(m => m.MessageKey == KernelReplyOverdue.NoticeKey),
             "the kernel answered within the budget, so no snapshot may say it has not");
+    }
+}
+
+/// <summary>
+/// #7362 review — the no-answer-yet notice is decided by the Activity's OWNER, never by the
+/// dispatcher's mirror. A non-owner write runs on a mirror and ships a merge patch, so a guard on the
+/// mirror's "still Running" can land AFTER the kernel's terminal write. These tests deliver the
+/// dispatcher's fact, and the old mirror-guarded notice itself, after a run has finished, and
+/// require the finished run to end without the notice.
+/// </summary>
+public class KernelReplyOverdueAfterTheTerminalWriteTest(ITestOutputHelper output) : CSharpCellRunTestBase(output)
+{
+    private static string Transcript(ActivityLog log) =>
+        string.Join("\n", log.Messages.Select(m => $"{m.LogLevel}|{m.MessageKey}|{m.Message}"));
+
+    /// <summary>
+    /// The first state of <paramref name="activityPath"/> NEWER than <paramref name="landed"/> — the
+    /// owner's own fold of what landed — so the assertion reads the owner's verdict, never the
+    /// unchanged state from before the write.
+    /// </summary>
+    private async Task<ActivityLog> OwnersAnswerTo(string activityPath, MeshNode landed, CancellationToken ct)
+    {
+        var options = Mesh.JsonSerializerOptions;
+        return (await Mesh.GetWorkspace().GetMeshNodeStream(activityPath)
+            .Where(node => node is not null && node.Version > landed.Version)
+            .Select(node => node.ContentAs<ActivityLog>(options))
+            .Where(log => log is not null)
+            .FirstAsync()
+            .Timeout(Bound)
+            .Catch<ActivityLog?, TimeoutException>(ex => Observable.Throw<ActivityLog?>(
+                new TimeoutException(
+                    $"the owner of {activityPath} never folded the write that landed at version "
+                    + $"{landed.Version} (waited {Bound})", ex)))
+            .Await(ct))!;
+    }
+
+    /// <summary>
+    /// The dispatcher's fact arrives after the kernel's terminal write (the reply timed out while
+    /// the kernel was finishing): the owner consumes it and adds no notice to the finished run.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task TheOverdueFact_LandingAfterTheTerminalWrite_AddsNoNotice()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var activity = await Run(await CreateCell("1 + 1", ct), ct);
+        var finished = await Terminal(activity, "the in-time `1 + 1` run", ct);
+        finished.Status.Should().Be(ActivityStatus.Succeeded);
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var landed = await access
+            .RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(activity)
+                .Update<ActivityLog>((node, log) =>
+                    node with { Content = log! with { ReplyOverdueSince = DateTime.UtcNow } }))
+            .FirstAsync()
+            .Timeout(Bound)
+            .Await(ct);
+
+        var log = await OwnersAnswerTo(activity, landed, ct);
+        log.ReplyOverdueSince.Should().BeNull("the owner consumes the fact it acted on");
+        log.Status.Should().Be(ActivityStatus.Succeeded, "a late fact is no verdict");
+        log.Messages.Should().NotContain(m => KernelReplyOverdue.IsNotice(m),
+            "the run had already finished, so it must not say it is waiting for the kernel");
+        Transcript(log).Should().Be(Transcript(finished),
+            "the kernel's terminal transcript is not touched by a late fact");
+    }
+
+    /// <summary>
+    /// The exact shape the mirror-guarded write produced: the notice appended to a run that had
+    /// already finished, landing after the terminal write. The owner removes it — a finished run
+    /// never keeps saying it is waiting. Fails without the owner-side fold.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ANotice_LandingAfterTheTerminalWrite_DoesNotSurviveOnTheFinishedRun()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var activity = await Run(await CreateCell("1 + 1", ct), ct);
+        var finished = await Terminal(activity, "the in-time `1 + 1` run", ct);
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var landed = await access
+            .RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(activity)
+                .Update<ActivityLog>((node, log) =>
+                    node with { Content = log!.Append(KernelReplyOverdue.Notice()) }))
+            .FirstAsync()
+            .Timeout(Bound)
+            .Await(ct);
+        landed.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)!.Messages
+            .Should().Contain(m => KernelReplyOverdue.IsNotice(m),
+                "the stale notice really reached the owner — otherwise this test checks nothing");
+
+        var log = await OwnersAnswerTo(activity, landed, ct);
+        log.Status.Should().Be(ActivityStatus.Succeeded);
+        log.Messages.Should().NotContain(m => KernelReplyOverdue.IsNotice(m),
+            "a notice that reached a finished run is removed by the owner");
+        Transcript(log).Should().Be(Transcript(finished), "the kernel's own transcript is what remains");
+        log.TotalMessageCount.Should().Be(finished.TotalMessageCount,
+            "removing the notice takes it out of the count as well");
+    }
+}
+
+/// <summary>The owner's fold itself, state by state (#7362 review).</summary>
+public class KernelReplyOverdueFoldTest
+{
+    private static readonly DateTime Overdue = new(2026, 10, 30, 12, 0, 0, DateTimeKind.Utc);
+
+    private static ActivityLog Running() =>
+        new ActivityLog("ScriptExecution").Append(new LogMessage("started", Microsoft.Extensions.Logging.LogLevel.Information));
+
+    /// <summary>A pending fact on a running run: the notice is appended once and the fact consumed.</summary>
+    [Fact]
+    public void AFactOnARunningRun_AppendsTheNoticeOnce_AndIsConsumed()
+    {
+        var folded = KernelReplyOverdue.Fold(Running() with { ReplyOverdueSince = Overdue });
+
+        folded.ReplyOverdueSince.Should().BeNull();
+        folded.Status.Should().Be(ActivityStatus.Running);
+        folded.Messages.Count(KernelReplyOverdue.IsNotice).Should().Be(1);
+        folded.MaxSeverity.Should().Be(Microsoft.Extensions.Logging.LogLevel.Information,
+            "a slow run must not read as a run with warnings");
+
+        var again = KernelReplyOverdue.Fold(folded with { ReplyOverdueSince = Overdue });
+        again.Messages.Count(KernelReplyOverdue.IsNotice).Should().Be(1, "a second fact adds no second notice");
+    }
+
+    /// <summary>A pending fact on a finished run: consumed, and nothing appended.</summary>
+    [Fact]
+    public void AFactOnAFinishedRun_IsConsumed_AndAddsNothing()
+    {
+        var finished = Running() with { Status = ActivityStatus.Succeeded, ReplyOverdueSince = Overdue };
+
+        var folded = KernelReplyOverdue.Fold(finished);
+
+        folded.ReplyOverdueSince.Should().BeNull();
+        string.Join("\n", folded.Messages.Select(m => m.Message))
+            .Should().Be(string.Join("\n", finished.Messages.Select(m => m.Message)));
+    }
+
+    /// <summary>A notice on a finished run is removed, count included.</summary>
+    [Fact]
+    public void ANoticeOnAFinishedRun_IsRemoved()
+    {
+        var finished = Running().Append(KernelReplyOverdue.Notice()) with { Status = ActivityStatus.Succeeded };
+
+        var folded = KernelReplyOverdue.Fold(finished);
+
+        folded.Messages.Should().NotContain(m => KernelReplyOverdue.IsNotice(m));
+        folded.TotalMessageCount.Should().Be(finished.TotalMessageCount - 1);
+    }
+
+    /// <summary>Negative control: a running run with no fact, and a notice on a running run, are left alone.</summary>
+    [Fact]
+    public void NothingPending_IsLeftExactlyAsItIs()
+    {
+        var running = Running();
+        KernelReplyOverdue.Fold(running).Should().BeSameAs(running);
+        KernelReplyOverdue.NeedsFold(running).Should().BeFalse();
+
+        var waiting = running.Append(KernelReplyOverdue.Notice());
+        KernelReplyOverdue.Fold(waiting).Should().BeSameAs(waiting,
+            "a running run keeps its notice until the kernel's own transcript replaces it");
     }
 }

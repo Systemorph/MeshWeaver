@@ -387,12 +387,12 @@ public static class CodeNodeType
                                 // of silence — a healthy cell computing past it is still running, and
                                 // the kernel will settle its Activity when it ends. Failing it here
                                 // would mark a live run Failed (and race the kernel's own Complete).
-                                // What a timeout CAN say — nothing came back YET — it says on the
-                                // Activity as a keyed transcript entry (NoKernelReplyYet), leaving the
-                                // status Running: the run is visibly waiting instead of silently
-                                // Running (#7362), and a late reply still settles it normally. The
-                                // kernel owns the transcript and replaces it on its next snapshot,
-                                // so its first output or its terminal write supersedes the notice.
+                                // What a timeout CAN say — nothing came back YET — it states as a
+                                // FACT on the Activity (ReplyOverdueSince, MarkAwaitingKernel), and
+                                // the Activity's OWNER turns it into the keyed notice only while the
+                                // run is still Running (KernelReplyOverdue): the run is visibly
+                                // waiting instead of silently Running (#7362), a late reply still
+                                // settles it normally, and a notice never outlives the kernel's answer.
                                 // The delivery faults (DeliveryFailure, NotFound) and a failed reply
                                 // are the verdicts this path writes.
                                 hub.Observe<SubmitCodeResponse>(submit, o => o.WithTarget(submitTarget))
@@ -603,44 +603,36 @@ public static class CodeNodeType
                 .WithKey("activity.codeRun.failed", ("language", language), ("reason", reason));
 
     /// <summary>
-    /// The transcript entry for a C# run whose kernel has not answered within the dispatcher's
-    /// request budget. Not a verdict: the run stays <see cref="ActivityStatus.Running"/> and a late
-    /// reply settles it normally. A warning, so the Output pane shows the run is waiting rather than
-    /// silently running; keyed, so it renders in the viewer's language.
-    /// </summary>
-    internal static LogMessage NoKernelReplyYet() =>
-        new LogMessage(
-                "No answer from the kernel yet. The run is still in progress and completes when the "
-                + "kernel answers.",
-                LogLevel.Warning)
-            .WithKey(NoKernelReplyYetKey);
-
-    /// <summary>The catalog key of <see cref="NoKernelReplyYet"/>.</summary>
-    internal const string NoKernelReplyYetKey = "activity.codeRun.noKernelReplyYet";
-
-    /// <summary>
-    /// Records on a still-Running Activity that its kernel has not answered yet (#7362). Appends
-    /// <see cref="NoKernelReplyYet"/> and leaves the status untouched; a log already terminal (the
-    /// kernel settled it while the reply was in flight) is left as it is. The kernel owns the
-    /// transcript and writes its own window on its next snapshot, so its output or its terminal
-    /// write replaces this entry — the notice never outlives the kernel's answer.
+    /// States on a run's Activity that the kernel has not answered within this hub's request budget
+    /// (#7362). This hub does NOT own the Activity, so its write runs on a mirror and ships a merge
+    /// patch: it therefore writes only a FACT, <see cref="ActivityLog.ReplyOverdueSince"/>, and
+    /// writes it unconditionally — a one-field patch that cannot touch the transcript or the status
+    /// whatever the owner holds by the time it lands. The owning Activity hub folds it
+    /// (<see cref="MeshWeaver.Kernel.Hub.KernelReplyOverdue"/>): a still-running run shows the
+    /// keyed "no answer from the kernel yet" notice, a finished one shows nothing.
+    ///
+    /// <para>As System, in a SYNCHRONOUS scope around the Update call and its Subscribe: this runs
+    /// from the reply wait's timeout, which fires on a timer thread that carries no user context —
+    /// a write there would fail closed. It is infrastructure progress on the activity, the same
+    /// identity <c>ActivityLogLogger</c> writes it with.</para>
     /// </summary>
     internal static void MarkAwaitingKernel(IMessageHub hub, string activityPath)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(LoggerCategory);
-        hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(curr =>
-                // ContentAs, never `is ActivityLog` — the local mirror's Content can be untyped JSON.
-                curr.ContentAs<ActivityLog>(hub.JsonSerializerOptions, logger) is { } log
-                && !log.Status.IsTerminal()
-                && !log.Messages.Any(m => m.MessageKey == NoKernelReplyYetKey)
-                    ? curr with { Content = log.Append(NoKernelReplyYet()) }
-                    : curr)
-            .Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex,
-                    "CodeNodeType: failed to record on ActivityLog {Activity} that its kernel has not answered yet",
-                    activityPath));
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var overdueSince = DateTime.UtcNow;
+        using (access?.ImpersonateAsSystem())
+            hub.GetWorkspace().GetMeshNodeStream(activityPath).Update<ActivityLog>((node, log) =>
+                    // null means ABSENT — the dispatcher created this activity before it posted, so
+                    // there is no run to state anything about. Present-but-unreadable content faults
+                    // the typed overload instead of being written over.
+                    log is null ? node : node with { Content = log with { ReplyOverdueSince = overdueSince } })
+                .Subscribe(
+                    _ => { },
+                    ex => logger?.LogWarning(ex,
+                        "CodeNodeType: failed to state on ActivityLog {Activity} that its kernel has not answered yet",
+                        activityPath));
     }
 
     /// <summary>The transcript entry for a foreign-language run with no worker connected.</summary>
