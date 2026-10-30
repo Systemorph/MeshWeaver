@@ -36,6 +36,7 @@ public class MoveRenamesOffAWhitespacePathTest(ITestOutputHelper output) : Monol
     [Theory(Timeout = 90_000)]
     [InlineData("License Email {0} Rubin")]
     [InlineData("plain-{0}")]
+
     public async Task AMoveOffAPath_CarriesTheSubtree_WhateverWhitespaceTheLeafHolds(string leafPattern)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -52,6 +53,35 @@ public class MoveRenamesOffAWhitespacePathTest(ITestOutputHelper output) : Monol
         (await StoredAt(target, ct)).Should().NotBeNull("the source arrived at the target");
         (await StoredAt($"{target}/child", ct)).Should().NotBeNull("its descendant travelled with it");
         (await StoredAt(source, ct)).Should().BeNull("the delete leg removed the source after a complete copy");
+    }
+
+    /// <summary>
+    /// A COPY reads its source through the same subtree query. A path with BOTH quote characters (and no
+    /// whitespace) has no quoted literal, and the bare term always read it whole, so quoting must not make
+    /// it uncopyable (review of #7627). The whitespace case and the plain control run beside it.
+    /// </summary>
+    [Theory(Timeout = 90_000)]
+    [InlineData("it's-\"{0}\"")]
+    [InlineData("License Email {0} Rubin")]
+    [InlineData("plain-{0}")]
+    public async Task ACopyOfAPath_CarriesTheSubtree_WhateverQuotesOrWhitespaceTheLeafHolds(string leafPattern)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var source = $"{TestPartition}/{string.Format(leafPattern, id)}";
+        var target = $"{TestPartition}/Copied{id}";
+        await Create(source, "Source", ct);
+        await Create($"{source}/child", "Child", ct);
+
+        var copied = await ObserveNodeOperation(new CopyNodeRequest(source, target))
+            .Select(d => d.Message)
+            .Do(r => Output.WriteLine($"COPY {source} -> {target}: success={r.Success} error={r.Error}"))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        copied.Success.Should().BeTrue($"'{source}' is an ordinary stored node the caller owns; the copy answered: {copied.Error}");
+        (await StoredAt(target, ct)).Should().NotBeNull("the source arrived at the target");
+        (await StoredAt($"{target}/child", ct)).Should().NotBeNull("its descendant travelled with it");
+        (await StoredAt(source, ct)).Should().NotBeNull("a copy leaves the source in place");
     }
 
     private Task<MoveNodeResponse> Move(string source, string target, CancellationToken ct) =>

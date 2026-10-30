@@ -226,7 +226,7 @@ public static class NodeCopyHelper
         // the completeness question, and sharing the shape is what makes the difference mean only
         // that. Complete(): this is an ENUMERATION, not a page (IMeshQuery.Complete).
         var subtreeQuery = MeshQueryRequest
-            .FromQuery($"path:{QueryParser.QuoteLiteral(sourcePath)} scope:subtree")
+            .FromQuery($"path:{QueryParser.PathLiteral(sourcePath)} scope:subtree")
             .Complete();
 
         IObservable<IReadOnlyList<MeshNode>> Enumerate() => meshQuery
