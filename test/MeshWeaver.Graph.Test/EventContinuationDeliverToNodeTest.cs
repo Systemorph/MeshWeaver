@@ -152,7 +152,43 @@ public class EventContinuationDeliverToNodeTest(ITestOutputHelper output) : Mono
         Assert.Equal(EventContinuationType.DeliverToNode, read.ContinuationType);
     }
 
-    private async Task<EventSubscription> ArmDueTimer(EventContinuationType continuation, CancellationToken ct)
+    /// <summary>
+    /// A delivery never REPLACES content it cannot extend: a scalar or an array is refused (the
+    /// subscription then fails naming why) instead of being overwritten by an object holding only the
+    /// delivery. An object keeps every field; no content starts empty.
+    /// </summary>
+    [Fact]
+    public void WithDelivery_KeepsAnObject_AndRefusesContentItWouldReplace()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var delivery = new EventDelivery { SubscriptionId = "s", SubjectId = "u" };
+        var field = EventSubscriptionOps.DeliveryField(options);
+
+        var kept = EventSubscriptionOps.WithDelivery(JsonDocument.Parse("""{"plan":"personal"}""").RootElement, delivery, options);
+        Assert.Equal("personal", (string?)kept["plan"]);
+        Assert.NotNull(kept[field]);
+        Assert.NotNull(EventSubscriptionOps.WithDelivery(null, delivery, options)[field]);
+
+        foreach (var raw in new[] { "\"text\"", "42", "[1,2]" })
+        {
+            var refused = Assert.Throws<InvalidOperationException>(() =>
+                EventSubscriptionOps.WithDelivery(JsonDocument.Parse(raw).RootElement, delivery, options));
+            Assert.Contains("not an object", refused.Message);
+        }
+    }
+
+    /// <summary>A whitespace-only <c>DeliverTo</c> names no node: it fails like a missing one instead
+    /// of trimming to an empty path, which the stream API would read as the runner's own hub.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task DeliverToNode_WithAWhitespacePath_FailsNamingIt()
+    {
+        var subscription = await ArmDueTimer(EventContinuationType.DeliverToNode, TestContext.Current.CancellationToken, deliverTo: "   ");
+        var final = await Settled(subscription.Id);
+        Assert.Equal(EventSubscriptionStatus.Failed, final.Status);
+        Assert.Contains("names no DeliverTo node", final.LastError ?? "");
+    }
+
+    private async Task<EventSubscription> ArmDueTimer(EventContinuationType continuation, CancellationToken ct, string? deliverTo = null)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var subscription = new EventSubscription
@@ -160,6 +196,7 @@ public class EventContinuationDeliverToNodeTest(ITestOutputHelper output) : Mono
             TriggerType = EventTriggerType.Timer,
             FireAt = DateTimeOffset.UtcNow.AddSeconds(-1),
             ContinuationType = continuation,
+            DeliverTo = deliverTo,
         };
         await EventSubscriptionOps.CreateSubscription(meshService, subscription)
             .Should().Emit(cancellationToken: ct);

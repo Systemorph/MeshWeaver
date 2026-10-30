@@ -127,7 +127,8 @@ public static class EventSubscriptionOps
     /// <paramref name="content"/> as JSON with <paramref name="delivery"/> set on its
     /// <c>eventDelivery</c> field (named through <paramref name="options"/>' naming policy). The content
     /// may arrive typed or as a <see cref="JsonElement"/>; either way its other fields, its
-    /// <c>$type</c> included, are kept, so the owning hub re-types it on the way in. Pure.
+    /// <c>$type</c> included, are kept, so the owning hub re-types it on the way in. Content that is
+    /// not a JSON object (a scalar, an array) is refused rather than replaced. Pure.
     /// </summary>
     /// <param name="content">The node's current content, or null.</param>
     /// <param name="delivery">The delivery to set.</param>
@@ -142,7 +143,17 @@ public static class EventSubscriptionOps
             JsonNode node => node.DeepClone(),
             _ => JsonSerializer.SerializeToNode(content, options),
         };
-        var obj = json as JsonObject ?? new JsonObject();
+        // Only an OBJECT can carry the field beside what it already holds. A scalar or an array would
+        // have to be replaced, losing the node's content while the subscription reports Fired — so it
+        // is refused, and the subscription fails naming why. Null (no content yet) starts empty.
+        var obj = json switch
+        {
+            null => new JsonObject(),
+            JsonObject existing => existing,
+            _ => throw new InvalidOperationException(
+                $"The DeliverTo node's content is a JSON {json.GetValueKind()}, not an object: a delivery "
+                + "would replace it, so it was not written."),
+        };
         obj[DeliveryField(options)] = JsonSerializer.SerializeToNode(delivery, options);
         return obj;
     }

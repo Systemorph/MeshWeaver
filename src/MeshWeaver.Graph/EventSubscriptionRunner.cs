@@ -582,7 +582,7 @@ public sealed class EventSubscriptionRunner(
 
             // The generic module continuation: the firing is written onto the module's own node, whose
             // hub decides what it means. In-mesh source owns a continuation this way.
-            EventContinuationType.DeliverToNode when subscription is { DeliverTo.Length: > 0 } =>
+            EventContinuationType.DeliverToNode when !string.IsNullOrWhiteSpace(subscription.DeliverTo) =>
                 Deliver(subscription, userId),
             EventContinuationType.DeliverToNode =>
                 Unhandled(subscription, $"Event subscription {subscription.Id} has continuation "
