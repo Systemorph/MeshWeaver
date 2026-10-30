@@ -318,8 +318,8 @@ the viewer presses play.
 // One clip.
 Controls.Audio(previewUrl).WithTitle(previewTitle).WithPreload(AudioPreload.None)
 
-// A preview column in a grid: the source is bound to each row's property.
-Controls.Audio(new ContextProperty(nameof(Song.PreviewUrl))).WithPreload(AudioPreload.None)
+// A preview column in a grid: the source is bound to each row's (camelCase) property.
+Controls.Audio(new ContextProperty("previewUrl")).WithPreload(AudioPreload.None)
 ```
 
 `Src` is an ordinary bindable property, so it takes a data-binding expression as well as a URL.
