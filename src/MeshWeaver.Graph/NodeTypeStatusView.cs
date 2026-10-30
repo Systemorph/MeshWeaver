@@ -54,6 +54,21 @@ public sealed record NodeTypeStatusView(
     bool CompileDisabled,
     string LatestReleaseLink)
 {
+    // 🚨 The delivery-hold members are init properties, NOT primary-constructor parameters: a record's
+    // constructor arity is binary surface (scripts/check-record-signatures.py), and widening it would
+    // break every assembly compiled against the 17-parameter signature.
+
+    /// <summary>The delivery-hold block's style — hidden unless the record carries a
+    /// <see cref="NodeTypeDefinition.DeliveryHoldReason"/>.</summary>
+    public string HoldStyle { get; init; } = Hidden;
+
+    /// <summary>The delivery-hold block's headline, or empty.</summary>
+    public string HoldHeadline { get; init; } = "";
+
+    /// <summary>Markdown under it: what a hold means, then the recorded reason verbatim (it is data,
+    /// written by the mesh), or empty.</summary>
+    public string HoldDetail { get; init; } = "";
+
     /// <summary>The id under the layout area's <c>/data</c> the projection is published at.</summary>
     public const string DataId = "nodeTypeStatus";
 
@@ -69,6 +84,9 @@ public sealed record NodeTypeStatusView(
     private const string PanelBase =
         "align-items: center; gap: 12px; padding: 12px 16px; margin: 16px 0; border-radius: 6px; "
         + "border: 1px solid var(--neutral-stroke-rest); ";
+    private const string HoldBase =
+        "padding: 12px 16px; gap: 8px; margin-bottom: 8px; border-radius: 6px; "
+        + "background: var(--warning-fill-rest); border: 1px solid var(--warning-stroke-rest);";
     private const string LogBase =
         "padding: 12px 16px; background: var(--neutral-layer-2); border-radius: 4px; gap: 8px; margin-bottom: 8px;";
 
@@ -102,6 +120,7 @@ public sealed record NodeTypeStatusView(
 
         var (logStyle, logHeadline, logHeadlineStyle, logDetail, logLinks) = CompileLog(def, L);
         var (panelStyle, chip, chipStyle, compileLabel, compileDisabled) = CompilePanel(def, L);
+        var (holdStyle, holdHeadline, holdDetail) = DeliveryHold(def, L);
 
         var latestRelease = def?.LatestReleasePath is { Length: > 0 } release
             ? $"[{release.Split('/').LastOrDefault() ?? release}](/{release})"
@@ -126,7 +145,35 @@ public sealed record NodeTypeStatusView(
             PanelChipStyle: chipStyle,
             CompileLabel: compileLabel,
             CompileDisabled: compileDisabled,
-            LatestReleaseLink: latestRelease);
+            LatestReleaseLink: latestRelease)
+        {
+            HoldStyle = holdStyle,
+            HoldHeadline = holdHeadline,
+            HoldDetail = holdDetail
+        };
+    }
+
+    /// <summary>
+    /// The delivery-hold block (MeshWeaver#7356): shown for ANY record that carries a
+    /// <see cref="NodeTypeDefinition.DeliveryHoldReason"/> — the field is <c>null</c> whenever the
+    /// record is not held, so its presence IS the hold, whatever kind settled it (stale-but-serving,
+    /// refused, <c>Modules:RequirePrebuilt</c>, or unknown module membership).
+    ///
+    /// <para>🚨 Keyed on the reason, never on <c>BuildDeliveryHold.IsHeld</c>: that predicate reads
+    /// the provenance, and the unknown-membership hold deliberately keeps
+    /// <see cref="BuildProvenance.Compiled"/> (#7015 review) — so a page asking <c>IsHeld</c> showed
+    /// a plain "Up to date" over a forced release the hold had answered with no build.</para>
+    /// </summary>
+    private static (string Style, string Headline, string Detail) DeliveryHold(
+        NodeTypeDefinition? def, Func<string, object?[], string> L)
+    {
+        if (def is null || string.IsNullOrWhiteSpace(def.DeliveryHoldReason))
+            return (Hidden, "", "");
+        var reason = def.DeliveryHoldReason;
+        var headline = def.CompilationStatus == CompilationStatus.Ok
+            ? L("ui.deliveryHoldServing", [])
+            : L("ui.deliveryHold", []);
+        return (HoldBase, headline, L("ui.deliveryHoldBody", []) + "\n\n" + Fenced(reason));
     }
 
     /// <summary>
@@ -222,6 +269,12 @@ public sealed record NodeTypeStatusView(
         if (neverCompiled)
             return (PanelBase + warning, L("ui.neverCompiled", []),
                 "font-weight: 600; color: var(--warning-foreground);", L("ui.compile", []), false);
+        // #7356 — a held record is Ok and may well be dirty, but neither "Up to date" nor "needs
+        // compile" is true: a compile request was ANSWERED by the hold. The reason renders in the
+        // hold block below the panel.
+        if (status == CompilationStatus.Ok && !string.IsNullOrWhiteSpace(def.DeliveryHoldReason))
+            return (PanelBase + warning, L("ui.deliveryHoldServing", []),
+                "font-weight: 600; color: var(--warning-foreground);", L("ui.recompile", []), false);
         if (def.IsDirty)
             return (PanelBase + warning, L("ui.sourceChanged", []),
                 "font-weight: 600; color: var(--warning-foreground);", L("ui.compile", []), false);
