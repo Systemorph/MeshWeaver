@@ -158,6 +158,16 @@ before it is built:
   was already tested. That costs runner time, never correctness. Reusing tree evidence belongs with
   the build's own `precheck`.
 
+## Not yet: initializer shapes the root scan does not model
+
+The guard-root scan reads source text, not a C# syntax tree. It resolves collection expressions,
+`new[] { … }` and same-file `const string` entries, and every guard root on `main` today. An
+initializer it does not model, such as `ImmutableArray.Create("src/B", Project)`, is recorded only
+through its string literals, so a const-backed entry in it is missed rather than reported as
+unresolved. The safe rule is the one review suggested: treat every initializer that is not a
+collection expression or `new[] { … }` as unresolved, even when it contains literals. Apply it when a
+real guard first uses such a shape. The guard's own test in CI remains the authority either way.
+
 ## Proof
 
 - `scripts/test-preflight-pr.py` uses fakes only: throwaway git repositories, draft body files, a
