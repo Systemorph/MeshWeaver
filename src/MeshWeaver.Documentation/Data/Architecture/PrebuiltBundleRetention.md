@@ -462,11 +462,23 @@ to change):
   owner across two silos, `AGenerationWithoutItsClaim_IsRefusedAtTheOwner`.
   Pinned in `PrebuiltBundleRetentionLeaseTerminalTest` and, across two
   silos, `AHolderWhoseAckedClaimDiedWithTheOwner_IsRefused_EvenWhenItFirstLooksAfterTheLoss`.
-  Persistence itself is still not confirmed before a pass counts as held. The fence makes that safe
-  for the lease; whether an `Update` ack should ever mean durable is a data-layer question this does
-  not answer. What the fence does not cover: one owner loss that drops TWO unpersisted takes, so the
-  next take lands an OLDER generation than the stale holder's. The stale holder then waits past it
-  until its own deadline, as before.
+- **The pass starts only once its own claim is SEEN on the live lease (#7459).** The verdict says the
+  owner committed the claim; the pass is subscribed only after the live lease has carried that claim
+  in its own generation (`PrebuiltBundleRetentionLease.Fenced`). Until then the holder sweeps nothing:
+  a superseding state, a fault or the end of the lease stream stops it before it starts, and the pass
+  deadline bounds the wait. This closes the case the generation alone could not: one owner loss that
+  drops TWO unpersisted takes (the holder's and the one before it), so the lease is reloaded two
+  generations back and the next take lands an OLDER generation than the stale holder's. An older
+  generation is indistinguishable from a snapshot from before the take, so the fence waits past it;
+  a pass that ran from the verdict on used to sweep through that wait until its deadline, beside the
+  new holder. Pinned in `AHolderWhoseFirstLookIsATakeBelowItsGeneration_NeverStartsItsPass`, with the
+  ordinary holder as the negative control.
+  What is still NOT confirmed is persistence. A holder whose claim the owner committed, echoed live and
+  then lost before it persisted runs until its watch sees the reloaded or superseding lease, and stops
+  at the pass's next step boundary — so the overlap with a new holder is bounded by how fast the live
+  lease reaches the holder after the owner's loss, not closed. Closing that needs an acknowledgement
+  that means the write persisted, which is what an `Update` ack promises across the framework: a
+  data-layer decision this does not make.
 
 🚨 **The claim is ONE number, and a lapsed claim is never `0`.** A remote `Update` reaches the owner
 as a three-way merge resolved per leaf (`MeshNodePatchMerge`). A string changed on both sides is
