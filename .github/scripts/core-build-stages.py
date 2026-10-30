@@ -116,10 +116,12 @@ RESTORE_TIMEOUT_MINUTES = 20
 OWES = [
     "Consolidate test results: host-results (GitHub-hosted — core runs nothing on the self-hosted pool and reads no "
     "shared store) fetches each host shard's results tree over HTTPS by receipt (host-shard-results.py: the run's OIDC "
-    "token, every file verified against its receipt) and uploads it as the `test` matrix's own artifact, but the build "
-    "API serves receipts only, not their bytes — GET {api}/{repo}/{sha}/artifacts/{sha256} is owed by MeshWeaver.Plugins' "
-    "BuildHostEndpoints, and until it answers that job is RED naming it. Paid only when collect-results consolidates "
-    "results fetched that way (Actions: collect-results over the testResults-shard<i>-attempt<a> artifacts)",
+    "token, every file verified against its receipt) and uploads it as the `test` matrix's own artifact. Both ends "
+    "exist: a host shard hands its tree back as receipts, and the build API serves a receipt's bytes at "
+    "GET {api}/{repo}/{sha}/artifacts/{sha256} (MeshWeaver.Plugins' BuildHostEndpoints). What is unproven is the "
+    "fetch itself: host-results runs only on the plain `host` route, never in host-forced shadow, so no run has yet "
+    "fetched a tree that way with its OIDC token. Paid only when collect-results consolidates results fetched that "
+    "way on a host run (Actions: collect-results over the testResults-shard<i>-attempt<a> artifacts)",
     "prepared packages: the build restores through the repository's nuget.config with the host's cache as the "
     "fallback folder, and a package the cache lacks is restored for the run and named; the host WARMS the cache from "
     "the default branch's tip by running the declared `restore` once per restore key (MeshWeaver.Deploy#68) - until "
