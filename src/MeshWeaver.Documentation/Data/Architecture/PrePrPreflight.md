@@ -104,10 +104,19 @@ true. `.github/scripts/pr-body-regate.py` holds the decision table, and its self
 |---|---|---|
 | read the body after the edit, or has not read it yet | not judged | nothing |
 | body gates green | green | **nothing.** The verdict holds for the current body, and the build is not re-run |
-| body gates red | green | `rerun-failed-jobs` once the run has finished. The failed gates read the current body, because a new attempt never reuses the old read (`read-current-pr-body.py --reuse-from-env`), and the build they held runs. It never ran, so it is owed, not repeated |
+| body gates red | green | re-run the `pr-body` job by id once the run has finished. Every body gate needs it and re-runs with it, reading the current body, because a new attempt never reuses the old read (`read-current-pr-body.py --reuse-from-env`), and the build they held runs. It never ran, so it is owed, not repeated |
 | body gates red | red | nothing. The required check is red and stays red |
 | body gates green (or still judging) | red | re-run the `pr-body` job, after cancelling an in-flight run. Its dependents follow: the gates go red, stage 0 holds the build, and the required check turns red within minutes |
-| any | undecided (could not be judged) | treated as red when the run is green (a truthful re-run, cheap because a red gate holds the build), and as green when it is red |
+| any | undecided (could not be judged) | the `pr-body` job is re-run either way: truthful, and cheap whenever a gate is red, because a red gate holds the build |
+
+🚨 **The lane never posts `rerun-failed-jobs` on the whole run.** Every re-run is one job, `pr-body`,
+by id; GitHub re-runs the jobs that need it along with it. Before posting, the lane asserts that the
+run belongs to `.github/workflows/dotnet-test.yml` by its workflow path, not its name. It also computes
+that re-run set from the workflow file's own `needs:` graph and refuses, red and named, if any job in it
+matches *review answered*. `Automatic review answered` is an API-written check-run per head, and a
+re-run that included a legacy job of that name would overwrite the API verdict. `dotnet-test.yml`
+carries no such job today; the assertion keeps it that way, and the self-test measures the real
+workflow's set.
 
 So an edit that fixes a body declaration turns `Consolidate test results` green with no manual
 re-run. An edit that breaks one turns it red. An edit that changes nothing the gates read re-runs

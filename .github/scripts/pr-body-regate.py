@@ -27,18 +27,27 @@ when the verdict the run carries is no longer true:
      (`scripts/preflight-pr.py --only body`, online), and with the run's body-gate results R:
        body green, R green    → nothing: the run's verdict holds for the current body too
                                 (this is the case that must NOT re-run the build — and does not);
-       body green, R red      → `rerun-failed-jobs` once the run has finished: the failed gates read
-                                the current body (a new attempt never reuses the old read), and the
-                                build they held runs — it never ran, so that is owed, not repeated;
+       body green, R red      → re-run the `pr-body` JOB (by id) once the run has finished: every body
+                                gate depends on it and re-runs with it, reading the current body (a new
+                                attempt never reuses the old read), and the build they held runs — it
+                                never ran, so that is owed, not repeated;
        body red,   R red      → nothing: the required check is red and stays red;
        body red,   R green    → re-run the `pr-body` job (its dependents — the gates, the stage gate,
                                 the aggregator — follow): the gates go red, stage 0 holds the build,
                                 so the re-run costs minutes and the required check turns red. An
                                 IN-FLIGHT run is cancelled first (it would otherwise finish green on
                                 the old body), then re-run the same way;
-       body undecided         → treated as red when R is green (re-run: truthful, and cheap because a
-                                red gate holds the build) and as green when R is red (re-run failed
-                                jobs: if the body is still red the hold keeps it cheap).
+       body undecided         → treated as red when R is green and as green when R is red: either way
+                                the `pr-body` job is re-run (truthful; a red gate holds the build).
+
+🚨 NEVER `rerun-failed-jobs` ON THE WHOLE RUN, and never a job outside the body-gate subtree. Every
+re-run is ONE job by id — `pr-body` — plus the jobs that `need` it, which GitHub re-runs with it. Before
+posting it the lane (a) asserts the run is `.github/workflows/dotnet-test.yml` by its WORKFLOW PATH, not
+its name, and (b) computes that subtree from the workflow file's own `needs:` graph and REFUSES, red and
+named, when any job in it matches /review answered/i: `Automatic review answered` is an API-written
+check-run per head (review-answered.yml and its re-judging), and a re-run that included a legacy job of
+that name would overwrite the API verdict. dotnet-test.yml carries no such job today (it omits
+`review-before-suites`); the assertion is what keeps that true.
      While R is still being computed, or a held red run is finishing, the lane waits — a bounded
      script poll (the stage-advance lane's posture), never a model loop.
 
@@ -70,6 +79,9 @@ BODY_GATES = (
     "i18n catalog (mirror sync handed over)",
     "Closing keywords (no accidental close)",
 )
+WORKFLOW_PATH = ".github/workflows/" + "dotnet-test.yml"
+READER_KEY = "pr-body"
+REVIEW_JOB = __import__("re").compile(r"review[\s_-]*answered", __import__("re").IGNORECASE)
 RED = ("failure", "cancelled", "timed_out", "startup_failure", "action_required")
 WAIT_BUDGET_SECONDS = 20 * 60
 POLL_SECONDS = 30
@@ -83,7 +95,7 @@ def parse_time(value: str | None) -> dt.datetime | None:
 
 @dataclass
 class Action:
-    kind: str           # none | wait | rerun-failed | rerun-reader | cancel-then-rerun-reader
+    kind: str           # none | wait | rerun-reader | cancel-then-rerun-reader
     reason: str
 
 
@@ -141,8 +153,8 @@ def decide(pr: dict, head: str, run: dict | None, jobs: list[dict], edited_at: d
     if not completed:
         return Action("wait", f"the run's body gates are red on the OLD body and the current body is {verdict}; "
                               "waiting for the held run to finish before re-running its failed jobs")
-    return Action("rerun-failed", f"the run's body gates were red on the OLD body; the current body is {verdict} — "
-                                  "re-running the failed jobs (the gates re-read the body; the held build runs)")
+    return Action("rerun-reader", f"the run's body gates were red on the OLD body; the current body is {verdict} — "
+                                  "re-running the body reader job (the gates re-read the body; the held build runs)")
 
 
 # ── GitHub ──────────────────────────────────────────────────────────────────────────────────────
@@ -176,14 +188,89 @@ class Api:
                 return out
         raise RuntimeError(f"run {run_id} lists more than 2000 jobs")
 
-    def rerun_failed(self, run_id: int) -> None:
-        self.g.post(f"repos/{self.repo}/actions/runs/{run_id}/rerun-failed-jobs", self.token)
-
     def rerun_job(self, job_id: int) -> None:
         self.g.post(f"repos/{self.repo}/actions/jobs/{job_id}/rerun", self.token)
 
     def cancel(self, run_id: int) -> None:
         self.g.post(f"repos/{self.repo}/actions/runs/{run_id}/cancel", self.token)
+
+
+def workflow_jobs(text: str) -> dict[str, dict]:
+    """{job key: {"name": display name, "needs": [keys]}} from a workflow file — a line parser on purpose
+    (no PyYAML on the runner's system python), self-tested against the real dotnet-test.yml."""
+    import re
+    jobs: dict[str, dict] = {}
+    lines = text.splitlines()
+    in_jobs, key = False, None
+    for i, line in enumerate(lines):
+        if re.match(r"^jobs:\s*$", line):
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        if re.match(r"^\S", line):
+            break
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if m:
+            key = m.group(1)
+            jobs[key] = {"name": key, "needs": []}
+            continue
+        if key is None:
+            continue
+        m = re.match(r"^    name:\s*(.+?)\s*$", line)
+        if m:
+            jobs[key]["name"] = m.group(1).strip().strip("'\"")
+            continue
+        m = re.match(r"^    needs:\s*(.*?)\s*$", line)
+        if m:
+            v = m.group(1)
+            if v.startswith("["):
+                jobs[key]["needs"] = [x.strip().strip("'\"") for x in v.strip("[]").split(",") if x.strip()]
+            elif v:
+                jobs[key]["needs"] = [v.strip("'\"")]
+            else:
+                j = i + 1
+                while j < len(lines) and re.match(r"^      - ", lines[j]):
+                    jobs[key]["needs"].append(lines[j].strip()[2:].strip().strip("'\""))
+                    j += 1
+    return jobs
+
+
+def rerun_subtree(graph: dict[str, dict], root: str) -> set[str]:
+    """`root` and every job that needs it, transitively — what re-running `root` by id re-runs."""
+    out = {root}
+    changed = True
+    while changed:
+        changed = False
+        for k, v in graph.items():
+            if k not in out and any(n in out for n in v["needs"]):
+                out.add(k)
+                changed = True
+    return out
+
+
+def scope_refusal(run: dict, jobs: list[dict], workflow_text: str) -> str | None:
+    """Why the body-reader re-run must NOT be posted on this run, or None when it is safe."""
+    path = str(run.get("path") or "").split("@", 1)[0]
+    if path != WORKFLOW_PATH:
+        return (f"run {run.get('html_url') or run.get('id')} is workflow `{path or '?'}`, not `{WORKFLOW_PATH}` — refusing to "
+                "re-run anything in it")
+    graph = workflow_jobs(workflow_text)
+    if READER_KEY not in graph:
+        return f"{WORKFLOW_PATH} has no `{READER_KEY}` job — the re-run set cannot be computed"
+    subtree = rerun_subtree(graph, READER_KEY)
+    labels = {k: graph[k]["name"] for k in subtree}
+    hits = sorted(f"{k} ({n})" for k, n in labels.items() if REVIEW_JOB.search(k) or REVIEW_JOB.search(n))
+    for j in jobs:
+        name = str(j.get("name") or "")
+        if any(name == n or name == k or name.startswith(f"{n} / ") or name.startswith(f"{k} / ")
+               for k, n in labels.items()) and REVIEW_JOB.search(name):
+            hits.append(f"run job `{name}`")
+    if hits:
+        return ("re-running `pr-body` would also re-run " + ", ".join(hits) + " — a review-answered job, whose "
+                "verdict is an API-written check-run a re-run would overwrite. Refusing; re-run the body "
+                "gates by hand without it")
+    return None
 
 
 def measure_body(base_ref: str, workdir: Path) -> str:
@@ -198,7 +285,7 @@ def measure_body(base_ref: str, workdir: Path) -> str:
     return {0: "green", 1: "red"}.get(rc, "unknown")
 
 
-def regate(api, number: int, head: str, edited_at: dt.datetime, body_verdict, *,
+def regate(api, number: int, head: str, edited_at: dt.datetime, body_verdict, workflow_text: str, *,
            sleep=time.sleep, clock=time.monotonic, budget: float = WAIT_BUDGET_SECONDS, poll: float = POLL_SECONDS) -> int:
     cached: list[str] = []
 
@@ -225,10 +312,13 @@ def regate(api, number: int, head: str, edited_at: dt.datetime, body_verdict, *,
             sleep(poll)
             continue
         reader = next((j for j in jobs if j.get("name") == BODY_READER), None)
+        refusal = scope_refusal(run, jobs, workflow_text) or (
+            None if reader and reader.get("id") else f"run {run.get('html_url')} has no `{BODY_READER}` job id")
+        if refusal:
+            print(f"::error::{refusal}")
+            return 1
         try:
-            if action.kind == "rerun-failed":
-                api.rerun_failed(run["id"])
-            elif action.kind == "rerun-reader":
+            if action.kind == "rerun-reader":
                 api.rerun_job(reader["id"])
             elif action.kind == "cancel-then-rerun-reader":
                 api.cancel(run["id"])
@@ -254,6 +344,33 @@ T_EDIT = dt.datetime(2026, 1, 1, 10, 5, tzinfo=dt.timezone.utc)
 T_AFTER = "2026-01-01T10:06:00Z"
 HEAD = "a" * 40
 
+# A workflow shaped like dotnet-test.yml's body-gate subtree, plus an UNRELATED review job.
+FAKE_WORKFLOW = """name: MeshWeaver Build and Test
+on: pull_request
+jobs:
+  pr-body:
+    name: "Pull-request body (read once)"
+  closing-keywords:
+    name: "Closing keywords (no accidental close)"
+    needs: [pr-body]
+  stage-gate:
+    needs: [pr-body, closing-keywords]
+  build:
+    name: "Build solution (once)"
+    needs:
+      - stage-gate
+  collect-results:
+    name: "Consolidate test results"
+    needs: [build, closing-keywords]
+  review-answered:
+    name: Automatic review answered
+"""
+# The same, but a review job now hangs off the body gates — the shape the assertion must refuse.
+REVIEW_IN_SUBTREE = FAKE_WORKFLOW + """  lane:
+    name: lane
+    needs: [stage-gate]
+"""
+
 
 def _jobs(state: str, started: str = T0, reader_status: str = "completed") -> list[dict]:
     conclusion = {"green": "success", "red": "failure", "pending": None}[state]
@@ -272,7 +389,8 @@ class FakeApi:
     def __init__(self, pr_state="open", head=HEAD, run_status="completed", jobs=None, run=True,
                  finishes_after=0):
         self._pr = {"state": pr_state, "head": {"sha": head}}
-        self._run = {"id": 7, "status": run_status, "html_url": "run/7"} if run else None
+        self._run = ({"id": 7, "status": run_status, "html_url": "run/7", "path": WORKFLOW_PATH}
+                     if run else None)
         self._jobs = jobs or []
         self.calls: list[str] = []
         self.finishes_after = finishes_after
@@ -292,7 +410,7 @@ class FakeApi:
     def jobs(self, run_id):
         return self._jobs
 
-    def rerun_failed(self, run_id):
+    def rerun_failed(self, run_id):  # must never be reached: the lane re-runs ONE job by id
         self.calls.append(f"rerun-failed:{run_id}")
 
     def rerun_job(self, job_id):
@@ -311,13 +429,13 @@ def self_test() -> int:
     failures: list[str] = []
     asked: list[int] = []
 
-    def case(label, api, verdict, expect_calls, expect_rc=0, budget=60.0):
+    def case(label, api, verdict, expect_calls, expect_rc=0, budget=60.0, workflow=FAKE_WORKFLOW):
         def body_verdict():
             asked.append(1)
             return verdict
         ticks = iter(range(0, 10_000, 1))
         with quiet():
-            rc = regate(api, 1, HEAD, T_EDIT, body_verdict, sleep=lambda s: None,
+            rc = regate(api, 1, HEAD, T_EDIT, body_verdict, workflow, sleep=lambda s: None,
                         clock=lambda: float(next(ticks)), budget=budget, poll=1)
         if rc != expect_rc or api.calls != expect_calls:
             failures.append(f"{label}: rc={rc} calls={api.calls}, expected rc={expect_rc} calls={expect_calls}")
@@ -334,12 +452,12 @@ def self_test() -> int:
 
     # Stale, completed run — the four corners.
     case("green run, green body: NOTHING re-runs (the build is not repeated)", FakeApi(jobs=_jobs("green")), "green", [])
-    case("red run, green body: re-run the failed jobs", FakeApi(jobs=_jobs("red")), "green", ["rerun-failed:7"])
+    case("red run, green body: re-run the body reader job (never rerun-failed-jobs)", FakeApi(jobs=_jobs("red")), "green", ["rerun-job:1"])
     case("red run, red body: nothing", FakeApi(jobs=_jobs("red")), "red", [])
     case("green run, red body: re-run the body reader", FakeApi(jobs=_jobs("green")), "red", ["rerun-job:1"])
     case("green run, unknown body: re-run the body reader (truthful)", FakeApi(jobs=_jobs("green")), "unknown",
          ["rerun-job:1"])
-    case("red run, unknown body: re-run failed jobs", FakeApi(jobs=_jobs("red")), "unknown", ["rerun-failed:7"])
+    case("red run, unknown body: re-run the body reader job", FakeApi(jobs=_jobs("red")), "unknown", ["rerun-job:1"])
 
     # Stale, IN-FLIGHT run.
     case("in-flight green gates, red body: cancel, then re-run the reader",
@@ -360,7 +478,7 @@ def self_test() -> int:
 
     held.jobs = finishing_jobs
     case("in-flight red gates, green body: wait for the held run, then re-run failed jobs", held, "green",
-         ["rerun-failed:7"])
+         ["rerun-job:1"])
     case("a wait that outlasts its budget is RED, never a silent pass",
          FakeApi(run_status="in_progress", jobs=_jobs("red")), "green", [], expect_rc=1, budget=3.0)
 
@@ -377,7 +495,7 @@ def self_test() -> int:
         return o2(run_id)
 
     held2.jobs = fj2
-    case("judged once across waits", held2, "green", ["rerun-failed:7"])
+    case("judged once across waits", held2, "green", ["rerun-job:1"])
     if len(asked) != 1:
         failures.append(f"the body was judged {len(asked)} times across waits, expected once")
 
@@ -388,25 +506,72 @@ def self_test() -> int:
         decide = lambda *a, **k: Action("none", "neutered")  # noqa: E731
         probe = FakeApi(jobs=_jobs("red"))
         with quiet():
-            regate(probe, 1, HEAD, T_EDIT, lambda: "green", sleep=lambda s: None, clock=lambda: 0.0)
+            regate(probe, 1, HEAD, T_EDIT, lambda: "green", FAKE_WORKFLOW, sleep=lambda s: None, clock=lambda: 0.0)
         if probe.calls:
             failures.append("negative control: a neutered table still acted")
     finally:
         decide = real
     probe = FakeApi(jobs=_jobs("red"))
     with quiet():
-        regate(probe, 1, HEAD, T_EDIT, lambda: "green", sleep=lambda s: None, clock=lambda: 0.0)
-    if probe.calls != ["rerun-failed:7"]:
+        regate(probe, 1, HEAD, T_EDIT, lambda: "green", FAKE_WORKFLOW, sleep=lambda s: None, clock=lambda: 0.0)
+    if probe.calls != ["rerun-job:1"]:
         failures.append("negative control: the real table did not act where the neutered one did not")
+
+    # SCOPE: a failed body gate AND failed review-answered jobs in the same run — only the body
+    # reader's id is re-run; never a review job, never rerun-failed-jobs.
+    def with_review_jobs():
+        jobs = _jobs("red")
+        jobs.append({"id": 50, "name": "Automatic review answered", "status": "completed",
+                     "conclusion": "failure", "started_at": T0})
+        jobs.append({"id": 51, "name": "lane / Automatic review answered", "status": "completed",
+                     "conclusion": "failure", "started_at": T0})
+        return jobs
+    case("failed body gate + failed review jobs: re-run ONLY the body reader id",
+         FakeApi(jobs=with_review_jobs()), "green", ["rerun-job:1"])
+    case("a review job inside the re-run subtree is REFUSED (red, nothing posted)",
+         FakeApi(jobs=with_review_jobs()), "green", [], expect_rc=1, workflow=REVIEW_IN_SUBTREE)
+    wrong = FakeApi(jobs=_jobs("red"))
+    wrong._run["path"] = ".github/workflows/review-answered.yml"
+    case("a run of another workflow is REFUSED by its path", wrong, "green", [], expect_rc=1)
+    # NEGATIVE CONTROL for the scope assertion: with it disabled, the refused case posts — so the
+    # refusal above is the assertion firing, not an accident of the fixture.
+    global scope_refusal
+    real_scope = scope_refusal
+    try:
+        scope_refusal = lambda *a, **k: None  # noqa: E731
+        probe = FakeApi(jobs=with_review_jobs())
+        with quiet():
+            regate(probe, 1, HEAD, T_EDIT, lambda: "green", REVIEW_IN_SUBTREE, sleep=lambda s: None,
+                   clock=lambda: 0.0)
+        if probe.calls != ["rerun-job:1"]:
+            failures.append(f"negative control: with the scope check disabled the refused case did not post ({probe.calls})")
+    finally:
+        scope_refusal = real_scope
+    # The real dotnet-test.yml: the subtree is computed, holds the gates and the aggregator, and no
+    # review-answered job — the fact this lane relies on, measured rather than remembered.
+    real_wf = Path(__file__).resolve().parents[1] / "workflows" / "dotnet-test.yml"
+    if real_wf.is_file():
+        g = workflow_jobs(real_wf.read_text(encoding="utf-8"))
+        sub = rerun_subtree(g, READER_KEY)
+        for must in ("closing-keywords", "cross-repo-pair", "stage-gate", "build", "collect-results"):
+            if must not in sub:
+                failures.append(f"real dotnet-test.yml: `{must}` missing from the pr-body re-run subtree {sorted(sub)}")
+        if any(REVIEW_JOB.search(k) or REVIEW_JOB.search(g[k]["name"]) for k in sub):
+            failures.append("real dotnet-test.yml: a review-answered job is in the pr-body re-run subtree")
+        if scope_refusal({"path": WORKFLOW_PATH, "html_url": "x"}, [], real_wf.read_text(encoding="utf-8")):
+            failures.append("real dotnet-test.yml: the scope check refuses the real workflow")
+    else:
+        failures.append(f"{real_wf} not found — the subtree of the real workflow was not measured")
 
     if failures:
         print("self-test FAILED:")
         for f in failures:
             print(f"  ✗ {f}")
         return 1
-    print("✓ pr-body-regate self-test: acts only when the run judged an OLD body — re-runs failed jobs when the "
-          "current body clears a red gate, re-runs the body reader (cancelling an in-flight run) when it breaks a "
-          "green one, re-runs NOTHING when the verdict still holds, waits within a budget and goes red past it.")
+    print("✓ pr-body-regate self-test: acts only when the run judged an OLD body — re-runs ONLY the body reader job "
+          "by id (never rerun-failed-jobs, never a review-answered job: refused red when one is in the re-run subtree "
+          "or the run is another workflow) when the current body clears a red gate or breaks a green one, cancels an "
+          "in-flight run first, re-runs NOTHING when the verdict still holds, waits within a budget and goes red past it.")
     return 0
 
 
@@ -429,8 +594,9 @@ def main() -> int:
         return 1
     edited_at = parse_time(args.edited_at)
     workdir = Path(os.environ.get("RUNNER_TEMP") or ".")
+    workflow_text = Path(WORKFLOW_PATH).read_text(encoding="utf-8")
     return regate(Api(args.repo, token), args.pr, args.head, edited_at,
-                  lambda: measure_body(args.base_ref, workdir))
+                  lambda: measure_body(args.base_ref, workdir), workflow_text)
 
 
 if __name__ == "__main__":

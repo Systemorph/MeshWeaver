@@ -14,10 +14,14 @@
 # decision table and proves every arm in its self-test:
 #   * the run read the body after the edit, or has not read it yet → nothing;
 #   * its gates passed and the CURRENT body passes the same gates  → nothing (the build is NOT re-run);
-#   * its gates failed and the current body passes                  → `rerun-failed-jobs`: the gates
-#     re-read the body (a new attempt never reuses the old read) and the build they held runs;
+#   * its gates failed and the current body passes                  → re-run the `pr-body` JOB by id:
+#     the gates that need it re-run and re-read the body (a new attempt never reuses the old read), and
+#     the build they held runs;
 #   * its gates passed and the current body fails                   → re-run `pr-body` (an in-flight
 #     run is cancelled first): the gates go red, stage 0 holds the build, the required check goes red.
+# 🚨 Never `rerun-failed-jobs` on the whole run: every re-run is ONE job id (`pr-body`) plus what needs it,
+# posted only after asserting the run's WORKFLOW PATH is dotnet-test.yml and that no job matching
+# /review answered/i is in that subtree (its verdict is an API-written check-run a re-run would overwrite).
 # The current body is judged with the SAME gate scripts the run uses (scripts/preflight-pr.py, which
 # invokes them; Doc/Architecture/PrePrPreflight).
 #
@@ -31,7 +35,7 @@ on:
     types: [edited]
 
 permissions:
-  actions: write          # list the Build-and-Test runs and jobs; rerun-failed-jobs / rerun a job / cancel
+  actions: write          # list the Build-and-Test runs and jobs; re-run ONE job by id / cancel
   contents: read
   pull-requests: read     # read the current body and head
   issues: read            # the closing-keyword gate reads issue labels
