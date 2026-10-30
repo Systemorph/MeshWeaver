@@ -1552,8 +1552,32 @@ public static class MeshExtensions
                                 // .Do operator, which runs only after the storage write emits
                                 // (post-commit). No-persistence fallback skips the publish —
                                 // see the confirm branch above for the rationale.
+                                //
+                                // 🚨 A CREATE IS AN INSERT, decided BY THE STORE (#7347). The
+                                // existence read in step 1 is a snapshot: two creates of one path —
+                                // on two replicas, or two turns of one — can both read "absent" and
+                                // both reach this line. The ordinary upsert applies at EQUAL versions
+                                // (IStorageAdapter.WriteIfVersion's contract note), so both used to
+                                // commit at version 1, last-write-wins, and BOTH answered Success:
+                                // every "create-only claim" in the fleet (incident filing, control-lane
+                                // single-use claims, step-up, seeding) granted itself twice. The write
+                                // is therefore the store's insert-if-absent, and a lost race answers
+                                // exactly what step 1 answers for a row it could see.
                                 var saveObs = persistence != null
-                                    ? persistence.WriteAndPublishCreated(enriched, hub.JsonSerializerOptions, changeFeed)
+                                    ? persistence.InsertAndPublishCreated(enriched, hub.JsonSerializerOptions, changeFeed)
+                                        .SelectMany(inserted =>
+                                        {
+                                            if (inserted is not false)
+                                                return Observable.Return(inserted is true ? enriched : null);
+                                            logger.LogInformation(
+                                                "[CreateNode] REFUSED {Path}: another create committed the path after this one's existence read — the store's insert-if-absent decided",
+                                                enriched.Path);
+                                            Respond(CreateNodeResponse.FailWith(
+                                                LocalizableText.Keyed($"Node already exists at path: {enriched.Path}",
+                                                    "activity.node.create.alreadyExists", ("path", enriched.Path)),
+                                                NodeCreationRejectionReason.NodeAlreadyExists));
+                                            return Observable.Empty<MeshNode?>();
+                                        })
                                         .RequireClaimedWrite(hub, request.Id, persistence, enriched.Path)
                                         .Do(s => logger.LogDebug("[CreateNode] step=save-emit path={Path} version={Version}",
                                             s.Path, s.Version))

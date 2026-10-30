@@ -1082,8 +1082,11 @@ def floor_only_change(root: Path, base: str, path: str) -> bool:
             and json.dumps(before, sort_keys=True) == json.dumps(after, sort_keys=True))
 
 
-def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
-    """Verify the CI-owned lock PR is only the exact settlement the current main tree requires."""
+def check_generated_lock_settlement(root: Path, base: str, regenerate=None) -> list[str]:
+    """Verify the CI-owned lock PR changes only generated paths, and that its locks are byte-for-byte
+    what regenerating them at the CURRENT main tip merged with the PR produces (policy
+    `lock-settlement-content-equal`). `regenerate(tree) -> exit code` defaults to `--settle`; the
+    self-test injects a failing one."""
     # `--no-renames`: with rename detection a move (`Mod/README.md` → `Mod/mesh-floor.lock`) lists
     # only its allowed DESTINATION and hides the deleted source; both ends must be checked.
     changed = git(root, ["diff", "-z", "--no-renames", "--name-only", base, "HEAD"])
@@ -1103,42 +1106,117 @@ def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
                 f"(plus, for a floor stamp riding the settle, a package's {FLOOR_WITNESS} and its "
                 f"index.json content.{FLOOR_FIELD} alone); found {details}"]
 
-    # The lock claim is valid only for the exact main tree its version baseline came from. If main
-    # advanced after this PR was opened, the main push's own run will refresh the one settlement
-    # branch; this run must not bless a stale claim under loose branch protection.
+    # 🚨 CONTENT-EQUAL, NOT EXACT-TIP (policy `lock-settlement-content-equal`). This used to accept
+    # the settlement only when its base WAS the current main tip. Main merges every few minutes, so a
+    # settlement refreshed onto the tip was stale again before its own validate job ran (measured on
+    # MeshWeaver.Plugins#4685: refreshed onto main at 19:52Z, main moved 15 s later) and could never
+    # go green. A lock is a function of the tree, so the question is whether the bytes the PR carries
+    # are what the CURRENT tip, merged with the PR, regenerates — not whether nothing merged since.
     trunk, errors = derivation_inputs(root, fetch=True)
     if errors:
-        return [f"cannot verify the settlement PR's baseline: {error}" for error in errors]
-    if trunk is None or trunk != base:
-        return [f"main advanced after this settlement PR was based on {base[:12]} "
-                f"(current verified main: {trunk[:12] if trunk else 'unavailable'}) — "
-                "the next main run must refresh the generated lock branch"]
+        return [f"NOT MEASURED — cannot verify the settlement PR's baseline, so it is not accepted: {error}"
+                for error in errors]
+    if trunk is None:
+        return ["NOT MEASURED — there is no verified main tip to regenerate the locks against, so the "
+                "settlement PR is not accepted"]
+    head = git(root, ["rev-parse", "HEAD"])
+    if not head:
+        return ["NOT MEASURED — cannot read the settlement PR's head commit, so it is not accepted"]
+    return _regenerated_at_tip(root, trunk, head, regenerate or (lambda tree: settle(tree, fetch=True)))
 
-    # `settle()` delegates its writes to `generate(..., settling=True)`, whose only write target is
-    # each enumerated plugin's manifest.lock; the postconditions are reads. The positive self-test
-    # also asserts the entire checkout is clean after this validator returns.
-    lock_files = [plugin / "manifest.lock" for plugin in plugin_dirs(root)]
-    before = {path: path.read_bytes() if path.is_file() else None for path in lock_files}
+
+def _flatten_lock(value: object, prefix: str = "") -> dict[str, str]:
+    """A lock as `dotted.key → canonical JSON text`, so a differing entry can be NAMED (type-preserving:
+    `false` and `0` stay distinct, as in `floor_only_change`)."""
+    if isinstance(value, dict) and value:
+        out: dict[str, str] = {}
+        for key, item in value.items():
+            out.update(_flatten_lock(item, f"{prefix}.{key}" if prefix else str(key)))
+        return out
+    return {prefix or "(root)": json.dumps(value, sort_keys=True)}
+
+
+def _lock_entry_diff(carried: bytes | None, generated: bytes | None, limit: int = 6) -> str:
+    """Which entries of one lock differ between what the PR carries and what regeneration wrote."""
+    if carried is None:
+        return "the PR carries no such lock; regeneration writes one"
+    if generated is None:
+        return "the PR carries this lock; regeneration writes none"
     try:
-        if settle(root, fetch=True) != 0:
-            return ["the generated settlement does not pass gen-manifests.py --settle against current main"]
-        remaining = git(root, ["status", "--porcelain", "-z", "--untracked-files=all", "--", "*/manifest.lock"],
-                        preserve_output=True)  # unstripped: " M <path>" keeps its first column
-        if remaining is None:
-            return ["cannot verify the generated settlement output against the PR head"]
-        if remaining.strip("\0"):
-            return ["the PR's manifest.lock files differ from the locks generated for its tree: "
-                    + ", ".join(entry[3:] for entry in [e for e in remaining.split("\0") if e][:12])]
+        before = _flatten_lock(json.loads(carried.decode("utf-8")))
+        after = _flatten_lock(json.loads(generated.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "the bytes differ and one side is not JSON"
+    missing = "(absent)"
+    keys = [k for k in sorted(set(before) | set(after)) if before.get(k) != after.get(k)]
+    if not keys:
+        return "same entries, different bytes (formatting)"
+
+    def short(text: str) -> str:
+        return text if len(text) <= 40 else text[:37] + "…"
+    shown = [f"{k}: PR {short(before.get(k, missing))} ≠ regenerated {short(after.get(k, missing))}"
+             for k in keys[:limit]]
+    return "; ".join(shown) + (f"; … {len(keys) - limit} more" if len(keys) > limit else "")
+
+
+def _regenerated_at_tip(root: Path, trunk: str, head: str, regenerate) -> list[str]:
+    """Merge `head` onto `trunk` in a throwaway worktree, regenerate the locks there, and compare.
+
+    Every failure to MEASURE is a refusal that says "NOT MEASURED" — a validator that cannot
+    regenerate has no evidence, and no evidence is never a pass. The caller's checkout is never
+    written: everything happens in the scratch worktree, which is removed afterwards.
+    """
+    import shutil
+    import tempfile
+    at = f"main@{trunk[:12]}"
+    scratch = Path(tempfile.mkdtemp(prefix="settlement-verify-"))
+    tree = scratch / "tree"
+    added = False
+    try:
+        if git(root, ["worktree", "add", "--detach", "-q", str(tree), trunk], timeout=180) is None:
+            return [f"NOT MEASURED against {at} — could not check out the current main tip to regenerate "
+                    f"the locks on, so the settlement PR is not accepted"]
+        added = True
+        if git(tree, ["-c", "user.name=gen-manifests", "-c", "user.email=gen-manifests@invalid",
+                      "merge", "--no-ff", "--no-edit", "-q", head], timeout=180) is None:
+            conflicted = [p for p in (git(tree, ["diff", "-z", "--name-only", "--diff-filter=U"],
+                                          preserve_output=True) or "").split("\0") if p.strip()]
+            return [f"the settlement PR does not merge cleanly onto {at}"
+                    + (f" (conflicts: {', '.join(conflicted[:12])})" if conflicted else "")
+                    + " — the next main run must refresh the generated lock branch"]
+        locks = {f"{plugin.name}/manifest.lock" for plugin in plugin_dirs(tree)}
+        carried = {rel: (tree / rel).read_bytes() if (tree / rel).is_file() else None for rel in locks}
+        try:
+            rc = regenerate(tree)
+        except (Exception, SystemExit) as error:   # a crash is "could not measure", never a pass
+            return [f"NOT MEASURED against {at} — regenerating the locks of main merged with this PR "
+                    f"crashed ({type(error).__name__}: {error}), so the settlement PR is not accepted"]
+        if rc != 0:
+            return [f"NOT MEASURED against {at} — regenerating the locks of main merged with this PR "
+                    f"failed (gen-manifests.py --settle exited {rc}), so the settlement PR is not accepted"]
+        locks |= {f"{plugin.name}/manifest.lock" for plugin in plugin_dirs(tree)}
+        status = git(tree, ["status", "--porcelain", "-z", "--untracked-files=all", "--", "*/manifest.lock"],
+                     preserve_output=True)
+        if status is None:
+            return [f"NOT MEASURED against {at} — cannot read the regenerated locks back"]
+        locks |= {entry[3:] for entry in status.split("\0") if len(entry) > 3}
+        differing = []
+        for rel in sorted(locks):
+            generated = (tree / rel).read_bytes() if (tree / rel).is_file() else None
+            if generated != carried.get(rel):
+                differing.append(f"{rel} ({_lock_entry_diff(carried.get(rel), generated)})")
+        if differing:
+            return [f"the PR's manifest.lock files differ from the locks generated for {at} merged with "
+                    f"this PR ({len(differing)} file(s)): " + " | ".join(differing[:12])
+                    + (" …" if len(differing) > 12 else "")]
+        print(f"  ✓ content-equal: regenerating every lock at {at} (full: {trunk}) merged with this PR "
+              f"reproduces the {len(locks)} lock(s) it carries byte-for-byte")
         return []
     finally:
-        # Validation is read-only from the PR's point of view, even when a bad lock fails the
-        # generated comparison. The next checks in the shared lane must see the original checkout.
-        for path, contents in before.items():
-            if contents is None:
-                if path.exists():
-                    path.unlink()
-            else:
-                path.write_bytes(contents)
+        if added:
+            git(root, ["worktree", "remove", "--force", str(tree)], timeout=120)
+        shutil.rmtree(scratch, ignore_errors=True)
+        git(root, ["worktree", "prune"])
 
 
 def check_untouched(root: Path, base: str) -> list[str]:
@@ -2737,15 +2815,53 @@ def _self_test_main_owned(repo: Path) -> list[str]:
             failures.append("main-owned: a floor stamp must not pass beside a lock --settle would change")
         sg("checkout", "-q", SETTLEMENT_PR_BRANCH)
 
+        # CONTENT-EQUAL, NOT EXACT-TIP (policy lock-settlement-content-equal). Main merges while the
+        # settlement's checks run; what decides is whether regenerating at the CURRENT tip, merged
+        # with the PR, reproduces the bytes the PR carries — and which tip that was is named.
+        def worktrees() -> int:
+            return sg("worktree", "list", "--porcelain").stdout.count("worktree ")
         sg("checkout", "-q", "main")
         (settlement_repo / "Other.txt").write_text("advance main\n")
         sg("add", "Other.txt")
         sg("commit", "-qm", "main: unrelated advance")
         sg("push", "-q", "origin", "main")
+        moved_tip = sg("rev-parse", "HEAD").stdout.strip()
+        sg("checkout", "-qb", "settlement-after-main-moved", settled_good)
+        # (1) main moved, the locks are unaffected ⇒ PASS. The exact-tip rule refused exactly this
+        # ("main advanced after this settlement PR was based on …") — MeshWeaver.Plugins#4685.
+        moved = check_untouched(settlement_repo, settlement_base)
+        if moved:
+            failures.append(f"main-owned: a settlement whose locks are unaffected by main moving must pass "
+                            f"(content-equal), got {moved}")
+        if sg("status", "--porcelain", "--untracked-files=all").stdout.strip() or worktrees() != 1:
+            failures.append("main-owned: content-equal verification must leave the checkout and its "
+                            "worktree list exactly as it found them")
+        # (2) regeneration cannot run ⇒ RED, "NOT MEASURED", naming the tip — never a pass.
+        failed = check_generated_lock_settlement(settlement_repo, settlement_base, regenerate=lambda tree: 1)
+        if not any("NOT MEASURED" in e and moved_tip[:12] in e for e in failed):
+            failures.append(f"main-owned: a regeneration that fails must be red and NOT MEASURED at "
+                            f"main@{moved_tip[:12]}, got {failed}")
+
+        def crash(tree: Path) -> int:
+            raise RuntimeError("generator crashed")
+        crashed = check_generated_lock_settlement(settlement_repo, settlement_base, regenerate=crash)
+        if not any("NOT MEASURED" in e and "generator crashed" in e for e in crashed):
+            failures.append(f"main-owned: a regeneration that crashes must be red and NOT MEASURED, got {crashed}")
+        if worktrees() != 1:
+            failures.append("main-owned: a failed regeneration must still remove its scratch worktree")
+        # (3) main moved AND a lock changed ⇒ RED, naming the file, the entry and the tip.
+        sg("checkout", "-q", "main")
+        (settlement_repo / "Mod" / "src.cs").write_text("main moved the module's content\n")
+        sg("commit", "-qam", "main: content the settlement does not describe")
+        sg("push", "-q", "origin", "main")
+        content_tip = sg("rev-parse", "HEAD").stdout.strip()
+        sg("checkout", "-q", "settlement-after-main-moved")
+        changed = check_untouched(settlement_repo, settlement_base)
+        if not any("Mod/manifest.lock" in e and "moduleVersion" in e and content_tip[:12] in e
+                   for e in changed):
+            failures.append(f"main-owned: a lock that regenerating at main@{content_tip[:12]} would change "
+                            f"must be red, naming the file and the entry, got {changed}")
         sg("checkout", "-q", SETTLEMENT_PR_BRANCH)
-        stale = check_untouched(settlement_repo, settlement_base)
-        if not any("main advanced" in error for error in stale):
-            failures.append(f"main-owned: a lock settlement based on stale main must be refused, got {stale}")
     finally:
         for key, value in old_env.items():
             if value is None:
@@ -2946,7 +3062,8 @@ def main() -> int:
                 return 1
             if is_manifest_lock_settlement_pr():
                 print("✓ generated main-owned lock settlement: only current manifest.lock files "
-                      "changed, and they exactly match --settle against the current main tree")
+                      "changed, and they are byte-for-byte what --settle regenerates at the current "
+                      "main tip merged with this PR (the tip is named above)")
             else:
                 print("✓ main-owned locks: none changed by this pull request, every committed lock is "
                       "self-consistent, and this tree's locks materialize without moving a version back")

@@ -649,8 +649,31 @@ touch one module before settlement would otherwise claim the same number for dif
 first job of every `main` run therefore opens or refreshes one reserved bot PR from the generated
 lock files; it never pushes to protected `main`. The validator grants this PR a narrow exception
 only when its author, branch, same-repository origin, base branch, changed paths, and generated
-contents all match, and its base is the current verified `main` tip. Every other PR that changes a
-lock stays red. If locks need settlement, that main run reports that it does not own the settled
+contents all match. Every other PR that changes a lock stays red.
+
+**The settlement is checked for CONTENT, not for its base** (policy
+[`lock-settlement-content-equal`](../PolicyNotProse)). The validator does not require the PR's base
+to be the current `main` tip. It reads the current verified tip, merges the PR onto it in a throwaway
+worktree, runs `--settle` there, and accepts the PR only when every regenerated `manifest.lock` is
+byte-identical to the one the PR carries. The verdict names the tip it regenerated against. Main
+merges every few minutes, so the old rule ("the base must BE the tip") left a settlement refreshed
+onto the tip stale again before its own check ran; MeshWeaver.Plugins#4685 was refreshed onto `main`
+and `main` moved 15 seconds later. A lock is a function of the tree. A merge since then that touched
+no package does not change any lock, and the settlement still holds. Three outcomes are red:
+
+- **A lock would differ.** The verdict names each file and the entries that differ (for example
+  `moduleVersion`, `version`, a `files.<path>` hash), with the PR's value beside the regenerated one.
+  A new module whose lock neither `main` nor the PR carries counts as a differing lock. The
+  comparison reads the MERGED tree, which is what lands, so a valid lock `main` already carries
+  counts as carried.
+- **The PR does not merge cleanly onto the tip.** The conflicted paths are named, and the next main
+  run refreshes the branch.
+- **Regeneration could not run** (no verified tip, the scratch worktree could not be made, or
+  `--settle` failed or crashed). The verdict says *NOT MEASURED* and stays red. It never passes on no
+  evidence.
+
+The caller's checkout is never written. The scratch worktree is removed afterwards, whatever the
+outcome. If locks need settlement, that main run reports that it does not own the settled
 tree and publishes, seals, and tags nothing. After the bot PR passes the repository's ordinary
 required checks and merges, the resulting `main` run sees the settled locks and publishes exactly
 what `--settle` derives. MeshWeaver.Plugins' `settle-locks` job and its `own` output are the reference
