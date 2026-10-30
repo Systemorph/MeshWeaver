@@ -187,8 +187,22 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     private string GetEffectiveUserId(MeshQueryRequest request)
         => QueryIdentityResolver.ResolveAndReport(
             request,
-            accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId,
+            AmbientViewer(),
             logger).UserId;
+
+    /// <summary>
+    /// The same viewer <see cref="GetEffectiveUserId"/> decides, WITHOUT the unresolved-viewer
+    /// diagnostic. For a consumer that rides along a read rather than being one — the access follow
+    /// of an open secured query. The read itself reports (and fails closed on
+    /// <c>RequireViewer()</c>), so a second report here logged every unresolved read TWICE
+    /// (MeshWeaver.Plugins QueryIdentityTest, after #7565 added the follow): the diagnostic fires once
+    /// per read, at the point the read decides its viewer.
+    /// </summary>
+    private string ViewerOf(MeshQueryRequest request)
+        => QueryIdentityResolver.Resolve(request, AmbientViewer()).UserId;
+
+    private string? AmbientViewer()
+        => accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
 
     /// <summary>
     /// Pure-IObservable query: composes <see cref="FindMatchingNodes"/> across every
@@ -1835,7 +1849,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // longer follow access must not go on serving rows.
             if (useSecurityFilter && !SecuredReadIsTheRawRead(request))
                 disposables.Add(SecuredQueryAccessFollow
-                    .RecheckTriggers(services, GetEffectiveUserId(request),
+                    .RecheckTriggers(services, ViewerOf(request),
                         scopeFilters.Select(sf => sf.BasePath).ToArray(),
                         () => Volatile.Read(ref heldMainNodes))
                     .Subscribe(Route, ex =>

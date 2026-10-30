@@ -208,11 +208,19 @@ Every node write has generated an embedding vector since the PG adapter shipped:
 ```csharp
 // PostgreSqlStorageAdapter.BuildUpsertAsync (paraphrased) — shared by
 // WriteAsyncCore (single command) and WriteMany (batched), so the two can't drift.
-var embeddingText = string.Join(" ",
-    new[] { node.Name, node.NodeType }.Where(s => !string.IsNullOrEmpty(s)));
+var embeddingText = MeshNodeEmbeddingText.Compose(node.Name, node.NodeType, node.Description, contentJson);
 var embeddingVector = await _embeddingProvider.GenerateEmbeddingAsync(embeddingText);
 // bound to the `embedding` column of the INSERT … ON CONFLICT upsert
 ```
+
+The text is the node's own words: name and type, description, and the string values of its
+content (a Markdown body included), cleaned and capped at 1800 characters. Every writer (Postgres,
+Snowflake, SQLite) and the migration's backfill share it. Until MeshWeaver.Plugins#4554 it was
+`"{Name} {NodeType}"` only, so a page's vector never carried its body: a paraphrase, a synonym or
+a question in another language was never a close semantic neighbour of the page that answered it,
+and the free-text gate (every word, or a close neighbour) admitted nothing. The Plugins page
+`Hosting/NodeEmbeddingText` carries the rule, the re-embed of stored vectors (migration V61 plus
+the always-run backfill) and the tests.
 
 Before vector search was wired, that column was write-only — the embedding HTTP call was paid per write, but the stored vectors were never read. Now the same model that generated vectors at write time generates the query embedding (the provider is injected from the same DI registration), and the closed loop yields meaningful cosine similarity.
 

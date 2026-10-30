@@ -145,6 +145,13 @@ behaviour swap.
 That is also why the diagnostic lives in the provider: it is the point at which "nobody named a
 viewer" is finally true, so it can neither cry wolf nor miss.
 
+🚨 **One read, one report.** Anything that rides along a read and needs the same viewer — the
+access follow of an open secured query (#7365), which re-runs the read on grant changes — resolves
+it with the non-reporting `QueryIdentityResolver.Resolve`, never with `ResolveAndReport` a second
+time. The follow is not a second read; reporting from it logged every unresolved read twice and
+turned MeshWeaver.Plugins' `QueryIdentityTest` red. `UnresolvedViewerIsReportedOncePerReadTest`
+(`test/MeshWeaver.Graph.Test`) pins it.
+
 ## The same rule applies to single-node reads
 
 This is one instance of a general contract, not a query-only quirk:

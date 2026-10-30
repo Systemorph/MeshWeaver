@@ -437,8 +437,11 @@ public sealed class IoPool : IIoPool, IDisposable
     private readonly ConcurrentDictionary<long, InFlightLeaf> _inFlightLeaves = new();
     private long _leafSeq;
 
-    /// <summary>One leaf in flight: the work, when it started, the thread running it, and who opened it.</summary>
-    private sealed record InFlightLeaf(object Work, long StartedAt, int ThreadId, string? Opener);
+    /// <summary>One leaf in flight: the work, when it started, the thread running it, who opened it,
+    /// and whether it is SYNCHRONOUS — a blocking leaf or a <see cref="SubscribeThroughPool{T}"/>
+    /// subscribe, which holds the thread it started on until it returns, so that thread's stack is
+    /// where it is stuck (#7277). An async leaf yields its thread at every await.</summary>
+    private sealed record InFlightLeaf(object Work, long StartedAt, int ThreadId, string? Opener, bool Synchronous);
 
     /// <summary>
     /// Whether every leaf records the caller that opened it — a stack captured on the CALLER's thread
@@ -487,12 +490,35 @@ public sealed class IoPool : IIoPool, IDisposable
     /// thread that STARTS the leaf, so that is the thread it records — an async leaf may resume on
     /// another after an await, which is why the report says "started on", never "parked on".
     /// </summary>
-    private long EnterLeaf(object io, string? opener)
+    private long EnterLeaf(object io, string? opener, bool synchronous = false)
     {
         var id = Interlocked.Increment(ref _leafSeq);
-        _inFlightLeaves[id] = new InFlightLeaf(io, Stopwatch.GetTimestamp(), Environment.CurrentManagedThreadId, opener);
+        _inFlightLeaves[id] = new InFlightLeaf(io, Stopwatch.GetTimestamp(), Environment.CurrentManagedThreadId, opener, synchronous);
         return id;
     }
+
+    /// <summary>
+    /// The SYNCHRONOUS leaves still in flight, oldest first: each one's site and the managed thread it
+    /// is holding. A synchronous leaf does not return its thread until it ends, so that thread's stack
+    /// names the frame it is stuck in — the reading a residual at the silo join needs and the site
+    /// alone cannot give (#7277: one <c>MeshQuery</c> fan-out type serves every query in the process,
+    /// and its subscribe takes no token, so "ignored its cancellation token" is not even the
+    /// mechanism). Empty when none is in flight.
+    /// </summary>
+    internal IReadOnlyList<IoPoolRegistry.SynchronousLeaf> PendingSynchronousLeaves =>
+        _inFlightLeaves
+            .Where(l => l.Value.Synchronous)
+            .OrderBy(l => l.Value.StartedAt)
+            .Select(l => new IoPoolRegistry.SynchronousLeaf(SiteOf(l.Value.Work), l.Value.ThreadId, l.Key))
+            .ToArray();
+
+    /// <summary>
+    /// Whether the leaf holding <paramref name="ticket"/> is still in flight. A synchronous leaf holds
+    /// its thread for as long as its ticket lives, so a stack read while the ticket was live both
+    /// before and after the read is that leaf's (#7277).
+    /// </summary>
+    /// <param name="ticket">The leaf's ticket (<see cref="IoPoolRegistry.SynchronousLeaf.Ticket"/>).</param>
+    internal bool IsLeafInFlight(long ticket) => _inFlightLeaves.ContainsKey(ticket);
 
     /// <summary>Retires a leaf's ticket. Safe to call for an id that was never added.</summary>
     private void LeaveLeaf(long id) => _inFlightLeaves.TryRemove(id, out _);
@@ -1095,7 +1121,7 @@ public sealed class IoPool : IIoPool, IDisposable
                         // so CurrentInFlight reflects actually-running blocking work,
                         // capped at the scheduler's MaximumConcurrencyLevel.
                         Interlocked.Increment(ref _inFlight);
-                        var blockingLeaf = EnterLeaf(work, opener);
+                        var blockingLeaf = EnterLeaf(work, opener, synchronous: true);
                         if (Interlocked.Increment(ref _blockingInFlight) == 1)
                             _blockingIdle.Reset();
                         try
@@ -1411,7 +1437,7 @@ public sealed class IoPool : IIoPool, IDisposable
                             LeaveWaitOnce();
                             RecordWait(queuedAt);
                             Interlocked.Increment(ref _inFlight);
-                            var subLeaf = EnterLeaf(source, opener);
+                            var subLeaf = EnterLeaf(source, opener, synchronous: true);
                             try
                             {
                                 // Draining before we even subscribed → do not open providers / create hubs.
