@@ -737,6 +737,43 @@ fixes can merge while the host closes its gaps one by one. That is a third execu
 - **Leaving it.** A repository leaves `hostForced` when its stages claim equivalence (it then routes
   as plain `host`, and the host becomes its verdict), or when the owner reverses the decision.
 
+### Per-stage equivalence — one proven stage at a time (policy `per-stage-ci-equivalence`)
+
+`ciEquivalent` is all-or-nothing per repository. Per-stage equivalence moves ONE stage of a host-forced
+repository off Actions once that stage's own parity is proven, while the other stages stay in shadow:
+
+- **Where it is declared.** `equivalentStages` in core main's `.github/build-routing.json`, the same
+  trunk-only file as `hostForced`, so no pull request routes its own stage. One object per repository:
+  `{"<stage>": {"comparable": N, "disagreements": 0, "report": "<the measurement>"}}`. The evidence comes
+  from MeshWeaver.Plugins `scripts/build-parity-report.py`. It is declared, never derived: the executor
+  reads the declaration and measures nothing.
+- **The bar.** At least 20 comparable pull requests, where both the host and Actions reached a verdict,
+  and zero disagreements. `build-executor.py --check-routing` refuses an entry below the bar in core CI,
+  and the executor refuses it again at run time: the stage stays in shadow and the run says why.
+- **Fail-fast order.** A declared stage is honoured only when every stage declared BEFORE it in the
+  repository's `.github/build-stages.json` is honoured too. The host runs stages fail-fast, so a later
+  stage behind a shadow one could read `not run` and turn its required context red for a reason it
+  never checked.
+- **Only on a run the host holds.** A stage moves only when this run's `build-request` was accepted and
+  its signature verified. Otherwise every stage stays on Actions for that run, so a context never waits
+  on a run the host never received.
+- **What it answers.** The run-level `executor` stays `host-forced`, so every lane that reads it is
+  unchanged. A new output, `stage-executors`, is JSON with one entry per declared stage: `host` (its
+  follow job carries the verdict and its Actions legs skip) or `host-forced` (shadow). A consumer reads
+  `fromJSON(stage-executors)['<stage>'] || executor`, so an empty `{}` is today's behaviour for every
+  stage. The host's own `build/<stage>` check runs stay `neutral` on a shadow run. They are never
+  required: the follow job is what carries the verdict.
+- **Required contexts stay guarded.** Per stage, the context-owning job keeps its name and runs
+  `if: !cancelled()`. With `host` it asserts a FOLLOWED success, and the stage's Actions legs must have
+  skipped. With anything else it judges the Actions legs. It is never skipped: this is the shim route of
+  [Renaming a Required Check](../RenamingARequiredCheck). The caller wires this, for example
+  MeshWeaver.Plugins `ci.yml` and its `scripts/check-build-queue-admission.py`.
+- **Rollback.** Remove the stage's entry from `equivalentStages`. The next run's admission answers
+  `host-forced` for it, and its Actions legs carry the verdict again under the same context name.
+
+`build-executor.py --self-test` holds the bar, the order, the queued-and-verified requirement, trunk
+and route-only, with negative controls for each refusal. Every case runs on fakes, with no network.
+
 ### The host publication graph (module-pack on a host)
 
 A module repository's bundles reach the registry from a host run through three calls, and
