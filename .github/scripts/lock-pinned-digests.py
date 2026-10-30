@@ -1411,9 +1411,11 @@ def redact_private_prose(value, key: str | None = None):
     is, so a validator that refuses a missing `reason` or a `null` estate still refuses it."""
     if isinstance(value, dict):
         # Under a prose key nothing is an identifier — not a value and not a KEY — and the readers
-        # stringify the whole object, so a non-empty object there becomes the placeholder outright.
+        # stringify the whole object, so a non-empty object there is replaced outright — but by an
+        # OBJECT (#7599 review): this runs before the validators, and a malformed `estate: {…}`
+        # turned into the placeholder string would pass the "a non-empty string" check.
         if key in PRIVATE_PROSE_KEYS:
-            return PRIVATE_PROSE_PLACEHOLDER if value else value
+            return {PRIVATE_PROSE_PLACEHOLDER: PRIVATE_PROSE_PLACEHOLDER} if value else value
         return {k: redact_private_prose(v, k) for k, v in value.items()}
     if isinstance(value, list):
         return [redact_private_prose(v, key) for v in value]
@@ -7844,6 +7846,17 @@ ingress:
             check("AcmeCorp" not in json.dumps(_nested),
                   f"ARM 35: a prose key's nested object kept its words, and the readers print it "
                   f"stringified into the public log: {_nested}")
+            # …but it stays an OBJECT (#7599 review): the redaction runs BEFORE the validators, and
+            # a malformed `estate: {…}` turned into the placeholder STRING would satisfy the
+            # retention check's "a non-empty string" test, so redacting must never repair a shape.
+            _shaped = redact_private_prose({"retention": {"estate": {"tenant": "AcmeCorp"}},
+                                            "reason": {"AcmeCorp": "retired"}})
+            check(isinstance(_shaped["retention"]["estate"], dict) and _shaped["retention"]["estate"]
+                  and isinstance(_shaped["reason"], dict) and _shaped["reason"]
+                  and "AcmeCorp" not in json.dumps(_shaped),
+                  f"ARM 35: a prose key's non-empty OBJECT was redacted into a string, so a private "
+                  f"`estate: {{…}}` the retention check must refuse now reads as a well-formed "
+                  f"one: {_shaped}")
             # …and its KEYS are prose too: nothing under a prose key is an identifier.
             _keyed = redact_private_prose({"reason": {"AcmeCorp": "retired"},
                                            "notes": [{"AcmeCorp": {"AcmeCorp": 1}}]})
