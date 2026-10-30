@@ -301,6 +301,9 @@ def push_guard(source: str) -> None:
 
 
 
+LANE_TOOL = "lane/.github/scripts/template-feed.py"
+
+
 def workflow_findings(text: str) -> list[str]:
     """Shapes of template-feed.yml that would read a sealed set as 'nothing to publish'.
 
@@ -322,6 +325,12 @@ def workflow_findings(text: str) -> list[str]:
         out.append("the lane runs template-feed.py out of the SET's core checkout (core_sha) — a set "
                    "older than the lane has no such script, or an older one; run the lane's own copy "
                    "(the `lane` checkout at github.sha)")
+    # The calls go through $FEED_TOOL, so the regex above cannot see where it points: the binding
+    # itself must name the lane's copy, or the set-tree regression returns through one env line.
+    bindings = re.findall(r"^\s*FEED_TOOL:\s*['\"]?([^'\"\s]+)", text, re.M)
+    if "$FEED_TOOL" in text and (not bindings or any(b != LANE_TOOL for b in bindings)):
+        out.append(f"FEED_TOOL is bound to {bindings or 'nothing'}, not {LANE_TOOL} — the calls through it "
+                   "would run the set's copy (or none)")
     if "ref: ${{ github.sha }}" not in text or "path: lane" not in text:
         out.append("the publish job does not check out the lane's own tooling at github.sha into "
                    "`lane` — the script it runs would come from the set's tree")
@@ -464,21 +473,31 @@ def self_test() -> int:
         if n != 3 or "Memex.Aspire.Hosting" in text:
             failures.append(f"platform slnx wrong ({n} projects): {text}")
 
-    # 8. The workflow decides 'sealed' from job results, never from the run's conclusion.
-    for bad in ("    if: github.event.workflow_run.conclusion == 'success'\n",
-                "gh api actions/workflows/main-cd.yml/runs?branch=main&status=success\n"):
-        if not workflow_findings(bad):
-            failures.append(f"workflow_findings missed a conclusion-gated shape: {bad.strip()}")
-    # 8b. … and runs its own tool from the lane's commit, never from the set's tree (#7660).
-    lane_ok = ("          ref: ${{ github.sha }}\n          path: lane\n"
+    # 8. The workflow decides 'sealed' from job results, never from the run's conclusion. Every
+    #    fixture starts from the CORRECT lane shape, so each control is red only for its own rule.
+    lane_ok = ("      FEED_TOOL: lane/.github/scripts/template-feed.py\n"
+               "          ref: ${{ github.sha }}\n          path: lane\n"
                '        run: python3 "$FEED_TOOL" --self-test\n')
     if workflow_findings(lane_ok):
         failures.append(f"workflow_findings refused the lane-tool shape: {workflow_findings(lane_ok)}")
-    set_tree = lane_ok.replace('python3 "$FEED_TOOL"', "python3 .github/scripts/template-feed.py")
-    if not any("SET's core checkout" in f for f in workflow_findings(set_tree)):
-        failures.append("workflow_findings missed the script run out of the set's tree (#7660)")
-    if not any("github.sha" in f for f in workflow_findings('        run: python3 "$FEED_TOOL" plan\n')):
-        failures.append("workflow_findings missed a publish job with no lane checkout (#7660)")
+
+    def only(fixture: str, needle: str, label: str) -> None:
+        got = workflow_findings(fixture)
+        if len(got) != 1 or needle not in got[0]:
+            failures.append(f"workflow_findings, {label}: expected exactly the `{needle}` finding, got {got}")
+
+    only(lane_ok + "    if: github.event.workflow_run.conclusion == 'success'\n", "CONCLUSION",
+         "a conclusion-gated publish")
+    only(lane_ok + "gh api actions/workflows/main-cd.yml/runs?branch=main&status=success\n",
+         "status=success", "a status=success run filter")
+    # 8b. … and runs its own tool from the lane's commit, never from the set's tree (#7660).
+    only(lane_ok.replace('python3 "$FEED_TOOL"', "python3 .github/scripts/template-feed.py"),
+         "SET's core checkout", "the script run out of the set's tree")
+    only(lane_ok.replace("FEED_TOOL: lane/.github/scripts/template-feed.py",
+                         "FEED_TOOL: .github/scripts/template-feed.py"),
+         "FEED_TOOL", "FEED_TOOL re-bound to the set's tree")
+    only(lane_ok.replace("          path: lane\n", ""), "does not check out the lane's own tooling",
+         "a publish job with no lane checkout")
     wf = Path(__file__).resolve().parents[1] / "workflows" / "template-feed.yml"
     if wf.is_file():
         for f in workflow_findings(wf.read_text(encoding="utf-8")):

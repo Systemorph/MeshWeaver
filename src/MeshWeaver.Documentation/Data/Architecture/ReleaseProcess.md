@@ -473,7 +473,8 @@ its `core_sha`, Plugins at its `plugins_sha`. The lane's own tool, `template-fee
 commit the workflow runs at (`github.sha`, a sparse `lane/` checkout). The set is usually older than
 the lane. The first sealed set after the lane merged was cut from a commit that had no
 `template-feed.py`, and the lane died `can't open file` before it measured anything
-(MeshWeaver#7660). The self-test refuses a workflow that runs the script out of the set's tree. A
+(MeshWeaver#7660). The self-test refuses a workflow that runs the script out of the set's tree,
+either literally or through a `FEED_TOOL` bound to anything but `lane/.github/scripts/template-feed.py`. A
 set sealed before the lane existed still cannot be packed. Its `Directory.Build.props` predates the
 README condition that packing needs (NU5019). The ledger stays red until the next sealed set
 publishes.
