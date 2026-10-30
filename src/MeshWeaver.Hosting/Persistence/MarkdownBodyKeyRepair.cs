@@ -135,7 +135,43 @@ public static class MarkdownBodyKeyRepair
         foreach (var meta in obj.Select(p => p.Key).Where(k => k.StartsWith('$')).ToArray())
             obj.Remove(meta);
         obj[ContentMember] = body;
-        return obj.Deserialize<MarkdownContent>(options);
+        var typed = obj.Deserialize<MarkdownContent>(options);
+        // 🚨 The rename must be the ONLY change. A declared member the typed shape cannot carry
+        // unchanged (e.g. `tags` stored as a string, which the list converter reads as an empty
+        // list) would be rewritten by the write: data loss beyond the move. Such a row is not
+        // mechanical and is left for review.
+        return typed is null || LossyMembers(obj, typed, options).Count > 0 ? null : typed;
+    }
+
+    /// <summary>
+    /// The declared members of <paramref name="source"/> whose value does not survive binding to
+    /// <paramref name="typed"/> and serialising back unchanged. Empty when the round-trip is lossless.
+    /// </summary>
+    private static ImmutableList<string> LossyMembers(
+        JsonObject source, MarkdownContent typed, JsonSerializerOptions options)
+    {
+        var written = JsonSerializer.SerializeToNode(typed, options) as JsonObject;
+        return source
+            .Where(p => !p.Key.StartsWith('$') && p.Key != ContentMember)
+            .Where(p => !(written is not null && written.TryGetPropertyValue(p.Key, out var after)
+                ? JsonNode.DeepEquals(p.Value, after)
+                : p.Value is null))
+            .Select(p => p.Key)
+            .ToImmutableList();
+    }
+
+    /// <summary>
+    /// <see cref="Classify"/>, plus the round-trip check only the hub's serializer options can make:
+    /// a Repairable row whose rename would change a declared member is reported as
+    /// <see cref="MarkdownBodyKeyOutcome.NeedsReview"/> by Detect and Repair alike.
+    /// </summary>
+    private static (MarkdownBodyKeyOutcome Outcome, string Detail) ClassifyForRepair(
+        MeshNode node, JsonSerializerOptions options)
+    {
+        var result = Classify(node);
+        return result.Outcome == MarkdownBodyKeyOutcome.Repairable && Rewrite(node, options) is null
+            ? (MarkdownBodyKeyOutcome.NeedsReview, $"{result.Detail}: the rename would change a declared member")
+            : result;
     }
 
     private static readonly ImmutableHashSet<string> DeclaredMembers =
@@ -194,7 +230,7 @@ public static class MarkdownBodyKeyRepair
                     (Findings: ImmutableList<MarkdownBodyKeyFinding>.Empty, NodesRead: 0),
                     (acc, batch) => (
                         acc.Findings.AddRange(batch
-                            .Select(n => (Node: n, Result: Classify(n)))
+                            .Select(n => (Node: n, Result: ClassifyForRepair(n, options)))
                             .Where(x => x.Result.Outcome != MarkdownBodyKeyOutcome.Clean)
                             .Select(x => new MarkdownBodyKeyFinding(
                                 x.Node.Path, x.Result.Outcome, x.Result.Detail, Error: null))),
@@ -216,8 +252,23 @@ public static class MarkdownBodyKeyRepair
                     ? current with { Content = typed }
                     : current))
             .Take(1)
-            .Select(_ =>
+            .Select(updated =>
             {
+                // `Update` emits the node even when the lambda returned it unchanged (the row was
+                // fixed, or became ambiguous or lossy, between the scan and the write). Only a node
+                // that no longer classifies was repaired; anything else is reported for review.
+                var after = Classify(updated);
+                if (after.Outcome != MarkdownBodyKeyOutcome.Clean)
+                {
+                    logger?.LogWarning(
+                        "[MarkdownBodyKeyRepair] '{Path}' was not rewritten: at write time it classified as {Outcome} ({Detail})",
+                        path, after.Outcome, after.Detail);
+                    return finding with
+                    {
+                        Outcome = MarkdownBodyKeyOutcome.NeedsReview,
+                        Detail = $"{finding.Detail}: not rewritten, {after.Outcome} at write time ({after.Detail})",
+                    };
+                }
                 logger?.LogInformation(
                     "[MarkdownBodyKeyRepair] repaired '{Path}': body moved from '{Key}' to 'content' (#6639)",
                     path, finding.Detail);

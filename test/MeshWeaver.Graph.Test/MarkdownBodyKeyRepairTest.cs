@@ -117,6 +117,38 @@ public class MarkdownBodyKeyRepairTest(ITestOutputHelper output) : MonolithMeshT
         StateOf(await ReadRawAsync(unknown.Path)).Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable);
     }
 
+    /// <summary>
+    /// A declared member that would not survive the typed round-trip (here <c>tags</c> stored as a
+    /// string, which the list converter reads as an empty list) makes the rename LOSSY: writing it
+    /// would persist <c>tags: []</c> and drop stored data the repair never meant to touch. Such a
+    /// row is reported for review by both passes and never written.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task A_lossy_round_trip_is_reported_for_review_and_left_untouched()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        const string ns = "BodyKeyLossy";
+        var lossy = await SeedAsync("Lossy", ns,
+            """{"$type":"MarkdownContent","body":"x","tags":"keep this"}""");
+        StateOf(lossy).Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable,
+            "the fixture must be the refused shape — otherwise this test proves nothing");
+
+        var detected = await DetectAsync(ns);
+        detected.Findings.Should().ContainSingle(f => f.Path == lossy.Path)
+            .Which.Outcome.Should().Be(MarkdownBodyKeyOutcome.NeedsReview,
+                "a rename that would change a declared member is not mechanical");
+
+        var report = await RepairAsync(ns);
+
+        report.Findings.Should().ContainSingle(f => f.Path == lossy.Path)
+            .Which.Outcome.Should().Be(MarkdownBodyKeyOutcome.NeedsReview);
+        report.RepairedCount.Should().Be(0);
+        var after = await ReadRawAsync(lossy.Path);
+        after.Content.Should().BeOfType<JsonElement>();
+        ((JsonElement)after.Content!).GetProperty("tags").GetString().Should().Be("keep this",
+            "the stored value must not be replaced by the converter's empty list");
+    }
+
     /// <summary>Healthy Markdown rows are not findings, and Detect writes nothing.</summary>
     [Fact(Timeout = 120000)]
     public async Task Detect_reports_without_writing_and_ignores_healthy_rows()

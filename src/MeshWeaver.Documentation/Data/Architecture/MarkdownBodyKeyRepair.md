@@ -37,7 +37,11 @@ it, so a node fixed in the meantime is left alone.
 
 Anything else that fails to bind is reported as **NeedsReview** and never written: two stray
 members, a non-string value, or a key outside the three. Which member is the body is then a
-judgement about content, not a mechanical rename.
+judgement about content, not a mechanical rename. The same holds when the rename would change a
+declared member. For example, `tags` stored as a string reads as an empty list, and writing that
+back would lose the stored value. A row whose node, at write time, still does not bind is also
+reported as NeedsReview rather than Repaired. This covers a row that changed between the scan and
+the write.
 
 The pass is idempotent. A repaired row no longer matches, so a second run reads the same rows and
 writes nothing. The report lists every finding by path, and it also carries `PathsScanned` and
