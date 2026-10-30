@@ -26,9 +26,13 @@ public static class MainNodeTrust
     }
 
     /// <summary>
-    /// The satellite's OWNER: the path before its first satellite segment (one starting with
-    /// <c>_</c>), e.g. <c>Space/Doc</c> for <c>Space/Doc/_Comment/c1</c>; the parent when the path
-    /// carries no satellite segment. Null for a single-segment path.
+    /// The satellite's OWNER: the path before its own satellite segment — the LAST segment above the
+    /// leaf that starts with <c>_</c> — e.g. <c>Space/Doc</c> for <c>Space/Doc/_Comment/c1</c>; the
+    /// parent when the path carries no such segment. Null for a single-segment path.
+    /// <para>The LAST, never the first (review of #7601, round 3): an unmapped <c>_</c> segment higher
+    /// up is ordinary content, and a scope below it can break the inherited grant. For
+    /// <c>Space/_ledger/Private/_Comment/c1</c> the owner is <c>Space/_ledger/Private</c>, so a pointer
+    /// to <c>Space</c> must also pass the landing check. Erring deeper only ever adds that check.</para>
     /// </summary>
     /// <param name="path">The satellite's path.</param>
     public static string? OwnerOf(string? path)
@@ -36,8 +40,8 @@ public static class MainNodeTrust
         if (string.IsNullOrEmpty(path))
             return null;
         var segments = path.Trim('/').Split('/');
-        var first = Array.FindIndex(segments, s => s.StartsWith('_'));
-        var take = first > 0 ? first : first == 0 ? 0 : segments.Length - 1;
+        var own = segments.Length < 2 ? -1 : Array.FindLastIndex(segments, segments.Length - 2, s => s.StartsWith('_'));
+        var take = own > 0 ? own : own == 0 ? 0 : segments.Length - 1;
         return take <= 0 ? null : string.Join('/', segments, 0, take);
     }
 

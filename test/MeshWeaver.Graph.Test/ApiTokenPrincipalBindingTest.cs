@@ -140,6 +140,9 @@ public class ApiTokenPrincipalBindingTest(ITestOutputHelper output) : MonolithMe
     [InlineData("User/" + Owner + "/ApiToken/x", "User", null, false)]
     [InlineData("User/" + Owner + "/ApiToken/x", Owner, null, true)]
     [InlineData(Owner + "/ApiToken/x", Owner + "/ApiToken", null, false)]
+    // Review of #7601 (round 3): a record in a partition NAMED like System never authenticates as a
+    // case variant of System.
+    [InlineData("System-Security/ApiToken/x", "System-Security", null, false)]
     public async Task AStoredRecord_AuthenticatesOnlyAsThePrincipalOfItsLocation(
         string recordPath, string principal, string? serviceIdentityPath, bool authenticatesAsNamed)
     {
@@ -208,6 +211,10 @@ public class ApiTokenPrincipalBindingTest(ITestOutputHelper output) : MonolithMe
     /// </summary>
     [Theory(Timeout = 60_000)]
     [InlineData(WellKnownUsers.System, false)]
+    // A case variant of System is System to the platform predicate (AccessService.IsPlatformPrincipal
+    // compares case-insensitively), so it may not authenticate either (review of #7601, round 3).
+    [InlineData("SYSTEM-SECURITY", false)]
+    [InlineData("System-Security", false)]
     [InlineData(Owner + "/x", false)]
     [InlineData(Owner, true)]
     public async Task ALegacyInlineIndex_NeverAuthenticatesAsSystem(string principal, bool authenticates)
