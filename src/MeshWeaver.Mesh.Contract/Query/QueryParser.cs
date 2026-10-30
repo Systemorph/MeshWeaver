@@ -49,7 +49,7 @@ public partial class QueryParser
             return ParsedQuery.Empty with { Paths = listPaths, Path = listPaths[0] };
 
         var tokens = Tokenize(query);
-        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition) = ExtractReservedQualifiers(tokens);
+        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition, storedContent) = ExtractReservedQualifiers(tokens);
 
         // Parse the filter expression from remaining tokens
         QueryNode? filter = null;
@@ -68,6 +68,7 @@ public partial class QueryParser
         return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent)
         {
             CrossPartition = crossPartition,
+            StoredContent = storedContent,
         };
     }
 
@@ -645,7 +646,7 @@ public partial class QueryParser
     /// Extracts reserved qualifiers (path, namespace, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
-    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain, IReadOnlyList<string>? Paths, bool? IsContent, bool CrossPartition)
+    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain, IReadOnlyList<string>? Paths, bool? IsContent, bool CrossPartition, bool StoredContent)
         ExtractReservedQualifiers(List<Token> tokens)
     {
         var filterTokens = new List<Token>();
@@ -673,6 +674,7 @@ public partial class QueryParser
         bool? isMain = null;
         bool? isContent = null;
         var crossPartition = false;
+        var storedContent = false;
         // A positive `basePath:X` anchored the query: with no explicit scope it walks the
         // DESCENDANTS of X, the same as the tools' basePath argument (#6828).
         var basePathAnchored = false;
@@ -936,6 +938,17 @@ public partial class QueryParser
                     continue;
                 }
 
+                // `content:stored` — hand content back exactly as stored (ParsedQuery.StoredContent).
+                // Only that one value is the qualifier; any other `content:` term stays a filter,
+                // as it always was.
+                if (field.Equals("content", StringComparison.OrdinalIgnoreCase)
+                    && token.Condition.Operator == QueryOperator.Equal
+                    && value.Equals("stored", StringComparison.OrdinalIgnoreCase))
+                {
+                    storedContent = true;
+                    continue;
+                }
+
                 if (field.Equals("is", StringComparison.OrdinalIgnoreCase))
                 {
                     if (value.Equals("main", StringComparison.OrdinalIgnoreCase))
@@ -1009,7 +1022,7 @@ public partial class QueryParser
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
-        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition);
+        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition, storedContent);
     }
 
     /// <summary>
