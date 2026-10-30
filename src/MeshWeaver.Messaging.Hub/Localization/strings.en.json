@@ -128,6 +128,8 @@
   "error.ownerUnreachable": "Owner unreachable",
   "access.partitionCreate.signInRequired": "Sign in to create '{0}': only a signed-in account can create a partition.",
   "access.anonymousDenied.signInRequired": "Sign in to access '{0}': this instance does not allow anonymous access.",
+  "access.apiToken.principalFixed": "The token '{0}' belongs to '{1}': the principal of an existing API token never changes.",
+  "access.apiToken.principalNotCaller": "The API token '{0}' names '{1}', but a token may name only the caller who writes it ('{2}').",
   "access.apiTokenScope.refused": "This API token is limited to the scopes [{0}]: {2} on '{3}' needs the scope '{1}'.",
   "access.apiTokenScope.mintRefused": "This API token is limited to the scopes [{0}] and cannot write the token record '{1}': {2}",
   "access.partitionCreate.undetermined": "Whether '{0}' owns its partition could not be established — the read of its NodeType definition failed, or did not answer within {1} s. '{2}' was not created; please try again.",
