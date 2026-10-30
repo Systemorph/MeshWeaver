@@ -157,4 +157,52 @@ public class SatelliteMainNodeRepointTest(ITestOutputHelper output) : MonolithMe
         (await Decide(unset, unset with { MainNode = Doc })).Should().BeTrue(
             "the path-derived normalisation of an unset pointer to the satellite's owner is not a repoint");
     }
+
+    private SatelliteMainNodeCommitGuard Guard => new(Mesh.ServiceProvider);
+
+    private string? Commit(MeshNode? before, MeshNode after, string ownerPath) =>
+        Guard.Refusal(nameof(MeshNode), before, after, ownerPath, Person(Writer), Mesh.JsonSerializerOptions);
+
+    private static MeshNode Comment(string mainNode) =>
+        new("c1", Doc + "/_Comment") { Name = "c1", NodeType = "Comment", MainNode = mainNode };
+
+    /// <summary>
+    /// 🚨 A satellite CARRIED to another node's hub (a data change whose entity is not the receiving hub's
+    /// own node) arrives with no predecessor, so the stored-vs-proposed comparison has nothing to compare.
+    /// Committed at <see cref="Doc"/>'s hub, a comment carrying a chosen pointer is refused; one carrying
+    /// the path-derived pointer is the control, and so is the same carried node committed at its own hub
+    /// (an ordinary create, decided by the creation chain).
+    /// </summary>
+    [Fact]
+    public void ACarriedSatelliteWithAChosenPointer_IsRefusedAtTheCarrier()
+    {
+        Commit(before: null, Comment(Locked), ownerPath: Doc).Should().NotBeNull(
+            "a carrier holds no predecessor, so a satellite it commits may carry only a path-derived pointer");
+        Commit(before: null, Comment(Doc), ownerPath: Doc).Should().BeNull(
+            "the control: the path-derived pointer (the comment's owner) is what the satellite's location implies");
+        Commit(before: null, Comment(Locked), ownerPath: CommentPath).Should().BeNull(
+            "the control: at its OWN hub a satellite without a predecessor is a create, decided by the creation chain");
+    }
+
+    /// <summary>
+    /// 🚨 Retype out, repoint, retype back: each write alone passes the stored-vs-proposed comparison,
+    /// because the middle one changes the pointer while neither snapshot is a satellite. The write that
+    /// makes the node a satellite again is where the chosen pointer is caught. The control is the same
+    /// three writes with the pointer kept.
+    /// </summary>
+    [Fact]
+    public void RetypingBackIntoASatelliteWithAChosenPointer_IsRefused()
+    {
+        var comment = Comment(Doc);
+        var asMarkdown = comment with { NodeType = "Markdown" };
+        var repointed = asMarkdown with { MainNode = Locked };
+
+        Commit(comment, asMarkdown, CommentPath).Should().BeNull("retyping out keeps the pointer");
+        Commit(asMarkdown, repointed, CommentPath).Should().BeNull("an ordinary node chooses its own pointer");
+        Commit(repointed, repointed with { NodeType = "Comment" }, CommentPath).Should().NotBeNull(
+            "a node that BECOMES a satellite may bring only a path-derived pointer — otherwise satellite "
+            + "delegation is restored over the pointer the writer chose while it was not one");
+        Commit(asMarkdown, asMarkdown with { NodeType = "Comment" }, CommentPath).Should().BeNull(
+            "the control: retyping back with the path-derived pointer lands");
+    }
 }

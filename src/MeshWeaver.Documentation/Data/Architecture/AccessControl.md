@@ -1492,6 +1492,24 @@ one more reason the rule refuses rather than re-checks. Pinned by `SatelliteMain
 (a routed repoint to a locked target and to the writer's own target are both refused; an update that
 keeps the pointer lands; the rule refuses a changed pointer and allows the path-derived one).
 
+Three routes around the stored-vs-proposed comparison are closed at the commit point too. In each,
+the pointer must be one the path derives (unset or self, the satellite's owner, or the owner of its
+namespace's first satellite segment):
+
+- **A carried write.** A data change sent to ANOTHER node's hub can carry a satellite. That hub holds
+  no predecessor under the satellite's key, so there is nothing to compare. A satellite committed
+  anywhere but its own hub may carry only a derived pointer.
+- **A retype into the satellite class.** Retype a satellite out, change its pointer while it is an
+  ordinary node, and retype it back. Each write alone passes the comparison, so the write that makes a
+  node a satellite may only bring a derived pointer.
+- **A module's satellite type.** The rule set hands a module's rule out behind a lease wrapper, so the
+  guard asks the set (`NodeTypeAccessRuleSet.IsGovernedBy<SatelliteAccessRule>`), which tests the
+  leased rule itself, instead of testing what `Find` returns.
+
+Pinned by `SatelliteMainNodeRepointTest` (the carried write and the three-write retype, each with a
+derived-pointer control) and `ModuleSatelliteMainNodeRepointTest` (MeshWeaver.Compiler.Pipeline.Test:
+a compiled module's satellite type outside the standard list).
+
 **A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
 (`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a
 create proposed, which let a person create anywhere — a service's token namespace in the Admin
