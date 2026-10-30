@@ -300,6 +300,24 @@ def push_guard(source: str) -> None:
         raise Red(f"refusing to push to {source}: the only permitted source is {FEED}")
 
 
+
+def workflow_findings(text: str) -> list[str]:
+    """Shapes of template-feed.yml that would read a sealed set as 'nothing to publish'.
+
+    A CD run seals its set and can still CONCLUDE `failure` (an independent job such as
+    control-image red), so whether to publish must come from the Promote / Verify / Bake JOB
+    results alone — never from the run's conclusion, and never from a `status=success` run filter.
+    """
+    out: list[str] = []
+    if "workflow_run.conclusion" in text:
+        out.append("the lane reads the CD run's CONCLUSION — a sealed set in a run that concluded "
+                   "`failure` would be skipped and read green; decide on the job results only")
+    if "status=success" in text:
+        out.append("the dispatch path selects CD runs by `status=success` — a sealed set in a "
+                   "failed run is invisible to it; select completed runs and let the job results decide")
+    return out
+
+
 # ─────────────────────────────── self-test ───────────────────────────────
 
 def _proj(path: Path, refs: list[str] = (), version: str | None = None,
@@ -436,13 +454,25 @@ def self_test() -> int:
         if n != 3 or "Memex.Aspire.Hosting" in text:
             failures.append(f"platform slnx wrong ({n} projects): {text}")
 
+    # 8. The workflow decides 'sealed' from job results, never from the run's conclusion.
+    for bad in ("    if: github.event.workflow_run.conclusion == 'success'\n",
+                "gh api actions/workflows/main-cd.yml/runs?branch=main&status=success\n"):
+        if not workflow_findings(bad):
+            failures.append(f"workflow_findings missed a conclusion-gated shape: {bad.strip()}")
+    wf = Path(__file__).resolve().parents[1] / "workflows" / "template-feed.yml"
+    if wf.is_file():
+        for f in workflow_findings(wf.read_text(encoding="utf-8")):
+            failures.append(f"template-feed.yml: {f}")
+    else:
+        failures.append(f"{wf} not found — the workflow-shape check checked nothing")
+
     if failures:
         print("template-feed self-test FAILED:")
         for f in failures:
             print(f"  ✗ {f}")
         return 1
-    print("template-feed self-test: 7 scenarios, all held (derive, unknown id RED, own-line pin RED, "
-          "empty/odd version RED, verify both ways, push guard, slnx)")
+    print("template-feed self-test: 8 scenarios, all held (derive, unknown id RED, own-line pin RED, "
+          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results)")
     return 0
 
 

@@ -28,8 +28,9 @@
 #
 # 🚨 NO SKIP-TRAPDOORS. `preflight` asserts every external input and fails RED naming it. The one
 # condition on whether `publish` runs is a fact about the CD RUN (did it seal a set?), never about an
-# input; and `verdict` runs `always()` and fails explicitly unless publish succeeded or there was
-# provably no sealed set to publish.
+# input — and that fact is read from the CD run's Promote / Verify / Bake JOB results, never from
+# the run's conclusion; `verdict` runs `always()` and fails explicitly unless publish succeeded or
+# preflight proved there was no sealed set to publish.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 name: Template feed (private GitHub Packages)
 
@@ -66,10 +67,10 @@ env:
 jobs:
   preflight:
     name: "Inputs, and the sealed set this run publishes"
-    # The ONE sanctioned condition, on the EVENT: a CD run that did not succeed sealed nothing.
-    if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
+    # 🚨 NO condition on the CD run's CONCLUSION. A CD run seals its platform set and can still
+    # conclude `failure` when an independent job (control-image, satellite-compat, …) fails; gating
+    # on the conclusion skipped that set and read green. Whether a set was sealed is decided ONLY
+    # by the Promote / Verify / Bake job results below (template-feed.py --self-test pins this).
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -113,12 +114,13 @@ jobs:
             dry="${INPUT_DRY:-true}"
             id="${INPUT_ID:-}"
             if [ -z "$id" ]; then
-              # The newest successful CD run on main that uploaded a promotion record.
-              for cand in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/main-cd.yml/runs?branch=main&status=success&per_page=30" --jq '.workflow_runs[].id'); do
+              # The newest COMPLETED CD run on main that uploaded a promotion record — whatever its
+              # conclusion: the job results below decide whether it sealed a set.
+              for cand in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/main-cd.yml/runs?branch=main&status=completed&per_page=30" --jq '.workflow_runs[].id'); do
                 n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$cand/artifacts?name=promotion-record" --jq '.total_count')
                 if [ "$n" -gt 0 ]; then id="$cand"; break; fi
               done
-              [ -n "$id" ] || { echo "::error::no successful 'Continuous Delivery (main)' run among the newest 30 carries a promotion record — name one with cd-run-id"; exit 1; }
+              [ -n "$id" ] || { echo "::error::no completed 'Continuous Delivery (main)' run among the newest 30 carries a promotion record — name one with cd-run-id"; exit 1; }
             fi
           fi
           [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::'$id' is not a run id"; exit 1; }
@@ -277,15 +279,9 @@ jobs:
           CANDIDATE: ${{ needs.preflight.outputs.candidate }}
           PUB: ${{ needs.publish.result }}
           DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
-          EVENT: ${{ github.event_name }}
-          WR_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -euo pipefail
           echo "preflight=$PRE candidate=${CANDIDATE:-} publish=$PUB"
-          if [ "$PRE" = skipped ] && [ "$EVENT" = workflow_run ] && [ "$WR_CONCLUSION" != success ]; then
-            echo "CD run concluded '$WR_CONCLUSION' — it sealed no set; nothing to publish."
-            echo "published=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
           [ "$PRE" = success ] || { echo "::error::preflight did not succeed ($PRE)"; exit 1; }
           if [ "$CANDIDATE" != true ]; then
             echo "No sealed set in that CD run — nothing to publish."
