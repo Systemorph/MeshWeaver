@@ -143,9 +143,17 @@ SIGNATURES = re.compile(
 # NONE of its own checks because an upstream job failed prints exactly one `red because <root> … —
 # see it` and stops. Consequential by construction: the root is a failed job of the same run, judged
 # on its own log. Matched on the EMITTED `##[error]` record only — never the echoed `run:` source.
+#
+# 🚦 THE STAGE-0 HOLD (node-repo-stage-gate.yml, and core's Consolidate which repeats it): the stage
+# gate ran none of the suites because a stage-0 control did not SUCCEED. Consequential by
+# construction: every stage-0 control that held it is a red job of the same run, judged on its own
+# evidence — measured on MeshWeaver#7694 run 41100409024, where the two controls were CANCELLED by a
+# lost completion (see JOB_TIME_LIMIT_ANNOTATION) and this line was the gate's only red.
+STAGE0_HOLD_LINE = "STAGE 2 HELD (stage 0 red): "
 CONSEQUENTIAL_SIGNATURES = re.compile(
     r"The test matrix concluded 'skipped' — at least one shard did not succeed"
     r"|##\[error\]red because .+ — see (?:it|them)\."
+    r"|##\[error\]" + re.escape(STAGE0_HOLD_LINE)
 )
 
 # 🚨 BLOCK signatures span TWO consecutive log lines, so they are matched on the log with newlines
@@ -311,6 +319,29 @@ def read_annotations(repo: str, job_id: int, fetch) -> list[dict]:
 RUNNER_DEATH_ANNOTATION = r"^The self-hosted runner lost communication with the server\."
 RUNNER_SHUTDOWN_ANNOTATION = r"^The runner has received a shutdown signal\."
 RUNNER_GONE_ANNOTATIONS = (RUNNER_DEATH_ANNOTATION, RUNNER_SHUTDOWN_ANNOTATION)
+
+# 🚨 A LOST COMPLETION — GitHub's time-limit sentence over a job whose WORK had already finished.
+# Measured 2026-10-30 17:44–17:56Z on hosted `ubuntu-latest` runners, four jobs over two runs:
+#   MeshWeaver#7694 run 41100409024 job 124219237937 "i18n catalog (mirror sync handed over)": every
+#     step success INCLUDING "Complete job" at 17:47:03 (the log ends at "Cleaning up orphan
+#     processes"), then "The job has exceeded the maximum execution time of 5m0s" and conclusion
+#     `cancelled` at 17:51:50. Job 124218588224 "CI's own shell": all 133 steps success by 17:53:45,
+#     cut at its 10m0s cap at 17:55:54.
+#   MeshWeaver#7697 run 41100231113 job 124218462994 "Satellite package pins": every work step success
+#     by 17:44:27, the runner-owned "Post Run actions/checkout" left `in_progress`, cut at 5m0s.
+# The runner never delivered the completion it had written, so GitHub cut a FINISHED job at its cap.
+# The run then concludes `cancelled`, the stage gate reads `cancelled` as stage-0 red, and nothing in
+# the lane ever looked (it judged `failure` runs only) — the pull request stayed red until a person
+# re-ran it.
+# 🚨 THE STEPS ARE THE PROOF, not the sentence. The same sentence is what a REAL hang at the cap
+# leaves, so it is admitted only when every work step (everything but the runner's own `Post …` and
+# `Complete job` bookkeeping) COMPLETED with success/skipped — a step cut mid-work fails the test and
+# the job stays UNPROVEN. It is matched separately from ANNOTATION_SIGNATURES for that reason.
+JOB_TIME_LIMIT_ANNOTATION = r"^The job has exceeded the maximum execution time of [0-9]+m[0-9]+s$"
+RUNNER_BOOKKEEPING_STEP = re.compile(r"^(?:Post |Complete job$)")
+# A job cancelled because a NEWER run took its concurrency group (a push superseded it), or by a
+# person, is never a transient: the newer run is the one that counts, or somebody meant it.
+SUPERSEDED_ANNOTATION = r"^Canceling since a higher priority waiting request for .+ exists"
 ANNOTATION_SIGNATURES: tuple[tuple[str, str], ...] = (
     (RUNNER_DEATH_ANNOTATION, "runner death — the self-hosted runner lost communication with the server"),
     (RUNNER_SHUTDOWN_ANNOTATION, "runner shutdown — the runner received a shutdown signal mid-job"),
@@ -398,6 +429,31 @@ def match_annotations(annotations: list[dict]) -> str | None:
     return None
 
 
+def _failure_messages(annotations: list[dict]) -> list[str]:
+    return [str(a.get("message") or "") for a in annotations if a.get("annotation_level") == "failure"]
+
+
+def lost_completion(job: dict, annotations: list[dict]) -> str | None:
+    """Why a job GitHub cut at its time limit had already FINISHED its work, or None.
+
+    All three must hold: the time-limit sentence is a failure annotation of the job; no annotation
+    says a newer run superseded it; and every work step COMPLETED with success/skipped (only the
+    runner's own `Post …` / `Complete job` bookkeeping may be unfinished). A step cut mid-work is a
+    real hang at the cap, and the job stays UNPROVEN.
+    """
+    messages = _failure_messages(annotations)
+    limit = next((m for m in messages if re.search(JOB_TIME_LIMIT_ANNOTATION, m)), None)
+    if limit is None or any(re.search(SUPERSEDED_ANNOTATION, m) for m in messages):
+        return None
+    work = [s for s in job.get("steps") or []
+            if not RUNNER_BOOKKEEPING_STEP.match(str(s.get("name", "")))]
+    if not work or any(s.get("status") != "completed" or s.get("conclusion") not in ("success", "skipped")
+                       for s in work):
+        return None
+    return (f"lost completion — every one of its {len(work)} work step(s) completed green, then "
+            f"GitHub cut the job: {limit!r} (the runner never delivered the completion it wrote)")
+
+
 def runner_gone(annotations: list[dict]) -> bool:
     return any(a.get("annotation_level") == "failure"
                and any(re.search(p, str(a.get("message") or "")) for p in RUNNER_GONE_ANNOTATIONS)
@@ -435,7 +491,7 @@ def judge(repo: str, job: dict, fetch) -> tuple[str, str, bool]:
     own = failed_steps(job)
     if not own:
         annotations = read_annotations(repo, job_id, fetch)
-        matched = match_annotations(annotations)
+        matched = match_annotations(annotations) or lost_completion(job, annotations)
         where = "no step ran" if not job.get("steps") else "no step of its own failed"
         # Judged WITHOUT a log by construction (the log was never read), so both outcomes are
         # listed for the `Judged without a log` warning and the summary carries their evidence.
@@ -470,8 +526,17 @@ def judge(repo: str, job: dict, fetch) -> tuple[str, str, bool]:
                       "no retry"), True
 
 
+# The job conclusions that are a red to judge. `cancelled` is one: a job GitHub cut at its time limit
+# concludes `cancelled`, never `failure` (MeshWeaver#7694 — see JOB_TIME_LIMIT_ANNOTATION). Each
+# cancelled job is judged like any other red: proven, or it vetoes — a superseded or hand-cancelled
+# job carries no named proof, so a run cancelled that way is never retried.
+RED_JOB_CONCLUSIONS = frozenset({"failure", "cancelled", "timed_out"})
+# The run conclusions this steward judges — the lane's `if:` admits the same two.
+JUDGED_RUN_CONCLUSIONS = frozenset({"failure", "cancelled"})
+
+
 def failed_jobs(repo: str, run_id: str, attempt: int | None, fetch) -> list[dict]:
-    """EVERY failed job of the run (of the judged ATTEMPT when one is given) — paginated.
+    """EVERY red job (RED_JOB_CONCLUSIONS) of the run (of the judged ATTEMPT when one is given) — paginated.
 
     🚨 The population must be COMPLETE or the EVERY-job rule is evaluated over a truncated one, and
     a run whose real failure sits on page two would be retried as if it were all transients.
@@ -512,7 +577,7 @@ def failed_jobs(repo: str, run_id: str, attempt: int | None, fetch) -> list[dict
             break
         seen += len(jobs)
         jobs_out.extend(job for job in jobs
-                        if isinstance(job, dict) and job.get("conclusion") == "failure")
+                        if isinstance(job, dict) and job.get("conclusion") in RED_JOB_CONCLUSIONS)
         if seen >= total:
             break
         page += 1
@@ -523,7 +588,9 @@ def decide(repo: str, run_id: str, fetch, attempt: int | None = None,
            scope: str = RERUN_FAILED) -> Decision:
     failed = failed_jobs(repo, run_id, attempt, fetch)
     if not failed:
-        return Decision(False, f"run {run_id}: failure conclusion but no failed jobs listed — doing nothing.")
+        return Decision(False, f"run {run_id}: a red conclusion but no failed or cancelled jobs listed "
+                               "(a run evicted from its concurrency group before any job started) — "
+                               "doing nothing.")
     transients = 0
     consequential = 0
     logless: list[str] = []
@@ -551,6 +618,10 @@ def decide(repo: str, run_id: str, fetch, attempt: int | None = None,
     # the needs that caused the skip went green and the dependent stayed skipped. So the retry would
     # only re-fail the aggregator. Re-run the whole run instead.
     if consequential:
+        scope = RERUN_ALL
+    # A CANCELLED job is re-run by the whole-run POST, which needs no reading of whether GitHub's
+    # "failed jobs" includes the cancelled ones; one retry, ever, so the extra jobs are bounded.
+    if any(job.get("conclusion") != "failure" for job in failed):
         scope = RERUN_ALL
     return Decision(True, (f"all {len(failed)} failed job(s) are proven ({transients} transient, "
                            f"{consequential} consequential) — one retry ({scope})."),
@@ -620,7 +691,7 @@ def run(repo: str, run_id: str, fetch, dry_run: bool, attempt: int | None = None
               "before the POST carries no run_attempt. Not retrying on a stale view.")
         return 1
     if (current["run_attempt"] != judged or current.get("status") != "completed"
-            or current.get("conclusion") != "failure"):
+            or current.get("conclusion") not in JUDGED_RUN_CONCLUSIONS):
         line = (f"run {run_id} moved on after attempt {judged} was judged (now attempt "
                 f"{current['run_attempt']}, {current.get('status')}/{current.get('conclusion')}) — "
                 "somebody re-ran it, so this steward does NOT retry over them.")
@@ -664,7 +735,8 @@ def _fake(logs: dict[int, object], total: int | None = None,
           pages: list[list[int]] | None = None,
           steps: dict[int, list[dict]] | None = None,
           annotations: dict[int, object] | None = None,
-          run_state: object = None):
+          run_state: object = None,
+          conclusions: dict[int, str] | None = None):
     """A fetch double. `logs` maps job id → log text, or an Exception to raise.
 
     `pages` (a list of job-id lists) serves a DIFFERENT set of job records per page, so a test can
@@ -672,14 +744,16 @@ def _fake(logs: dict[int, object], total: int | None = None,
     `steps[]` (default: one failed step — the job's OWN failure). `annotations` maps job id → the
     check-run annotation list, or an Exception to raise; an absent entry is an EMPTY list.
     `run_state` is what GET runs/<id> answers right before the POST (default: attempt 1, still a
-    completed failure), or an Exception to raise.
+    completed failure), or an Exception to raise. `conclusions` overrides a job's conclusion
+    (default `failure`).
     """
     calls: list[str] = []
     steps = steps or {}
     annotations = annotations or {}
+    conclusions = conclusions or {}
 
     def record(job_id: int) -> dict:
-        return {"id": job_id, "name": f"job-{job_id}", "conclusion": "failure",
+        return {"id": job_id, "name": f"job-{job_id}", "conclusion": conclusions.get(job_id, "failure"),
                 "steps": steps.get(job_id, ONE_FAILED_STEP)}
 
     def fetch(path: str, method: str = "GET"):
@@ -746,6 +820,38 @@ DIED_IN_STEP = _steps(("Set up job", "completed", "success"),
                       ("Upload the built markers", "completed", "failure"))
 VERDICT_ONLY = _steps(("Set up job", "completed", "success"),
                       ("Exactly the selected bundles were built", "completed", "failure"))
+# ── MeshWeaver#7694 / #7697 (2026-10-30), measured verbatim: a FINISHED job cut at its time limit. ──
+TIME_LIMIT_5M = [{"annotation_level": "failure", "title": "",
+                  "message": "The job has exceeded the maximum execution time of 5m0s"},
+                 {"annotation_level": "notice",
+                  "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026.\""}]
+# Job 124219237937: every step green INCLUDING "Complete job", then cut.
+FINISHED_THEN_CUT = _steps(("Set up job", "completed", "success"),
+                           ("Run actions/checkout@v7", "completed", "success"),
+                           ("Every catalog change hands the mirror sync over", "completed", "success"),
+                           ("Post Run actions/checkout@v7", "completed", "success"),
+                           ("Complete job", "completed", "success"))
+# Job 124218462994: the work green, the runner's own post step left in progress, then cut.
+POST_STEP_STUCK = _steps(("Set up job", "completed", "success"),
+                         ("Run actions/checkout@v7", "completed", "success"),
+                         ("Satellite pins are declared", "completed", "success"),
+                         ("Post Run actions/checkout@v7", "in_progress", None))
+# The REAL hang the same sentence also describes: a work step still running when the cap fired.
+WORK_STEP_HUNG = _steps(("Set up job", "completed", "success"),
+                        ("Run the suite", "in_progress", None),
+                        ("Complete job", "pending", None))
+# MeshWeaver#7696 run 41103074897: a job a NEWER run superseded — never a transient.
+SUPERSEDED = [{"annotation_level": "failure",
+               "message": "Canceling since a higher priority waiting request for build-test-refs/pull/7696/merge exists"},
+              {"annotation_level": "failure", "message": "The operation was canceled."}]
+# The stage gate's and Consolidate's own lines over the two cut controls (run 41100409024).
+STAGE0_HELD_LOG = REAL_LOG_HEAD + (
+    "2026-10-30T17:56:01.8136634Z ##[error]STAGE 2 HELD (stage 0 red): a cheap static control is red "
+    "(i18n-mirror-sync=cancelled workflow-shell=cancelled) — fix it and push; the new head restarts at stage 0\n"
+    "2026-10-30T17:56:01.8144950Z ##[error]Process completed with exit code 1.\n")
+GATE_STEP = _steps(("Set up job", "completed", "success"),
+                   ("Stage 1 — is this head reviewed and every finding answered?", "completed", "failure"))
+RUN_CANCELLED = {"run_attempt": 1, "status": "completed", "conclusion": "cancelled"}
 
 
 def self_test() -> int:
@@ -1178,9 +1284,73 @@ def _self_test_cases(live_summary: str | None) -> int:
     check("a caller that asks for the whole run gets POST rerun",
           _posted(fetch) == ["POST /repos/o/r/actions/runs/9/rerun"])
 
+    # ══ MeshWeaver#7694 / #7697: a FINISHED job GitHub cut at its time limit, in a `cancelled` run. ══
+    # Run 41100409024: two stage-0 controls finished green, were cut (`cancelled`), and the stage gate
+    # held the suites over them. Before this case the steward never listed a cancelled job, so it
+    # answered "no failed jobs" (or skipped the run entirely) and the pull request stayed red.
+    cut_run = {1: "", 2: "", 3: STAGE0_HELD_LOG}
+    fetch = _fake(cut_run, steps={1: FINISHED_THEN_CUT, 2: POST_STEP_STUCK, 3: GATE_STEP},
+                  annotations={1: TIME_LIMIT_5M, 2: TIME_LIMIT_5M},
+                  conclusions={1: "cancelled", 2: "cancelled"}, run_state=dict(RUN_CANCELLED))
+    decision = decide("o/r", "9", fetch, attempt=1)
+    check("#7694: two FINISHED controls cut at their time limit + the stage-0 hold → ONE retry",
+          decision.retry)
+    check("...of the WHOLE run (a cancelled job and a consequential gate are both in it)",
+          decision.scope == RERUN_ALL)
+    fetch = _fake(cut_run, steps={1: FINISHED_THEN_CUT, 2: POST_STEP_STUCK, 3: GATE_STEP},
+                  annotations={1: TIME_LIMIT_5M, 2: TIME_LIMIT_5M},
+                  conclusions={1: "cancelled", 2: "cancelled"}, run_state=dict(RUN_CANCELLED))
+    check("...and run() POSTs it although the run's conclusion is `cancelled`, not `failure`",
+          run("o/r", "9", fetch, dry_run=False, attempt=1) == 0
+          and _posted(fetch) == ["POST /repos/o/r/actions/runs/9/rerun"])
+    check("a lone finished-then-cut job (no consequential job) still re-runs the whole run",
+          decide("o/r", "9", _fake({1: ""}, steps={1: FINISHED_THEN_CUT}, annotations={1: TIME_LIMIT_5M},
+                                   conclusions={1: "cancelled"})).scope == RERUN_ALL)
+    # Negative controls — each must decline, or this is a flake-retrier.
+    check("a WORK step still running when the cap fired is a real hang → NO retry",
+          not decide("o/r", "9", _fake({1: ""}, steps={1: WORK_STEP_HUNG}, annotations={1: TIME_LIMIT_5M},
+                                       conclusions={1: "cancelled"})).retry)
+    check("a work step that FAILED before the cut → NO retry (its own log decides, and matches nothing)",
+          not decide("o/r", "9", _fake({1: REAL_LOG_HEAD + "2026-10-30T17:47:03.0Z boom\n"},
+                                       steps={1: ONE_FAILED_STEP}, annotations={1: TIME_LIMIT_5M},
+                                       conclusions={1: "cancelled"})).retry)
+    check("finished steps WITHOUT the time-limit sentence (cancelled for another reason) → NO retry",
+          not decide("o/r", "9", _fake({1: ""}, steps={1: FINISHED_THEN_CUT},
+                                       annotations={1: [{"annotation_level": "failure",
+                                                         "message": "The operation was canceled."}]},
+                                       conclusions={1: "cancelled"})).retry)
+    check("#7696: a job SUPERSEDED by a newer run of its concurrency group → NO retry",
+          not decide("o/r", "9", _fake({1: ""}, steps={1: FINISHED_THEN_CUT},
+                                       annotations={1: SUPERSEDED + TIME_LIMIT_5M[:1]},
+                                       conclusions={1: "cancelled"})).retry)
+    check("...nor one superseded before any step ran",
+          not decide("o/r", "9", _fake({1: ""}, steps={1: []}, annotations={1: SUPERSEDED},
+                                       conclusions={1: "cancelled"})).retry)
+    check("a time-limit sentence at NOTICE level is not the failure → NO retry",
+          not decide("o/r", "9", _fake({1: ""}, steps={1: FINISHED_THEN_CUT},
+                                       annotations={1: [dict(TIME_LIMIT_5M[0], annotation_level="notice")]},
+                                       conclusions={1: "cancelled"})).retry)
+    check("the stage-0 hold ALONE (nothing proven upstream) → NO retry",
+          not decide("o/r", "9", _fake({3: STAGE0_HELD_LOG}, steps={3: GATE_STEP})).retry)
+    check("the stage-0 hold in ECHOED source only is not evidence",
+          classify(REAL_LOG_HEAD + "2026-10-30T17:56:01.0Z \x1b[36;1m  echo \"::error title=x::"
+                   + STAGE0_HOLD_LINE + "…\"\x1b[0m\n") is None)
+    # The hold line is only evidence while the gate still prints it.
+    gate_lane = workflows / "node-repo-stage-gate.yml"
+    gate_text = gate_lane.read_text(encoding="utf-8") if gate_lane.is_file() else ""
+    check(f"node-repo-stage-gate.yml still prints {STAGE0_HOLD_LINE!r} (read: {gate_lane.is_file()})",
+          STAGE0_HOLD_LINE in gate_text)
+
     # ── The lane grants what this script reads. A lane without `checks: read` is blind to deaths. ──
     lane = workflows / "node-repo-retry-transients.yml"
     lane_text = lane.read_text(encoding="utf-8") if lane.is_file() else ""
+    # ...and it WAKES for the runs this script judges: a lane filtered to `failure` never sees a run
+    # whose only reds were cut jobs (they conclude `cancelled`) — the #7694 shape.
+    check("the steward judges `failure` AND `cancelled` runs",
+          JUDGED_RUN_CONCLUSIONS == {"failure", "cancelled"})
+    for conclusion in ("failure", "cancelled"):
+        check(f"node-repo-retry-transients.yml admits a `{conclusion}` run",
+              f"github.event.workflow_run.conclusion == '{conclusion}'" in lane_text)
     for grant in ("actions: write", "checks: read"):
         check(f"node-repo-retry-transients.yml grants `{grant}` (read: {lane.is_file()})",
               re.search(rf"^\s+{re.escape(grant)}\b", lane_text, re.M) is not None)

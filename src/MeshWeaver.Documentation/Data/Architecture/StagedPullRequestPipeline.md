@@ -237,6 +237,40 @@ a red like any other: `retry-known-transients.yml` re-runs the recognised shapes
 in stage 0 — because "the static controls could not run" must never read as "the static controls
 passed".
 
+**A control GitHub CUT after it finished is a red the steward re-runs once (#7694).** Measured on
+2026-10-30, 17:44–17:56Z, on hosted runners: `i18n catalog (mirror sync handed over)` in run
+41100409024 had every step green, `Complete job` included, at 17:47:03. GitHub then marked it
+`cancelled` at 17:51:50 with *"The job has exceeded the maximum execution time of 5m0s"*. The runner
+never delivered the completion it had written. `CI's own shell` (10m0s cap) in the same run and
+`Satellite package pins` in run 41100231113 were cut the same way. The gate read the two `cancelled`
+results as stage-0 red, which is correct: a cut job did not deliver a verdict. Consolidate then had
+no shard results.
+
+The defect was that nothing recovered it. A cut job concludes `cancelled`, so the whole run concludes
+`cancelled`, and the retry lane only woke for `failure`. Now:
+
+- The lane (`node-repo-retry-transients.yml`) also judges a `cancelled` run.
+- The steward (`retry-known-transients.py`) lists `cancelled` jobs among the reds.
+- It admits a cut job as a *lost completion* only when three things hold. GitHub's time-limit
+  sentence is a failure annotation of the job. No annotation says a newer run superseded it. And every
+  work step completed with success or skipped; only the runner's own `Post …` and `Complete job`
+  bookkeeping may be unfinished.
+- A real hang at the cap leaves a work step unfinished, so it stays unproven and red.
+- So does a run superseded by a push (*"Canceling since a higher priority waiting request …"*) and a
+  run cancelled by a person.
+- The gate's `STAGE 2 HELD (stage 0 red): ` line is read as consequential, never as a cause.
+- A proven cut re-runs the whole run, once.
+- A run evicted from its concurrency group before any job started has no red job, and is declined by
+  name.
+
+The third red of that hour, run 41103074897 on #7696, was not a cut. It was cancelled mid-step with
+*"Canceling since a higher priority waiting request for build-test-refs/pull/7696/merge exists"*.
+The build queue on the control instance had admitted the build of a superseded head (`d2fba67d`) at
+18:01:34. It then resumed that head's cancelled run with `rerun-failed-jobs`, and the resumed run took
+the pull request's concurrency group from the current head's run. The steward declines that shape by
+design: the defect is the resume of a superseded run, which lives in MeshWeaver.Plugins
+(`BuildQueueScheduler.ResumeWaitingRun`).
+
 ## A push during stage 2
 
 Unchanged supersession rules, applied per head:
