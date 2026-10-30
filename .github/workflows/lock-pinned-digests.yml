@@ -384,6 +384,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
+          # Inside this job's 5-minute cap: a rate limit past it exits 3, NO VERDICT, and the
+          # ledger lists the run's jobs itself (MeshWeaver#7416).
+          MW_API_OUTAGE_WAIT_MINUTES: "3"
         run: python3 .github/scripts/ci-failure-ledger.py --list-failed-jobs "$RUN_ID"
 
   lane-red:
