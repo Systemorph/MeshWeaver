@@ -2561,9 +2561,30 @@ partition root, above the query's scope, and each test fails on the unfixed buil
 
 `AReadCheckWithNoVerdict_WithholdsTheRow` pins the fail-closed filter.
 
+**Configuration-declared rows follow grants the same way.** `StaticNodeQueryProvider` serves
+declared rows from memory, and storage holds no row for them, so no change-feed write can ever
+re-decide one. It used to decide each declared row once, emit its Initial and complete. Now, when a
+query holds a row that is decided per viewer (anything but vocabulary, see *Configuration-declared
+nodes are row-filtered* above), it merges the same `RecheckTriggers`, anchored on those rows' own
+paths and MainNodes. Each trigger re-runs the row filter, coalesced so only one run is in flight,
+and diffs the result into `Removed` and `Added` frames. Its `ValidateRead` is bounded and fails
+closed by the same three rules. A query that holds only vocabulary rows, a System query and a
+provider built without a mesh still emit their Initial and complete, as before.
+
+**The snapshot surface carries removals.** `IMeshService.Query(request)` (every frame the full current
+set) reaches each provider through the default bridge `IMeshQueryProvider.Query(request, options)`.
+That bridge folded `Initial`, `Added` and `Updated` and DROPPED `Removed`, so a row a provider removed
+stayed in the snapshot for as long as it was open: a revoked reader kept it there, and so did every
+reader of a deleted node. The bridge now removes it.
+
+Both are pinned by `OpenQueryFollowsAccessOnDeclaredRowsTest` (`test/MeshWeaver.Graph.Test/`), each
+test red on the unfixed build: a revoked reader loses the declared row, with a second reader whose
+grant stands as the negative control; a newly granted reader receives it as `Added`; a grant to
+somebody else leaves the first reader's result unchanged and emits no frame, while it admits the row
+for the reader it names; and the snapshot surface drops both a declared and a stored row on
+revocation, while the other reader's snapshot keeps both.
+
 What this does NOT cover:
-- configuration-declared rows (`StaticNodeQueryProvider`) are still decided once, because that
-  provider emits its Initial and completes;
 - a row whose Read is decided through a MainNode is re-checked when a fold or grant reaches that
   MainNode, but the in-memory executor learns of the MainNode only from the rows it already holds;
 - the window between an access commit and the fold taking it in is not held, as it is for a cache
