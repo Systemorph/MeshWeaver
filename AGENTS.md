@@ -490,6 +490,8 @@ Detailed patterns with code examples: [UserInterface.md](src/MeshWeaver.Document
 
 🚨 **xUnit's `methodTimeout` (30 s, `test/xunit.runner.json`) only bounds time spent INSIDE a test method** — a wedge in fixture construction, class init or teardown runs unbounded, so always give a local run its own wall-clock cap (background it and hold the deadline yourself; there is no `timeout` binary here). If a run hits a cap it is stuck — do not raise the bound.
 
+🍎 **On a Mac, verify like CI with a host-built reference set and a plain `dotnet test`.** For in-mesh C#, run `python3 .github/scripts/build-host-reference-set.py --plugins <plugins>` and pass the printed directory as `--refs` to `canonical-compile-check.py` and `run-node-tests.py` (with `MW_PLATFORM_SCRIPTS=<core>/.github/scripts`). An image extraction cannot execute on macOS, and a `src/*/bin` set has no Rx. Testcontainers on Colima needs no hand-set variables. Clean old test containers with Plugins `scripts/clean-test-containers.py`, and never with `memex-local up`. [LocalDevWorkflow.md](src/MeshWeaver.Documentation/Data/Architecture/LocalDevWorkflow.md) → "Verify like CI on a Mac".
+
 Full reference: [/testing](.claude/skills/testing/SKILL.md) · [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/WritingTests.md).
 
 ## Project Structure

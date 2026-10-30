@@ -90,6 +90,10 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Mesh.Services.MeshQueryRequest"] = ["AsSystem", "ForViewer"],
             ["MeshWeaver.ContentCollections.ContentImportBuilder"] = ["ImpersonateAsSystem"],
             ["MeshWeaver.ContentCollections.SyncContentFilesBuilder"] = ["ImpersonateAsSystem"],
+            // The storage repair sweeps write as System over any partition the caller names (Doc/Architecture/
+            // MarkdownBodyKeyRepair, StaleMainNodeRepair): an operator's one-shot, never in-mesh code's.
+            ["MeshWeaver.Hosting.Persistence.MarkdownBodyKeyRepair"] = ["Repair"],
+            ["MeshWeaver.Hosting.Persistence.StaleMainNodeRepair"] = ["Repair"],
             // The mail copy's stores write and read as System on the owner's behalf. Their runtime check judges
             // the immediate caller, which a method group handed to a platform callback replaces — so both the
             // interfaces and the concrete stores are reported here, and every public road to Enable (it starts the
