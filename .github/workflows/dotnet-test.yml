@@ -2455,6 +2455,15 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/run-node-tests.py --self-test
 
+    # The host-built reference set (Doc/Architecture/LocalDevWorkflow → "Verify like CI on a Mac") is
+    # a contract between two files: this builder writes meshweaver-reference-set.json and
+    # compile-check.py classifies a flat directory by it. A rename on one side would turn every
+    # host-built set back into a refused "image" with no CI lane noticing, so the builder's self-test
+    # reads the contract FROM compile-check.py. Offline, no dotnet, under a second.
+    - name: "The host-built reference set and compile-check agree on its manifest (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-host-reference-set.py --self-test
+
     # The fresh merge every suite job runs (policy suites-test-fresh-merge) is proven both ways on
     # throwaway repositories: parents [main tip, head], main's NEWER change present, the identical
     # commit from a shallow and a full checkout, a conflict RED naming the path, and the negative
@@ -2462,6 +2471,13 @@ jobs:
     - name: "The fresh merge tests head + CURRENT main, and refuses a conflict (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-fresh-merge.py --self-test
+    # A cascade is reported ONCE (policy report-a-cascade-once, ReadingCiSignals): the step every
+    # aggregator leads with is proven over synthetic `needs` — a failed root is ONE red line naming
+    # it, green roots hand over to the aggregator's own (still red-capable) checks, all green is
+    # green, a wait keeps its waiting wording, and an unreadable needs document is never green.
+    - name: "An aggregator reports an upstream red once, and can still say no (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/ci-cascade-verdict.py --self-test
     # ONE CANDIDATE per run: a job that SELECTS what a lane tests (the affected closure) applies the
     # same fresh merge its shards test, and the shards merge onto that job's tip. A planner that only
     # resolved the tip selected on GitHub's stale merge ref and staged a set missing a `requires`

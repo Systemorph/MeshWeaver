@@ -42,7 +42,8 @@ public class InMeshImpersonationReferencesTest
         _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
                     typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable),
                     typeof(System.Text.Json.JsonSerializerOptions), typeof(MessageDelivery<>),
-                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>) };
+                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>),
+                    typeof(MeshWeaver.Hosting.Persistence.MarkdownBodyKeyRepair) };
         // 🚨 Only assemblies whose file is STILL on disk. Other classes of this project compile
         // node assemblies into temp folders, load them and delete the folder when they finish; such
         // an assembly stays in the AppDomain with a Location that no longer exists, and referencing
@@ -197,6 +198,12 @@ public class InMeshImpersonationReferencesTest
         "\"system-security\"")]
     [InlineData("public static AccessContext M() { var id = \"system-security\"; return new() { ObjectId = id }; }",
         "\"system-security\"")]
+    // The storage repair sweeps WRITE AS SYSTEM over any partition the caller names; in-mesh code
+    // reaching one is an escalation (review on #7645). Detect only reads and is not reported.
+    [InlineData("public static object M(IMessageHub h) => MeshWeaver.Hosting.Persistence.MarkdownBodyKeyRepair.Repair(h, new[] { \"someone-else\" });",
+        "MeshWeaver.Hosting.Persistence.MarkdownBodyKeyRepair.Repair")]
+    [InlineData("public static object M(IMessageHub h) => MeshWeaver.Hosting.Persistence.StaleMainNodeRepair.Repair(h);",
+        "MeshWeaver.Hosting.Persistence.StaleMainNodeRepair.Repair")]
     public void AnImpersonationReference_IsFound(string body, string expected)
     {
         Assert.Contains(expected, Found(body));
@@ -282,6 +289,14 @@ public class InMeshImpersonationReferencesTest
     public void ModuleMailCopyTypes_Untouched_AreNotReported()
     {
         Assert.Empty(FoundWithModuleStubs($"public static object M(MeshWeaver.Mail.MailCopy.IMailCopyStore s, MeshWeaver.Mail.MailCopy.MailCopyEngine e) => (s, e);"));
+    }
+
+    /// <summary>Negative control for the repair rows: the read-only <c>Detect</c> half writes nothing and is not reported.</summary>
+    [Fact]
+    public void TheReadOnlyRepairDetect_IsNotReported()
+    {
+        Assert.Empty(Found("public static object M(IMessageHub h) => MeshWeaver.Hosting.Persistence.MarkdownBodyKeyRepair.Detect(h);"));
+        Assert.Empty(Found("public static object M(IMessageHub h) => MeshWeaver.Hosting.Persistence.StaleMainNodeRepair.Detect(h);"));
     }
 
     [Fact]
