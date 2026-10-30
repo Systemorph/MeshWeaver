@@ -58,6 +58,14 @@ public record ValidateTokenResponse
     /// </summary>
     public bool IsService { get; init; }
 
+    /// <summary>
+    /// The token's scope cap (<see cref="ApiToken.Scopes"/>); <c>null</c> for an unscoped token.
+    /// Every authenticating site copies it onto <see cref="AccessContext.Scopes"/> — dropping it
+    /// would turn a capped token into a full-authority one. Additive and wire-compatible: absent
+    /// on old payloads ⇒ unscoped, which is what an old token is.
+    /// </summary>
+    public IReadOnlyList<string>? Scopes { get; init; }
+
     /// <summary>Error message if validation failed.</summary>
     public string? Error { get; init; }
 

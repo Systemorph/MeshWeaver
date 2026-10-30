@@ -67,7 +67,13 @@ public static class ApiTokenVerdict
                     if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
                         return Observable.Return(ValidateTokenResponse.Fail("Invalid token"));
                     return ReadOne(read, index.TokenPath)
-                        .SelectMany(tokenNode => DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
+                        .SelectMany(tokenNode => IsNotATokenRecord(tokenNode)
+                            // 🛡️ Only a TOKEN RECORD authenticates (review of #7585). The index outlives
+                            // its record, so a record deleted and recreated at the same path as another
+                            // type — carrying ApiToken-shaped content with no scopes — would otherwise
+                            // authenticate past every rule that protects token records.
+                            ? Observable.Return(ValidateTokenResponse.Fail("Token not found"))
+                            : DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
                 }
 
                 // A legacy index node carries the token record itself.
@@ -76,6 +82,17 @@ public static class ApiTokenVerdict
             .Catch((Exception ex) => Observable.Return(
                 ValidateTokenResponse.Unavailable($"Validation error: {ex.GetType().Name}: {ex.Message}")));
     }
+
+    /// <summary>
+    /// 🛡️ THE INVARIANT the write rules lean on (review of #7585): a credential authenticates ONLY
+    /// from a node TYPED as an API-token record. Content alone never makes a credential — not a
+    /// foreign-typed node, not an untyped or empty-typed one — because every rule that protects
+    /// token records (RLS, the owner's gate, the commit point) recognises them by type. Token
+    /// records are written typed (the store's <c>node_type = 'ApiToken'</c>). A legacy index that
+    /// carries the record itself is decided on its own branch and is untouched.
+    /// </summary>
+    private static bool IsNotATokenRecord(MeshNode? node)
+        => node is not null && !ApiTokenScope.IsTokenRecordType(node.NodeType);
 
     private static IObservable<ValidateTokenResponse> DecideToken(
         ApiToken? apiToken, string hash, Func<string, IObservable<MeshNode?>> read, JsonSerializerOptions options)
@@ -94,7 +111,9 @@ public static class ApiTokenVerdict
             return Observable.Return(ValidateTokenResponse.Fail("OAuth token expired after being unused"));
 
         // Diagnostic only — no permission decision reads the mint-time roles (see ApiToken.Roles).
-        var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles);
+        var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles)
+            // The scope CAP travels with the verdict; an unscoped token carries null (not []).
+            with { Scopes = ApiTokenScope.IsScoped(apiToken.Scopes) ? apiToken.Scopes : null };
 
         if (string.IsNullOrEmpty(apiToken.ServiceIdentityPath))
             // A person's token. One naming a SERVICE object id without an identity path was not
