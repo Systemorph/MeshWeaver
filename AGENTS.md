@@ -260,9 +260,8 @@ certainty sends the next person down a branch you had already excluded. Never fi
 checked is real against the DEPLOYED artifact: a stale checkout or a truncated query produces a
 confident finding about a defect that does not exist, and someone else pays to disprove it.
 🚨 **An agent does NOT open a plain ticket — it files into BUG TRIAGE**, fleet-wide: a node of
-TYPE `Feedback/Feedback` on the control instance (memex.systemorph.com — the MCP server named
-`systemorph`, not `memex`), which reaches the triage agent and may become a GitHub issue *from
-there*. Triage decides the repo, the priority, and whether it becomes a ticket at all — you do not.
+TYPE `Feedback/Feedback` on the control instance (the MCP server named `systemorph`, not
+`memex`), which reaches the triage agent and may become a GitHub issue *from there*. Triage decides the repo, the priority, and whether it becomes a ticket at all — you do not.
 A ticket you open yourself still reaches the pool (the organisation's Issues webhook feeds every new
 issue into the same inbox, `Hosting/Triage` in MeshWeaver.Plugins), but only AFTER you have picked its
 repo and made it public — the two calls triage exists to make, and on the public core repository a

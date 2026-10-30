@@ -317,12 +317,7 @@
       "id": "file-it-and-move-on",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [
-        "Systemorph/MeshWeaver",
-        "Systemorph/MeshWeaver.Plugins",
-        "Systemorph/MeshWeaver.Education",
-        "Systemorph/Memex",
-        "Systemorph/CreditReRate",
-        "Systemorph/DecisionModels"
+        "Systemorph/MeshWeaver"
       ],
       "slots": [],
       "why": [
@@ -357,6 +352,13 @@
         "same three steps as adding one: (1) this change: new hub text, required-in narrowed to the hub;",
         "(2) the six spokes copy the hub's text; (3) required-in widened back to all seven. The window",
         "between (1) and (3) is the one moment this block is compared nowhere; close it the same day.",
+        "",
+        "🚧 TEXT CHANGE IN FLIGHT (#7327) — step 1 of 3. The block named the operated instance's",
+        "hostname beside 'the control instance'; the spokes' own AGENTS.md forbid operated-instance",
+        "listings and want role names, and the automatic review flagged it on three spoke pull requests.",
+        "The hub now names the role and the MCP server only, and required-in is narrowed to the hub.",
+        "Step 2: Plugins, Education, Memex, CreditReRate and DecisionModels copy the hub text. Step 3:",
+        "widen required-in back to those five and delete this paragraph.",
         "",
         "Step 2 of that text change was still owed on 2026-10-17 — all six spokes carried the old",
         "text — and lands with the baseline rollout (Plugins#3831, Education#398, Memex#769 merged;",
