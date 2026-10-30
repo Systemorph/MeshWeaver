@@ -347,6 +347,9 @@ LANDER_REQUIRED = {
         'framework-identity /portal --expect "$tester_identity"',
     "the verifier is handed the composed host": '--host "$host_root/host"',
     "a missing instrument is refused and never landed": '[ "$verify_exit" -ne "$TESTER_MISSING_EXIT" ]',
+    # #4413: the selected version is a tag in the repository the instance's poller lists.
+    "the candidate image comes from the repository the instance rolls": 'PORTAL_IMAGE="$ACR/$REPO:$CANDIDATE"',
+    "that repository is read from the instance's own roll-target answer": "REPO=$(jq -r '.repository // \"\"' <\"$roll\")",
 }
 LANDER_FORBIDDEN = {
     "an mwi_ instance key": "INSTANCE_KEY",
@@ -356,6 +359,8 @@ LANDER_FORBIDDEN = {
     "an unconditional print of a response body (a private row's names its modules)": '$(head -c',
     "401 guidance that tells an operator to set the audience to a description":
         "BuildPrincipalAudience = $where",
+    "a candidate pulled from memex-portal-ai whatever the instance rolls (#4413: control rolls memex-control)":
+        'PORTAL_IMAGE="$ACR/memex-portal-ai:',
 }
 
 

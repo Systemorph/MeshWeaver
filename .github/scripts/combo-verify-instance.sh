@@ -137,6 +137,21 @@ if [ -z "$CANDIDATE" ] || [ "$CANDIDATE" = "null" ]; then
 fi
 note "candidate=$CANDIDATE (currently on $CURRENT)"
 
+# 🚨 WHICH REPOSITORY `selected` names (#4413). The version is a tag in the repository THIS
+# instance's poller lists, and that is not always memex-portal-ai: the control instance rolls
+# memex-control, whose version tag exists before memex-portal-ai's is armed — and for builds that
+# never arm it. Pulling memex-portal-ai:<selected> for control failed "not found" on every run whose
+# candidate was not armed yet (runs 41020010827, 41017110305), so the slot was red having verified
+# nothing. The instance names the repository on the same answer; an image from before it did is
+# read as the poller's own default, which is what that image lists.
+REPO=$(jq -r '.repository // ""' <"$roll")
+if [ -z "$REPO" ]; then
+  REPO=memex-portal-ai
+  note "the roll target names no repository (the instance runs an image from before #4413 added it) — assuming the poller's default, $REPO."
+fi
+[[ "$REPO" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*$ ]] \
+  || fail "the roll target names a repository that is not a registry path, so no image can be pulled for it — nothing was verified."
+
 # ── 2. What does the instance actually run? ────────────────────────────────────────────────────
 combo=$out_dir/combo-$tag.json
 mint_token
@@ -189,7 +204,7 @@ for s in "${source_pairs[@]}"; do src_args+=(--source "$s"); done
 # `mw-plugin-test:<version>` is written by the SAME CD run as the portal's `<version>`, in promote's
 # phase A — before phase C writes the portal tag a roll-target can name — so it exists whenever the
 # candidate does (Doc/Architecture/ImageTagContract). Every docker call is pinned to $PLATFORM.
-PORTAL_IMAGE="$ACR/memex-portal-ai:$CANDIDATE"
+PORTAL_IMAGE="$ACR/$REPO:$CANDIDATE"
 TESTER_IMAGE="$ACR/mw-plugin-test:$CANDIDATE"
 host_root="$WORK_ROOT/host-$tag"
 rm -rf "$host_root"
