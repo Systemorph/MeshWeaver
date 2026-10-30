@@ -528,6 +528,47 @@ internal static class PermissionEvaluator
             .DistinctUntilChanged();
     }
 
+    /// <summary>
+    /// 🛡️ Whether a policy that RESTRICTS sits on the path BELOW <paramref name="ancestorPath"/> down
+    /// to <paramref name="descendantPath"/>: a scope strictly beneath the ancestor and at or above the
+    /// descendant whose <c>_Policy</c> breaks inheritance or caps any permission. Reads the same
+    /// runtime-then-static policy chain the fold reads, so the two never disagree about which policy
+    /// applies. A delegation that decides a path by an ancestor's permissions (satellite access
+    /// follows its main node) uses this to know when the scopes it skipped would have answered
+    /// differently. Additive policies (<c>PublicRead</c>) never count: they cannot make the
+    /// descendant stricter.
+    /// </summary>
+    /// <param name="hub">The hub whose policies are read (the mesh hub).</param>
+    /// <param name="ancestorPath">The path whose permissions are delegated to.</param>
+    /// <param name="descendantPath">The path the decision is about.</param>
+    /// <returns>Live: true while such a policy exists; false when the descendant is not strictly
+    /// beneath the ancestor.</returns>
+    public static IObservable<bool> ObserveRestrictingPolicyBetween(
+        IMessageHub hub, string ancestorPath, string descendantPath)
+    {
+        var ancestor = ToMeshPath(ancestorPath).Trim('/');
+        var descendant = ToMeshPath(descendantPath).Trim('/');
+        if (descendant.Length == 0
+            || !(ancestor.Length == 0 || descendant.StartsWith(ancestor + "/", StringComparison.Ordinal)))
+            return Observable.Return(false);
+
+        var between = GetScopeHierarchy(descendant)
+            .Where(scope => scope.Length > ancestor.Length)
+            .ToImmutableList();
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var staticPolicies = CollectStaticPolicies(hub);
+        return ObserveScopePolicies(hub, cache, descendant, staticPolicies)
+            .Select(runtimePolicies => between.Any(scope =>
+            {
+                var policy = runtimePolicies.TryGetValue(scope, out var rp) ? rp
+                    : staticPolicies.TryGetValue(scope, out var sp) ? sp
+                    : null;
+                return policy is not null
+                       && (policy.BreaksInheritance || policy.GetPermissionCap() != (Permission)~0);
+            }))
+            .DistinctUntilChanged();
+    }
+
     public static IObservable<PartitionAccessPolicy?> GetPolicy(IMessageHub hub, string targetNamespace)
     {
         var ns = ToMeshPath(targetNamespace);
