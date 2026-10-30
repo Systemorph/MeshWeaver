@@ -1432,7 +1432,18 @@ read differently by the writer and the verifier). So the verdict does not trust 
 on its own: the index is written only by the platform, as System, and names the path the token was
 minted at. A person's token authenticates only from `{UserId}/…`, and a service's only from its own
 token namespace under `Admin/_ServiceIdentity`. Whatever reaches a record in a person's own partition,
-it can only ever be a credential for that person.
+it can only ever be a credential for that person. The location is CLASSIFIED before its principal is
+read: the service namespace authenticates only a service id, never its partition's name; the
+pre-migration layout `User/{userId}/…` only its second segment; and a principal is never empty,
+System, or a multi-segment path. A legacy index that carries the record itself never authenticates
+as System.
+
+**A writer-chosen main node outside the node's ancestry does not delegate alone.** Satellite delegation
+(`SatelliteAccessRule`) authorises a satellite against its main node. When the WRITER chooses that
+pointer — on a create, or on an update that changes it — and it is not the node or one of its
+ancestors, the write must also pass the path check where the node lands. A stored off-partition main
+node still governs reads. The own-main-node shortcut trusts only an ancestor main node
+(`MainNodeTrust`).
 
 **A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
 (`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a

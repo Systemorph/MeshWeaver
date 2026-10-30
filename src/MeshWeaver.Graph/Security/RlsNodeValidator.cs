@@ -136,7 +136,10 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
                 NodeOperation.Update => context.ExistingNode?.MainNode,
                 _ => context.Node.MainNode,
             };
+            // …and only one that is the node or one of its ancestors (MainNodeTrust): a stored pointer
+            // to the writer's home from a node elsewhere is not ownership of that node.
             var ownMainNode = !string.IsNullOrEmpty(trustedMainNode)
+                && MainNodeTrust.IsAncestorOrSelf(trustedMainNode, context.Node.Path)
                 && string.Equals(trustedMainNode, userId, StringComparison.OrdinalIgnoreCase);
 
             // Per-user own-scope shortcut: every user owns the partition

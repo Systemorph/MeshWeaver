@@ -133,6 +133,13 @@ public class ApiTokenPrincipalBindingTest(ITestOutputHelper output) : MonolithMe
     [InlineData(Owner + "/ApiToken/x", "svc-forged", "Admin/_ServiceIdentity/svc-forged", false)]
     [InlineData(Owner + "/ApiToken/x", Owner, null, true)]
     [InlineData("Admin/_ServiceIdentity/svc-real/ApiToken/x", "svc-real", "Admin/_ServiceIdentity/svc-real", true)]
+    // Review of #7601 (round 2): a location must be CLASSIFIED before a principal is read off it —
+    // the service namespace never authenticates its partition's name, the pre-migration layout
+    // never its first segment, and a principal is never a multi-segment path.
+    [InlineData("Admin/_ServiceIdentity/svc-real/ApiToken/x", "Admin", null, false)]
+    [InlineData("User/" + Owner + "/ApiToken/x", "User", null, false)]
+    [InlineData("User/" + Owner + "/ApiToken/x", Owner, null, true)]
+    [InlineData(Owner + "/ApiToken/x", Owner + "/ApiToken", null, false)]
     public async Task AStoredRecord_AuthenticatesOnlyAsThePrincipalOfItsLocation(
         string recordPath, string principal, string? serviceIdentityPath, bool authenticatesAsNamed)
     {
@@ -191,6 +198,59 @@ public class ApiTokenPrincipalBindingTest(ITestOutputHelper output) : MonolithMe
             .Should().Within(Budget).Emit("the create must answer", ct);
         Output.WriteLine($"service-namespace write as a person: {answer}");
         answer.Should().StartWith("refused:", "only the platform admin surface writes a service's tokens");
+    }
+
+    /// <summary>
+    /// 🚨 THE LEGACY-INDEX PIN (review of #7601). An index that carries the token record itself has
+    /// no separate location to bind to — it lives in the platform-only <c>ApiToken</c> partition — so
+    /// it may never authenticate as System or as a multi-segment principal; an ordinary person's
+    /// legacy token still does (the control).
+    /// </summary>
+    [Theory(Timeout = 60_000)]
+    [InlineData(WellKnownUsers.System, false)]
+    [InlineData(Owner + "/x", false)]
+    [InlineData(Owner, true)]
+    public async Task ALegacyInlineIndex_NeverAuthenticatesAsSystem(string principal, bool authenticates)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var options = Mesh.JsonSerializerOptions;
+        var index = new MeshNode(ApiTokenVerdict.IndexPath(Hash))
+        {
+            NodeType = ApiTokenNodeType.NodeType,
+            Content = JsonSerializer.SerializeToElement(new ApiToken { TokenHash = Hash, UserId = principal }, options),
+        };
+        var response = await ApiTokenVerdict
+            .Decide(RawToken, path => Observable.Return<MeshNode?>(path == index.Path ? index : null), options)
+            .Should().Within(Budget).Emit("the verdict must answer", ct);
+        response.Success.Should().Be(authenticates, $"a legacy inline index naming '{principal}'");
+    }
+
+    /// <summary>
+    /// 🚨 THE MAIN-NODE PIN (review of #7601, round 2). A node's <c>MainNode</c> is what satellite
+    /// delegation and the stored-main-node shortcut trust, so a write may only name a main node that
+    /// IS the node or one of its ancestors. A comment in another person's partition naming the
+    /// writer's own home as its main node would otherwise be authorised against the writer's home,
+    /// not against where it lands. A main node that is an ancestor is the control.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AWriteNamesOnlyAnAncestorAsItsMainNode()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rls = Mesh.ServiceProvider.GetServices<MeshWeaver.Mesh.Services.INodeValidator>()
+            .OfType<MeshWeaver.Graph.Security.RlsNodeValidator>().Single();
+        Task<MeshWeaver.Mesh.Services.NodeValidationResult> Validate(MeshNode node) =>
+            rls.Validate(new MeshWeaver.Mesh.Services.NodeValidationContext
+                {
+                    Operation = MeshWeaver.Mesh.Security.NodeOperation.Create, Node = node, AccessContext = Person(Owner),
+                })
+                .FirstAsync().Timeout(Budget).Await(ct);
+
+        var foreign = new MeshNode("c1", $"{Other}/Page/_Comment") { NodeType = "Comment", Name = "c1", MainNode = Owner };
+        (await Validate(foreign)).IsValid.Should().BeFalse(
+            "a node in another person's partition must not borrow the writer's home as its main node");
+
+        var own = new MeshNode("c1", $"{Owner}/Page/_Comment") { NodeType = "Comment", Name = "c1", MainNode = $"{Owner}/Page" };
+        (await Validate(own)).IsValid.Should().BeTrue("the control: an ancestor main node in the writer's own partition");
     }
 
     private Task<string> CreateAs(string principal, string nodeType, string id, CancellationToken ct) =>

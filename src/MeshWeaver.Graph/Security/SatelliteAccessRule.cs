@@ -85,7 +85,29 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
         }
 
         var permission = MainNodeDelegatedPermission(context);
-        return hub.CheckPermission(mainNodePath, userId, permission);
+        var delegated = hub.CheckPermission(mainNodePath, userId, permission);
+
+        // 🛡️ A main node the WRITER is choosing — on a create, or an update that changes it — and that
+        // is not the satellite or one of its ancestors is not enough on its own (review of #7601).
+        // MainNode is a field the writer supplies: a comment in another person's partition naming the
+        // writer's own home would otherwise be authorised against the writer's home rather than where
+        // it lands. Such a write must ALSO pass the path check where the node lands. A STORED pointer
+        // (a read, a delete, an update that keeps it) is delegated to as before — that is how an
+        // off-partition main node legitimately governs its satellites.
+        var writerChoosesPointer = context.Operation == NodeOperation.Create
+            || (context.Operation == NodeOperation.Update
+                && !string.Equals(context.ExistingNode?.MainNode, mainNodePath, StringComparison.OrdinalIgnoreCase));
+        if (!writerChoosesPointer || MainNodeTrust.IsAncestorOrSelf(mainNodePath, context.Node.Path))
+            return delegated;
+
+        var landingPath = context.Operation == NodeOperation.Create
+            ? (context.Node.GetParentPath() ?? context.Node.Path)
+            : context.Node.Path;
+        var landingPermission = StandardPathPermission(context);
+        var landing = landingPermission == Permission.None
+            ? Observable.Return(true)
+            : hub.CheckPermission(landingPath, userId, landingPermission);
+        return delegated.CombineLatest(landing, (viaMainNode, atLanding) => viaMainNode && atLanding);
     }
 
     /// <summary>

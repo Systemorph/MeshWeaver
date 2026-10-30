@@ -80,8 +80,13 @@ public static class ApiTokenVerdict
                                 : DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
                 }
 
-                // A legacy index node carries the token record itself.
-                return DecideToken(ContentOf<ApiToken>(indexNode, options), hash, read, options);
+                // A legacy index node carries the token record itself. It lives in the platform-only
+                // ApiToken partition, so it has no owner's location to bind to — but it still never
+                // authenticates as System or as a principal that is a path (review of #7601).
+                var legacy = ContentOf<ApiToken>(indexNode, options);
+                return legacy is not null && !IsAPersonOrServicePrincipal(legacy.UserId)
+                    ? Observable.Return(ValidateTokenResponse.Fail("Token not found"))
+                    : DecideToken(legacy, hash, read, options);
             })
             .Catch((Exception ex) => Observable.Return(
                 ValidateTokenResponse.Unavailable($"Validation error: {ex.GetType().Name}: {ex.Message}")));
@@ -111,16 +116,30 @@ public static class ApiTokenVerdict
     /// <returns>True when the record's principal is the one its location belongs to.</returns>
     public static bool IsBoundToItsLocation(string tokenPath, ApiToken token)
     {
-        if (string.IsNullOrEmpty(tokenPath) || string.IsNullOrEmpty(token.UserId)
-            || string.Equals(token.UserId, WellKnownUsers.System, StringComparison.Ordinal))
+        if (string.IsNullOrEmpty(tokenPath) || !IsAPersonOrServicePrincipal(token.UserId))
             return false;
-        if (ServiceIdentity.IsServiceObjectId(token.UserId) || !string.IsNullOrEmpty(token.ServiceIdentityPath))
+        var path = tokenPath.Trim('/');
+        // CLASSIFY the location first, then read its principal (review of #7601): a prefix test on
+        // the principal alone let the service namespace authenticate its partition's name ("Admin")
+        // and the pre-migration layout its first segment ("User").
+        if (path.StartsWith(ServiceIdentity.Namespace + "/", StringComparison.OrdinalIgnoreCase))
             return ServiceIdentity.IsServiceObjectId(token.UserId)
-                   && tokenPath.StartsWith(ServiceIdentity.TokenNamespace(token.UserId) + "/", StringComparison.OrdinalIgnoreCase);
-        return tokenPath.StartsWith(token.UserId + "/", StringComparison.OrdinalIgnoreCase)
-               // The pre-migration layout (User/{userId}/…), rewritten by the partition migration.
-               || tokenPath.StartsWith($"User/{token.UserId}/", StringComparison.OrdinalIgnoreCase);
+                   && path.StartsWith(ServiceIdentity.TokenNamespace(token.UserId) + "/", StringComparison.OrdinalIgnoreCase);
+        if (ServiceIdentity.IsServiceObjectId(token.UserId) || !string.IsNullOrEmpty(token.ServiceIdentityPath))
+            return false;
+        var segments = path.Split('/');
+        var owner = segments.Length > 2 && string.Equals(segments[0], "User", StringComparison.OrdinalIgnoreCase)
+            ? segments[1]   // the pre-migration layout, User/{userId}/…
+            : segments[0];  // a person's own partition, {userId}/…
+        return segments.Length > 1 && string.Equals(owner, token.UserId, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>Whether <paramref name="userId"/> can name a principal at all: not empty, not System,
+    /// and a single path segment (a principal is an id, never a path).</summary>
+    private static bool IsAPersonOrServicePrincipal(string? userId) =>
+        !string.IsNullOrWhiteSpace(userId)
+        && !string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal)
+        && !userId.Contains('/');
 
     private static bool IsNotATokenRecord(MeshNode? node)
         => node is not null && !ApiTokenScope.IsTokenRecordType(node.NodeType);
