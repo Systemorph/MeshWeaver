@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -85,20 +85,19 @@ public class UnresolvedViewerIsReportedOncePerReadTest(ITestOutputHelper output)
 
     private sealed class UnresolvedViewerCapture : ILoggerProvider
     {
-        private readonly ConcurrentQueue<string> warnings = new();
+        private ImmutableQueue<string> warnings = ImmutableQueue<string>.Empty;
 
-        internal string[] Warnings => warnings.ToArray();
+        internal string[] Warnings => Volatile.Read(ref warnings).ToArray();
 
-        internal void Clear()
-        {
-            while (warnings.TryDequeue(out _)) { }
-        }
+        internal void Clear() => Interlocked.Exchange(ref warnings, ImmutableQueue<string>.Empty);
 
-        public ILogger CreateLogger(string categoryName) => new CapturingLogger(warnings);
+        internal void Add(string message) => ImmutableInterlocked.Enqueue(ref warnings, message);
+
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(this);
 
         public void Dispose() { }
 
-        private sealed class CapturingLogger(ConcurrentQueue<string> sink) : ILogger
+        private sealed class CapturingLogger(UnresolvedViewerCapture sink) : ILogger
         {
             private sealed class NullScope : IDisposable
             {
@@ -118,7 +117,7 @@ public class UnresolvedViewerIsReportedOncePerReadTest(ITestOutputHelper output)
                 var message = formatter(state, exception);
                 // The resolver's own wording — see QueryIdentityResolver.DescribeUnresolved.
                 if (message.Contains("NO resolvable viewer", StringComparison.Ordinal))
-                    sink.Enqueue(message);
+                    sink.Add(message);
             }
         }
     }
