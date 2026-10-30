@@ -391,7 +391,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
             }).ToList();
             return visible.Count == 0
                 ? Observable.Empty<MeshNode>()
-                : WithFallbacks(visible, _inner.ReadMany(visible, options));
+                : DelayedBatchRead(visible, WithFallbacks(visible, _inner.ReadMany(visible, options)));
         });
 
     /// <inheritdoc />
@@ -577,6 +577,50 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         => Observable.Defer(() => HiddenRoot(fullPath) is { } root
             ? Resolved(root, $"ResolvePath {fullPath}", r => _inner.ResolvePath(r, options))
             : _inner.ResolvePath(fullPath, options));
+
+    /// <summary>
+    /// The NEXT batch read (<c>ReadMany</c>) naming <paramref name="path"/> is DECIDED by the store at
+    /// once and DELIVERED when the returned switch is released: the <b>answer in flight</b>. A mesh
+    /// resolves a route with one such batch read over the path's prefixes, so this is the shape of a
+    /// "no node found" reached before the node was created again and received after it — an ordering no
+    /// clock can force. One-shot: every later read passes untouched, so the recreate and the reads after
+    /// it run normally while the captured answer waits. The captured read is the switch's arrival.
+    /// </summary>
+    /// <param name="path">The node path whose next batch read to capture.</param>
+    public FaultSwitch DelayNextBatchReadAnswer(string path)
+    {
+        var key = Norm(path);
+        var delay = new FaultSwitch($"{Name}: delay the next batch read answer naming {key}",
+            s => _batchReadDelays.TryRemove(new KeyValuePair<string, FaultSwitch>(key, s)));
+        if (!_batchReadDelays.TryAdd(key, delay))
+            throw new InvalidOperationException($"A batch read of {key} is already being delayed.");
+        return delay;
+    }
+
+    private readonly ConcurrentDictionary<string, FaultSwitch> _batchReadDelays = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// <paramref name="answer"/> unchanged — unless it is the first batch read naming a path armed with
+    /// <see cref="DelayNextBatchReadAnswer"/>, which is claimed here (one-shot), subscribed EAGERLY so the
+    /// store decides it now, and replayed behind the switch.
+    /// </summary>
+    private IObservable<T> DelayedBatchRead<T>(IReadOnlyCollection<string> paths, IObservable<T> answer)
+    {
+        if (_batchReadDelays.IsEmpty)
+            return answer;
+        foreach (var path in paths)
+        {
+            var key = Norm(path);
+            if (!_batchReadDelays.TryGetValue(key, out var delay)
+                || !delay.IsClosed
+                || !_batchReadDelays.TryRemove(new KeyValuePair<string, FaultSwitch>(key, delay)))
+                continue;
+            var decided = answer.Replay();
+            decided.Connect();
+            return delay.Gate(decided, $"ReadMany {string.Join(", ", paths)}");
+        }
+        return answer;
+    }
 
     /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath) => _inner.ListPartitionSubPaths(nodePath);
