@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Security;
+using System.Runtime.CompilerServices;
+using System.Reflection;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -128,9 +131,28 @@ public static class StaleMainNodeRepair
     /// storage adapter's root listing.
     /// </param>
     /// <returns>A cold observable emitting one report and completing. <b>Subscribe to run it.</b></returns>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static IObservable<StaleMainNodeRepairReport> Repair(
         IMessageHub hub, IReadOnlyCollection<string>? roots = null)
-        => Sweep(hub, roots, write: true);
+    {
+        // 🚨 The sweep WRITES as System over whatever partitions `roots` names, so this method is an
+        // impersonation surface on behalf of ITS caller: user-authored in-mesh code must not reach
+        // System through it (Doc/Architecture/InMeshImpersonation). The compile-time half lists it
+        // in InMeshImpersonationReferences.Members; this is the runtime half, judged on entry
+        // because the calling frame is gone by the time the cold observable is subscribed.
+        var caller = Assembly.GetCallingAssembly();
+        try
+        {
+            hub.ServiceProvider.GetRequiredService<AccessService>().ImpersonationGuard
+                .Check(caller, nameof(StaleMainNodeRepair) + "." + nameof(Repair), WellKnownUsers.SystemContext);
+        }
+        catch (InMeshImpersonationRefusedException refused)
+        {
+            return Observable.Throw<StaleMainNodeRepairReport>(refused);
+        }
+        return Sweep(hub, roots, write: true);
+    }
 
     private static IObservable<StaleMainNodeRepairReport> Sweep(
         IMessageHub hub, IReadOnlyCollection<string>? roots, bool write)

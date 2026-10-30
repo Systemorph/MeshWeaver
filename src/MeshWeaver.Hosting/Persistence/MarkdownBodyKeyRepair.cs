@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Security;
+using System.Runtime.CompilerServices;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Markdown;
@@ -74,9 +77,28 @@ public static class MarkdownBodyKeyRepair
     /// <param name="hub">Hub supplying the storage adapter, access service, serializer options and logger.</param>
     /// <param name="roots">Partitions / subtrees to sweep. Null or empty sweeps the whole mesh.</param>
     /// <returns>A cold observable emitting one report and completing. <b>Subscribe to run it.</b></returns>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static IObservable<MarkdownBodyKeyRepairReport> Repair(
         IMessageHub hub, IReadOnlyCollection<string>? roots = null)
-        => Sweep(hub, roots, write: true);
+    {
+        // 🚨 The sweep WRITES as System over whatever partitions `roots` names, so this method is an
+        // impersonation surface on behalf of ITS caller: user-authored in-mesh code must not reach
+        // System through it (Doc/Architecture/InMeshImpersonation). The compile-time half lists it
+        // in InMeshImpersonationReferences.Members; this is the runtime half, judged on entry
+        // because the calling frame is gone by the time the cold observable is subscribed.
+        var caller = Assembly.GetCallingAssembly();
+        try
+        {
+            hub.ServiceProvider.GetRequiredService<AccessService>().ImpersonationGuard
+                .Check(caller, nameof(MarkdownBodyKeyRepair) + "." + nameof(Repair), WellKnownUsers.SystemContext);
+        }
+        catch (InMeshImpersonationRefusedException refused)
+        {
+            return Observable.Throw<MarkdownBodyKeyRepairReport>(refused);
+        }
+        return Sweep(hub, roots, write: true);
+    }
 
     /// <summary>
     /// Classifies one node's content. <see cref="MarkdownBodyKeyOutcome.Clean"/> for everything

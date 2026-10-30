@@ -66,6 +66,14 @@ repairs nothing. Running `Repair` against a live portal is a separate operator d
 the evidence `Detect` produces. Raw SQL is not an alternative: a direct `UPDATE` bypasses the
 workspace cache, so live subscriptions keep serving the old value.
 
+🚨 **`Repair` is an impersonation surface — an operator's, never in-mesh code's.** It writes as
+System over whatever partitions `roots` names, so user-authored in-mesh code must not reach it.
+Both halves of the [in-mesh impersonation guard](../InMeshImpersonation) cover it, and
+`StaleMainNodeRepair.Repair` the same way: the compile-time scan reports a reference to either
+`Repair` (`InMeshImpersonationReferences.Members`), and on entry the method judges its calling
+assembly. An untrusted in-mesh caller is refused under `Enforce`, and the refusal arrives as the
+observable's error. `Detect` only reads and is not reported.
+
 ## Related
 
 - [Repairing a Stale MainNode](../StaleMainNodeRepair) — the same detection-driven shape for
