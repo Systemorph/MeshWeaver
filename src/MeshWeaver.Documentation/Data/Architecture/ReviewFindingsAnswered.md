@@ -209,9 +209,11 @@ not defects ON their threads, through the App. It leaves every real defect unans
 stays pending until a fix with a test lands. The lane is off by default, and its model and effort are
 deployment-record config. Its manual is MeshWeaver.Plugins `Hosting/PrThreadAnswerer`.
 
-🚨 That lane's answers are posted by a **Bot**, and condition 2 above counts only a `type: User`
-reply. Until the owner decides that a marked App answer counts, they inform the author but do not
-turn this check green.
+🚨 That lane's answers are posted by a **Bot**. Under policy [`app-marked-answer-counts`](../PolicyNotProse), condition 2
+counts a reply from the control plane's App ONLY when it carries the lane's marker
+(`<!-- pr-relay:answer comment=<root id> -->`) naming that thread's root. The App is matched by account id or
+either login (`systemorph-com[bot]`, `systemorph[bot]`). An unmarked App reply, a marker naming another
+thread, and a marked reply from any other bot still answer nothing (`is_app_answer`, self-tested).
 
 🚨 **Why the lane's judging job has no `permissions:` block any more.** The writer needs
 `checks: write`. A called job's `permissions:` is a hard requirement on every caller. Writing

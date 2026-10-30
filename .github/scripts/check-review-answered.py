@@ -240,7 +240,13 @@ REVIEWER_ACCOUNT_ID = 175728472
 # `Governance/PullRequestSteward.md`.
 INTERNAL_REVIEWER_ACCOUNT_ID = 328286035
 REVIEWER_ACCOUNT_IDS = frozenset({REVIEWER_ACCOUNT_ID, INTERNAL_REVIEWER_ACCOUNT_ID})
-REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot", "systemorph-com[bot]"})
+REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot", "systemorph-com[bot]", "systemorph[bot]"})
+#: Policy `app-marked-answer-counts`: the control plane's GitHub App (the auto-answer lane, MeshWeaver.Plugins
+#: `Hosting/PrThreadAnswerer`) under BOTH its logins — it is being renamed `systemorph-com` → `systemorph`, the account
+#: id stays. Its reply answers a thread ONLY when it carries the lane's marker naming that thread's root.
+APP_ANSWER_ACCOUNT_ID = 328286035
+APP_ANSWER_LOGINS = frozenset({"systemorph-com[bot]", "systemorph[bot]"})
+APP_ANSWER_MARKER = re.compile(r"<!-- pr-relay:answer comment=(?P<id>\d+) -->")
 # A refusal OF THE PULL REQUEST (quota, outage): never a review, whatever else the body says —
 # every spelling of it, so a `Copilot wasn't able to review this pull request because …` followed
 # by a generated-file list cannot fall through to the zero-files exception below (#7488 review).
@@ -287,6 +293,17 @@ def is_reviewer(user: dict | None) -> bool:
 
 def is_person(user: dict | None) -> bool:
     return bool(user) and user.get("type") == "User" and not str(user.get("login", "")).endswith("[bot]")
+
+
+def is_app_answer(comment: dict, root_id) -> bool:
+    """Policy `app-marked-answer-counts`: a reply by the control plane's App (either login, or its account id; type
+    Bot) answers a thread ONLY when its body carries the auto-answer lane's marker naming THAT thread's root. An
+    unmarked App reply, a marker naming another thread, and a marked reply from ANY other bot answer nothing. Pure."""
+    user = comment.get("user") or {}
+    if user.get("type") != "Bot" or not (user.get("id") == APP_ANSWER_ACCOUNT_ID or user.get("login") in APP_ANSWER_LOGINS):
+        return False
+    m = APP_ANSWER_MARKER.search(str(comment.get("body") or ""))
+    return bool(m) and root_id is not None and int(m.group("id")) == root_id
 
 
 def first_line(text: str | None) -> str:
@@ -582,7 +599,8 @@ def reviewer_threads(comments: list, as_of: str | None = None) -> tuple[list, tu
     visible = [c for c in comments if not_after(c.get("created_at"), as_of)]
     roots = [c for c in visible if c.get("in_reply_to_id") is None and is_reviewer(c.get("user"))]
     answered_roots = {root_id_of(c, by_id) for c in visible
-                      if c.get("in_reply_to_id") is not None and is_person(c.get("user"))}
+                      if c.get("in_reply_to_id") is not None
+                      and (is_person(c.get("user")) or is_app_answer(c, root_id_of(c, by_id)))}
     return roots, tuple(c for c in roots if c.get("id") not in answered_roots)
 
 
@@ -3001,11 +3019,16 @@ def reported_state(verdict: Verdict, now: str, first_seen: str,
     if review_due is not None and review_due <= t_now:
         return Reported("failure", "review-overdue",
                         f"The automatic review of this head has not landed in {review_hours:g} h — a maintainer re-requests it or waives it")
-    red_at = _stamp(min([due for due, _ in answer_due] + ([review_due] if review_due else [])))
+    first_answer_due = min((due for due, _ in answer_due), default=None)
+    # The title names the deadline that ACTUALLY applies first — the review's or a thread's, never a guess.
+    if review_due is not None and (first_answer_due is None or review_due <= first_answer_due):
+        red_at, which = _stamp(review_due), f"if this head's review has not landed ({review_hours:g} h after it was first judged)"
+    else:
+        red_at, which = _stamp(first_answer_due), f"if a thread is still unanswered ({answer_hours:g} h after the review that opened it)"
     if verdict.unanswered:
         return Reported("pending", "answering",
-                        f"Pending — {roots} of {verdict.threads} thread(s) unanswered; red at {red_at} if still unanswered", red_at)
-    return Reported("pending", "awaiting-review", f"Pending — awaiting the automatic review of this head; red at {red_at}", red_at)
+                        f"Pending — {roots} of {verdict.threads} thread(s) unanswered; red at {red_at} {which}", red_at)
+    return Reported("pending", "awaiting-review", f"Pending — awaiting the automatic review of this head; red at {red_at} {which}", red_at)
 
 
 def verdict_summary(number: int, verdict: Verdict, reported: Reported) -> str:
@@ -4953,6 +4976,31 @@ def pending_self_test(HEAD: str) -> int:
     r = reported_state(unanswered, FRESH, T0)
     check("unanswered + fresh -> PENDING (not failure)", r.state == "pending" and r.kind == "answering"
           and "1 of 2 thread(s) unanswered" in r.title and r.red_at == "2026-10-31T10:00:00Z", f"{r}")
+    check("the pending title names the deadline that applies (a thread's, not the review's)",
+          "if a thread is still unanswered (24 h" in r.title and "review has not landed" not in r.title, r.title)
+    owes = dataclasses.replace(unanswered, review_missing="head owes its own Copilot review", reasons=("head owes …",) + unanswered.reasons)
+    r2 = reported_state(owes, FRESH, T0)
+    check("NEG: when the head's review is due first, the title names THAT deadline",
+          r2.state == "pending" and "review has not landed (6 h" in r2.title and r2.red_at == "2026-10-30T16:00:00Z", r2.title)
+    # Policy app-marked-answer-counts: the App's MARKED reply answers its own thread; nothing else a bot posts does.
+    APP = {"login": "systemorph-com[bot]", "type": "Bot", "id": APP_ANSWER_ACCOUNT_ID}
+    APP_RENAMED = {"login": "systemorph[bot]", "type": "Bot", "id": APP_ANSWER_ACCOUNT_ID}
+    OTHER = {"login": "some-other-app[bot]", "type": "Bot", "id": 99}
+    marked = "The null check is upstream.\n<!-- pr-relay:answer comment=1 -->"
+
+    def app_reply(cid, user, body):
+        return dict(_comment(cid, user, 1, "2026-10-30T13:00:00Z"), body=body)
+    for name, reply, want in [
+        ("the App's MARKED reply answers its thread", app_reply(21, APP, marked), True),
+        ("the App's marked reply under its NEW login answers too", app_reply(21, APP_RENAMED, marked), True),
+        ("NEG: the App's UNMARKED reply answers nothing", app_reply(21, APP, "The null check is upstream."), False),
+        ("NEG: a marker naming ANOTHER thread answers nothing", app_reply(21, APP, marked.replace("comment=1", "comment=2")), False),
+        ("NEG: a MARKED reply from any other bot answers nothing", app_reply(21, OTHER, marked), False),
+        ("NEG: a marked reply from a bot posing as the App's login with a different type answers nothing",
+         app_reply(21, dict(APP, type="User"), marked), False),
+    ]:
+        _r, open_ = reviewer_threads([ONE, reply])
+        check(name, (not open_) == want, f"unanswered={[c.get('id') for c in open_]}")
     r = reported_state(unanswered, LATE, T0)
     check("unanswered past the 24 h deadline -> FAILURE", r.state == "failure" and r.kind == "answer-overdue", f"{r}")
     r = reported_state(verdict_of([ONE, ANSWER]), LATE, T0)
