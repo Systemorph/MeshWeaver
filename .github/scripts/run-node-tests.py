@@ -688,6 +688,10 @@ def execution_host_refusal(layout: str, host: str) -> str | None:
     mis-attributed 102 times. What is NOT claimed here: that a `linux-arm64` host can load a
     `linux-x64` extraction. That combination is unmeasured, so it is not refused up front — it
     falls to the per-set classification, which needs no assumption about RIDs at all.
+
+    A `host-build` set (`build-host-reference-set.py`) is the image's closure published ON this
+    host, framework-dependent and without the linux shared frameworks, so it is never refused here.
+    Measured on darwin-arm64: Hosting/InstanceAction, 56 suites, 760 of 760 cases passed against it.
     """
     if layout != "image" or host.startswith("linux"):
         return None
@@ -698,8 +702,10 @@ def execution_host_refusal(layout: str, host: str) -> str | None:
             f"  What DOES answer here:\n"
             f"    • compilation — `compile-check.py` over the same tree and the same set; it only "
             f"compiles, so the host never matters\n"
-            f"    • execution — run this harness inside the tester image, the way CI does, or point "
-            f"`--refs` at a sibling MeshWeaver checkout BUILT ON THIS HOST\n"
+            f"    • execution — build the same closure ON THIS HOST and pass it as `--refs`:\n"
+            f"        python3 <core>/.github/scripts/build-host-reference-set.py "
+            f"[--plugins <MeshWeaver.Plugins checkout>]\n"
+            f"      (or run this harness inside the tester image, the way CI does)\n"
             f"  Refusing rather than reporting {host} as a content failure.")
 
 
@@ -1102,6 +1108,12 @@ def self_test() -> int:
          all(execution_host_refusal("source-build", h) is None
              for h in ("osx-arm64", "linux-x64", "win-x64")),
          "the local loop this harness exists for would be refused")
+    case("a host-built FLAT set (build-host-reference-set.py) is NOT refused, on any host",
+         all(execution_host_refusal(cc.HOST_REFERENCE_SET_LAYOUT, h) is None
+             for h in ("osx-arm64", "linux-x64", "win-x64")),
+         "the Mac would again have no reference set it can execute against")
+    case("the image refusal names the host-built set as the way to execute on this host",
+         osx is not None and "build-host-reference-set.py" in osx, f"got: {osx!r}")
     case("a signalled exit is read as a failure to RUN, never as a failure to build",
          (EXEC_FAILED + exit_code_reading(134)).startswith(EXEC_FAILED)
          and "SIGABRT" in exit_code_reading(134) and "SIGSEGV" in exit_code_reading(139),

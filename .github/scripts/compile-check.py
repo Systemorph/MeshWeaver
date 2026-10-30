@@ -520,6 +520,68 @@ def _refuse_if_sibling_stale(core: "Path | str") -> None:
 
 
 
+# 🚨 A HOST-BUILT REFERENCE SET IS DECLARED, NEVER INFERRED. CI's reference set is the
+# platform IMAGE's /app (plus its shared frameworks). Those assemblies are container-built for linux, so
+# on a Mac they compile but cannot be EXECUTED, and `run-node-tests.py` rightly refuses them (#5080). A
+# core `src/*/bin` build CAN run, but a library's bin holds only its own assembly. Without
+# System.Reactive.dll it is refused as short, also rightly. That left a Mac no set it could verify
+# against. `build-host-reference-set.py` publishes the image's own closure (the tester, plus the
+# portal when a MeshWeaver.Plugins checkout is named) on this host into ONE flat directory, and writes
+# this manifest beside it. The manifest is the only thing that lets a flat directory without
+# System.Private.CoreLib.dll count as complete. Without it, the same directory reads as an image
+# extraction that is MISSING its shared frameworks, and stays refused.
+HOST_REFERENCE_SET_MANIFEST = "meshweaver-reference-set.json"
+HOST_REFERENCE_SET_LAYOUT = "host-build"
+
+
+def read_host_reference_set(refs_dir) -> "dict | None":
+    """The manifest of a host-built reference set at `refs_dir`, or None when there is none.
+
+    A manifest that exists but does not declare the host-build layout is an ERROR, not a None. A file
+    that is there and says something else must not quietly turn the directory back into an "image"."""
+    path = Path(refs_dir) / HOST_REFERENCE_SET_MANIFEST
+    if not path.is_file():
+        return None
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        sys.exit(refuse(EXIT_REFUSED_REFS, f"{path} is not readable JSON ({exc})"))
+    if not isinstance(manifest, dict) or manifest.get("layout") != HOST_REFERENCE_SET_LAYOUT:
+        sys.exit(refuse(EXIT_REFUSED_REFS,
+                        f"{path} does not declare layout '{HOST_REFERENCE_SET_LAYOUT}' "
+                        f"(got {manifest.get('layout') if isinstance(manifest, dict) else manifest!r})"))
+    return manifest
+
+
+def _refuse_if_host_build_stale(manifest: dict) -> None:
+    """A host-built set records the core commit it was published from; refuse when the checkout it
+    came from has moved past that commit on `origin/main`. Same hazard and same exit code as a
+    stale sibling checkout (`_refuse_if_sibling_stale`): the set is a snapshot, and a snapshot older
+    than main answers about a framework CI no longer runs."""
+    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+        return
+    core, sha = manifest.get("coreRoot"), manifest.get("coreSha")
+    if not core or not sha:
+        print("  (host-built reference set names no core commit; freshness unchecked)", file=sys.stderr)
+        return
+    try:
+        r = subprocess.run(["git", "-C", str(core), "rev-list", "--count", f"{sha}..origin/main"],
+                           capture_output=True, text=True, timeout=15)
+    except Exception as exc:
+        print(f"  (host-built reference set freshness unchecked for {core}: {exc})", file=sys.stderr)
+        return
+    if r.returncode != 0:
+        print(f"  (host-built reference set freshness unchecked: {r.stderr.strip()[:200]})", file=sys.stderr)
+        return
+    n = r.stdout.strip()
+    if n.isdigit() and int(n) > 0:
+        print(f"\n✗ REFUSING TO RUN: the host-built reference set was published from core {sha[:12]},\n"
+              f"  which is {n} commit(s) behind origin/main in {core}.\n\n"
+              "  Fix:  update that checkout, then rebuild the set:\n"
+              f"    python3 {core}/.github/scripts/build-host-reference-set.py", flush=True)
+        sys.exit(refuse(EXIT_REFUSED_STALE, f"host-built reference set is {n} commit(s) behind origin/main"))
+
+
 def _report_framework_provenance(refs: dict, ref_roots) -> None:
     """Say WHICH framework this verdict was measured against, on every run.
 
@@ -577,12 +639,16 @@ def discover_refs(refs_arg):
        OWN project dir + newest. `search_roots` is the base dir(s) `discover_ai_refs` then scans for
        the Microsoft.Extensions.AI assemblies (which live under `test/*/bin`, not `src/*/bin`).
 
-       `layout` is which of the two documented shapes the set came from, and it decides what a
+       `layout` is which of the three documented shapes the set came from, and it decides what a
        COMPLETE set means (see `short_reference_set_refusal`): `"image"` — a FLAT directory of
        assemblies extracted from the platform image (`--image`'s cache, CI's `refs/`), whose
        contents are CONTAINER-built and therefore need the image's shared frameworks too; or
        `"source-build"` — the per-project `<proj>/bin/<cfg>/net10.0` layout of a core checkout
-       built on this host with the SDK, which needs the reference pack and no shared frameworks."""
+       built on this host with the SDK, which needs the reference pack and no shared frameworks; or
+       `"host-build"` — a FLAT directory carrying `HOST_REFERENCE_SET_MANIFEST`: the image's
+       closure published on this host by `build-host-reference-set.py`. Like a source build it
+       needs the reference pack and no shared frameworks, and unlike an image extraction the
+       suites built against it can be EXECUTED here."""
     layout = "source-build"
     if refs_arg:
         # Prefer the PRECISE per-project output glob (the same clean set auto-discovery uses below):
@@ -599,9 +665,24 @@ def discover_refs(refs_arg):
                 break
         if not dlls:
             dlls = glob.glob(os.path.join(refs_arg, "**", "*.dll"), recursive=True)
-            layout = "image"        # a flat assemblies dir — the platform-image extraction
-        # `--refs <core>/src` is the documented form, so the checkout is its parent.
-        _refuse_if_sibling_stale(Path(refs_arg).resolve().parent)
+            # A flat assemblies dir is the platform-image extraction UNLESS it declares otherwise.
+            # The one declaration is the manifest `build-host-reference-set.py` writes: the same
+            # closure, published on THIS host with the SDK. It is read, never inferred —
+            # "no System.Private.CoreLib.dll" is also exactly what a SHORT image extraction looks
+            # like, and that one must stay refused.
+            host_build = read_host_reference_set(refs_arg)
+            layout = HOST_REFERENCE_SET_LAYOUT if host_build is not None else "image"
+        else:
+            host_build = None
+        if host_build is not None:
+            print(f"layout: host-built reference set ({host_build.get('rid', '?')}, core "
+                  f"{str(host_build.get('coreSha') or '?')[:12]}"
+                  + (f", plugins {str(host_build['pluginsSha'])[:12]}" if host_build.get("pluginsSha") else "")
+                  + (", built from UNCOMMITTED core changes" if host_build.get("coreDirty") else "") + ")")
+            _refuse_if_host_build_stale(host_build)
+        else:
+            # `--refs <core>/src` is the documented form, so the checkout is its parent.
+            _refuse_if_sibling_stale(Path(refs_arg).resolve().parent)
         search_roots = [refs_arg]
     else:
         # Auto-discover the sibling built core. In a worktree ROOT is under `.worktrees/<name>`, so
@@ -692,7 +773,9 @@ def short_reference_set_refusal(refs, layout: str, where: str = "the reference s
             "  platform's Rx major and reported 43 of 89 NodeTypes broken with CS1705, naming the\n"
             "  CONTENT (#1911), and even a derived version is a guess about what the image carries.\n"
             "\n  Use a complete set instead:\n"
-            "    python3 scripts/compile-check.py --image   # the platform image's own Rx")
+            "    python3 scripts/compile-check.py --image   # the platform image's own Rx\n"
+            "    python3 <core>/.github/scripts/build-host-reference-set.py   # the same closure, "
+            "built on this host")
     return None
 
 
@@ -1655,6 +1738,39 @@ def _self_test() -> int:
             {"MeshWeaver.Messaging.Hub.dll": "/c/src/X/bin/Release/net10.0/MeshWeaver.Messaging.Hub.dll",
              "System.Reactive.dll": "/c/src/X/bin/Release/net10.0/System.Reactive.dll"},
             "source-build", None)
+    # 🚨 THE HOST-BUILT FLAT SET. It has no System.Private.CoreLib.dll, legitimately, so it must PASS
+    # as `host-build` and must NOT pass as `image`. The classification is read from its manifest. A
+    # flat directory WITHOUT the manifest has to keep reading as an image extraction, which is the
+    # case that keeps a short /app-only extraction refused.
+    host_set = {"MeshWeaver.Messaging.Hub.dll": "/h/MeshWeaver.Messaging.Hub.dll",
+                "System.Reactive.dll": "/h/System.Reactive.dll"}
+    refuses("a complete host-built set (no shared frameworks, by design)", host_set,
+            HOST_REFERENCE_SET_LAYOUT, None)
+    refuses("a host-built set with no Rx", {"MeshWeaver.Messaging.Hub.dll": "/h/MeshWeaver.Messaging.Hub.dll"},
+            HOST_REFERENCE_SET_LAYOUT, "NO System.Reactive.dll")
+    with tempfile.TemporaryDirectory() as flat_tmp:
+        flat_dir = Path(flat_tmp)
+        for n in host_set:
+            (flat_dir / n).write_bytes(b"")
+        _, _, undeclared = discover_refs(str(flat_dir))
+        if undeclared != "image":
+            failures.append(f"  a flat dir WITHOUT {HOST_REFERENCE_SET_MANIFEST} classified as {undeclared!r}; "
+                            "expected 'image' (it must not pass without its shared frameworks)")
+        (flat_dir / HOST_REFERENCE_SET_MANIFEST).write_text(
+            json.dumps({"schema": 1, "layout": HOST_REFERENCE_SET_LAYOUT}), encoding="utf-8")
+        _, _, declared = discover_refs(str(flat_dir))
+        if declared != HOST_REFERENCE_SET_LAYOUT:
+            failures.append(f"  a flat dir WITH {HOST_REFERENCE_SET_MANIFEST} classified as {declared!r}; "
+                            f"expected {HOST_REFERENCE_SET_LAYOUT!r}")
+        (flat_dir / HOST_REFERENCE_SET_MANIFEST).write_text(json.dumps({"layout": "image"}), encoding="utf-8")
+        try:
+            discover_refs(str(flat_dir))
+            failures.append("  a manifest declaring another layout was ACCEPTED; it must be refused, "
+                            "never quietly read as an image")
+        except SystemExit as exc:
+            if exc.code != EXIT_REFUSED_REFS:
+                failures.append(f"  a manifest declaring another layout exited {exc.code}, "
+                                f"expected {EXIT_REFUSED_REFS}")
     # 🚨 …and NO version may come back. The generated csproj must never restore Rx from NuGet, in
     # either mode: that restore is what compiled the platform's Rx 7 assemblies against a 6.1.
     for impl in (False, True):
