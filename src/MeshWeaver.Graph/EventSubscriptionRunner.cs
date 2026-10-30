@@ -580,31 +580,22 @@ public sealed class EventSubscriptionRunner(
                     .Timeout(TimeSpan.FromMinutes(30))
                     .Select(_ => new MeshNode(subscription.TargetPath!))),
 
+            // The generic module continuation: the firing is written onto the module's own node, whose
+            // hub decides what it means. In-mesh source owns a continuation this way.
+            EventContinuationType.DeliverToNode when subscription is { DeliverTo.Length: > 0 } =>
+                Deliver(subscription, userId),
+            EventContinuationType.DeliverToNode =>
+                Unhandled(subscription, $"Event subscription {subscription.Id} has continuation "
+                    + $"{subscription.ContinuationType} but names no DeliverTo node — there is nobody to deliver it to."),
+
             // Continuations this assembly cannot implement — their effects live ABOVE it in the
             // reference graph (PublishSocialPost is owned by MeshWeaver.Social, which references
-            // Graph), or in a module's in-mesh source. The vocabulary is OPEN (string constants), so
-            // this arm is not a default that means something: it routes the value to whoever claims
-            // it, and a value nobody claims fails naming it.
+            // Graph). The owning module registers an IEventContinuationHandler. A value nobody claims
+            // (a number from a newer peer, say) is never treated as one this runner knows: it fails
+            // naming itself.
             _ => ExternalContinuation(subscription, userId),
         };
 
-    /// <summary>
-    /// Dispatches to the <see cref="IEventContinuationHandler"/> registered for this continuation.
-    /// Resolved per firing (never cached): handlers are registered by modules, and a cached null taken
-    /// before a module's registration landed would wedge every later subscription of that type for the
-    /// life of the process.
-    ///
-    /// <para>Both failure modes name themselves, because both are configuration mistakes that would
-    /// otherwise present as "the thing just never happened":</para>
-    /// <list type="bullet">
-    ///   <item><b>None registered</b> — the owning module was not composed into this host (a missing
-    ///   <c>AddSocial</c>, say). The generic "unsupported subscription" wording sent readers looking
-    ///   for a bad subscription instead of an absent registration.</item>
-    ///   <item><b>More than one</b> — ambiguous, so it FAILS rather than picking one. Taking the first
-    ///   match would make behaviour depend on registration order, which is nondeterministic across
-    ///   hosts and hides the duplicate indefinitely.</item>
-    /// </list>
-    /// </summary>
     /// <summary>
     /// Hands the firing to the node named by <see cref="EventSubscription.DeliverTo"/>: an
     /// <see cref="EventDelivery"/> written onto its content, as System, through its own stream. The
@@ -616,7 +607,6 @@ public sealed class EventSubscriptionRunner(
         var delivery = new EventDelivery
         {
             SubscriptionId = subscription.Id,
-            ContinuationType = subscription.ContinuationType,
             SubjectId = subjectId,
             FiredAt = DateTimeOffset.UtcNow,
             CreatedBy = subscription.CreatedBy,
@@ -624,35 +614,54 @@ public sealed class EventSubscriptionRunner(
         return AsSystem(() => EventSubscriptionOps.Deliver(hub, subscription.DeliverTo!.Trim(), delivery));
     }
 
+    /// <summary>Logs a continuation this runner cannot carry out, by name, and fails the subscription
+    /// with <paramref name="reason"/> (recorded on <see cref="EventSubscription.LastError"/> by the
+    /// caller's Failed write).</summary>
+    private IObservable<MeshNode> Unhandled(EventSubscription subscription, string reason)
+    {
+        logger?.LogWarning(
+            "Event subscription {Id} with continuation {Continuation} cannot be carried out: {Reason}",
+            subscription.Id, subscription.ContinuationType, reason);
+        return Observable.Throw<MeshNode>(new InvalidOperationException(reason));
+    }
+
+    /// <summary>
+    /// Dispatches to the <see cref="IEventContinuationHandler"/> registered for this continuation.
+    /// Resolved per firing (never cached): handlers are registered by modules, and a cached null taken
+    /// before a module's registration landed would wedge every later subscription of that type for the
+    /// life of the process.
+    ///
+    /// <para>Both failure modes name themselves, because both are configuration mistakes that would
+    /// otherwise present as "the thing just never happened":</para>
+    /// <list type="bullet">
+    ///   <item><b>None registered</b> — the owning module was not composed into this host (a missing
+    ///   <c>AddSocial</c>, say), or the value is one this build does not know at all. The generic
+    ///   "unsupported subscription" wording sent readers looking for a bad subscription instead of an
+    ///   absent registration.</item>
+    ///   <item><b>More than one</b> — ambiguous, so it FAILS rather than picking one. Taking the first
+    ///   match would make behaviour depend on registration order, which is nondeterministic across
+    ///   hosts and hides the duplicate indefinitely.</item>
+    /// </list>
+    /// </summary>
     private IObservable<MeshNode> ExternalContinuation(EventSubscription subscription, string userId)
     {
-        // An explicit DeliverTo is the subscription's own statement of who acts: the owning module's
-        // node, whose hub reacts to the delivery. It is how in-mesh source owns a continuation.
-        if (!string.IsNullOrWhiteSpace(subscription.DeliverTo))
-            return Deliver(subscription, userId);
-
         var handlers = hub.ServiceProvider.GetServices<IEventContinuationHandler>()
-            .Where(h => string.Equals(h.ContinuationType, subscription.ContinuationType, StringComparison.Ordinal))
+            .Where(h => h.ContinuationType == subscription.ContinuationType)
             .ToList();
 
         if (handlers.Count == 1)
             return AsSystem(() => handlers[0].Execute(subscription, userId));
 
-        // Unknown stays unknown: logged by name here and recorded on the subscription by the caller's
-        // Failed write — never mapped onto a continuation that means something.
-        logger?.LogWarning(
-            "Event subscription {Id} has continuation {Continuation}, which {Count} handler(s) claim and which names no DeliverTo node",
-            subscription.Id, subscription.ContinuationType, handlers.Count);
-        return Observable.Throw<MeshNode>(new InvalidOperationException(handlers.Count == 0
+        return Unhandled(subscription, handlers.Count == 0
             ? $"Event subscription {subscription.Id} has continuation "
               + $"{subscription.ContinuationType}, which no IEventContinuationHandler is registered "
-              + "for and which names no DeliverTo node. The module that owns it is not composed into "
-              + "this host — nothing will ever fire this subscription until it is."
+              + "for. The module that owns it is not composed into this host — nothing will ever fire "
+              + "this subscription until it is."
             : $"Event subscription {subscription.Id} has continuation "
               + $"{subscription.ContinuationType}, which {handlers.Count} IEventContinuationHandlers "
               + $"claim ({string.Join(", ", handlers.Select(h => h.GetType().Name))}). Exactly one must "
               + "be registered — refusing to pick one, because which arrived first is not a decision "
-              + "this runner can make correctly."));
+              + "this runner can make correctly.");
     }
 
     /// <summary>
