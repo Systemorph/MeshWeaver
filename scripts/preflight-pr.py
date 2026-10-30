@@ -383,7 +383,7 @@ def body_gates(ctx: Context) -> list[Result]:
 # ── source guards whose scanned roots a deletion empties ────────────────────────────────────────
 
 ROOTS_DECL = re.compile(r"\b(?P<name>[A-Za-z_]\w*Roots)\b\s*(?:\(\s*\))?\s*(?:=>|=)(?!=)")
-INLINE_ROOTS = re.compile(r"SourceFiles\(\s*[^,()]+,\s*(?=\[)")
+INLINE_ROOTS = re.compile(r"SourceFiles\(\s*(?P<arg>[^,()]+?)\s*,\s*(?=\[)")
 STRING = re.compile(r'@?"((?:[^"\\]|\\.)*)"')
 TEST_SEGMENT = re.compile(r"(^|/)(test|tests|[^/]+\.Tests?)(/|$)")
 
@@ -470,6 +470,8 @@ def parse_root_declarations(rel: str, text: str) -> list[RootDecl]:
     text = strip_comments(text)
     for rx, symbol_of in ((ROOTS_DECL, lambda m: m.group("name")), (INLINE_ROOTS, lambda m: "SourceScan.SourceFiles([...])")):
         for m in rx.finditer(text):
+            if rx is INLINE_ROOTS and not scans_repo_root(m.group("arg"), text):
+                continue  # a fixture scan over a planted temp tree (`dir.FullName`), not the repository
             span = initializer_span(text, m.end() if rx is INLINE_ROOTS else _skip_ws(text, m.end()))
             roots = [s.strip("/") for s in STRING.findall(span) if looks_like_root(s.strip("/"))]
             if roots:
@@ -478,6 +480,21 @@ def parse_root_declarations(rel: str, text: str) -> list[RootDecl]:
                     re.search(r"SourceFiles\([^;]*\b" + re.escape(symbol) + r"\b", text))
                 decls.append(RootDecl(rel, text.count("\n", 0, m.start()) + 1, symbol, roots, scanned))
     return decls
+
+
+def scans_repo_root(arg: str, text: str) -> bool:
+    """Whether a `SourceFiles(<arg>, [...])` call scans the REPOSITORY: the guards pass `RepoPaths.Root`, or a
+    local assigned from it (`var root = RepoPaths.Root;`). Self-tests of the scanner pass a planted temp
+    directory (`dir.FullName`) — those roots name the fixture, not the tree."""
+    arg = arg.strip()
+    if arg == "RepoPaths.Root":
+        return True
+    if not re.fullmatch(r"[A-Za-z_]\w*", arg):
+        return False  # `dir.FullName`, a call, an expression: a planted tree
+    if re.search(r"\b" + re.escape(arg) + r"\s*=\s*RepoPaths\.Root\b", text):
+        return True
+    # A helper taking the root as a PARAMETER (`Offenders(string root)`), in a file that hands it RepoPaths.Root.
+    return bool(re.search(r"\bstring\s+" + re.escape(arg) + r"\b", text)) and "RepoPaths.Root" in text
 
 
 def _skip_ws(text: str, i: int) -> int:

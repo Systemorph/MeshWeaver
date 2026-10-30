@@ -230,7 +230,7 @@ public class Guard1
 GUARD2 = """namespace G;
 public class Guard2
 {
-    public void Scan(string root) => SourceScan.SourceFiles(root, ["src/B"]).ToList();
+    public void Scan() { var root = RepoPaths.Root; SourceScan.SourceFiles(root, ["src/B"]).ToList(); }
 }
 """
 GUARD3 = """namespace G;
@@ -372,6 +372,32 @@ def test_guard_roots(tmp: Path) -> None:
     rc, r, out = guards_status(repo, tmp)
     check("guards: a root NOT read through SourceScan keeps counting any file (control for the row above)",
           rc == 0 and r["status"] == "PASS", out)
+
+    # A scanner SELF-TEST planting its own tree (`SourceScan.SourceFiles(dir.FullName, ["src", "memex"])`,
+    # SourceScanFloorTest's shape) names the fixture, not the repository: never inventoried.
+    fixture = textwrap.dedent("""\
+        namespace G;
+        public class FloorTest
+        {
+            public void Planted(System.IO.DirectoryInfo dir) =>
+                SourceScan.SourceFiles(dir.FullName, ["src/A", "memex"]).ToArray();
+        }
+        """)
+    real_call = fixture.replace("dir.FullName", "root").replace(
+        "public void Planted(System.IO.DirectoryInfo dir) =>",
+        "public void Real() { var root = RepoPaths.Root; Use(") + ""
+    real_call = real_call.replace(".ToArray();", ".ToArray()); }")
+    for label, text, expect in (("a fixture scan over a planted tree is NOT a guard root", fixture, 1),
+                                ("control: the same call over RepoPaths.Root IS one", real_call, 2)):
+        repo = guard_repo(tmp, f"g13-{expect}")
+        write(repo, "test/G.Test/FloorTest.cs", text)
+        commit(repo, "floor test")
+        publish_main(repo)
+        git(repo, "rm", "-q", "src/A/a.cs")
+        commit(repo, "drop A")
+        rc, r, out = guards_status(repo, tmp)
+        findings = [d for d in r["details"] if d.startswith("test/")]
+        check(f"guards: {label}", rc == 1 and len(findings) == expect, "\n".join(r["details"]))
 
     # NEUTERED DETECTOR: with no declaration recognised, the RED case above turns GREEN — so the red
     # cases depend on the detector, and a detector that stopped detecting would be caught here.

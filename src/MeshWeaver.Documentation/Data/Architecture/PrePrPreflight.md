@@ -86,7 +86,10 @@ root silently, so a guard whose root moved goes on passing having scanned nothin
 
 The preflight reads those lists from the test sources themselves: every `…Roots` field, property or
 method initializer (`ScannedRoots`, `ProductionRoots`, `HomeRoots`, …), and every inline root list
-passed to `SourceScan.SourceFiles(root, [...])`. Comments are blanked first. For every path the diff
+passed to `SourceScan.SourceFiles(root, [...])` whose root is the repository (`RepoPaths.Root`, a local
+assigned from it, or a helper's `string root` parameter in a file that passes it). A scanner self-test
+over a planted temp tree (`SourceScan.SourceFiles(dir.FullName, [...])`) names the fixture, not the
+repository, and is skipped. Comments are blanked first. For every path the diff
 deletes or renames (`git diff --name-status -M` against the merge base), it reports each root that path
 touches and that is now **missing** or **empty**, with the guard's `file:line`. A root read through
 `SourceScan.SourceFiles` is empty once no `.cs`/`.razor`/`.csx` outside `bin`/`obj`/… is left under
@@ -109,7 +112,16 @@ break a green one while the run stays red, and a later partial re-run would then
 first. The run is the newest one **associated with this pull request** (two pull requests can share a
 head sha). Its jobs are read across every attempt, keeping the newest execution of each, because a
 partial re-run's attempt lists only what it re-ran. The pull request is read again just before anything
-is posted, and a closed pull request or a moved head stops the lane. `.github/scripts/pr-body-regate.py` holds the decision table, and its self-test proves every arm:
+is posted, and a closed pull request or a moved head stops the lane.
+
+🚨 **The lane never cancels anything.** If the run is still in progress and a gate's verdict changed
+(or a gate is still judging, or has not even been listed yet, which counts as pending and never as
+green), the lane waits for the run to finish, then re-runs `pr-body` on the finished run. The wait is
+a bounded script poll inside the 45-minute job cap; past it, the lane goes red and says to re-run
+`pr-body` by hand. When every gate's verdict holds, it stops at once and holds no runner. Its
+concurrency group sits on the job, which runs only for body edits, so a title-only edit never enters
+it. The group never cancels the running lane: a newer body edit queues behind it and judges the newer
+body once the first lane has finished. `.github/scripts/pr-body-regate.py` holds the decision table, and its self-test proves every arm:
 
 | The run… | Current body (same gates, via this preflight) | Action |
 |---|---|---|
@@ -117,13 +129,14 @@ is posted, and a closed pull request or a moved head stops the lane. `.github/sc
 | every gate's verdict unchanged | (per gate) | **nothing.** The verdict holds for the current body, and the build is not re-run |
 | a gate red | that gate now passes (or cannot be judged) | re-run the `pr-body` job by id once the run has finished. Every body gate needs it and re-runs with it, reading the current body, because a new attempt never reuses the old read (`read-current-pr-body.py --reuse-from-env`), and the build they held runs. It never ran, so it is owed, not repeated |
 | a gate red | that gate still red, and no other gate changed | nothing. The required check is red and stays red |
-| a gate green (or still judging) | that gate now fails (or cannot be judged) — even if another gate keeps the run red | re-run the `pr-body` job, after cancelling an in-flight run. Its dependents follow: the gates go red, stage 0 holds the build, and the required check turns red within minutes |
+| a gate green | that gate now fails (or cannot be judged) — even if another gate keeps the run red | re-run the `pr-body` job by id. Its dependents follow: the gates go red, stage 0 holds the build, and the required check turns red within minutes |
 | any | undecided (could not be judged) | the `pr-body` job is re-run either way: truthful, and cheap whenever a gate is red, because a red gate holds the build |
 
 🚨 **The lane never posts `rerun-failed-jobs` on the whole run.** Every re-run is one job, `pr-body`,
 by id; GitHub re-runs the jobs that need it along with it. Before posting, the lane asserts that the
 run belongs to `.github/workflows/dotnet-test.yml` by its workflow path, not its name. It also computes
-that re-run set from the workflow file's own `needs:` graph and refuses, red and named, if any job in it
+that re-run set from the `needs:` graph of that workflow **at the run's own revision** (read through
+the contents API at the run's `head_sha`, refusing red when it cannot be read) and refuses, red and named, if any job in it
 matches *review answered*. `Automatic review answered` is an API-written check-run per head, and a
 re-run that included a legacy job of that name would overwrite the API verdict. `dotnet-test.yml`
 carries no such job today; the assertion keeps it that way, and the self-test measures the real
