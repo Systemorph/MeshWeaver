@@ -468,6 +468,17 @@ on every core pull request (`workflow-shell` job) and again before every publish
 the lane's own ledger issue (label `ci-template-feed`) and closed by the next real publication; a
 dry run never closes it.
 
+**Inputs from the set, the instrument from the lane.** What is packed comes from the set: core at
+its `core_sha`, Plugins at its `plugins_sha`. The lane's own tool, `template-feed.py`, comes from the
+commit the workflow runs at (`github.sha`, a sparse `lane/` checkout). The set is usually older than
+the lane. The first sealed set after the lane merged was cut from a commit that had no
+`template-feed.py`, and the lane died `can't open file` before it measured anything
+(MeshWeaver#7660). The self-test refuses a workflow that runs the script out of the set's tree,
+either literally or through a `FEED_TOOL` bound to anything but `lane/.github/scripts/template-feed.py`. A
+set sealed before the lane existed still cannot be packed. Its `Directory.Build.props` predates the
+README condition that packing needs (NU5019). The ledger stays red until the next sealed set
+publishes.
+
 **Dry run.** `gh workflow run template-feed.yml -f dry-run=true [-f cd-run-id=<run>]` packs,
 verifies and lists the packages in the run summary and pushes nothing. `dry-run` defaults to `true`
 on a dispatch; the `workflow_run` path always publishes.
