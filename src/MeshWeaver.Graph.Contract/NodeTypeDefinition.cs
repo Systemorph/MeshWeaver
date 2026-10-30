@@ -856,8 +856,9 @@ public record NodeTypeDefinition
     public string? BuiltModuleVersionMvid { get; init; }
 
     /// <summary>
-    /// 🚨 WHY this record is in a delivery hold (<see cref="Mesh.Services.BuildProvenance.StaleAdopted"/>
-    /// or <see cref="Mesh.Services.BuildProvenance.AdoptionRefused"/>), in one operator-readable
+    /// 🚨 WHY this record is in a delivery hold (<see cref="Mesh.Services.BuildProvenance.StaleAdopted"/>,
+    /// <see cref="Mesh.Services.BuildProvenance.AdoptionRefused"/>, or the unknown-membership hold,
+    /// which keeps its <c>Compiled</c> provenance), in one operator-readable
     /// line: the delivery gate that refused to compile (the untracked-module gate, or
     /// <c>Modules:RequirePrebuilt</c>), the two module versions and fingerprints, and the fix.
     /// <c>null</c> whenever the record is not held.
@@ -867,7 +868,8 @@ public record NodeTypeDefinition
     /// <see cref="LastReleaseRequestHandledAt"/> equal to <see cref="RequestedReleaseAt"/> with
     /// no build produced and NOTHING on the record saying why: an <c>Ok</c> record carries no
     /// <see cref="CompilationError"/>, so the gate's reason was dropped on the way to the hold.
-    /// This is where it is kept. Mesh-owned, never authored.</para>
+    /// This is where it is kept. Mesh-owned, never authored. The NodeType page renders it, verbatim,
+    /// for any record that carries it (MeshWeaver#7356).</para>
     /// </summary>
     public string? DeliveryHoldReason { get; init; }
 
