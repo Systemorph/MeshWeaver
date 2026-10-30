@@ -130,6 +130,20 @@ public static class PlatformFloor
     }
 
     /// <summary>
+    /// Whether ANY floor could be held against <paramref name="runningPlatformVersion"/> (pure):
+    /// false for an unknown or unreadable running version and for a source build (<c>-dev</c>, the
+    /// retired <c>-ci.0</c>), against which <see cref="Evaluate"/> answers
+    /// <see cref="PlatformFloorKind.Advisory"/> whatever the floor says. A reader that would have
+    /// to fetch a floor before judging it can skip the fetch when this is false — the answer is
+    /// already known to be "proceed".
+    /// </summary>
+    /// <param name="runningPlatformVersion">The running platform version, or null when unknown.</param>
+    public static bool CanHold(string? runningPlatformVersion) =>
+        !string.IsNullOrWhiteSpace(runningPlatformVersion)
+        && PlatformReleaseOrder.TrySplit(runningPlatformVersion.Trim(), out _, out _)
+        && PlatformReleaseOrder.BuildOrdinal(runningPlatformVersion.Trim()) != 0;
+
+    /// <summary>
     /// The held sentence alone — non-null ONLY when <see cref="Evaluate"/> answers
     /// <see cref="PlatformFloorKind.Held"/>. The shape a <c>Func&lt;string?, string?&gt;</c> gate
     /// takes.
