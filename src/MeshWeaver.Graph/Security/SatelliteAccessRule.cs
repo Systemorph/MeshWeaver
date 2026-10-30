@@ -146,16 +146,23 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
             ? (context.Node.GetParentPath() ?? context.Node.Path)
             : context.Node.Path;
         // No row-level security on this mesh: every check answers All, so there is nothing to apply.
-        if (hub.Configuration.Get<EffectivePermissionsDelegate>() is null
-            || string.IsNullOrEmpty(landingPath)
-            || string.Equals(mainNodePath.Trim('/'), landingPath.Trim('/'), StringComparison.Ordinal)
-            || !MainNodeTrust.IsAncestorOrSelf(mainNodePath, landingPath))
+        // Ancestry is decided by ObserveRestrictingPolicyBetween, never by a raw string comparison
+        // here: the evaluator accepts every spelling of the main node (`@/Space/Doc`, `/` for the
+        // root), so a raw check that did not would skip the policies in between for exactly those
+        // spellings while the main node's grant still answered (review of #7676). It answers false
+        // for the same path and for an unrelated one.
+        if (hub.Configuration.Get<EffectivePermissionsDelegate>() is null || string.IsNullOrEmpty(landingPath))
             return viaMainNode;
 
+        // Composed HERE, on the caller's thread, beside the main-node check, and only SUBSCRIBED
+        // while a restriction exists: the fold snapshots the ambient AccessContext when it is
+        // composed (IsApiToken drives the API-token clamp, IsHub the hub-credential return), and a
+        // check composed inside the policy stream's selector would take whatever context the
+        // emitting thread carried. A token admitted at the main node would then pass an
+        // intervening `Api = false` (review of #7676).
+        var landingCheck = hub.CheckPermission(landingPath, userId, permission);
         var atLanding = PermissionEvaluator.ObserveRestrictingPolicyBetween(hub, mainNodePath, landingPath)
-            .Select(restricted => restricted
-                ? hub.CheckPermission(landingPath, userId, permission)
-                : Observable.Return(true))
+            .Select(restricted => restricted ? landingCheck : Observable.Return(true))
             .Switch();
         return viaMainNode.CombineLatest(atLanding, (main, landing) => main && landing);
     }
