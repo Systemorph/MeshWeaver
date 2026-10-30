@@ -471,6 +471,28 @@
         "Landing in the three change sets this register's header describes: step 1 (this entry) names the hub",
         "only; step 2 lands the six spoke copies; step 3 widens required-in to all seven."
       ]
+    },
+    {
+      "id": "link-pending-activity",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": [
+        "Systemorph/MeshWeaver"
+      ],
+      "slots": [],
+      "why": [
+        "Policy `link-pending-activity` (Doc/Architecture/PolicyNotProse carries when and by whom). Requests for a",
+        "signature or an approval reached the owner as a bare path, a bare id or a bare 'please approve', on whichever",
+        "instance the author happened to be connected to, so each one cost a lookup before it could be acted on.",
+        "",
+        "A PROCESS block: it governs how an agent hands work to a person, which is the same in every repository, so it",
+        "is required in every registered repo once the spokes carry it.",
+        "",
+        "No slots, and no operated-instance hostname: the text names the URL SHAPE with an `<instance>` placeholder",
+        "(the hostname rule of #7327), so it reads identically everywhere.",
+        "",
+        "🚧 ADDITION IN FLIGHT — step 1 of 3 (this register's header): required-in names the hub only. Step 2: the",
+        "spokes copy the hub text. Step 3: widen required-in to every registered repo and delete this paragraph."
+      ]
     }
   ]
 }
