@@ -975,6 +975,15 @@ on:
           `actions` or `host` — who built this call's bundles (the `executor` input, once `verify` has
           accepted it). A caller branching on a host run reads this, never `bundles-built`'s absence.
         value: ${{ jobs.verify.outputs.executed-on }}
+      cascade-root:
+        description: >
+          When this lane's aggregator went red because one of the lane's own jobs FAILED, the job it
+          names (ci-cascade-verdict.py) — so a caller's aggregator that needs this call names the
+          true root instead of the call. Empty otherwise.
+        value: ${{ jobs.verify.outputs.cascade-root }}
+      cascade-waiting:
+        description: The waiting-for-platform sentence of that root, when it is waiting rather than broken.
+        value: ${{ jobs.verify.outputs.cascade-waiting }}
       lane:
         description: >
           THIS call's lane key — the artifact namespace every marker, receipt and staged
@@ -5635,14 +5644,37 @@ jobs:
     outputs:
       bundles-built: ${{ steps.host.outputs.bundles_built || steps.verify.outputs.bundles_built }}
       executed-on: ${{ steps.host.outputs.executed_on || steps.on-actions.outputs.executed_on }}
+      # The root this job's red names when an upstream job of the lane failed (ci-cascade-verdict.py),
+      # re-exported as the workflow's own outputs so the CALLER's aggregators name it too.
+      cascade-root: ${{ steps.cascade.outputs.root }}
+      cascade-waiting: ${{ steps.cascade.outputs.waiting }}
     steps:
+      # 🔗 A CASCADE IS REPORTED ONCE (policy `report-a-cascade-once`, ReadingCiSignals). When the
+      # SELECTION or the shared build the pack legs stand on FAILED, no bundle could be packed and
+      # the receipt accounting below would only restate that red as N missing receipts — so this job
+      # says ONE line naming that job and stays RED. Only those three are roots here, deliberately:
+      # a red `pack` or suite leg can still leave every bundle BUILT, and `bundles-built` (what a
+      # composing gate depends on — #2710, Plugins#937) must then still be answered from the
+      # markers, so the verifier keeps judging those. Actions arm only; the host arm judges its own.
+      - name: Report an upstream red once
+        id: cascade
+        if: inputs.executor != 'host'
+        uses: Systemorph/MeshWeaver/.github/actions/cascade-verdict@main
+        with:
+          needs: |
+            {"select": ${{ toJSON(needs.select) }}, "prepare": ${{ toJSON(needs.prepare) }}, "build-workspace": ${{ toJSON(needs.build-workspace) }}}
+          job: All selected bundles built
+          names: |
+            select=Select the affected bundles
+            prepare=Warm the shared build environment (once)
+            build-workspace=Build the workspace (one global build)
       # 🏗️ ON A BUILD HOST (H7): the heavy legs ran on the host and the caller followed them. This
       # REQUIRED context then carries the HOST's verdict — never a skipped job (a skipped required
       # context reads as satisfied) and never a green no follow job produced. A leg that ran here
       # anyway means the two executors disagree about who built this run, and that is RED too.
       - name: "On a build host: the caller's follow job carries the stage's verdict"
         id: host
-        if: ${{ always() && inputs.executor == 'host' }}
+        if: ${{ always() && inputs.executor == 'host' && steps.cascade.outputs.cascade != 'true' }}
         env:
           HOST_VERDICT: ${{ inputs.host-verdict }}
           SELECT_RESULT: ${{ needs.select.result }}
@@ -5845,7 +5877,7 @@ jobs:
       # confident zero over an empty population. The census of a host run is owed by the host's
       # modules stage (Doc/Architecture/BuildHosts §5).
       - name: Collect every receipt in this run (the publication spans calls)
-        if: ${{ always() && inputs.executor != 'host' }}
+        if: ${{ always() && inputs.executor != 'host' && steps.cascade.outputs.cascade != 'true' }}
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ needs.select.outputs.artifact-store || 'unresolved' }}
@@ -5854,7 +5886,7 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/receipts-run
       - name: The publication's module set, read at one build per assembly name
-        if: ${{ always() && inputs.executor != 'host' }}
+        if: ${{ always() && inputs.executor != 'host' && steps.cascade.outputs.cascade != 'true' }}
         # 🚨 NO `continue-on-error`. This is a REPORT about divergence — the script exits 0 when it
         # FINDS divergence, because no lane passes `--enforce` yet — so the only way this step can
         # fail is that the reading did not happen: a malformed receipt, a helper the build-logic ref
@@ -5876,7 +5908,7 @@ jobs:
       # just accounted for, filtered to THIS call's declared matrix (artifacts are run-wide). It is
       # a report, never a gate: `if: always()` so a red verifier does not also hide the number.
       - name: Report the compiler split
-        if: ${{ always() && inputs.executor != 'host' }}
+        if: ${{ always() && inputs.executor != 'host' && steps.cascade.outputs.cascade != 'true' }}
         # A REPORT, not a gate: it must never be the reason this required context goes red, and it
         # must still print when the verifier above failed.
         continue-on-error: true

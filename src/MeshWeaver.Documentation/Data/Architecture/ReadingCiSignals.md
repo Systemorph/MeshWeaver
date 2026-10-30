@@ -159,6 +159,86 @@ A guard's own *fetch* is deliberately **not** a prerequisite: its consumers run 
 they could not open, which is a second red rather than a silent skip, and the fetch's `::error::` is the
 root.
 
+## 🔗 A cascade is reported once
+
+Policy [`report-a-cascade-once`](../PolicyNotProse). **When a root job fails, the aggregators behind it say ONE line naming
+it, and run none of their own checks.** An aggregator judges other jobs' outcomes. Examples are
+`Every gate executed`, the Tests-area ratchet, a selection-and-receipts check, and a lane's `verify`.
+Behind a failed root, each of those checks can only restate the root's red in its own words:
+`NO receipt`, `gate skipped`, `no gate log`, `scope supplied no valid count`.
+
+Measured on MeshWeaver.Plugins "Plugin Catalog CI" pull-request runs, 2026-10-30: 9 of 25 runs were red,
+and one root fanned out into 5–10 independent-looking reds per run. Run `41020398335` had 9 red jobs
+with one cause, `Resolve the released platform`. Run `41018256447` had 5 red jobs with one cause,
+`validate / Validate node repos`. In that run the ratchet and `Every gate executed` each painted
+their own analysis (`gate did not succeed (result=skipped)`, `these gates SKIPPED`).
+
+**The mechanism** is core's `.github/actions/cascade-verdict` (script
+`.github/scripts/ci-cascade-verdict.py`). It is the aggregator's FIRST step, over `toJSON(needs)`:
+
+| The needs | What the aggregator does |
+|---|---|
+| a need ended `failure`/`cancelled` | prints `red because <root> failed — see it` once and fails. It stays RED and its own checks never run |
+| that need is itself a cascade | names the TRUE root, read from the need's `cascade-root` output, not the intermediate job |
+| the root is waiting for its platform | repeats the root's own waiting sentence (`red because <root> is WAITING FOR PLATFORM — see it. …`) |
+| every need green or SKIPPED | prints nothing red. The aggregator's own checks run and decide, so a skip is theirs to refuse |
+| the needs document is unreadable | RED (exit 2), never "nothing failed" |
+
+🚨 **Still RED, never skipped, never green.** A skipped required check counts as satisfied, so the
+merge stays blocked by the same context it was blocked by before. The only change is that the
+context's text points at the cause. `Resolve the released platform` already worked this way for the
+platform alone; the action generalises it to every root.
+
+🚨 **Choose the roots per aggregator; do not always pass every need.** A need whose failure is
+the aggregator's own SUBJECT stays its own to judge. Example: the gate's `verify` treats only its
+`plan` and prepared `bake` as roots. A failed shard is still folded, so the fold names that shard and
+the caller's ratchet gets its log. Likewise, the module lane's `All selected bundles built` treats only
+`select`, `prepare` and `build-workspace` as roots. A red pack or suite leg can leave every bundle
+built, and `bundles-built` must still be answered from the markers (#2710). An aggregator passes a
+hand-built subset (`{"plan": ${{ toJSON(needs.plan) }}, …}`) for that.
+
+🚨 **Re-export the outputs.** An aggregator that cascades exposes `cascade-root` /
+`cascade-waiting` as job outputs. The reusable lanes expose them as workflow outputs, so the next
+aggregator downstream names the root two levels up.
+
+**The retry steward reads the line as CONSEQUENTIAL** (`retry-known-transients.py`). Alone it never
+causes a retry. Beside a transient (a runner death in the root) it retries with it. Beside a real red
+it never retries.
+
+Self-test, run by core CI: `python3 .github/scripts/ci-cascade-verdict.py --self-test`. The aggregator
+it simulates covers three cases. A failed root gives one line naming the root. Green roots with the
+aggregator's own check failing give the aggregator's own red. All green gives green.
+
+### An artifact-store miss is NOT MEASURED, not a code finding
+
+`ci-run-artifacts: no artifact matches this repository, run, attempt and name` was 6 of the reds on
+those runs. **Measured: none of them was a store fault.** The failed jobs of 231 "Plugin Catalog CI"
+runs from 2026-10-29/30 were scanned. Every miss found was a portal-hosts **test leg whose own build
+leg FAILED**: 26 legs over 5 runs (`41013939238`, `40938500907`, `40932960020`, `40922037272`,
+`40919547220`).
+The build leg hit cross-repo skew, `CS1061 'SelfUpdateOptions' does not contain 'RegistryIsPublic'`,
+and uploaded nothing. The legs run `!cancelled()` so that one red network does not skip the others.
+Each leg then downloaded a build that was never written and painted its own red. That is a cascade.
+The legs now read their build leg's receipt first. With no receipt behind a failed build, they say
+`red because portal-hosts (<unit>) failed — see it` and never reach the download.
+
+What is left of a miss is a consumer whose producer **succeeded**. `ci-run-artifacts.py` handles it
+in three steps:
+
+1. it **re-reads once** after a pause (`MISS_RECHECK_SECONDS`). The producer finished before this job
+   started, so a first-read miss may be this runner's cached view of the cifs share. It never loops;
+2. it names **what the store holds** for that name, as one of these shapes:
+   - nothing: no upload reached this share;
+   - an upload still in flight;
+   - only a later attempt: the wrong attempt number was asked for;
+   - expired: the retention prune;
+   - no manifest;
+   - readable now: a stale view;
+3. it fails with `NOT MEASURED — artifact store miss (infra)` and the
+   [tracking issue](https://github.com/Systemorph/MeshWeaver/issues/7656). The job stays red, so a miss
+   is never a pass. The retry steward treats that line as a named transient and re-runs the run once.
+   A miss behind a failed producer never retries, because the failed producer vetoes it.
+
 ## A scheduled red is red in an empty room
 
 **A `schedule:` run is attached to no pull request, no reviewer and no check list.** Its red updates
