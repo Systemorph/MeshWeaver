@@ -73,7 +73,11 @@ public static class ApiTokenVerdict
                             // type — carrying ApiToken-shaped content with no scopes — would otherwise
                             // authenticate past every rule that protects token records.
                             ? Observable.Return(ValidateTokenResponse.Fail("Token not found"))
-                            : DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
+                            : ContentOf<ApiToken>(tokenNode, options) is { } record
+                              && !IsBoundToItsLocation(index.TokenPath, record)
+                                // 🛡️ The principal is bound to WHERE the record lives (#7598).
+                                ? Observable.Return(ValidateTokenResponse.Fail("Token not found"))
+                                : DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
                 }
 
                 // A legacy index node carries the token record itself.
@@ -91,6 +95,33 @@ public static class ApiTokenVerdict
     /// records are written typed (the store's <c>node_type = 'ApiToken'</c>). A legacy index that
     /// carries the record itself is decided on its own branch and is untouched.
     /// </summary>
+    /// <summary>
+    /// 🛡️ A token's PRINCIPAL is bound to the LOCATION of its record (#7598). The index is written
+    /// only by the platform, as System, and names the path the token was minted at. A person's token
+    /// is minted in that person's own partition (<c>{UserId}/…</c>), and a service's token in its own
+    /// token namespace under the Admin partition (<see cref="ServiceIdentity.TokenNamespace"/>). So
+    /// whatever later happens to the record — rewritten, cleared and restored, recreated, confirmed
+    /// from a transient, carried in a data change, reached through a cold owner — it authenticates
+    /// only as the principal whose location it is. A write inside a person's own partition can then
+    /// only ever yield a credential for that person. This is decided on the verdict, so it holds for
+    /// every write seam at once, including the ones no write rule sees.
+    /// </summary>
+    /// <param name="tokenPath">The record's path, as the platform-written index names it.</param>
+    /// <param name="token">The record's content.</param>
+    /// <returns>True when the record's principal is the one its location belongs to.</returns>
+    public static bool IsBoundToItsLocation(string tokenPath, ApiToken token)
+    {
+        if (string.IsNullOrEmpty(tokenPath) || string.IsNullOrEmpty(token.UserId)
+            || string.Equals(token.UserId, WellKnownUsers.System, StringComparison.Ordinal))
+            return false;
+        if (ServiceIdentity.IsServiceObjectId(token.UserId) || !string.IsNullOrEmpty(token.ServiceIdentityPath))
+            return ServiceIdentity.IsServiceObjectId(token.UserId)
+                   && tokenPath.StartsWith(ServiceIdentity.TokenNamespace(token.UserId) + "/", StringComparison.OrdinalIgnoreCase);
+        return tokenPath.StartsWith(token.UserId + "/", StringComparison.OrdinalIgnoreCase)
+               // The pre-migration layout (User/{userId}/…), rewritten by the partition migration.
+               || tokenPath.StartsWith($"User/{token.UserId}/", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsNotATokenRecord(MeshNode? node)
         => node is not null && !ApiTokenScope.IsTokenRecordType(node.NodeType);
 

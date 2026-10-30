@@ -119,6 +119,80 @@ public class ApiTokenPrincipalBindingTest(ITestOutputHelper output) : MonolithMe
         (await CreateAs(Owner, "ApiToken", "own", ct)).Should().Be("created", "the control: their own token");
     }
 
+    /// <summary>
+    /// 🚨 THE LOCATION PIN (#7598, review of #7601). Whatever write route a record at the indexed path
+    /// came through — rewritten, cleared and restored, confirmed from a transient, carried in a data
+    /// change, reached through a cold owner, or written with content the write rules read differently —
+    /// it authenticates only as the principal its LOCATION belongs to. Decided on the verdict over the
+    /// stored bytes, so it needs no write route at all: the record is supplied as stored. The owner's
+    /// own record and a service token in its own namespace are the controls.
+    /// </summary>
+    [Theory(Timeout = 60_000)]
+    [InlineData(Owner + "/ApiToken/x", WellKnownUsers.System, null, false)]
+    [InlineData(Owner + "/ApiToken/x", Other, null, false)]
+    [InlineData(Owner + "/ApiToken/x", "svc-forged", "Admin/_ServiceIdentity/svc-forged", false)]
+    [InlineData(Owner + "/ApiToken/x", Owner, null, true)]
+    [InlineData("Admin/_ServiceIdentity/svc-real/ApiToken/x", "svc-real", "Admin/_ServiceIdentity/svc-real", true)]
+    public async Task AStoredRecord_AuthenticatesOnlyAsThePrincipalOfItsLocation(
+        string recordPath, string principal, string? serviceIdentityPath, bool authenticatesAsNamed)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var options = Mesh.JsonSerializerOptions;
+        var index = new MeshNode(ApiTokenVerdict.IndexPath(Hash))
+        {
+            NodeType = ApiTokenNodeType.NodeType,
+            Content = JsonSerializer.SerializeToElement(new ApiTokenIndex { TokenHash = Hash, TokenPath = recordPath }, options),
+        };
+        var record = MeshNode.FromPath(recordPath) with
+        {
+            NodeType = ApiTokenNodeType.NodeType,
+            Content = JsonSerializer.SerializeToElement(
+                new ApiToken { TokenHash = Hash, UserId = principal, ServiceIdentityPath = serviceIdentityPath }, options),
+        };
+        var identity = serviceIdentityPath is null ? null : MeshNode.FromPath(serviceIdentityPath) with
+        {
+            Content = JsonSerializer.SerializeToElement(new ServiceIdentity { Description = "test" }, options),
+        };
+        var response = await ApiTokenVerdict
+            .Decide(RawToken, path => Observable.Return<MeshNode?>(
+                path == index.Path ? index : path == recordPath ? record : path == serviceIdentityPath ? identity : null), options)
+            .Should().Within(Budget).Emit("the verdict must answer", ct);
+        Output.WriteLine($"{recordPath} naming {principal}: success={response.Success} user={response.UserId} error={response.Error}");
+
+        if (authenticatesAsNamed)
+            response.UserId.Should().Be(principal, "the control: a record in its principal's own location authenticates");
+        else
+            response.Success.Should().BeFalse($"a record at '{recordPath}' must never authenticate as '{principal}'");
+    }
+
+    /// <summary>
+    /// A person cannot write into a service's token namespace by naming THEMSELVES as the node's main
+    /// node (review of #7601): the own-scope shortcut keys on the path and the caller, and a
+    /// caller-supplied <c>MainNode</c> must not stand in for either. Only the platform admin surface
+    /// issues service tokens.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task APersonCannotWriteIntoAServiceTokenNamespace_ByNamingThemselvesMainNode()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetContext(Person(Owner));
+        var answer = await NodeFactory.CreateNode(new MeshNode("forged", "Admin/_ServiceIdentity/svc-real/ApiToken")
+            {
+                Name = "forged", NodeType = ApiTokenNodeType.NodeType, MainNode = Owner,
+                Content = new ApiToken
+                {
+                    TokenHash = new string('e', 64), UserId = "svc-real",
+                    ServiceIdentityPath = "Admin/_ServiceIdentity/svc-real", Label = "forged",
+                },
+            })
+            .Take(1)
+            .Select(_ => "created")
+            .Catch((Exception ex) => Observable.Return("refused:" + ex.GetType().Name + ": " + ex.Message))
+            .Should().Within(Budget).Emit("the create must answer", ct);
+        Output.WriteLine($"service-namespace write as a person: {answer}");
+        answer.Should().StartWith("refused:", "only the platform admin surface writes a service's tokens");
+    }
+
     private Task<string> CreateAs(string principal, string nodeType, string id, CancellationToken ct) =>
         NodeFactory.CreateNode(new MeshNode(id, $"{Owner}/ApiToken")
             {

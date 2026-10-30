@@ -123,8 +123,21 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
         // PseudoIdentity.)
         if (WellKnownUsers.IsAuthenticated(userId))
         {
-            var ownMainNode = !string.IsNullOrEmpty(context.Node.MainNode)
-                && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase);
+            // 🛡️ Only a STORED MainNode speaks for ownership (#7598, review of #7601). On a create the
+            // node is the caller's proposal, so its MainNode is whatever the caller wrote: trusting it
+            // let a person create anywhere — a service's token namespace in the Admin partition
+            // included — by naming themselves. A create is decided by the path (ownScope below); an
+            // update by the node it replaces; a read or delete by the stored node itself. Every
+            // platform writer that sets MainNode to the user writes under `{userId}/…`, which the path
+            // shortcut already covers.
+            var trustedMainNode = context.Operation switch
+            {
+                NodeOperation.Create => null,
+                NodeOperation.Update => context.ExistingNode?.MainNode,
+                _ => context.Node.MainNode,
+            };
+            var ownMainNode = !string.IsNullOrEmpty(trustedMainNode)
+                && string.Equals(trustedMainNode, userId, StringComparison.OrdinalIgnoreCase);
 
             // Per-user own-scope shortcut: every user owns the partition
             // named after their userId. A node at `{userId}` or `{userId}/…`
