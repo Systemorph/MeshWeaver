@@ -146,6 +146,13 @@ one severity ([Issue Taxonomy](../IssueTaxonomy)). It runs on no pull request an
 a sibling's state can turn only that lane — and its one standing issue — red, never a core build.
 It is ledgered all the same, in `ApiReadLedger`, so the inventory stays complete.
 
+`pr-body-edited.yml` repeats the SECOND edge's read on a pull-request body EDIT. It judges the
+edited body with the same gate scripts the run uses (through `scripts/preflight-pr.py`) to decide
+whether the Build-and-Test run's verdict went stale and has to be re-run, so it needs the same
+counterpart resolution, with the same App and the same scoped read-only token. It checks nothing out
+and decides no merge; it only re-runs core's own run — see [Pre-PR Preflight](../PrePrPreflight).
+`ApiReadLedger` carries it.
+
 The FIFTH edge of this class, `build-host-stable.yml` (the daily roll of the standing build host
 `build-stable`, which reads MeshWeaver.Plugins' main runs to find the main-passed ceiling), LEFT
 core with the rest of the build-host deployment: it is MeshWeaver.Deploy's now

@@ -154,6 +154,7 @@ differs and the full suite runs; there is no way to skip an untested tree.
 
 ```bash
 # 0. PRE-FLIGHT — a clean-checkout CI catches what a local build hides. Check for the trap below.
+python3 scripts/preflight-pr.py --body-file pr-body.md   # run before opening/pushing a PR: every body gate + guard roots (Doc/Architecture/PrePrPreflight)
 git status --porcelain | grep '^??'        # untracked files a committed file might reference
 dotnet build src/<TheProjectYouTouched> -c Release -warnaserror --no-restore   # match the CI flags
 

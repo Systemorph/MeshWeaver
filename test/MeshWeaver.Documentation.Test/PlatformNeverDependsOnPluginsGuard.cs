@@ -112,6 +112,12 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "read; neither checks anything out. Core asks no dependent to run its suites "
                 + "(policy `dependents-verify-on-their-side`, which superseded "
                 + "`dependent-suites-affected-gate`): a sibling's suites never decide a core merge"),
+            new KeyValuePair<string, string>("pr-body-edited.yml",
+                "the same `cross-repo-pair` read as dotnet-test.yml, re-made when a pull-request BODY is "
+                + "edited: it judges the edited body with the same gate scripts (scripts/preflight-pr.py) "
+                + "so it can decide whether the Build-and-Test run's verdict went stale and must be re-run "
+                + "(Doc/Architecture/PrePrPreflight). Same App, same scoped read-only token, nothing "
+                + "checked out; it re-runs core's own run and decides no merge itself"),
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),
