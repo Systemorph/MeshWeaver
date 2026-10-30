@@ -128,7 +128,7 @@ public class ADeclaredModuleParksOnlyWithoutAnInstallRecordTest(ITestOutputHelpe
             await MeshService.CreateNode(node).Should().Within(TestTimeouts.Convergence)
                 .Emit(cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.Convergence)
-            .Match(n => n?.Content is NodeTypeDefinition d
+            .Match(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && string.Equals(d.LatestAssemblyMvid, SeededMvid, StringComparison.Ordinal),
                 cancellationToken: TestContext.Current.CancellationToken);
     }
@@ -153,14 +153,14 @@ public class ADeclaredModuleParksOnlyWithoutAnInstallRecordTest(ITestOutputHelpe
     private async Task<NodeTypeDefinition> Settled(string path)
     {
         var node = await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.CrossSilo)
-            .Match(n => n?.Content is NodeTypeDefinition d
+            .Match(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && (d.CompilationStatus == CompilationStatus.Error
                             || (d.CompilationStatus == CompilationStatus.Ok
                                 && (d.DeliveryHoldReason is { Length: > 0 }
                                     || !string.Equals(d.LatestAssemblyMvid, SeededMvid, StringComparison.Ordinal)))),
                 "every route into a compile settles: a Roslyn pass, a hold or a named park",
                 cancellationToken: TestContext.Current.CancellationToken);
-        return (NodeTypeDefinition)node.Content!;
+        return node!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
     }
 
     [Fact]
@@ -279,6 +279,61 @@ public class DeclaredModuleVersionDecisionTest
                 },
                 new JsonSerializerOptions())
             .Should().Be(expected);
+
+    private static MeshNode Record(string json) =>
+        new("Store", NodeTypeCompilationHelpers.InstallRecordsPartition)
+        {
+            Content = JsonDocument.Parse(json).RootElement.Clone(),
+        };
+
+    [Fact]
+    public void AReadRecord_NamesItsTarget_ElseItsId()
+    {
+        NodeTypeCompilationHelpers.InstalledTargetOf(
+                NodeReadOutcome.Present(Record("{\"id\":\"Store\",\"targetPartition\":\"Shop\"}")),
+                "Plugins/Store", "Store", new JsonSerializerOptions())
+            .Should().Be("Shop");
+        NodeTypeCompilationHelpers.InstalledTargetOf(
+                NodeReadOutcome.Present(Record("{\"id\":\"Store\"}")), "Plugins/Store", "Store", new JsonSerializerOptions())
+            .Should().Be("Store", "a readable record declaring no target targets its id — the installer's default");
+        NodeTypeCompilationHelpers.InstalledTargetOf(
+                NodeReadOutcome.Absent, "Plugins/Store", "Store", new JsonSerializerOptions())
+            .Should().BeNull("a record that is gone installs nothing");
+    }
+
+    /// <summary>A record that could not be read must not be credited to its id: <c>Plugins/Store</c>
+    /// may target <c>Shop</c>, and inventing <c>Store</c> would park <c>Shop</c> (review on #7640).</summary>
+    [Fact]
+    public void AnUnreadRecord_IsUnknown_NeverItsId()
+    {
+        var options = new JsonSerializerOptions();
+        ((Action)(() => _ = NodeTypeCompilationHelpers.InstalledTargetOf(
+                NodeReadOutcome.Unavailable(new TimeoutException("owner did not answer")), "Plugins/Store", "Store", options)))
+            .Should().Throw<InvalidOperationException>();
+        ((Action)(() => _ = NodeTypeCompilationHelpers.InstalledTargetOf(
+                NodeReadOutcome.Present(new MeshNode("Store", NodeTypeCompilationHelpers.InstallRecordsPartition)),
+                "Plugins/Store", "Store", options)))
+            .Should().Throw<InvalidOperationException>("a record with no readable content names no target");
+        ((Action)(() => _ = NodeTypeCompilationHelpers.InstalledTargetOf(
+                NodeReadOutcome.Present(Record("\"not an object\"")), "Plugins/Store", "Store", options)))
+            .Should().Throw<InvalidOperationException>();
+    }
+
+    /// <summary>An incomplete listing is a FLOOR, never the installed set: read as one it would park an
+    /// installed package while a provider is down (review on #7640).</summary>
+    [Fact]
+    public void AnIncompleteListing_IsUnknown_NeverTheInstalledSet()
+    {
+        var items = new[] { Record("{\"id\":\"Store\"}") };
+        NodeTypeCompilationHelpers.CompleteInstallRecordListing(new QueryResultChange<MeshNode> { Items = items })
+            .Should().HaveCount(1);
+        ((Action)(() => _ = NodeTypeCompilationHelpers.CompleteInstallRecordListing(
+                new QueryResultChange<MeshNode> { Items = items, SnapshotIncomplete = true })))
+            .Should().Throw<InvalidOperationException>().WithMessage("*INCOMPLETE*");
+        ((Action)(() => _ = NodeTypeCompilationHelpers.CompleteInstallRecordListing(
+                new QueryResultChange<MeshNode> { Items = items, SilentProviders = ["postgres"] })))
+            .Should().Throw<InvalidOperationException>().WithMessage("*postgres*");
+    }
 
     [Fact]
     public void TheReason_NamesThePartition_TheVersion_AndTheFixes()

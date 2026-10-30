@@ -3794,7 +3794,8 @@ internal static class NodeTypeCompilationHelpers
     /// (<c>PackageInstaller.TargetPartitionOf</c>). The content is read through JSON, in whatever
     /// shape it arrives, so the compiler layer needs no reference to the catalog's
     /// <c>PackageManifest</c>. A listed record that has gone by the time it is read is not
-    /// installed; a listed record whose content cannot be read counts under its id.</para>
+    /// installed; a listed record that cannot be read, or a listing that is incomplete (silent providers,
+    /// <c>SnapshotIncomplete</c>), makes the whole answer unknown (null) — never a guessed target.</para>
     ///
     /// <para>The listing is a fresh query, never the shared synced cache: a replayed snapshot taken
     /// before the installer wrote its record would read "no record" for a package whose release
@@ -3812,7 +3813,7 @@ internal static class NodeTypeCompilationHelpers
             .Timeout(InstallRecordReadBudget)
             .SelectMany(change =>
             {
-                var listed = change.Items
+                var listed = CompleteInstallRecordListing(change)
                     .Where(n => !string.IsNullOrWhiteSpace(n.Path) && !string.IsNullOrWhiteSpace(n.Id))
                     .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
                     .Select(g => (Path: g.Key, Id: g.First().Id))
@@ -3824,14 +3825,12 @@ internal static class NodeTypeCompilationHelpers
                         .RunAsSystem(() => hub.GetMeshNodeOutcome(
                             record.Path, InstallRecordReadBudget, ReadTimeoutBehavior.EmitNull))
                         .Take(1)
-                        .Select(outcome => outcome.Status switch
-                        {
-                            NodeReadStatus.Present => TargetPartitionOf(outcome.Node, options) ?? record.Id,
-                            NodeReadStatus.Absent => null,
-                            _ => record.Id,
-                        })
-                        .DefaultIfEmpty(record.Id)
-                        .Catch<string?, Exception>(_ => Observable.Return<string?>(record.Id)))
+                        .ToList()
+                        // An empty read is no answer: unknown, never the record's id.
+                        .Select(read => read.Count == 0
+                            ? throw new InvalidOperationException(
+                                $"the install record '{record.Path}' answered no read, so the partition it targets is unknown")
+                            : InstalledTargetOf(read[0], record.Path, record.Id, options)))
                     .Merge()
                     .ToList()
                     .Select(targets => targets
@@ -3849,6 +3848,79 @@ internal static class NodeTypeCompilationHelpers
                     InstallRecordsPartition, InstallRecordReadBudget.TotalSeconds);
                 return Observable.Return<ImmutableHashSet<string>?>(null);
             });
+    }
+
+    /// <summary>
+    /// The install-record listing's items, when the listing was read COMPLETELY. A frame naming
+    /// silent providers, or marked <see cref="QueryResultChange{T}.SnapshotIncomplete"/>, is a FLOOR
+    /// that may be missing a record, and read as the installed set it would park or hold an installed
+    /// package during a provider failure. So it throws, which <see cref="InstalledPartitions"/> turns
+    /// into "unknown" (null) — and unknown compiles. Pure.
+    /// </summary>
+    /// <param name="change">The listing's first frame.</param>
+    /// <returns>The listed records.</returns>
+    /// <exception cref="InvalidOperationException">The listing is incomplete.</exception>
+    internal static IReadOnlyList<MeshNode> CompleteInstallRecordListing(QueryResultChange<MeshNode> change)
+    {
+        if (change.SilentProviders is { Count: > 0 } silent)
+            throw new InvalidOperationException(
+                $"the install-record listing under '{InstallRecordsPartition}' is INCOMPLETE: query provider(s) "
+                + $"[{string.Join(", ", silent)}] did not answer, so which packages are installed is unknown");
+        if (change.SnapshotIncomplete)
+            throw new InvalidOperationException(
+                $"the install-record listing under '{InstallRecordsPartition}' is INCOMPLETE: a provider dropped "
+                + "part of its read, so which packages are installed is unknown");
+        return change.Items;
+    }
+
+    /// <summary>
+    /// The partition one listed install record names, from its point read: its
+    /// <c>targetPartition</c>, else its id (the installer's default) — but only when the record was
+    /// READ. <see langword="null"/> when the record is genuinely gone (not installed). Any other
+    /// outcome — unavailable, a delete in flight, content that could not be read — is UNKNOWN and
+    /// throws: substituting the id would invent a target partition (a record <c>Store</c> that
+    /// targets <c>Shop</c> would then park <c>Shop</c>). Pure.
+    /// </summary>
+    /// <param name="outcome">The point read of the record.</param>
+    /// <param name="path">The record's path, for the refusal.</param>
+    /// <param name="id">The record's id — its target when its readable content declares none.</param>
+    /// <param name="options">Serializer options for the content.</param>
+    /// <returns>The target partition, or null when the record is absent.</returns>
+    /// <exception cref="InvalidOperationException">The record's target could not be determined.</exception>
+    internal static string? InstalledTargetOf(
+        NodeReadOutcome outcome, string path, string id, System.Text.Json.JsonSerializerOptions options)
+        => outcome.Status switch
+        {
+            NodeReadStatus.Absent => null,
+            NodeReadStatus.Present when ReadsAsObject(outcome.Node, options) =>
+                TargetPartitionOf(outcome.Node, options) ?? id,
+            NodeReadStatus.Present => throw new InvalidOperationException(
+                $"the install record '{path}' was read but its content could not be, so the partition it targets is unknown"),
+            _ => throw new InvalidOperationException(
+                $"the install record '{path}' could not be read ({outcome.Status}), so the partition it targets is unknown",
+                outcome.Failure),
+        };
+
+    /// <summary>Whether a record's content reads as a JSON object — the shape a <c>targetPartition</c>
+    /// member is read from. Pure.</summary>
+    private static bool ReadsAsObject(MeshNode? record, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (record?.Content is null)
+            return false;
+        try
+        {
+            var element = record.Content switch
+            {
+                System.Text.Json.JsonElement e => e,
+                System.Text.Json.Nodes.JsonNode n => System.Text.Json.JsonSerializer.SerializeToElement(n, options),
+                var o => System.Text.Json.JsonSerializer.SerializeToElement(o, o.GetType(), options),
+            };
+            return element.ValueKind == System.Text.Json.JsonValueKind.Object;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>The <c>targetPartition</c> member of an install record's content, whatever shape the
