@@ -196,12 +196,19 @@ public static class TokenPrincipalAuditing
 
     /// <summary>The credential a node carries, read as a token verdict reads it; an index row
     /// (it names the record it points to) is not a credential and yields null.</summary>
+    /// <remarks>🛡️ A node is read as a POINTER only where <see cref="ApiTokenVerdict.Decide"/> reads
+    /// pointers: a direct child of the global index namespace (review of #7619). Anywhere else the
+    /// verdict reads the node as the credential itself, so a record carrying a stray
+    /// <c>tokenPath</c> is still judged — it cannot hide from the audit by looking like an index.</remarks>
     private static ApiToken? TokenOf(MeshNode node, JsonSerializerOptions options)
     {
-        if (Read<ApiTokenIndex>(node, options) is { TokenPath.Length: > 0 })
+        if (IsIndexRow(node) && Read<ApiTokenIndex>(node, options) is { TokenPath.Length: > 0 })
             return null;
         return Read<ApiToken>(node, options);
     }
+
+    private static bool IsIndexRow(MeshNode node) =>
+        string.Equals(node.Namespace, ApiTokenVerdict.IndexNamespace, StringComparison.OrdinalIgnoreCase);
 
     private static T? Read<T>(MeshNode node, JsonSerializerOptions options) where T : class
     {
@@ -233,12 +240,16 @@ public static class TokenPrincipalAuditing
                 .Take(1)
                 .Timeout(ReadBudget));
 
+        // The global index namespace is listed UNFILTERED by type (review of #7619): the verdict's
+        // legacy branch authenticates whatever credential content sits at ApiToken/{hashPrefix},
+        // whatever its node type, so the audit must read every row there too.
         return List($"nodeType:{TokenRecordType} partitions:all")
             .Zip(List($"namespace:Admin scope:descendants nodeType:{TokenRecordType}"),
-                (fanOut, admin) => (fanOut, admin))
+                List($"namespace:{ApiTokenVerdict.IndexNamespace} scope:children"),
+                (fanOut, admin, index) => (fanOut, admin, index))
             .Select(read =>
             {
-                var changes = new[] { read.fanOut, read.admin };
+                var changes = new[] { read.fanOut, read.admin, read.index };
                 var nodes = changes.SelectMany(c => c.Items)
                     .Where(n => n.Path is not null)
                     .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
@@ -280,7 +291,8 @@ public static class TokenPrincipalAuditing
     /// <summary>
     /// The request node's own hub: on activation, a request that has not started is checked (creator
     /// a platform admin, a reason given), marked Running, swept as System and written back — once.
-    /// A request that already ran is left exactly as it is.
+    /// A request that already ran is left exactly as it is; one found at Running was interrupted
+    /// and is closed as Failed.
     /// </summary>
     private static void Execute(IMessageHub hub)
     {
@@ -311,6 +323,16 @@ public static class TokenPrincipalAuditing
             .SelectMany(node =>
             {
                 var request = node!.ContentAs<TokenPrincipalAudit>(options) ?? new TokenPrincipalAudit();
+                // A request found at Running on ACTIVATION was interrupted: the sweep lives only as
+                // long as the activation that started it, so no executor remains to finish it. It is
+                // closed as Failed, never resumed — a new request re-authorizes from scratch (review
+                // of #7619).
+                if (request.Status == TokenPrincipalAuditStatus.Running)
+                    return Write(r => r with
+                    {
+                        Status = TokenPrincipalAuditStatus.Failed, CompletedAt = DateTimeOffset.UtcNow,
+                        Error = "the sweep was interrupted before it wrote a result (its activation ended); nothing is claimed — create a new request to run it again",
+                    });
                 if (request.Status is not null)
                     return Observable.Empty<MeshNode>();
                 var creator = node.CreatedBy;

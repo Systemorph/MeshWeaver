@@ -153,6 +153,71 @@ public class TokenPrincipalAuditTest(ITestOutputHelper output) : MonolithMeshTes
         TokenPrincipalAuditing.IsInProtectedNamespace($"{TokenPrincipalAudit.Namespace}/x").Should().BeTrue();
     }
 
+    /// <summary>
+    /// 🛡️ A token RECORD whose raw content also carries a <c>tokenPath</c> is still a credential to the
+    /// verdict (it reads pointers only at <c>ApiToken/{hashPrefix}</c>), so the audit must judge it too
+    /// and must not skip it as an index row (review of #7619).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ATokenRecordCarryingAStrayTokenPath_IsStillJudged()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var raw = System.Text.Json.JsonDocument.Parse(
+            $$"""{"tokenHash":"{{Hash}}","userId":"{{WellKnownUsers.System}}","label":"disguised","tokenPath":"{{Alice}}/ApiToken/bound"}""").RootElement.Clone();
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("disguised", $"{Alice}/ApiToken")
+            {
+                Name = "disguised", NodeType = "ApiToken", Content = raw,
+            }))
+            .Should().Within(Budget).Emit("seed the disguised record", ct);
+
+        var result = await TokenPrincipalAuditing.Sweep(Mesh).Should().Within(Budget).Emit("the sweep must answer", ct);
+        result.Mismatches.Select(m => m.Path).Should().Contain($"{Alice}/ApiToken/disguised",
+            "outside the index namespace the verdict reads this node as a credential naming System");
+    }
+
+    /// <summary>
+    /// 🛡️ The verdict's legacy branch authenticates credential content at <c>ApiToken/{hashPrefix}</c>
+    /// whatever the node's type, so an untyped-as-token legacy row naming System is listed too
+    /// (review of #7619).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ALegacyCredentialInTheIndexNamespace_IsJudgedWhateverItsType()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("bbbbbbbbbbbb", ApiTokenVerdict.IndexNamespace)
+            {
+                Name = "legacy", NodeType = "Markdown",
+                Content = new ApiToken { TokenHash = Hash, UserId = WellKnownUsers.System, Label = "legacy" },
+            }))
+            .Should().Within(Budget).Emit("seed the legacy row", ct);
+
+        var result = await TokenPrincipalAuditing.Sweep(Mesh).Should().Within(Budget).Emit("the sweep must answer", ct);
+        Output.WriteLine($"tokens read={result.TokensRead} complete={result.Complete} ({result.Incomplete})");
+        result.Mismatches.Select(m => m.Path).Should().Contain($"{ApiTokenVerdict.IndexNamespace}/bbbbbbbbbbbb",
+            "a legacy credential at the index path authenticates whatever its type");
+    }
+
+    /// <summary>
+    /// A request found at Running when its hub activates was interrupted — the activation that ran it
+    /// is gone — so it is closed as Failed instead of reading Running forever (review of #7619).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARequestFoundRunningOnActivation_IsClosedAsFailed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("interrupted", TokenPrincipalAudit.Namespace)
+            {
+                Name = "interrupted", NodeType = TokenPrincipalAudit.NodeType,
+                Content = new TokenPrincipalAudit { Reason = "test", Status = TokenPrincipalAuditStatus.Running, RequestedBy = PlatformAdmin },
+            }))
+            .Should().Within(Budget).Emit("seed the interrupted request", ct);
+
+        var settled = await Settled("interrupted", ct);
+        settled.Status.Should().Be(TokenPrincipalAuditStatus.Failed);
+        settled.Error.Should().Contain("interrupted");
+        settled.Mismatches.Should().BeEmpty("an interrupted run claims nothing");
+    }
+
     /// <summary>The request, created by <paramref name="creator"/> as themselves, then read until it settles.</summary>
     private async Task<TokenPrincipalAudit> Request(string id, string creator, CancellationToken ct)
     {
