@@ -214,6 +214,15 @@ on:
           `nothing-to-gate` is not `true`): a caller's own ratchet over that log keys on this output
           and takes the followed verdict instead — never "no log, so nothing to ratchet".
         value: ${{ jobs.verify.outputs.executed-on }}
+      cascade-root:
+        description: >
+          When this lane's aggregator went red because one of the lane's own jobs FAILED, the job it
+          names (ci-cascade-verdict.py) — so a caller's aggregator that needs this call names the
+          true root instead of the call. Empty otherwise.
+        value: ${{ jobs.verify.outputs.cascade-root }}
+      cascade-waiting:
+        description: The waiting-for-platform sentence of that root, when it is waiting rather than broken.
+        value: ${{ jobs.verify.outputs.cascade-waiting }}
       gate-log-artifact:
         description: >-
           The name of the artifact holding the tester's stdout (gate-log-<sha>) — EMPTY when the gate
@@ -3043,6 +3052,8 @@ jobs:
     outputs:
       gate-log-artifact: ${{ steps.fold.outputs.artifact }}
       executed-on: ${{ steps.executor.outputs.executed-on }}
+      cascade-root: ${{ steps.cascade.outputs.root }}
+      cascade-waiting: ${{ steps.cascade.outputs.waiting }}
     steps:
       - name: The executor is one this lane knows
         id: executor
@@ -3094,6 +3105,22 @@ jobs:
       # gate the plan did not predict, a gate that did not succeed — is RED here, with the cause
       # named. A `uses:` job cannot carry steps, so this is where the caller's "a failed need must
       # not SILENCE this gate" guard lives for the lane's own internals.
+      # 🔗 A CASCADE IS REPORTED ONCE (policy `report-a-cascade-once`, ReadingCiSignals). A failed
+      # PLAN or prepared BAKE means no shard could start, so the fold below would only restate it as
+      # missing shard logs. ONE line names that job; this context stays RED. Only those two are
+      # roots here: a SHARD that failed is the gate's own subject, and the fold still runs to name
+      # which shard and to hand the caller's ratchet its log.
+      - name: Report an upstream red once
+        id: cascade
+        if: inputs.executor != 'host'
+        uses: Systemorph/MeshWeaver/.github/actions/cascade-verdict@main
+        with:
+          needs: |
+            {"plan": ${{ toJSON(needs.plan) }}, "bake": ${{ toJSON(needs.bake) }}}
+          job: Compile + render node repos
+          names: |
+            plan=Plan the gate's shards
+            bake=Bake once for every shard
       - name: The fan-out must have happened, or the plan must have said why not
         if: inputs.executor != 'host'
         id: expect
@@ -3213,7 +3240,7 @@ jobs:
       # own, so the two ways this context must go red are asserted BY NAME, after the evidence has
       # been handed over: a shard that did not succeed, and a fold that refused the cover.
       - name: A shard that did not succeed, or a fold that refused, fails this context
-        if: ${{ inputs.executor != 'host' && (always() && needs.plan.outputs.nothing-to-gate != 'true') }}
+        if: ${{ inputs.executor != 'host' && (always() && needs.plan.outputs.nothing-to-gate != 'true' && steps.cascade.outputs.cascade != 'true') }}
         run: |
           set -euo pipefail
           failed=0

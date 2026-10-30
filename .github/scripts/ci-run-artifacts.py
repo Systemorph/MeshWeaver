@@ -55,6 +55,22 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ ()+-]{0,239}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")
 DIGEST_RE = re.compile(r"^[a-f0-9]{64}$")
 
+# 🚨 AN EXACT-NAME MISS IS INFRA, NOT A CODE FINDING (policy `report-a-cascade-once`, ReadingCiSignals →
+# "An artifact-store miss is NOT MEASURED"). The consumer runs only after its producer finished
+# (`needs:`), so a producer that SUCCEEDED has published — a miss then says something about the
+# shared store (a cifs client's cached view, a prune, another share behind the same mount path),
+# never about the diff. One mechanical re-read after this pause, then the miss is reported as
+# NOT MEASURED with what the store DID hold for that name, and filed on the tracking issue below.
+# A consumer whose producer FAILED must not get here at all: it reports the producer's red once
+# (ci-cascade-verdict.py) instead of downloading what was never written.
+MISS_RECHECK_SECONDS = 20
+MISS_TRACKING_ISSUE = "https://github.com/Systemorph/MeshWeaver/issues/7656"
+MISS_TITLE = "NOT MEASURED — artifact store miss"
+
+
+class StoreMiss(Red):
+    """An exact-name artifact the store does not hold, after one re-read: INFRA, never a code red."""
+
 
 def boolean(value: str | bool) -> bool:
     """Accept action inputs' true/false strings as well as bare CLI switches."""
@@ -349,18 +365,57 @@ class Artifacts:
                 raise Red("artifact archive inventory differs from its manifest")
         return members
 
+    def what_the_store_holds(self, name: str) -> str:
+        """Why an exact name missed, from what the store DOES hold for it — the four known shapes."""
+        folder = self.root / self.name_prefix(name)
+        if not folder.is_dir():
+            return ("the store holds NOTHING under this name for this run (no upload reached this "
+                    "share: the producer did not publish it, or published to another share)")
+        attempts = sorted(int(p.name) for p in folder.iterdir() if p.name.isdigit())
+        staging = [p.name for p in folder.iterdir() if p.name.startswith(".publish-")]
+        later = [a for a in attempts if a > self.attempt]
+        earlier = [a for a in attempts if a <= self.attempt]
+        if staging and not earlier:
+            return (f"an upload is still IN FLIGHT ({len(staging)} staging folder(s)) and none is "
+                    "published — the producer's upload had not completed when this job read")
+        if later and not earlier:
+            return (f"published only by LATER attempt(s) {later}, and this job reads attempt "
+                    f"{self.attempt} — the wrong attempt number was asked for")
+        for attempt in sorted(earlier, reverse=True):
+            manifest = folder / str(attempt) / "manifest.json"
+            if not manifest.is_file():
+                return f"attempt {attempt} has a folder but NO manifest (a partial or pruned publication)"
+            try:
+                doc = json.loads(manifest.read_text())
+                if doc.get("expiresAt", 0) <= time.time():
+                    return f"attempt {attempt} was published but has EXPIRED (retention prune window)"
+            except (OSError, ValueError):
+                return f"attempt {attempt}'s manifest is unreadable"
+        return (f"attempts {attempts} are present and readable now — the first read did not see "
+                "them (a stale view of the shared mount)")
+
     def download(self, destination: Path, name: str = "", pattern: str = "",
-                 merge_multiple: bool = False) -> int:
+                 merge_multiple: bool = False, recheck_seconds: float | None = None) -> int:
         selected = self.list(name, pattern)
-        if not selected:
-            if name:
+        if not selected and name:
+            # ONE mechanical re-read: the producer finished before this job started, so a miss on
+            # the first read may be this runner's cached view of the share. Never a loop.
+            time.sleep(MISS_RECHECK_SECONDS if recheck_seconds is None else recheck_seconds)
+            selected = self.list(name, pattern)
+            if not selected:
                 # 🚨 Name the STORE, not just the absence (#4761). This layer rides on the same
                 # FileStore, and `file:<dir>` is a path: two runner pools can mount two different
                 # shares behind it, in which case a producer's artifact is genuinely absent here and
                 # nothing about the message would have said so.
-                raise Red("no artifact matches this repository, run, attempt and name — "
-                          f"this runner's {self.store.spec} is {self.store.store_id()}, and the "
-                          "job that uploaded prints its own identity beside its `store: wrote` line")
+                raise StoreMiss(
+                    "no artifact matches this repository, run, attempt and name after one re-read — "
+                    f"{self.what_the_store_holds(name)}. This runner's {self.store.spec} is "
+                    f"{self.store.store_id()}, and the job that uploaded prints its own identity "
+                    "beside its `store: wrote` line. INFRA, not a code finding: nothing in the diff "
+                    f"was measured by this job. Tracked on {MISS_TRACKING_ISSUE}")
+        if not selected:
+            if name:  # unreachable: an exact-name miss raised above
+                raise StoreMiss("no artifact matches this repository, run, attempt and name")
             # Pattern/all downloads are collections: an empty collection is valid, as in
             # actions/download-artifact. The constructor and list still validate the store
             # and manifests; unavailable/corrupt storage must never become an empty success.
@@ -490,6 +545,9 @@ def main(argv: list[str] | None = None) -> int:
                 artifacts.verified_archive(docs[0], Path(temp) / "artifact.tar.gz")
             emit("present", "true")
         return 0
+    except StoreMiss as ex:
+        print(f"::error title={MISS_TITLE}::ci-run-artifacts: {MISS_TITLE} (infra) — {ex}", file=sys.stderr)
+        return 1
     except (Red, OSError, tarfile.TarError, EOFError) as ex:
         print(f"::error::ci-run-artifacts: {ex}", file=sys.stderr)
         return 1

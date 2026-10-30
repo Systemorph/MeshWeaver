@@ -117,8 +117,13 @@ JOB_LOG_LINE = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ", re
 #     signature named the feed. Both forms assert the feed's OWN hostname. NU1301 is NuGet's
 #     "could not reach the source" code; a package that does not EXIST is NU1101/NU1102, and a
 #     private feed refusing a credential names another host — neither matches.
+#   NOT MEASURED — artifact store miss — ci-run-artifacts.py's exact-name miss AFTER its one re-read
+#     (MeshWeaver#7656). The job measured nothing about the diff; its producer had succeeded (a
+#     consumer whose producer FAILED reports that red once instead, and the failed producer vetoes
+#     the retry on its own log). Matched on the EMITTED annotation title, never the echoed source.
 SIGNATURES = re.compile(
-    r"meshweaver\.azurecr\.io.*connection refused"
+    r"##\[error\]ci-run-artifacts: NOT MEASURED — artifact store miss \(infra\)"
+    r"|meshweaver\.azurecr\.io.*connection refused"
     r"|dial tcp .*: connect: connection refused"
     r"|registry answered 503 for https://memex\.meshweaver\.cloud"
     r"|error NU1301: Failed to retrieve information about '[^']+' from remote source 'https://api\.nuget\.org/"
@@ -133,8 +138,14 @@ SIGNATURES = re.compile(
 # `needs:` failed) and that line matched nothing, which is exactly how #6364's restore blip went
 # un-retried. `skipped` is the only accepted conclusion: a shard that FAILED or was CANCELLED makes
 # the matrix `failure`/`cancelled`, and those are that shard's own red, judged on its own log.
+#
+# 🔗 THE CASCADE LINE (ci-cascade-verdict.py, policy `report-a-cascade-once`): an aggregator that ran
+# NONE of its own checks because an upstream job failed prints exactly one `red because <root> … —
+# see it` and stops. Consequential by construction: the root is a failed job of the same run, judged
+# on its own log. Matched on the EMITTED `##[error]` record only — never the echoed `run:` source.
 CONSEQUENTIAL_SIGNATURES = re.compile(
     r"The test matrix concluded 'skipped' — at least one shard did not succeed"
+    r"|##\[error\]red because .+ — see (?:it|them)\."
 )
 
 # 🚨 BLOCK signatures span TWO consecutive log lines, so they are matched on the log with newlines
@@ -892,6 +903,26 @@ def _self_test_cases(live_summary: str | None) -> int:
     failed_matrix = consolidate.replace("concluded 'skipped'", "concluded 'failure'")
     check("a matrix that concluded 'failure' is a shard's own red, NOT consequential",
           not decide("o/r", "9", _fake({1: nuget_reset, 2: failed_matrix})).retry)
+
+    # ── report-a-cascade-once: the cascade line is consequential; the store miss is transient. ──
+    cascade = REAL_LOG_HEAD + (
+        "2026-10-30T07:37:48.2347562Z ##[error]red because Resolve the released platform failed — see it. "
+        "This job's own checks were not run: behind that red they would only restate it.\n")
+    store_miss = REAL_LOG_HEAD + (
+        "2026-10-30T06:42:58.1824095Z ##[error]ci-run-artifacts: NOT MEASURED — artifact store miss "
+        "(infra) — no artifact matches this repository, run, attempt and name after one re-read — x\n")
+    check("a cascade line is CONSEQUENTIAL: alone it never retries", not decide("o/r", "9", _fake({1: cascade})).retry)
+    check("...beside a transient it retries with it", decide("o/r", "9", _fake({1: nuget_reset, 2: cascade})).retry)
+    check("...beside a REAL red it never retries", not decide("o/r", "9", _fake({1: real_red, 2: cascade})).retry)
+    check("...and only the EMITTED record counts, never the echoed source",
+          classify(REAL_LOG_HEAD + "2026-10-30T07:37:48.0Z \x1b[36;1mecho red because X failed — see it.\x1b[0m\n") is None)
+    check("an artifact-store miss (NOT MEASURED) is a transient: one mechanical retry",
+          decide("o/r", "9", _fake({1: store_miss})).retry)
+    check("...but a store miss beside a REAL red (its producer failed) never retries",
+          not decide("o/r", "9", _fake({1: real_red, 2: store_miss})).retry)
+    check("...and the PRE-classification miss line (no NOT MEASURED) matches nothing",
+          classify(REAL_LOG_HEAD + "2026-10-30T06:42:58.1Z ##[error]ci-run-artifacts: no artifact matches "
+                   "this repository, run, attempt and name — x\n") is None)
 
     # ── A retry actually posts. ──
     fetch = _fake({1: escaped})
