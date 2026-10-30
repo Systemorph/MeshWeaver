@@ -111,7 +111,10 @@ def _tar_tree(src: str, arc_root: str, dest: str) -> int:
             entries.append((full, f"{arc_root}/{rel}" if arc_root else rel))
     if not entries:
         raise Red(f"{src} holds no file to hand back")
-    with tarfile.open(dest, "w", format=tarfile.PAX_FORMAT) as tf:
+    # dereference=True: two hard links to one inode are each archived with their CONTENT. Without it gettarinfo
+    # encodes the second as a hard-link member, which extract() — rightly — refuses, so the stage would succeed
+    # with a hand-back its own reader rejects.
+    with tarfile.open(dest, "w", format=tarfile.PAX_FORMAT, dereference=True) as tf:
         for full, arc in entries:
             info = tf.gettarinfo(full, arcname=arc)
             info.uid = info.gid = 0
@@ -440,6 +443,20 @@ def self_test() -> int:
     os.symlink("/etc/passwd", os.path.join(bin_dir, "link.dll"))
     check("RED: a symlink in the tester bin is never handed back", red(stage, repo, head, evidence, os.path.join(tmp, "x5")))
     os.remove(os.path.join(bin_dir, "link.dll"))
+    os.link(os.path.join(bin_dir, "MeshWeaver.Messaging.dll"), os.path.join(bin_dir, "MeshWeaver.Messaging.copy.dll"))
+    hard = os.path.join(tmp, "art-hardlink")
+    stage(repo, head, evidence, hard)
+    with tarfile.open(os.path.join(hard, UNIT, TESTER_TAR)) as tf:
+        kinds = {m.name.rsplit("/", 1)[-1]: m.isreg() for m in tf}
+    check("two hard links to one file are BOTH archived as regular files (with content, never a link member)",
+          kinds.get("MeshWeaver.Messaging.dll") and kinds.get("MeshWeaver.Messaging.copy.dll"), kinds)
+    try:
+        got = extract(os.path.join(hard, UNIT, TESTER_TAR), os.path.join(tmp, "hard-x"), tester_member, "t", "t")
+        check("…and the fetch side extracts its own hand-back of hard-linked files",
+              any(r.endswith("MeshWeaver.Messaging.copy.dll") for r in got), got)
+    except Red as e:
+        check("…and the fetch side extracts its own hand-back of hard-linked files", False, e)
+    os.remove(os.path.join(bin_dir, "MeshWeaver.Messaging.copy.dll"))
 
     print("fetch — in the GitHub-hosted job, by receipt:")
     blobs: dict[str, bytes] = {}
