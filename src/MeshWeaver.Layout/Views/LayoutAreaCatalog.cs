@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout.Views;
@@ -32,9 +33,14 @@ public static class LayoutAreaCatalogArea
     /// <returns>A <see cref="UiControl"/> representing the complete catalog grid.</returns>
     [Browsable(false)]
     public static UiControl LayoutAreaCatalog(LayoutAreaHost host, RenderingContext ctx)
+        // Data-bound: the cards render once the areas' XML-doc descriptions are in memory, which the
+        // mesh's I/O pool reads — never the thread building this view.
+        => Controls.Stack.WithWidth("100%")
+            .WithView(host.LayoutDefinition.ObserveVisibleAreaDefinitions()
+                .Select(layouts => (UiControl?)CatalogSections(layouts, host.LayoutDefinition.ThumbnailPattern)));
+
+    private static UiControl CatalogSections(IReadOnlyList<LayoutAreaDefinition> layouts, ThumbnailPattern? thumbnailPattern)
     {
-        var layouts = host.GetLayoutAreaDefinitions();
-        var thumbnailPattern = host.LayoutDefinition.ThumbnailPattern;
 
         // Group layouts by category, then order within groups
         var groupedLayouts = layouts

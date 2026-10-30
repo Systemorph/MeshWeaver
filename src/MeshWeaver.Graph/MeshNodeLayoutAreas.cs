@@ -16,6 +16,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -2305,8 +2306,7 @@ public static class MeshNodeLayoutAreas
             // one this hub's MeshDataSource was CONFIGURED with — structure, not data — so the page
             // is a template that needs no read of the node at all (Doc/GUI/DataBinding →
             // "Templates first, data later").
-            return Observable.Return<UiControl?>(
-                RenderNodeSchema(ConfiguredContentType(host.Workspace), host.Hub));
+            return OnDocumentationReadEdge(host.Hub, () => RenderNodeSchema(ConfiguredContentType(host.Workspace), host.Hub));
 
         // Try to get the type from the registry
         var typeRegistry = host.Hub.ServiceProvider.GetService<ITypeRegistry>();
@@ -2318,9 +2318,19 @@ public static class MeshNodeLayoutAreas
             return Observable.Return<UiControl?>(Controls.Markdown($"*Type '{typeName}' not found.*"));
 
         // Generate JSON schema for the type using hub's JSON options
-        var schema = GenerateJsonSchema(typeDef.Type, host.Hub);
-        return Observable.Return<UiControl?>(new MarkdownControl($"## JSON Schema: {typeName}\n\n```json\n{schema}\n```"));
+        return OnDocumentationReadEdge(host.Hub, () =>
+            new MarkdownControl($"## JSON Schema: {typeName}\n\n```json\n{GenerateJsonSchema(typeDef.Type, host.Hub)}\n```"));
     }
+
+    /// <summary>
+    /// Runs a schema render on the mesh's file-system I/O pool. The schema exporter walks the type's
+    /// whole property graph and reads the XML-doc summary of every property it meets — documentation
+    /// files of assemblies nobody can name in advance — so the render runs where a blocking read
+    /// belongs, never on the thread building the view (Doc/Architecture/XmlDocumentationReader).
+    /// </summary>
+    private static IObservable<UiControl?> OnDocumentationReadEdge(IMessageHub hub, Func<UiControl> render)
+        => (hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
+            .InvokeBlocking<UiControl?>(_ => render());
 
     /// <summary>
     /// The content type this node hub's <see cref="MeshDataSource"/> was configured with

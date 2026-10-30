@@ -1,4 +1,7 @@
 using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Concurrency;
+using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
@@ -32,11 +35,17 @@ namespace MeshWeaver.Messaging.Serialization;
 /// <see cref="ConditionalWeakTable{TKey,TValue}.GetValue"/> is thread-safe (a racing parse is
 /// discarded) and nothing shared is mutated afterwards.</para>
 ///
-/// <para><b>Synchronous on first read.</b> A cold lookup reads and parses the file on the caller's
-/// thread, exactly as the previous third-party reader did. It cannot be warmed through the
-/// platform's IO pool from here: <c>IIoPool</c> lives in <c>MeshWeaver.Mesh.Contract</c>, which
-/// depends on this assembly, and a warm-up that the synchronous reader then waits for would be a
-/// blocking bridge.</para>
+/// <para><b>Two ways to read, and only one of them may touch the disk.</b>
+/// <see cref="Summary(MemberInfo)"/> answers synchronously and, on a cold assembly, reads and parses
+/// its documentation file on the CALLER's thread. That is acceptable where the caller is already at
+/// an I/O edge, and wrong anywhere a view is being built or a hub is being configured. Those paths
+/// use the reactive half instead: <see cref="WhenLoaded"/> (and <see cref="ObserveSummary"/> on top of
+/// it) answers at once when every snapshot a lookup needs is already in memory, and otherwise runs
+/// the cold reads through an <see cref="IBlockingReadScheduler"/> — the mesh's I/O pool, which this
+/// assembly cannot reference directly — and emits once they are done. After that emission the
+/// synchronous lookups for the same members are dictionary hits. <see cref="TrySummary(MemberInfo, out string)"/>
+/// never reads at all; it says whether the answer is already in memory. Reach the reactive half from
+/// a hub with <c>hub.WhenXmlDocsLoaded(...)</c> / <c>hub.ObserveXmlDocsSummary(...)</c>.</para>
 /// </summary>
 public sealed class XmlDocsReader
 {
@@ -53,7 +62,7 @@ public sealed class XmlDocsReader
     /// <param name="type">The type; a constructed generic type reads its definition's docs.</param>
     /// <returns>The rendered summary text.</returns>
     public string Summary(Type type)
-        => new Resolution(this).Find(type) ?? string.Empty;
+        => new Resolution(this, loadedOnly: false).Find(type) ?? string.Empty;
 
     /// <summary>
     /// The <c>&lt;summary&gt;</c> text of a member (property, field, method, constructor, event or
@@ -64,10 +73,72 @@ public sealed class XmlDocsReader
     /// <param name="member">The member.</param>
     /// <returns>The rendered summary text.</returns>
     public string Summary(MemberInfo member)
-        => new Resolution(this).Find(member) ?? string.Empty;
+        => new Resolution(this, loadedOnly: false).Find(member) ?? string.Empty;
 
-    private XmlDocFile File(Assembly assembly)
+    /// <summary>
+    /// The summary of <paramref name="member"/> (a type or a member) if it can be answered from
+    /// snapshots already in memory — WITHOUT reading any file. Returns <c>false</c> when some
+    /// documentation file the lookup needs (the member's own, or one an <c>&lt;inheritdoc/&gt;</c>
+    /// leads to) has not been loaded yet; <see cref="WhenLoaded"/> loads it at the I/O edge.
+    /// </summary>
+    /// <param name="member">The type or member.</param>
+    /// <param name="summary">The rendered summary text when the answer is in memory; otherwise empty.</param>
+    /// <returns>Whether the answer was available without a read.</returns>
+    public bool TrySummary(MemberInfo member, out string summary)
+    {
+        var resolution = new Resolution(this, loadedOnly: true);
+        var found = resolution.Find(member);
+        summary = resolution.Missed ? string.Empty : found ?? string.Empty;
+        return !resolution.Missed;
+    }
+
+    /// <summary>
+    /// Emits once every documentation file the summaries of <paramref name="members"/> need is in
+    /// memory, so that <see cref="Summary(MemberInfo)"/> for those members afterwards reads nothing.
+    /// COLD. When everything is already loaded it emits synchronously on subscribe; otherwise the
+    /// lookups — and with them the cold file reads — run through <paramref name="io"/> and the
+    /// emission follows on the pool's thread. With no scheduler (a hub without I/O pools) the work is
+    /// hopped onto the task pool, so the subscribing thread never reads either way.
+    /// </summary>
+    /// <param name="members">The types and members whose summaries are about to be read.</param>
+    /// <param name="io">The mesh's blocking-read edge, or <c>null</c> when the hub has none.</param>
+    /// <returns>A single <see cref="Unit"/>.</returns>
+    public IObservable<Unit> WhenLoaded(IEnumerable<MemberInfo> members, IBlockingReadScheduler? io)
+        => Observable.Defer(() =>
+        {
+            var all = members.ToImmutableArray();
+            var cold = all.Where(m => !TrySummary(m, out _)).ToImmutableArray();
+            if (cold.IsEmpty)
+                return Observable.Return(Unit.Default);
+            Unit Load(CancellationToken ct)
+            {
+                foreach (var member in cold)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    _ = Summary(member);
+                }
+                return Unit.Default;
+            }
+            return io is not null
+                ? io.InvokeBlocking(Load)
+                : Observable.Defer(() => Observable.Return(Load(CancellationToken.None))).SubscribeOn(TaskPoolScheduler.Default);
+        });
+
+    /// <summary>
+    /// The summary of <paramref name="member"/>, read through <see cref="WhenLoaded"/>: emitted at once
+    /// when it is in memory, otherwise after the cold read has run at the I/O edge. COLD, one value.
+    /// </summary>
+    /// <param name="member">The type or member.</param>
+    /// <param name="io">The mesh's blocking-read edge, or <c>null</c> when the hub has none.</param>
+    /// <returns>The rendered summary text, empty when there is none.</returns>
+    public IObservable<string> ObserveSummary(MemberInfo member, IBlockingReadScheduler? io)
+        => WhenLoaded([member], io).Select(_ => Summary(member));
+
+    private XmlDocFile Load(Assembly assembly)
         => files.GetValue(assembly, static a => XmlDocFile.Load(a));
+
+    private XmlDocFile? Loaded(Assembly assembly)
+        => files.TryGetValue(assembly, out var file) ? file : null;
 
     private static Assembly AssemblyOf(MemberInfo member) => member is Type type ? type.Assembly : member.Module.Assembly;
 
@@ -92,10 +163,30 @@ public sealed class XmlDocsReader
     /// nothing. Instance-local and discarded with the lookup — the shared state stays the immutable
     /// per-assembly snapshots.
     /// </summary>
-    private sealed class Resolution(XmlDocsReader reader)
+    private sealed class Resolution(XmlDocsReader reader, bool loadedOnly)
     {
         private ImmutableDictionary<(Assembly, string), string?> resolved = ImmutableDictionary<(Assembly, string), string?>.Empty;
         private ImmutableHashSet<(Assembly, string)> open = ImmutableHashSet<(Assembly, string)>.Empty;
+
+        /// <summary>
+        /// In memory-only mode: whether the lookup needed a documentation file that is not loaded.
+        /// The answer it produced is then incomplete and must not be used.
+        /// </summary>
+        public bool Missed { get; private set; }
+
+        /// <summary>
+        /// The snapshot of <paramref name="assembly"/>: loaded on demand, or — in memory-only mode —
+        /// taken only if already loaded, recording the miss otherwise.
+        /// </summary>
+        private XmlDocFile File(Assembly assembly)
+        {
+            if (!loadedOnly)
+                return reader.Load(assembly);
+            if (reader.Loaded(assembly) is { } file)
+                return file;
+            Missed = true;
+            return XmlDocFile.Empty;
+        }
 
         /// <summary>
         /// The summary of <paramref name="member"/>: its own, else what its <c>&lt;inheritdoc/&gt;</c>
@@ -127,7 +218,7 @@ public sealed class XmlDocsReader
 
         private string? Compute(MemberInfo member)
         {
-            var doc = DocCommentId.For(member) is { } id ? reader.File(AssemblyOf(member)).Members.GetValueOrDefault(id) : null;
+            var doc = DocCommentId.For(member) is { } id ? File(AssemblyOf(member)).Members.GetValueOrDefault(id) : null;
             var summary = doc switch
             {
                 null => null,
@@ -139,7 +230,7 @@ public sealed class XmlDocsReader
             if (string.IsNullOrEmpty(summary)
                 && member is PropertyInfo { DeclaringType: { } declaringType } property
                 && DocCommentId.For(declaringType) is { } typeId
-                && reader.File(AssemblyOf(declaringType)).Members.GetValueOrDefault(typeId) is { } typeDoc
+                && File(AssemblyOf(declaringType)).Members.GetValueOrDefault(typeId) is { } typeDoc
                 && typeDoc.Params.TryGetValue(property.Name, out var recordParam))
                 return recordParam;
             return summary;
@@ -179,7 +270,7 @@ public sealed class XmlDocsReader
             if (ResolveCref(cref, assemblies) is { } target)
                 return Find(target);
             foreach (var assembly in assemblies)
-                if (reader.File(assembly).Members.GetValueOrDefault(cref) is { } doc)
+                if (File(assembly).Members.GetValueOrDefault(cref) is { } doc)
                     return doc.Summary;
             return null;
         }
