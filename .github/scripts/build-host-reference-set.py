@@ -86,15 +86,26 @@ def git(repo: Path, *args: str) -> str:
 
 
 def source_state(repo: Path) -> tuple[str, str | None]:
-    """(HEAD, a digest of the uncommitted tracked changes or None when clean). Many worktrees sit at
-    the SAME commit, so the commit alone does not say what a set was built from."""
+    """(HEAD, a digest of the uncommitted changes or None when clean). Many worktrees sit at the SAME
+    commit, so the commit alone does not say what a set was built from. "Uncommitted" covers tracked
+    edits AND untracked, non-ignored files (with their content): an SDK project compiles a new `.cs`
+    by default, so it changes the assemblies exactly as an edit does."""
     sha = git(repo, "rev-parse", "HEAD")
-    if not git(repo, "status", "--porcelain", "-z", "--untracked-files=no"):
+    tracked = bool(git(repo, "status", "--porcelain", "-z", "--untracked-files=no"))
+    untracked = sorted(p for p in git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if p)
+    if not tracked and not untracked:
         return sha, None
+    h = hashlib.sha256()
     proc = subprocess.run(["git", "-C", str(repo), "diff", "HEAD", "--binary"], capture_output=True)
     if proc.returncode != 0:
         raise SystemExit(f"✗ git diff HEAD failed in {repo}: {proc.stderr.decode(errors='replace')[:300]}")
-    return sha, hashlib.sha256(proc.stdout).hexdigest()[:12]
+    h.update(proc.stdout)
+    for rel in untracked:
+        h.update(b"\0untracked\0" + rel.encode() + b"\0")
+        f = repo / rel
+        if f.is_file():
+            h.update(f.read_bytes())
+    return sha, h.hexdigest()[:12]
 
 
 def default_out(core: tuple[str, str | None], plugins: tuple[str, str | None] | None, rid: str) -> Path:
@@ -179,7 +190,7 @@ def build(core: Path, plugins: Path | None, out: Path | None, rid: str) -> Path:
     replace = out is not None
     out = out or default_out(core_state, plugins_state, rid)
     if core_dirty:
-        print(f"  ⚠ {core} has uncommitted changes; the set carries them and records coreDirty=true.")
+        print(f"  ⚠ {core} has uncommitted changes (tracked or untracked); the set carries them and records coreDirty=true.")
     with tempfile.TemporaryDirectory(prefix="host-refs-") as tmp:
         tmp = Path(tmp)
         publish(TESTER, tmp / "tester", rid, core, [])
@@ -189,6 +200,11 @@ def build(core: Path, plugins: Path | None, out: Path | None, rid: str) -> Path:
             # The portal's csproj names `PublishProfile=DefaultContainer`, which publishes an IMAGE and
             # accepts only linux RIDs. Cleared here: what this set needs is the same /app, on disk.
             publish(PORTAL, portal, rid, plugins, [f"-p:MeshWeaverRoot={core}/", "-p:PublishProfile="])
+        # The key was read BEFORE publishing. A source edit since then means these assemblies are not
+        # the state the key names, and an identity-keyed set is kept forever once installed: refuse.
+        if source_state(core) != core_state or (plugins and source_state(plugins) != plugins_state):
+            raise SystemExit("✗ the source changed while the set was being published; no set was installed. "
+                             "Rebuild once the checkout is quiet.")
         # A staging directory of this build's OWN: a concurrent build of the same path must never
         # delete or fill it. It sits beside `out`, so the final rename stays on one filesystem.
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -239,6 +255,16 @@ def _self_test_identity_and_concurrency() -> list[str]:
                             f"different default paths; got {clean!r}, {dirty_two!r}, {dirty_three!r}")
         (repo / "a.txt").write_text("one\n", encoding="utf-8")
 
+        # An UNTRACKED source file is compiled by SDK projects by default, so it is part of the state.
+        (repo / "New.cs").write_text("class A {}\n", encoding="utf-8")
+        untracked_a = print_path()
+        (repo / "New.cs").write_text("class B {}\n", encoding="utf-8")
+        untracked_b = print_path()
+        (repo / "New.cs").unlink()
+        if len({clean, untracked_a, untracked_b}) != 3:
+            failures.append("an untracked source file (and its content) must change the default path; got "
+                            f"{clean!r}, {untracked_a!r}, {untracked_b!r}")
+
         other = "linux-x64" if host_rid() != "linux-x64" else "osx-arm64"
         refused = print_path("--rid", other)
         if refused.startswith("exit=0"):
@@ -276,6 +302,27 @@ def _self_test_identity_and_concurrency() -> list[str]:
                                     f"{sorted(p.name for p in first.parent.iterdir())}")
         finally:
             globals().update(publish=real_publish, assemble=real_assemble, CACHE=real_cache)
+
+        # A source edit DURING publish: the assemblies no longer match the key read before it, so the
+        # set must not be installed under that key (a later build of the old state would keep it).
+        def editing_publish(project: Path, out: Path, rid: str, cwd: Path, extra: list[str]) -> None:
+            fake_publish(project, out, rid, cwd, extra)
+            (repo / "a.txt").write_text("edited mid-publish\n", encoding="utf-8")
+
+        globals().update(publish=editing_publish, CACHE=tmp / "cache-edit")
+        try:
+            try:
+                build(repo, None, None, host_rid())
+                failures.append("a source edit during publish must refuse the install; the set was installed")
+            except SystemExit as exc:
+                if "changed while" not in str(exc):
+                    failures.append(f"a source edit during publish was refused for the wrong reason: {exc}")
+            cache_edit = tmp / "cache-edit"
+            if cache_edit.exists() and any(cache_edit.iterdir()):
+                failures.append(f"a refused build left {sorted(p.name for p in cache_edit.iterdir())} behind")
+        finally:
+            globals().update(publish=real_publish, CACHE=real_cache)
+            (repo / "a.txt").write_text("one\n", encoding="utf-8")
     return failures
 
 

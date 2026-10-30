@@ -326,8 +326,10 @@ Measured on darwin-arm64 (Apple silicon): the set held 224 assemblies; `canonica
 --modules Hosting` compiled 48 of 48 NodeTypes clean in 64 s; `run-node-tests.py Hosting --type
 InstanceAction` ran 56 suites with 760 of 760 cases passing in 21 s. Old sets stay under
 `~/.cache/meshweaver/refs/host-*` until you delete them. The default path is keyed by the SOURCE STATE:
-the core commit, plus a digest of its uncommitted tracked changes when there are any, and the same for
-the Plugins checkout. Many worktrees sit at one commit and share this cache, so two dirty worktrees never
+the core commit, plus a digest of its uncommitted changes when there are any (tracked edits and untracked,
+non-ignored files with their content, since a new `.cs` compiles by default), and the same for the Plugins
+checkout. A source change while the set is being published refuses the install, because the key would no
+longer name what was built. Many worktrees sit at one commit and share this cache, so two dirty worktrees never
 build into the same path. Each build stages in a directory of its own, and a set already at its path is
 kept, never replaced under a session that uses it as `--refs`. Only this host's RID is accepted: the
 manifest declares the set host-built, which is what lets `run-node-tests.py` execute it here.
