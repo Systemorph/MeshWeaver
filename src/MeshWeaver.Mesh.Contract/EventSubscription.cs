@@ -71,7 +71,51 @@ public enum EventContinuationType
     /// <see cref="EventSubscription.RepeatEvery"/> must be idempotent. Read-and-reconcile jobs are;
     /// anything that posts, sends or charges is not.</para>
     /// </summary>
-    RunScript = 4
+    RunScript = 4,
+
+    /// <summary>
+    /// Deliver the firing to the node at <see cref="EventSubscription.DeliverTo"/>: the runner writes
+    /// an <see cref="EventDelivery"/> (the subject's id — for a sign-up, the new user's id — the
+    /// subscription, the time and <see cref="EventSubscription.CreatedBy"/>) onto that node's content,
+    /// and the node's OWN hub acts on it.
+    ///
+    /// <para>🚨 <b>The one generic continuation for module-owned effects.</b> In-mesh source cannot
+    /// register a root-DI <see cref="IEventContinuationHandler"/>, so it could not own a continuation
+    /// at all; with this member it owns the NODE the firing is delivered to, and its watcher decides
+    /// what the firing means (the Store's <c>Store/TierInvite</c> activates a plan). A module therefore
+    /// needs no member of its own here.</para>
+    ///
+    /// <para>Appended, never inserted: members keep their numbers, so a module compiled against an
+    /// earlier platform still binds every member it uses.</para>
+    /// </summary>
+    DeliverToNode = 5
+}
+
+/// <summary>
+/// What the node named by <see cref="EventSubscription.DeliverTo"/> receives when a
+/// <see cref="EventContinuationType.DeliverToNode"/> subscription fires. The runner writes it onto
+/// that node's content, as the <c>eventDelivery</c> field, through the node's own stream, so the
+/// node's OWN hub acts on it — a module's node type, in-mesh source included.
+///
+/// <para>A module's content record declares <c>public EventDelivery? EventDelivery { get; init; }</c>,
+/// and its watcher reacts when the field appears: the control-plane shape every other request in the
+/// mesh has (a field set on the node, the owner's watcher reacts).</para>
+/// </summary>
+public record EventDelivery
+{
+    /// <summary>The subscription that fired.</summary>
+    public string SubscriptionId { get; init; } = "";
+
+    /// <summary>The subject the trigger identified: for a <see cref="EventTriggerType.NodeChange"/> on
+    /// <c>User</c>, the new user's id.</summary>
+    public string SubjectId { get; init; } = "";
+
+    /// <summary>When the runner delivered it.</summary>
+    public DateTimeOffset FiredAt { get; init; }
+
+    /// <summary>The subscription's <see cref="EventSubscription.CreatedBy"/>: whose request this was,
+    /// so the receiver can check that person's right AGAIN before it acts.</summary>
+    public string? CreatedBy { get; init; }
 }
 
 /// <summary>
@@ -168,6 +212,14 @@ public record EventSubscription
     /// <summary>The node the continuation targets — for <see cref="EventContinuationType.GrantSpaceAccess"/>
     /// the Space path, for <see cref="EventContinuationType.AddToGroup"/> the Group path.</summary>
     public string? TargetPath { get; init; }
+
+    /// <summary>
+    /// [DeliverToNode] The node that ACTS when this fires: the runner writes an
+    /// <see cref="EventDelivery"/> onto its content (<c>eventDelivery</c>), and the node's own hub,
+    /// owned by the module, does the rest. The node must exist when the subscription fires; when it
+    /// does not, the subscription fails with the write's error on <see cref="LastError"/>.
+    /// </summary>
+    public string? DeliverTo { get; init; }
 
     /// <summary>The subject the continuation acts on when the trigger carries no node (e.g. a
     /// <see cref="EventTriggerType.Timer"/>) — for <see cref="EventContinuationType.GrantSpaceAccess"/> the

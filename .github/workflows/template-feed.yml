@@ -172,11 +172,30 @@ jobs:
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
       DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
+      # The lane's OWN tool, from the lane's commit (the `lane` checkout below) — never the set's.
+      FEED_TOOL: lane/.github/scripts/template-feed.py
     steps:
+      # The SET's core tree: what gets packed, and the --core the generator reads.
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.preflight.outputs.core_sha }}
           fetch-depth: 1
+      # 🚨 The lane's own tooling comes from the commit THIS WORKFLOW runs at (github.sha), never
+      # from the sealed set's core_sha. The set is usually older than the lane: the first sealed set
+      # after the lane merged was cut from a commit that predates template-feed.py, so running the
+      # script out of the set's tree died `can't open file` before the lane measured anything
+      # (MeshWeaver#7660) — and any later change to the script's subcommands would skew the same way.
+      # Inputs (what is packed) come from the set; the instrument comes from the lane.
+      - name: Check out the lane's own tooling (this workflow's commit, not the set's)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: lane
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/scripts/
+            .github/workflows/template-feed.yml
       # The template generator, and six of the packages the template restores, live in
       # MeshWeaver.Plugins — checked out at the commit the sealed set was built from, exactly as
       # main-cd's image legs do (PlatformNeverDependsOnPluginsGuard's Ledger names this lane).
@@ -193,7 +212,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: "The derivation can say no (self-test)"
-        run: python3 .github/scripts/template-feed.py --self-test
+        run: python3 "$FEED_TOOL" --self-test
 
       - name: Generate the template at this set's version
         run: |
@@ -204,10 +223,10 @@ jobs:
       - name: Derive the package list from the template
         run: |
           set -euo pipefail
-          python3 .github/scripts/template-feed.py plan --template "$RUNNER_TEMP/template" \
+          python3 "$FEED_TOOL" plan --template "$RUNNER_TEMP/template" \
             --core "$GITHUB_WORKSPACE" --plugins plugins-repo --version "$VERSION" --out "$RUNNER_TEMP/plan.json"
-          python3 .github/scripts/template-feed.py slnx --plan "$RUNNER_TEMP/plan.json" --line platform --out pack-platform.slnx
-          python3 .github/scripts/template-feed.py slnx --plan "$RUNNER_TEMP/plan.json" --line own --out pack-own.slnx
+          python3 "$FEED_TOOL" slnx --plan "$RUNNER_TEMP/plan.json" --line platform --out pack-platform.slnx
+          python3 "$FEED_TOOL" slnx --plan "$RUNNER_TEMP/plan.json" --line own --out pack-own.slnx
 
       # 🚨 Two invocations, because the version lines differ: the platform line is stamped with the
       # set's version; an own-line package (MeshWeaver.Aspire.Hosting.Memex) keeps the version its
@@ -224,7 +243,7 @@ jobs:
       - name: Verify every package the template restores was packed, closure complete
         run: |
           set -euo pipefail
-          python3 .github/scripts/template-feed.py verify --plan "$RUNNER_TEMP/plan.json" --nupkgs "$RUNNER_TEMP/nupkgs"
+          python3 "$FEED_TOOL" verify --plan "$RUNNER_TEMP/plan.json" --nupkgs "$RUNNER_TEMP/nupkgs"
           echo "### Template feed — set $VERSION ($([ "$DRY_RUN" = true ] && echo 'DRY RUN, nothing pushed' || echo 'publishing'))" >> "$GITHUB_STEP_SUMMARY"
           for f in "$RUNNER_TEMP"/nupkgs/*.nupkg; do
             case "$f" in *.symbols.nupkg) continue ;; esac
@@ -236,7 +255,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/template-feed.py push-guard --source "$FEED"
+          python3 "$FEED_TOOL" push-guard --source "$FEED"
           if [ "$DRY_RUN" = true ]; then
             echo "dry run: pushing nothing"
             exit 0

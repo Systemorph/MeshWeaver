@@ -238,6 +238,39 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
     }
 
     /// <summary>
+    /// The same retype issued on the node's OWN hub, through its own stream — the route code running
+    /// on the owner takes. That write never reached the commit point, so the create-only rule was
+    /// skipped. The control: an ordinary own write on the same hub lands.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task RetypingIntoAPolicy_ThroughTheOwnersOwnStream_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var path = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        (await TypeOf(path, ct)).Should().Be("Markdown", "precondition: the node's hub is active");
+        var own = (Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never)
+                   ?? throw new InvalidOperationException($"the owning hub of {path} is not active"))
+            .GetWorkspace().GetMeshNodeStream();
+
+        var failure = await Record.ExceptionAsync(() =>
+            own.Update(current => current with
+                {
+                    NodeType = PartitionAccessPolicyNodeType.NodeType,
+                    Content = new PartitionAccessPolicy { BreaksInheritance = true },
+                })
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+
+        failure.Should().NotBeNull("an own write retyping the node into a policy meets the same commit point");
+        failure!.Message.Should().Contain(path);
+        (await TypeOf(path, ct)).Should().Be("Markdown", "the refused retype must leave the node as it was");
+
+        var renamed = await own.Update(current => current with { Name = "renamed" })
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+        renamed.Name.Should().Be("renamed", "the control: an ordinary own write lands");
+    }
+
+    /// <summary>
     /// The policy type matches the way NodeType resolution matches it: case-insensitively. A
     /// differently cased type must not skip the rule, on create or on retype.
     /// </summary>

@@ -169,32 +169,43 @@ def word_diff(hub_text: str, spoke_text: str, hub_label: str, spoke_label: str) 
 # ───────────────────────────────────── fetching ──────────────────────────────────────────
 
 
-def fetch_agents_md(repo: str, token: str | None) -> str:
-    """Read a repo's AGENTS.md from its default branch. Any failure is fatal, never a pass."""
-    url = f"https://api.github.com/repos/{repo}/contents/{AGENTS_FILE}"
-    req = urllib.request.Request(url)
-    req.add_header("Accept", "application/vnd.github.raw")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    req.add_header("User-Agent", "meshweaver-shared-rules-gate")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
+def fetch_agents_md(repo: str, token: str | None, urlopen=None, sleep=None, clock=None) -> str:
+    """Read a repo's AGENTS.md from its default branch. Any failure is fatal, never a pass — and an
+    OUTAGE (rate limit, 5xx, no connection past the shared budget) says NO VERDICT, never that the
+    token "lacks contents:read (or is rate-limited)" (MeshWeaver#7448)."""
+    reader = _github_reader()
+    kwargs = {k: v for k, v in (("urlopen", urlopen), ("sleep", sleep), ("clock", clock)) if v is not None}
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
+        return reader.api_get(f"repos/{repo}/contents/{AGENTS_FILE}", token=token,
+                              accept="application/vnd.github.raw", raw=True,
+                              user_agent="meshweaver-shared-rules-gate", **kwargs)
+    except reader.ApiUnavailable as e:
+        raise Problem(f"could not read {repo}/{AGENTS_FILE}: {e.sentence()}") from e
+    except reader.ApiRefused as e:
+        code = str(e).split()[1] if len(str(e).split()) > 1 else "?"
         hint = {
-            401: "the token is invalid or expired",
-            403: "the token is valid but lacks contents:read on this repo (or is rate-limited)",
-            404: "the repo, the branch or AGENTS.md does not exist — OR the token cannot see a "
-                 "private repo, which GitHub reports as 404 rather than 403",
-        }.get(e.code, "unexpected status")
+            "401": "the token is invalid or expired",
+            "403": "the token is valid but lacks contents:read on this repo (a plain refusal, not a rate limit)",
+            "404": "the repo, the branch or AGENTS.md does not exist — OR the token cannot see a "
+                   "private repo, which GitHub reports as 404 rather than 403",
+        }.get(code, "unexpected status")
         raise Problem(
-            f"could not read {repo}/{AGENTS_FILE}: HTTP {e.code} ({hint}). This gate compares "
+            f"could not read {repo}/{AGENTS_FILE}: HTTP {code} ({hint}). This gate compares "
             f"what the repos actually contain, so an unreadable repo is a FAILURE — reporting "
             f"'no drift' here would be reporting on evidence we do not have."
         ) from e
-    except urllib.error.URLError as e:
-        raise Problem(f"could not reach github.com for {repo}: {e.reason}") from e
+
+
+def _github_reader():
+    """`scripts/read-current-pr-body.py` — the ONE GitHub REST classification every CI gate shares:
+    a rate-limit 403/429, a 5xx or a dropped connection is retried to its reset inside a bounded
+    budget and otherwise reported as NO VERDICT, never as a missing grant (MeshWeaver#7448)."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[2] / "scripts" / "read-current-pr-body.py"
+    spec = importlib.util.spec_from_file_location("read_current_pr_body", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # ─────────────────────────────────────── the gate ────────────────────────────────────────

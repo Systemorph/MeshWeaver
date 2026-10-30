@@ -164,6 +164,12 @@ internal class MonolithRoutingService(
                 }, o => o.ResponseFor(delivery)
             );
         }
+        // 🚨 Past DisposeHostedHubs the mesh's Post is no carrier, but a sender that is still waiting
+        // is still owed this verdict — the route was accepted while the mesh was live and only ENDED
+        // in its teardown (hub creation is frozen, so this is the usual way it ends). Handed to that
+        // sender directly; see RoutingServiceBase.AnswerRequestRefusedDuringMeshTeardown.
+        else if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            senderNacked = AnswerRequestRefusedDuringMeshTeardown(delivery, errorType, errorMessage);
         // Declare whether the sender was answered — MessageService now NACKs any unanswered Failed
         // delivery it finishes, and this path is hot enough that a duplicate would multiply every
         // NotFound in the mesh. See RoutingServiceBase.PostNotFound for the full rationale.

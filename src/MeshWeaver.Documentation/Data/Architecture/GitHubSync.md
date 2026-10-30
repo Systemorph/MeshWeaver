@@ -436,6 +436,17 @@ lost either. The only things left out of an export are the **governance satellit
 **gitignore-style ignore rules** (`SyncIgnore`). Nothing else is excluded, and nothing is
 excluded *silently*.
 
+**Adding an Ignore pattern after an import retires what it now excludes (#7611).** The import
+prune skips ignored paths, because a node the mesh minted under an ignored path (the default
+`Release/` records, #1326) is absent from the repo by design. A node the sync itself imported,
+which the Space's own pattern now excludes, is the opposite case. On the next "Update to latest",
+such a node is pruned when the Space's import manifest (`{space}/_Activity/import-manifest`)
+records that the sync put it there. A node the mesh created under the same pattern was never in
+that manifest, so it stays. Before this change, the imported node stayed forever, frozen at its
+last version. On a one-way (system-owned) Space no person could delete it either. Held NodeType
+sources and the README slot are excluded from the mirror without being retired, so they are
+never pruned this way. Regression guard: `AnIgnorePatternRetiresWhatTheSyncImportedTest`.
+
 ---
 
 ## 5. Operations — branch, commit, checkout, pull request
