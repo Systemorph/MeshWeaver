@@ -2330,7 +2330,13 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     private static IObservable<UiControl?> OnDocumentationReadEdge(IMessageHub hub, Func<UiControl> render)
         => (hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded)
-            .InvokeBlocking<UiControl?>(_ => render());
+            .InvokeBlocking<UiControl?>(ct =>
+            {
+                // A drained pool never starts a render. Once started it is ONE call into the schema
+                // exporter, whose property walk offers no step boundary to check between.
+                ct.ThrowIfCancellationRequested();
+                return render();
+            });
 
     /// <summary>
     /// The content type this node hub's <see cref="MeshDataSource"/> was configured with

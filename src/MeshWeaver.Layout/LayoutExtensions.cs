@@ -917,7 +917,7 @@ public static class LayoutExtensions
         hub.SubscribeHeldUntilTerminal(uiControlService.LayoutDefinition.ObserveVisibleAreaDefinitions(), areas => areas
             .Subscribe(
                 list => hub.Post(new GetDataResponse(list, hub.Version), o => o.ResponseFor(request)),
-                ex => hub.Post(new GetDataResponse(null, 0) { Error = ex.Message }, o => o.ResponseFor(request))));
+                ex => hub.Post(DeliveryFailure.FromException(request, ex), o => o.ResponseFor(request))));
         return request.Processed();
     }
 }
