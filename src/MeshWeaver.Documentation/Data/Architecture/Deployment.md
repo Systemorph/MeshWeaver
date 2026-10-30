@@ -12,7 +12,7 @@ MeshWeaver has **two distinct deploy routes**. They target different infrastruct
 | Route | Target | How | Doc |
 |---|---|---|---|
 | **AKS** | Shared cluster `<aks-cluster>` — every `Deployments/<name>` record (each portal instance of the estate) | A `Roll` `Hosting/InstanceAction` on the control instance (the record's image pin); the operator runs build images → `kubectl set image` + rollout. Direct `az aks command invoke` is break-glass | [OperatingFromThePortal.md](/Doc/Architecture/OperatingFromThePortal) · [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
-| **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
+| **Azure Container Apps** | .NET Aspire `test` / `prod` modes (ACA, Sweden Central) | MeshWeaver.Plugins `tools/deploy.sh prod\|test` (wraps `aspire deploy` + migration-exit + db-version gate) | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 
 🚨 **The Deployment record is the ONE input; Aspire and Helm render from it; the image receives it as configuration (`Deployment:Record`); Aspire emits a record, never a chart.** An instance is a `DeploymentContent` record (`Deployments/<name>` on the control instance), built fluently (`builder.AddMemex("memex").WithImage(…).WithPluginRepo(…)…`) or by hand, and every route reads that record — nothing is configured twice. Maintainer, 2026-09-08; [ConfiguringAnInstanceFromAspire.md](/Doc/Architecture/ConfiguringAnInstanceFromAspire) carries the fluent surface and the parity table.
 

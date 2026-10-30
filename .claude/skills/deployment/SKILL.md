@@ -27,7 +27,7 @@ other half). Policy page, with what the API does NOT answer yet:
 
 - **AKS** — a portal instance on the shared cluster. Full ref:
   [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).
-- **Azure Container Apps** — the Aspire `test`/`prod` modes, via `tools/deploy.sh prod|test`. Full
+- **Azure Container Apps** — the Aspire `test`/`prod` modes, via MeshWeaver.Plugins `tools/deploy.sh prod|test`. Full
   ref:
   [DeploymentContainerApps.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentContainerApps.md).
 
