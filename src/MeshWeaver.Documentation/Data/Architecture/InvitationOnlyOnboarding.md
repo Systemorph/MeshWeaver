@@ -106,8 +106,10 @@ standing footer of `EmailTemplate` follows the same tag. `inviteUrl` is the sign
 minted (next section); when given, the button points at it unchanged in both the Space and the
 deployment-wide variant, and only without it does the button fall back to the Space or the portal. An invitation written before the field
 existed carries no language and renders in English. The emailer in MeshWeaver.Plugins
-(`InvitationEmailSender.BuildInviteEmail`) is the one that sends it: until it builds its email through
-this method, the email it sends keeps its own English text whatever the invitation says.
+(`InvitationEmailSender.BuildInviteEmail`) is the one that sends it, and it builds the email through
+this method (MeshWeaver.Plugins#4706), passing its signed invitation link as `inviteUrl`. A
+deployment whose Plugins build predates that change still sends its own English text, whatever the
+invitation says.
 
 ### The invitation link token
 
