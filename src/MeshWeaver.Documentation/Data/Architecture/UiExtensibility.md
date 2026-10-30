@@ -97,7 +97,10 @@ Two load-bearing rules for pack authors:
    assembly or load context other than the framework's: the same-named-type trap, where every
    pattern match on the real type declines the copy. The Blazor portal pairs the line with an
    Information entry from `DispatchView` (`Rendering Area … through the escaped-HTML fallback`) and
-   a `view_packs` health check that reports the same owner list for the root hub.
+   a `view_packs` health check that reports the same owner list for the root hub. A missing
+   REQUIRED pack makes that check Unhealthy, and it is a roll gate on `/ready`
+   ([The Bake Gate Only Stalls a Roll](../TheBakeGateOnlyStallsARoll)), so such a replica takes no
+   traffic instead of serving `ToString()` forms.
 2. **Never ship copies of contract assemblies.** The pack compiles against the host's
    `MeshWeaver.Layout` / `MeshWeaver.Blazor` and binds to them at load time. A same-named type from
    a second copy is the platform's documented trap-door class — values silently read as absent.

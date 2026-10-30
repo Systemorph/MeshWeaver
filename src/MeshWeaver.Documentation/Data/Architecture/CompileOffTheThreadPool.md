@@ -189,6 +189,34 @@ wait expires. The Activity stays the authority and the kernel settles it when th
 `LongCellOutlivesThe{Dispatchers,KernelContainers}RequestBudgetTest` pin each hop with a two-second
 budget and a six-second cell; both read `Failed` while the script was still running before the change.
 
+**But the dispatcher's timeout is SAID, not swallowed (#7362).** Not a verdict is not the same as
+silence: a run whose kernel never answered used to stay `Running` with nothing on it, indistinguishable
+from one computing normally. When the dispatcher's wait expires the run now says so — *"No answer from
+the kernel yet. The run is still in progress and completes when the kernel answers."*
+(`activity.codeRun.noKernelReplyYet`, en + de) — and its status stays `Running`. While a run is
+`Running` the Output pane shows its latest transcript line, so that is what the reader sees.
+
+**Who decides is the Activity's OWNER, never the dispatcher.** The dispatcher does not own the Activity,
+so its write runs on a mirror and ships a merge patch ([Conditional Writes Across
+Hubs](../ConditionalWritesAcrossHubs)). A notice appended there behind a mirror-read "still Running"
+guard could land after the kernel's terminal write — and survive on a finished run, or, since a changed
+array travels whole, replace the kernel's final transcript with the mirror's stale one. So the
+dispatcher states only a FACT, `ActivityLog.ReplyOverdueSince`, unconditionally and as System (the
+timeout fires on a timer thread with no user context, so a caller-context write would fail closed). The
+Activity hub, which owns the node, folds it on its own serialised write path (`KernelReplyOverdue`):
+it consumes the fact, appends the notice once if the run is still `Running`, appends nothing if it has
+finished, and removes a notice that reached a finished run. The notice is logged at Information, so a
+slow run that then succeeds never reads as one with warnings. A late reply settles the run exactly as an
+in-time one does: the kernel's next snapshot rewrites the transcript, and its terminal write leaves no
+notice behind.
+
+`KernelReplyTimeoutNoticeTest` parks a real cell on a gate node past a two-second dispatcher budget: the
+notice appears on a `Running` Activity, and once the gate opens the run ends `Succeeded` with its return
+value and without the notice. `KernelReplyOverdueAfterTheTerminalWriteTest` delivers the fact, and the
+old notice itself, to a run that has already finished, and requires the owner's answer to carry neither.
+`KernelReplyOverdueFoldTest` pins the fold state by state. The control, `KernelReplyInTimeShowsNoNoticeTest`,
+collects every snapshot of an in-time run and finds the notice on none of them.
+
 Three more holes the same review found, each of which could again leave a run wrong or `Running`:
 
 - **A reconcile from a lagging copy.** The dispatcher's terminal guard reads ITS copy of the Activity,

@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
 
@@ -77,6 +78,42 @@ public class LayoutAreaRetrievalTest(ITestOutputHelper output) : HubTestBase(out
         names.Should().NotContain("Threads");
     }
 
+    /// <summary>
+    /// Every spelling of the listing reference answers the listing: the colon form, and the slash
+    /// and bare forms <c>MeshOperations.Get</c> sends for <c>@Node/layoutAreas/</c> and
+    /// <c>@Node/layoutAreas</c>. A GetDataRequest is offered to EVERY GetDataRequest handler on the
+    /// hub, and the generic data handler parsed the slash and bare forms as a data COLLECTION named
+    /// <c>layoutAreas</c>, answering "Collections layoutAreas are not mapped to any source". That
+    /// wrong answer won whenever the layout handler's own answer was not posted on the same turn,
+    /// which since the area descriptions load off the turn (Doc/Architecture/XmlDocumentationReader)
+    /// is every first read on a cold mesh.
+    /// </summary>
+    [HubFact]
+    public Task LayoutAreasUnifiedReference_ColonForm_AnswersTheListing() => AssertAnswersTheListing("layoutAreas:");
+
+    /// <inheritdoc cref="LayoutAreasUnifiedReference_ColonForm_AnswersTheListing"/>
+    [HubFact]
+    public Task LayoutAreasUnifiedReference_SlashForm_AnswersTheListing() => AssertAnswersTheListing("layoutAreas/");
+
+    /// <inheritdoc cref="LayoutAreasUnifiedReference_ColonForm_AnswersTheListing"/>
+    [HubFact]
+    public Task LayoutAreasUnifiedReference_BareForm_AnswersTheListing() => AssertAnswersTheListing("layoutAreas");
+
+    private async Task AssertAnswersTheListing(string path)
+    {
+        GetHost();
+        var client = GetClient();
+
+        var response = await client
+            .Observe(new GetDataRequest(new UnifiedReference(path)), o => o.WithTarget(CreateHostAddress()))
+            .Should().Emit();
+
+        response.Message.Error.Should().BeNull($"'{path}' names the layout-area listing, not a data collection");
+        var areas = response.Message.Data.As<IReadOnlyList<LayoutAreaDefinition>>(client.JsonSerializerOptions)?.Select(a => a.Area).ToList();
+        areas.Should().NotBeNull($"'{path}' answers a list of LayoutAreaDefinition");
+        areas!.Should().Contain(CustomVisibleArea);
+    }
+
     [HubFact]
     public async Task LayoutAreasUnifiedReference_MatchesTheTypedRequest()
     {
@@ -89,7 +126,7 @@ public class LayoutAreaRetrievalTest(ITestOutputHelper output) : HubTestBase(out
             .Should().Emit();
         viaReference.Message.Error.Should().BeNull();
 
-        var referenceAreas = (viaReference.Message.Data as IEnumerable<LayoutAreaDefinition>)?
+        var referenceAreas = viaReference.Message.Data.As<IReadOnlyList<LayoutAreaDefinition>>(client.JsonSerializerOptions)?
             .Select(a => a.Area).OrderBy(a => a).ToList();
         referenceAreas.Should().NotBeNull("the layoutAreas: reference returns a list of LayoutAreaDefinition");
         referenceAreas!.Should().Contain(CustomVisibleArea);

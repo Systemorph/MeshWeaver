@@ -30,6 +30,9 @@ namespace MeshWeaver.Data;
 /// </summary>
 public static class DataExtensions
 {
+    /// <summary>The unified-reference prefix of a hub's layout-area listing, as callers spell it.</summary>
+    private const string LayoutAreasPrefix = "layoutAreas";
+
     /// <summary>
     /// Parses a unified path into prefix and remaining path.
     /// Supports both formats:
@@ -61,6 +64,20 @@ public static class DataExtensions
                 var remainingPath = slashIndex < path.Length - 1 ? path[(slashIndex + 1)..] : null;
                 return (potentialPrefix, remainingPath);
             }
+        }
+
+        // The layout-area LISTING in its slash and bare spellings (`layoutAreas/`, `layoutAreas`) —
+        // the forms MeshOperations.Get sends for `@Node/layoutAreas/`. Every GetDataRequest handler on
+        // a hub sees the request, the layout plugin's own handler included; read as the default `data`
+        // prefix, this handler answered "Collections layoutAreas are not mapped to any source", and
+        // that wrong answer won whenever the listing was not posted on the same turn (a cold read of
+        // the area descriptions, Doc/Architecture/XmlDocumentationReader). Matched exactly, as
+        // MeshOperations matches it, so no data collection can be mistaken for it.
+        var firstSegment = slashIndex > 0 ? path[..slashIndex] : path;
+        if (string.Equals(firstSegment, LayoutAreasPrefix, StringComparison.Ordinal))
+        {
+            var remainingPath = slashIndex > 0 && slashIndex < path.Length - 1 ? path[(slashIndex + 1)..] : null;
+            return (LayoutAreasPrefix.ToLowerInvariant(), remainingPath);
         }
 
         // No prefix - default to "data"
