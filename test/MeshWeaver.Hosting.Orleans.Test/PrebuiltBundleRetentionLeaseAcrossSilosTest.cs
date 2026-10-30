@@ -472,6 +472,44 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
     }
 
     /// <summary>
+    /// 🚨 #7459: the claim/generation commit guard is armed at the lease node's OWNER. A write that advances
+    /// the generation without a new claim (what a partially refused take leaves) commits nothing, from any
+    /// silo. NEGATIVE CONTROL: the take before it, the claim with the next generation, commits.
+    /// </summary>
+    [Fact]
+    public async Task AGenerationWithoutItsClaim_IsRefusedAtTheOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hubA = SiloMeshHub(0);
+        var hubB = SiloMeshHub(1);
+        const int Holder = 15;
+        var now = new DateTimeOffset(2511, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var held = await PrebuiltBundleRetentionLease.Take(hubA, now, Hold, Holder, "silo-0")
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        held.Held.Should().BeTrue("NEGATIVE CONTROL: a whole take commits");
+        var lease = await Sees(hubB, l => l.Claim == held.Lease!.Claim, ct);
+
+        var outcome = await hubB.ServiceProvider.GetService<AccessService>()
+            .RunAsSystem(() => hubB.GetWorkspace().GetMeshNodeStream(PrebuiltBundleRetentionLease.LeasePath)
+                .Update(node => node with { Content = lease with { Generation = lease.Generation + 1 } })
+                .Take(1)
+                .Select(_ => (Exception?)null)
+                .Catch<Exception?, Exception>(fault => Observable.Return<Exception?>(fault)))
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        outcome.Should().NotBeNull("the owner refuses a generation that advances without a new claim");
+
+        var after = await PrebuiltBundleRetentionLease.Stamp(hubA, held.Lease!.Claim, held.Lease.Generation, "silo-0", now)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        after.Held.Should().BeTrue("the holder's fence still holds: nothing of the refused write committed");
+        after.Lease!.Generation.Should().Be(held.Lease.Generation);
+
+        await PrebuiltBundleRetentionLease.Release(hubA, Holder).Timeout(TestTimeouts.Convergence).Await(ct);
+        await Sees(hubB, l => l.IsLapsed, ct);
+    }
+
+    /// <summary>
     /// 🚨 #7459, the fence. The lease node's owner ACKNOWLEDGED A's claim and stamp, then died before they
     /// persisted. Its replacement reloads the lease as it was before A's take (lapsed, one generation back),
     /// and B takes it, landing the SAME generation A took. A's watch on the live lease starts only now, so
@@ -596,6 +634,61 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         var wrong = landed.Deserialize<PrebuiltBundleRetentionLeaseState>(Web)!;
         wrong.Holder.Should().Be(52, "…so the stale take lands");
         wrong.Generation.Should().Be(1, "…at a generation that was already taken once");
+    }
+
+    /// <summary>
+    /// 🚨 #7459, a PARTIAL refusal against a RELEASED lease. The owner keeps the leaves that did not conflict:
+    /// a take from an expired base <c>(claimA, 1)</c> against the released <c>(-2, 1)</c> has its claim refused
+    /// and its generation applied, so the merge produces <c>(-2, 2)</c>, a lapsed lease a generation ahead of
+    /// any take. The commit guard refuses that result whole. NEGATIVE CONTROL: the merge itself does produce it.
+    /// </summary>
+    [Fact]
+    public void APartiallyRefusedTake_AgainstAReleasedLease_CommitsNothing()
+    {
+        var t = new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var expired = PrebuiltBundleRetentionLease.Taken(PrebuiltBundleRetentionLeaseState.Lapsed, PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(1), 61));
+        var released = PrebuiltBundleRetentionLease.Released(expired);
+        var take = PrebuiltBundleRetentionLease.Taken(expired, PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(3), 62));
+
+        var (merged, refused) = MergeLosingClaim(expired, released, take);
+        refused.Should().Contain("claim", "PRECONDITION: the claim changed on both sides");
+        var partial = merged.Deserialize<PrebuiltBundleRetentionLeaseState>(Web)!;
+        partial.Should().Be(released with { Generation = 2 },
+            "NEGATIVE CONTROL: the generation, unchanged on the owner since the base, is applied without its claim");
+
+        PrebuiltBundleRetentionLease.TransitionRefusal(released, partial).Should().NotBeNull(
+            "a generation advances only with a new claim, so the partial result commits nothing");
+        PrebuiltBundleRetentionLease.TransitionRefusal(released, PrebuiltBundleRetentionLease.Taken(released, take.Claim)).Should().BeNull(
+            "the re-run take, the claim with the next generation, commits");
+    }
+
+    /// <summary>
+    /// 🚨 #7459, a PARTIAL refusal against an ACTIVE lease: an expired base of the same generation (the owner
+    /// lost that take and granted the generation to another holder) proposes the next generation; the claim is
+    /// refused, the generation lands, and the valid holder's fence reads its own lease as lost. The commit guard
+    /// refuses it. A stamp, a release and the take itself still commit.
+    /// </summary>
+    [Fact]
+    public void APartiallyRefusedTake_AgainstAnActiveLease_CommitsNothing_AndKeepsTheHoldersFence()
+    {
+        var t = new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var lost = PrebuiltBundleRetentionLease.Taken(PrebuiltBundleRetentionLeaseState.Lapsed, PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(1), 71));
+        var holder = PrebuiltBundleRetentionLease.Taken(PrebuiltBundleRetentionLeaseState.Lapsed, PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(5), 72));
+        var active = holder with { Claim = holder.Claim | PrebuiltBundleRetentionLease.StampedFlag, Replica = "silo-1", TakenAt = t };
+        var take = PrebuiltBundleRetentionLease.Taken(lost, PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(3), 73));
+
+        var (merged, refused) = MergeLosingClaim(lost, active, take);
+        refused.Should().Contain("claim", "PRECONDITION: the claim changed on both sides");
+        var partial = merged.Deserialize<PrebuiltBundleRetentionLeaseState>(Web)!;
+        partial.Generation.Should().Be(2, "NEGATIVE CONTROL: the generation lands without its claim");
+        PrebuiltBundleRetentionLease.IsHeldBy(partial, holder.Claim, holder.Generation).Should().BeFalse(
+            "NEGATIVE CONTROL: …and the valid holder's fence would read its own lease as lost");
+
+        PrebuiltBundleRetentionLease.TransitionRefusal(active, partial).Should().NotBeNull("the partial result commits nothing");
+        PrebuiltBundleRetentionLease.TransitionRefusal(holder, active).Should().BeNull("a stamp keeps the claim and the generation");
+        PrebuiltBundleRetentionLease.TransitionRefusal(active, PrebuiltBundleRetentionLease.Released(active)).Should().BeNull("a release keeps the generation");
+        PrebuiltBundleRetentionLease.TransitionRefusal(active, take with { Generation = 1 }).Should().NotBeNull(
+            "a new claim never lands in the generation it replaces");
     }
 
     /// <summary>The lease shape with a generation the serializer OMITS at <c>0</c> — the negative control above.</summary>

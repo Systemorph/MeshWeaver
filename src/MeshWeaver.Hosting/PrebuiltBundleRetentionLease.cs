@@ -214,7 +214,58 @@ public static class PrebuiltBundleRetentionLease
     /// <param name="services">The host's service collection.</param>
     /// <returns>The same collection.</returns>
     public static IServiceCollection AddPrebuiltBundleRetentionLease(this IServiceCollection services)
-        => services.AddSingleton<IStaticNodeProvider, LeaseTypeProvider>();
+        => services
+            .AddSingleton<IStaticNodeProvider, LeaseTypeProvider>()
+            .AddSingleton<IEntityCommitGuard, LeaseTransitionCommitGuard>();
+
+    /// <summary>
+    /// The refusal for committing <paramref name="after"/> over <paramref name="before"/>, or <c>null</c>
+    /// when the transition is whole (#7459). Pure.
+    ///
+    /// <para>🚨 <b>The claim and its generation move TOGETHER, or not at all.</b> The owner merges a remote
+    /// <c>Update</c> leaf by leaf and KEEPS the leaves that did not conflict when another is refused (a
+    /// partial refusal NACKs <c>Conflict</c> but commits the rest). A take whose claim was refused could
+    /// therefore commit its generation alone: <c>(-2, 1)</c> became <c>(-2, 2)</c>, a lapsed lease one
+    /// generation ahead of any take, which a stale claimant could then land on at a generation a lost take
+    /// had already handed to another holder, and which a valid holder's fence read as a loss. So at the
+    /// commit point a generation advances only with a NEW claim, and a new claim lands only with the NEXT
+    /// generation. A stamp (the same claim with <see cref="StampedFlag"/>), a release and the diagnostic
+    /// fields keep the generation, and none of them is a new claim.</para>
+    /// </summary>
+    /// <param name="before">The lease the owner holds.</param>
+    /// <param name="after">The lease about to commit.</param>
+    internal static string? TransitionRefusal(PrebuiltBundleRetentionLeaseState before, PrebuiltBundleRetentionLeaseState after)
+    {
+        var from = Math.Max(before.Generation, 0);
+        var newClaim = after.Claim > 0 && (after.Claim & ~StampedFlag) != (before.Claim & ~StampedFlag);
+        if (newClaim && after.Generation != from + 1)
+            return $"the prebuilt-bundle retention lease takes a new claim only with the next generation ({from + 1}), "
+                + $"not {after.Generation}: the claim and its generation commit together or not at all";
+        if (!newClaim && after.Generation > from)
+            return $"the prebuilt-bundle retention lease advances its generation ({from} → {after.Generation}) only "
+                + "with a new claim: the claim and its generation commit together or not at all";
+        return null;
+    }
+
+    /// <summary>
+    /// <see cref="TransitionRefusal"/> at the lease node owner's COMMIT point, for every route that commits
+    /// into it (#7459). A refused commit commits nothing; the writer's update faults and its next pass asks
+    /// again on a fresh read.
+    /// </summary>
+    private sealed class LeaseTransitionCommitGuard : IEntityCommitGuard
+    {
+        public string? Refusal(string collection, object? before, object after, string ownerPath,
+            AccessContext? writer, System.Text.Json.JsonSerializerOptions options)
+        {
+            if (!string.Equals(collection, nameof(MeshNode), StringComparison.Ordinal)
+                || after.As<MeshNode>(options) is not { NodeType: LeaseNodeType } next
+                || before?.As<MeshNode>(options) is not { NodeType: LeaseNodeType } previous
+                || previous.ContentAs<PrebuiltBundleRetentionLeaseState>(options) is not { } held
+                || next.ContentAs<PrebuiltBundleRetentionLeaseState>(options) is not { } proposed)
+                return null;
+            return TransitionRefusal(held, proposed);
+        }
+    }
 
     /// <summary>
     /// Registers the lease content type on the mesh's shared type registry, so the hub that WRITES

@@ -451,6 +451,15 @@ to change):
   generation a lost take may already have handed to another holder. A generation-specific lapsed claim
   makes that take conflict whole on the claim, so its fold re-runs and takes the next generation
   (`AStaleLapsedBase_AgainstANewerReleasedLease_IsRefusedWhole_AndTheRerunTakesTheNextGeneration`).
+  The claim and its generation also commit TOGETHER or not at all. The owner keeps the leaves of a
+  partially refused write that did not conflict, so a take whose claim was refused could commit its
+  generation alone. Against a released lease that gives a lapsed lease a generation ahead of any take;
+  against an active one, the valid holder's fence reads its lease as lost. A commit guard on the lease
+  node (`TransitionRefusal`, an `IEntityCommitGuard`) refuses both: a generation advances only with a
+  new claim, and a new claim lands only with the next generation. Pinned in
+  `APartiallyRefusedTake_AgainstAReleasedLease_CommitsNothing`,
+  `APartiallyRefusedTake_AgainstAnActiveLease_CommitsNothing_AndKeepsTheHoldersFence` and, at the
+  owner across two silos, `AGenerationWithoutItsClaim_IsRefusedAtTheOwner`.
   Pinned in `PrebuiltBundleRetentionLeaseTerminalTest` and, across two
   silos, `AHolderWhoseAckedClaimDiedWithTheOwner_IsRefused_EvenWhenItFirstLooksAfterTheLoss`.
   Persistence itself is still not confirmed before a pass counts as held. The fence makes that safe
