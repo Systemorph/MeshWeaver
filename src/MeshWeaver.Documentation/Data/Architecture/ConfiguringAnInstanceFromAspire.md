@@ -26,15 +26,25 @@ three readers of it:
 | **The Aspire adapter** (`MeshWeaver.Aspire.Hosting.Memex`) | a developer's AppHost, the ACA lanes | derives the local containers, volumes and environment from it; injects it into the portal; writes it out (`PublishRecord`) |
 | **The portal itself** | inside the image | binds its own record from configuration at boot (`DeploymentRecordJson.FromConfiguration`) |
 
-The contract they share is one assembly, **`MeshWeaver.Deployment.Contract`** (namespace
-`MeshWeaver.Deployment`; `src/MeshWeaver.Deployment.Contract/`): the record and its nested specs,
-the fluent builder (`DeploymentRecordExtensions`), the configuration binding
-(`DeploymentRecordJson`) and the portal-config derivation the chart and the adapter both use
-(`DeploymentPortalConfig`). It has **zero MeshWeaver references** so it can ride inside the
-published Aspire package (bundled into its `lib/` folder — no third NuGet id; the maintainer
-retired all but two on 2026-09-07), and inside the image it is referenced by
-`MeshWeaver.PluginCatalog`, which puts it in the application closure the in-mesh Hosting sources
-compile against.
+The contract they share is one set of source files, owned by the **Hosting package** in
+MeshWeaver.Plugins (namespace `MeshWeaver.Hosting.Deployment`;
+`src/MeshWeaver.SelfUpdate.Aks/Deployment/`): the record and its nested specs, the fluent builder
+(`DeploymentRecordExtensions`), the configuration binding (`DeploymentRecordJson`) and the
+portal-config derivation the chart and the adapter both use (`DeploymentPortalConfig`). Those files
+compile twice:
+
+- into **`MeshWeaver.SelfUpdate.Aks`**, the Hosting package's module. The in-mesh Hosting sources
+  bind the record, and an in-mesh compile composes a module by its ENTRY assembly alone
+  (`CompileReferences.ComposeWithModules`), so the types have to live inside that assembly, not in a
+  library beside it;
+- into **`MeshWeaver.Hosting.Deployment.Contract`**, which has **zero MeshWeaver references** so it
+  can ride inside the published Aspire package (bundled into its `lib/` folder — no third NuGet id;
+  see [NuGet Package Retirement](../NuGetPackageRetirement)) and back the chart guards in
+  MeshWeaver.Deploy.
+
+The record left the platform's content surface when it moved; why, and in which order, is in
+[Carving Projects Out of Core](../CarvingProjectsOutOfCore) → "The Deployment record: moved into the
+Hosting module".
 
 ## The fluent surface
 
@@ -45,7 +55,7 @@ builder: a bare `new DeploymentContent()` already renders a bootable portal (`Po
 store, `Filesystem` backend, port 8080).
 
 ```csharp
-using MeshWeaver.Deployment;
+using MeshWeaver.Hosting.Deployment;
 
 var record = new DeploymentContent()
     .WithHost("portal.example.com", dnsZone: "example.com")
@@ -154,7 +164,8 @@ covers the fourth).
 ## The parity table
 
 This table is the contract between the fluent surface, the record and the two renderers.
-**`RendererParityTest` (`test/MeshWeaver.Deployment.Contract.Test`) reads it**: every method it
+**`RendererParityTest` (MeshWeaver.Plugins `src/MeshWeaver.SelfUpdate.Aks.Test/Deployment/`) reads it**
+from the platform checkout its build compiled against: every method it
 names exists on `DeploymentRecordExtensions`; every record transform the code has is in it; every
 field it names is on the record; every public field of the record is reached by some row (or is in
 the "written by the operator" table below); and every configuration key it names is emitted by
@@ -302,11 +313,6 @@ generated from the Aspire model through Aspire's Kubernetes/Helm publisher. That
 
 ## What is still open
 
-- **The Plugins half.** The in-mesh Hosting module (`Hosting/Deployment/Source/*`) still compiles
-  its own copy of `DeploymentContent`; its PR replaces that copy with `using
-  MeshWeaver.Deployment;` and makes `HelmValues.PortalConfig` delegate to
-  `DeploymentPortalConfig`. It stays a DRAFT until the fleet's images carry this assembly (merging
-  to Plugins main edits live portals — a registration syncs sources at main's HEAD).
 - **German labels.** The in-mesh record carries `[Translation("de", …)]` on every property; the
   contract cannot (the attribute is read by concrete type from `MeshWeaver.Messaging.Contract`,
   which is not a published package). The pairs are preserved in the appendix below, and return to

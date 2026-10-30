@@ -40,7 +40,7 @@ green, switch `latest` to it. A set is available to modules only once `latest` p
 | Build hosts are merged and switched off in core's CD | `.github/build-hosts.json:3` (`"enabled": false`) |
 | The chart renders nothing by default | MeshWeaver.Deploy `deploy/helm/values.yaml:1113-1114` (`buildHosts.enabled: false`); the build-host chart lives there, core's is frozen (`BuildHosts.md` §3) |
 | The control record declares no hosts | Memex `mesh/Deployments/control.json` holds no `buildHosts` block |
-| The host model is per CHANNEL (`latest`, `stable`), never per version | `src/MeshWeaver.Deployment.Contract/BuildHosts.cs:25-41`; MeshWeaver.Plugins `Hosting/StandingBuildHosts.md:52-69` |
+| The host model is per CHANNEL (`latest`, `stable`), never per version | MeshWeaver.Plugins `src/MeshWeaver.SelfUpdate.Aks/Deployment/BuildHosts.cs:25-41`; MeshWeaver.Plugins `Hosting/StandingBuildHosts.md:52-69` |
 | A channel's set is one mesh-owned token per channel, and it never moves backwards | `BuildHosts.cs:90-101`; MeshWeaver.Plugins `Hosting/Deployment/Source/BuildHostUpdates.cs:105-136` |
 | CD's order is gate → images → promote → ladder → control-first → arm | `.github/workflows/main-cd.yml:402,1350,2675,4658,2329,2908` (`arm` needs `platform-ladder-compat`, line 2910) |
 | `build-host-latest` moves the channel to the armed set. Nothing exercises that set ON a host before the move | `main-cd.yml:4038-4177` (needs `arm, build-host-image`, line 4045) |

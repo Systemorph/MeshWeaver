@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -9,7 +10,6 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Data;
-using MeshWeaver.Deployment;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -59,6 +59,27 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
     private sealed record SealedSecrets(string Name);
     private record NonSealedSecrets(string Name);
     private record NestedNonSealedDeploymentContent(NonSealedSecrets KeyVaultSecrets);
+
+    // The Deployment record's shape (the Hosting package's MeshWeaver.Hosting.Deployment.DeploymentContent,
+    // which left the platform): a NON-sealed record holding a SEALED nested record and a list of SEALED
+    // records, each carrying its own `$type`, stored under the bare name `DeploymentContent`. Declared
+    // here because the platform can no longer reference the real one; the shape is what this test is about.
+    private record DeploymentContent
+    {
+        public KeyVaultSecretsSpec? KeyVaultSecrets { get; init; }
+        public ImmutableList<GateSpec> Gates { get; init; } = ImmutableList<GateSpec>.Empty;
+    }
+
+    private sealed record KeyVaultSecretsSpec
+    {
+        public string Name { get; init; } = "";
+    }
+
+    private sealed record GateSpec
+    {
+        public string Language { get; init; } = "";
+        public bool Enabled { get; init; } = true;
+    }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)

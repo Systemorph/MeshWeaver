@@ -175,17 +175,18 @@ Fluent: `record.WithRequiredModules(…).WithRequiredModulesAuthoritative()`.
 | Test | Holds |
 |---|---|
 | `ConfiguredModuleActivationTest` (`test/MeshWeaver.Compiler.Pipeline.Test`) | the reading, over a real two-provider configuration — the short list, the empty claim, the explicit slot, blanking, the no-claim default, the non-root section |
-| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped — scoped to the chart, since the Aspire route delivers it — plus the POSITIONAL rule on the live public-instance shape (slot 7, no claim → reported; the same record with the claim → silent), the two surfaces' independence, and one normalization across entries and problems |
+| `RequiredModuleAuthorityTest` (MeshWeaver.Plugins `src/MeshWeaver.SelfUpdate.Aks.Test/Deployment/`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped — scoped to the chart, since the Aspire route delivers it — plus the POSITIONAL rule on the live public-instance shape (slot 7, no claim → reported; the same record with the claim → silent), the two surfaces' independence, and one normalization across entries and problems |
 
-🚨 **The cross-assembly key assertion is in the FIRST of those, not the second, and deliberately.**
-The record renders from `MeshWeaver.Deployment.Contract` (zero MeshWeaver references by design — it
-ships inside the published Aspire package) and the host reads from `MeshWeaver.Mesh.Contract`, so
-the key is spelled twice and a rename on one side would silently stop the other from ever seeing the
-claim — rendered-and-never-read is indistinguishable from not rendered. But
-`MeshWeaver.Deployment.Contract.Test` references only the renderer's assembly, so the same two
-constants compared *there* would be the renderer against a literal: a check that cannot fail for the
-reason it exists. `ConfiguredModuleActivationTest` sees both assemblies (through
-`MeshWeaver.PluginCatalog`), so the comparison lives there.
+🚨 **The cross-assembly key assertion lives where BOTH spellings are visible.** The record renders
+from the Hosting module's `DeploymentPortalConfig` (namespace `MeshWeaver.Hosting.Deployment`, in
+MeshWeaver.Plugins) and the host reads from `MeshWeaver.Mesh.Contract`, so the key is spelled twice
+and a rename on one side would silently stop the other from ever seeing the claim —
+rendered-and-never-read is indistinguishable from not rendered. Compared in a project that sees only
+one of the two, the check would be one side against a literal: a check that cannot fail for the
+reason it exists. Since the record left the platform, core sees only the reader, so the comparison
+is `RequiredIsAuthoritativeKeyTest` in MeshWeaver.Plugins `src/MeshWeaver.SelfUpdate.Aks.Test`, which
+references both; `ConfiguredModuleActivationTest` keeps pinning the reader's own wire name and its
+ENV form.
 
 ## Still open
 

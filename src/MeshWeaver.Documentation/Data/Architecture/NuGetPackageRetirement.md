@@ -170,7 +170,7 @@ add a driver to a running portal even in principle — so a fan-out of `MeshWeav
 packages would buy nothing and cost a version matrix that must agree with the image tag.
 
 What does work is in place. The **Deployment record** (`DeploymentContent`, the assembly
-`MeshWeaver.Deployment.Contract`, bundled INSIDE the Aspire package) is the single config surface —
+`MeshWeaver.Hosting.Deployment.Contract` from MeshWeaver.Plugins, bundled INSIDE the Aspire package) is the single config surface —
 the ONE input Aspire and the Helm chart both render from — and every field on it maps to a portal
 config key emitted as container environment:
 

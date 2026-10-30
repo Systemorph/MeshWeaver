@@ -327,8 +327,8 @@ rule the literal switches follow. Some values cannot reach the pod as written, a
   sources would race for one value);
 - a key that is not a valid ConfigMap key;
 - a map or a list;
-- a `Modules__Required__N` slot outside the literal 0..19 block. `ChartModuleSlotProblems` in
-  `MeshWeaver.Deployment.Contract` already refuses such a slot on a record at plan time, so the chart
+- a `Modules__Required__N` slot outside the literal 0..19 block. `ChartModuleSlotProblems` in the
+  Hosting module's Deployment record (`MeshWeaver.Hosting.Deployment`) already refuses such a slot on a record at plan time, so the chart
   agrees with that rule rather than delivering the slot.
 
 What the pass-through does **not** give a key is a default. A key whose consumer cannot take a

@@ -333,7 +333,7 @@ Measured against `Systemorph/MeshWeaver@4cc5c17fbf` and `Systemorph/MeshWeaver.P
 |---|---|---|---|---|
 | `Mesh.Contract/Threading` | 4 993 | `MeshWeaver.Threading.Test`, a test project only | everything: it is `IIoPool`, `PromiseCache`, `AlcLeaseRegistry` and the teardown signal (namespace `MeshWeaver.Mesh.Threading`) | **stays** — kernel. The name only looked like a feature |
 | `Mesh.Contract/Payments` | 2 222 | `MeshWeaver.Payments.Stripe`, the implementer (a **second half**, not a duplicate) | the Store package's in-mesh sources (`Store/Order`, `CouponClaim`, `Catalog`, `Maintenance`), `Hosting/Deployment`, the Stripe module | **stays** — it *is* the seam. It was put in core so commerce content compiles on a portal that mounts no payment module ([The Payment Provider Contract](../PaymentProviderContract)). As a module it would bring back the `CS0234` it was created to remove |
-| `Hosting/SelfUpdate` | 790 | `MeshWeaver.SelfUpdate.Aks`, the implementer (**second half**) | `PluginCatalog.RegistryUpdateReconciler` (`SelfUpdateOptions.HostOf`, the one registry-host rule), `Deployment.Contract`, core's `Memex.Portal.ServiceDefaults` health check, `Memex.Portal.Shared` | **stays** — interfaces plus options that core code calls; the provider half has already left |
+| `Hosting/SelfUpdate` | 790 | `MeshWeaver.SelfUpdate.Aks`, the implementer (**second half**) | `PluginCatalog.RegistryUpdateReconciler` (`SelfUpdateOptions.HostOf`, the one registry-host rule), the Deployment record (now the Hosting module's), core's `Memex.Portal.ServiceDefaults` health check, `Memex.Portal.Shared` | **stays** — interfaces plus options that core code calls; the provider half has already left |
 | `Graph/Apps` | 1 401 | nothing of that name | the kernel home page (`UserActivityLayoutAreas` → `HomeAppSource`), `GraphConfigurationExtensions.AddAppDirectory`, in-mesh content in `AppleMaps`/`AppleWeather`/`Edu`/`Store/Core` | **stays** — the kernel calls into it, and `AppleMaps/Maps/Source/AmapsConnect.cs` reflects on `"MeshWeaver.Graph.Apps.HomeAppSource, MeshWeaver.Graph"` by **assembly-qualified name**, which a move would break silently |
 | `Graph/ControlLane` | 2 940 | nothing of that name; consumers only | image assemblies `Memex.Portal.Shared` (endpoints, settings tab, self-update hand-over) and `MeshWeaver.Hosting.Instance`; in-mesh sources in `Hosting/InstanceAction`, `Hosting/Deployment`, `Hosting/PlatformBuildInbox`, `Approvals/Elsewhere` | **stays** — see below |
 | `Graph/OpenGraph` | 668 | `MeshWeaver.OgCard`, a consumer (**second half**) | `GraphConfigurationExtensions` registers it on every mesh; `Memex.Portal.Shared` (`SeoEndpoints`, `OgCardRenderer`) and the OgCard module call it | **stays for now** — see below |
@@ -457,6 +457,85 @@ it picks up the published one; it does not crash. When this was written the pull
 measured only four module bundles and neither mail module was among them; since MeshWeaver#7409 it
 links every module of the sealed `plugins` publication, mail included. The ORDER is still the guard
 for this break, and the pair gate (`Pairs-with:`) enforces the first step.
+
+### The Deployment record: moved into the Hosting module
+
+`src/MeshWeaver.Deployment.Contract` (the `DeploymentContent` record, its fluent builder, the
+configuration binding and the portal-config derivation, about 5 200 lines) sat in the content
+surface for one reason: `MeshWeaver.PluginCatalog` referenced it so that the in-mesh Hosting sources
+compiled against it. PluginCatalog itself used the types only in doc comments. Its consumers were
+all in MeshWeaver.Plugins (52 Hosting node sources and their `Test/` folders, `Hosting/Deployment.json`,
+the Aspire adapter and its hosts, the control instance's `MeshWeaver.Fleet.Control`) and
+MeshWeaver.Deploy's chart guards. Core had two tests and no `src/` caller.
+
+**Why a module works here when it did not for ControlLane.** The 409 question above is about an
+IMAGE copy beside a registry module. No image project binds the record in code, so the image needs
+no copy, and an earlier reading that "neither home works" for this contract was too strong. The two
+remaining questions have these answers:
+
+- **Compiler visibility on a portal.** An in-mesh compile composes each installed module by its
+  ENTRY assembly alone (`CompileReferences.ComposeWithModules` adds `module.Assembly.Location`, and
+  the bake host uses the same call). A library shipped beside the module in its bundle is invisible
+  to it. So the files live INSIDE the module's entry assembly, `MeshWeaver.SelfUpdate.Aks`, the
+  module `Hosting/index.json` declares, under `Deployment/`.
+- **Being proven.** The Plugins in-mesh gate composes a declared, hand-kept module set
+  (`MW_INMESH_MODULES` in its `ci.yml`), and `MeshWeaver.SelfUpdate.Aks` was not in it — no Hosting
+  source bound the module before. The Plugins half adds the module's bundle to every composing step
+  (compile-check's reference set, the Tests-area gate, both publish-bake lanes, the build host's
+  in-mesh module build), each of which is red by name when the bundle is missing.
+
+**A second compilation for the consumers that must not carry the module.** The published Aspire
+package bundles the record in its `lib/` folder and may carry no MeshWeaver dependency, and the chart
+guards should not build the module's closure. So the same files also compile, by `Compile Include`
+link, into `MeshWeaver.Hosting.Deployment.Contract`, which has zero MeshWeaver references. The two
+assemblies define the same full type names, so no compilation may reference both (`CS0433`); the
+module's suites test the module's copy, and the Aspire suites test the bundled copy.
+
+**How it moved: add first, delete second, under a NEW namespace.** The move followed MailCopy's
+order and MailCopy's reason for a new namespace. While core still exported
+`MeshWeaver.Deployment.DeploymentContent` from an assembly in every image's closure, a module
+exporting the same full name would have made every in-mesh Hosting compile on a portal ambiguous.
+The Plugins half therefore moved the types to `MeshWeaver.Hosting.Deployment` and switched every
+consumer in the same change; it compiles against a core with or without this project.
+
+**The ties, and what became of each:**
+
+- **Persisted records are safe.** `WithContentType<T>()` registers the bare CLR name
+  (`dataType.Name`), and the stored records carry `"$type": "DeploymentContent"`. Neither carries the
+  namespace or the assembly.
+- **The content-surface entry goes.** `MeshWeaver.Deployment.Contract` leaves
+  `FrameworkBuildIdentity.ContentSurfaceAssemblies` and `MeshWeaver.PluginCatalog` drops the reference.
+  That changes the content-surface hash, which is provenance only; the bake key is the compatibility
+  key `c<major>e<epoch>` ([Platform Compatibility Ladder](../PlatformCompatibilityLadder)), so no epoch
+  is declared.
+- **Two core tests changed subject, neither weakened.** `RefusedSourceSaysItIsRefusedTest` imports a
+  record with sealed nested discriminators; it now declares a local record of the same shape (a
+  non-sealed record holding a sealed `KeyVaultSecretsSpec` and a list of sealed `GateSpec`, stored
+  under the bare name `DeploymentContent`). `ConfiguredModuleActivationTest` compared the renderer's
+  and the reader's spelling of `Modules:RequiredIsAuthoritative`; core now sees only the reader, so it
+  pins the reader's wire name and the comparison moved to the one project that sees both, Plugins'
+  `MeshWeaver.SelfUpdate.Aks.Test` (`RequiredIsAuthoritativeKeyTest`).
+- **The suites moved with the code**, into `MeshWeaver.SelfUpdate.Aks.Test/Deployment/`. The parity
+  test still reads this repository's [Configuring an Instance from Aspire](../ConfiguringAnInstanceFromAspire)
+  page, from the platform checkout its build compiled against (`$(MeshWeaverRoot)`, baked into the
+  test assembly).
+
+🚨 **Removing the project is a BINARY break for every build that still binds it, so the order is the
+guard.** A Hosting NodeType build compiled before the move references `MeshWeaver.Deployment.*` in
+`MeshWeaver.Deployment.Contract`. On a platform without that assembly it is `Unlinkable` and refused
+([The Module Platform Link Gate](../ModulePlatformLinkGate)), and an older Hosting package's in-mesh
+SOURCE no longer compiles there. So:
+
+1. The Plugins half merges and the Hosting package publishes. Its sources and module bind only
+   `MeshWeaver.Hosting.Deployment`, so they run on a platform with or without this project.
+2. MeshWeaver.Deploy's chart guards repoint to `MeshWeaver.Hosting.Deployment.Contract`.
+3. The fleet adopts the new Hosting package.
+4. Only then does core's deletion merge (`Pairs-with:` holds the first step).
+
+**Not established.** The local compile gate (`scripts/canonical-compile-check.py`, running core's
+`compile-check.py`) discovers only the modules named in `MODULE_REFS_NOT_IN_IMAGE` from a Plugins
+build. A local run of the Hosting package therefore needs `MeshWeaver.SelfUpdate.Aks.dll` in its
+`--refs` set until that list, or a discovery-only sibling of it, names the module.
 
 ## Two defects this survey found
 
@@ -772,7 +851,7 @@ into the control instance's inbox, and memex's fan-out.
 | `deploy/CHANGE-PROPAGATION.md` | the platform's own delivery cost model | stays: it measures core's CI/CD and the bake tax, and `Directory.Build.props` cites it as the cost/benefit record of the framework-identity stamp. It belongs in the doc tree rather than `deploy/` — a follow-up, not a move |
 | `edge-images.yml`, `dockerhub-mirror.yml` | build (images the product or its CI runs) | stays |
 | `build-follow.yml`, `build-host-publication.yml`, `build-follow.py`, `build-executor.py`, `build-artifacts-fetch.py`, `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `node-repo-scope.py`, `ci-artifact-store.py` | build (the CI side of a host run; helpers the runner image READS at the set's commit) | stays |
-| `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | stays: the receivers in MeshWeaver.Plugins and the records compile against it |
+| `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | **moved** into the Hosting package's module (MeshWeaver.Plugins `src/MeshWeaver.SelfUpdate.Aks/Deployment/`, namespace `MeshWeaver.Hosting.Deployment`). An earlier verdict here said it stays because the receivers compile against it; they still do, from the module — see "The Deployment record: moved into the Hosting module" |
 
 🚨 **The runner image is two repositories' bytes, like the operator's.** The runner is
 MeshWeaver.Deploy's; its helpers and `meshweaver-plugin-build` are core's, fetched BY COMMIT inside

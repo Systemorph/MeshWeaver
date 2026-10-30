@@ -589,7 +589,7 @@ itself on the one open `build-host` issue — from its OWN job (`build-host-stab
 
 **The receiver** (the operations instance, MeshWeaver.Plugins) writes the event's set into
 `DeploymentContent.BuildHostSets[<channel>]` — the record's MESH-OWNED member, never the authored
-`BuildHosts` block (`MeshWeaver.Deployment.Contract` `BuildHostsBlock` / `BuildHostChannel`) — only
+`BuildHosts` block (the Hosting module's `MeshWeaver.Hosting.Deployment.BuildHostsBlock` / `BuildHostChannel`) — only
 when the record's `BuildHosts.Enabled` is already true and the block runs that channel, and never
 backwards; the record change then applies itself (policy `record-change-applies-itself`); the roll is
 ordinary Deployment semantics.

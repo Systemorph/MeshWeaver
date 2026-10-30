@@ -130,7 +130,7 @@ this change teaches the place both notations. "Owed" means a later step of the m
 | `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs:211` | **R**: Stable must not admit a run-numbered clean tag | **handled** |
 | `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` `ResolveChannel` advisory | **R/P**: tells the operator which pattern to set | **handled**: names `3.*` |
 | `src/MeshWeaver.Hosting/SelfUpdate/UpdateChannelPattern.cs` | **R**: the glob, pattern-agnostic | unchanged; `3.*` works as is |
-| `src/MeshWeaver.Hosting/SelfUpdate/SelfUpdateOptions.cs` `DefaultPattern`; `src/MeshWeaver.Deployment.Contract/DeploymentPortalConfig.cs:603` | **R**: render a record's `updatePattern` as `SelfUpdate__DefaultPattern` | unchanged (pass-through); docs examples still say `3.0.0-ci*` |
+| `src/MeshWeaver.Hosting/SelfUpdate/SelfUpdateOptions.cs` `DefaultPattern`; MeshWeaver.Plugins `src/MeshWeaver.SelfUpdate.Aks/Deployment/DeploymentPortalConfig.cs:603` | **R**: render a record's `updatePattern` as `SelfUpdate__DefaultPattern` | unchanged (pass-through); docs examples still say `3.0.0-ci*` |
 | `.github/scripts/platform-version.py` (new) | **R**: the one shell-facing reader: `ordinal`, `max-ordinal`, `line-pointers` | **new**, self-tested |
 | `.github/workflows/main-cd.yml:866` | **R**: satellite-compat baseline run number from `mw-plugin-test:main` | **handled** |
 | `.github/workflows/main-cd.yml:2083` | **P**: `control-first` line pointers for `memex-control` | **handled**: `3-latest 3.1-latest` |

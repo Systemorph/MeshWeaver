@@ -181,7 +181,8 @@ public class ConfiguredModuleActivationTest
 
     /// <summary>
     /// What every fleet record names today — five, against the image's nine (the `memex`, `fabrikam`
-    /// and `memex-cloud` fixtures in <c>MeshWeaver.Deployment.Contract.Test</c>).
+    /// and `memex-cloud` fixtures beside the Deployment record's suites, MeshWeaver.Plugins
+    /// <c>MeshWeaver.SelfUpdate.Aks.Test</c>).
     /// </summary>
     private static readonly ImmutableArray<string> TheRecordsOwnList =
     [
@@ -365,10 +366,9 @@ public class ConfiguredModuleActivationTest
     /// the route-neutral positional rule. This case is why: the rule was first written as
     /// "renders a key that binds to nothing on every route", which this configuration falsifies.</para>
     ///
-    /// <para>It lives HERE rather than beside that rule because only this project sees both
-    /// assemblies — the renderer (MeshWeaver.Deployment.Contract) and the reader
-    /// (MeshWeaver.Mesh.Contract) — which is the same reason the key-spelling assertion lives
-    /// here.</para>
+    /// <para>It lives HERE rather than beside that rule because this is where the READER is: the
+    /// rule belongs to the renderer (the Deployment record, in the Hosting package's module), and the
+    /// delivery it contradicts is the platform's own (<see cref="MeshBuilderModuleActivation"/>).</para>
     /// </summary>
     [Fact]
     public void ANegativeSlotIsDeliveredByTheASPIREReader_WhichIsWhyTheRuleIsTheCHARTS()
@@ -407,22 +407,19 @@ public class ConfiguredModuleActivationTest
     }
 
     [Fact]
-    public void TheRENDERERAndTheREADERSpellTheClaimTheSameWay()
+    public void TheREADERSpellsTheClaimAsTheRecordRendersIt()
     {
         // 🚨 The two halves live in assemblies that may not reference each other: the record renders
-        // from MeshWeaver.Deployment.Contract (ZERO MeshWeaver references by design — it ships
-        // inside the published Aspire package) and the host reads from MeshWeaver.Mesh.Contract, so
-        // the key is spelled TWICE. A rename on one side would silently stop the other from ever
-        // seeing the claim, and rendered-but-never-read is indistinguishable from not rendered:
-        // every record keeps behaving as a by-index overlay and nothing anywhere says why.
+        // from the Hosting package's module (MeshWeaver.Plugins, namespace MeshWeaver.Hosting.Deployment)
+        // and the host reads from MeshWeaver.Mesh.Contract, so the key is spelled TWICE. A rename on
+        // one side would silently stop the other from ever seeing the claim, and
+        // rendered-but-never-read is indistinguishable from not rendered.
         //
-        // This assertion lives HERE and not beside the renderer because this project sees BOTH
-        // assemblies (through MeshWeaver.PluginCatalog). The same two constants compared inside
-        // MeshWeaver.Deployment.Contract.Test would be the renderer against a literal — a check
-        // that cannot fail for the reason it exists.
-        Assert.Equal(
-            MeshBuilderModuleActivation.RequiredIsAuthoritativeKey,
-            MeshWeaver.Deployment.DeploymentPortalConfig.RequiredIsAuthoritativeKey);
+        // The comparison of the two constants needs a project that sees BOTH, and since the record
+        // left the platform that is MeshWeaver.Plugins' MeshWeaver.SelfUpdate.Aks.Test
+        // (RequiredIsAuthoritativeKeyTest). This half pins the reader's wire name, so a rename here
+        // is red HERE, not only after the Plugins suite next runs against it.
+        Assert.Equal("Modules:RequiredIsAuthoritative", MeshBuilderModuleActivation.RequiredIsAuthoritativeKey);
 
         // And the rendered ENV form is what the chart and the Aspire adapter put on the container.
         Assert.Equal(
