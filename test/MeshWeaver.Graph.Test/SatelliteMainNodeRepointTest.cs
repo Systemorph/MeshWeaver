@@ -227,4 +227,24 @@ public class SatelliteMainNodeRepointTest(ITestOutputHelper output) : MonolithMe
         Commit(nested with { MainNode = thread }, nested with { MainNode = thread, NodeType = "Comment" }, ownPath)
             .Should().BeNull("the control: the thread, the nested satellite's security owner, is accepted");
     }
+
+    /// <summary>
+    /// 🚨 Four own-hub writes on a nested satellite: retype out keeping the thread as pointer, point it at
+    /// ITSELF, retype back, then "normalise" the self-pointer to the outer document. The last write reads
+    /// as the path-derived normalisation of an unset pointer, so the re-entry is where it must stop: a node
+    /// that becomes a satellite points at its security owner, never at itself.
+    /// </summary>
+    [Fact]
+    public void RetypingBackWithASelfPointer_IsRefused_SoTheOuterNormalisationIsNeverReached()
+    {
+        const string thread = Doc + "/_Thread/t1";
+        var ownPath = thread + "/_Comment/c1";
+        var asMarkdown = new MeshNode("c1", thread + "/_Comment") { Name = "c1", NodeType = "Markdown", MainNode = thread };
+        var self = asMarkdown with { MainNode = ownPath };
+
+        Commit(asMarkdown, self, ownPath).Should().BeNull("an ordinary node chooses its own pointer");
+        Commit(self, self with { NodeType = "Comment" }, ownPath).Should().NotBeNull(
+            "re-entering the satellite class with a self pointer would let the next write 'normalise' it to the "
+            + "outer document, above the thread's own policy");
+    }
 }

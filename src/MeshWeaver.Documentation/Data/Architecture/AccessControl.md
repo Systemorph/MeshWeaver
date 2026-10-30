@@ -1505,8 +1505,10 @@ namespace's first satellite segment):
   (filed to triage).
 - **A retype into the satellite class.** Retype a satellite out, change its pointer while it is an
   ordinary node, and retype it back. Each write alone passes the comparison, so the write that makes a
-  node a satellite may only bring its SECURITY owner or itself. The storage owner of an outer satellite
-  segment is not enough, because for `Doc/_Thread/t1/_Comment/c1` it is `Doc`, above the thread.
+  node a satellite must point at its SECURITY owner. It may not point at the storage owner of an outer
+  satellite segment: for `Doc/_Thread/t1/_Comment/c1` that is `Doc`, above the thread. It may not point
+  at itself or carry an unset pointer either, because the next update could then "normalise" the pointer
+  to that storage owner.
 - **A module's satellite type.** The rule set hands a module's rule out behind a lease wrapper, so the
   guard asks the set (`NodeTypeAccessRuleSet.IsGovernedBy<SatelliteAccessRule>`), which tests the
   leased rule itself, instead of testing what `Find` returns.

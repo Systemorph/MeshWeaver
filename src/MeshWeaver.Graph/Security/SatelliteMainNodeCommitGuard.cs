@@ -69,9 +69,10 @@ public sealed class SatelliteMainNodeCommitGuard(IServiceProvider services) : IE
             // Carried to another node's hub: no predecessor to compare with, so only a derived pointer.
             (!PolicyCommitGuard.IsOwnPath(next.Path, ownerPath) && !CarriesOnlyADerivedPointer(next))
             // Retyped INTO the satellite class: the pointer it brings was never compared as a satellite's.
-            // Only its SECURITY owner (or itself): the first-segment storage owner can sit above a
-            // nested satellite's owner and above a policy that breaks inheritance there (review of #7655).
-            || (previous is not null && !wasSatellite && isSatellite && !PointsAtItsSecurityOwnerOrItself(next))
+            // Only its SECURITY owner: the first-segment storage owner can sit above a nested
+            // satellite's owner and above a policy that breaks inheritance there, and a self or unset
+            // pointer would let the next update "normalise" it to that storage owner (review of #7655).
+            || (previous is not null && !wasSatellite && isSatellite && !MainNodeTrust.IsOwnerOf(next.MainNode, next.Path))
             // The update itself repoints a satellite.
             || (previous is not null && MainNodeTrust.Repoints(previous, next));
         return refused
@@ -94,18 +95,6 @@ public sealed class SatelliteMainNodeCommitGuard(IServiceProvider services) : IE
                || (!string.IsNullOrEmpty(node.Namespace)
                    && string.Equals(main, SatelliteTableMapping.OwnerOfSatellitePath(node.Namespace),
                        StringComparison.Ordinal));
-    }
-
-    /// <summary>
-    /// Whether the node's <c>MainNode</c> is unset, the node itself, or its SECURITY owner
-    /// (<see cref="MainNodeTrust.IsOwnerOf"/>), never the storage owner of an outer satellite segment.
-    /// </summary>
-    private static bool PointsAtItsSecurityOwnerOrItself(MeshNode node)
-    {
-        var main = (node.MainNode ?? "").Trim('/');
-        return main.Length == 0
-               || string.Equals(main, node.Path.Trim('/'), StringComparison.Ordinal)
-               || MainNodeTrust.IsOwnerOf(main, node.Path);
     }
 
     private bool IsSatellite(string? nodeType) =>
