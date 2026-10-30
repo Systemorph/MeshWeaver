@@ -250,11 +250,45 @@ RESTORED_MANIFEST = "restored-packages.json"
 EVIDENCE_PACKAGES = "packages"
 
 
-def licence_files(pid: str, version: str) -> list[str]:
+def package_folders() -> list[str]:
+    """Every folder THIS restore read packages from, in NuGet's order: the writable packages
+    folder (NUGET_PACKAGES, else ~/.nuget/packages), then every FALLBACK folder — the
+    NUGET_FALLBACK_PACKAGES list and each project.assets.json's `packageFolders`. A build host
+    restores from a prepared, read-only cache bound as the fallback folder and fetches only what
+    it lacks into the writable one (core-build-stages.py BUILD_COMMAND), so evidence staged from
+    the writable folder alone would miss nearly every package."""
+    folders = [nuget_cache()]
+    folders += [f for f in re.split(r"[;" + re.escape(os.pathsep) + r"]", os.environ.get("NUGET_FALLBACK_PACKAGES", "")) if f.strip()]
+    for assets in glob.glob(os.path.join(REPO_ROOT, "**", "obj", "project.assets.json"), recursive=True):
+        if os.path.relpath(assets, REPO_ROOT).startswith(".claude" + os.sep):
+            continue
+        try:
+            with open(assets, encoding="utf-8") as handle:
+                folders += list((json.load(handle).get("packageFolders") or {}).keys())
+        except (OSError, json.JSONDecodeError, AttributeError):
+            continue
+    seen: list[str] = []
+    for f in folders:
+        f = os.path.normpath(f.strip())
+        if f not in seen:
+            seen.append(f)
+    return seen
+
+
+def package_dir(pid: str, version: str, folders: list[str] | None = None) -> str | None:
+    """The version folder of one restored package: the first package folder holding its .nuspec."""
+    for folder in folders if folders is not None else package_folders():
+        vdir = os.path.join(folder, pid.lower(), version.lower())
+        if os.path.isfile(os.path.join(vdir, pid.lower() + ".nuspec")):
+            return vdir
+    return None
+
+
+def licence_files(pid: str, version: str, vdir: str | None = None) -> list[str]:
     """The files of one restored package the gate reads: its .nuspec, and the licence
     file the nuspec names (when it names one). Paths are relative to the package's
     version folder. Mirrors resolve_license, which is the only reader."""
-    vdir = os.path.join(nuget_cache(), pid.lower(), version.lower())
+    vdir = vdir or os.path.join(nuget_cache(), pid.lower(), version.lower())
     nuspec = pid.lower() + ".nuspec"
     if not os.path.isfile(os.path.join(vdir, nuspec)):
         return []
@@ -283,9 +317,13 @@ def stage_evidence(target: str) -> int:
         )
         return 1
     copied = 0
+    folders = package_folders()
     for pid, ver in restored.values():
-        for relative in licence_files(pid, ver):
-            source = os.path.join(nuget_cache(), pid.lower(), ver.lower(), relative)
+        vdir = package_dir(pid, ver, folders)
+        if vdir is None:
+            continue
+        for relative in licence_files(pid, ver, vdir):
+            source = os.path.join(vdir, relative)
             dest = os.path.join(target, EVIDENCE_PACKAGES, pid.lower(), ver.lower(), relative)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             shutil.copyfile(source, dest)
