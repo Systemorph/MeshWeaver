@@ -31,6 +31,9 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
     private const string Locked = Partition + "/Locked";
     private const string Doc = Partition + "/Doc";
 
+    /// <summary>A main node whose comment container refuses the API surface (<c>Api = false</c>).</summary>
+    private const string Tokened = Partition + "/Tokened";
+
     /// <summary>Commenter on the whole partition.</summary>
     private const string PartitionCommenter = "sat-policy-partition-commenter";
 
@@ -55,9 +58,11 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
                 new MeshNode("Locked", Partition) { Name = "Locked", NodeType = "Markdown" },
                 new MeshNode("Sealed", Partition) { Name = "Sealed", NodeType = "Markdown" },
                 new MeshNode("Unsealed", Partition) { Name = "Unsealed", NodeType = "Markdown" },
+                new MeshNode("Tokened", Partition) { Name = "Tokened", NodeType = "Markdown" },
                 AssignmentNodeFactory.Policy(Ledger, new PartitionAccessPolicy { BreaksInheritance = true }),
                 // A static policy on a mapped satellite container: comments under Locked are closed.
                 AssignmentNodeFactory.Policy($"{Locked}/_Comment", new PartitionAccessPolicy { Read = false }),
+                AssignmentNodeFactory.Policy($"{Tokened}/_Comment", new PartitionAccessPolicy { Api = false }),
                 AssignmentNodeFactory.UserRole(PartitionCommenter, Role.Commenter.Id, Partition),
                 AssignmentNodeFactory.UserRole(DeniedCommenter, Role.Commenter.Id, Partition),
                 AssignmentNodeFactory.UserRole(DeniedCommenter, Role.Commenter.Id, $"{Sealed}/_Comment", denied: true));
@@ -125,6 +130,55 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
 
         (await ReadVerdict(rule!, Comment($"{Doc}/_Comment", Doc), ct)).Should().BeTrue(
             "the control: a comment with no policy between it and its main node follows the main node");
+    }
+
+    /// <summary>
+    /// The evaluator accepts a main node written as a reference (<c>@/Space/Doc</c>), so the policies
+    /// in between must apply to that spelling too. A raw ancestry check skipped them for it, and the
+    /// main node's grant alone admitted the read (review of #7676).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AReferenceSpelledMainNode_StillMeetsThePolicyInBetween()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rule = NodeTypeAccessRuleGate.Find(Mesh, "Comment", NodeOperation.Read)!;
+
+        (await ReadVerdict(rule, Comment($"{Doc}/_Comment", "@/" + Doc), ct)).Should().BeTrue(
+            "the control: the evaluator honours the @/ spelling, so the grant on the main node answers");
+
+        (await ReadVerdict(rule, Comment($"{Locked}/_Comment", "@/" + Locked), ct)).Should().BeFalse(
+            "Read=false on Locked/_Comment applies whatever spelling the stored main node uses");
+    }
+
+    /// <summary>
+    /// The landing check is composed with the caller's context, like the main-node check beside it.
+    /// The fold snapshots the ambient context when it is composed, so a landing check composed inside
+    /// the policy stream's selector ran under the EMITTING thread's context: a token admitted at the
+    /// main node passed an intervening <c>Api = false</c>. Here the verdict is composed under the
+    /// token and subscribed outside it (review of #7676).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AnInterveningApiFalse_RefusesAToken_WhereverTheVerdictIsSubscribed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rule = NodeTypeAccessRuleGate.Find(Mesh, "Comment", NodeOperation.Read)!;
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var token = Person(PartitionCommenter) with { IsApiToken = true };
+
+        IObservable<bool> ComposedUnderTheToken(MeshNode comment)
+        {
+            using (access.SwitchAccessContext(token))
+                return rule.HasAccess(new NodeValidationContext
+                    {
+                        Operation = NodeOperation.Read, Node = comment, AccessContext = token,
+                    }, PartitionCommenter);
+        }
+
+        (await ComposedUnderTheToken(Comment($"{Doc}/_Comment", Doc)).FirstAsync().Timeout(Budget).Await(ct))
+            .Should().BeTrue("the control: the token holds Api on Doc and nothing in between caps it");
+
+        (await ComposedUnderTheToken(Comment($"{Tokened}/_Comment", Tokened)).FirstAsync().Timeout(Budget).Await(ct))
+            .Should().BeFalse("Api=false on Tokened/_Comment clamps the token there, so the read below it is refused");
     }
 
     // The rule is asked about the satellite as the delivery gate asks about a stored one: the node

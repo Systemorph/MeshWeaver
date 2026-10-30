@@ -1489,10 +1489,18 @@ keep reaching its satellites. A role DENIED on an intermediate scope counts the 
 assignment rather than a policy, but it subtracts that role from everything beneath it, so while one
 is denied to the caller (directly, or through any group they belong to) on a scope in between, the
 landing check runs too (`PermissionEvaluator.ObserveDeniedRoleBetween`, read from the same assignment
-and membership legs, and the same subject expansion, as the fold). Pinned by
-`SatelliteInterveningPolicyTest` (an inheritance break on an intermediate segment refuses a create, a
-cap on a mapped container refuses a read, and a Commenter denied on the main node's `_Comment`
-container is refused both; each with the same shape minus the policy or the denial as the control).
+and membership legs, and the same subject expansion, as the fold). Ancestry is decided on the
+NORMALISED path, the same one the evaluator reads, so every spelling of the main node it accepts
+(`@/Space/Doc`, `/` for the root) meets the policies and denials in between. The landing check is
+composed with the caller's context, beside the main-node check, and only subscribed while a
+restriction exists: the fold snapshots the ambient context when it is composed, and a check composed
+inside the policy stream would read the emitting thread's context, so an API token admitted at the
+main node would pass an intervening `Api = false`. Pinned by `SatelliteInterveningPolicyTest` (an
+inheritance break on an intermediate segment refuses a create, a cap on a mapped container refuses a
+read, a reference-spelled main node meets that cap, a token verdict composed under the token and
+subscribed outside it meets an intervening `Api = false`, and a Commenter denied on the main node's
+`_Comment` container is refused both; each with the same shape minus the policy or the denial as the
+control).
 
 **An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
 the satellite and where its grants project, so a write that changed it would let its writer decide
