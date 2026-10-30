@@ -58,4 +58,14 @@ public record ApiToken
     /// "API tokens and the Api capability".</para>
     /// </summary>
     public IReadOnlyCollection<string> Roles { get; init; } = [];
+
+    /// <summary>
+    /// The token's scope CAP (<see cref="ApiTokenScope"/>), or <c>null</c> / empty for an
+    /// unscoped token — the owner's full authority over the API surface, which is what every
+    /// token minted before this field existed is. When set, the token can do at most what these
+    /// scopes allow; values no enforcement site claims grant nothing. Returned in
+    /// <see cref="ValidateTokenResponse.Scopes"/> and stamped onto
+    /// <c>AccessContext.Scopes</c> by every site that authenticates a token.
+    /// </summary>
+    public IReadOnlyList<string>? Scopes { get; init; }
 }

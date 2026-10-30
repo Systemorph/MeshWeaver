@@ -21,7 +21,7 @@ namespace MeshWeaver.Graph.Configuration;
 public static class ApiTokenNodeType
 {
     /// <summary>The node-type identifier string for ApiToken nodes.</summary>
-    public const string NodeType = "ApiToken";
+    public const string NodeType = ApiTokenScope.TokenRecordNodeType;
 
     /// <summary>
     /// Registers the ApiToken node type on the mesh builder: adds the MeshNode definition,

@@ -152,7 +152,16 @@ internal static class PermissionEvaluator
         // never touches the scope again.
         var services = ResolveFoldServices(hub);
 
-        return GetEffectivePermissionsCore(hub, nodePath, userId, services)
+        // 🛡️ The API-token SCOPE cap (ApiTokenScope): a token that carries scopes holds at most
+        // what they allow, whatever its owner's grants say. Read off the SAME snapshot the clamp
+        // reads (captured on the caller's thread), applied to every emission of the fold — so a
+        // grant made later still cannot lift a scoped token past its cap. Null for an unscoped
+        // caller: the fold is then exactly what it was before scopes existed.
+        var scopeCap = ApiTokenScope.PermissionCap(services.CapturedContext ?? services.CapturedCircuitContext);
+
+        return (scopeCap is { } cap
+                ? GetEffectivePermissionsCore(hub, nodePath, userId, services).Select(p => p & cap).DistinctUntilChanged()
+                : GetEffectivePermissionsCore(hub, nodePath, userId, services))
             // The DI-scope half of the teardown contract (Doc/Architecture/ControlledIoPooling →
             // "The mesh teardown drains THREE things"): a fold that faults with an
             // ObjectDisposedException while the hub's OWN scope has been disposed is a hub going

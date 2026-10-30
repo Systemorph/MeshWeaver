@@ -52,10 +52,21 @@ public static class ModuleReloadExecutor
 
     /// <summary>Arms the executor on a request node's own hub. Registered as the node type's initialization.</summary>
     /// <param name="hub">The request node's hub.</param>
-    public static IObservable<Unit> Arm(IMessageHub hub)
+    public static IObservable<Unit> Arm(IMessageHub hub) => Arm(hub, ResolveAndLand);
+
+    /// <summary>
+    /// <see cref="Arm(IMessageHub)"/> with the landing supplied by the caller — the seam the
+    /// activation-hold pin (<c>AModuleReloadStepHoldsItsActivationTest</c>) uses to park a landing
+    /// for as long as it needs, since a real all-modules landing is long only on a real registry.
+    /// Everything else — the state machine, the writes, the hold — is the production executor.
+    /// </summary>
+    /// <param name="hub">The request node's hub.</param>
+    /// <param name="resolveAndLand">Resolves and lands the modules a request names (production:
+    /// <see cref="ResolveAndLand"/>).</param>
+    internal static IObservable<Unit> Arm(IMessageHub hub, Func<IMessageHub, string?, IObservable<ModuleReloadLanding>> resolveAndLand)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ModuleReloadExecutor));
-        var run = new Run(hub, logger);
+        var run = new Run(hub, logger, resolveAndLand);
         // 🚨 Arm runs during the hub's build-up; nothing here may touch the stream until the hub is
         // Started (the init gate) — the same rule ActivationRecycle's agent follows.
         hub.RegisterForDisposal(hub.RunLevelChanged
@@ -81,7 +92,8 @@ public static class ModuleReloadExecutor
 
     /// <summary>One activation's state: which steps it has already started (an echo of its own
     /// write must not start the same step twice). Instance state of the activation, never static.</summary>
-    private sealed class Run(IMessageHub hub, ILogger? logger)
+    private sealed class Run(IMessageHub hub, ILogger? logger,
+        Func<IMessageHub, string?, IObservable<ModuleReloadLanding>> resolveAndLand)
     {
         private int landingStarted;
         private int restartStarted;
@@ -115,24 +127,24 @@ public static class ModuleReloadExecutor
                 return Observable.Empty<Unit>();
             if (!string.Equals(node.CreatedBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
                 return Interlocked.Exchange(ref finished, 1) == 0
-                    ? Finish(ModuleReloadStatus.Failed,
+                    ? Held("refusal", Finish(ModuleReloadStatus.Failed,
                         $"written by '{node.CreatedBy}', not by System — only ModuleReload.Request may issue a "
-                        + "reload (its callers authorise the requester); nothing was landed")
+                        + "reload (its callers authorise the requester); nothing was landed"))
                     : Observable.Empty<Unit>();
             if (ModuleReload.Validate(request) is { } invalid)
                 return Interlocked.Exchange(ref finished, 1) == 0
-                    ? Finish(ModuleReloadStatus.Failed, invalid)
+                    ? Held("refusal", Finish(ModuleReloadStatus.Failed, invalid))
                     : Observable.Empty<Unit>();
 
             return request.Status switch
             {
                 ModuleReloadStatus.Requested or ModuleReloadStatus.Landing =>
-                    Interlocked.Exchange(ref landingStarted, 1) == 0 ? Land(request) : Observable.Empty<Unit>(),
+                    Interlocked.Exchange(ref landingStarted, 1) == 0 ? Held("landing", Land(request)) : Observable.Empty<Unit>(),
                 ModuleReloadStatus.AwaitingRestart when request.RestartRequestedAt is null =>
-                    Interlocked.Exchange(ref restartStarted, 1) == 0 ? IssueRestart(request) : Observable.Empty<Unit>(),
+                    Interlocked.Exchange(ref restartStarted, 1) == 0 ? Held("restart", IssueRestart(request)) : Observable.Empty<Unit>(),
                 ModuleReloadStatus.AwaitingRestart or ModuleReloadStatus.Activating => Evaluate(request),
                 _ => Interlocked.Exchange(ref finished, 1) == 0
-                    ? Finish(ModuleReloadStatus.Failed, $"the request carries the status '{request.Status}', which this executor does not know")
+                    ? Held("refusal", Finish(ModuleReloadStatus.Failed, $"the request carries the status '{request.Status}', which this executor does not know"))
                     : Observable.Empty<Unit>(),
             };
         }
@@ -143,7 +155,7 @@ public static class ModuleReloadExecutor
             Write(r => r with { Status = ModuleReloadStatus.Landing }, Line(
                 $"resolving {(request.Module is null ? "every installed module" : $"'{request.Module}'")} "
                 + $"against the configured registries — reason: {request.Reason}"))
-            .SelectMany(_ => ResolveAndLand(hub, request.Module))
+            .SelectMany(_ => resolveAndLand(hub, request.Module))
             .SelectMany(landed => landed.Problem is { } problem
                 ? Finish(ModuleReloadStatus.Failed, problem)
                 : Decide(landed.Items))
@@ -294,19 +306,19 @@ public static class ModuleReloadExecutor
             if (verdict.SwapFailed && request.Status == ModuleReloadStatus.Activating)
                 return Interlocked.Exchange(ref fallbackStarted, 1) != 0
                     ? Observable.Empty<Unit>()
-                    : Write(r => r with
+                    : Held("verdict", Write(r => r with
                 {
                     Status = ModuleReloadStatus.AwaitingRestart,
                     Activation = ModuleReloadActivation.Restart,
                     ActivationDetail = $"{verdict.Detail} — the previous generation keeps serving; falling back to ONE restart",
-                }, Line($"live swap failed: {verdict.Detail} — falling back to one restart"));
+                }, Line($"live swap failed: {verdict.Detail} — falling back to one restart")));
             if (Interlocked.Exchange(ref finished, 1) != 0)
                 return Observable.Empty<Unit>();
             if (!verdict.Loaded)
-                return Finish(ModuleReloadStatus.Failed,
+                return Held("verdict", Finish(ModuleReloadStatus.Failed,
                     (request.Status == ModuleReloadStatus.AwaitingRestart ? "after the restart, " : "after the live swap, ")
-                    + verdict.Detail);
-            return Write(r =>
+                    + verdict.Detail));
+            return Held("verdict", Write(r =>
             {
                 var status = ModuleReload.OutcomeOf(r.Items, r.Failure);
                 var faulted = status == ModuleReloadStatus.Faulted;
@@ -316,7 +328,75 @@ public static class ModuleReloadExecutor
                     FaultedAt = faulted ? DateTimeOffset.UtcNow : null,
                     CompletedAt = faulted ? null : DateTimeOffset.UtcNow,
                 };
-            }, Line(verdict.Detail));
+            }, Line(verdict.Detail)));
+        }
+
+        // ── The activation hold ──────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// 🚨 Runs one step while HOLDING this request's activation (<see cref="MessageHubExtensions.BeginAsyncOperation"/>)
+        /// — taken when the step starts, released exactly once when it completes, faults or is
+        /// unsubscribed (#7324).
+        ///
+        /// <para><b>Why.</b> The request's hub is reached only by the platform (System), so its
+        /// activation retires as soon as its last subscriber goes (#6623) — and nothing a step does
+        /// counts as one: an all-modules landing runs <see cref="ResolveAndLand"/> module after
+        /// module (each bounded only per package) without writing to its node in between. Unheld,
+        /// the activation was retired MID-landing, the pipeline living on the hub's disposal went
+        /// with it, and the next activation started the landing over. A held activation is not
+        /// retired under its operation; a retirement that fell due while the hold was up is taken
+        /// when it ends.</para>
+        ///
+        /// <para><b>The other half: when the hub IS torn down mid-step</b> (a recycle, a drain, a
+        /// host stop — the hold defers only idle retirement), <see cref="StepHold"/> says so ONCE,
+        /// at Warning, with the hub's own <see cref="MessageHub.DisposalAttribution"/> — WHO tore
+        /// it down and WHY. The step lines and the dispose reasons are Information, which the
+        /// cluster does not ship, so a request that re-entered Landing 13 times left one line in
+        /// the log and no answer to what restarted it.</para>
+        /// </summary>
+        /// <param name="step">The step's name, for the teardown warning.</param>
+        /// <param name="work">The step.</param>
+        private IObservable<Unit> Held(string step, IObservable<Unit> work) =>
+            Observable.Using(
+                () => new StepHold(hub, logger, step),
+                hold => work.Do(_ => { }, _ => hold.Ended(), hold.Ended));
+
+        /// <summary>One step's hold on the activation, and the witness of whether the step ended
+        /// on its own or was torn down under it. Disposed exactly once by <c>Observable.Using</c>.</summary>
+        private sealed class StepHold : IDisposable
+        {
+            private readonly IMessageHub hub;
+            private readonly ILogger? logger;
+            private readonly string step;
+            private readonly IDisposable activation;
+            private int ended;
+            private int released;
+
+            public StepHold(IMessageHub hub, ILogger? logger, string step)
+            {
+                this.hub = hub;
+                this.logger = logger;
+                this.step = step;
+                activation = hub.BeginAsyncOperation();
+            }
+
+            /// <summary>The step completed or faulted on its own — its end is not a teardown.</summary>
+            public void Ended() => Interlocked.Exchange(ref ended, 1);
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref released, 1) != 0)
+                    return;
+                activation.Dispose();
+                // Unsubscribed before it ended, by a hub that is going down: the pipeline lives on
+                // the hub's disposal, so this IS the teardown dropping an in-flight step.
+                if (Volatile.Read(ref ended) == 0 && hub.IsDisposing)
+                    logger?.LogWarning(
+                        "[ModuleReload] {Path}: the request's hub was torn down while its {Step} step was in flight — "
+                        + "the step is dropped and the next activation runs it again. Teardown {Attribution}",
+                        PathOf(hub), step,
+                        (hub as MessageHub)?.DisposalAttribution ?? "(not attributable: the hub is not a MessageHub)");
+            }
         }
 
         // ── Writes ───────────────────────────────────────────────────────────────────────────
