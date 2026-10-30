@@ -93,6 +93,11 @@ three outcomes, and that neither the absent path nor the absent ref is ever call
 **2. The stage-advance listener answers `pull_request_review` only.** The comment trigger was a
 pure duplicate (above); dropping it removes ~60 of ~100 runs an hour at ~10 calls each. The caller
 owns its triggers (`stage-advance.yml` in each satellite); the lane's header names the rule.
+Core's own `stage-advance.yml` and core's `Review answered` gate had the same duplicate: they listen
+to `pull_request_review` and no longer to `pull_request_review_comment: created` (MeshWeaver#7187;
+the gate keeps `deleted`, which raises no review event). `check-review-answered.py --self-test`
+refuses the trigger in both files and in the review lane's caller contract. See
+[One judgement per reply](../ReviewFindingsAnswered#one-judgement-per-reply-not-two).
 
 ## The instrument
 

@@ -1647,6 +1647,228 @@ def in_flight_policy(run: dict, jobs: list | None, own_created_at: str) -> tuple
 FEEDBACK_LANE_EVENT = "pull_request_review_comment"
 
 
+#: MeshWeaver#7187 — a reply to a finding raises BOTH `pull_request_review: submitted` and
+#: `pull_request_review_comment: created` in the same second (every review comment belongs to a review;
+#: measured on core 2026-10-30: 232 of 232 comment runs had a same-head review run within 15 s). A caller
+#: that listens to `created` judges every reply twice, so a burst of N replies starts 2N runs and spends
+#: the repository's REST budget on duplicates. The only comment type a caller may listen to is `deleted`
+#: (a reply going raises no review event). `review_comment_triggers` reads a workflow's text and
+#: `trigger_contract_failures` holds the files in TRIGGER_CONTRACT to it.
+ALLOWED_REVIEW_COMMENT_TYPES = frozenset({"deleted"})
+REVIEW_COMMENT_EVENT = "pull_request_review_comment"
+
+#: (workflow file, rule for its ACTIVE triggers, rule for its COMMENTED caller contract). A rule is
+#: "deleted" (at least one trigger, and each lists `deleted` only) or "none" (no trigger at all).
+TRIGGER_CONTRACT = (
+    ("review-answered.yml", "deleted", "none"),
+    ("node-repo-review-answered.yml", "none", "deleted"),   # a workflow_call lane; its header carries the caller
+    ("stage-advance.yml", "none", "none"),
+)
+
+
+def _trigger_code(line: str) -> str:
+    """A line of a trigger declaration as the reader sees it: the event name UNQUOTED wherever it is quoted
+    (`'pull_request_review_comment':` and `"pull_request_review_comment":` are the same YAML key as the bare
+    form, and `on: [push, 'pull_request_review_comment']` names the same event), then the trailing comment
+    dropped. Nothing else is masked: the reader looks only inside the top-level `on:` block (and the
+    commented contract), where a quoted event name is a trigger, never an expression. Pure."""
+    unquoted = re.sub(r"(['\"])" + REVIEW_COMMENT_EVENT + r"\1", REVIEW_COMMENT_EVENT, line)
+    return re.sub(r"(^|\s)#.*$", "", unquoted).rstrip()
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _on_block(lines: list) -> tuple:
+    """The top-level `on:` block of the active YAML — [(line number, text)] from the `on:` line (reduced to
+    what follows `on:`, so `on: [push, x]` is still read) to the next top-level key — and a message when
+    there is none. Triggers are declared ONLY there, so an `if:` or a concurrency expression comparing
+    `github.event_name` to the event name elsewhere in the file is never read as one. Pure."""
+    for i, (n, t) in enumerate(lines):
+        m = re.match(r"^(['\"]?)on\1[ \t]*:(.*)$", t)
+        if not m:
+            continue
+        block = [(n, " " + m.group(2))]
+        for n2, t2 in lines[i + 1:]:
+            if t2.strip() and _indent(t2) == 0:
+                break
+            block.append((n2, t2))
+        return block, None
+    return [], "no top-level `on:` key, so its triggers cannot be read"
+
+
+def _parse_review_comment_triggers(lines: list, strict: bool) -> tuple:
+    """`lines` = [(line number, text)] of ONE layer (the active `on:` block, or the commented contract with
+    its `#` removed). Returns (found, unsupported): `found` lists each trigger's types, ["*"] for a trigger
+    with no `types` (it listens to EVERY type); `unsupported` names every declaration shape this reader does
+    not read. The ONE shape read is the event name (bare or quoted) alone as a key on its line, followed by a
+    more-indented `types: [a, b]` on the next line. `strict` (the `on:` block): ANY other mention is
+    unsupported — a flow mapping, `on: [...]`, a list item, an inline value, quoted or not. In the commented
+    layer prose is allowed, so only a line that STARTS with the event name as a key or list item is held to
+    the shape. Pure."""
+    found, unsupported = [], []
+    code = [(n, _trigger_code(t)) for n, t in lines]
+    code = [(n, c) for n, c in code if c.strip()]
+    for i, (n, c) in enumerate(code):
+        if REVIEW_COMMENT_EVENT not in c:
+            continue
+        if re.fullmatch(r"[ \t]*" + REVIEW_COMMENT_EVENT + r":[ \t]*", c):
+            nxt = code[i + 1] if i + 1 < len(code) else None
+            if nxt is None or _indent(nxt[1]) <= _indent(c):
+                found.append(["*"])
+                continue
+            m = re.fullmatch(r"[ \t]*types:[ \t]*\[([^\]]*)\][ \t]*", nxt[1])
+            if not m:
+                unsupported.append(f"line {nxt[0]}: `{nxt[1].strip()}` under `{REVIEW_COMMENT_EVENT}:` is not a "
+                                   "one-line `types: [..]` list")
+                continue
+            found.append([t.strip().strip("'\"") for t in m.group(1).split(",") if t.strip()])
+        elif strict or re.match(r"[ \t]*(-[ \t]*)?" + REVIEW_COMMENT_EVENT + r"[ \t]*(:|,|\]|$)", c):
+            unsupported.append(f"line {n}: `{c.strip()}` — only `{REVIEW_COMMENT_EVENT}:` followed by "
+                               "`types: [..]` on the next line is read")
+    return found, unsupported
+
+
+def review_comment_triggers(text: str) -> dict:
+    """The `pull_request_review_comment` triggers of a workflow, split by layer: `active` (the top-level
+    `on:` block GitHub runs) and `contract` (a caller contract written as `#` comments, as
+    node-repo-review-answered.yml's header carries one), plus `unsupported` — every declaration shape
+    neither layer can read, and a file with no `on:` block, which the gate treats as RED. A commented line
+    is never part of the active layer, so a `# types: [deleted]` under a bare active trigger leaves that
+    trigger listening to every type. Pure."""
+    active, contract = [], []
+    for n, line in enumerate(text.splitlines(), 1):
+        m = re.match(r"^[ \t]*#(.*)$", line)
+        if m:
+            contract.append((n, m.group(1)))
+        else:
+            active.append((n, line))
+    block, missing = _on_block(active)
+    a_found, a_bad = _parse_review_comment_triggers(block, strict=True)
+    c_found, c_bad = _parse_review_comment_triggers(contract, strict=False)
+    return {"active": a_found, "contract": c_found, "unsupported": ([missing] if missing else []) + a_bad + c_bad}
+
+
+def _trigger_rule_holds(rule: str, found: list) -> bool:
+    if rule == "none":
+        return found == []
+    return bool(found) and all(t and set(t) <= ALLOWED_REVIEW_COMMENT_TYPES for t in found)
+
+
+def trigger_contract_failures(wf_dir: str) -> list:
+    """Every way the workflows in `wf_dir` break TRIGGER_CONTRACT, as messages — a MISSING file is one
+    (its contract cannot be checked, so it is never passed over). Empty = the contract holds."""
+    fails = []
+    for wf, active_rule, contract_rule in TRIGGER_CONTRACT:
+        path = os.path.join(wf_dir, wf)
+        if not os.path.isfile(path):
+            fails.append(f"{wf}: missing from {wf_dir} — its review-comment trigger contract cannot be checked")
+            continue
+        with open(path, encoding="utf-8") as f:
+            r = review_comment_triggers(f.read())
+        for bad in r["unsupported"]:
+            fails.append(f"{wf}: unsupported `{REVIEW_COMMENT_EVENT}` declaration, {bad}")
+        for layer, rule in (("active", active_rule), ("contract", contract_rule)):
+            if not _trigger_rule_holds(rule, r[layer]):
+                want = "no trigger" if rule == "none" else "`types: [deleted]` only"
+                fails.append(f"{wf}: {layer} {REVIEW_COMMENT_EVENT} triggers {r[layer]} — want {want}")
+    return fails
+
+
+def trigger_self_test() -> int:
+    """MeshWeaver#7187 fix shape 2 — one judgement per reply, not two. Fixture directories first (a negative
+    control for every shape that must go red, and a positive one), then the real workflows. The real check
+    is skipped ONLY when there is no workflows directory beside this copy (the lanes fetch the predicate
+    alone into $RUNNER_TEMP); a directory that exists is checked file by file, and a missing file is RED."""
+    failures = 0
+
+    def check(name, ok, detail=""):
+        nonlocal failures
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} trigger: {name:66} {detail}")
+
+    ok_ra = "on:\n  pull_request_review:\n    types: [submitted]\n  pull_request_review_comment:\n    types: [deleted]\n"
+    ok_lane = ("on:\n  workflow_call:\n#   on:\n#     pull_request_review_comment:\n"
+               "#       types: [deleted]          # NOT `created`\n"
+               "#   pull_request_review_comment  deleted ONLY — prose\n"
+               "jobs:\n  x:\n    run: echo \"wire it to pull_request_review_comment\"\n"
+               "    group: x-${{ github.event_name == 'pull_request_review_comment' && 'feedback' || 'gate' }}\n")
+    ok_sa = ("on:\n  pull_request_review:\n    types: [submitted]\njobs:\n  x:\n    if: >-\n"
+             "      github.event_name == 'pull_request_review_comment'\n")
+    created = "on:\n  pull_request_review_comment:\n    types: [created, deleted]\n"
+    good = {"review-answered.yml": ok_ra, "node-repo-review-answered.yml": ok_lane, "stage-advance.yml": ok_sa}
+    # Each case names EVERY failure it must produce (a substring each), so a control that is red for some
+    # other reason — a fixture the reader cannot parse — is a FAIL here, not a pass.
+    cases = [
+        ("the contract as it stands -> holds", good, []),
+        ("NEG: [created, deleted] (the shape before #7187) -> red",
+         dict(good, **{"review-answered.yml": created}), ["review-answered.yml: active"]),
+        ("NEG: flow mapping `{types: [created]}` -> red, named unsupported",
+         dict(good, **{"stage-advance.yml": "on:\n  pull_request_review_comment: {types: [created]}\n"}),
+         ["stage-advance.yml: unsupported"]),
+        ("NEG: `on: [pull_request_review_comment]` -> red",
+         dict(good, **{"stage-advance.yml": "on: [push, pull_request_review_comment]\n"}), ["stage-advance.yml: unsupported"]),
+        ("NEG: bare trigger + COMMENTED `# types: [deleted]` -> red (every type)",
+         dict(good, **{"review-answered.yml": "on:\n  pull_request_review_comment:\n    # types: [deleted]\n"
+                                              "  pull_request_review:\n    types: [submitted]\n"}),
+         ["review-answered.yml: active pull_request_review_comment triggers [['*']]"]),
+        ("NEG: a block-style `types:` list -> red, named unsupported",
+         dict(good, **{"review-answered.yml": "on:\n  pull_request_review_comment:\n    types:\n      - deleted\n"}),
+         ["review-answered.yml: unsupported", "review-answered.yml: active"]),
+        ("NEG: no trigger where `deleted` is required -> red",
+         dict(good, **{"review-answered.yml": "on:\n  pull_request_review:\n    types: [submitted]\n"}),
+         ["review-answered.yml: active pull_request_review_comment triggers []"]),
+        ("NEG: a commented caller contract with [created] -> red",
+         dict(good, **{"node-repo-review-answered.yml": ok_lane.replace("[deleted]", "[created]")}),
+         ["node-repo-review-answered.yml: contract"]),
+        ("NEG: a commented `# pull_request_review_comment: {types: [created]}` -> red",
+         dict(good, **{"node-repo-review-answered.yml": ok_lane + "#     pull_request_review_comment: {types: [created]}\n"}),
+         ["node-repo-review-answered.yml: unsupported"]),
+        ("NEG: an ACTIVE trigger in the workflow_call lane -> red",
+         dict(good, **{"node-repo-review-answered.yml": ok_lane.replace(
+             "  workflow_call:\n", "  workflow_call:\n  pull_request_review_comment:\n    types: [deleted]\n", 1)}),
+         ["node-repo-review-answered.yml: active"]),
+        ("NEG: a single-quoted key `'pull_request_review_comment':` + [created] -> red",
+         dict(good, **{"stage-advance.yml": "on:\n  'pull_request_review_comment':\n    types: [created]\n"}),
+         ["stage-advance.yml: active"]),
+        ("NEG: a double-quoted key `\"pull_request_review_comment\":` + [created] -> red",
+         dict(good, **{"stage-advance.yml": "on:\n  \"pull_request_review_comment\":\n    types: [created]\n"}),
+         ["stage-advance.yml: active"]),
+        ("NEG: a quoted item in `on: [push, '…']` -> red, named unsupported",
+         dict(good, **{"stage-advance.yml": "on: [push, 'pull_request_review_comment']\n"}),
+         ["stage-advance.yml: unsupported"]),
+        ("NEG: a quoted key with a bare `types` line missing -> red (every type)",
+         dict(good, **{"review-answered.yml": "on:\n  \"pull_request_review_comment\":\n  pull_request:\n"}),
+         ["review-answered.yml: active pull_request_review_comment triggers [['*']]"]),
+        ("a quoted key with `types: ['deleted']` -> holds",
+         dict(good, **{"review-answered.yml": "\"on\":\n  'pull_request_review_comment':\n    types: ['deleted']\n"}), []),
+        ("NEG: no top-level `on:` -> red, named",
+         dict(good, **{"stage-advance.yml": "name: x\njobs:\n  y:\n    runs-on: z\n"}), ["stage-advance.yml: unsupported"]),
+        ("NEG: lane file missing, the other two on [created] -> red, ALL three",
+         {"review-answered.yml": created, "stage-advance.yml": created},
+         ["review-answered.yml: active", "node-repo-review-answered.yml: missing", "stage-advance.yml: active"]),
+    ]
+    for name, files, needles in cases:
+        with tempfile.TemporaryDirectory() as d:
+            for f, t in files.items():
+                with open(os.path.join(d, f), "w", encoding="utf-8") as fh:
+                    fh.write(t)
+            got = trigger_contract_failures(d)
+        ok = len(got) == len(needles) and all(any(n in g for g in got) for n in needles)
+        check(name, ok, f"{len(got)} failure(s) {got[:3]}")
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    wf_dir = os.path.join(os.path.dirname(here), "workflows")
+    if os.path.isdir(wf_dir):
+        fails = trigger_contract_failures(wf_dir)
+        check("core's workflows: no review comment is judged twice", not fails, "; ".join(fails))
+    else:
+        print(f"self-test note trigger: no workflows directory beside this copy ({wf_dir}) — the trigger contract "
+              "is checked in core's tree")
+    return failures
+
+
 def concurrency_lane(event) -> str:
     """The caller's concurrency-group suffix for a run of this event. Pure."""
     return "feedback" if event == FEEDBACK_LANE_EVENT else "gate"
@@ -4750,6 +4972,7 @@ def self_test() -> int:
     failures += duplicate_sweep_self_test(HEAD, ref_pr, red_read)
     failures += outage_self_test(HEAD, ref_pr, red_read)
     failures += pending_self_test(HEAD)
+    failures += trigger_self_test()
 
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
