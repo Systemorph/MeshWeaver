@@ -126,6 +126,25 @@ the source is absent. This distinction matters for a move from a private user sp
 Inbox: reporting “source not found” for a node storage still holds leaves the submitted record in
 the user's space and prevents its destination watcher from handing it over.
 
+### Every path in a query is a quoted literal (#7542)
+
+The source and container paths are spliced into the copy's queries through
+`QueryParser.PathLiteral` — `path:"P/License Email Rubin" scope:subtree`, never the bare path. The
+query tokenizer splits on whitespace, so a bare `path:P/License Email Rubin` reads as the filter
+`path:P/License` plus two free-text words: a query for a different node. Storage, enumerated by raw
+prefix, still lists the source, so the two surfaces disagreed on every attempt and each move of a
+node with a space in its path was refused as *"Copy reached no verdict: … is stored, but the subtree
+query under the caller did not return it yet"* — including the rename meant to remove the space.
+Regression guard: `MoveRenamesOffAWhitespacePathTest` (a spaceless move of the same shape is its
+control). A path that carries BOTH quote characters has no quoted literal (the query language
+has no escape). `PathLiteral` then writes it bare, as it always was: a bare value runs to the next
+whitespace and reads a quote inside it as data, so such a path still copies. A bare value still
+carries query syntax, though, so the bare form is used only when the path holds none of `| * ( )` AND
+reads back as exactly one exact path anchor equal to itself — `a'b"c|other` would otherwise be two
+path alternatives, a copy aimed at a different set of nodes. Anything else (whitespace, that syntax,
+a leading quote) cannot be written at all and is refused by name. Guards: the copy theory in the same
+test class, with a mixed-quote leaf, and `PathLiteralReadsBackAsOnePathTest`.
+
 ## The refusal — `RequireComplete`
 
 Carrying satellites fixes the case we know about. The rule the operation actually needs is stronger,
