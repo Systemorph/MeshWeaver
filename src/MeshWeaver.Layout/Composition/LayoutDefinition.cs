@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Layout.Composition;
 
@@ -412,6 +413,33 @@ public record LayoutDefinition(IMessageHub Hub)
         => this with { ConversionRules = ConversionRules.Insert(0, rule) };
 
     internal ImmutableDictionary<string, LayoutAreaDefinition> AreaDefinitions { get; init; } = ImmutableDictionary<string, LayoutAreaDefinition>.Empty;
+
+    /// <summary>
+    /// The visible area definitions as they are SERVED — to the layout-area catalog, the
+    /// <c>layoutAreas</c> stream, <see cref="GetLayoutAreasRequest"/> and autocomplete — with each
+    /// undeclared description filled in from its view method's XML-doc summary. The documentation
+    /// files those summaries live in are read through the mesh's I/O pool
+    /// (<c>hub.WhenXmlDocsLoaded</c>), never on the configuring or the requesting thread; once they
+    /// are in memory this emits synchronously on subscribe. COLD, one value.
+    /// </summary>
+    internal IObservable<IReadOnlyList<LayoutAreaDefinition>> ObserveVisibleAreaDefinitions()
+        => Observable.Defer(() =>
+        {
+            var visible = AreaDefinitions.Values.Where(l => l.IsVisible()).ToImmutableList();
+            return Hub.WhenXmlDocsLoaded(visible
+                    .Where(d => d.Description is null)
+                    .Select(d => d.SummarySource)
+                    .OfType<System.Reflection.MethodInfo>())
+                .Select(_ =>
+                {
+                    var docs = Hub.XmlDocs();
+                    return (IReadOnlyList<LayoutAreaDefinition>)visible
+                        .Select(d => d.Description is null && d.SummarySource is { } method
+                            ? d with { Description = docs.Summary(method) }
+                            : d)
+                        .ToImmutableList();
+                });
+        });
     internal ThumbnailPattern? ThumbnailPattern { get; init; }
 
     /// <summary>
