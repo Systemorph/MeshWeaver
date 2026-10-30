@@ -198,14 +198,85 @@ public class AnIgnorePatternRetiresWhatTheSyncImportedTest(ITestOutputHelper out
 
         second.PrunedPaths.Should().NotContain($"{space}/Other",
             "its recursive delete would take the mesh-minted child with it");
-        var children = await NodeFactory
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{meshMinted}"))
-            .Take(1)
-            .Timeout(TestTimeouts.Convergence)
-            .Await(ct);
-        children.Items.Should().ContainSingle(n => n.Path == meshMinted,
+        // Review on #7641: read the KNOWN child from its authoritative node stream, never a query —
+        // the eventually-consistent index can still return the pre-delete row after a destructive
+        // import, so a query-based survival assertion could not fail.
+        (await ReadSurvivor(meshMinted, ct)).Should().NotBeNull(
             "the mesh-minted child under the retired node is still there");
     }
+
+    /// <summary>
+    /// Review on #7641: the survivor guard must count what THIS import writes, not only the snapshot
+    /// read before the upserts. With <c>Other*</c> plus a <c>!Other/Local*</c> re-include, the
+    /// repository's new <c>Other/Local.md</c> is imported in the same run that retires <c>Other</c>;
+    /// <c>DeleteNode</c> is recursive, so pruning <c>Other</c> would delete the child it just wrote.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task RetiringAnImportedNode_NeverDeletesAChildTheSameImportWrites()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await SetUpSpace(ct);
+        var child = $"{space}/Other/Local";
+
+        repoClient.Serve(FirstSha, complete: true, "Api.md", "Other.md");
+        var first = await Sync.ReimportAtCommit(space, FirstSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        first.WrittenPaths.Should().Contain($"{space}/Other", "precondition: the sync imported the parent");
+
+        await SetIgnore(space, ["Other*", "!Other/Local*"], ct);
+
+        repoClient.Serve(SecondSha, complete: true, "Api.md", "Other.md", "Other/Local.md");
+        var second = await Sync.ReimportAtCommit(space, SecondSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        Output.WriteLine($"{space} import 2: outcome={second.Outcome} written=[{string.Join(", ", second.WrittenPaths)}] pruned=[{string.Join(", ", second.PrunedPaths)}]");
+
+        second.WrittenPaths.Should().Contain(child, "precondition: the re-include lets the new child import");
+        second.PrunedPaths.Should().NotContain($"{space}/Other",
+            "its recursive delete would take the child this same import just wrote");
+        (await ReadSurvivor(child, ct)).Should().NotBeNull("the child the import wrote is still there");
+    }
+
+    /// <summary>
+    /// Review on #7641: a manifest entry with the refusal prefix records that the source's write was
+    /// REFUSED — not that the source put the node there. So an Ignore pattern that later excludes the
+    /// path must leave the node spared as never-mirrored (it may be one the mesh created), while a
+    /// successful-import token for the same path makes it retirable. Pins the exact predicate the
+    /// import hands to <see cref="StaticRepoImporter.ComputePrunableNodes"/>.
+    /// </summary>
+    [Fact]
+    public void ARefusalEntryInTheManifest_NeverMakesAnIgnoredNodePrunable()
+    {
+        var source = new InMemoryStaticRepoSource("Sp", [], null, ignore: new SyncIgnore(["Other*"]));
+        var other = new MeshNode("Other", "Sp") { NodeType = "Markdown" };
+
+        var refused = new Dictionary<string, string>
+        {
+            ["Sp/Other"] = StaticRepoImporter.RefusedTokenPrefix + "0123abcd|refused by a validator",
+        };
+        var refusedGuard = StaticRepoImporter.SparedAsNeverMirrored(source, refused);
+        refusedGuard("Sp/Other").Should().BeTrue(
+            "a refused write is no evidence the source put the node here, so it stays spared");
+        StaticRepoImporter.ComputePrunableNodes(
+                [other], [], refused.Keys, [], PartitionSyncMode.FullReplace, refusedGuard)
+            .Should().BeEmpty("a refusal entry must not qualify the node for deletion");
+
+        var imported = new Dictionary<string, string> { ["Sp/Other"] = "0123abcd" };
+        var importedGuard = StaticRepoImporter.SparedAsNeverMirrored(source, imported);
+        importedGuard("Sp/Other").Should().BeFalse("the sync imported it and the owner's pattern retires it");
+        StaticRepoImporter.ComputePrunableNodes(
+                [other], [], imported.Keys, [], PartitionSyncMode.FullReplace, importedGuard)
+            .Should().ContainSingle(n => n.Path == "Sp/Other");
+
+        importedGuard("Sp/Api").Should().BeFalse("no pattern excludes it, so the guard has nothing to spare");
+    }
+
+    /// <summary>Authoritative read of a node expected to exist; times out (fails) when it was deleted.</summary>
+    private Task<MeshNode> ReadSurvivor(string path, CancellationToken ct)
+        => Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
 
     private async Task<string> SetUpSpace(CancellationToken ct, Func<string, Task>? beforeConfig = null)
     {

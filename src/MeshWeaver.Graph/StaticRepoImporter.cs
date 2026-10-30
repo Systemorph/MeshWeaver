@@ -2188,18 +2188,23 @@ public static class StaticRepoImporter
                     // the prior manifest records this source putting here can leave; a node the mesh
                     // minted under the same pattern (the #1326 Release/ case) never was, and stays.
                     // Holds and never-mirrored slots are not "retired" (IsRetiredFromMirror) and
-                    // stay spared exactly as before.
+                    // stay spared exactly as before. So does a path whose manifest entry is a REFUSAL
+                    // (review on #7641): it records a refused write, not that the source put the node
+                    // here — see SparedAsNeverMirrored.
                     var toPrune = ComputePrunableNodes(
                         existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode,
-                        path => source.IsExcludedFromMirror(path) && !source.IsRetiredFromMirror(path),
+                        SparedAsNeverMirrored(source, manifest),
                         sourceListingIsComplete);
                     // 🚨 …and a RETIRED node is never deleted over a node that stays (review on
                     // #7641). DeleteNode is recursive, so retiring `Sp/Other` would take a
                     // mesh-minted `Sp/Other/Local` (or a Release record) with it — the very #1326
                     // loss the provenance guard exists to prevent. Such a node is kept until its
-                    // subtree holds nothing that stays.
+                    // subtree holds nothing that stays. The survivors include the nodes THIS import
+                    // writes: `existing` is the snapshot read before the upserts, so a child the run
+                    // just imported (a `!Other/Local*` re-include) would otherwise be deleted with
+                    // its retired parent.
                     toPrune = WithoutRetiredAncestorsOfSurvivors(
-                        toPrune, existing.Values, source.IsRetiredFromMirror);
+                        toPrune, existing.Values.Concat(nodes), source.IsRetiredFromMirror);
 
                     // Never prune a node CREATED/changed on the server since the last sync when the
                     // policy protects it (two-way, OR prune-only protection for bidirectional spaces —
@@ -2989,13 +2994,33 @@ public static class StaticRepoImporter
     }
 
     /// <summary>
+    /// The never-mirrored guard <see cref="ComputePrunableNodes"/> receives on an import (issues
+    /// #1326 and #7611): <c>true</c> spares <paramref name="source"/>'s excluded path from the prune.
+    /// A path an owner's Ignore PATTERN now excludes (<see cref="IStaticRepoSource.IsRetiredFromMirror"/>)
+    /// is no longer spared — but only when <paramref name="manifest"/> records a SUCCESSFUL import of
+    /// it. A refusal entry (<see cref="RefusedTokenPrefix"/>) records that the source's write was
+    /// REFUSED, which is no evidence the source ever put the node there (review on #7641): the node
+    /// may be one the mesh created, and it stays spared exactly as before.
+    /// </summary>
+    /// <param name="source">The source being imported.</param>
+    /// <param name="manifest">The prior import manifest (path → token).</param>
+    /// <returns>The predicate: <c>true</c> = never-mirrored, never pruned.</returns>
+    internal static Func<string, bool> SparedAsNeverMirrored(
+        IStaticRepoSource source, IReadOnlyDictionary<string, string> manifest)
+        => path => source.IsExcludedFromMirror(path)
+                   && !(source.IsRetiredFromMirror(path)
+                        && manifest.TryGetValue(path, out var token)
+                        && !token.StartsWith(RefusedTokenPrefix, StringComparison.Ordinal));
+
+    /// <summary>
     /// Drops every RETIRED prune candidate (<paramref name="isRetired"/>, issue #7611) that has a
     /// descendant which stays — an existing node that is not itself pruned and is not one of its
     /// governance satellites. <c>DeleteNode</c> deletes a subtree, so pruning such a node would delete
     /// the survivor with it (review on #7641). Candidates that are not retired are returned as before.
     /// </summary>
     /// <param name="toPrune">The prune candidates.</param>
-    /// <param name="existing">The partition snapshot the candidates were chosen from.</param>
+    /// <param name="existing">Every node that stays unless pruned: the partition snapshot the
+    /// candidates were chosen from PLUS the nodes the same import writes.</param>
     /// <param name="isRetired">The source's retirement predicate.</param>
     /// <returns>The candidates whose recursive delete removes nothing that stays.</returns>
     internal static IReadOnlyList<MeshNode> WithoutRetiredAncestorsOfSurvivors(
