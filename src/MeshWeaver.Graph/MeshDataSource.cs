@@ -1812,7 +1812,14 @@ public static class MeshDataSourceExtensions
             // read returns the version the write landed at.
             if (newNode.Version == lastSelfWrite.Value)
                 return;
-            cache.IsDeleted = false;
+            // 🚨 `cache.IsDeleted` is NOT reset here — only once the adoption below has LANDED. The
+            // flag says "the node this hub holds in RAM was deleted", and a recreate does not change
+            // what this hub holds until it is adopted. A delete tears its owner down, and a recreate
+            // of the same path can reach the dying owner while it is still subscribed here; a
+            // tearing-down hub refuses the adoption (HubDisposingException). Reset up front, the flag
+            // then sat cleared over the PRE-delete node, and the dispose-time flush wrote that deleted
+            // node back over the recreate (ADyingOwnerNeverOverwritesTheRecreateTest; the Feedback
+            // hand-over's redirect, overwritten by the second copy it had just deleted).
             // A genuine (re)create/update SUPERSEDES the tombstone so a same-id recreate persists
             // normally (a self-write echo was already suppressed above). The storage write seam has
             // usually done this already, synchronously at the commit (#3008); this covers the
@@ -1849,7 +1856,8 @@ public static class MeshDataSourceExtensions
                 hub.GetWorkspace().GetMeshNodeStream()
                     .AdoptPersisted(newNode)
                     .Subscribe(
-                        _ => { },
+                        // The in-RAM node is the durable one now: this hub's own state is live again.
+                        _ => cache.IsDeleted = false,
                         ex => TryLogWarning(hub, ex,
                             "Own-node refresh from change notification failed on {Hub}",
                             hub.Address));
