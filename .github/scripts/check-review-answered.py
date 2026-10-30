@@ -1647,6 +1647,90 @@ def in_flight_policy(run: dict, jobs: list | None, own_created_at: str) -> tuple
 FEEDBACK_LANE_EVENT = "pull_request_review_comment"
 
 
+#: MeshWeaver#7187 — a reply to a finding raises BOTH `pull_request_review: submitted` and
+#: `pull_request_review_comment: created` in the same second (every review comment belongs to a review;
+#: measured on core 2026-10-30: 232 of 232 comment runs had a same-head review run within 15 s). A caller
+#: that listens to `created` judges every reply twice, so a burst of N replies starts 2N runs and spends
+#: the repository's REST budget on duplicates. The only comment type a caller may listen to is `deleted`
+#: (a reply going raises no review event). `review_comment_trigger_types` reads a workflow's text and the
+#: self-test holds review-answered.yml, the lane's caller contract and stage-advance.yml to it.
+ALLOWED_REVIEW_COMMENT_TYPES = frozenset({"deleted"})
+
+
+def review_comment_trigger_types(text: str) -> list:
+    """Every `pull_request_review_comment:` trigger in a workflow's text — including one inside a
+    commented caller contract (`#   pull_request_review_comment:`) — as the list of its `types`, in
+    order. A trigger with no flow-style `types: [...]` on the next line listens to EVERY type and is
+    returned as ["*"], so an unparsed shape can never read as compliant. Pure."""
+    lines = text.splitlines()
+    found = []
+    for i, line in enumerate(lines):
+        if not re.match(r"^[ \t#]*pull_request_review_comment:[ \t]*(#.*)?$", line):
+            continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        m = re.match(r"^[ \t#]*types:[ \t]*\[([^\]]*)\]", nxt)
+        found.append([t.strip().strip("'\"") for t in m.group(1).split(",") if t.strip()] if m else ["*"])
+    return found
+
+
+def review_comment_triggers_bounded(found: list, allowed_none: bool = False) -> bool:
+    """True when no trigger listens to a review comment being CREATED (MeshWeaver#7187): each one lists
+    only `deleted`. `allowed_none` = the file must not listen to review comments at all. Pure."""
+    if allowed_none:
+        return found == []
+    return bool(found) and all(t and set(t) <= ALLOWED_REVIEW_COMMENT_TYPES for t in found)
+
+
+def trigger_self_test() -> int:
+    """MeshWeaver#7187 fix shape 2 — one judgement per reply, not two. Fixtures first (a negative control
+    for each shape that must go red), then the real workflows when they sit beside this copy."""
+    failures = 0
+
+    def check(name, ok, detail=""):
+        nonlocal failures
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} trigger: {name:62} {detail}")
+
+    old_shape = ("on:\n  pull_request_review:\n    types: [submitted, dismissed]\n"
+                 "  pull_request_review_comment:\n    types: [created, deleted]\n")
+    new_shape = "on:\n  pull_request_review_comment:\n    types: [deleted]\n"
+    bare = "on:\n  pull_request_review_comment:\n  pull_request_review:\n    types: [submitted]\n"
+    block = "on:\n  pull_request_review_comment:\n    types:\n      - created\n"
+    contract = "#   on:\n#     pull_request_review_comment:\n#       types: [deleted]          # NOT `created`\n"
+    prose = ("#   pull_request_review_comment  deleted ONLY — a reply going\n"
+             "  if: github.event_name == 'pull_request_review_comment'\n")
+    for name, text, none, want in [
+        ("NEG: [created, deleted] (the shape before #7187) -> refused", old_shape, False, False),
+        ("NEG: a bare trigger listens to every type -> refused", bare, False, False),
+        ("NEG: a block-style list is not read as compliant", block, False, False),
+        ("NEG: no trigger where one is required -> refused", "on:\n  pull_request:\n", False, False),
+        ("[deleted] -> bounded", new_shape, False, True),
+        ("a commented caller contract with [deleted] -> bounded", contract, False, True),
+        ("prose and `if:` mentions are not triggers", prose, True, True),
+        ("NEG: a listener that must have none, with [created] -> refused", old_shape, True, False),
+    ]:
+        found = review_comment_trigger_types(text)
+        got = review_comment_triggers_bounded(found, allowed_none=none)
+        check(name, got == want, f"found={found}")
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    wf_dir = os.path.join(os.path.dirname(here), "workflows")
+    if os.path.isdir(wf_dir) and os.path.exists(os.path.join(wf_dir, "node-repo-review-answered.yml")):
+        for wf, none in [("review-answered.yml", False), ("node-repo-review-answered.yml", False),
+                         ("stage-advance.yml", True)]:
+            path = os.path.join(wf_dir, wf)
+            if not os.path.exists(path):
+                check(f"{wf} is present", False, "missing — the trigger contract cannot be checked")
+                continue
+            with open(path, encoding="utf-8") as f:
+                found = review_comment_trigger_types(f.read())
+            what = "listens to no review comment" if none else "listens to review comments being DELETED only"
+            check(f"{wf} {what}", review_comment_triggers_bounded(found, allowed_none=none), f"found={found}")
+    else:
+        print(f"self-test note trigger: the workflows are not beside this copy ({wf_dir}) — the trigger check runs in core's tree")
+    return failures
+
+
 def concurrency_lane(event) -> str:
     """The caller's concurrency-group suffix for a run of this event. Pure."""
     return "feedback" if event == FEEDBACK_LANE_EVENT else "gate"
@@ -4750,6 +4834,7 @@ def self_test() -> int:
     failures += duplicate_sweep_self_test(HEAD, ref_pr, red_read)
     failures += outage_self_test(HEAD, ref_pr, red_read)
     failures += pending_self_test(HEAD)
+    failures += trigger_self_test()
 
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"

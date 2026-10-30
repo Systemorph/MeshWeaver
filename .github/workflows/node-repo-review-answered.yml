@@ -54,7 +54,7 @@ name: Node repo review answered (reusable)
 #     pull_request_review:
 #       types: [submitted, dismissed]
 #     pull_request_review_comment:
-#       types: [created, deleted]
+#       types: [deleted]          # NOT `created` — see "ONE RUN PER REPLY" below
 #   permissions:
 #     contents: read
 #     pull-requests: read
@@ -74,6 +74,15 @@ name: Node repo review answered (reusable)
 #         actions: write     # the `refresh` job only — see "THE SELF-REFRESH" below
 #       with:
 #         scripts-ref: <the SAME 40-char core sha>
+#
+# 🚨 ONE RUN PER REPLY (MeshWeaver#7187). A reply to a finding raises BOTH `pull_request_review:
+# submitted` and `pull_request_review_comment: created`, in the same second — every review comment
+# belongs to a review. Listening to both judged every reply twice (each judgement spends REST calls on
+# the caller's 1,000/hour `github.token` budget), so a burst of 27 replies on core #7180 started ~60
+# runs and the installation's budget ran out. Measured on core 2026-10-30: 232 of 232 comment runs had
+# a same-head review run within 15 s. So the caller listens to `created` NOT AT ALL; `deleted` stays,
+# because a reply going raises no review event and can make a thread unanswered again. The predicate's
+# self-test asserts this contract and core's caller (`review_comment_trigger_types`).
 #
 # ⏳ OPT-IN: PENDING WHILE ANSWERING (policy review-pending-while-answering). With the default empty
 # `verdict-check-run` the lane behaves exactly as before. To have the context read PENDING (not red)

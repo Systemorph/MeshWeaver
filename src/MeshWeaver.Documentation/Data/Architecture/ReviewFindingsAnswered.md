@@ -497,7 +497,7 @@ to go **red** if the marker rule is restored.
 |---|---|---|
 | `pull_request` | opened, synchronize, reopened, ready_for_review, labeled, unlabeled | a new head; the waiver is a label |
 | `pull_request_review` | submitted, dismissed | the reviewer's review; a person's reply also creates a review |
-| `pull_request_review_comment` | created, deleted | a finding or a reply arriving, or a reply going |
+| `pull_request_review_comment` | deleted **only** | a reply going — it raises no review event. **Not** `created`: see [One judgement per reply](#one-judgement-per-reply-not-two) |
 | `merge_group` | checks_requested | the queue entry is judged again; the number comes from `gh-readonly-queue/main/pr-<N>-<sha>` |
 | `check_run` (in `review-answered-on-degradation.yml`) | completed | ANY `internal-review` check run of the internal reviewer (since 2026-10-03; before, only its "Reviewer unavailable" degradation) — this file **re-runs** the gate's newest `pull_request` run for that head rather than judging itself; see [the degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody) for why |
 
@@ -511,10 +511,51 @@ Evaluations are serialised per **pull request** for pull-request events and per 
 may evaluate alongside an older entry. That is the right granularity: what must not race is two
 evaluations publishing the same check-run *name* on the same commit, and two queue entries of one
 pull request are two commits with two check-runs. Nothing is cancelled mid-read, which also matters
-because cancelling a `merge_group` run ejects the entry rather than retrying it. A review arrives as
-one `submitted` event and one `created` event per inline comment; GitHub keeps one running and one
-pending run per group, so a burst of fourteen collapses to two evaluations, and the one that runs
-last read last.
+because cancelling a `merge_group` run ejects the entry rather than retrying it. A burst of replies
+arrives as one `submitted` review event per reply; GitHub keeps one running and one pending run per
+group, so a burst of fourteen collapses to a few evaluations, and the one that runs last read last.
+
+### One judgement per reply, not two
+
+A person's reply to a finding raises **two** events in the same second:
+`pull_request_review_comment: created` and `pull_request_review: submitted`. Every review comment,
+a finding or a reply, belongs to a review. While this check listened to both, every reply was judged
+twice. Each judgement is two full evaluations in core (the `answered` job and the fleet `lane`), and
+each spends REST calls on the repository's shared `github.token` budget. On 2026-10-25 a burst of 27
+replies on #7180 started about 60 runs, and the budget ran out for every pull request (MeshWeaver#7187).
+
+Measured on core's last 500 runs of `Review answered` (2026-10-30 07:49–16:45Z):
+
+| | runs |
+|---|---|
+| `pull_request_review_comment` runs | 232 |
+| … with a same-head `pull_request_review` run within 15 s | **232** |
+| … that still executed a full judgement (success or failure) | 83 |
+| … `action_required` (the reviewer's own comments; zero jobs) | 108 |
+
+So the comment trigger reported nothing the review trigger did not. MeshWeaver.Plugins#3101 found the
+same pairing for the stage-advance lane (60 of 60 and 52 of 52).
+
+The rule, for core's caller, the lane's caller contract and `stage-advance.yml`:
+
+- **`review-answered.yml` listens to `pull_request_review_comment: deleted` only.** A reply being
+  deleted raises no review event and can make a thread unanswered again. Nothing else would re-judge
+  a GREEN verdict, so `deleted` stays. Deletions do not come in bursts.
+- **`stage-advance.yml` does not listen to review comments at all.** Its lane header already said
+  so; core's own caller still listened to `created`.
+- **Nothing that branch protection reads is lost.** Branch protection never read a comment-driven
+  run's job check-run (#4649, below). The verdict writer's check-run is written by the paired
+  review-event run. The `refresh` job follows a GREEN verdict on a `pull_request_review` run exactly
+  as it followed one on a comment run.
+- **It is enforced.** `check-review-answered.py --self-test` reads all three workflow files and
+  refuses a `created` trigger (`review_comment_trigger_types`, `trigger_self_test`). A bare trigger
+  or a block-style `types:` list counts as listening to every type. Each refused shape has a
+  negative-control fixture. Run against main's three files as they stood before this change, the
+  self-test fails three cases.
+
+What was **not** measured: how many REST calls one judgement of this check makes. A satellite whose
+caller still lists `created` keeps paying double until it adopts the contract. The self-test checks
+core's tree only.
 
 ### 🚨 The reviewer's own event cannot start a run here — so the check waits, briefly
 
