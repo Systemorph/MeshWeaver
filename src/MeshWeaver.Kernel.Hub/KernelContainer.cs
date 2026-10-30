@@ -184,6 +184,11 @@ public class KernelContainer(IServiceProvider serviceProvider)
             },
             logger);
         hub.RegisterForDisposal(subscription);
+
+        // #7362 — the owner's half of "no answer from the kernel yet": the dispatcher states
+        // ReplyOverdueSince as a fact; this hub, which owns the activity, decides on its current
+        // state whether that means a notice (still Running) or nothing (already finished).
+        hub.RegisterForDisposal(KernelReplyOverdue.Watch(hub, logger));
     }
 
     private void DisposeOnTimeout(IMessageHub hub)

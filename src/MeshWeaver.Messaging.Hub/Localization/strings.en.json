@@ -1643,6 +1643,7 @@
   "activity.codeRun.failed": "{language} run failed: {reason}",
   "activity.codeRun.failedNoReason": "{language} run failed: the kernel reported a failure without giving a reason.",
   "activity.codeRun.kernelSaturated": "The cell was not run: all {max} kernel slot(s) of this process are busy, and a cell that waits on another cell may not queue behind it. Run it again once other cells have finished.",
+  "activity.codeRun.noKernelReplyYet": "No answer from the kernel yet. The run is still in progress and completes when the kernel answers.",
   "activity.codeRun.noWorker": "No {language} worker connected at '{target}'. The language gate is not running in this deployment — see Doc/Architecture/PythonCodeNodes.",
   "kernel.executionFailed": "Execution failed",
   "activity.compile.started": "Compile started for {path}",

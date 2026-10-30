@@ -415,6 +415,58 @@ addresses refused). Its two callers are both published plugin bytes (the OgCard 
 668 lines. Reconsider it when another carve out of `MeshWeaver.Graph` is sequencing the same
 republish anyway.
 
+### Why the Deployment record stays
+
+`src/MeshWeaver.Deployment.Contract` holds the Deployment record (`DeploymentContent`, its fluent
+builder, the configuration binding and the portal-config derivation). It is in the content surface
+because `MeshWeaver.PluginCatalog` references it, so that the in-mesh Hosting sources compile against
+it. Its consumers are all outside core. A move into the Hosting package's module
+(`MeshWeaver.SelfUpdate.Aks`) was built end to end, following MailCopy's order, and then **rejected
+by the maintainer**. The record stays here.
+
+**What was built** (Systemorph/MeshWeaver.Plugins#4740, closed):
+
+- a new namespace, `MeshWeaver.Hosting.Deployment`, so the module copy and core's still-exported
+  `MeshWeaver.Deployment` could coexist;
+- the files compiled into the module's own dll. An in-mesh compile composes an installed module by
+  that entry assembly alone (`CompileReferences.ComposeWithModules`), so a library shipped beside it
+  would have been invisible to the Hosting sources;
+- a second, dependency-free compilation for the Aspire package, and every Hosting source switched;
+- `MeshWeaver.SelfUpdate.Aks` added to the Plugins CI module lists (`MW_INMESH_MODULES`, the gate's
+  and publish-bake's module artifacts, the build host's stage requirements). Before, no Hosting source
+  bound the module, so CI never composed it.
+
+**What it measured:**
+
+- **The bake's compile passed.** 166 of 166 NodeTypes compiled with the module composed into the
+  reference set, and a local compile of the 48 Hosting types was clean.
+- **The mesh lane's runtime compile failed on 24 Hosting types.** The gate's mesh WITHDREW the
+  module at boot: `IncompatibleModule ... Cannot build 'AcrTagLister' ... 'SelfUpdateOptions options'
+  is not registered`. A module's shared instances are built eagerly, and one constructor that cannot
+  be resolved withdraws the whole module. A withdrawn module contributes nothing to the compile, so
+  every Hosting type that names the record failed `CS0234` on `MeshWeaver.Hosting.Deployment`. Content
+  that binds another module in the same lane (`Collaboration/Review` against
+  `MeshWeaver.Markdown.Collaboration`) compiled, because that module installed.
+
+**Why it stays.** The failure was fixable, and a fallback registration made the module buildable on
+that host. But it showed what the home costs. Today the Hosting package's content depends on a
+platform type that is present on every host. In the module, it would depend on its module INSTALLING
+on that host. Any reason a module is withdrawn (a constructor dependency, a version skew against the
+image) would then take down every Hosting NodeType, where today it costs only the module's features.
+For the fleet-operations package that is a new failure mode, and it is the one place that new
+failure mode must not be added.
+
+**Two things this established, which hold beyond this record:**
+
+1. **A package's module reaches the in-mesh compile only once it has INSTALLED.** Being composed
+   into the bake's reference set is not enough. The runtime compile reads the installed-module set,
+   which leaves out a withdrawn module, so a green bake can sit beside a red mesh lane for the same
+   content.
+2. **`MeshWeaver.SelfUpdate.Aks` has a hidden dependency on the portal registering
+   `SelfUpdateOptions`.** Only `Memex.Portal.Shared`'s `AddSelfUpdate` registers it, and
+   `AcrTagLister` and `KubernetesDeploymentUpdater` take it. On a host that does not compose the
+   self-update poller, the module is withdrawn.
+
 ### MailCopy: moved into the Mail module
 
 MailCopy was the one subsystem with **no caller in core and no in-mesh binder**. Its consumers were
@@ -806,7 +858,7 @@ into the control instance's inbox, and memex's fan-out.
 | `deploy/CHANGE-PROPAGATION.md` | the platform's own delivery cost model | stays: it measures core's CI/CD and the bake tax, and `Directory.Build.props` cites it as the cost/benefit record of the framework-identity stamp. It belongs in the doc tree rather than `deploy/` — a follow-up, not a move |
 | `edge-images.yml`, `dockerhub-mirror.yml` | build (images the product or its CI runs) | stays |
 | `build-follow.yml`, `build-host-publication.yml`, `build-follow.py`, `build-executor.py`, `build-artifacts-fetch.py`, `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `node-repo-scope.py`, `ci-artifact-store.py` | build (the CI side of a host run; helpers the runner image READS at the set's commit) | stays |
-| `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | stays: the receivers in MeshWeaver.Plugins and the records compile against it |
+| `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | **stays** (tried, measured, decided): the receivers in MeshWeaver.Plugins and the records compile against it, and the module home makes every Hosting NodeType depend on a module installing — see "Why the Deployment record stays" |
 
 🚨 **The runner image is two repositories' bytes, like the operator's.** The runner is
 MeshWeaver.Deploy's; its helpers and `meshweaver-plugin-build` are core's, fetched BY COMMIT inside
