@@ -511,9 +511,12 @@ Reading per SCOPE instead multiplied that one read by the depth of the path **an
 
 🚨 **The same classification puts a `_Policy` under a satellite segment out of the fold's reach.** The policy read is a CONTENT query, so it never returns a `_Policy` whose scope lies under a configured satellite segment, such as `{partition}/_Storage/_Policy` or `{node}/_Thread/_Policy`. On Postgres that row is stored in the segment's table. In memory it is dropped like every other satellite row. The fold also reads only the id `_Policy`. Until `PolicyPlacementValidator`, both placements could be created, read back by path, and **never applied**. A `BreaksInheritance` policy at `{partition}/_Storage` left the inherited partition grant in force. The same node declared statically DID apply, because `CollectStaticPolicies` reads the static providers directly and never passes through the query. `PolicyPlacementValidator` now refuses a runtime `PartitionAccessPolicy` CREATE in either placement.
 
-**A `PartitionAccessPolicy` is create-only, and ONE guard enforces it: `PolicyCommitGuard`, at the owner's COMMIT point.** It is created as `{scope}/_Policy`. Retyping an existing node into one is unsupported by design on every route. The guard is an `IEntityCommitGuard`, consulted in the turn that applies a write, against the entity exactly as it would commit and the entity the owner holds under that key. Two places commit into an owner, and both consult it:
+**A `PartitionAccessPolicy` is create-only, and ONE guard enforces it: `PolicyCommitGuard`, at the owner's COMMIT point.** It is created as `{scope}/_Policy`. Retyping an existing node into one is unsupported by design on every route. The guard is an `IEntityCommitGuard`, consulted in the turn that applies a write, against the entity exactly as it would commit and the entity the owner holds under that key. Three places commit into an owner, and all three consult the guards through the ONE helper, `EntityCommitGuards.FirstRefusal`:
 - `ApplyMeshNodePatchInTurn`, the merge turn of a merge patch. This covers every `GetMeshNodeStream(path).Update` from another hub, `IMeshService.UpdateNode`, and the upsert's update branch.
 - `WorkspaceOperations`, the apply turn of a `DataChangeRequest`. This covers a synced write-back, an entity-reference patch, a full entity or an `EntityDeltaUpdate`, and a node carried to a hub that is not its own.
+- `MeshNodeStreamHandle.UpdateOwn`, the commit turn of an OWN write: `GetMeshNodeStream().Update` (or `Overwrite`) issued on the owning hub itself. Code that runs on the owner as a person writes this way: the `RollbackNodeRequest` handler (a client request that needs only Update), an activity script on its own hub, a layout-area action. Until this route consulted the guards, every commit-point rule was skipped on it, so a rollback or an own-hub write could commit what every routed write is refused. The writer judged is the identity the write was issued under. `AdoptPersisted`, which observes state that is already durable and writes nothing, is the one own commit the guards do not judge.
+
+A new route that commits into an owner's store must call `EntityCommitGuards.FirstRefusal` in its commit turn; a route that does not is a bypass of every rule below. Pinned by `RetypingIntoAPolicy_ThroughTheOwnersOwnStream_IsRefused`, `AScopedToken_CannotRewriteItsOwnRecord_ThroughTheOwnersOwnStream`, `ARepointThroughTheSatellitesOwnStream_IsRefused` and `RollbackMeetsTheCommitGuardsTest`.
 
 It refuses two things:
 - **A node held as another type that would commit as a policy.** This applies whatever produced the value: a literal, a string splice, a stale-base three-way merge, or a patch queued behind another that changed the type first.
@@ -1442,7 +1445,7 @@ The credential is recognised by its CONTENT, read exactly as the verdict reads i
 the rule. It is enforced at both write seams: the create chain (`RlsNodeValidator`, ahead of the
 own-scope shortcut that otherwise lets a person write anything into their own partition) and the
 owner's commit point (`ApiTokenPrincipalCommitGuard`, an `IEntityCommitGuard`), which every routed
-update, merge patch and data change meets. Binding at the write side covers both verdicts at once.
+update, merge patch, data change and own-hub write meets. Binding at the write side covers both verdicts at once.
 
 A token record or index commits only at ITS OWN hub. A data change sent to another node's hub can
 carry one, and that hub holds no predecessor under its key, so a rewrite would read as a create there
@@ -1487,7 +1490,8 @@ The refusal is held at two seams, both reading `MainNodeTrust.Repoints`: the rul
 asked about an update with the stored node, and the owner's commit point
 (`SatelliteMainNodeCommitGuard`). The commit point is the one that matters for a routed write: a merge
 patch reaches the owning hub, whose delivery check decides from the STORED node and never sees the
-proposed pointer. A commit guard cannot read or wait, so it cannot re-validate a new target, which is
+proposed pointer. An own-hub write (`UpdateOwn`, e.g. an activity script repointing its own
+activity) meets the same commit point. A commit guard cannot read or wait, so it cannot re-validate a new target, which is
 one more reason the rule refuses rather than re-checks. Pinned by `SatelliteMainNodeRepointTest`
 (a routed repoint to a locked target and to the writer's own target are both refused; an update that
 keeps the pointer lands; the rule refuses a changed pointer and allows the path-derived one).
