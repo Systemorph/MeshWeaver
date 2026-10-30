@@ -2,8 +2,9 @@
 Name: Review Findings Answered
 Category: Architecture
 Description: >-
-  A pull request into main reads RED until the automatic review has landed and every thread it opened
-  has a reply from a person. Why review was advisory, the reviewer as measured (two logins, one
+  A pull request into main is BLOCKED until the automatic review has landed and every thread it opened
+  has a reply from a person — PENDING while that is in progress inside its deadlines, red only on a
+  real failure (past a deadline, a refusal, an unmeasured state). Why review was advisory, the reviewer as measured (two logins, one
   account, and a quota refusal posted as if it were a review), what counts as "reviewed, nothing
   found" (only a Copilot review that covers the head: its own, or an earlier one across merges of main
   alone), the review requested on every real change, the maintainer waiver, the retired
@@ -14,8 +15,12 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Review Findings Answered
 
-**The check `Automatic review answered` is RED until the automatic review has landed on a pull
-request and every inline thread that review opened has a reply from a person.** It never skips, it
+**The check `Automatic review answered` BLOCKS until the automatic review has landed on a pull
+request and every inline thread that review opened has a reply from a person.** While that is merely
+in progress — threads not answered yet, a review not landed yet, inside their deadlines — it reads
+**pending**, not red (policy `review-pending-while-answering`; see
+[Pending while answering](#pending-while-answering--red-only-on-a-real-failure)), and it goes red
+only on a real failure. It never skips, it
 never passes on no evidence, and a pull request the reviewer could not review is released only by a
 maintainer's visible waiver. With no finding on the pull request, the only evidence of a review is a
 Copilot review that COVERS the head — of the head itself, or of an earlier head when only `main` was
@@ -116,6 +121,142 @@ All three hold, or the check is RED:
 
 A reply that says nothing still counts as answered. That limitation is known and accepted on #4299;
 the predicate is still strictly better than none.
+
+## Pending while answering — red only on a real failure
+
+Policy [`review-pending-while-answering`](../PolicyNotProse), with its deadlines under policy
+[`review-answer-deadline`](../PolicyNotProse). Measured on the day it was decided: about 60% of the
+red pull requests were this check reading RED while Copilot's threads simply had not been answered
+**yet**. That state is not a failure. Nothing but a person's reply changes it, and a red X sends
+everybody to investigate it. So the required context now has three readings:
+
+| reading | when | what the pull request page shows |
+|---|---|---|
+| **success** | every reviewer thread answered, and a review covers the head (the predicate above is GREEN) | ✅ |
+| **pending** | the predicate is red ONLY because threads are not answered yet, or the head's review has not landed yet, and neither is past its deadline | ⏳ in progress. The title reads `Pending — N of M thread(s) unanswered; red at <time>`, and the summary names every unanswered thread by link |
+| **failure** | a thread still unanswered **24 h** after the review that opened it; a head whose review has not landed **6 h** after the gate first judged it; a refusal (nothing that arrives can change it); or a state the gate could not **measure** (an incomplete listing, a failed read, an unreadable clock, a red reason the reading does not recognise) | ❌ |
+
+🚨 **It still blocks exactly as before.** A pending verdict is a check-run with status `in_progress`
+and **no conclusion**. Branch protection and rulesets accept only `success`, `neutral` or `skipped`
+for a required context, so `in_progress` is never satisfied, and auto-merge waits for it like any
+pending required check. The writer never posts `neutral` or `skipped`. The self-test pins that
+(`a PENDING body is in_progress with NO conclusion`), and mutating the body to `neutral` turns four
+cases red.
+
+**How a workflow can say "pending".** A job's own check-run always ends with a conclusion when the
+job ends, and every job is capped at 45 minutes. So the verdict is written through the Checks API
+instead (`check-review-answered.py --verdict-check-run NAME`, `run_verdict`):
+
+- **One check-run per head**, named exactly like the required context. The first evaluation of a
+  head creates it, and every later evaluation PATCHes it, whatever event started that evaluation.
+  This also removes the duplicate problem described under *The check's log says GREEN and the pull
+  request is still BLOCKED*: there is now one verdict per head, not one per run.
+- **The judging job is renamed** (`Review answered — verdict writer`), so its own check-run never
+  carries the required name. It goes red only when the verdict is `failure`.
+- **The newest read stands.** The check-run's `external_id` records when the writing evaluation read
+  the pull request (`mw-review-answered:v1:<read time>:<kind>`). An evaluation whose read is older
+  than the one on file writes nothing (`verdict_write_plan`).
+- **Reopening a completed verdict.** When a completed verdict must become pending again (for example,
+  a new thread on an answered head), the writer re-opens it. If GitHub refuses, the old check-run is
+  closed as `failure` with title *Superseded* and a new pending one carries the verdict. An old
+  `success` therefore never stands beside a newer pending verdict.
+- **`GITHUB_TOKEN` writes it**, so the check-run belongs to the GitHub Actions App (id 15368). That is
+  the App MeshWeaver.Plugins' classic protection pins its review context to.
+
+**What re-judges a pending verdict with no event.** Copilot's own review event cannot start a run
+here (see below), and a deadline passes without any event at all. So the caller's `schedule` (every
+15 minutes in core) runs `--verdict-sweep`. The sweep re-judges every open, non-draft,
+same-repository pull request whose verdict on its current head is pending or unmeasured
+(`SWEEP_KINDS`). Every other pull request costs one listing read. That is also why the writer takes
+**no** review wait and **no** settle wait: a pending verdict is not red, so there is nothing to wait
+out, and the sweep flips a clean review to green within 15 minutes.
+
+**Where nothing changed.** The job keeps the required name and its old red/green behaviour in these
+cases:
+
+- a **fork** pull request, whose token is read-only and so could write no verdict;
+- a **Dependabot** pull request, whose token is read-only unless granted;
+- a **merge-queue** entry, whose commit is judged once, at admission;
+- every caller of the fleet lane that has **not opted in**.
+
+One condition picks the shape. It is written twice in each workflow, in the job's `name:` and in
+`VERDICT_CHECK_RUN`, and the self-test asserts the two are identical. There is still no job-level
+`if:`: the shape is chosen by **name**, never by skipping a job, because a skipped required context
+counts as satisfied.
+
+**The refresh machinery stays coherent.** An answered state still flips the context to success,
+directly: the reply's own run PATCHes the head's verdict to `success`, whichever event it was. The
+lane's `refresh` job runs only after a `success` verdict and prints why it does nothing on a pending
+one. After a success it still re-runs every older red of the job-shaped check on the head. That
+covers a pull request that was open across this change and still carries job-shaped reds from before
+it. The outage marker step and the retry listener are unchanged: an outage takes no verdict and
+writes nothing.
+
+**Satellites opt in, per repository.** The fleet lane (`node-repo-review-answered.yml`) has an
+`verdict-check-run` input, empty by default, which gives exactly the old behaviour. A repository opts
+in with one change to its caller:
+
+1. pass `verdict-check-run: '<caller job> / Automatic review answered'`, exactly as its protection
+   lists the context;
+2. grant `checks: write` on the `uses:` job;
+3. add a `schedule:` trigger (the sweep);
+4. update its row in `.github/lane-caller-grants.yml` (core first, as `pending:`).
+
+**Answering automatically** (policy [`review-thread-auto-answer`](../PolicyNotProse)). When Copilot's
+threads land, the control plane's babysitter pass queues ONE agent run per (pull request, head, review
+round). The pass is fed by the org webhook, and no model polls. The run answers the findings that are
+not defects ON their threads, through the App. It leaves every real defect unanswered, so this check
+stays pending until a fix with a test lands. The lane is off by default, and its model and effort are
+deployment-record config. Its manual is MeshWeaver.Plugins `Hosting/PrThreadAnswerer`.
+
+🚨 That lane's answers are posted by a **Bot**. Under policy [`app-marked-answer-counts`](../PolicyNotProse), condition 2
+counts a reply from the control plane's App ONLY when it carries the lane's marker
+(`<!-- pr-relay:answer comment=<root id> -->`) naming that thread's root. The App is matched by account id or
+either login (`systemorph-com[bot]`, `systemorph[bot]`). An unmarked App reply, a marker naming another
+thread, and a marked reply from any other bot still answer nothing (`is_app_answer`, self-tested).
+
+🚨 **Why the lane's judging job has no `permissions:` block any more.** The writer needs
+`checks: write`. A called job's `permissions:` is a hard requirement on every caller. Writing
+`checks: write` there would startup-fail every caller that has not granted it, and five of six call
+the lane at `@main`. That is the #3933 outage shape. Without a block, the job holds exactly what its
+caller grants on the `uses:` job, which the roster records per caller.
+
+**Controls.** The self-test's `pending:` cases run against a fake GitHub:
+
+- the four the decision named: unanswered and fresh → pending; past the deadline → failure; all
+  answered → success; unmeasurable → failure;
+- the review deadline, the refusal, an unrecognised reason and an unreadable clock;
+- the write plan: create, patch, and skip on a newer read;
+- the re-open fallback;
+- the sweep, with a draft, a fork and a completed verdict as negative controls;
+- the workflow condition parity.
+
+Watched failing under five mutations:
+
+| mutation | cases that go red |
+|---|---|
+| unanswered threads reported as `failure` again (the old behaviour) | 7 |
+| the 24 h deadline removed | 3 |
+| pending written as `neutral` | 4 |
+| an older read allowed to overwrite a newer verdict | 2 |
+| the explicit `unmeasurable` branch removed | 0 — the fail-closed fallback still classifies an unrecognised red as `failure`, by design |
+
+**Not established — measure it on the first pull requests.**
+
+- **Whether the rollup reads the API-written check-run.** The rollup that branch protection reads
+  left out the check-runs of `pull_request_review_comment` runs on #4649, and nobody measured why.
+  The verdict check-run is created by whichever evaluation runs first on a head, usually the
+  `pull_request` run of the push. Read the pull request's rollup on the first pull requests after
+  this lands. A pending verdict must show the merge as blocked, and a success must clear it.
+- **Whether a ruleset blocks on an absent required context.** Read the four rows below in order.
+  1. Classic protection blocks on an absent context. This was measured on Plugins#1453.
+  2. Whether a ruleset blocks is *not* measured. [Reading CI Signals](../ReadingCiSignals) records
+     it as satisfied.
+  3. The writer creates the context on its first evaluation, a few seconds after the event. The
+     window before that is shorter than the job-shaped check's queue time. Every required suite
+     takes far longer than that window.
+  4. An outage that keeps even that first write from landing leaves the context absent until the
+     retry listener re-runs it.
 
 ## Reviewed, nothing found — the only evidence that counts
 
@@ -257,6 +398,13 @@ requires) bought a full Copilot round on code the pull request did not change: n
 - **The order.** The gate half and the lane land in core first (the gate change is safe under
   `review_on_push: true`, where every head is reviewed anyway); each repository then adds its thin
   caller; only then is that repository's ruleset flipped.
+- **The rollout is complete — measured 2026-10-30.** A dry run of `set-copilot-review-on-push.py`
+  over its whole `FLEET` read `review_on_push: false` — `unchanged` — on all ten rulesets
+  (MeshWeaver 2128472, MeshWeaver.Plugins 19008635, Memex 21038115, Crm 21741681, Education
+  19153714, Reinsurance 20302588, SocialMedia 20302587, Manufacturing 20625978, FundReporting
+  23730648, Deploy 25787784), and every one of those ten repositories carries
+  `.github/workflows/request-review-on-change.yml` on its default branch (contents API). Nothing is
+  left to apply.
 - **The self-test.** The `REAL CHANGE` and `real-change` cases pin it: a main-only merge after a
   review is green (and its negative control, the same merge with a changed diff, is red); a real
   change after a review is red until its own review lands; an unanswered thread is red over a
@@ -275,7 +423,7 @@ Policy [`copilot-code-review`](../PolicyNotProse), as amended, puts `review_on_p
 - **Every push to a non-draft pull request triggers a fresh Copilot review**, so every push opens a new review round, and that round's new threads hold the merge until a person answers each one ON the thread. That is why AGENTS.md says to push only for a real defect: a nit or a question is answered on its thread, not with a commit.
 - **Nobody hand-requests a review.** The ruleset requests one on every push, so an author never asks for a review or a re-review, and never withdraws one. The one exception is a review the reviewer REFUSED (below, *A refusal is posted as a review*): once the reviewer can review again, a maintainer's re-request or the `review-waived` label clears it.
 - **The gates do not change.** A landed review of any head still counts as "reviewed" (`review-once-per-pull-request`, gate half; `review-evidence-any-head`). A push therefore never goes red just because its own review has not landed yet. Threads the new round opens still need replies.
-- **The ruleset is reconciled, not hand-edited.** `.github/scripts/set-copilot-review-on-push.py` holds the in-force value in one constant (now `REVIEW_ON_PUSH = False`, policy `review-on-real-change`; it was `True` under this section) and applies it to the nine repositories in its `FLEET` idempotently: dry-run by default; `--apply` PUTs the ruleset with every other field as read, then reads it back and fails unless only that one parameter changed. Changing the policy means changing that constant in the same pull request. **The ninth repository is not reconciled yet:** the policy names eight rulesets, while the script's `FLEET` also holds `MeshWeaver.FundReporting`, whose ruleset `23730648` (*Copilot review for default branch*) measured `review_on_push: false` on 2026-10-10 — a dry run names it as `would PUT`. Applying it (`--repo MeshWeaver.FundReporting --apply`) is a maintainer's act; until then a default-fleet `--apply` run changes that ruleset too, so run it only once that is decided.
+- **The ruleset is reconciled, not hand-edited.** `.github/scripts/set-copilot-review-on-push.py` holds the in-force value in one constant (now `REVIEW_ON_PUSH = False`, policy `review-on-real-change`; it was `True` under this section) and applies it to the nine repositories in its `FLEET` idempotently: dry-run by default; `--apply` PUTs the ruleset with every other field as read, then reads it back and fails unless only that one parameter changed. Changing the policy means changing that constant in the same pull request. (Superseded: the script now holds `False`, and on 2026-10-30 a dry run read every ruleset in its `FLEET` — ten, FundReporting and Deploy included — already at `false`; see *The rollout is complete* above.)
 - **Drafts** are not reviewed while they are drafts. The review comes on the first push after the pull request is marked ready (or when it is opened ready).
 
 **One account, two logins.** A predicate keyed on either login alone sees half of the reviewer. The
