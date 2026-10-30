@@ -239,13 +239,18 @@ REVIEWER_ACCOUNT_ID = 175728472
 # thread EITHER one opened needs a reply from a person. Design of record: MeshWeaver.Plugins
 # `Governance/PullRequestSteward.md`.
 INTERNAL_REVIEWER_ACCOUNT_ID = 328286035
+# The internal reviewer's App is being renamed `systemorph-com` → `systemorph`, in three steps:
+# accept both spellings, rename, retire the old spelling. A rename changes the App's slug and its
+# bot login; the App id and the bot account id stay. Until the third step BOTH spellings are the
+# same App, and this is the one place this script names them.
+INTERNAL_REVIEWER_LOGINS = frozenset({"systemorph-com[bot]", "systemorph[bot]"})
 REVIEWER_ACCOUNT_IDS = frozenset({REVIEWER_ACCOUNT_ID, INTERNAL_REVIEWER_ACCOUNT_ID})
-REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot", "systemorph-com[bot]", "systemorph[bot]"})
+REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot"}) | INTERNAL_REVIEWER_LOGINS
 #: Policy `app-marked-answer-counts`: the control plane's GitHub App (the auto-answer lane, MeshWeaver.Plugins
-#: `Hosting/PrThreadAnswerer`) under BOTH its logins — it is being renamed `systemorph-com` → `systemorph`, the account
-#: id stays. Its reply answers a thread ONLY when it carries the lane's marker naming that thread's root.
-APP_ANSWER_ACCOUNT_ID = 328286035
-APP_ANSWER_LOGINS = frozenset({"systemorph-com[bot]", "systemorph[bot]"})
+#: `Hosting/PrThreadAnswerer`) — the internal reviewer's App, under BOTH its logins (INTERNAL_REVIEWER_LOGINS, the
+#: rename). Its reply answers a thread ONLY when it carries the lane's marker naming that thread's root.
+APP_ANSWER_ACCOUNT_ID = INTERNAL_REVIEWER_ACCOUNT_ID
+APP_ANSWER_LOGINS = INTERNAL_REVIEWER_LOGINS
 APP_ANSWER_MARKER = re.compile(r"<!-- pr-relay:answer comment=(?P<id>\d+) -->")
 # A refusal OF THE PULL REQUEST (quota, outage): never a review, whatever else the body says —
 # every spelling of it, so a `Copilot wasn't able to review this pull request because …` followed
@@ -275,6 +280,8 @@ GENERATED_FILE_REASON = "generated file"
 # read off a real `internal-review` run (109436738198 on d433fc0c10, 2026-09-29T13:45:38Z).
 DEGRADATION_CHECK_NAME = "internal-review"
 DEGRADATION_APP_SLUG = "systemorph-com"
+# Both slugs of the one App across its rename (see INTERNAL_REVIEWER_LOGINS); the id does not change.
+DEGRADATION_APP_SLUGS = frozenset({DEGRADATION_APP_SLUG, "systemorph"})
 DEGRADATION_APP_ID = 4918443
 DEGRADATION_CONCLUSION = "neutral"
 DEGRADATION_TITLE_PREFIX = "Reviewer unavailable"
@@ -425,7 +432,7 @@ def copilot_currency(reviews, head: str, carry: Carry | None, as_of: str | None 
 
 
 def is_degradation_app(app: dict | None) -> bool:
-    return bool(app) and app.get("slug") == DEGRADATION_APP_SLUG and app.get("id") == DEGRADATION_APP_ID
+    return bool(app) and app.get("slug") in DEGRADATION_APP_SLUGS and app.get("id") == DEGRADATION_APP_ID
 
 
 def newest_internal_review_run(check_runs, as_of: str | None) -> dict | None:
@@ -1573,9 +1580,12 @@ PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
 
 
 def is_review_check_job(name) -> bool:
-    """True for the job that publishes this check's required context, under any caller prefix. Pure."""
+    """True for the job that publishes this check's required context, under any caller prefix — the
+    job-shaped check AND the verdict writer (VERDICT_WRITER_JOB, policy review-pending-while-answering),
+    whose run would otherwise read as "has not created its review job yet" and be waited on until the
+    refresh deadline (#7653 review). Pure."""
     name = str(name or "")
-    return name == REVIEW_CHECK_NAME or name.endswith(f" / {REVIEW_CHECK_NAME}")
+    return any(name == n or name.endswith(f" / {n}") for n in (REVIEW_CHECK_NAME, VERDICT_WRITER_JOB))
 
 
 def sweep_precondition(event: str, repo: str, pr: dict) -> str | None:
@@ -2965,7 +2975,12 @@ ANSWER_DEADLINE_HOURS = 24
 REVIEW_DEADLINE_HOURS = 6
 #: The verdict kinds the sweep re-judges: a pending one (a review or a deadline can arrive with no
 #: event) and an unmeasured one (the next read can complete). Every other kind changes only on an event.
-SWEEP_KINDS = frozenset({"answering", "awaiting-review", "unmeasurable"})
+#: `review-overdue` and `refused` are swept too (#7653 review): a late review or a maintainer's re-request
+#: clears them and raises no event here, so without the sweep their red would outlive its cause.
+SWEEP_KINDS = frozenset({"answering", "awaiting-review", "unmeasurable", "review-overdue", "refused"})
+#: run_verdict's exit when the verdict could NOT be published (a failed write, or a failed read whose failure
+#: could not be written either) — distinct from 1, a red verdict that WAS published (#7653 review).
+VERDICT_UNPUBLISHED_EXIT = 4
 #: The kind of a completed verdict check-run GitHub would not re-open, closed as `failure` so it can never
 #: stand as an old success beside a newer pending one.
 SUPERSEDED_KIND = "superseded"
@@ -3111,7 +3126,10 @@ def write_verdict_check_run(gh, head: str, name: str, reported: Reported, summar
                             existing: list | None = None) -> str:
     """Create or PATCH the head's verdict check-run. Returns what was done. A failed write raises ReadError
     (an outage raises ApiOutage) — the caller turns either into a RED job, never a silent pass."""
-    existing = read_verdict_runs(gh, head, name) if existing is None else existing
+    # 🚨 Read the head's verdicts AGAIN, immediately before the write, whatever the caller passed (#7653 review): the
+    # listing taken before the evaluation can be seconds old, and a newer evaluation may have written meanwhile — an
+    # older read must never overwrite it (newest READ stands). The residual window is this one read-then-write.
+    existing = read_verdict_runs(gh, head, name)
     action, ids, why = verdict_write_plan(existing, read_at)
     if action == "skip":
         return f"skip: {why}"
@@ -3188,8 +3206,12 @@ def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
                 print("  " + write_verdict_check_run(gh, head, name, unmeasured, f"### ❌ {unmeasured.title}\n", read_at, epoch_stamp(gh)))
             except ReadError as w:
                 print(f"::error::and the verdict check-run `{name}` could not be written either: {w}")
+                _append("GITHUB_OUTPUT", "verdict-state=failure\n")
+                return VERDICT_UNPUBLISHED_EXIT
+            _append("GITHUB_OUTPUT", "verdict-state=failure\n")
+            return 1
         _append("GITHUB_OUTPUT", "verdict-state=failure\n")
-        return 1
+        return VERDICT_UNPUBLISHED_EXIT
     verdict = evaluate(pr, reviews, comments, waiver, None, check_runs, files, commits, copilot_carry)
     now = epoch_stamp(gh)
     reported = reported_state(verdict, now, first_judged(existing, now))
@@ -3201,7 +3223,7 @@ def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
         print(f"::error::the verdict ({reported.state}) was taken, but the check-run `{name}` could not be written on "
               f"{head[:10]}: {e}. The required context is NOT updated — this run is red so the gap is seen.")
         _append("GITHUB_OUTPUT", "verdict-state=failure\n")
-        return 1
+        return VERDICT_UNPUBLISHED_EXIT
     print(f"  verdict check-run `{name}`: {done}")
     _append("GITHUB_OUTPUT", f"verdict-state={reported.state}\n")
     _append("GITHUB_STEP_SUMMARY", summary)
@@ -3248,11 +3270,15 @@ def run_verdict_sweep(repo: str, name: str, gh=None, now_epoch: int | None = Non
             print(f"  #{p['number']}: verdict `{kind}` on {head[:10]} changes only on an event — not re-judged")
             continue
         judged.append(p["number"])
-        if run_verdict(repo, p["number"], name, gh=gh) != 0:
+        rc = run_verdict(repo, p["number"], name, gh=gh)
+        if rc == VERDICT_UNPUBLISHED_EXIT:
+            print(f"::error::#{p['number']}: the verdict could NOT be published")
+            failed.append(p["number"])
+        elif rc != 0:
             print(f"  #{p['number']}: re-judged — the verdict is red (that is the pull request's state, not a sweep failure)")
     print(f"verdict sweep: re-judged {len(judged)} pull request(s) {judged} of {len(numbers)} open")
     if failed:
-        print(f"::error::the verdict sweep could not read {failed}")
+        print(f"::error::the verdict sweep could not read or publish {failed}")
     return 1 if failed else 0
 
 
@@ -3653,6 +3679,36 @@ def self_test() -> int:
          [_comment(1), _comment(2, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")], mention=("1 of 2",))
     case("a User account named systemorph-com[bot] is not the reviewer", (NOT_LANDED,), _pr(0),
          [_review(user={"login": "systemorph-com[bot]", "type": "User", "id": 7})], [])
+
+    # The App rename `systemorph-com` → `systemorph` (step 1 of 3: accept both). The renamed bot keeps
+    # its account id, so the id alone already recognises it; the login-only cases prove the LOGIN set
+    # carries the new spelling as well, and the controls prove nothing else rides on it.
+    RENAMED_REVIEWER_USER = {"login": "systemorph[bot]", "type": "Bot", "id": INTERNAL_REVIEWER_ACCOUNT_ID}
+    RENAMED_LOGIN_ONLY = {"login": "systemorph[bot]", "type": "Bot", "id": 900000001}
+    OLD_LOGIN_ONLY = {"login": "systemorph-com[bot]", "type": "Bot", "id": 900000002}
+    STRANGER_BOT = {"login": "some-other-app[bot]", "type": "Bot", "id": 900000003}
+    case("RENAME: a systemorph[bot] thread with no reply is unanswered", (UNANSWERED,), _pr(1),
+         [_review(user=RENAMED_REVIEWER_USER)], [_comment(1, RENAMED_REVIEWER_USER)], mention=("1 of 1",))
+    case("RENAME: a systemorph[bot] thread answered by a person is green", GREEN, _pr(2),
+         [_review(user=RENAMED_REVIEWER_USER)],
+         [_comment(1, RENAMED_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")])
+    case("RENAME: the new login is the reviewer by LOGIN alone", (UNANSWERED,), _pr(1),
+         [_review(user=RENAMED_LOGIN_ONLY)], [_comment(1, RENAMED_LOGIN_ONLY)], mention=("1 of 1",))
+    case("RENAME: the old login stays the reviewer by LOGIN alone", (UNANSWERED,), _pr(1),
+         [_review(user=OLD_LOGIN_ONLY)], [_comment(1, OLD_LOGIN_ONLY)], mention=("1 of 1",))
+    case("RENAME NEG: another App's bot is not the reviewer", (NOT_LANDED,), _pr(0), [_review(user=STRANGER_BOT)], [])
+    case("RENAME NEG: a User account named systemorph[bot] is not the reviewer", (NOT_LANDED,), _pr(0),
+         [_review(user={"login": "systemorph[bot]", "type": "User", "id": 8})], [])
+    for name, app, expect in [
+        ("RENAME: the degradation App under its old slug", {"id": DEGRADATION_APP_ID, "slug": "systemorph-com"}, True),
+        ("RENAME: the degradation App under its new slug", {"id": DEGRADATION_APP_ID, "slug": "systemorph"}, True),
+        ("RENAME NEG: the new slug on another App id", {"id": 900000004, "slug": "systemorph"}, False),
+        ("RENAME NEG: another App entirely", {"id": 15368, "slug": "github-actions"}, False),
+    ]:
+        got = is_degradation_app(app)
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
 
     # 🚨 Policy review-evidence-any-head (#4730): "reviewed, nothing found" is ONLY a completed
     # Copilot review object on the pull request with zero findings — on ANY of its heads, because a
@@ -5150,7 +5206,7 @@ def pending_self_test(HEAD: str) -> int:
     check("e2e: a newer verdict on file -> writes nothing", rc == 0 and g.writes == [], f"rc={rc} writes={g.writes}")
     g = _VerdictGh([ONE, TWO, ANSWER], fail_write=True)
     rc, out, text = drive(g)
-    check("NEG e2e: the check-run cannot be written -> job RED, named", rc == 1 and "could not be written" in text,
+    check("NEG e2e: the check-run cannot be written -> UNPUBLISHED exit, named", rc == VERDICT_UNPUBLISHED_EXIT and "could not be written" in text,
           f"rc={rc} text={text[-300:]}")
     g = _VerdictGh([ONE, TWO, ANSWER], runs=[dict(mine(5, T0, "answered", "completed"), conclusion="success")],
                    refuse_reopen=True)
@@ -5163,6 +5219,23 @@ def pending_self_test(HEAD: str) -> int:
     check("e2e: ... and the next pending verdict PATCHes the new one, creating nothing more",
           rc == 0 and len(g.runs) == 2, f"runs={[(c['id'], c['status']) for c in g.runs]}")
 
+    # #7653 review: the write plan reads AGAIN right before writing — a newer verdict written DURING the evaluation
+    # (after the first listing) is never overwritten by this older read.
+    class _RacingGh(_VerdictGh):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.listings = 0
+
+        def api(self, path, paginate=False):
+            if path.startswith(f"commits/{HEAD}/check-runs?check_name=Automatic%20review%20answered&"):
+                self.listings += 1
+                if self.listings == 2:    # a competing evaluation wrote a NEWER pending verdict meanwhile
+                    self.runs = [mine(5, LATE)]
+            return super().api(path, paginate)
+    g = _RacingGh([ONE, TWO, ANSWER, _comment(12, PERSON, 2, "2026-10-30T13:01:00Z")], runs=[mine(5, T0)])
+    rc, out, _ = drive(g)
+    check("race: a newer verdict written during the evaluation is never overwritten by an older read",
+          rc == 0 and g.writes == [] and g.listings == 2, f"rc={rc} writes={g.writes} listings={g.listings}")
     # ── the sweep: only a pending/unmeasured verdict of a same-repo, non-draft pull request is re-judged
     def pull(n, draft=False, repo="o/r"):
         return {"number": n, "draft": draft, "head": {"sha": HEAD, "repo": {"full_name": repo}}}
@@ -5176,6 +5249,20 @@ def pending_self_test(HEAD: str) -> int:
         rc = run_verdict_sweep("o/r", "Automatic review answered", gh=g, now_epoch=0)
     check("sweep NEG: a completed success is not re-judged (it changes only on an event)", rc == 0 and g.writes == [],
           f"writes={g.writes}")
+    late = _VerdictGh([], runs=[dict(mine(5, T0, "review-overdue", "completed"), conclusion="failure")], pulls=[pull(7)])
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_verdict_sweep("o/r", "Automatic review answered", gh=late, now_epoch=0)
+    check("sweep: a review-overdue red is re-judged — the late review clears it", rc == 0 and late.writes
+          and late.writes[0][2].get("conclusion") == "success", f"rc={rc} writes={late.writes}")
+    broken = _VerdictGh([ONE, TWO, ANSWER], runs=[mine(5, T0)], pulls=[pull(7)], fail_write=True)
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_verdict_sweep("o/r", "Automatic review answered", gh=broken, now_epoch=0)
+    check("sweep NEG: a verdict it could not publish makes the sweep RED (never a green no-op)", rc == 1, f"rc={rc}")
+    check("the verdict writer is a review job (bare and caller-prefixed), so no refresh waits on its run as jobless",
+          is_review_check_job(VERDICT_WRITER_JOB) and is_review_check_job(f"lane / {VERDICT_WRITER_JOB}")
+          and in_flight_policy({"id": 1, "status": "in_progress", "event": "pull_request_review_comment", "created_at": "b"},
+                               [{"name": VERDICT_WRITER_JOB, "status": "completed", "conclusion": "success"}], "a")[0] == "none"
+          and not is_review_check_job("Refresh the verdict branch protection reads"))
 
     # ── the workflows: the writer's job name and its check-run name are chosen by ONE condition
     here = os.path.dirname(os.path.abspath(__file__))

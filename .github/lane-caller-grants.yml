@@ -156,6 +156,14 @@ repos:
         lane: build-follow.yml
         grants: {contents: read, id-token: write}
         pending: lands with Systemorph/MeshWeaver.Plugins#4489 (the portal-hosts stage on the build host)
+      # ── Store-artifact reader (MeshWeaver#7032) — ARRIVING. A workflow_dispatch caller that prints a
+      # run's own-store artifacts (a killed leg's teardown trail) into a job log; the lane demands nothing
+      # beyond the caller's grant. Same shape as MeshWeaver.Education's caller.
+      - workflow: read-store-artifact.yml
+        job: read
+        lane: read-store-artifact.yml
+        grants: {contents: read}
+        pending: Systemorph/MeshWeaver.Plugins#4713 lands the caller (MeshWeaver.Plugins#4424)
 
   # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
   # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core

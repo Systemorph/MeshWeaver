@@ -222,6 +222,15 @@ public sealed record BuildHostChannel
     [Description("The most replicas the host scales to")]
     public int MaxReplicas { get; init; } = DefaultMaxReplicas;
 
+    /// <summary>
+    /// The FLOOR KEDA keeps this host at, however empty the queue (the chart's <c>minReplicaCount</c>; default 0 — scale
+    /// to zero). DECLARED, never derived: a floor of one keeps a host warm so an admitted run is claimed without a
+    /// node and a pod cold start (Doc/Architecture/BuildHosts → "Declared host floor"). Never above
+    /// <see cref="MaxReplicas"/>; the chart refuses that.
+    /// </summary>
+    [Description("The fewest replicas the host keeps, even with an empty queue")]
+    public int MinReplicas { get; init; }
+
     /// <summary>True when the channel names a whole set — a version and the three digests in the
     /// <c>sha256:&lt;64 hex&gt;</c> form the chart requires. A channel that is not complete renders no host.</summary>
     public bool IsComplete =>

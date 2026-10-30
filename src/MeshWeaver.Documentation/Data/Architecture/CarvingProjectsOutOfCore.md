@@ -212,7 +212,7 @@ the departing types, and which of the three answers each of them gets.
 | `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
 | `Testcontainers` | 385 | no | nothing: its two consumers (`Memex.Portal.Shared.Test`, `MeshWeaver.Testcontainers.Test`) were already in plugins | moved out — free |
 | `Hosting.AspNetCore` | 3 970 | no | a satellite's compiled module (the endpoint hook); seven Plugins modules' published bytes (`PortalApplication` and three more) | **split** — the host-only half of `Portal/` moved out (see below); the rest stays |
-| `Markdown.Export.Contract` | 355 | no | `PortalApplication`, which stays | **stays** |
+| `Markdown.Export.Contract` | 355 | no | one `AddMarkdownExportTypes()` call in `PortalApplication`, which moved to the contract's owner | moved out — see below |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
 and NuGet resolution, packaging.
@@ -236,8 +236,9 @@ That is why `Hosting.AspNetCore` was split rather than moved (see "Splitting `Ho
 below): the hook (`MeshEndpointProviderAttribute`, `ModuleEndpointDataSource`, the endpoint and static-asset
 extensions) is a platform extension point, and `Portal/` is host code. That split changes which
 assembly declares public types, so it needs type forwarders and is a design change, not a move.
-`Markdown.Export.Contract` is pinned by `Hosting.AspNetCore` alone (`PortalApplication`), so it waits
-with it. 🚨 **Before calling any move free, grep the satellites' `.csproj` files for
+`Markdown.Export.Contract` was pinned by `Hosting.AspNetCore` alone, through one type-registration
+call in `PortalApplication`. It did not have to wait for that split: the call moved to the
+contract's owner and the contract followed (see "Moving `Markdown.Export.Contract`" below). 🚨 **Before calling any move free, grep the satellites' `.csproj` files for
 `$(MeshWeaverRoot)/src/<Project>`**, not only core's.
 
 ### The `ProjectReference` graph lies about all of them
@@ -280,8 +281,7 @@ holds into `MeshWeaver.Hosting.AspNetCore` were read from the metadata:
 | `Portal.UserIdentityCache`, `Portal.UserIdentityLookup` | Mail.MicrosoftGraph |
 
 Those types stay, together with what their public signatures name (`ICircuitContextAccessor`,
-`UserDirectoryReading`, `PortalErrorReporting`) and the one package `PortalApplication` needs,
-`MeshWeaver.Markdown.Export.Contract`. The text search for the namespace finds more. Courses and Mcp
+`UserDirectoryReading`, `PortalErrorReporting`). The text search for the namespace finds more. Courses and Mcp
 mention `UserContextMiddleware` in comments, for instance. But a comment is not a `TypeRef`, so a text
 search over-counts.
 
@@ -316,6 +316,39 @@ today, plus a source search of every Systemorph repository for the namespace (on
 MeshWeaver.SocialMedia uses it, and only the endpoint hook). A module that some other estate built and
 published from a private fork would not be seen.
 
+### Moving `Markdown.Export.Contract`: the registration goes where the contract goes
+
+The document-export wire contract (`ExportDocumentRequest`/`Response`, `DocumentExportOptions`,
+`ExportFormat`, `ExportFidelity`, `RenderedDocument`, `CorporateIdentity` and
+`AddMarkdownExportTypes()`) is a SOURCE move to `MeshWeaver.Plugins/src/MeshWeaver.Markdown.Export.Contract`,
+beside the engine that implements it; the assembly and namespace names are unchanged. Its only core
+consumer was `PortalApplication.DefaultPortalConfig`, which called `AddMarkdownExportTypes()` on every
+portal hub — no `PortalApplication` signature names a contract type, so no published module binds
+the contract THROUGH `Hosting.AspNetCore`.
+
+The registration was the hard part, and it moved to `MeshWeaver.Blazor` (`BlazorViewRegistry.AddBlazor`),
+which already referenced the contract and already registered the types on the mesh hub. That covers
+every hub that exchanges these messages:
+
+- **the mesh hub** — `MeshBuilder.AddBlazor` applies `AddBlazor` to it, as before;
+- **every portal hub** — the same `AddBlazor` now appends the registration to the layout client's
+  `PortalConfiguration`, which `PortalApplication` applies to each circuit's hub. So the portal hub
+  carries the types on its OWN registry exactly as before, and would still resolve them through its
+  parent chain without that;
+- **the node hubs that handle an export** — the engine's `ExportDocumentHandler` registers them, as
+  before.
+
+`PortalApplication` is constructed only by the Blazor host (`MeshBuilder.AddBlazor` registers it), so
+no host can build a portal hub without that layout-client configuration. The React, React Native and
+portal-next clients post the literal discriminator `"ExportDocumentRequest"`, keyed by type NAME, so
+they are unaffected.
+
+`ExportDocumentControl` stays in core's `MeshWeaver.Layout` with every other `UiControl`; only its
+registration lives in the contract. The contract still ships in the portal image, through
+`MeshWeaver.Blazor`, so MeshWeaver.Plugins lists it in `src/platform-shipped.txt` and the Export
+bundle carries no second copy. It referenced no package, so no `PackageVersion` left core with it.
+Pair: Systemorph/MeshWeaver.Plugins#4724 (add) with this repository's delete.
+
 ## Feature folders inside content-surface projects
 
 The table above is per project. A second survey looked one level down, at feature subsystems that
@@ -338,6 +371,7 @@ Measured against `Systemorph/MeshWeaver@4cc5c17fbf` and `Systemorph/MeshWeaver.P
 | `Graph/ControlLane` | 2 940 | nothing of that name; consumers only | image assemblies `Memex.Portal.Shared` (endpoints, settings tab, self-update hand-over) and `MeshWeaver.Hosting.Instance`; in-mesh sources in `Hosting/InstanceAction`, `Hosting/Deployment`, `Hosting/PlatformBuildInbox`, `Approvals/Elsewhere` | **stays** — see below |
 | `Graph/OpenGraph` | 668 | `MeshWeaver.OgCard`, a consumer (**second half**) | `GraphConfigurationExtensions` registers it on every mesh; `Memex.Portal.Shared` (`SeoEndpoints`, `OgCardRenderer`) and the OgCard module call it | **stays for now** — see below |
 | `Graph/MailCopy` | 3 379 | consumers only: the `Mail.MicrosoftGraph` and `Mail.Gmail` modules | those two modules; core's compile-time impersonation table names its types; no core `src/` caller, no in-mesh binder in either repo's content trees | **moved** into the `Mail` module, namespace `MeshWeaver.Mail.MailCopy`; `Google` requires `Mail` — see below |
+| `GitSync` Azure Repos provider | ~1 000 | nothing yet; the module half is the next step | GitSync's own sync, pull-request and issue services (through the `IGitHostingProvider` seam now, no longer by name); `Azure.Identity` — the only Azure package a core `src/` project referenced; no in-mesh binder in either repo's content trees (the live-mesh sweep is owed before the delete) | **moving** — the seam (`IGitHostingProvider`, `GitHostingProviders`) stays in core; the provider moves to a MeshWeaver.Plugins project `MeshWeaver.GitSync.AzureRepos` registered by the portal hosts, which replaces the platform's built-in by kind; then the platform deletes its copy and the `Azure.Identity` reference. The central `Azure.Identity` pin stays: six Plugins projects consume it versionless. See [Syncing a Space with GitHub](../GitHubSync) → *Hosting providers* |
 
 ### Why ControlLane and OpenGraph stay
 

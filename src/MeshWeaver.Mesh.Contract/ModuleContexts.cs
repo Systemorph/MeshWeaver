@@ -203,7 +203,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         var gaps = ImmutableList.CreateBuilder<ModuleForwarderGap>();
         foreach (var name in current.Keys.OrderBy(n => n, StringComparer.Ordinal))
         {
-            if (TryLeaseCurrent(name) is not { } leased)
+            if (TryLeaseCurrent(name, "the forwarder health scan") is not { } leased)
                 continue;
             using (leased.Release)
                 gaps.AddRange(leased.Services.UnresolvableForwarders(attached)
@@ -220,11 +220,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// that check finds the lease and defers the services' disposal (and the unload) to its release.
     /// </summary>
     /// <param name="module">The module's entry-assembly name.</param>
-    private (ModuleGeneration Generation, ModuleServices Services, IDisposable Release)? TryLeaseCurrent(string module)
+    private (ModuleGeneration Generation, ModuleServices Services, IDisposable Release)? TryLeaseCurrent(string module, string holder)
     {
         if (Current(module) is not { Services: { } services } generation)
             return null;
-        var context = Leases.Enter(generation.Context);
+        var context = Leases.Enter(generation.Context, holder);
         var held = services.TryLease();
         if (held is null || !ReferenceEquals(Current(module), generation))
         {
@@ -235,6 +235,36 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         // Released in this order: the services first — their disposal, when this is the last lease of a
         // retiring generation, runs module code — and the context lease after it.
         return (generation, services, new System.Reactive.Disposables.CompositeDisposable(held, context));
+    }
+
+    // The holder a service lease is recorded under (AlcLeaseRegistry.Holders): the platform interface the
+    // consumer leased — which names the consumer's kind (IMeshQueryProvider: the query fan-out;
+    // INodeTypeAccessRule: the access-rule set; IConfigureOptions: the options pipeline) — and the
+    // registration. A label per kind, never per call, so the registry's map stays small.
+    internal static string ServiceLeaseHolder(Type? expected, int index) =>
+        $"{(expected is null ? "module service" : DisplayName(expected))} (registration {index})";
+
+    private static string DisplayName(Type type) =>
+        type.IsGenericType ? DisplayName(type, type.GetGenericArguments()) : type.Name;
+
+    // 🚨 A diagnostic label must never break the lease it labels (review of #7647). The generic arguments
+    // of a constructed type cover its DECLARING types' parameters as well as its own, and only the type's
+    // OWN arity is written after its backtick — a type nested in a generic declarer (Outer<int>.Options)
+    // is generic with no backtick at all. So the name is split only where a backtick is present, the own
+    // arity is read from it (never assumed), and the leading arguments go to the declaring type.
+    private static string DisplayName(Type type, Type[] arguments)
+    {
+        var tick = type.Name.IndexOf('`', StringComparison.Ordinal);
+        var stem = tick < 0 ? type.Name : type.Name[..tick];
+        var own = tick >= 0 && int.TryParse(type.Name.AsSpan(tick + 1), out var arity)
+            ? Math.Clamp(arity, 0, arguments.Length)
+            : 0;
+        var inherited = arguments.Length - own;
+        var declaring = type.IsNested && inherited > 0 && type.DeclaringType is { } outer
+            ? DisplayName(outer, arguments[..inherited]) + "."
+            : "";
+        var parameters = own > 0 ? $"<{string.Join(", ", arguments[inherited..].Select(DisplayName))}>" : "";
+        return declaring + stem + parameters;
     }
 
     /// <summary>The instance behind forwarded registration <paramref name="index"/> of
@@ -329,7 +359,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         string module, int index, MeshWeaver.ServiceProvider.MeshServiceProvider? caller, Type? expected, out ModuleLeaseFault fault)
     {
         fault = ModuleLeaseFault.None;
-        if (TryLeaseCurrent(module) is not { } leased)
+        if (TryLeaseCurrent(module, ServiceLeaseHolder(expected, index)) is not { } leased)
             return null;
         var (generation, services, release) = leased;
         if (services.Unservable.ContainsKey(index))
@@ -901,7 +931,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
                     if (!unloaded)
                         retirement?.Faulted(new InvalidOperationException(
                             $"Module generation '{generation.Context.Name}' ({generation.Location}) was KEPT loaded: "
-                            + $"it still had {Leases.InFlight(generation.Context)} in-flight lease(s) after {budget}."));
+                            + $"it still had {Leases.InFlight(generation.Context)} in-flight lease(s) after {budget}, held by {string.Join(", ", Leases.Holders(generation.Context))}."));
                 });
         });
 
@@ -953,16 +983,18 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         var candidates = (among ?? current.Values.ToArray())
             .OrderBy(g => g.Name, StringComparer.Ordinal)
             .ToArray();
+        // The binding's lease is held by whoever asked — a kernel script session holds it until it ends.
+        var holder = $"a script session's binding of {name}";
 
         foreach (var generation in candidates)
             if (string.Equals(generation.Name, name, StringComparison.Ordinal)
                 && Satisfies(generation.Assembly.GetName(), assemblyName)
-                && LeaseIfCurrent(generation) is { } lease)
+                && LeaseIfCurrent(generation, holder) is { } lease)
                 return new ModuleBinding(generation.Assembly, generation.Context, lease);
 
         foreach (var generation in candidates)
         {
-            if (LeaseIfCurrent(generation) is not { } lease)
+            if (LeaseIfCurrent(generation, holder) is not { } lease)
                 continue;
             foreach (var assembly in generation.Context.Assemblies)
                 if (assembly.GetName() is { } held
@@ -976,7 +1008,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         {
             var candidate = Path.Combine(generation.Context.Directory, name + ".dll");
             if (!File.Exists(candidate) || !Satisfies(NameOf(candidate), assemblyName)
-                || LeaseIfCurrent(generation) is not { } lease)
+                || LeaseIfCurrent(generation, holder) is not { } lease)
                 continue;
             Assembly loaded;
             try
@@ -996,7 +1028,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
                 // same terms — current, or not at all.
                 var ownerLease = Current(owner.ModuleName) is { } ownerGeneration
                                  && ReferenceEquals(ownerGeneration.Context, owner)
-                    ? LeaseIfCurrent(ownerGeneration)
+                    ? LeaseIfCurrent(ownerGeneration, holder)
                     : null;
                 lease.Dispose();
                 return ownerLease is null ? null : new ModuleBinding(loaded, owner, ownerLease);
@@ -1011,9 +1043,9 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     // Leases `generation` and keeps the lease only if it is STILL current after the lease is taken:
     // Retire removes a generation from `current` BEFORE it waits for quiescence, so a lease that
     // sees it current is one the retirement will wait for.
-    private IDisposable? LeaseIfCurrent(ModuleGeneration generation)
+    private IDisposable? LeaseIfCurrent(ModuleGeneration generation, string holder)
     {
-        var lease = Leases.Enter(generation.Context);
+        var lease = Leases.Enter(generation.Context, holder);
         if (current.TryGetValue(generation.Name, out var live) && ReferenceEquals(live, generation))
             return lease;
         lease.Dispose();
@@ -1126,11 +1158,12 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             var inFlight = Leases.InFlight(generation.Context);
             if (inFlight > 0)
             {
+                var holders = string.Join(", ", Leases.Holders(generation.Context));
                 logger?.LogError(
-                    "NOT unloading module generation {Context} at mesh teardown: {InFlight} lease(s) still held.",
-                    generation.Context.Name, inFlight);
+                    "NOT unloading module generation {Context} at mesh teardown: {InFlight} lease(s) still held, by {Holders}.",
+                    generation.Context.Name, inFlight, holders);
                 retirement?.Faulted(new InvalidOperationException(
-                    $"Module generation '{generation.Context.Name}' was kept loaded at teardown: {inFlight} lease(s) held."));
+                    $"Module generation '{generation.Context.Name}' was kept loaded at teardown: {inFlight} lease(s) held, by {holders}."));
                 continue;
             }
             generation.Context.Unload();
