@@ -241,13 +241,31 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     // consumer leased — which names the consumer's kind (IMeshQueryProvider: the query fan-out;
     // INodeTypeAccessRule: the access-rule set; IConfigureOptions: the options pipeline) — and the
     // registration. A label per kind, never per call, so the registry's map stays small.
-    private static string ServiceLeaseHolder(Type? expected, int index) =>
+    internal static string ServiceLeaseHolder(Type? expected, int index) =>
         $"{(expected is null ? "module service" : DisplayName(expected))} (registration {index})";
 
     private static string DisplayName(Type type) =>
-        !type.IsGenericType
-            ? type.Name
-            : $"{type.Name[..type.Name.IndexOf('`', StringComparison.Ordinal)]}<{string.Join(", ", type.GetGenericArguments().Select(DisplayName))}>";
+        type.IsGenericType ? DisplayName(type, type.GetGenericArguments()) : type.Name;
+
+    // 🚨 A diagnostic label must never break the lease it labels (review of #7647). The generic arguments
+    // of a constructed type cover its DECLARING types' parameters as well as its own, and only the type's
+    // OWN arity is written after its backtick — a type nested in a generic declarer (Outer<int>.Options)
+    // is generic with no backtick at all. So the name is split only where a backtick is present, the own
+    // arity is read from it (never assumed), and the leading arguments go to the declaring type.
+    private static string DisplayName(Type type, Type[] arguments)
+    {
+        var tick = type.Name.IndexOf('`', StringComparison.Ordinal);
+        var stem = tick < 0 ? type.Name : type.Name[..tick];
+        var own = tick >= 0 && int.TryParse(type.Name.AsSpan(tick + 1), out var arity)
+            ? Math.Clamp(arity, 0, arguments.Length)
+            : 0;
+        var inherited = arguments.Length - own;
+        var declaring = type.IsNested && inherited > 0 && type.DeclaringType is { } outer
+            ? DisplayName(outer, arguments[..inherited]) + "."
+            : "";
+        var parameters = own > 0 ? $"<{string.Join(", ", arguments[inherited..].Select(DisplayName))}>" : "";
+        return declaring + stem + parameters;
+    }
 
     /// <summary>The instance behind forwarded registration <paramref name="index"/> of
     /// <paramref name="module"/>'s CURRENT generation — what every root forwarder resolves.</summary>

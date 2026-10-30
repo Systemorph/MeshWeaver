@@ -88,6 +88,43 @@ public sealed class ModuleLeasesAtMeshTeardownTest(ITestOutputHelper output)
             "the live query held the same lease, but the Query pool's drain disposed its subscription before the container ended");
     }
 
+    /// <summary>
+    /// Review of #7647 — the holder LABEL must never break a valid lease. A type nested in a generic
+    /// declaring type (<c>Outer&lt;int&gt;.Options</c>) is <see cref="Type.IsGenericType"/> while its
+    /// <see cref="System.Reflection.MemberInfo.Name"/> carries no backtick; the formatter sliced the name
+    /// at index -1 and threw before the registration was even resolved. The lease runs to its ordinary
+    /// verdict (this module's registration is no such options type, so: unservable), and the label names
+    /// the nested type with its declaring type's arguments.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ALeaseExpectingATypeNestedInAGenericDeclarer_IsLabelledWithoutThrowing()
+    {
+        var expected = typeof(Microsoft.Extensions.Options.IConfigureOptions<Outer<int>.Options>);
+        var fixture = new Fixture(output);
+        try
+        {
+            await fixture.InitializeAsync();
+            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+            var leased = fixture.Contexts.TryLeaseModuleService(Module, 0, null, expected, out var fault);
+            leased.Should().BeNull("the module's registration 0 is a query provider, not the expected options type");
+            fault.Should().Be(ModuleLeaseFault.Unservable,
+                "the lease reached its ordinary verdict instead of throwing while building its holder label");
+            ModuleContexts.ServiceLeaseHolder(expected, 0).Should().Be(
+                "IConfigureOptions<Outer<Int32>.Options> (registration 0)",
+                "the label names the nested type with the declaring type's arguments");
+        }
+        finally
+        {
+            await fixture.DisposeAsync();
+        }
+    }
+
+    // A type nested in a GENERIC declaring type: IsGenericType, with no backtick in its Name.
+    private sealed class Outer<T>
+    {
+        public sealed class Options;
+    }
+
     private sealed class Fixture(ITestOutputHelper output) : MonolithMeshTestBase(output)
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "teardown-lease-" + Guid.NewGuid().ToString("N"));
@@ -98,7 +135,7 @@ public sealed class ModuleLeasesAtMeshTeardownTest(ITestOutputHelper output)
         protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
             base.ConfigureMesh(builder).InstallAssemblies(Write());
 
-        private ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
+        public ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
 
         public CollectibleContextUnloads Unloads => Mesh.ServiceProvider.GetRequiredService<CollectibleContextUnloads>();
 
