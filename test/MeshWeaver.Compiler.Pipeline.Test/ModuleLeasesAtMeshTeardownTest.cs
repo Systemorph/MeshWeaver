@@ -48,7 +48,7 @@ public sealed class ModuleLeasesAtMeshTeardownTest(ITestOutputHelper output)
             await fixture.InitializeAsync();
             unloads = fixture.Unloads;
             fixture.Hold(fixture.MeshService.Autocomplete("TeardownLeaseQueried", "a").Subscribe(_ => { }, _ => { }));
-            await fixture.LeasedBy(QueryHolder);
+            await fixture.LeasedBy(QueryHolder, TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -77,7 +77,7 @@ public sealed class ModuleLeasesAtMeshTeardownTest(ITestOutputHelper output)
             fixture.Hold(fixture.MeshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery("path:TeardownLeaseQueried/answer").AsSystem())
                 .Subscribe(_ => { }, _ => { }));
-            await fixture.LeasedBy(QueryHolder);
+            await fixture.LeasedBy(QueryHolder, TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -108,7 +108,7 @@ public sealed class ModuleLeasesAtMeshTeardownTest(ITestOutputHelper output)
 
         /// <summary>Completes once the module's context is leased by <paramref name="holder"/> — the
         /// registry's own record, re-read until it says so (the fan-out subscribes off the caller).</summary>
-        public Task LeasedBy(string holder)
+        public Task LeasedBy(string holder, CancellationToken cancellationToken)
         {
             var context = (Contexts.Current(Module)
                            ?? throw new Xunit.Sdk.XunitException($"{Module} is not held by the module registry")).Context;
@@ -118,7 +118,7 @@ public sealed class ModuleLeasesAtMeshTeardownTest(ITestOutputHelper output)
                 .Take(1)
                 .Should().Within(Budget)
                 .Emit($"the live subscription leases the module's provider, recorded as '{holder}'",
-                    cancellationToken: TestContext.Current.CancellationToken);
+                    cancellationToken: cancellationToken);
         }
 
         private string Write()
