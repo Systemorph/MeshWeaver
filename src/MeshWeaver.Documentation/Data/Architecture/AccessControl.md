@@ -1425,9 +1425,26 @@ own-scope shortcut that otherwise lets a person write anything into their own pa
 owner's commit point (`ApiTokenPrincipalCommitGuard`, an `IEntityCommitGuard`), which every routed
 update, merge patch and data change meets. Binding at the write side covers both verdicts at once.
 
+**The verdict binds the principal to the record's LOCATION** (`ApiTokenVerdict.IsBoundToItsLocation`).
+The write rules above cover the seams they see; several write routes do not reach them (a node cleared
+and restored, a data change reaching a cold owner, a transient confirmed straight to storage, content
+read differently by the writer and the verifier). So the verdict does not trust the record's `UserId`
+on its own: the index is written only by the platform, as System, and names the path the token was
+minted at. A person's token authenticates only from `{UserId}/…`, and a service's only from its own
+token namespace under `Admin/_ServiceIdentity`. Whatever reaches a record in a person's own partition,
+it can only ever be a credential for that person.
+
+**A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
+(`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a
+create proposed, which let a person create anywhere — a service's token namespace in the Admin
+partition included — by naming themselves. Every platform writer that sets the main node to the user
+writes under `{userId}/…`, which the path shortcut covers.
+
 Pinned by `ApiTokenPrincipalBindingTest` (the owner of a token cannot rename its principal to System
 or to another person; a person creates a token only for themselves, whatever the node is typed as;
-the owner's relabel and their own token are the controls).
+the owner's relabel and their own token are the controls; a stored record authenticates only as the
+principal of its location; a person cannot write into a service token namespace by naming themselves
+as main node).
 
 ## Scoped API tokens — a cap, never a grant
 
