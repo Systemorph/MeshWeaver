@@ -249,11 +249,24 @@ def scope_refusal(run: dict, jobs: list[dict], workflow_text: str | None) -> str
     if READER_KEY not in graph:
         return f"{WORKFLOW_PATH} at {run.get('head_sha')} has no `{READER_KEY}` job — the re-run set cannot be computed"
     labels = {k: graph[k]["name"] for k in rerun_subtree(graph, READER_KEY)}
+    everything = {k: v["name"] for k, v in graph.items()}
+
+    def known(name: str, table: dict) -> bool:
+        return any(name in (n, k) or name.startswith(f"{n} / ") or name.startswith(f"{k} / ") for k, n in table.items())
+
+    # The run executed the merge of its head with the base AS IT STOOD THEN; the head_sha revision read
+    # here can differ from it on the base side. So a review job the RUN executed that this graph does not
+    # know at all cannot be shown to be outside the re-run set — refuse rather than assume.
+    unknown = sorted({str(j.get("name")) for j in jobs
+                      if REVIEW_JOB.search(str(j.get("name") or "")) and not known(str(j.get("name")), everything)})
+    if unknown:
+        return ("the run executed review-answered job(s) " + ", ".join(f"`{n}`" for n in unknown) + " that the "
+                f"workflow at {run.get('head_sha')} does not declare — the re-run set cannot be proven to exclude "
+                "them. Refusing; re-run the body gates by hand")
     hits = sorted(f"{k} ({n})" for k, n in labels.items() if REVIEW_JOB.search(k) or REVIEW_JOB.search(n))
     for j in jobs:
         name = str(j.get("name") or "")
-        if any(name in (n, k) or name.startswith(f"{n} / ") or name.startswith(f"{k} / ")
-               for k, n in labels.items()) and REVIEW_JOB.search(name):
+        if known(name, labels) and REVIEW_JOB.search(name):
             hits.append(f"run job `{name}`")
     if hits:
         return ("re-running `pr-body` would also re-run " + ", ".join(hits) + " — a review-answered job, whose "
@@ -412,12 +425,16 @@ jobs:
     needs: [build, closing-keywords]
   review-answered:
     name: Automatic review answered
+  lane:
+    name: lane
 """
 # The same, but a review job now hangs off the body gates — the shape the assertion must refuse.
-REVIEW_IN_SUBTREE = FAKE_WORKFLOW + """  lane:
+REVIEW_IN_SUBTREE = FAKE_WORKFLOW.replace("""  lane:
+    name: lane
+""", """  lane:
     name: lane
     needs: [stage-gate]
-"""
+""")
 
 
 def _jobs(state: str, started: str = T0, reader_status: str = "completed") -> list[dict]:
@@ -620,6 +637,8 @@ def self_test() -> int:
         return jobs
     case("failed body gate + failed review jobs: re-run ONLY the body reader id",
          FakeApi(jobs=with_review_jobs()), "green", ["rerun-job:1"])
+    if REVIEW_IN_SUBTREE == FAKE_WORKFLOW or "lane" not in rerun_subtree(workflow_jobs(REVIEW_IN_SUBTREE), READER_KEY):
+        failures.append("fixture: REVIEW_IN_SUBTREE does not put the review lane inside the pr-body subtree")
     case("a review job inside the re-run subtree is REFUSED (red, nothing posted)",
          FakeApi(jobs=with_review_jobs(), workflow=REVIEW_IN_SUBTREE), "green", [], expect_rc=1)
     wrong = FakeApi(jobs=_jobs("red"))
@@ -631,6 +650,9 @@ def self_test() -> int:
     case("the workflow graph is read at the run's own head_sha", rev, "green", ["rerun-job:1"])
     if rev.workflow_reads != [HEAD]:
         failures.append(f"the workflow was read at {rev.workflow_reads}, not the run's head_sha")
+    case("the run executed a review job its revision's graph does not declare: REFUSED red",
+         FakeApi(jobs=_jobs("red") + [{"id": 52, "name": "Automatic review answered (legacy)", "status": "completed",
+                                        "conclusion": "failure", "started_at": T0}]), "green", [], expect_rc=1)
     case("the run's workflow revision cannot be read: REFUSED red, nothing posted",
          FakeApi(jobs=_jobs("red"), workflow=None), "green", [], expect_rc=1)
 
