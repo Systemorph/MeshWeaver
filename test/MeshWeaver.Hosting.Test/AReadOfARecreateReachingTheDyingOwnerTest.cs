@@ -71,6 +71,13 @@ public class AReadOfARecreateReachingTheDyingOwnerTest(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// How long the teardown hold may last: longer than the whole test (its <c>Timeout</c> is 120 s), for BOTH
+    /// budgets that could end it without the test — the child's quiesce drain and its request timeout (an
+    /// expired request removes the pending callback and lets the owner finish).
+    /// </summary>
+    private static readonly TimeSpan HoldBudget = TimeSpan.FromSeconds(240);
+
     private FaultInjectingStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<FaultInjectingStorageAdapter>();
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -114,7 +121,9 @@ public class AReadOfARecreateReachingTheDyingOwnerTest(ITestOutputHelper output)
                     return d.Processed();
                 }));
         var child = owner!.GetHostedHub(new Address($"{path}/_hold"),
-            c => c.WithTypes(typeof(HoldRequest), typeof(HoldResponse)).WithQuiesceTimeout(TestTimeouts.Convergence * 2));
+            c => c.WithTypes(typeof(HoldRequest), typeof(HoldResponse))
+                .WithQuiesceTimeout(HoldBudget)
+                .WithRequestTimeout(HoldBudget));
         using var held = child.Observe<HoldResponse>(new HoldRequest(), o => o.WithTarget(holder.Address))
             .Subscribe(_ => { }, ex => Output.WriteLine($"hold ended: {ex.GetType().Name}"));
         var owed = await holdEntered.Should().Within(TestTimeouts.Convergence)
@@ -134,11 +143,15 @@ public class AReadOfARecreateReachingTheDyingOwnerTest(ITestOutputHelper output)
 
             // The recreate is admitted by the guard and held before the store commits it.
             using var hold = Storage.HoldWrites(path);
+            // The recreate's outcome is recorded from the moment it is issued, so awaiting it never depends on
+            // when the write reached the hold.
+            var recreated = new ReplaySubject<Notification<MeshNode>>();
             using var recreate = Access.RunAsSystem(() => NodeFactory.CreateNode(MeshNode.FromPath(path) with
                 {
                     NodeType = "Markdown", Name = "second", State = MeshNodeState.Active,
                 }))
-                .Subscribe(_ => { }, ex => Output.WriteLine($"recreate ended: {ex.Message}"));
+                .Materialize()
+                .Subscribe(recreated);
             await hold.Arrivals.Should().Within(TestTimeouts.Convergence)
                 .Emit("the recreate was admitted and reached the store", ct);
 
@@ -154,10 +167,14 @@ public class AReadOfARecreateReachingTheDyingOwnerTest(ITestOutputHelper output)
             (owner.RunLevel < MessageHubRunLevel.Dead).Should().BeTrue(
                 "the premise: the refusal came while the deleted owner was still tearing down");
 
-            // The old owner may now finish its teardown, and the recreate may commit: the reader is served by
-            // the next activation.
-            ReleaseTeardown();
+            // The recreate commits FIRST, and only then may the old owner finish its teardown: the reader's next
+            // ask then reaches an activation that finds the row. (Released the other way round, a re-ask after
+            // the teardown could find the row still absent — a true "not found" for that instant.)
             hold.Release();
+            var outcome = await recreated.Where(n => n.Kind != NotificationKind.OnCompleted)
+                .Should().Within(TestTimeouts.Convergence).Emit("the recreate commits once released", ct);
+            outcome.Kind.Should().Be(NotificationKind.OnNext, $"the recreate succeeds ({outcome.Exception?.Message})");
+            ReleaseTeardown();
             var first = await seen.Where(n => n.Kind == NotificationKind.OnError || n.Value is not null)
                 .Select(n => n.Kind == NotificationKind.OnNext ? n.Value!.Name ?? string.Empty : $"FAILED: {n.Exception?.Message}")
                 .Should().Within(TestTimeouts.Convergence).Emit("the reader is answered", ct);
