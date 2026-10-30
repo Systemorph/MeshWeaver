@@ -28,7 +28,7 @@ fields, so the node imported with its description and every other key silently m
 | `TolerantYaml.ParseAll(text, options?)` | every `---`-separated document |
 | `TolerantYaml.Deserialize<T>(text, jsonOptions?, options?)` | the first document bound to `T`; `default` for an empty one |
 | `TolerantYaml.Serialize(node)` / `Serialize<T>(value, jsonOptions?)` | block-style YAML text |
-| `TolerantYaml.ScalarText(node)` | a scalar's text as YAML wrote it (`"true"`, `"1.10"`, the string) |
+| `TolerantYaml.ScalarText(node)` | a scalar's text as the core schema resolved it (`"true"`, `"1.10"`, the string; `007` reads `"7"`) |
 | `TolerantYaml.CreateSerializerOptions()` | a new instance of the tolerant binding options |
 
 The one failure type is `YamlParseException` (a `FormatException`) carrying `Line` and `Column`, both
@@ -119,11 +119,24 @@ quote — throws `YamlParseException`.
 | property names case-insensitive, written camelCase | `nodeType:`, `NodeType:` and `NODETYPE:` all bind |
 | unknown keys skipped | an author's own metadata never fails a read |
 | numbers readable from strings, named float literals | `order: "7"` binds to an `int` |
-| any scalar binds to a `string` as its written text | `version: 1.10` gives `"1.10"`, `name: 123` gives `"123"` |
+| any scalar binds to a `string` as its written text | `version: 1.10` gives `"1.10"`, `name: 123` gives `"123"`, `zip: 00123` gives `"00123"`, `label: TRUE` gives `"TRUE"` |
 | a `"true"`/`"false"` string binds to a `bool` | quoting a switch does not break it |
 | enums by name, case-insensitively | `colour: green` binds to `Colour.Green` |
 | nulls omitted on write | a written file carries only what is set |
 | a missing key keeps the property's default | as in JSON |
+
+**How a string target gets the written text.** The tree stays YAML 1.2 core schema — `00123` is the
+number 123, `0x1F` is 31, `TRUE` is `true` — because other readers consume it as JSON. While parsing,
+the reader records, for THAT parse only, the source spelling of every plain scalar whose resolved node
+reads differently, keyed by the node's reference (an alias or a merged key copies the spelling with the
+node). `Deserialize<T>` then walks `T`'s System.Text.Json contract alongside the tree — properties
+(matched like the binding, case-insensitively), collection elements, dictionary values, at any depth —
+and wherever a `string` is declared puts the recorded spelling back before binding. A typed target
+(`int`, `bool`, `double`, `object`, `JsonElement`) binds the resolved value, a property with its own
+converter is left alone, and options without the tolerant string converter keep System.Text.Json's
+refusal of a number for a string (#7398). Before this, a string target got the RESOLVED text (`"123"`,
+`"31"`, `"true"`), which the previous third-party reader never did. `Parse` + `ScalarText` still answer
+with the resolved text; a plain mapping KEY was always its written text (`007: x` has the key `007`).
 
 A caller may pass its own `JsonSerializerOptions`; `MarkdownFileParser` writes front matter with
 PascalCase keys in declaration order, which keeps every existing mirrored file byte-identical.
