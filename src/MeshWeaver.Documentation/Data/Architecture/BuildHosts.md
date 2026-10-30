@@ -448,11 +448,22 @@ Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
   identity token restricted to the `build` container. The container's seccomp / AppArmor profiles
   can be stated (`buildHosts.sandbox.*`) for what `bwrap` needs on the pool's nodes — measured, not
   assumed;
-- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` 0, `maxReplicaCount` per channel,
+- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` the channel's declared floor
+  (default 0 — see "Declared host floor" below), `maxReplicaCount` per channel,
   ONE `metrics-api` trigger on `<apiUrl>/queue?channel=<c>` with `valueLocation: demand`
   (= claimable + running, so the metric never drops to zero while a host holds a run) and a
   scale-down stabilization window (`scaleDownStabilizationSeconds`, default 300) longer than a
   claim's round trip.
+
+### Declared host floor
+
+A channel's floor is DECLARED on the record, never derived (policy `declared-not-derived`):
+`BuildHostChannel.MinReplicas` (default 0, scale to zero) renders as the channel's `minReplicas`,
+which the chart writes as the ScaledObject's `minReplicaCount`; `MaxReplicas` stays the one
+declaration of capacity and the admission cap. A floor of one keeps a host warm, so an admitted run
+is claimed without first waiting for a node and a pod to start. The chart refuses a floor below 0
+or above the channel's `maxReplicas`. A floor is paid for around the clock, so it is a record
+change the owner approves like any other, and the record says why it holds the value it does.
 
 **A host holds no publication credential, no registry token and no bake share.** The gate refuses
 `buildHosts.pluginsPullSecret` and `buildHosts.bakeShares`; `imagePullSecret` is the kubelet's image
@@ -933,8 +944,8 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
   reds any drift. The runner also refuses a `--total` the image was not packed for.
 - **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
-  generator's `OWES` list is the debt — `Consolidate test results` (the build API does not yet serve a
-  receipt's bytes, which the host-results job fetches), the prepared package closure, the browser and font set, the
+  generator's `OWES` list is the debt — `Consolidate test results` (the host-results fetch is built on both
+  ends but has never run, since it runs only on the plain `host` route), the prepared package closure, the browser and font set, the
   prepared-mesh rule, and a green probe that agrees with Actions. (The legs that read the build's artifacts —
   platform-compat and licence-gate — are paid: the host build hands their inputs back, below.)
 - **The shards FAN OUT on one host (`"parallel": true`).** The runner (MeshWeaver.Deploy `build-run.py`)
@@ -1038,11 +1049,13 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   job's shape (`test/**/*.trx`, `test/test-results.log`, `collected-logs/**`), one path with two
   contents, a missing `test/test-results.log` or one with no `[CI] <project> exit=<n>` marker, a
   refused fetch, a body whose size or sha256 differs from its receipt (TRUNCATED or padded), and a
-  written tree that is not exactly the receipts' set. 🚨 **Owed outside core:** the build API
-  (MeshWeaver.Plugins `BuildHostEndpoints`) serves the receipts but not yet the object route in step 2,
-  so on the host route `host-results` is RED with a 404 naming it until that lands — and the
-  `Consolidate test results` owes entry is paid only when collect-results consolidates results
-  fetched this way.
+  written tree that is not exactly the receipts' set. The object route in step 2 is served by
+  MeshWeaver.Plugins `BuildHostEndpoints` (since MeshWeaver.Plugins#4526) and is live on the control
+  instance: measured 2026-10-30, a tokenless `GET …/artifacts/<sha256>?channel=latest` answers 401
+  naming the OIDC token, while a path one segment longer answers 404. 🚨 **Still owed:** a fetch
+  that has actually run. `host-results` runs only on the plain `host` route, never in host-forced
+  shadow, so the `Consolidate test results` owes entry is paid only when collect-results
+  consolidates results fetched this way on a host run.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
