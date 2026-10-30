@@ -125,9 +125,6 @@ OWES = [
     "the default branch's tip by running the declared `restore` once per restore key (MeshWeaver.Deploy#68) - until "
     "that is on build-latest and has warmed core's key there, core's restore closure is not in the cache (Actions: "
     "the `build` job's NuGet-shelf hydration and restore)",
-    "browser: the shards that run browser tests need the headless browser and the font set the `browser-fonts` job "
-    "stages and each `test` shard provisions; the build-host image (MeshWeaver.Deploy deploy/build-host/Dockerfile) "
-    "carries neither",
     "prepared mesh: on a host no test may install a mesh from scratch — a prepared mesh snapshot is cloned per run; "
     "which of core's fixtures that replaces is not established (owned by the prepared-server work)",
     "evidence: no stage has run on a host — a probe of every stage on build-latest must be green and agree with the "
