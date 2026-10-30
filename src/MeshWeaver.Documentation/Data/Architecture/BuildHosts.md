@@ -448,11 +448,22 @@ Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
   identity token restricted to the `build` container. The container's seccomp / AppArmor profiles
   can be stated (`buildHosts.sandbox.*`) for what `bwrap` needs on the pool's nodes — measured, not
   assumed;
-- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` 0, `maxReplicaCount` per channel,
+- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` the channel's declared floor
+  (default 0 — see "Declared host floor" below), `maxReplicaCount` per channel,
   ONE `metrics-api` trigger on `<apiUrl>/queue?channel=<c>` with `valueLocation: demand`
   (= claimable + running, so the metric never drops to zero while a host holds a run) and a
   scale-down stabilization window (`scaleDownStabilizationSeconds`, default 300) longer than a
   claim's round trip.
+
+### Declared host floor
+
+A channel's floor is DECLARED on the record, never derived (policy `declared-not-derived`):
+`BuildHostChannel.MinReplicas` (default 0, scale to zero) renders as the channel's `minReplicas`,
+which the chart writes as the ScaledObject's `minReplicaCount`; `MaxReplicas` stays the one
+declaration of capacity and the admission cap. A floor of one keeps a host warm, so an admitted run
+is claimed without first waiting for a node and a pod to start. The chart refuses a floor below 0
+or above the channel's `maxReplicas`. A floor is paid for around the clock, so it is a record
+change the owner approves like any other, and the record says why it holds the value it does.
 
 **A host holds no publication credential, no registry token and no bake share.** The gate refuses
 `buildHosts.pluginsPullSecret` and `buildHosts.bakeShares`; `imagePullSecret` is the kubelet's image
