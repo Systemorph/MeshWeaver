@@ -133,6 +133,33 @@ Both pipelines build **multi-arch manifest lists** (`linux/amd64` + `linux/arm64
 > ```
 > **One-time operator step:** the very first multi-arch roll needs the base rebuilt multi-arch *before* the app build (the app's arm64 leg has no base layer otherwise). `gh workflow run base-image-acr.yml --ref main` does it; by hand into ACR: `az acr build --registry meshweaver --image memex-portal-ai-base:latest --platform linux/amd64 --platform linux/arm64 deploy/base-images/portal-ai` (or `docker buildx ... --push`).
 
+### Registry mode updates from public GHCR
+
+A `memex-local` install in **registry mode** runs `ghcr.io/systemorph/memex-portal-ai` (and
+`ghcr.io/systemorph/memex-migration`) with no pull secret, and it rolls itself forward from that same
+public registry (MeshWeaver.Deploy#65). `memex-local` sets the chart's self-update values for it:
+
+| Chart value | Set to | Why |
+|---|---|---|
+| `selfUpdate.registry` | `ghcr.io` | the registry the install already pulls from; the chart derives the repositories `systemorph/memex-portal-ai` and `systemorph/memex-migration` from the images it runs |
+| `selfUpdate.registryIsPublic` | `true` | the tags are listed through the anonymous token flow; the portal never resolves or sends a credential to GHCR |
+| `selfUpdate.canPatch` | `true` | a standalone local cluster has no control instance to hand a release to, so the portal patches its own two deployments |
+
+No `portal.imagePullSecret`, no `az login` and no managed identity are involved. The old default, the
+upstream ACR listed through a managed identity, failed every hour on a Mac with
+`ManagedIdentityCredential authentication failed`, so a registry-mode install never rolled its
+platform and held every package whose floor was above it. The `--key mwr_…` registration key cannot
+replace GHCR here: `mwr_` is a registration key, while `cr.meshweaver.cloud` checks an `mwi_` instance
+key that is minted inside the pod and never reaches the host.
+
+What rolls is still decided by `Admin/UpdatePolicy` (Settings → Updates) — see
+[ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy). The listing needs a platform that carries
+`SelfUpdate:RegistryIsPublic`. An older image ignores the flag and refuses the GHCR listing by name,
+because no plugin registry is configured on that host, so it sends nothing. Such an install is moved
+once by hand onto a platform that carries the flag: `brew upgrade memex-local && memex-local update`,
+which in registry mode pulls the CI-built image as in Option A. It updates itself after that. How
+the credential decision is made: [The Self-Update Registry Credential](/Doc/Architecture/SelfUpdateRegistryCredential).
+
 ### Option B — build natively (fast inner loop for un-pushed edits)
 
 When you've changed source that isn't in any pushed tag, build straight into Colima's Docker store. The verified rebuild loop (a few minutes on an M-series Mac):
