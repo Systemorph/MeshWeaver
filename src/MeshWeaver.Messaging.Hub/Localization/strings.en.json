@@ -2096,6 +2096,7 @@
   "profile.pictureError.notPermitted": "You may not change this picture.",
   "profile.pictureError.permissionUndetermined": "The permission check did not complete; nothing was saved. Try again.",
   "store.profileSubscription": "Subscription",
+  "store.adminInviteWithPlan": "Invite with a plan",
   "settings.dataSourcesIntro": "Registered data source repositories. Enable or disable sources, install data, or export subtrees.",
   "settings.whoAmI": "Who am I",
   "settings.account": "Account",
