@@ -23,7 +23,9 @@ when the verdict the run carries is no longer true:
   2. No Build-and-Test run for the head, or its body reader has not STARTED → nothing: it will read
      the current body.
   3. The body reader started AFTER the edit → nothing: it read (or is reading) the current body.
-  4. Otherwise the run judged an OLD body. The current body is judged here with the SAME gate scripts
+  4. Otherwise the run judged an OLD body. Verdicts are compared PER GATE, never as one aggregate: an
+     edit can clear one red gate and break a green one while the run stays red overall, and a later
+     partial re-run would then refresh only the first. Below, "green"/"red" is per gate. The current body is judged here with the SAME gate scripts
      (`scripts/preflight-pr.py --only body`, online), and with the run's body-gate results R:
        body green, R green    → nothing: the run's verdict holds for the current body too
                                 (this is the case that must NOT re-run the build — and does not);
@@ -99,25 +101,37 @@ class Action:
     reason: str
 
 
-def body_gate_state(jobs: list[dict]) -> str:
-    """'red' | 'pending' | 'green' over the run's body-gate jobs (skipped counts as passed, as the stage gate reads it)."""
-    gates = [j for j in jobs if j.get("name") in BODY_GATES]
-    if any(j.get("status") == "completed" and j.get("conclusion") in RED for j in gates):
-        return "red"
-    if any(j.get("status") != "completed" for j in gates):
+GATES = BODY_GATES[1:]
+# preflight-pr.py result name → the Build-and-Test job that runs the same gate script.
+PREFLIGHT_TO_JOB = {
+    "Pairs-with (cross-repo pair)": "Cross-repo pair (public surface)",
+    "Satellite-pins (package pin removal)": "Satellite package pins (removal declared)",
+    "Implementers (interface additions)": "Interface additions (implementers declared)",
+    "Mirror-sync (i18n catalog)": "i18n catalog (mirror sync handed over)",
+    "Closing keywords / Verified-closing": "Closing keywords (no accidental close)",
+}
+
+
+def job_state(job: dict | None) -> str:
+    """'green' | 'red' | 'pending' for one job (skipped counts as passed, as the stage gate reads it)."""
+    if job is None:
+        return "green"
+    if job.get("status") != "completed":
         return "pending"
-    return "green"
+    return "red" if job.get("conclusion") in RED else "green"
 
 
 def decide(pr: dict, head: str, run: dict | None, jobs: list[dict], edited_at: dt.datetime, body_verdict) -> Action:
-    """The decision table in the module docstring. `body_verdict()` is called only when it matters."""
+    """The decision table in the module docstring, PER GATE. `body_verdict()` is called only when it matters
+    and answers {job name: 'green'|'red'|'unknown'} (a bare string applies to every gate)."""
     if pr.get("state") != "open":
         return Action("none", f"the pull request is {pr.get('state')} — nothing to keep true")
     if (pr.get("head") or {}).get("sha") != head:
         return Action("none", "the head moved since this edit — the new head's run reads the current body")
     if run is None:
         return Action("none", "no Build-and-Test run for this head yet — the run to come reads the current body")
-    reader = next((j for j in jobs if j.get("name") == BODY_READER), None)
+    by_name = {j.get("name"): j for j in jobs}
+    reader = by_name.get(BODY_READER)
     started = [parse_time(j.get("started_at")) for j in jobs
                if j.get("name") in BODY_GATES and j.get("status") != "queued" and j.get("started_at")]
     if reader is None or reader.get("status") in ("queued", "waiting", "pending", "requested") or not started:
@@ -126,35 +140,63 @@ def decide(pr: dict, head: str, run: dict | None, jobs: list[dict], edited_at: d
     if read_at >= edited_at:
         return Action("none", f"the run read the body at {read_at.isoformat()}, after the edit "
                               f"({edited_at.isoformat()}) — its verdict is already the current body's")
-    state = body_gate_state(jobs)
     completed = run.get("status") == "completed"
-    verdict = body_verdict()          # 'green' | 'red' | 'unknown'
-    if state == "pending":
-        if verdict == "green":
-            return Action("wait", "the run's body gates are still judging the OLD body; the current body passes — "
-                                  "waiting for their verdict")
-        # red/unknown with gates pending on the old body: they could pass and finish green on stale input.
-        return Action("cancel-then-rerun-reader" if not completed else "rerun-reader",
-                      f"the current body is {verdict}; the run is judging the old one — re-judge it")
-    if state == "green":
-        if verdict == "green":
-            return Action("none", "the run's body gates passed the old body and the same gates pass the current "
-                                  "body — the verdict holds; nothing re-runs")
+    if job_state(reader) == "red":
+        return (Action("rerun-reader", "the run's body reader itself failed — re-running it")
+                if completed else Action("wait", "the run's body reader failed — waiting for the run to finish"))
+    raw = body_verdict()
+    current = {g: raw for g in GATES} if isinstance(raw, str) else {g: raw.get(g, "unknown") for g in GATES}
+    old = {g: job_state(by_name.get(g)) for g in GATES}
+    # A gate that passed (or is still judging) the OLD body but does not pass the current one: the run
+    # would carry a green the current body has not earned — whatever the aggregate says.
+    regressed = [g for g in GATES if old[g] in ("green", "pending") and current[g] != "green"]
+    # A gate that failed the OLD body but may pass the current one: the red is no longer known true.
+    cleared = [g for g in GATES if old[g] == "red" and current[g] != "red"]
+    pending = [g for g in GATES if old[g] == "pending"]
+    if regressed:
+        why = ", ".join(f"{g} ({old[g]} → {current[g]})" for g in regressed)
         if completed:
-            return Action("rerun-reader", f"the run's gates passed the OLD body; the current body is {verdict} — "
+            return Action("rerun-reader", f"the current body regresses gate(s) the run judged on the OLD body: {why} — "
                                           "re-running the body reader so the required check reflects it")
-        return Action("cancel-then-rerun-reader",
-                      f"the in-flight run passed the OLD body; the current body is {verdict} — cancelling it "
-                      "before it finishes green on stale input, then re-running the body reader")
-    # state == red
-    if verdict == "red":
-        return Action("none", "the run's body gates are red and the current body is red too — the required "
-                              "check is red and stays red")
-    if not completed:
-        return Action("wait", f"the run's body gates are red on the OLD body and the current body is {verdict}; "
-                              "waiting for the held run to finish before re-running its failed jobs")
-    return Action("rerun-reader", f"the run's body gates were red on the OLD body; the current body is {verdict} — "
-                                  "re-running the body reader job (the gates re-read the body; the held build runs)")
+        return Action("cancel-then-rerun-reader", f"the current body regresses gate(s) the in-flight run judged on the "
+                                                  f"OLD body: {why} — cancelling it before it finishes on stale input, "
+                                                  "then re-running the body reader")
+    if pending:
+        return Action("wait", "the run's body gates are still judging the OLD body; the current body passes them — "
+                              "waiting for their verdict")
+    if cleared:
+        why = ", ".join(f"{g} (red → {current[g]})" for g in cleared)
+        if not completed:
+            return Action("wait", f"gate(s) red on the OLD body may pass the current one: {why} — waiting for the "
+                                  "held run to finish")
+        return Action("rerun-reader", f"gate(s) red on the OLD body may pass the current one: {why} — re-running the "
+                                      "body reader job (the gates re-read the body; the held build runs)")
+    return Action("none", "every body gate's verdict on the OLD body is its verdict on the current body — the "
+                          "required check is still true; nothing re-runs")
+
+
+def pick_run(runs: list[dict], number: int) -> dict | None:
+    """The newest run ASSOCIATED WITH THIS pull request. Two pull requests can share a head sha, so a run
+    is never chosen by sha alone; runs for the sha that name no pull request at all are refused."""
+    mine = [r for r in runs if any(p.get("number") == number for p in (r.get("pull_requests") or []))]
+    if not mine and any(not r.get("pull_requests") for r in runs):
+        raise RuntimeError("a Build-and-Test run for this head names no pull request — it cannot be attributed "
+                           "to this one; re-run by hand if it is")
+    mine.sort(key=lambda r: (r.get("created_at") or "", r.get("id") or 0))
+    return mine[-1] if mine else None
+
+
+def newest_per_name(jobs: list[dict]) -> list[dict]:
+    """Across EVERY attempt: the newest execution of each job. A partial re-run's attempt lists only the
+    jobs it re-ran, so `filter=latest` alone loses a reader that succeeded in an earlier attempt."""
+    best: dict[str, dict] = {}
+    for j in jobs:
+        key = j.get("name")
+        rank = (int(j.get("run_attempt") or 0), j.get("started_at") or "", int(j.get("id") or 0))
+        cur = best.get(key)
+        if cur is None or rank > (int(cur.get("run_attempt") or 0), cur.get("started_at") or "", int(cur.get("id") or 0)):
+            best[key] = j
+    return list(best.values())
 
 
 # ── GitHub ──────────────────────────────────────────────────────────────────────────────────────
@@ -168,11 +210,10 @@ class Api:
     def pr(self, number: int) -> dict:
         return self.g.get(f"repos/{self.repo}/pulls/{number}", self.token)
 
-    def latest_run(self, head: str) -> dict | None:
+    def latest_run(self, head: str, number: int) -> dict | None:
         data = self.g.get(f"repos/{self.repo}/actions/workflows/{WORKFLOW_FILE}/runs"
-                          f"?event=pull_request&head_sha={head}&per_page=20", self.token)
-        runs = sorted(data.get("workflow_runs") or [], key=lambda r: (r.get("created_at") or "", r.get("id") or 0))
-        return runs[-1] if runs else None
+                          f"?event=pull_request&head_sha={head}&per_page=50", self.token)
+        return pick_run(data.get("workflow_runs") or [], number)
 
     def run(self, run_id: int) -> dict:
         return self.g.get(f"repos/{self.repo}/actions/runs/{run_id}", self.token)
@@ -180,12 +221,12 @@ class Api:
     def jobs(self, run_id: int) -> list[dict]:
         out: list[dict] = []
         for page in range(1, 21):
-            data = self.g.get(f"repos/{self.repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}",
+            data = self.g.get(f"repos/{self.repo}/actions/runs/{run_id}/jobs?filter=all&per_page=100&page={page}",
                               self.token)
             batch = data.get("jobs") or []
             out.extend(batch)
             if len(out) >= int(data.get("total_count") or 0) or not batch:
-                return out
+                return newest_per_name(out)
         raise RuntimeError(f"run {run_id} lists more than 2000 jobs")
 
     def rerun_job(self, job_id: int) -> None:
@@ -273,32 +314,63 @@ def scope_refusal(run: dict, jobs: list[dict], workflow_text: str) -> str | None
     return None
 
 
-def measure_body(base_ref: str, workdir: Path) -> str:
-    """Judge the CURRENT body with the same gate scripts CI runs: 'green' | 'red' | 'unknown'."""
+def measure_body(base_ref: str, workdir: Path):
+    """Judge the CURRENT body with the same gate scripts CI runs, PER GATE: {job name: 'green'|'red'|'unknown'}
+    (or 'unknown' for every gate when the body or the preflight could not be read)."""
     body = workdir / "current-pr-body.md"
+    report = workdir / "preflight-body.json"
     read = subprocess.run([sys.executable, "scripts/read-current-pr-body.py", "--output", str(body)])
     if read.returncode != 0:
-        print("::warning::could not read the current body — treating its verdict as UNKNOWN")
+        print("::warning::could not read the current body — treating every gate's verdict as UNKNOWN")
         return "unknown"
-    rc = subprocess.run([sys.executable, "scripts/preflight-pr.py", "--only", "body", "--base",
-                         f"origin/{base_ref}", "--body-file", str(body)]).returncode
-    return {0: "green", 1: "red"}.get(rc, "unknown")
+    subprocess.run([sys.executable, "scripts/preflight-pr.py", "--only", "body", "--base",
+                    f"origin/{base_ref}", "--body-file", str(body), "--json", str(report)])
+    try:
+        results = json.loads(report.read_text(encoding="utf-8"))["results"]
+    except (OSError, ValueError, KeyError):
+        print("::warning::the preflight wrote no report — treating every gate's verdict as UNKNOWN")
+        return "unknown"
+    status = {"PASS": "green", "FAIL": "red"}
+    verdicts = {job: "unknown" for job in GATES}
+    for r in results:
+        job = PREFLIGHT_TO_JOB.get(r.get("name"))
+        if job:
+            verdicts[job] = status.get(r.get("status"), "unknown")
+    # The surface detector feeds the pair AND the implementer gate; when it fails, neither is known.
+    if any(r.get("name", "").startswith("Public-surface detector") and r.get("status") == "FAIL" for r in results):
+        for job in ("Cross-repo pair (public surface)", "Interface additions (implementers declared)"):
+            verdicts[job] = "unknown"
+    return verdicts
 
 
 def regate(api, number: int, head: str, edited_at: dt.datetime, body_verdict, workflow_text: str, *,
            sleep=time.sleep, clock=time.monotonic, budget: float = WAIT_BUDGET_SECONDS, poll: float = POLL_SECONDS) -> int:
-    cached: list[str] = []
+    cached: list = []
 
-    def verdict() -> str:
+    def verdict():
         if not cached:
             cached.append(body_verdict())
-            print(f"The current body, judged by the same gate scripts: {cached[0].upper()}")
+            print(f"The current body, judged by the same gate scripts: {cached[0]}")
         return cached[0]
+
+    def still_current() -> str | None:
+        """Re-read the pull request right before posting: a push or a close since the decision means
+        the re-run would be for an obsolete head — and it shares the new head's concurrency group."""
+        now = api.pr(number)
+        if now.get("state") != "open":
+            return f"the pull request is now {now.get('state')}"
+        if (now.get("head") or {}).get("sha") != head:
+            return "the head moved while this lane worked — the new head's run reads the current body"
+        return None
 
     deadline = clock() + budget
     while True:
         pr = api.pr(number)
-        run = api.latest_run(head)
+        try:
+            run = api.latest_run(head, number)
+        except RuntimeError as exc:
+            print(f"::error::{exc}")
+            return 1
         jobs = api.jobs(run["id"]) if run else []
         action = decide(pr, head, run, jobs, edited_at, verdict)
         print(f"[{action.kind}] {action.reason}")
@@ -318,9 +390,11 @@ def regate(api, number: int, head: str, edited_at: dt.datetime, body_verdict, wo
             print(f"::error::{refusal}")
             return 1
         try:
-            if action.kind == "rerun-reader":
-                api.rerun_job(reader["id"])
-            elif action.kind == "cancel-then-rerun-reader":
+            if action.kind == "cancel-then-rerun-reader":
+                gone = still_current()
+                if gone:
+                    print(f"[none] {gone} — not cancelling")
+                    return 0
                 api.cancel(run["id"])
                 while api.run(run["id"]).get("status") != "completed":
                     if clock() >= deadline:
@@ -328,7 +402,11 @@ def regate(api, number: int, head: str, edited_at: dt.datetime, body_verdict, wo
                               f"`{BODY_READER}` by hand once it has.")
                         return 1
                     sleep(poll)
-                api.rerun_job(reader["id"])
+            gone = still_current()
+            if gone:
+                print(f"[none] {gone} — not re-running the old head's body reader")
+                return 0
+            api.rerun_job(reader["id"])
         except urllib.error.HTTPError as exc:
             print(f"::error::GitHub refused `{action.kind}` on run {run.get('html_url')}: HTTP {exc.code}. A fork's "
                   f"token cannot re-run anything — re-run by hand (`{BODY_READER}`, or the failed jobs).")
@@ -396,9 +474,12 @@ class FakeApi:
         self.finishes_after = finishes_after
 
     def pr(self, n):
+        self.pr_reads = getattr(self, "pr_reads", 0) + 1
+        if getattr(self, "head_moves_after", None) is not None and self.pr_reads > self.head_moves_after:
+            return {"state": "open", "head": {"sha": "c" * 40}}
         return self._pr
 
-    def latest_run(self, head):
+    def latest_run(self, head, number):
         return self._run
 
     def run(self, run_id):
@@ -453,7 +534,16 @@ def self_test() -> int:
     # Stale, completed run — the four corners.
     case("green run, green body: NOTHING re-runs (the build is not repeated)", FakeApi(jobs=_jobs("green")), "green", [])
     case("red run, green body: re-run the body reader job (never rerun-failed-jobs)", FakeApi(jobs=_jobs("red")), "green", ["rerun-job:1"])
-    case("red run, red body: nothing", FakeApi(jobs=_jobs("red")), "red", [])
+    closing = "Closing keywords (no accidental close)"
+    pins = "Satellite package pins (removal declared)"
+    same = {g: ("red" if g == closing else "green") for g in GATES}
+    case("red run, the SAME per-gate verdicts on the current body: nothing", FakeApi(jobs=_jobs("red")), same, [])
+    # Copilot #4421715005: the edit clears the red gate AND breaks a green one; the aggregate stays red,
+    # and an aggregate comparison would do nothing — leaving the broken gate's stale success for a later
+    # partial re-run to keep. Per gate it is a regression, so the reader re-runs.
+    swapped = {g: ("red" if g == pins else "green") for g in GATES}
+    case("red→red aggregate but a green gate REGRESSED: re-run the body reader", FakeApi(jobs=_jobs("red")),
+         swapped, ["rerun-job:1"])
     case("green run, red body: re-run the body reader", FakeApi(jobs=_jobs("green")), "red", ["rerun-job:1"])
     case("green run, unknown body: re-run the body reader (truthful)", FakeApi(jobs=_jobs("green")), "unknown",
          ["rerun-job:1"])
@@ -516,6 +606,59 @@ def self_test() -> int:
         regate(probe, 1, HEAD, T_EDIT, lambda: "green", FAKE_WORKFLOW, sleep=lambda s: None, clock=lambda: 0.0)
     if probe.calls != ["rerun-job:1"]:
         failures.append("negative control: the real table did not act where the neutered one did not")
+
+    # …and that case is invisible to an AGGREGATE comparison (red before, red after) — the row above
+    # tests the per-gate rule, not something an aggregate would also catch.
+    agg = lambda v: "red" if any(x == "red" for x in v.values()) else "green"  # noqa: E731
+    if agg(same) != agg(swapped):
+        failures.append("the regressed-gate row is visible to an aggregate comparison — it proves nothing")
+
+    # Copilot #4421715049: a partial re-run's attempt lists only what it re-ran. Across ALL attempts the
+    # reader from attempt 1 is kept, so the edit is judged; with attempt 2 alone it would look unstarted.
+    attempt1 = [dict(j, run_attempt=1) for j in _jobs("red")]
+    attempt2 = [{"id": 20, "name": closing, "status": "completed", "conclusion": "failure",
+                 "started_at": T0, "run_attempt": 2}]
+    merged = newest_per_name(attempt1 + attempt2)
+    if next(j for j in merged if j["name"] == closing)["id"] != 20:
+        failures.append("newest_per_name did not keep the newest execution of a re-run gate")
+    case("reader only in an EARLIER attempt: still judged, its id re-run", FakeApi(jobs=merged), "green",
+         ["rerun-job:1"])
+    case("negative control: the latest attempt ALONE hides the reader (nothing would be judged)",
+         FakeApi(jobs=attempt2), "green", [])
+
+    # Copilot #4421715079: two pull requests on one head sha — the run is chosen by PR association.
+    runs = [{"id": 1, "created_at": "2026-01-01T09:00:00Z", "pull_requests": [{"number": 1}]},
+            {"id": 2, "created_at": "2026-01-01T09:30:00Z", "pull_requests": [{"number": 2}]}]
+    if (pick_run(runs, 1) or {}).get("id") != 1:
+        failures.append("pick_run chose another pull request's (newer) run for the same sha")
+    if pick_run(runs, 3) is not None:
+        failures.append("pick_run returned a run for a pull request none of the runs names")
+    try:
+        pick_run([{"id": 9, "created_at": "x", "pull_requests": []}], 1)
+        failures.append("pick_run accepted a run that names no pull request")
+    except RuntimeError:
+        pass
+
+    # Copilot #4421715119: the pull request is re-read right before posting; a moved head stops it.
+    moved = FakeApi(jobs=_jobs("green"))
+    moved.head_moves_after = 1
+    case("head moved before the re-run is posted: nothing posted", moved, "red", [])
+    moved = FakeApi(run_status="in_progress", jobs=_jobs("green"))
+    moved.head_moves_after = 2
+    case("head moved while the cancel completed: cancelled, but the OLD reader is not re-run", moved, "red",
+         ["cancel:7"])
+
+    # The per-gate verdict depends on the preflight's result names: each must still exist there.
+    if set(PREFLIGHT_TO_JOB.values()) != set(GATES):
+        failures.append("PREFLIGHT_TO_JOB does not cover exactly the body-gate jobs")
+    pf = Path(__file__).resolve().parents[2] / "scripts" / "preflight-pr.py"
+    if pf.is_file():
+        src = pf.read_text(encoding="utf-8")
+        for name in PREFLIGHT_TO_JOB:
+            if f'"{name}"' not in src:
+                failures.append(f"scripts/preflight-pr.py no longer names the result `{name}`")
+    else:
+        failures.append(f"{pf} not found — the per-gate name map was not checked")
 
     # SCOPE: a failed body gate AND failed review-answered jobs in the same run — only the body
     # reader's id is re-run; never a review job, never rerun-failed-jobs.

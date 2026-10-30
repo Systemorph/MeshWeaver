@@ -337,6 +337,42 @@ def test_guard_roots(tmp: Path) -> None:
     rc, r, out = guards_status(repo, tmp)
     check("guards: an unrelated deletion is GREEN", rc == 0 and r["status"] == "PASS", out)
 
+    # UNTRACKED files are part of the working tree: an unstaged `mv` leaves the root populated.
+    repo = guard_repo(tmp, "g10")
+    os.rename(repo / "src/A/a.cs", repo / "src/A/b.cs")
+    rc, r, out = guards_status(repo, tmp)
+    check("guards: an unstaged rename inside a root keeps it non-empty (untracked file counted)",
+          r["status"] == "PASS", out)
+    check("state: an uncommitted change makes the verdict INCOMPLETE (exit 2), never GREEN",
+          rc == 2 and "Committed state" in out and "uncommitted" in out, out)
+    git(repo, "add", "-A")
+    commit(repo, "commit the rename")
+    rc, r, out = guards_status(repo, tmp)
+    check("state: the same change, committed, is GREEN (the INCOMPLETE above was the dirty tree)", rc == 0, out)
+
+    # SourceScan-backed roots are empty to their guard once no .cs/.razor/.csx is left, whatever else is.
+    repo = guard_repo(tmp, "g11")
+    write(repo, "src/B/README.md", "docs only\n")
+    write(repo, "src/B/bin/Stale.cs", "// build output, excluded by SourceScan\n")
+    commit(repo, "non-source files beside B")
+    publish_main(repo)
+    git(repo, "rm", "-q", "src/B/b.cs")
+    commit(repo, "drop the last source file of B")
+    rc, r, out = guards_status(repo, tmp)
+    findings = [d for d in r["details"] if d.startswith("test/")]
+    check("guards: a SourceScan root left with only a README and bin/ output is RED (empty to SourceScan)",
+          rc == 1 and len(findings) == 1 and "Guard2.cs:4" in findings[0] and "EMPTY to SourceScan" in findings[0],
+          "\n".join(r["details"]))
+    repo = guard_repo(tmp, "g12")
+    write(repo, "tools/README.md", "docs only\n")
+    commit(repo, "non-source file beside tools")
+    publish_main(repo)
+    git(repo, "rm", "-q", "tools/t.cs")
+    commit(repo, "drop tools source")
+    rc, r, out = guards_status(repo, tmp)
+    check("guards: a root NOT read through SourceScan keeps counting any file (control for the row above)",
+          rc == 0 and r["status"] == "PASS", out)
+
     # NEUTERED DETECTOR: with no declaration recognised, the RED case above turns GREEN — so the red
     # cases depend on the detector, and a detector that stopped detecting would be caught here.
     pf = load_preflight()

@@ -423,6 +423,19 @@ class RootDecl:
     line: int
     symbol: str
     roots: list[str]
+    # True when the roots reach the guard through `SourceScan.SourceFiles`, which reads ONLY
+    # non-excluded .cs/.razor/.csx files — a root left holding a README is empty to it.
+    source_scan: bool = False
+
+
+# Mirrors test/MeshWeaver.Documentation.Test/SourceScan.cs (SourceFiles + ExcludedSegments).
+SOURCE_SCAN_EXTENSIONS = (".cs", ".razor", ".csx")
+SOURCE_SCAN_EXCLUDED = {"bin", "obj", "node_modules", "testresults", ".git", ".vs", "dist"}
+
+
+def source_scan_file(rel: str) -> bool:
+    return rel.endswith(SOURCE_SCAN_EXTENSIONS) and not any(
+        seg.lower() in SOURCE_SCAN_EXCLUDED for seg in rel.split("/"))
 
 
 def strip_comments(text: str) -> str:
@@ -460,7 +473,10 @@ def parse_root_declarations(rel: str, text: str) -> list[RootDecl]:
             span = initializer_span(text, m.end() if rx is INLINE_ROOTS else _skip_ws(text, m.end()))
             roots = [s.strip("/") for s in STRING.findall(span) if looks_like_root(s.strip("/"))]
             if roots:
-                decls.append(RootDecl(rel, text.count("\n", 0, m.start()) + 1, symbol_of(m), roots))
+                symbol = symbol_of(m)
+                scanned = rx is INLINE_ROOTS or bool(
+                    re.search(r"SourceFiles\([^;]*\b" + re.escape(symbol) + r"\b", text))
+                decls.append(RootDecl(rel, text.count("\n", 0, m.start()) + 1, symbol, roots, scanned))
     return decls
 
 
@@ -491,8 +507,10 @@ def removed_paths(root: Path, merge_base: str) -> list[tuple[str, str, str | Non
 
 
 def present_files(root: Path) -> list[str]:
-    tracked = [p for p in git(root, "ls-files", "-z").split("\0") if p]
-    return [p for p in tracked if (root / p).exists()]
+    """Every file in the working tree as it stands: indexed AND untracked-but-not-ignored, minus
+    what has been deleted from disk — an unstaged `mv` leaves its new name untracked."""
+    listed = [p for p in git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard").split("\0") if p]
+    return sorted({p for p in listed if (root / p).is_file()})
 
 
 def touches(root_path: str, removed: str) -> bool:
@@ -515,12 +533,18 @@ def guard_roots(ctx: Context) -> list[Result]:
     if not removed:
         return [Result(name, PASS, f"the diff deletes or renames nothing ({len(decls)} root declaration(s) "
                        f"read in {len(guards)} test source file(s))", group="guards")]
-    present_dirs: set[str] = set()
+    def dirs_of(paths) -> set[str]:
+        out: set[str] = set()
+        for p in paths:
+            parts = p.split("/")
+            for k in range(1, len(parts)):
+                out.add("/".join(parts[:k]))
+        return out
+
     present_set = set(files)
-    for p in files:
-        parts = p.split("/")
-        for k in range(1, len(parts)):
-            present_dirs.add("/".join(parts[:k]))
+    present_dirs = dirs_of(files)
+    source_set = {p for p in files if source_scan_file(p)}
+    source_dirs = dirs_of(source_set)
     findings: list[str] = []
     seen: set[tuple[str, int, str]] = set()
     for d in decls:
@@ -528,9 +552,15 @@ def guard_roots(ctx: Context) -> list[Result]:
             hits = [x for x in removed if touches(r, x[1])]
             if not hits:
                 continue
-            if r in present_set or r in present_dirs:
-                continue  # the root still holds (or is) a tracked file
-            state = "EMPTY (no tracked file left under it)" if (ctx.root / r).is_dir() else "MISSING"
+            if d.source_scan:
+                if r in source_set or r in source_dirs:
+                    continue  # SourceScan still finds a .cs/.razor/.csx under it
+                state = ("EMPTY to SourceScan (no non-excluded .cs/.razor/.csx left under it)"
+                         if (ctx.root / r).exists() else "MISSING")
+            else:
+                if r in present_set or r in present_dirs:
+                    continue  # the root still holds (or is) a file
+                state = "EMPTY (no file left under it)" if (ctx.root / r).is_dir() else "MISSING"
             key = (d.file, d.line, r)
             if key in seen:
                 continue
@@ -599,8 +629,32 @@ def build_context(args, scratch: Path) -> Context:
                    verbose=args.verbose)
 
 
+def committed_state(ctx: Context) -> Result:
+    """CI judges the COMMIT. The gates do not all read the same tree locally — the surface detector
+    reads the working tree, the pair gate's project listing compares the merge base with HEAD — so an
+    uncommitted change can make a local verdict disagree with CI's either way. Never GREEN over one."""
+    raw = git(ctx.root, "status", "--porcelain", "-z", "--untracked-files=normal").split("\0")
+    entries: list[str] = []
+    i = 0
+    while i < len(raw):
+        e = raw[i]
+        if len(e) > 3:
+            entries.append(e)
+            if e[0] in "RC":
+                i += 1  # a rename/copy record is followed by its ORIGINAL path
+        i += 1
+    if not entries:
+        return Result("Committed state (what CI will judge)", PASS, "no uncommitted change — CI judges this tree",
+                      group="state")
+    shown = [e[3:] for e in entries[:8]]
+    return Result("Committed state (what CI will judge)", SKIPPED,
+                  f"{len(entries)} uncommitted change(s): the gates disagree locally about which tree they "
+                  "read (the pair gate's project listing compares the merge base with HEAD), so this verdict "
+                  "cannot match CI's — commit, then re-run", shown, group="state")
+
+
 def run_all(ctx: Context, groups: set[str]) -> list[Result]:
-    results: list[Result] = []
+    results: list[Result] = [committed_state(ctx)]
     if "body" in groups:
         results.extend(body_gates(ctx))
     if "guards" in groups:

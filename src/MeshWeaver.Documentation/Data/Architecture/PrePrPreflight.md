@@ -38,8 +38,11 @@ an input only CI has.
 
 The script never re-implements a gate. It invokes the gate script that CI's job invokes, with the
 same arguments, from the repository root, against the **merge base** with `--base` (default
-`origin/main`). That is the same comparison every diff gate makes in CI. It checks the working tree as
-it stands. Uncommitted changes are included, and the header says so, because CI sees only what you push.
+`origin/main`). That is the same comparison every diff gate makes in CI. It reads the working tree as
+it stands, untracked files included. But CI judges the COMMIT, and the gates do not all read the same
+tree locally: the surface detector reads the working tree, while the pair gate's project listing
+compares the merge base with `HEAD`. So any uncommitted change makes the verdict INCOMPLETE (exit 2,
+the `Committed state` line names the changes) and never GREEN. Commit, then run it again.
 
 | Check | Gate it invokes | Network |
 |---|---|---|
@@ -85,7 +88,10 @@ The preflight reads those lists from the test sources themselves: every `…Root
 method initializer (`ScannedRoots`, `ProductionRoots`, `HomeRoots`, …), and every inline root list
 passed to `SourceScan.SourceFiles(root, [...])`. Comments are blanked first. For every path the diff
 deletes or renames (`git diff --name-status -M` against the merge base), it reports each root that path
-touches and that is now **missing** or **empty**, with the guard's `file:line`. The fix belongs in the
+touches and that is now **missing** or **empty**, with the guard's `file:line`. A root read through
+`SourceScan.SourceFiles` is empty once no `.cs`/`.razor`/`.csx` outside `bin`/`obj`/… is left under
+it, whatever else is there, because that is all SourceScan reads. Any other root is empty when no file
+is left. The fix belongs in the
 same change: point the root at the new home of a moved directory, or drop the root of a retired one.
 
 ## An edited body re-judges the body gates — without re-running the build
@@ -98,15 +104,20 @@ publish the required `Consolidate test results`, where a skipped required contex
 
 `.github/workflows/pr-body-edited.yml` fires on `pull_request: edited` when the **body** changed, on a
 same-repository head. It acts on the **existing** run, and only when that run's verdict is no longer
-true. `.github/scripts/pr-body-regate.py` holds the decision table, and its self-test proves every arm:
+true. Verdicts are compared **per gate**, never as one aggregate: an edit can clear one red gate and
+break a green one while the run stays red, and a later partial re-run would then refresh only the
+first. The run is the newest one **associated with this pull request** (two pull requests can share a
+head sha). Its jobs are read across every attempt, keeping the newest execution of each, because a
+partial re-run's attempt lists only what it re-ran. The pull request is read again just before anything
+is posted, and a closed pull request or a moved head stops the lane. `.github/scripts/pr-body-regate.py` holds the decision table, and its self-test proves every arm:
 
 | The run… | Current body (same gates, via this preflight) | Action |
 |---|---|---|
 | read the body after the edit, or has not read it yet | not judged | nothing |
-| body gates green | green | **nothing.** The verdict holds for the current body, and the build is not re-run |
-| body gates red | green | re-run the `pr-body` job by id once the run has finished. Every body gate needs it and re-runs with it, reading the current body, because a new attempt never reuses the old read (`read-current-pr-body.py --reuse-from-env`), and the build they held runs. It never ran, so it is owed, not repeated |
-| body gates red | red | nothing. The required check is red and stays red |
-| body gates green (or still judging) | red | re-run the `pr-body` job, after cancelling an in-flight run. Its dependents follow: the gates go red, stage 0 holds the build, and the required check turns red within minutes |
+| every gate's verdict unchanged | (per gate) | **nothing.** The verdict holds for the current body, and the build is not re-run |
+| a gate red | that gate now passes (or cannot be judged) | re-run the `pr-body` job by id once the run has finished. Every body gate needs it and re-runs with it, reading the current body, because a new attempt never reuses the old read (`read-current-pr-body.py --reuse-from-env`), and the build they held runs. It never ran, so it is owed, not repeated |
+| a gate red | that gate still red, and no other gate changed | nothing. The required check is red and stays red |
+| a gate green (or still judging) | that gate now fails (or cannot be judged) — even if another gate keeps the run red | re-run the `pr-body` job, after cancelling an in-flight run. Its dependents follow: the gates go red, stage 0 holds the build, and the required check turns red within minutes |
 | any | undecided (could not be judged) | the `pr-body` job is re-run either way: truthful, and cheap whenever a gate is red, because a red gate holds the build |
 
 🚨 **The lane never posts `rerun-failed-jobs` on the whole run.** Every re-run is one job, `pr-body`,
