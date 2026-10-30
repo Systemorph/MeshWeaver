@@ -347,7 +347,7 @@ they are unaffected.
 registration lives in the contract. The contract still ships in the portal image, through
 `MeshWeaver.Blazor`, so MeshWeaver.Plugins lists it in `src/platform-shipped.txt` and the Export
 bundle carries no second copy. It referenced no package, so no `PackageVersion` left core with it.
-Pair: Systemorph/MeshWeaver.Plugins#PLUGINS_PR (add) with this repository's delete.
+Pair: Systemorph/MeshWeaver.Plugins#4724 (add) with this repository's delete.
 
 ## Feature folders inside content-surface projects
 
