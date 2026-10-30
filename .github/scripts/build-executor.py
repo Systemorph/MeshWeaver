@@ -745,7 +745,7 @@ def self_test() -> int:
         check("wiring/the Actions build RUNS on host-forced (no host-forced exclusion in its if)", "host-forced" not in build_if, build_if)
         check("wiring/negative control: the Actions build still does NOT run on plain `host` (a parity claim — the host IS the verdict)",
               "needs.admission.outputs.executor != 'host'" in build_if, build_if)
-        for j in ("host-follow", "host-results"):
+        for j in ("host-follow", "host-results", "host-build-outputs"):
             jif = str(workflow_yaml.job(doc, j, "dotnet-test.yml").get("if", ""))
             check(f"wiring/{j} runs ONLY on plain `host`, never on host-forced", "executor == 'host'" in jif and "host-forced" not in jif, jif)
         test_assert = [st for st in steps if "needs.test.result != 'success'" in str(st.get("if", ""))]

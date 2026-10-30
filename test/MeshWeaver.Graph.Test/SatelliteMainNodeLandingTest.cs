@@ -30,6 +30,8 @@ public class SatelliteMainNodeLandingTest(ITestOutputHelper output) : MonolithMe
     private const string Doc = Partition + "/Doc";
     private const string Private = Partition + "/Private";
     private const string Elsewhere = "SatLandingElsewhere";
+    private const string Ledger = Partition + "/_ledger";
+    private const string LedgerPrivate = Ledger + "/Private";
 
     /// <summary>Commenter on <see cref="Doc"/> only.</summary>
     private const string DocCommenter = "sat-landing-doc-commenter";
@@ -51,6 +53,11 @@ public class SatelliteMainNodeLandingTest(ITestOutputHelper output) : MonolithMe
                 new MeshNode("doc", Partition) { Name = "doc (another node)", NodeType = "Markdown" },
                 new MeshNode("Private", Partition) { Name = "Private", NodeType = "Markdown" },
                 AssignmentNodeFactory.Policy(Private, new PartitionAccessPolicy { BreaksInheritance = true }),
+                // An UNMAPPED `_`-prefixed segment is ordinary content (review of #7601, round 3): a
+                // protected area can sit under it.
+                new MeshNode("_ledger", Partition) { Name = "_ledger", NodeType = "Markdown" },
+                new MeshNode("Private", Ledger) { Name = "Private", NodeType = "Markdown" },
+                AssignmentNodeFactory.Policy(LedgerPrivate, new PartitionAccessPolicy { BreaksInheritance = true }),
                 new MeshNode(Elsewhere) { Name = Elsewhere, NodeType = "Markdown" },
                 new MeshNode("run1", Elsewhere + "/_Activity")
                 {
@@ -95,6 +102,43 @@ public class SatelliteMainNodeLandingTest(ITestOutputHelper output) : MonolithMe
 
         (await CreateVerdict(PartitionCommenter, Comment($"{Doc}/_Comment", Doc), ct)).IsValid.Should().BeTrue(
             "the control: the owner pointer inherits the partition's grant");
+    }
+
+    /// <summary>
+    /// The owner is the path before the satellite's OWN segment — the LAST <c>_</c> segment above the
+    /// leaf — never before the first one: an unmapped <c>_</c> segment higher up is ordinary content,
+    /// and a scope below it can break the inherited grant (review of #7601, round 3).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AnUnderscoreContentSegmentAboveAnInheritanceBreak_DoesNotMakeThePartitionTheOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await CreateVerdict(PartitionCommenter, Comment($"{LedgerPrivate}/_Comment", Partition), ct)).IsValid.Should().BeFalse(
+            "'SatLanding/_ledger/Private' breaks the partition's grant: a pointer to the partition must not reach into it");
+
+        (await CreateVerdict(PartitionCommenter, Comment($"{Ledger}/_Comment", Ledger), ct)).IsValid.Should().BeTrue(
+            "the control: the owner pointer under the content segment inherits the partition's grant");
+    }
+
+    /// <summary>
+    /// The owner is the path before a satellite segment only when that segment holds the node
+    /// DIRECTLY (review of #7601, round 4). A node under an ordinary content segment
+    /// (<c>_ledger/Private/c1</c>), or nested inside another satellite (<c>_Comment/c1/reply</c>),
+    /// has its parent as owner, so a pointer further up must also pass the landing check: a scope in
+    /// between can break the inherited grant.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ANodeNotDirectlyInASatelliteSegment_HasItsParentAsOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await CreateVerdict(PartitionCommenter, Comment(LedgerPrivate, Partition), ct)).IsValid.Should().BeFalse(
+            "'SatLanding/_ledger/Private' breaks the partition's grant, with or without a '_Comment' segment below it");
+
+        MainNodeTrust.OwnerOf($"{Doc}/_Comment/c1/reply").Should().Be($"{Doc}/_Comment/c1",
+            "a nested satellite's owner is the satellite it sits in, so an intervening policy is checked");
+        MainNodeTrust.OwnerOf($"{Doc}/_Comment/c1").Should().Be(Doc, "the control: a direct satellite's owner");
+        (await CreateVerdict(DocCommenter, Comment($"{Doc}/_Comment", Doc), ct)).IsValid.Should().BeTrue(
+            "the control: a comment directly in its owner's satellite segment");
     }
 
     [Fact(Timeout = 60_000)]

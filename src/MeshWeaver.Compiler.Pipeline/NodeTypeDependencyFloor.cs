@@ -32,6 +32,12 @@ namespace MeshWeaver.Graph.Configuration;
 /// loaded version for, a range that cannot be read, or a failed read of the package root: each
 /// answers <c>null</c>, and the compile runs exactly as it did before this rule existed. Same
 /// "absent means not judged, never met or unmet" contract as the import's rule.</para>
+///
+/// <para><b>The platform floor is the same floor (#7467).</b> The package root's
+/// <c>minMeshVersion</c> is judged by the same contract, before its <c>requires</c>: a replica whose
+/// image runs an older platform than the package declares answers "package X requires platform ≥ N;
+/// this instance runs M", so it can no longer compile sources a newer replica synced and fail on a
+/// platform member its image lacks.</para>
 /// </summary>
 public interface INodeTypeDependencyFloor
 {
@@ -56,9 +62,9 @@ public interface INodeTypeDependencyFloor
 /// <param name="unmet">The sentence <see cref="INodeTypeDependencyFloor.Unmet"/> returned.</param>
 public sealed class DependencyFloorUnmetException(string nodeTypePath, string unmet)
     : Exception(
-        $"Compile of '{nodeTypePath}' NOT RUN on this replica: {unmet} — a replica that runs a "
-        + "satisfying dependency compiles it; this one forms no verdict and leaves the last good "
-        + "build in place (MeshWeaver#6195).")
+        $"Compile of '{nodeTypePath}' NOT RUN on this replica: {unmet} — a replica that meets the "
+        + "package's floor (its dependencies and its platform) compiles it; this one forms no verdict "
+        + "and leaves the last good build in place (MeshWeaver#6195, #7467).")
 {
     /// <summary>The NodeType whose compile was not run.</summary>
     public string NodeTypePath { get; } = nodeTypePath;

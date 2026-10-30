@@ -138,7 +138,9 @@ public static class ApiTokenVerdict
     /// and a single path segment (a principal is an id, never a path).</summary>
     private static bool IsAPersonOrServicePrincipal(string? userId) =>
         !string.IsNullOrWhiteSpace(userId)
-        && !string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal)
+        // Case-insensitive, as the platform predicate reads it (AccessService.IsPlatformPrincipal):
+        // a case variant of System is System to every consumer of the identity (review of #7601).
+        && !string.Equals(userId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
         && !userId.Contains('/');
 
     private static bool IsNotATokenRecord(MeshNode? node)

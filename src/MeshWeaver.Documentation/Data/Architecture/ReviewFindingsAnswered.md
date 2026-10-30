@@ -170,6 +170,15 @@ uses:
 | `pulls/{n}/comments` | `Copilot` | Bot | 175728472 |
 | `pulls/{n}/reviews` and `pulls/{n}/comments` | `systemorph-com[bot]` — the **internal GLM-5.3 reviewer** | Bot | 328286035 |
 
+**The App is being renamed `systemorph-com` → `systemorph`, in three steps** — (1) every check
+accepts both spellings, (2) the App is renamed in the organisation's settings, (3) the old spelling
+is retired. A rename changes the App's **slug** and its bot **login** (`systemorph[bot]`); the App
+id (4918443) and the bot account id (328286035) do not change. Until step 3 the check treats
+`systemorph-com[bot]` and `systemorph[bot]` as the same reviewer (`INTERNAL_REVIEWER_LOGINS`) and
+both slugs as the same App (`DEGRADATION_APP_SLUGS`, always together with the id); the `RENAME`
+cases of `--self-test` pin both, with another App's bot and a `User` account of the new name as
+negative controls.
+
 **Historical — superseded by the next section.** Under the retired policy [`internal-code-review`](../PolicyNotProse) two reviewers were accepted: Copilot, and the internal GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward, which posts through the `systemorph-com` App (COMMENTED or CHANGES_REQUESTED, never APPROVED). That policy planned for Copilot to leave the set; the next section reverses it.
 
 ### Copilot is the reviewer again
@@ -562,7 +571,7 @@ run that satisfies ALL of:
 | field | must be | why |
 |---|---|---|
 | `name` | `internal-review` | the reviewer's own check run, the one it posts on every round |
-| `app.slug` **and** `app.id` | `systemorph-com` **and** `4918443` | provenance: the slug is a display name, the id cannot be claimed by another App (read off check run `109436738198`, 2026-09-29T13:45Z) |
+| `app.slug` **and** `app.id` | `systemorph-com` or `systemorph` (the App's rename) **and** `4918443` | provenance: the slug is a display name, the id cannot be claimed by another App (read off check run `109436738198`, 2026-09-29T13:45Z) |
 | `status` | `completed` | an in-progress round is not a verdict |
 | `conclusion` | `neutral` | the same title at `success` or `failure` is a round that ran, not a degradation |
 | `output.title` | starts with `Reviewer unavailable` | the contract the Plugins steward posts |

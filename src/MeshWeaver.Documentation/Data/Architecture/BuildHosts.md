@@ -448,11 +448,22 @@ Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
   identity token restricted to the `build` container. The container's seccomp / AppArmor profiles
   can be stated (`buildHosts.sandbox.*`) for what `bwrap` needs on the pool's nodes — measured, not
   assumed;
-- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` 0, `maxReplicaCount` per channel,
+- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` the channel's declared floor
+  (default 0 — see "Declared host floor" below), `maxReplicaCount` per channel,
   ONE `metrics-api` trigger on `<apiUrl>/queue?channel=<c>` with `valueLocation: demand`
   (= claimable + running, so the metric never drops to zero while a host holds a run) and a
   scale-down stabilization window (`scaleDownStabilizationSeconds`, default 300) longer than a
   claim's round trip.
+
+### Declared host floor
+
+A channel's floor is DECLARED on the record, never derived (policy `declared-not-derived`):
+`BuildHostChannel.MinReplicas` (default 0, scale to zero) renders as the channel's `minReplicas`,
+which the chart writes as the ScaledObject's `minReplicaCount`; `MaxReplicas` stays the one
+declaration of capacity and the admission cap. A floor of one keeps a host warm, so an admitted run
+is claimed without first waiting for a node and a pod to start. The chart refuses a floor below 0
+or above the channel's `maxReplicas`. A floor is paid for around the clock, so it is a record
+change the owner approves like any other, and the record says why it holds the value it does.
 
 **A host holds no publication credential, no registry token and no bake share.** The gate refuses
 `buildHosts.pluginsPullSecret` and `buildHosts.bakeShares`; `imagePullSecret` is the kubelet's image
@@ -933,10 +944,10 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
   reds any drift. The runner also refuses a `--total` the image was not packed for.
 - **No `ciEquivalent` while core owes.** `--check` holds the declaration to the one rule above; the
-  generator's `OWES` list is the debt — `Consolidate test results` (the build API does not yet serve a
-  receipt's bytes, which the host-results job fetches), the prepared package closure, the browser and font set, the legs that read
-  the build's artifacts (platform-compat,
-  licence-gate), the prepared-mesh rule, and a green probe that agrees with Actions.
+  generator's `OWES` list is the debt — `Consolidate test results` (the host-results fetch is built on both
+  ends but has never run, since it runs only on the plain `host` route), the prepared package closure, the browser and font set, the
+  prepared-mesh rule, and a green probe that agrees with Actions. (The legs that read the build's artifacts —
+  platform-compat and licence-gate — are paid: the host build hands their inputs back, below.)
 - **The shards FAN OUT on one host (`"parallel": true`).** The runner (MeshWeaver.Deploy `build-run.py`)
   runs a run's independent stages concurrently when the repository declares `parallel` and the host
   declares stage slots (`MW_BUILD_STAGE_SLOTS`, chart `buildHosts.stageSlots`, default 8, refused at start
@@ -978,16 +989,41 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
 - **Core's own route** (`dotnet-test.yml`). Job `admission` calls `node-repo-build-executor.yml` (the
   base tip = precheck's main, `BUILD_WEBHOOK_SECRET` signs the request) exactly when `build` would
   run. With `host`:
-  - `build` does not run here, and with it `test`, `doc-gate`, `platform-compat` and `licence-gate`;
+  - `build` does not run here, and with it `test` and `doc-gate`;
   - `host-follow` follows EVERY declared stage (`build`, each `test-shard-<i>`, `doc-gate`) with
     `build-follow.yml`;
   - `host-results` fetches each shard's handed-back results tree over HTTPS by receipt
     (`host-shard-results.py`, below) and uploads it under the `test` matrix's own artifact name
     `testResults-shard<i>-attempt<a>`, so `collect-results` consolidates a host run unchanged (download,
     attempt resolution, the coverage count, the trx and exit-marker gates);
-  - `collect-results` reds a failed admission, a host stage that did not succeed and a shard whose
-    results were not brought back; on the host route `platform-compat` and `licence-gate` read as not
-    run, which is RED — they are owed (`dependent legs`).
+  - `host-build-outputs` brings back what the two DEPENDENT LEGS read from the Actions `build` job
+    (`host-build-outputs.py`, below), and `platform-compat` and `licence-gate` then run their unchanged
+    steps on either route — they need `build` OR, on `host`, `host-build-outputs`, and merge the head
+    onto `needs.build.outputs.main-sha || needs.host-build-outputs.outputs.main-sha`;
+  - `collect-results` reds a failed admission, a host stage that did not succeed, a shard whose
+    results were not brought back, and a build hand-back that was not.
+
+  **The build's hand-back (the dependent legs).** On Actions the `build` job uploads `build-output-0`
+  (shard 0's tarball; `platform-compat` reads only its plugin tester, `tools/MeshWeaver.PluginTester/bin`)
+  and `licence-evidence` (`check-licenses.py --stage-evidence` over the build's one restore), and both
+  consumers judge the head merged onto the main the build compiled. The host `build` stage ends with the
+  same staging and `host-build-outputs.py stage`, which leaves exactly three files under
+  `$MW_BUILD_ARTIFACTS/build-outputs/` for the host to hand over as receipts: `build-output-0.tar` (the
+  tester bin under its repository path, sorted, fixed owner and mtime), `licence-evidence.tar`, and
+  `tested.json` (`sha`, the compiled `tree`, and `mergeBase` — the second parent of the host's
+  `merge --no-ff`, or null when it merged nothing). The evidence is staged from EVERY folder the restore
+  read — the writable `NUGET_PACKAGES`, the prepared cache bound as `NUGET_FALLBACK_PACKAGES`, and each
+  `project.assets.json`'s `packageFolders` — because on a host nearly every package comes from the
+  fallback folder. `host-build-outputs` (GitHub-hosted, the run's OIDC token) runs
+  `host-build-outputs.py fetch`: the `build` stage's SUCCEEDED receipts under `build-outputs/` only, each
+  object by content hash through `host-shard-results.py`'s no-redirect getter, verified against its
+  receipt, every tar member held to its shape (no link, nothing escaping, nothing outside the tester bin
+  or `restored-packages.json` + `packages/**`); then it runs the `fresh-merge` action onto the `main-sha`
+  it names (the merge base, or the head itself when nothing was merged — a head merged onto itself keeps
+  its own tree) and is RED unless that tree IS the host's; then it packs the tester with
+  `zstd --long=27` and uploads `build-output-0` and `licence-evidence` under the Actions names.
+  `core-build-stages.py --check` holds the wiring (`HANDBACK_WIRING`) and `check-build-stages.py`
+  (profile core) the build stage's two parity markers.
 
   `core-build-stages.py --check` holds both matrices to the declaration. Any other admission answer
   runs every leg on Actions, as before — a `host-forced` answer included (see "Host-forced routing"
@@ -1013,11 +1049,13 @@ checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI'
   job's shape (`test/**/*.trx`, `test/test-results.log`, `collected-logs/**`), one path with two
   contents, a missing `test/test-results.log` or one with no `[CI] <project> exit=<n>` marker, a
   refused fetch, a body whose size or sha256 differs from its receipt (TRUNCATED or padded), and a
-  written tree that is not exactly the receipts' set. 🚨 **Owed outside core:** the build API
-  (MeshWeaver.Plugins `BuildHostEndpoints`) serves the receipts but not yet the object route in step 2,
-  so on the host route `host-results` is RED with a 404 naming it until that lands — and the
-  `Consolidate test results` owes entry is paid only when collect-results consolidates results
-  fetched this way.
+  written tree that is not exactly the receipts' set. The object route in step 2 is served by
+  MeshWeaver.Plugins `BuildHostEndpoints` (since MeshWeaver.Plugins#4526) and is live on the control
+  instance: measured 2026-10-30, a tokenless `GET …/artifacts/<sha256>?channel=latest` answers 401
+  naming the OIDC token, while a path one segment longer answers 404. 🚨 **Still owed:** a fetch
+  that has actually run. `host-results` runs only on the plain `host` route, never in host-forced
+  shadow, so the `Consolidate test results` owes entry is paid only when collect-results
+  consolidates results fetched this way on a host run.
 - **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
   `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
   and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's

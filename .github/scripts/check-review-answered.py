@@ -233,8 +233,13 @@ REVIEWER_ACCOUNT_ID = 175728472
 # thread EITHER one opened needs a reply from a person. Design of record: MeshWeaver.Plugins
 # `Governance/PullRequestSteward.md`.
 INTERNAL_REVIEWER_ACCOUNT_ID = 328286035
+# The internal reviewer's App is being renamed `systemorph-com` → `systemorph`, in three steps:
+# accept both spellings, rename, retire the old spelling. A rename changes the App's slug and its
+# bot login; the App id and the bot account id stay. Until the third step BOTH spellings are the
+# same App, and this is the one place this script names them.
+INTERNAL_REVIEWER_LOGINS = frozenset({"systemorph-com[bot]", "systemorph[bot]"})
 REVIEWER_ACCOUNT_IDS = frozenset({REVIEWER_ACCOUNT_ID, INTERNAL_REVIEWER_ACCOUNT_ID})
-REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot", "systemorph-com[bot]"})
+REVIEWER_LOGINS = frozenset({"copilot-pull-request-reviewer[bot]", "Copilot"}) | INTERNAL_REVIEWER_LOGINS
 # A refusal OF THE PULL REQUEST (quota, outage): never a review, whatever else the body says —
 # every spelling of it, so a `Copilot wasn't able to review this pull request because …` followed
 # by a generated-file list cannot fall through to the zero-files exception below (#7488 review).
@@ -263,6 +268,8 @@ GENERATED_FILE_REASON = "generated file"
 # read off a real `internal-review` run (109436738198 on d433fc0c10, 2026-09-29T13:45:38Z).
 DEGRADATION_CHECK_NAME = "internal-review"
 DEGRADATION_APP_SLUG = "systemorph-com"
+# Both slugs of the one App across its rename (see INTERNAL_REVIEWER_LOGINS); the id does not change.
+DEGRADATION_APP_SLUGS = frozenset({DEGRADATION_APP_SLUG, "systemorph"})
 DEGRADATION_APP_ID = 4918443
 DEGRADATION_CONCLUSION = "neutral"
 DEGRADATION_TITLE_PREFIX = "Reviewer unavailable"
@@ -394,7 +401,7 @@ def copilot_currency(reviews, head: str, carry: Carry | None, as_of: str | None 
 
 
 def is_degradation_app(app: dict | None) -> bool:
-    return bool(app) and app.get("slug") == DEGRADATION_APP_SLUG and app.get("id") == DEGRADATION_APP_ID
+    return bool(app) and app.get("slug") in DEGRADATION_APP_SLUGS and app.get("id") == DEGRADATION_APP_ID
 
 
 def newest_internal_review_run(check_runs, as_of: str | None) -> dict | None:
@@ -3243,6 +3250,36 @@ def self_test() -> int:
          [_comment(1), _comment(2, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")], mention=("1 of 2",))
     case("a User account named systemorph-com[bot] is not the reviewer", (NOT_LANDED,), _pr(0),
          [_review(user={"login": "systemorph-com[bot]", "type": "User", "id": 7})], [])
+
+    # The App rename `systemorph-com` → `systemorph` (step 1 of 3: accept both). The renamed bot keeps
+    # its account id, so the id alone already recognises it; the login-only cases prove the LOGIN set
+    # carries the new spelling as well, and the controls prove nothing else rides on it.
+    RENAMED_REVIEWER_USER = {"login": "systemorph[bot]", "type": "Bot", "id": INTERNAL_REVIEWER_ACCOUNT_ID}
+    RENAMED_LOGIN_ONLY = {"login": "systemorph[bot]", "type": "Bot", "id": 900000001}
+    OLD_LOGIN_ONLY = {"login": "systemorph-com[bot]", "type": "Bot", "id": 900000002}
+    STRANGER_BOT = {"login": "some-other-app[bot]", "type": "Bot", "id": 900000003}
+    case("RENAME: a systemorph[bot] thread with no reply is unanswered", (UNANSWERED,), _pr(1),
+         [_review(user=RENAMED_REVIEWER_USER)], [_comment(1, RENAMED_REVIEWER_USER)], mention=("1 of 1",))
+    case("RENAME: a systemorph[bot] thread answered by a person is green", GREEN, _pr(2),
+         [_review(user=RENAMED_REVIEWER_USER)],
+         [_comment(1, RENAMED_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")])
+    case("RENAME: the new login is the reviewer by LOGIN alone", (UNANSWERED,), _pr(1),
+         [_review(user=RENAMED_LOGIN_ONLY)], [_comment(1, RENAMED_LOGIN_ONLY)], mention=("1 of 1",))
+    case("RENAME: the old login stays the reviewer by LOGIN alone", (UNANSWERED,), _pr(1),
+         [_review(user=OLD_LOGIN_ONLY)], [_comment(1, OLD_LOGIN_ONLY)], mention=("1 of 1",))
+    case("RENAME NEG: another App's bot is not the reviewer", (NOT_LANDED,), _pr(0), [_review(user=STRANGER_BOT)], [])
+    case("RENAME NEG: a User account named systemorph[bot] is not the reviewer", (NOT_LANDED,), _pr(0),
+         [_review(user={"login": "systemorph[bot]", "type": "User", "id": 8})], [])
+    for name, app, expect in [
+        ("RENAME: the degradation App under its old slug", {"id": DEGRADATION_APP_ID, "slug": "systemorph-com"}, True),
+        ("RENAME: the degradation App under its new slug", {"id": DEGRADATION_APP_ID, "slug": "systemorph"}, True),
+        ("RENAME NEG: the new slug on another App id", {"id": 900000004, "slug": "systemorph"}, False),
+        ("RENAME NEG: another App entirely", {"id": 15368, "slug": "github-actions"}, False),
+    ]:
+        got = is_degradation_app(app)
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
 
     # 🚨 Policy review-evidence-any-head (#4730): "reviewed, nothing found" is ONLY a completed
     # Copilot review object on the pull request with zero findings — on ANY of its heads, because a

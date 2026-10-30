@@ -430,6 +430,66 @@ pins keep resolving. See [NuGet Package Retirement](/Doc/Architecture/NuGetPacka
 survivor rule, the retirement tool, and why startup configuration goes on the Aspire adapter instead
 of into new packages.
 
+### The template feed — the one private package lane
+
+Policy `template-feed-private`. The `dotnet new` template MeshWeaver.Plugins generates
+(`tools/generate-memex-template.cs`) restores its framework as PACKAGES: it pins every `MeshWeaver.*`
+id it references at the template's version, and its generated `nuget.config` maps that prefix to the
+org's **private** GitHub Packages feed, `https://nuget.pkg.github.com/Systemorph/index.json`, and to
+nothing else — nuget.org is never consulted for `MeshWeaver.*`. With library publishing retired, no
+feed carried those ids and a generated portal could not restore (MeshWeaver.Plugins#4467).
+
+`.github/workflows/template-feed.yml` closes that. It runs after every `Continuous Delivery (main)`
+run (`workflow_run`, never a need of any platform job, so a packing failure cannot hold a platform
+release) and, when that run SEALED a set — `Promote`, `Verify every image shipped` and every
+`Bake platform content` leg green — it:
+
+1. reads the set's commits and version from the run's `promotion-record` (`3.1.<run>`, core sha,
+   Plugins sha);
+2. runs the template generator from that Plugins commit against that core commit, at that version;
+3. **derives** the package list from the generated `Directory.Packages.props` — every `MeshWeaver.*`
+   pin — plus the ProjectReference closure of each (`dotnet pack` turns a project reference into a
+   package dependency, so the pinned ids alone would not restore). Nothing is hand-listed
+   (`.github/scripts/template-feed.py plan`);
+4. packs the platform-line packages at the set's version, and an **own-line** package (a csproj
+   that declares its own `<Version>` — today `MeshWeaver.Aspire.Hosting.Memex`, policy
+   `cli-thin-wrapper-own-version`) at its own version, never the set's;
+5. verifies that every pinned id was packed at its planned version and that every `MeshWeaver.*`
+   dependency of every package is itself published by the lane (`template-feed.py verify`);
+6. pushes with the workflow's `GITHUB_TOKEN` (`packages: write`) and `--skip-duplicate`, so a
+   version already on the feed is skipped rather than an error; and
+7. reads every package's visibility back and is RED unless each is `private`.
+
+It is RED — never green — when the template pins an id that no project in core `src/` or Plugins
+`src/` packs, when it pins an id above the version the lane packs it at (a NuGet pin is a minimum),
+or when a packed package depends on an id outside the plan. `template-feed.py --self-test` proves
+each of those reds, and that the derived list equals the template's pins plus their closure; it runs
+on every core pull request (`workflow-shell` job) and again before every publish. A red is filed on
+the lane's own ledger issue (label `ci-template-feed`) and closed by the next real publication; a
+dry run never closes it.
+
+**Dry run.** `gh workflow run template-feed.yml -f dry-run=true [-f cd-run-id=<run>]` packs,
+verifies and lists the packages in the run summary and pushes nothing. `dry-run` defaults to `true`
+on a dispatch; the `workflow_run` path always publishes.
+
+**Never nuget.org.** `template-feed.py push-guard` refuses every push source except the org feed,
+and refuses nuget.org by name: a nupkg there can never be recalled. These packages are not a return
+of the retired library line — nothing in the fleet restores them; they exist for the template alone.
+
+**Consuming the feed.** GitHub Packages requires authentication even to read. A template user needs a
+GitHub personal access token (classic) with the `read:packages` scope — and an account the org has
+granted read access to the packages — added as credentials for the `github` source the template's
+`nuget.config` already declares:
+
+```bash
+dotnet nuget update source github --username <github-user> --password <PAT with read:packages> \
+  --store-password-in-clear-text --configfile nuget.config
+```
+
+or, without writing the token into the file, the environment form NuGet reads for that source:
+`NuGetPackageSourceCredentials_github="Username=<github-user>;Password=<PAT>"`. The generated
+template's README states the same steps.
+
 ---
 
 ## 6. What's New is per RELEASE, not per change

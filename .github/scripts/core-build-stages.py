@@ -67,6 +67,10 @@ SOLUTION = "MeshWeaver.slnx"
 # folder). A package the cache does not hold yet (a new or bumped PackageVersion) is restored into the
 # run's own writable package folder and NAMED below; the host reports it (MWPREP001) and promotes it into
 # the cache after a succeeded TRUNK build (MeshWeaver.Deploy#42), so the cache follows main.
+# Where the build stages the licence evidence before handing it back (the run's writable checkout; never
+# $MW_BUILD_OUTPUTS, which the host promotes after a trunk build).
+EVIDENCE_DIR = ".core-tests/licence-evidence"
+ARTIFACTS_ENV = '"${MW_BUILD_ARTIFACTS:?the host names no artifacts directory (MW_BUILD_ARTIFACTS)}"'
 BUILD_COMMAND = (
     "set -euo pipefail; "
     ': "${NUGET_FALLBACK_PACKAGES:?the host bound no prepared package cache (needs: nuget)}"; '
@@ -79,7 +83,16 @@ BUILD_COMMAND = (
     f"<(grep -oE 'test/[^\"]+\\.csproj' {SOLUTION} | sort)); "
     f'if [ -n "$missing" ]; then echo "::error::these test projects are not in {SOLUTION}, so they are never built '
     'and their tests never run: $missing"; exit 1; fi; '
-    f'{RUNNER} pack --repo . --out {RUN_ROOT} --sha {SHA_ENV} --version "run-${{MW_BUILD_SHA}}"'
+    f'{RUNNER} pack --repo . --out {RUN_ROOT} --sha {SHA_ENV} --version "run-${{MW_BUILD_SHA}}"; '
+    # THE DEPENDENT LEGS' INPUTS, handed back (host-build-outputs.py): on Actions the `build` job uploads shard 0's
+    # tarball (platform-compat reads its plugin tester) and the licence evidence staged from its ONE restore
+    # (licence-gate judges it), and both judge the tree the build compiled. Here the same evidence is staged from this
+    # stage's restore — the writable folder AND the prepared cache bound as the fallback folder — and the tester, the
+    # evidence and the tested tree are left under $MW_BUILD_ARTIFACTS/build-outputs/, which the host hands over as
+    # receipts; dotnet-test.yml's host-build-outputs job fetches them back into the run under the Actions names.
+    f'rm -rf {EVIDENCE_DIR}; python3 .github/scripts/check-licenses.py --stage-evidence {EVIDENCE_DIR}; '
+    f'python3 .github/scripts/host-build-outputs.py stage --repo . --sha {SHA_ENV} --evidence {EVIDENCE_DIR} '
+    f'--artifacts {ARTIFACTS_ENV}'
 )
 # The default-branch RESTORE a standing build host runs ONCE per restore key to warm its shared NuGet cache
 # (MeshWeaver.Deploy#68, build-run.py `nuget_warm_plan`/`warm_nuget`): the host reads this declaration from the
@@ -103,20 +116,17 @@ RESTORE_TIMEOUT_MINUTES = 20
 OWES = [
     "Consolidate test results: host-results (GitHub-hosted — core runs nothing on the self-hosted pool and reads no "
     "shared store) fetches each host shard's results tree over HTTPS by receipt (host-shard-results.py: the run's OIDC "
-    "token, every file verified against its receipt) and uploads it as the `test` matrix's own artifact, but the build "
-    "API serves receipts only, not their bytes — GET {api}/{repo}/{sha}/artifacts/{sha256} is owed by MeshWeaver.Plugins' "
-    "BuildHostEndpoints, and until it answers that job is RED naming it. Paid only when collect-results consolidates "
-    "results fetched that way (Actions: collect-results over the testResults-shard<i>-attempt<a> artifacts)",
+    "token, every file verified against its receipt) and uploads it as the `test` matrix's own artifact. Both ends "
+    "exist: a host shard hands its tree back as receipts, and the build API serves a receipt's bytes at "
+    "GET {api}/{repo}/{sha}/artifacts/{sha256} (MeshWeaver.Plugins' BuildHostEndpoints). What is unproven is the "
+    "fetch itself: host-results runs only on the plain `host` route, never in host-forced shadow, so no run has yet "
+    "fetched a tree that way with its OIDC token. Paid only when collect-results consolidates results fetched that "
+    "way on a host run (Actions: collect-results over the testResults-shard<i>-attempt<a> artifacts)",
     "prepared packages: the build restores through the repository's nuget.config with the host's cache as the "
     "fallback folder, and a package the cache lacks is restored for the run and named; the host WARMS the cache from "
     "the default branch's tip by running the declared `restore` once per restore key (MeshWeaver.Deploy#68) - until "
     "that is on build-latest and has warmed core's key there, core's restore closure is not in the cache (Actions: "
     "the `build` job's NuGet-shelf hydration and restore)",
-    "browser: the shards that run browser tests need the headless browser and the font set the `browser-fonts` job "
-    "stages and each `test` shard provisions; the build-host image (MeshWeaver.Deploy deploy/build-host/Dockerfile) "
-    "carries neither",
-    "dependent legs: platform-compat and licence-gate read the `build` job's artifacts (shard 0's output, the licence "
-    "evidence); with the build on a host they need its outputs handed back",
     "prepared mesh: on a host no test may install a mesh from scratch — a prepared mesh snapshot is cloned per run; "
     "which of core's fixtures that replaces is not established (owned by the prepared-server work)",
     "evidence: no stage has run on a host — a probe of every stage on build-latest must be green and agree with the "
@@ -430,6 +440,66 @@ def route_problems(workflow_text: str, total: int) -> list[str]:
     return out
 
 
+# THE DEPENDENT LEGS on the host route: `platform-compat` reads the `build` job's shard-0 output (its plugin tester)
+# and `licence-gate` its licence evidence, both judging the tree the build compiled. The host `build` stage hands them
+# back (BUILD_COMMAND → host-build-outputs.py stage), `host-build-outputs` fetches them by receipt and re-uploads them
+# under the Actions artifact names, and the two consumers accept either producer. Each line is a substring the named
+# job must carry, and why — the wiring is TEXT, read without a YAML parser (main-cd's runner has none).
+HANDBACK_JOB = "host-build-outputs"
+HANDBACK_MAIN = "${{ needs.build.outputs.main-sha || needs.host-build-outputs.outputs.main-sha }}"
+HANDBACK_RUNS = "needs.admission.outputs.executor == 'host' && needs.host-build-outputs.result == 'success'"
+HANDBACK_WIRING = {
+    HANDBACK_JOB: [
+        ("if: ${{ !cancelled() && needs.admission.outputs.executor == 'host' }}", "it runs on the host route, whatever the follows concluded"),
+        ("runs-on: ubuntu-latest", "GitHub-hosted: core runs nothing on the self-hosted pool"),
+        ("id-token: write", "the run's own OIDC token is the build API's gate"),
+        ("host-build-outputs.py fetch", "the outputs come back by verified receipt, never by trust"),
+        ("main-sha: ${{ steps.fetch.outputs.main-sha }}", "the fresh merge onto the main the HOST compiled"),
+        ("BUILT_TREE: ${{ steps.fetch.outputs.tree }}", "…held to the tree the host built"),
+        ("--long=27", "shard 0's output in the Actions tarball shape (platform-compat extracts with --long=27)"),
+        ("name: build-output-0", "under the Actions artifact name platform-compat downloads"),
+        ("name: licence-evidence", "under the Actions artifact name licence-gate downloads"),
+    ],
+    "platform-compat": [
+        ("host-build-outputs]", "it waits for the hand-back (a need)"),
+        (HANDBACK_RUNS, "it runs on the host route once the hand-back is in"),
+        (f"main-sha: {HANDBACK_MAIN}", "it judges the tree the build compiled, on either route"),
+        ("name: build-output-0", "it reads shard 0's output by the one name both producers upload"),
+    ],
+    "licence-gate": [
+        ("host-build-outputs]", "it waits for the hand-back (a need)"),
+        (HANDBACK_RUNS, "it runs on the host route once the hand-back is in"),
+        (f"main-sha: {HANDBACK_MAIN}", "it judges with the checker of the tree the evidence came from, on either route"),
+        ("name: licence-evidence", "it reads the evidence by the one name both producers upload"),
+    ],
+    "collect-results": [
+        ("host-build-outputs,", "the required check waits for the hand-back"),
+        ("needs.host-build-outputs.result != 'success'", "…and is RED when it was not brought back"),
+    ],
+}
+
+
+def _job_block(text: str, name: str) -> str | None:
+    """One job's text: the `  <name>:` line's body up to the next line at two spaces or less."""
+    m = re.search(rf"^  {re.escape(name)}:\n((?:    .*\n|\n)*)", text, re.M)
+    return m.group(1) if m else None
+
+
+def handback_problems(workflow_text: str) -> list[str]:
+    """dotnet-test.yml hands the host build's outputs to platform-compat and licence-gate (HANDBACK_WIRING)."""
+    out: list[str] = []
+    for job, needles in HANDBACK_WIRING.items():
+        block = _job_block(workflow_text, job)
+        if block is None:
+            out.append(f"{WORKFLOW} has no job {job} — the host build's outputs would reach neither platform-compat "
+                       f"nor licence-gate")
+            continue
+        for needle, why in needles:
+            if needle not in block:
+                out.append(f"{WORKFLOW} job {job} does not carry `{needle}` — {why}")
+    return out
+
+
 def _read(path: str) -> str | None:
     try:
         with open(path) as fh:
@@ -526,6 +596,26 @@ def _self_test() -> int:
     if os.path.isfile(real_wf):
         wf_text = open(real_wf).read()
         expect(route_problems(wf_text, read_shard_total(wf_text)) == [], "the real dotnet-test.yml's route matches the declaration")
+    print("the host build hands platform-compat and licence-gate their inputs back:")
+    build_cmd = doc["stages"][0]["command"]
+    expect("check-licenses.py --stage-evidence .core-tests/licence-evidence" in build_cmd
+           and build_cmd.index("--stage-evidence") > build_cmd.index("dotnet build"),
+           "the build stage stages the licence evidence from ITS OWN restore (after the build restored)")
+    expect('host-build-outputs.py stage --repo . --sha "${MW_BUILD_SHA' in build_cmd
+           and '--artifacts "${MW_BUILD_ARTIFACTS:?' in build_cmd,
+           "…and hands the tester, the evidence and the tested tree back under $MW_BUILD_ARTIFACTS")
+    expect(not any(str(o).startswith("dependent legs") for o in OWES), "the `dependent legs` debt is paid, so it is not owed")
+    wired = "jobs:\n" + "".join(f"  {job}:\n" + "".join(f"    x: {n}\n" for n, _ in needles)
+                                 for job, needles in HANDBACK_WIRING.items())
+    expect(handback_problems(wired) == [], "a workflow carrying every hand-back marker is green")
+    for job, needles in HANDBACK_WIRING.items():
+        for needle, _ in needles:
+            expect(any(f"job {job} does not carry" in p for p in handback_problems(wired.replace(f"    x: {needle}\n", ""))),
+                   f"RED: {job} drops `{needle}`")
+    expect(any("no job host-build-outputs" in p for p in handback_problems(wired.replace("  host-build-outputs:\n", "  other:\n"))),
+           "RED: no hand-back job at all")
+    if os.path.isfile(real_wf):
+        expect(handback_problems(open(real_wf).read()) == [], "the real dotnet-test.yml hands the host build's outputs back")
     print("no container — core's suites need no Docker daemon:")
     import tempfile
     # The scan's controls run against an explicit DEBT-FREE list, never the live OWES: re-opening
@@ -612,7 +702,7 @@ def main(argv: list[str]) -> int:
         return 0
     if argv == ["--check"]:
         found = (problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root)
-                 + route_problems(workflow, read_shard_total(workflow)))
+                 + route_problems(workflow, read_shard_total(workflow)) + handback_problems(workflow))
         for p in found:
             print(f"::error::{p}")
         if not found:

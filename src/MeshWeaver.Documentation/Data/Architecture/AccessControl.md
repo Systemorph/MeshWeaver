@@ -1425,6 +1425,11 @@ own-scope shortcut that otherwise lets a person write anything into their own pa
 owner's commit point (`ApiTokenPrincipalCommitGuard`, an `IEntityCommitGuard`), which every routed
 update, merge patch and data change meets. Binding at the write side covers both verdicts at once.
 
+A token record or index commits only at ITS OWN hub. A data change sent to another node's hub can
+carry one, and that hub holds no predecessor under its key, so a rewrite would read as a create there
+and a service token's replaced hash would pass in the service's own namespace. Such a carried write by
+anyone but System is refused at the commit point.
+
 **The verdict binds the principal to the record's LOCATION** (`ApiTokenVerdict.IsBoundToItsLocation`).
 The write rules above cover the seams they see; several write routes do not reach them (a node cleared
 and restored, a data change reaching a cold owner, a transient confirmed straight to storage, content
@@ -1440,9 +1445,13 @@ as System.
 
 **A writer-chosen main node outside the node's ancestry does not delegate alone.** Satellite delegation
 (`SatelliteAccessRule`) authorises a satellite against its main node. When the WRITER chooses that
-pointer on a create and it is not the node or one of its ancestors, the write must also pass the
-path check where the node lands. A stored off-partition main node still governs reads. The
-own-main-node shortcut trusts only an ancestor main node (`MainNodeTrust`).
+pointer — on a create, or on an update that changes it — and it is not the satellite's OWNER, the
+write must also pass the path check where the node lands. The owner is the path before the satellite
+segment only when that segment holds the node directly (`Space/Doc` for `Space/Doc/_Comment/c1`);
+otherwise it is the parent, so a node under an ordinary `_` content segment or nested inside another
+satellite never borrows an owner above a scope that can break the inherited grant. A stored off-partition main
+node still governs reads. The own-main-node shortcut trusts only an ancestor main node
+(`MainNodeTrust`).
 
 **An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
 the satellite and where its grants project, so a write that changed it would let its writer decide
