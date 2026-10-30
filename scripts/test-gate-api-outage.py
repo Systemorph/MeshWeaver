@@ -139,6 +139,20 @@ class LedgerLaneHasNoOutageBlindProbe(unittest.TestCase):
         self.assertEqual(calls, [], "node-repo-ci-failure.yml calls api.github.com outside the ledger "
                                     f"at line(s) {calls}: a rate limit there is read as a missing grant")
 
+    def test_a_prepared_event_is_delivered_when_the_ledger_step_fails_after_writing_it(self):
+        """The ledger files the red and writes the event, THEN exits 3 when the run's jobs could not
+        be listed (#7604 review). A step `if:` without a status function is implicitly
+        `success() && …`, so the signed POST and its verification were skipped and the control
+        portal never heard of a red the ledger had already filed."""
+        lines = (ROOT / ".github/workflows/node-repo-ci-failure.yml").read_text(encoding="utf-8").splitlines()
+        conditions = [line.split("if:", 1)[1].strip() for line in lines
+                      if line.lstrip().startswith("if:") and "steps.ledger.outputs.post" in line]
+        self.assertEqual(len(conditions), 2, f"expected the POST and the verification steps: {conditions}")
+        for condition in conditions:
+            self.assertIn("!cancelled()", condition,
+                          f"`{condition}` skips delivery whenever the ledger step exited non-zero "
+                          "after writing the event")
+
 
 class RefusalStaysAFinding(unittest.TestCase):
     """NEGATIVE CONTROL: a real permission 403 is still the finding that names its grant, unretried."""

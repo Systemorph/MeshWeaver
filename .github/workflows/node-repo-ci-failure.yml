@@ -380,7 +380,7 @@ jobs:
       # curl that fails at the transport level would kill the step before the verdict names what is
       # wrong. The timeouts stop an unreachable instance from burning the job timeout.
       - name: Sign and POST the event to the control portal's triage inbox
-        if: steps.ledger.outputs.post == 'true'
+        if: ${{ !cancelled() && steps.ledger.outputs.post == 'true' }}
         env:
           URL: ${{ inputs.control-webhook-url }}
           SECRET: ${{ secrets.control-webhook-secret }}
@@ -432,7 +432,7 @@ jobs:
       # FAILS (we always sign, so "never looked at it" means the secret is unexercised); no verdict
       # at all is a receiver that predates #3312 and WARNS — nothing in the calling repo can fix it.
       - name: "Did the inbox VERIFY the event?"
-        if: steps.ledger.outputs.post == 'true'
+        if: ${{ !cancelled() && steps.ledger.outputs.post == 'true' }}
         run: |
           set -euo pipefail
           RESP="${RESP:-$RUNNER_TEMP/resp}"
