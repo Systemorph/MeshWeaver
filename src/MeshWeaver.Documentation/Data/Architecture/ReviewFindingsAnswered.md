@@ -550,9 +550,13 @@ The rule, for core's caller, the lane's caller contract and `stage-advance.yml`:
 - **It is enforced.** `check-review-answered.py --self-test` reads all three workflow files and
   refuses a `created` trigger (`trigger_contract_failures`, `trigger_self_test`). It reads the
   active YAML and a caller contract written as `#` comments as two separate layers, so a commented
-  `# types: [deleted]` under a bare active trigger does not count. It reads one shape only:
-  `pull_request_review_comment:` followed by `types: [..]` on the next line. Any other shape is red
-  and named: a flow mapping such as `{types: [created]}`, `on: [..]`, or a block-style `types:` list.
+  `# types: [deleted]` under a bare active trigger does not count. In the active YAML it reads the
+  top-level `on:` block only, so an `if:` or concurrency expression that compares `event_name` to the
+  event is never mistaken for a trigger. It reads one shape only: `pull_request_review_comment:`
+  followed by `types: [..]` on the next line. The key may be bare, `'single-quoted'` or
+  `"double-quoted"`, because YAML reads all three as the same key. Any other shape is red and named:
+  a flow mapping such as `{types: [created]}`, `on: [..]` (quoted items too), a block-style `types:`
+  list, or a file with no `on:` block.
   A bare trigger counts as listening to every type. When a workflows directory sits beside the
   script, each expected file is checked, and a missing one is red. The check is skipped only when
   there is no workflows directory at all, which is how the lanes run a fetched copy. Each refused
