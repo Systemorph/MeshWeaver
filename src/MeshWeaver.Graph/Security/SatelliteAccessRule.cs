@@ -88,16 +88,22 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
         var delegated = hub.CheckPermission(mainNodePath, userId, permission);
 
         // 🛡️ A main node the WRITER is choosing — on a create, or an update that changes it — and that
-        // is not the satellite or one of its ancestors is not enough on its own (review of #7601).
-        // MainNode is a field the writer supplies: a comment in another person's partition naming the
-        // writer's own home would otherwise be authorised against the writer's home rather than where
-        // it lands. Such a write must ALSO pass the path check where the node lands. A STORED pointer
-        // (a read, a delete, an update that keeps it) is delegated to as before — that is how an
-        // off-partition main node legitimately governs its satellites.
+        // is not the satellite's OWNER is not enough on its own (review of #7601). MainNode is a field
+        // the writer supplies: a comment in another person's partition naming the writer's own home
+        // would otherwise be authorised against the writer's home rather than where it lands. Such a
+        // write must ALSO pass the path check where the node lands. "Owner" is exact and ordinal
+        // (MainNodeTrust.IsOwnerOf): an ancestor further up is not enough, since a scope in between can
+        // break the inherited grant, and a case-variant path is a different node.
+        // A STORED pointer (a read, a delete, an update that keeps it) is delegated to as before — that
+        // is how an off-partition main node legitimately governs its satellites. An Update without an
+        // ExistingNode is a decision about the STORED node itself (the delivery gate and the verbs'
+        // pre-flights build it that way); the update pipeline, which carries a proposal, always sets
+        // ExistingNode.
         var writerChoosesPointer = context.Operation == NodeOperation.Create
             || (context.Operation == NodeOperation.Update
-                && !string.Equals(context.ExistingNode?.MainNode, mainNodePath, StringComparison.OrdinalIgnoreCase));
-        if (!writerChoosesPointer || MainNodeTrust.IsAncestorOrSelf(mainNodePath, context.Node.Path))
+                && context.ExistingNode is { } existing
+                && !string.Equals(existing.MainNode, mainNodePath, StringComparison.Ordinal));
+        if (!writerChoosesPointer || MainNodeTrust.IsOwnerOf(mainNodePath, context.Node.Path))
             return delegated;
 
         var landingPath = context.Operation == NodeOperation.Create
