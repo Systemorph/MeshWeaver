@@ -115,12 +115,21 @@ per instance it does exactly the three steps
    image from before #4413 still selects over the `_releases` markers and can name a promoted but
    unarmed set; the pull then fails naming the absent `memex-portal-ai:<version>` until that
    instance rolls.
+
+   **The selected version is a tag in the repository the instance rolls**, and the answer names
+   that repository (`repository`). That is not always `memex-portal-ai`. The control instance rolls
+   `memex-control`, whose version tag exists before `memex-portal-ai`'s is armed, and also exists
+   for builds that never arm it. The lander used to pull `memex-portal-ai:<selected>` for every
+   instance, so the control slot failed `not found` whenever its candidate was not armed yet (#4413).
+   It now pulls `<acr>/<repository>:<selected>`. An instance on an image from before the field
+   names no repository, and the lander falls back to the poller's default (`memex-portal-ai`),
+   which is what that image lists.
 2. **Ask the instance what it runs** — `GET /api/plugins/combo`, added by #3544 beside its two
    `mwi_`-gated siblings. Its body is an `InstanceCombo` serialized with
    `InstanceComboAssembler.Json`, i.e. it **is** `combo.json`, byte-for-byte what `mw-combo-verify`
    deserializes. Before it existed, `InstanceComboReader` had no HTTP, MCP or layout surface at all
    and the producer's first input was simply unobtainable from a running portal.
-3. **Verify, then LAND the verdict** — `mw-combo-verify combo.json <acr>/memex-portal-ai:<candidate>`,
+3. **Verify, then LAND the verdict** — `mw-combo-verify combo.json <acr>/<repository>:<candidate>`,
    then a read-merge-write onto `Admin/UpdatePolicy` through `/api/mesh/get` + `/api/mesh/patch`.
 
 🚨 **The verdict is landed BEFORE the job's exit code is decided.** A Red that never reaches the

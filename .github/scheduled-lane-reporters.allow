@@ -16,6 +16,7 @@ main-cd.yml  — its scheduled tick is the delivery reconciler, and a failed del
 # The schedule is a catch-up sweep of a pull-request lane; its subject is open pull requests, whose
 # own checks show the outcome.
 request-review-on-change.yml  — the 15-minute tick re-judges open pull requests for a missed review request; the per-PR effect is visible on each PR
+review-answered.yml  — the 15-minute tick re-judges PENDING review verdicts (policy review-pending-while-answering); a missed tick leaves a verdict pending (still blocking, never green) on its PR, which names it
 stage-advance.yml  — the tick re-releases held PR heads whose review event was missed; a held head is visible on its PR as a pending stage
 
 # KNOWN DEBT — a scheduled red here still reaches nobody. Wire the ledger pair (#7416 follow-up).
