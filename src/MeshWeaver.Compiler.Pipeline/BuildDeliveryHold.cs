@@ -204,8 +204,17 @@ public static class BuildDeliveryHold
         };
     }
 
-    /// <summary>Whether <paramref name="def"/> is in a delivery hold of either kind — the page and
-    /// the notifier ask this, so the two cannot disagree about what "held" means.</summary>
+    /// <summary>Whether <paramref name="def"/> is in a delivery hold of either PROVENANCE kind
+    /// (<see cref="BuildProvenance.StaleAdopted"/> / <see cref="BuildProvenance.AdoptionRefused"/>) —
+    /// the notifier's transition test (<see cref="EventOf"/>).
+    ///
+    /// <para>🚨 Deliberately NOT widened to the unknown-membership hold (<see cref="SettleUnknownMembership"/>,
+    /// MeshWeaver#7356): that hold keeps <see cref="BuildProvenance.Compiled"/>, so counting it here
+    /// would make <see cref="EventOf"/> emit <see cref="DeliveryEvent.HeldStale"/> on entering it
+    /// (with the stale-serving body, which names a bundle the hold is not waiting for) and
+    /// <see cref="DeliveryEvent.Compiled"/> on leaving it although nothing compiled — a new
+    /// notification, which is an owner's call. The NodeType PAGE does not ask this: it shows
+    /// <see cref="NodeTypeDefinition.DeliveryHoldReason"/> for any record that carries one.</para></summary>
     public static bool IsHeld(NodeTypeDefinition? def)
         => def?.BuildProvenance is BuildProvenance.StaleAdopted or BuildProvenance.AdoptionRefused;
 
