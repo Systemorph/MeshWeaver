@@ -42,8 +42,9 @@ name: Release (promote a sealed set)
 # It adds the clean `<major>.<minor>.0` to the build main-cd published for the tagged commit and
 # opens the next-line pull request. It moves NO `-latest` pointer for such a build: CD's arm already
 # moved `<major>-latest`/`<major>.<minor>-latest` to that build or past it, so a move here could only
-# move them backwards. Sets of the retired `<line>-ci.<run>` notation are still promotable and keep
-# their old pointer behaviour.
+# move them backwards. Sets of the retired `<line>-ci.<run>` notation are still promotable and still
+# move their line pointers — but only FORWARD: a pointer whose line already holds a newer set stays
+# where it is (step `pointers`, the same never-backwards rule CD's arm applies; #7407).
 
 on:
   push:
@@ -337,13 +338,46 @@ jobs:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
         run: .github/scripts/check-release-availability.sh "${{ steps.rel.outputs.version }}" meshweaver-content plugins
 
+      # 🚨 NEVER BACKWARDS (#7407) — the same rule CD's `arm` applies before it moves a pointer. Only a
+      # RETIRED-notation set (`<line>-ci.<run>`) moves line pointers here at all (a SemVer set was
+      # armed by CD, which already moved them to it or past it). But a retired-notation set is older
+      # than every SemVer set, and a release may promote an older set of its own line too, so each of
+      # its pointers moves only when that pointer's LINE holds no newer set: releasing a 3.0.0-ci set
+      # may still move `3.0.0-latest`, never `3-latest` past a 3.1 build. The listing is the one CD's
+      # arm reads (memex-portal-ai's tags). FAIL CLOSED: a failed listing, or one that does not even
+      # carry this set's own tag, is no evidence the set is newest — the release stops before any
+      # retag. Executed by test-cd-steps.py against a stub `az`.
+      - name: "Which line pointers may move to this set (never backwards)"
+        id: pointers
+        env:
+          CI_VERSION: ${{ steps.set.outputs.ci_version }}
+        run: |
+          set -euo pipefail
+          case "$CI_VERSION" in
+            *-ci.*) ;;
+            *) echo "pointers=" >> "$GITHUB_OUTPUT"
+               echo "- line pointers: none moved — \`$CI_VERSION\` is a SemVer set; CD's arm moved them" >> "$GITHUB_STEP_SUMMARY"
+               exit 0;;
+          esac
+          tags=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 1000 -o tsv) \
+            || { echo "::error::could not list memex-portal-ai tags — refusing to move a line pointer on no evidence that $CI_VERSION is newest"; exit 1; }
+          printf '%s\n' "$tags" | grep -qxF "$CI_VERSION" \
+            || { echo "::error::memex-portal-ai's listing does not carry $CI_VERSION itself — the listing is not trustworthy evidence"; exit 1; }
+          all=$(python3 .github/scripts/platform-version.py line-pointers "$CI_VERSION")
+          fwd=$(printf '%s\n' "$tags" | python3 .github/scripts/platform-version.py forward-pointers "$CI_VERSION")
+          held=""
+          for p in $all; do case " $fwd " in *" $p "*) ;; *) held="$held $p";; esac; done
+          [ -z "$held" ] || echo "::notice::a newer set already holds${held} — those pointers stay where it put them (never backwards)"
+          echo "pointers=$fwd" >> "$GITHUB_OUTPUT"
+          echo "- line pointers moved to \`$CI_VERSION\`: ${fwd:-none}${held:+; held back (a newer set holds them):$held}" >> "$GITHUB_STEP_SUMMARY"
+
       # Manifest-only, seconds: the layers are already in ACR under <short-sha>. memex-portal-ai
       # LAST — it is the one tag a self-updater acts on, so everything it will need must exist first.
       - name: "Promote the images: <short-sha> → <clean>, memex-portal-ai last"
         env:
           SHORT: ${{ steps.rel.outputs.short }}
           VERSION: ${{ steps.rel.outputs.version }}
-          CI_VERSION: ${{ steps.set.outputs.ci_version }}
+          POINTERS: ${{ steps.pointers.outputs.pointers }}
         run: |
           set -euo pipefail
           # mw-core-tests is the set's fifth image (Doc/Architecture/DeployTestSwitchLatest, D3): a
@@ -354,12 +388,10 @@ jobs:
           done
           echo "→ memex-portal-ai: $VERSION  (arming Stable self-updaters)"
           docker buildx imagetools create --tag "$ACR/memex-portal-ai:$VERSION" "$ACR/memex-portal-ai:$SHORT"
-          # The line pointers move with a release of a RETIRED-notation set only (same rule as CD's
-          # Phase D then). A `<major>.<minor>.<run>` set was armed by CD, which already moved the
-          # pointers to it or past it — a move here could only move them backwards.
-          line_tags() { case "$CI_VERSION" in *-ci.*) local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v";; esac; }
+          # The line pointers step `pointers` cleared: a RETIRED-notation set's pointers whose line
+          # holds no newer set — empty for a SemVer set, which CD's arm already moved them to or past.
           for repo in memex-migration memex-portal-ai; do
-            args=(); for t in $(line_tags "$VERSION"); do args+=(--tag "$ACR/$repo:$t"); done
+            args=(); for t in $POINTERS; do args+=(--tag "$ACR/$repo:$t"); done
             # NO `latest` here: CD's `arm` owns it alone (see the GHCR mirror step below).
             [ "${#args[@]}" -eq 0 ] || docker buildx imagetools create "${args[@]}" "$ACR/$repo:$SHORT"
           done
@@ -381,11 +413,10 @@ jobs:
         env:
           SHORT: ${{ steps.rel.outputs.short }}
           VERSION: ${{ steps.rel.outputs.version }}
-          CI_VERSION: ${{ steps.set.outputs.ci_version }}
+          POINTERS: ${{ steps.pointers.outputs.pointers }}
         run: |
           set -euo pipefail
           NS=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          line_tags() { case "$CI_VERSION" in *-ci.*) local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v";; esac; }
           # 🚨 `latest` on memex-portal-ai and memex-migration is OWNED BY CD's `arm` ALONE (Phase D,
           # beside `<major>-latest`, under its never-backwards check — Doc/Architecture/ImageTagContract).
           # This lane never writes it, for ANY notation: a release can promote an OLDER set than the
@@ -394,7 +425,7 @@ jobs:
           for repo in memex-migration mw-plugin-test memex-portal-ai; do
             extra=()
             case "$repo" in
-              memex-migration|memex-portal-ai) for t in $(line_tags "$VERSION"); do extra+=(--tag "ghcr.io/$NS/$repo:$t"); done;;
+              memex-migration|memex-portal-ai) for t in $POINTERS; do extra+=(--tag "ghcr.io/$NS/$repo:$t"); done;;
               mw-plugin-test) extra+=(--tag "ghcr.io/$NS/mw-plugin-test:latest");;
             esac
             docker buildx imagetools create \
@@ -402,7 +433,7 @@ jobs:
               "${extra[@]}" \
               "$ACR/$repo:$SHORT"
           done
-          pointers=$(line_tags "$VERSION")
+          pointers="$POINTERS"
           echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ mw-plugin-test:latest${pointers:+; line pointers: $pointers})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Publish the GitHub Release from the committed notes"
