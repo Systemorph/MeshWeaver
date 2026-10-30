@@ -25,6 +25,11 @@ Usage:
                                              # 3.0.0-latest` for the old notation, `3-latest
                                              # 3.1-latest` for the SemVer one (a per-build
                                              # `3.1.10050-latest` would be a pointer to one build)
+  platform-version.py forward-pointers <version>
+                                             # stdin: one tag per line (the registry's listing);
+                                             # prints those of <version>'s line pointers whose LINE
+                                             # holds no newer set — moving one of the others would
+                                             # move it BACKWARDS (release.yml, Systemorph/MeshWeaver#7407)
   platform-version.py --self-test
 """
 from __future__ import annotations
@@ -69,6 +74,30 @@ def line_pointers(version: str) -> list[str]:
     return [f"{major}-latest", f"{major}.{minor}-latest", f"{major}.{minor}.{patch}-latest"]
 
 
+def _line_of(pointer: str) -> tuple[str, ...]:
+    """`3-latest` → ('3',), `3.0-latest` → ('3','0'), `3.0.0-latest` → ('3','0','0')."""
+    return tuple(pointer[: -len("-latest")].split("."))
+
+
+def forward_pointers(version: str, tags: list[str]) -> list[str]:
+    """The line pointers of `version` that may move to it without moving BACKWARDS: those whose line
+    holds no set newer than `version`. A pointer's line is every set sharing the pointer's leading
+    version parts (`3-latest`: major 3; `3.0-latest`: 3.0; `3.0.0-latest`: the 3.0.0 core). A newer
+    set in ANOTHER line never holds a pointer back — `3.0.0-latest` may still move although a 3.1
+    set exists, while `3-latest` may not. A non-set `version` is a ValueError (no line to move)."""
+    pointers = line_pointers(version)          # raises for a non-set
+    own = ordinal(version)
+    out = []
+    for pointer in pointers:
+        line = _line_of(pointer)
+        newer = [t for t in tags
+                 if (n := ordinal(t)) is not None and n > own
+                 and tuple(t.strip().split("-", 1)[0].split("."))[: len(line)] == line]
+        if not newer:
+            out.append(pointer)
+    return out
+
+
 def self_test() -> int:
     failures: list[str] = []
 
@@ -97,6 +126,29 @@ def self_test() -> int:
         check("pointers of a non-set are refused", "accepted", "refused")
     except ValueError:
         check("pointers of a non-set are refused", "refused", "refused")
+    # forward-pointers: a release of an OLDER set must never move a pointer backwards (#7407).
+    legacy = "3.0.0-ci.9000"
+    check("forward: the newest set in every line moves all three pointers",
+          forward_pointers(legacy, ["3.0.0-ci.8999", legacy, "3-latest", "main"]),
+          ["3-latest", "3.0-latest", "3.0.0-latest"])
+    check("forward: a newer 3.1 SemVer set holds `3-latest` back, never `3.0-latest`/`3.0.0-latest`",
+          forward_pointers(legacy, [legacy, "3.1.10400"]), ["3.0-latest", "3.0.0-latest"])
+    check("forward: a newer set on the 3.0.0 line holds every pointer back",
+          forward_pointers(legacy, [legacy, "3.0.0-ci.9001"]), [])
+    check("forward: a newer 3.0.1 set holds `3-latest` and `3.0-latest` back, not `3.0.0-latest`",
+          forward_pointers(legacy, [legacy, "3.0.1-ci.9100"]), ["3.0.0-latest"])
+    check("forward: another MAJOR's newer set holds nothing back",
+          forward_pointers(legacy, [legacy, "4.0.0-ci.9500", "4.1.12000"]), ["3-latest", "3.0-latest", "3.0.0-latest"])
+    check("forward: non-set tags (clean versions, pointers, shas) never count as newer",
+          forward_pointers(legacy, [legacy, "3.0.5", "3.1.0", "3-latest", "abc1234", "3.1.99999-edge.1"]),
+          ["3-latest", "3.0-latest", "3.0.0-latest"])
+    check("forward: a SemVer set compares on the same lineage",
+          forward_pointers("3.1.10400", ["3.1.10400", "3.2.10500"]), ["3.1-latest"])
+    try:
+        forward_pointers("3.0.0", ["3.0.0-ci.1"])
+        check("forward: a non-set version is refused", "accepted", "refused")
+    except ValueError:
+        check("forward: a non-set version is refused", "refused", "refused")
     print(f"platform-version self-test: {len(failures)} failure(s)")
     for f in failures:
         print(f"  - {f}")
@@ -120,6 +172,13 @@ def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[1] == "line-pointers":
         try:
             print(" ".join(line_pointers(argv[2])))
+        except ValueError as error:
+            print(f"::error::{error}", file=sys.stderr)
+            return 1
+        return 0
+    if len(argv) == 3 and argv[1] == "forward-pointers":
+        try:
+            print(" ".join(forward_pointers(argv[2], sys.stdin.read().split())))
         except ValueError as error:
             print(f"::error::{error}", file=sys.stderr)
             return 1

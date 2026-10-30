@@ -1685,6 +1685,95 @@ def run_control_webhook_cases(root, case) -> None:
          "the preflight run script no longer calls the checker")
 
 
+# ── release.yml: the legacy line pointers move FORWARD only (#7407) ────────────────────────────────
+# A release of a retired-notation set (`3.0.0-ci.<run>`) still moves `3-latest`/`3.0-latest`/
+# `3.0.0-latest`. Such a set is older than every SemVer set CD has armed, so before #7407 a release
+# moved `3-latest` BACKWARDS. Step `pointers` now clears only the pointers whose line holds no newer
+# set; the retag steps read its output alone. EXECUTED here against a stub `az` listing.
+RELEASE_WORKFLOW = ".github/workflows/release.yml"
+RELEASE_POINTERS_STEP_ID = "pointers"
+RP_SET = "3.0.0-ci.9000"
+
+
+def run_release_pointer_step(root: Path, body: str, ci_version: str, portal_tags: list[str] | None,
+                             platform_version: str | None = None) -> tuple[int, str, str]:
+    """Run release.yml's `pointers` step in a scratch tree; returns (rc, pointers output, log).
+    `portal_tags=None` makes the stub listing FAIL."""
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        scripts = tmp / "tree" / ".github" / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "platform-version.py").write_text(
+            platform_version if platform_version is not None
+            else (root / ".github/scripts/platform-version.py").read_text())
+        binp = tmp / "bin"
+        binp.mkdir()
+        (binp / "az").write_text(AZ_STUB)
+        (binp / "az").chmod(0o755)
+        out, summary = tmp / "out", tmp / "summary"
+        out.touch(); summary.touch()
+        e = dict(os.environ)
+        for knob in ("AZ_FAIL", "AZ_TAGS_FAIL", "AZ_TAGS"):
+            e.pop(knob, None)
+        e.update({"PATH": f"{binp}:{e['PATH']}", "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary),
+                  "CI_VERSION": ci_version, "AZ_TAGS": "memex-portal-ai=" + ",".join(portal_tags or [])})
+        if portal_tags is None:
+            e["AZ_TAGS_FAIL"] = "memex-portal-ai"
+        p = subprocess.run(["bash", "-c", body], env=e, cwd=tmp / "tree", capture_output=True, text=True)
+        outputs = dict(l.split("=", 1) for l in out.read_text().splitlines() if "=" in l)
+        return p.returncode, outputs.get("pointers", "<unset>"), p.stdout + p.stderr + summary.read_text()
+
+
+def run_release_pointer_cases(root, case) -> None:
+    try:
+        body = workflow_yaml.step_run(root / RELEASE_WORKFLOW, RELEASE_POINTERS_STEP_ID, job_name="release")
+    except workflow_yaml.WorkflowYamlError as e:
+        die(str(e))
+    if "forward-pointers" not in body or "show-tags" not in body:
+        die(f"release.yml step `{RELEASE_POINTERS_STEP_ID}` no longer filters by the registry listing — "
+            "these cases would pass vacuously")
+
+    # 1 ── the newest set of every line moves all three pointers (the old behaviour, still right).
+    rc, ptrs, log = run_release_pointer_step(root, body, RP_SET, ["3.0.0-ci.8999", RP_SET, "3-latest", "main"])
+    case("release: the newest retired-notation set moves `3-latest 3.0-latest 3.0.0-latest`",
+         rc == 0 and ptrs.split() == ["3-latest", "3.0-latest", "3.0.0-latest"], f"rc={rc} pointers={ptrs!r} {log}")
+
+    # 2 ── THE #7407 CASE: a SemVer 3.1 set is armed — `3-latest` must stay on it.
+    rc, ptrs, log = run_release_pointer_step(root, body, RP_SET, ["3.1.10400", RP_SET, "3-latest"])
+    case("release: a newer 3.1 set holds `3-latest` back; `3.0-latest`/`3.0.0-latest` still move",
+         rc == 0 and ptrs.split() == ["3.0-latest", "3.0.0-latest"] and "3-latest" in log and "newer set" in log,
+         f"rc={rc} pointers={ptrs!r} {log}")
+
+    # 3 ── a newer set on the same patch line holds every pointer back.
+    rc, ptrs, log = run_release_pointer_step(root, body, RP_SET, ["3.0.0-ci.9001", RP_SET])
+    case("release: a newer set on the same line holds every pointer back", rc == 0 and ptrs == "",
+         f"rc={rc} pointers={ptrs!r} {log}")
+
+    # 4 ── a SemVer set moves nothing here (CD's arm owns its pointers) and reads no registry.
+    rc, ptrs, log = run_release_pointer_step(root, body, "3.1.10400", None)
+    case("release: a SemVer set moves no pointer and does not even read the listing", rc == 0 and ptrs == "",
+         f"rc={rc} pointers={ptrs!r} {log}")
+
+    # 5 ── FAIL CLOSED: an unreadable listing, or one missing the set's own tag, stops the release.
+    rc, ptrs, log = run_release_pointer_step(root, body, RP_SET, None)
+    case("release: an unreadable tag listing fails the step (no pointer moves on no evidence)",
+         rc != 0 and ptrs == "<unset>", f"rc={rc} pointers={ptrs!r} {log}")
+    rc, ptrs, log = run_release_pointer_step(root, body, RP_SET, ["3.0.0-ci.8999"])
+    case("release: a listing that does not carry the set's own tag fails the step",
+         rc != 0 and ptrs == "<unset>", f"rc={rc} pointers={ptrs!r} {log}")
+
+    # 6 ── the retag steps read ONLY the cleared pointers — no private derivation of their own.
+    rel = (root / RELEASE_WORKFLOW).read_text()
+    case("release: no retag step derives line pointers itself (line_tags is gone; both read $POINTERS)",
+         "line_tags" not in rel and rel.count("for t in $POINTERS") == 2, "a retag step still spells its own pointers")
+
+    # 7 ── MUTATION CONTROL: the step without the forward filter moves `3-latest` backwards — and case 2 sees it.
+    mutated = body.replace("platform-version.py forward-pointers", "platform-version.py line-pointers", 1)
+    rc, ptrs, log = run_release_pointer_step(root, mutated, RP_SET, ["3.1.10400", RP_SET])
+    case("control: a step without the never-backwards filter moves `3-latest` past a newer set (the #7407 defect)",
+         mutated != body and rc == 0 and "3-latest" in ptrs.split(), f"rc={rc} pointers={ptrs!r}")
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -1968,6 +2057,10 @@ def main() -> int:
     print()
     print(f"── step `{LINE_POINTERS_STEP_ID}` (arm, Phase D: line pointers + `latest`) ──")
     run_line_pointer_cases(root, case)
+
+    print()
+    print(f"── release.yml step `{RELEASE_POINTERS_STEP_ID}` (legacy line pointers, never backwards) ──")
+    run_release_pointer_cases(root, case)
 
     print()
     if failures:
