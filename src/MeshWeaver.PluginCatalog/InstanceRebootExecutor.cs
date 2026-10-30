@@ -119,13 +119,27 @@ public static class InstanceRebootExecutor
     /// landing (#6625 review). Such an adopt reads "not landed", naming the decision and what keeps running.
     /// </summary>
     /// <param name="outcome">What the adopt answered.</param>
-    public static string DescribeAdopt(ModuleAdoptOutcome outcome) =>
+    public static string DescribeAdopt(ModuleAdoptOutcome outcome) => DescribeAdoptText(outcome).ToEnglish();
+
+    /// <summary>The keyed form of <see cref="DescribeAdopt"/> (MeshWeaver#7322) — the words through the
+    /// catalog, the versions, decision and reason as written. Pure.</summary>
+    /// <param name="outcome">What the adopt answered.</param>
+    public static RebootText DescribeAdoptText(ModuleAdoptOutcome outcome) =>
         outcome.Failure is { } failure
-            ? $"not landed — {failure}"
+            ? RebootText.Of("reboot.adopt.failed", ("failure", failure))
             : outcome.FilesLanded > 0
-                ? $"landed {outcome.LandedVersion ?? outcome.ServedVersion ?? "?"} ({outcome.FilesLanded} file(s))"
-                : $"not landed — {outcome.Verdict?.Action.ToString() ?? "no decision"}: {outcome.Verdict?.Reason ?? "no reason recorded"} "
-                  + $"(served {outcome.ServedVersion ?? "none"}; {outcome.LandedBefore ?? "nothing"} keeps running)";
+                ? RebootText.Of("reboot.adopt.landed",
+                    ("version", outcome.LandedVersion ?? outcome.ServedVersion ?? "?"),
+                    ("files", outcome.FilesLanded.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                : RebootText.Of("reboot.adopt.notLanded")
+                    .Then(RebootText.Or(outcome.Verdict?.Action.ToString(), "reboot.adopt.noDecision"))
+                    .Then(RebootText.Verbatim(":"), glue: "")
+                    .Then(RebootText.Or(outcome.Verdict?.Reason, "reboot.noReasonRecorded"))
+                    .Then(RebootText.Of("reboot.adopt.served"))
+                    .Then(RebootText.Or(outcome.ServedVersion, "reboot.word.none"))
+                    .Then(RebootText.Verbatim(";"), glue: "")
+                    .Then(RebootText.Or(outcome.LandedBefore, "reboot.word.nothing"))
+                    .Then(RebootText.Of("reboot.adopt.keepsRunning"));
 
     /// <summary>Arms the executor on a request node's own hub. Registered as the node type's initialization.</summary>
     public static IObservable<Unit> Arm(IMessageHub hub)
@@ -205,9 +219,8 @@ public static class InstanceRebootExecutor
                 return Observable.Empty<Unit>();
             if (!string.Equals(node.CreatedBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
                 return Once(ref finished, () => Finish(
-                    $"written by '{node.CreatedBy}', not by System — only InstanceReboot.Request may issue a "
-                    + "reboot (its callers authorise the requester); nothing was synced, landed or restarted"));
-            if (InstanceReboot.Validate(request) is { } invalid)
+                    RebootText.Of("reboot.finish.notSystem", ("by", node.CreatedBy ?? ""))));
+            if (InstanceReboot.ValidateText(request) is { } invalid)
                 return Once(ref finished, () => Finish(invalid));
 
             // A re-armed request (InstanceReboot.Rearm) is a new attempt: its restart may be asked for again.
@@ -227,7 +240,7 @@ public static class InstanceRebootExecutor
                 InstanceRebootStatus.AwaitingRestart when request.RestartRequestedAt is null =>
                     Once(ref restarting, () => IssueRestart(request)),
                 InstanceRebootStatus.AwaitingRestart => Evaluate(request),
-                _ => Once(ref finished, () => Finish($"the request carries the status '{request.Status}', which this executor does not know")),
+                _ => Once(ref finished, () => Finish(RebootText.Of("reboot.finish.unknownStatus", ("status", request.Status)))),
             };
         }
 
@@ -238,26 +251,30 @@ public static class InstanceRebootExecutor
 
         private IObservable<Unit> Prepare(InstanceRebootRequest request) =>
             Write(r => r with { Status = InstanceRebootStatus.Preparing },
-                    Line($"reboot requested by {request.RequestedBy ?? "(unattributed)"} ({request.Trigger}"
-                         + (request.Wedged ? ", wedged" : "") + $") — reason: {request.Reason}"
-                         + (request.WedgeEvidence is { } e ? $"; wedge evidence: {e}" : "")))
+                    Line(RebootText.Of("reboot.log.requestedBy")
+                        .Then(request.RequestedBy is { } by ? RebootText.Verbatim(by) : RebootText.Of("reboot.unattributed"))
+                        .Then(RebootText.Of(request.Wedged ? "reboot.log.requestedTriggerWedged" : "reboot.log.requestedTrigger",
+                            ("trigger", request.Trigger), ("reason", request.Reason)))
+                        .Then(request.WedgeEvidence is { } e ? RebootText.Of("reboot.log.wedgeEvidence", ("evidence", e)) : RebootText.Empty, glue: "")))
                 .SelectMany(_ => StepSync())
                 .SelectMany(_ => StepModules())
                 .SelectMany(_ => StepImage(request.Wedged))
                 .SelectMany(_ => Write(r => r with { Status = InstanceRebootStatus.AwaitingRestart },
-                    Line("steps 1–3 done — requesting the ONE roll/restart")))
-                .Catch((Exception ex) => Finish($"the preparation faulted: {ex.Message}"));
+                    Line(RebootText.Of("reboot.log.prepared"))))
+                .Catch((Exception ex) => Finish(RebootText.Of("reboot.finish.prepareFaulted", ("message", ex.Message))));
+
+        private static RebootText SyncLine(ModuleSourceUpdateRow row) =>
+            RebootText.Of("reboot.log.sync", ("source", row.ConfigPath), ("outcome", row.Outcome), ("detail", row.Detail));
 
         private IObservable<Unit> StepSync() =>
-            Mark(InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Running, "importing every module source at its branch HEAD")
+            Mark(InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Running, RebootText.Of("reboot.sync.running"))
                 .SelectMany(_ => hub.ServiceProvider.GetService<GitHubSyncService>() is null
-                    ? Mark(InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Skipped,
-                        "this host registers no GitSync service — no module source can be synced here")
+                    ? Mark(InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Skipped, RebootText.Of("reboot.sync.noService"))
                     // Each finished source is recorded as progress on the request at once (MeshWeaver#6625): a
                     // batch of many healthy imports must not read as one silence longer than the window.
                     // A write REFUSED because the request ended emits nothing → false: no further source is
                     // imported beside whatever replaced this reboot (#6625 review).
-                    : ModuleSourceUpdate.UpdateAllReporting(hub, row => Write(r => r, Line($"sync {row.ConfigPath}: {row.Outcome} — {row.Detail}"))
+                    : ModuleSourceUpdate.UpdateAllReporting(hub, row => Write(r => r, Line(SyncLine(row)))
                         .Select(_ => true)
                         .DefaultIfEmpty(false)
                         .Catch((Exception ex) =>
@@ -268,31 +285,35 @@ public static class InstanceRebootExecutor
                             return Observable.Return(true);
                         })).SelectMany(rows =>
                     {
+                        var invariant = System.Globalization.CultureInfo.InvariantCulture;
                         var updated = rows.Where(r => r.Outcome == ModuleSourceUpdateOutcome.Updated).ToImmutableList();
                         var failed = rows.Where(r => r.Outcome == ModuleSourceUpdateOutcome.Failed).ToImmutableList();
                         // Rows reported as they finished are already on the log; only the ones never started
                         // (behind an unfinished import) are written here.
                         var lines = rows.Where(r => r.Outcome == ModuleSourceUpdateOutcome.Skipped && r.Detail.StartsWith("not started:", StringComparison.Ordinal))
-                            .Select(r => $"sync {r.ConfigPath}: {r.Outcome} — {r.Detail}").ToArray();
-                        var summary = $"{updated.Count} module source(s) updated, {failed.Count} failed, "
-                                      // Reason-neutral: a row is skipped as not a module source OR as not
-                                      // started behind an unfinished import (#6625) — each sync line says which.
-                                      + $"{rows.Count - updated.Count - failed.Count} skipped (each sync line names why)"
-                                      + (failed.IsEmpty ? "" : ": " + string.Join("; ", failed.Select(f => $"{f.ConfigPath} — {f.Detail}")));
+                            .Select(r => Line(SyncLine(r))).ToArray();
+                        // Reason-neutral: a row is skipped as not a module source OR as not started behind an
+                        // unfinished import (#6625) — each sync line says which.
+                        var summary = RebootText.Of("reboot.sync.summary",
+                                ("updated", updated.Count.ToString(invariant)),
+                                ("failed", failed.Count.ToString(invariant)),
+                                ("skipped", (rows.Count - updated.Count - failed.Count).ToString(invariant)))
+                            .Then(RebootText.Join("; ", failed.Select(f => RebootText.Verbatim($"{f.ConfigPath} — {f.Detail}"))), glue: ": ");
                         var outcome = !failed.IsEmpty ? InstanceRebootStepOutcome.Failed
                             : updated.IsEmpty ? InstanceRebootStepOutcome.Skipped
                             : InstanceRebootStepOutcome.Ok;
                         return Mark(InstanceRebootSteps.Sync, outcome,
-                            updated.IsEmpty && failed.IsEmpty ? $"no module source to sync — {summary}" : summary, lines);
+                            updated.IsEmpty && failed.IsEmpty ? RebootText.Of("reboot.sync.nothing").Then(summary) : summary, lines);
                     }))
-                .Catch((Exception ex) => Mark(InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Failed, $"faulted: {ex.Message}"));
+                .Catch((Exception ex) => Mark(InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Failed,
+                    RebootText.Of("reboot.faulted", ("message", ex.Message))));
 
         private IObservable<Unit> StepModules() =>
-            Mark(InstanceRebootSteps.Modules, InstanceRebootStepOutcome.Running, "resolving and landing the newest compatible version of every installed module")
+            Mark(InstanceRebootSteps.Modules, InstanceRebootStepOutcome.Running, RebootText.Of("reboot.modules.running"))
                 // Each module whose reload ended is recorded as progress at once (#6625 review), and a write
                 // refused because the request ended answers false: no further module is reloaded.
                 .SelectMany(_ => ModuleReloadExecutor.ResolveAndLandReporting(hub, module: null, (module, outcome) =>
-                    Write(r => r, Line($"module {module}: {DescribeAdopt(outcome)}"))
+                    Write(r => r, Line(RebootText.Of("reboot.log.module", ("module", module)).Then(DescribeAdoptText(outcome))))
                         .Select(_ => true)
                         .DefaultIfEmpty(false)
                         .Catch((Exception ex) =>
@@ -309,38 +330,49 @@ public static class InstanceRebootExecutor
                             problem.StartsWith("no installed package", StringComparison.Ordinal)
                                 ? InstanceRebootStepOutcome.Skipped
                                 : InstanceRebootStepOutcome.Failed,
-                            problem);
+                            RebootText.Verbatim(problem));
+                    var invariant = System.Globalization.CultureInfo.InvariantCulture;
                     var items = landed.Items;
                     var failures = items.Where(i => i.Failure is not null).ToImmutableList();
                     var newly = items.Where(i => i.Failure is null && i.Landed).ToImmutableList();
-                    var summary = $"{items.Count} module(s): {newly.Count} newly landed, {failures.Count} declined or failed"
-                                  + (newly.IsEmpty ? "" : " — landed " + string.Join(", ", newly.Select(i => $"{i.Module} {i.TargetVersion}")))
-                                  + (failures.IsEmpty ? "" : " — " + string.Join("; ", failures.Select(i => $"{i.Module}: {i.Failure}")));
+                    var summary = RebootText.Of("reboot.modules.summary",
+                            ("count", items.Count.ToString(invariant)),
+                            ("landed", newly.Count.ToString(invariant)),
+                            ("failed", failures.Count.ToString(invariant)))
+                        .Then(newly.IsEmpty ? RebootText.Empty : RebootText.Of("reboot.modules.landedList",
+                            ("list", string.Join(", ", newly.Select(i => $"{i.Module} {i.TargetVersion}")))))
+                        .Then(failures.IsEmpty ? RebootText.Empty
+                            : RebootText.Verbatim("— " + string.Join("; ", failures.Select(i => $"{i.Module}: {i.Failure}"))));
                     // A floor above the running platform is a DECLINE by name — the right answer, not a red step;
                     // anything else that kept a module from landing is red.
                     var red = failures.Any(i => !i.Failure!.StartsWith("declined", StringComparison.Ordinal));
-                    return Write(r => r with { Modules = items }, Line($"modules: {summary}"))
+                    return Write(r => r with { Modules = items }, Line(RebootText.Of("reboot.log.modules").Then(summary)))
                         .SelectMany(_ => Mark(InstanceRebootSteps.Modules,
                             red ? InstanceRebootStepOutcome.Failed : InstanceRebootStepOutcome.Ok, summary));
                 })
-                .Catch((Exception ex) => Mark(InstanceRebootSteps.Modules, InstanceRebootStepOutcome.Failed, $"faulted: {ex.Message}"));
+                .Catch((Exception ex) => Mark(InstanceRebootSteps.Modules, InstanceRebootStepOutcome.Failed,
+                    RebootText.Of("reboot.faulted", ("message", ex.Message))));
 
         private IObservable<Unit> StepImage(bool wedged)
         {
             var activation = hub.ServiceProvider.GetService<IInstanceRebootActivation>();
             if (activation is null)
-                return Mark(InstanceRebootSteps.Image, InstanceRebootStepOutcome.Skipped,
-                    "this host registers no self-updater (IInstanceRebootActivation) — no image can be picked; the restart step names what that means");
-            return Mark(InstanceRebootSteps.Image, InstanceRebootStepOutcome.Running, "picking the newest image the update policy admits")
+                return Mark(InstanceRebootSteps.Image, InstanceRebootStepOutcome.Skipped, RebootText.Of("reboot.image.noActivation"));
+            return Mark(InstanceRebootSteps.Image, InstanceRebootStepOutcome.Running, RebootText.Of("reboot.image.running"))
                 .SelectMany(_ => activation.SelectImage(wedged).Take(1))
                 .SelectMany(choice => Write(r => r with { RunningImage = choice.Running, TargetImage = choice.Target },
-                        Line($"image: running {choice.Running ?? "?"}, target {choice.Target ?? "(none — restart on the running image)"} — {choice.Detail}"))
+                        Line(RebootText.Of("reboot.log.image", ("running", choice.Running ?? "?"))
+                            .Then(choice.Target is { } target ? RebootText.Verbatim(target) : RebootText.Of("reboot.image.noTarget"))
+                            .Then(RebootText.Verbatim($"— {choice.Detail}"))))
                     .SelectMany(_ => Mark(InstanceRebootSteps.Image,
                         choice.Failed ? InstanceRebootStepOutcome.Failed
                         : choice.Target is null ? InstanceRebootStepOutcome.Skipped
                         : InstanceRebootStepOutcome.Ok,
-                        choice.Target is null ? $"no newer image — {choice.Detail}" : $"{choice.Target} — {choice.Detail}")))
-                .Catch((Exception ex) => Mark(InstanceRebootSteps.Image, InstanceRebootStepOutcome.Failed, $"faulted: {ex.Message}"));
+                        choice.Target is null
+                            ? RebootText.Of("reboot.image.noNewer", ("detail", choice.Detail))
+                            : RebootText.Verbatim($"{choice.Target} — {choice.Detail}"))))
+                .Catch((Exception ex) => Mark(InstanceRebootSteps.Image, InstanceRebootStepOutcome.Failed,
+                    RebootText.Of("reboot.faulted", ("message", ex.Message))));
         }
 
         // ── Step 4 ────────────────────────────────────────────────────────────────────────────
@@ -349,41 +381,45 @@ public static class InstanceRebootExecutor
         {
             var activation = hub.ServiceProvider.GetService<IInstanceRebootActivation>();
             if (activation is null)
-                return Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed,
-                        "this host has no roll/restart path (no IInstanceRebootActivation is registered) — restart the workloads by hand")
-                    .SelectMany(_ => Finish("the restart could not be requested: no roll/restart path on this host"));
+                return Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, RebootText.Of("reboot.restart.noPath"))
+                    .SelectMany(_ => Finish(RebootText.Of("reboot.finish.noRestartPath")));
             var choice = new RebootImageChoice(request.RunningImage, request.TargetImage, "as chosen by the Image step");
             var reason = $"reboot {ModuleReloadExecutor.PathOf(hub)} by {request.RequestedBy ?? "(unattributed)"} ({request.Trigger}): {request.Reason}";
             // 🚨 Stamp FIRST, then ask. A resumed executor sees the stamp and never asks again.
             return Write(r => r with { RestartRequestedAt = DateTimeOffset.UtcNow }, Line(
-                    request.TargetImage is null ? "requesting ONE restart on the running image" : $"requesting ONE roll to {request.TargetImage}"))
-                .SelectMany(_ => Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Running, "requested"))
+                    request.TargetImage is null
+                        ? RebootText.Of("reboot.log.restartRunning")
+                        : RebootText.Of("reboot.log.rollTo", ("target", request.TargetImage))))
+                .SelectMany(_ => Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Running, RebootText.Of("reboot.restart.requested")))
                 .SelectMany(_ => activation.Activate(choice, reason).Take(1))
                 .SelectMany(outcome => outcome.Scheduled
-                    ? Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Ok, $"{outcome.Kind}: {outcome.Detail}")
-                        .SelectMany(_ => Mark(InstanceRebootSteps.Verify, InstanceRebootStepOutcome.Running,
-                            "waiting for a process booted after the restart to report its checks"))
+                    ? Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Ok, RebootText.Verbatim($"{outcome.Kind}: {outcome.Detail}"))
+                        .SelectMany(_ => Mark(InstanceRebootSteps.Verify, InstanceRebootStepOutcome.Running, RebootText.Of("reboot.verify.waiting")))
                     : string.Equals(outcome.Kind, RebootActivationKinds.Faulted, StringComparison.Ordinal)
-                        ? Fault($"the restart request faulted ({outcome.Kind}): {outcome.Detail}")
-                        : Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"{outcome.Kind}: {outcome.Detail}")
-                            .SelectMany(_ => Finish($"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
+                        ? Fault(RebootText.Of("reboot.restart.faultedKind", ("kind", outcome.Kind), ("detail", outcome.Detail)))
+                        : Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, RebootText.Verbatim($"{outcome.Kind}: {outcome.Detail}"))
+                            .SelectMany(_ => Finish(RebootText.Of("reboot.finish.restartRefused", ("kind", outcome.Kind), ("detail", outcome.Detail)))))
                 // A restart request that THREW is a crash, never a decided "cannot restart" (#6172).
-                .Catch((Exception ex) => Fault($"the restart request faulted: {ex.Message}"));
+                .Catch((Exception ex) => Fault(RebootText.Of("reboot.restart.faulted", ("message", ex.Message))));
         }
 
         /// <summary>The restart request crashed: the step is red for THIS attempt and the request goes
         /// Faulted (not terminal) — the reconcile pass re-arms it once its backoff is due.</summary>
-        private IObservable<Unit> Fault(string why)
+        private IObservable<Unit> Fault(RebootText why)
         {
+            var english = why.ToEnglish();
             logger?.LogWarning("[Reboot] {Path}: attempt {Attempt} Faulted — {Why}; retried once its backoff is due",
-                ModuleReloadExecutor.PathOf(hub), attempt, why);
-            return Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"{why} — retried once its backoff is due")
+                ModuleReloadExecutor.PathOf(hub), attempt, english);
+            return Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, why.Then(RebootText.Of("reboot.restart.retried")))
                 .SelectMany(_ => Write(r => r with
                 {
                     Status = InstanceRebootStatus.Faulted,
                     FaultedAt = DateTimeOffset.UtcNow,
-                    Failure = why,
-                }, Line($"attempt {attempt} faulted: {why} — the reconcile pass re-arms it")));
+                    Failure = english,
+                    FailureText = why,
+                }, Line(RebootText.Of("reboot.log.attemptFaulted", ("attempt", attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                    .Then(why)
+                    .Then(RebootText.Of("reboot.log.rearmsIt")))));
         }
 
         // ── Step 5 ────────────────────────────────────────────────────────────────────────────
@@ -395,41 +431,45 @@ public static class InstanceRebootExecutor
                 process => membership is null || membership.StateOf(process) != ClusterMemberState.Gone);
             if (verdict is null || Interlocked.Exchange(ref finished, 1) != 0)
                 return Observable.Empty<Unit>();
+            var detail = RebootText.Faithful(verdict.Detail, verdict.DetailText);
             // A self-patch restart can end the process that asked for it before the outcome line is
             // written; a process booted after the stamp reporting IS the evidence the restart happened.
             var restartRow = request.Steps.FirstOrDefault(s => s.Name == InstanceRebootSteps.Restart);
             var settleRestart = restartRow?.Outcome == InstanceRebootStepOutcome.Running
-                ? Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Ok,
-                    "a process booted after the restart stamp reported — the restart happened (its own outcome line was not written before the process ended)")
+                ? Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Ok, RebootText.Of("reboot.restart.happened"))
                 : Observable.Return(Unit.Default);
             return settleRestart.SelectMany(_ => Mark(InstanceRebootSteps.Verify,
-                    verdict.Passed ? InstanceRebootStepOutcome.Ok : InstanceRebootStepOutcome.Failed, verdict.Detail)
+                    verdict.Passed ? InstanceRebootStepOutcome.Ok : InstanceRebootStepOutcome.Failed, detail)
                 .SelectMany(_ => Write(r =>
                 {
-                    var red = InstanceReboot.RedSteps(r);
+                    var red = InstanceReboot.RedStepsText(r);
+                    var failure = red.IsEmpty ? null : RebootText.Join("; ", red);
                     return r with
                     {
                         Status = red.IsEmpty ? InstanceRebootStatus.Done : InstanceRebootStatus.Failed,
-                        Failure = red.IsEmpty ? null : string.Join("; ", red),
+                        Failure = failure?.ToEnglish(),
+                        FailureText = failure,
                         CompletedAt = DateTimeOffset.UtcNow,
                     };
-                }, Line(verdict.Passed ? $"verified: {verdict.Detail}" : $"verification RED: {verdict.Detail}"))));
+                }, Line(RebootText.Of(verdict.Passed ? "reboot.log.verified" : "reboot.log.verificationRed").Then(detail)))));
         }
 
         // ── Writes ────────────────────────────────────────────────────────────────────────────
 
-        private IObservable<Unit> Mark(string step, string outcome, string detail, params string[] extraLines) =>
+        private IObservable<Unit> Mark(string step, string outcome, RebootText detail, params RebootText[] extraLines) =>
             Write(r => r with { Steps = InstanceReboot.WithStep(r.Steps, step, outcome, detail, DateTimeOffset.UtcNow) },
-                [.. extraLines, Line($"{step}: {outcome} — {detail}")]);
+                [.. extraLines, Line(RebootText.Of("reboot.log.step", ("step", step), ("outcome", outcome)).Then(detail))]);
 
-        private IObservable<Unit> Finish(string failure)
+        private IObservable<Unit> Finish(RebootText failure)
         {
             Interlocked.Exchange(ref finished, 1);
-            logger?.LogWarning("[Reboot] {Path}: Failed — {Failure}", ModuleReloadExecutor.PathOf(hub), failure);
+            var english = failure.ToEnglish();
+            logger?.LogWarning("[Reboot] {Path}: Failed — {Failure}", ModuleReloadExecutor.PathOf(hub), english);
             return Write(r => r with
             {
                 Status = InstanceRebootStatus.Failed,
-                Failure = r.Failure is null ? failure : $"{r.Failure}; {failure}",
+                Failure = r.Failure is null ? english : $"{r.Failure}; {english}",
+                FailureText = r.Failure is null ? failure : RebootText.Faithful(r.Failure, r.FailureText).Then(failure, glue: "; "),
                 CompletedAt = DateTimeOffset.UtcNow,
             }, Line(failure));
         }
@@ -438,9 +478,9 @@ public static class InstanceRebootExecutor
         /// One write on the request's own node. 🚨 A terminal request is final (MeshWeaver#6625): a write
         /// that meets one changes nothing AND emits nothing, so the step chain behind it ends there — a late
         /// Sync result cannot start the module landing, and a request ended before the restart stamp cannot
-        /// go on to ask for the restart.
+        /// go on to ask for the restart. Each line is stored in English AND keyed (MeshWeaver#7322).
         /// </summary>
-        private IObservable<Unit> Write(Func<InstanceRebootRequest, InstanceRebootRequest> change, params string[] lines)
+        private IObservable<Unit> Write(Func<InstanceRebootRequest, InstanceRebootRequest> change, params RebootText[] lines)
         {
             var refused = 0;
             return Access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream()
@@ -451,26 +491,21 @@ public static class InstanceRebootExecutor
                         Volatile.Write(ref refused, ended ? 1 : 0);
                         if (ended)
                             return current;
-                        var next = change(current);
-                        var log = next.Log.AddRange(lines);
-                        return next with
-                        {
-                            // Every write is progress: the request's declared execution window runs from here.
-                            ProgressAt = DateTimeOffset.UtcNow,
-                            Log = log.Count > MaxLogLines ? log.RemoveRange(0, log.Count - MaxLogLines) : log,
-                        };
+                        // Every write is progress: the request's declared execution window runs from here.
+                        return InstanceReboot.AppendLog(change(current) with { ProgressAt = DateTimeOffset.UtcNow }, MaxLogLines, lines);
                     }))
                 .Take(1)
                 .Where(_ => Volatile.Read(ref refused) == 0)
                 .Do(_ =>
                 {
                     foreach (var line in lines)
-                        logger?.LogInformation("[Reboot] {Path}: {Line}", ModuleReloadExecutor.PathOf(hub), line);
+                        logger?.LogInformation("[Reboot] {Path}: {Line}", ModuleReloadExecutor.PathOf(hub), line.ToEnglish());
                 })
                 .Select(_ => Unit.Default);
         }
 
-        private static string Line(string text) => $"{DateTimeOffset.UtcNow:u} {text}";
+        private static RebootText Line(RebootText text) =>
+            RebootText.Verbatim(InstanceReboot.Stamp(DateTimeOffset.UtcNow)).Then(text);
     }
 }
 
@@ -593,14 +628,11 @@ public sealed class InstanceRebootAgent
             // are reported in name order.
             .Select(check => check.Run(meshHub, request).Take(1)
                 .Timeout(check.Budget ?? options.CheckBudget)
-                .Catch((Exception ex) => Observable.Return(new InstanceRebootCheck
-                {
-                    Name = check.Name,
-                    Outcome = InstanceRebootCheckOutcome.Failed,
-                    Detail = ex is TimeoutException
-                        ? $"did not answer within {(check.Budget ?? options.CheckBudget).TotalMinutes:0} min — NOT proven"
-                        : $"faulted: {ex.GetType().Name}: {ex.Message}",
-                })))
+                .Catch((Exception ex) => Observable.Return(InstanceReboot.CheckOf(check.Name, InstanceRebootCheckOutcome.Failed,
+                    ex is TimeoutException
+                        ? RebootText.Of("reboot.check.noAnswer",
+                            ("minutes", (check.Budget ?? options.CheckBudget).TotalMinutes.ToString("0", System.Globalization.CultureInfo.InvariantCulture)))
+                        : RebootText.Of("reboot.check.faulted", ("type", ex.GetType().Name), ("message", ex.Message))))))
             .Merge()
             .ToList()
             .Select(results => results.OrderBy(r => r.Name, StringComparer.Ordinal).ToList())
@@ -630,11 +662,8 @@ public sealed class PendingModuleActivationRebootCheck : IInstanceRebootCheck
     {
         var activations = meshHub.ServiceProvider.GetService<PendingModuleActivations>();
         if (activations is null)
-            return Observable.Return(new InstanceRebootCheck
-            {
-                Name = Name, Outcome = InstanceRebootCheckOutcome.NotMeasured,
-                Detail = "PendingModuleActivations is not registered on this host",
-            });
+            return Observable.Return(InstanceReboot.CheckOf(Name, InstanceRebootCheckOutcome.NotMeasured,
+                RebootText.Of("reboot.check.notRegistered", ("component", nameof(PendingModuleActivations)))));
         var pool = meshHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem);
         var read = pool is null
             ? Observable.Defer(() => Observable.Return(activations.Read()))
@@ -665,19 +694,12 @@ public sealed class ContentTypesRebootCheck : IInstanceRebootCheck
     {
         var registry = meshHub.ServiceProvider.GetService<ContentDegradationRegistry>();
         if (registry is null)
-            return Observable.Return(new InstanceRebootCheck
-            {
-                Name = Name, Outcome = InstanceRebootCheckOutcome.NotMeasured,
-                Detail = "ContentDegradationRegistry is not registered on this host",
-            });
+            return Observable.Return(InstanceReboot.CheckOf(Name, InstanceRebootCheckOutcome.NotMeasured,
+                RebootText.Of("reboot.check.notRegistered", ("component", nameof(ContentDegradationRegistry)))));
         var degraded = registry.Unresolved(meshHub.ServiceProvider.GetService<IMeshContentTypeRegistry>());
-        return Observable.Return(new InstanceRebootCheck
-        {
-            Name = Name,
-            Outcome = degraded.Count == 0 ? InstanceRebootCheckOutcome.Passed : InstanceRebootCheckOutcome.Failed,
-            Detail = ContentDegradationRegistry.Describe(degraded)
-                     + " (a type nobody has read on this process yet is not in this reading)",
-        });
+        return Observable.Return(InstanceReboot.CheckOf(Name,
+            degraded.Count == 0 ? InstanceRebootCheckOutcome.Passed : InstanceRebootCheckOutcome.Failed,
+            RebootText.Verbatim(ContentDegradationRegistry.Describe(degraded)).Then(RebootText.Of("reboot.check.contentTypesScope"))));
     });
 }
 
@@ -702,11 +724,8 @@ public sealed class NodeTypeBakeRebootCheck : IInstanceRebootCheck
         var state = meshHub.ServiceProvider.GetService<NodeTypeBakeGateState>();
         var options = meshHub.ServiceProvider.GetService<InstanceRebootOptions>() ?? new InstanceRebootOptions();
         if (state is null)
-            return Observable.Return(new InstanceRebootCheck
-            {
-                Name = Name, Outcome = InstanceRebootCheckOutcome.NotMeasured,
-                Detail = "NodeTypeBakeGateState is not registered on this host",
-            });
+            return Observable.Return(InstanceReboot.CheckOf(Name, InstanceRebootCheckOutcome.NotMeasured,
+                RebootText.Of("reboot.check.notRegistered", ("component", nameof(NodeTypeBakeGateState)))));
         return Observable.Interval(SettlePoll).StartWith(0L)
             .Select(_ => state.Phase)
             .Where(phase => phase is not (BakePhase.NotStarted or BakePhase.Running))
@@ -715,12 +734,10 @@ public sealed class NodeTypeBakeRebootCheck : IInstanceRebootCheck
             .Select(_ => Judge(Name, state.Phase, state.Detail,
                 [.. state.Regressions, .. state.ContentBroken, .. state.WithoutBaseline, .. state.Unevaluated],
                 options.CriticalNamespaces))
-            .Catch((TimeoutException _) => Observable.Return(new InstanceRebootCheck
-            {
-                Name = Name,
-                Outcome = InstanceRebootCheckOutcome.Failed,
-                Detail = $"the bake had not settled after {options.BakeSettleBudget.TotalMinutes:0} min (phase {state.Phase}: {state.Detail}) — NOT proven",
-            }));
+            .Catch((TimeoutException _) => Observable.Return(InstanceReboot.CheckOf(Name, InstanceRebootCheckOutcome.Failed,
+                RebootText.Of("reboot.check.bakeUnsettled",
+                    ("minutes", options.BakeSettleBudget.TotalMinutes.ToString("0", System.Globalization.CultureInfo.InvariantCulture)),
+                    ("phase", state.Phase.ToString()), ("detail", state.Detail)))));
     }
 
     /// <summary>The verdict over a settled bake: red iff a critical type failed. Pure.</summary>
@@ -730,17 +747,16 @@ public sealed class NodeTypeBakeRebootCheck : IInstanceRebootCheck
     {
         bool IsCritical(string type) => critical.Any(ns =>
             type.Equals(ns, StringComparison.OrdinalIgnoreCase) || type.StartsWith(ns.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase));
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
         var red = failing.Where(f => IsCritical(f.Key)).Select(f => $"{f.Key} ({f.Value})").Distinct().ToImmutableList();
         var other = failing.Where(f => !IsCritical(f.Key)).Select(f => f.Key).Distinct().ToImmutableList();
-        return new InstanceRebootCheck
-        {
-            Name = name,
-            Outcome = red.IsEmpty ? InstanceRebootCheckOutcome.Passed : InstanceRebootCheckOutcome.Failed,
-            Detail = (red.IsEmpty
-                         ? $"no critical NodeType ({string.Join(", ", critical)}) failed the bake (phase {phase})"
-                         : $"{red.Count} critical NodeType(s) failed the bake (phase {phase}): {string.Join("; ", red)}")
-                     + (other.IsEmpty ? "" : $"; {other.Count} non-critical type(s) also failing: {string.Join(", ", other.Take(10))}"),
-        };
+        var text = (red.IsEmpty
+                ? RebootText.Of("reboot.check.bakeGreen", ("critical", string.Join(", ", critical)), ("phase", phase.ToString()))
+                : RebootText.Of("reboot.check.bakeRed", ("count", red.Count.ToString(invariant)), ("phase", phase.ToString()),
+                    ("types", string.Join("; ", red))))
+            .Then(other.IsEmpty ? RebootText.Empty : RebootText.Of("reboot.check.bakeOther",
+                ("count", other.Count.ToString(invariant)), ("types", string.Join(", ", other.Take(10)))), glue: "; ");
+        return InstanceReboot.CheckOf(name, red.IsEmpty ? InstanceRebootCheckOutcome.Passed : InstanceRebootCheckOutcome.Failed, text);
     }
 }
 
@@ -765,15 +781,11 @@ public sealed class SingletonsResumedRebootCheck : IInstanceRebootCheck
     {
         var options = meshHub.ServiceProvider.GetService<InstanceRebootOptions>() ?? new InstanceRebootOptions();
         if (options.SingletonPasses.IsDefaultOrEmpty)
-            return Observable.Return(new InstanceRebootCheck
-            {
-                Name = Name, Outcome = InstanceRebootCheckOutcome.NotMeasured, Detail = "no singleton pass is configured",
-            });
+            return Observable.Return(InstanceReboot.CheckOf(Name, InstanceRebootCheckOutcome.NotMeasured,
+                RebootText.Of("reboot.check.noSingletons")));
         if (request.RestartRequestedAt is not { } restart)
-            return Observable.Return(new InstanceRebootCheck
-            {
-                Name = Name, Outcome = InstanceRebootCheckOutcome.Failed, Detail = "the reboot carries no restart stamp to compare passes against",
-            });
+            return Observable.Return(InstanceReboot.CheckOf(Name, InstanceRebootCheckOutcome.Failed,
+                RebootText.Of("reboot.check.noRestartStamp")));
         return options.SingletonPasses.ToObservable()
             .Select(pass => One(meshHub, pass, restart, options.SingletonResumeBudget))
             .Merge()
@@ -795,35 +807,28 @@ public sealed class SingletonsResumedRebootCheck : IInstanceRebootCheck
                 .Timeout(ActivationRecycle.ReadBudget))
             .Select(change => change.Items.Any(n => string.Equals(n.Path, pass.Path, StringComparison.Ordinal)))
             .SelectMany(exists => !exists
-                ? Observable.Return(new InstanceRebootCheck
-                {
-                    Name = pass.Name, Outcome = InstanceRebootCheckOutcome.NotMeasured,
-                    Detail = $"{pass.Path} does not exist on this instance",
-                })
+                ? Observable.Return(InstanceReboot.CheckOf(pass.Name, InstanceRebootCheckOutcome.NotMeasured,
+                    RebootText.Of("reboot.check.singletonMissing", ("path", pass.Path))))
                 : access.RunAsSystem(() => meshHub.GetMeshNodeStream(pass.Path))
                     .Select(node => PassAt(node?.Content, pass.Field, meshHub))
                     .Do(at => last = at ?? last)
                     .Where(at => at > restart)
                     .Take(1)
                     .Timeout(budget)
-                    .Select(at => new InstanceRebootCheck
-                    {
-                        Name = pass.Name, Outcome = InstanceRebootCheckOutcome.Passed,
-                        Detail = $"{pass.Path}.{pass.Field} = {at:u}, after the restart at {restart:u}",
-                    })
-                    .Catch((Exception ex) => Observable.Return(new InstanceRebootCheck
-                    {
-                        Name = pass.Name, Outcome = InstanceRebootCheckOutcome.Failed,
-                        Detail = ex is TimeoutException
-                            ? $"no pass after the restart at {restart:u} within {budget.TotalMinutes:0} min — the last pass stamped on "
-                              + $"{pass.Path}.{pass.Field} is {(last is { } l ? $"{l:u}" : "none")}; the singleton did NOT resume"
-                            : $"{pass.Path} could not be read ({ex.GetType().Name}: {ex.Message})",
-                    })))
-            .Catch((Exception ex) => Observable.Return(new InstanceRebootCheck
-            {
-                Name = pass.Name, Outcome = InstanceRebootCheckOutcome.Failed,
-                Detail = $"whether {pass.Path} exists could not be established ({ex.GetType().Name}: {ex.Message}) — NOT proven",
-            }));
+                    .Select(at => InstanceReboot.CheckOf(pass.Name, InstanceRebootCheckOutcome.Passed,
+                        RebootText.Of("reboot.check.singletonResumed", ("path", pass.Path), ("field", pass.Field),
+                            ("at", InstanceReboot.Stamp(at!.Value)), ("restart", InstanceReboot.Stamp(restart)))))
+                    .Catch((Exception ex) => Observable.Return(InstanceReboot.CheckOf(pass.Name, InstanceRebootCheckOutcome.Failed,
+                        ex is TimeoutException
+                            ? RebootText.Of("reboot.check.singletonStuck",
+                                    ("restart", InstanceReboot.Stamp(restart)),
+                                    ("minutes", budget.TotalMinutes.ToString("0", System.Globalization.CultureInfo.InvariantCulture)),
+                                    ("path", pass.Path), ("field", pass.Field))
+                                .Then(RebootText.Or(last is { } l ? InstanceReboot.Stamp(l) : null, "reboot.word.none"))
+                                .Then(RebootText.Of("reboot.check.singletonDidNotResume"), glue: "")
+                            : RebootText.Of("reboot.check.unreadable", ("path", pass.Path), ("type", ex.GetType().Name), ("message", ex.Message))))))
+            .Catch((Exception ex) => Observable.Return(InstanceReboot.CheckOf(pass.Name, InstanceRebootCheckOutcome.Failed,
+                RebootText.Of("reboot.check.existenceUnknown", ("path", pass.Path), ("type", ex.GetType().Name), ("message", ex.Message)))));
     }
 
     /// <summary>The instant a pass stamped in <paramref name="field"/> of <paramref name="content"/>, or null. Pure over the content.</summary>
@@ -842,12 +847,11 @@ public sealed class SingletonsResumedRebootCheck : IInstanceRebootCheck
     }
 
     /// <summary>The verdict over the per-singleton rows: red if any is red, not measured if none was measured. Pure.</summary>
-    public static InstanceRebootCheck Judge(string name, IReadOnlyList<InstanceRebootCheck> rows) => new()
-    {
-        Name = name,
-        Outcome = rows.Any(r => r.Outcome == InstanceRebootCheckOutcome.Failed) ? InstanceRebootCheckOutcome.Failed
+    public static InstanceRebootCheck Judge(string name, IReadOnlyList<InstanceRebootCheck> rows) =>
+        InstanceReboot.CheckOf(name,
+            rows.Any(r => r.Outcome == InstanceRebootCheckOutcome.Failed) ? InstanceRebootCheckOutcome.Failed
             : rows.All(r => r.Outcome == InstanceRebootCheckOutcome.NotMeasured) ? InstanceRebootCheckOutcome.NotMeasured
             : InstanceRebootCheckOutcome.Passed,
-        Detail = string.Join("; ", rows.Select(r => $"{r.Name}: {r.Outcome} — {r.Detail}")),
-    };
+            RebootText.Join("; ", rows.Select(r => RebootText.Of("reboot.check.row", ("check", r.Name), ("outcome", r.Outcome))
+                .Then(RebootText.Faithful(r.Detail, r.DetailText)))));
 }
