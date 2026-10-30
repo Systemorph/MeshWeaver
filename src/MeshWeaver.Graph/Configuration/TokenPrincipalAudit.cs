@@ -303,9 +303,11 @@ public static class TokenPrincipalAuditing
         var stream = hub.GetWorkspace().GetMeshNodeStream(path);
 
         IObservable<MeshNode> Write(Func<TokenPrincipalAudit, TokenPrincipalAudit> change) =>
-            access.RunAsSystem(() => stream.Update(n => n with
+            // Typed overload: null means ABSENT only; present-but-unreadable content faults the
+            // write instead of being replaced by a fresh default record.
+            access.RunAsSystem(() => stream.Update<TokenPrincipalAudit>((n, content) => n with
             {
-                Content = change(n.ContentAs<TokenPrincipalAudit>(options) ?? new TokenPrincipalAudit()),
+                Content = change(content ?? new TokenPrincipalAudit()),
             }));
 
         // 🛡️ Only a request in the Admin partition's protected namespace ever runs (review of #7619).
