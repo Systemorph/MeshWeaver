@@ -1289,6 +1289,25 @@ reaches `user_effective_permissions` and `partition_access` like an assignment d
 lists the partition for the subject. A rule change re-projects every partition; a root whose type
 or content changes re-projects its own partition, but only when some rule names its type.
 
+**Both evaluators match the content filter against the SAME bytes: the root's STORED JSON.** The
+fold's root read carries the query qualifier `content:stored` (`ParsedQuery.StoredContent`): a
+provider that stores serialised JSON hands the `content` column back as a `JsonElement` instead of
+deserialising it, and the node-stream cache passes such a result through untouched instead of
+re-typing it for the caller's options. Without it the fold matched a DESERIALISED root written back
+by the current serializer, and that round trip is lossy in two directions, both reachable on rows an
+older serializer (or an untyped write) left behind (#7426):
+
+- a field ABSENT from the stored JSON whose CLR member has a non-default initializer read as that
+  initializer — the fold granted where Postgres' `content->>'field'` is NULL;
+- an explicit CLR default stored in the JSON (`"approved": false`) was omitted on the way back — the
+  fold denied where Postgres matches `'false'`.
+
+Neither direction can be repaired by re-saving the root (for a row that already lost a value, the
+stored bytes are the truth both evaluators now agree on). Pinned by `GrantRuleStoredContentTest`
+(MeshWeaver.Hosting.Test: both directions on legacy-shaped rows, plus a typed row as the negative
+control) and, for the Postgres provider honouring the qualifier, by MeshWeaver.Plugins'
+grant-rule parity test.
+
 > ⚠️ **One pre-existing difference between the evaluators applies here too.** The C# fold denies by
 > ROLE (a `Denied: Viewer` removes the Viewer role and nothing else), the SQL projection by
 > PERMISSION (a denied Viewer writes deny rows for Viewer's permissions, which also block an Editor's

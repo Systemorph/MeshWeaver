@@ -175,12 +175,43 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones, IActiveDeletio
 
     /// <inheritdoc />
     /// <remarks>
-    /// The pipeline-facing name for <see cref="IsRecentlyDeleted"/>: same tombstone, same TTL,
-    /// same "a re-create supersedes it" semantics. Kept as a separate member so the message pipeline
-    /// depends on the intent (<see cref="IAddressTombstones"/> — "is this address gone for good?")
-    /// rather than on this class, which lives above it in the reference graph.
+    /// <para>The pipeline-facing reading of the tombstone: live (<see cref="IsRecentlyDeleted"/>) AND no
+    /// write to <paramref name="path"/> admitted to the store and still in flight. Kept as a separate
+    /// member so the message pipeline depends on the intent (<see cref="IAddressTombstones"/> — "is this
+    /// address gone for good?") rather than on this class, which lives above it in the reference graph.</para>
+    /// <para>🚨 <b>Why an in-flight write already answers "not gone"</b> (seen as
+    /// <c>InboxOpenApprovalsTest.APreferencesNodeDeletedAndRecreated_NeverEndsTheFeed</c> timing out;
+    /// pinned by <c>ARecreateRetiresTheReadOpenedOnTheDeletedNodeTest</c>). The
+    /// tombstone is superseded on the write's post-commit EMISSION (<see cref="Supersede"/>, called by the
+    /// storage write guard), but the store publishes the row on its own change feed INSIDE the commit,
+    /// before that emission. Synced queries are fed by that feed, so a reader that follows the CQRS
+    /// rule — a listing for existence, then the node's stream for content — sees the recreated row
+    /// and opens its read while the tombstone is still live. The read's request reaches the old,
+    /// still-disposing hub (routing short-circuits on a hosted address), which asks this method and
+    /// answers the authoritative, non-retryable "the node was deleted, so this address will not
+    /// reactivate" for a node the store already holds again. The reader stops, by contract, and
+    /// nothing ever tells it otherwise. A write the guard ADMITTED (<see cref="AdmitWrite"/>) is
+    /// registered before it reaches the store and stays registered until it terminates, i.e. past the
+    /// supersede — so from the moment a recreate can be visible to anyone until the tombstone is
+    /// superseded, the dying hub answers the transient "shutting down" instead, which the reader rides
+    /// out until the new activation answers. A write that then FAILS restores the verdict as soon as it
+    /// unregisters; the cost is that a delivery racing that failed write is told "retry" and finds the
+    /// routing NotFound on its re-probe. The resurrection guard (<see cref="IsRecentlyDeleted"/>) is
+    /// unchanged: an in-flight write does not license a resurrecting save.</para>
     /// </remarks>
-    public bool IsDeleted(string? path) => IsRecentlyDeleted(path);
+    public bool IsDeleted(string? path)
+        // 🚨 The admission snapshot FIRST, the tombstone second. A recreate supersedes the tombstone
+        // before it releases its admission, so the reverse order could read the live tombstone, then
+        // — the recreate having committed and settled in between — no admission, and call a node the
+        // store holds again "gone for good". In this order a write that settled before the admission
+        // read has already superseded the tombstone the second read sees.
+        => !string.IsNullOrEmpty(path) && !HasAdmittedWriteAt(path) && IsRecentlyDeleted(path);
+
+    /// <summary>
+    /// True when a write the storage guard admitted to exactly <paramref name="path"/> has not settled —
+    /// see <see cref="IsDeleted"/>. A snapshot read, like <see cref="HasAdmittedWriteUnder"/>.
+    /// </summary>
+    private bool HasAdmittedWriteAt(string path) => HasAdmittedWriteUnder(path, rowOnly: true);
 
     // ─── Active subtree deletions ────────────────────────────────────────────
     //
