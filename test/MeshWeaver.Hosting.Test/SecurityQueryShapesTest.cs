@@ -337,4 +337,43 @@ public class SecurityQueryShapesTest
     private static (QueryRoute Kind, string? Target) RouteOf(string query) => QueryRouteClassifier.RouteOf(query);
 
     private static string Describe(string query) => QueryRouteClassifier.Describe(query);
+
+    // ————————————————————————— stored content (#7426)
+
+    /// <summary>
+    /// The partition-root read is the ONE fold input whose content is MATCHED against what the
+    /// Postgres projection matches, so it asks for content exactly as stored; no other fold read
+    /// does (they deserialise into their registered types, which is what their readers need).
+    /// </summary>
+    [Fact]
+    public void ThePartitionRootRead_AsksForStoredContent_AndNoOtherShapeDoes()
+    {
+        var parser = new QueryParser();
+        parser.Parse(SecurityQueries.PartitionRoot("acme")).StoredContent.Should().BeTrue(
+            "the grant-rule check must match the same JSON the Postgres projection matches (#7426)");
+        ParsedQuery.AsksForStoredContent(SecurityQueries.PartitionRoot("acme")).Should().BeTrue();
+
+        foreach (var shape in SecurityQueries.AllShapes.Where(s => s != SecurityQueries.PartitionRoot("acme")))
+            parser.Parse(shape).StoredContent.Should().BeFalse($"'{shape}' folds TYPED content");
+    }
+
+    [Fact]
+    public void TheStoredContentQualifier_IsAFlag_OnlyAsAPositiveExactTerm()
+    {
+        var parser = new QueryParser();
+        var parsed = parser.Parse($"path:acme {ParsedQuery.StoredContentQualifier}");
+        parsed.StoredContent.Should().BeTrue();
+        parsed.Filter.Should().BeNull("the qualifier is consumed, not left behind as a filter on a field called content");
+        parsed.Path.Should().Be("acme");
+
+        parser.Parse("path:acme").StoredContent.Should().BeFalse("absent means the ordinary, typed read");
+        parser.Parse("path:acme -content:stored").StoredContent.Should().BeFalse("a negated term is not the request");
+        var other = parser.Parse("path:acme content:other");
+        other.StoredContent.Should().BeFalse();
+        other.Filter.Should().NotBeNull("any other content: value stays the filter it always was");
+
+        ParsedQuery.AsksForStoredContent(null).Should().BeFalse();
+        ParsedQuery.AsksForStoredContent("path:acme \"content:stored\"").Should().BeFalse(
+            "a quoted literal is free text, not the qualifier");
+    }
 }
