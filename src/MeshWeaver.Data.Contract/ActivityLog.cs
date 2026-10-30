@@ -129,6 +129,18 @@ public record ActivityLog(string Category)
     /// <c>Doc/Architecture/ActivityControlPlane.md</c>.</para>
     /// </summary>
     public ActivityStatus? RequestedStatus { get; init; }
+
+    /// <summary>
+    /// A FACT the dispatcher of a run states when its wait for the executor's reply ran out: the
+    /// UTC time the reply budget expired with no answer. Written unconditionally by a hub that does
+    /// NOT own this activity, so it travels as a one-field merge patch and never touches
+    /// <see cref="Messages"/> or <see cref="Status"/>. The OWNING hub consumes it (clears it) and
+    /// decides on its own current state what it means — a still-running run shows a "no answer
+    /// yet" notice, a finished one shows nothing (#7362;
+    /// <c>Doc/Architecture/ConditionalWritesAcrossHubs</c>). <c>null</c> when no such fact is
+    /// pending.
+    /// </summary>
+    public DateTime? ReplyOverdueSince { get; init; }
     /// <summary>UTC timestamp when the activity finished, or null while still running.</summary>
     public DateTime? End { get; init; }
     /// <summary>The user who triggered the activity, if known.</summary>
