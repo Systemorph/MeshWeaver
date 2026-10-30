@@ -915,7 +915,13 @@ would replace, and the claim is refused until that list is empty.
   the warm cache as a NuGet fallback folder ([NuGet Runtime Assets](../NuGetRuntimeAssets#offline-first-resolution)).
   The host reads it from the default branch's tip, never from a run's own tree, and runs it once per restore key to
   fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py` validates its shape and, for core, reds
-  a restore that drifts from the build's solution and properties or drops the resolver fixtures.
+  a restore that drifts from the build's solution and properties or drops the resolver fixtures. `core-build-stages.py
+  --check` holds the fixture list to the code: a `#r "nuget:…"` in a sample's source or an executable doc fence
+  (`--render` / `--execute`) whose id and exact version the fixture project does not list — or that names no exact
+  version — is red, because the host would download it on every run without naming it. Measured on build-latest
+  (2026-10-30): host-forced shadow runs of core warmed core's restore key from the default branch's tip (`warm NuGet
+  cache: filled … 3 package(s) promoted`, then `holds the default branch's restore`) and their `build` stage reported
+  no `MWPREP001` — nothing restored per run — so `prepared packages` is no longer owed.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
