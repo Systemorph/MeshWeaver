@@ -501,6 +501,8 @@ public static class PluginCatalogConfigurationExtensions
             HubConfiguration = config => config
                 .AddDefaultLayoutAreas()
                 .AddMeshDataSource(source => source.WithContentType<InstanceRebootRequest>())
+                // The request's page renders its keyed outcome in the viewer's language (#7322).
+                .AddInstanceRebootViews()
                 .WithInitialization(InstanceRebootExecutor.Arm),
         });
         builder.AddAutocompleteExcludedTypes(InstanceRebootRequest.NodeType);
