@@ -123,6 +123,16 @@ is the "Templates first, data later" rule in [Data Binding](/Doc/GUI/DataBinding
   `LayoutDefinition.ObserveVisibleAreaDefinitions` backs the layout-area catalog, the `layoutAreas`
   stream and `GetDataRequest`, `GetLayoutAreasRequest` and area autocomplete. A description that is
   declared explicitly (`[Display(Description=…)]` or `WithDescription`) still wins.
+
+  Moving the listing off the turn exposed a second answer. Every `GetDataRequest` handler on a hub
+  sees the request, and the generic data handler (`DataExtensions.HandleGetDataRequest`) used to
+  read the slash and bare spellings `layoutAreas/` and `layoutAreas` as a data collection. Those
+  are the forms `MeshOperations.Get` sends for `@Node/layoutAreas/`. The handler answered
+  `Collections layoutAreas are not mapped to any source`. While the layout handler answered on the
+  same turn, its listing arrived first and the wrong answer went unnoticed. Once a cold read moved
+  the listing to the I/O pool, the error arrived first on every first read of a mesh. The generic
+  parse now recognises `layoutAreas` in every spelling, so both handlers answer the listing.
+  `LayoutAreaRetrievalTest` (Graph.Test) pins the colon, slash and bare forms.
 - **Schema area.** The exporter walks the type's whole property graph, which reaches documentation
   files nobody can name in advance. So the `Schema` area renders the schema on the `FileSystem` pool
   rather than warming a member list.
