@@ -273,4 +273,35 @@ public class TokenPrincipalAuditTest(ITestOutputHelper output) : MonolithMeshTes
             .Where(c => c?.Status is TokenPrincipalAuditStatus.Done or TokenPrincipalAuditStatus.Refused or TokenPrincipalAuditStatus.Failed)
             .Select(c => c!)
             .Should().Within(Budget).Emit("the request must settle", ct);
+
+    /// <summary>
+    /// The audit judges a principal the way the verdict does (review of #7619): the LOCATION is classified
+    /// before its principal is read, a principal is never a path, and a case variant of System is System.
+    /// Each record below authenticates as nobody under <see cref="ApiTokenVerdict.IsBoundToItsLocation"/>,
+    /// so the audit must list it. A prefix test on the principal alone passed the first three, and an
+    /// ordinal System test missed the fourth's <c>NamesSystem</c>. The bound records are the controls.
+    /// </summary>
+    [Fact]
+    public void TheJudgement_ClassifiesTheLocationFirst_AndReadsSystemAsThePlatformDoes()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        TokenPrincipalMismatch? Judge(MeshNode node) => TokenPrincipalAuditing.Judge(node, options);
+
+        Judge(Token("x", ServiceIdentity.TokenNamespace(Service), "Admin") with { CreatedBy = WellKnownUsers.System })
+            .Should().NotBeNull("a service token namespace never authenticates its partition's name");
+        Judge(Token("x", $"User/{Alice}/ApiToken", "User") with { CreatedBy = WellKnownUsers.System })
+            .Should().NotBeNull("the pre-migration layout authenticates its second segment, never 'User'");
+        Judge(Token("x", $"{Alice}/ApiToken", $"{Alice}/ApiToken") with { CreatedBy = WellKnownUsers.System })
+            .Should().NotBeNull("a principal is an id, never a path");
+
+        var variant = Judge(Token("x", $"{Alice}/ApiToken", "System-Security") with { CreatedBy = WellKnownUsers.System });
+        variant.Should().NotBeNull("a case variant of System is System to every consumer of the identity");
+        variant!.Findings.Should().Contain(TokenPrincipalFinding.NamesSystem);
+
+        Judge(Token("x", $"{Alice}/ApiToken", Alice) with { CreatedBy = Alice })
+            .Should().BeNull("the control: a person's token in their own partition is bound");
+        Judge(Token("x", ServiceIdentity.TokenNamespace(Service), Service, ServiceIdentity.PathFor(Service))
+                with { CreatedBy = WellKnownUsers.System })
+            .Should().BeNull("the control: a service's token in its own token namespace is bound");
+    }
 }

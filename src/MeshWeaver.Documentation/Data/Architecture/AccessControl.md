@@ -1496,7 +1496,11 @@ bound to it. It is **read-only**: it lists and never revokes.
   token namespace (`Admin/_ServiceIdentity/{svc}/ApiToken`);
 - `PrincipalDiffersFromCreator`: a person's token whose principal is not the person who created the
   record (records created by System, such as migrations, are not judged on this);
-- `NamesSystem`: any token naming System.
+- `NamesSystem`: any token naming System, a case variant included.
+
+The location test is the verdict's own (`ApiTokenVerdict.IsBoundToItsLocation`), never a copy, so the
+audit lists exactly the records the verdict would not authenticate. That includes a service namespace
+naming its partition (`Admin`), the pre-migration layout naming `User`, and a path-shaped principal.
 
 Index rows (`ApiToken/{prefix}`, which name the record they point to) are not credentials and are
 skipped. A finding names the record's path, id, label, principal and creator. The `TokenHash` field is

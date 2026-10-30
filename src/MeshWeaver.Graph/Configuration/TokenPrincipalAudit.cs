@@ -158,7 +158,9 @@ public static class TokenPrincipalAuditing
         var path = node.Path;
         var principal = token.UserId;
         var findings = ImmutableList<string>.Empty;
-        if (string.Equals(principal, WellKnownUsers.System, StringComparison.Ordinal))
+        // Case-insensitive, as the platform reads the identity (AccessService.IsPlatformPrincipal,
+        // ApiTokenVerdict): a case variant of System is System (review of #7619).
+        if (string.Equals(principal, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
             findings = findings.Add(TokenPrincipalFinding.NamesSystem);
         if (!IsBoundToItsLocation(path, token))
             findings = findings.Add(TokenPrincipalFinding.PrincipalOutsideLocation);
@@ -176,19 +178,16 @@ public static class TokenPrincipalAuditing
     /// Whether a token record's principal belongs to its location: a person's token lives in that
     /// person's own partition (<c>{UserId}/…</c>, or the pre-migration <c>User/{UserId}/…</c>), a
     /// service's in its own token namespace (<see cref="ServiceIdentity.TokenNamespace"/>).
+    /// <para>🛡️ The VERDICT's own predicate (<see cref="ApiTokenVerdict.IsBoundToItsLocation"/>), never a
+    /// copy: it classifies the location before reading its principal and refuses a path-shaped or
+    /// System principal, so the audit lists exactly the records the verdict would not authenticate
+    /// (review of #7619 — a prefix test passed <c>Admin</c> in a service namespace, <c>User</c> in the
+    /// pre-migration layout and <c>alice/ApiToken</c> in alice's partition).</para>
     /// </summary>
     /// <param name="path">The record's path.</param>
     /// <param name="token">The record's content.</param>
     public static bool IsBoundToItsLocation(string path, ApiToken token)
-    {
-        if (string.IsNullOrEmpty(token.UserId) || string.Equals(token.UserId, WellKnownUsers.System, StringComparison.Ordinal))
-            return false;
-        if (IsService(token))
-            return ServiceIdentity.IsServiceObjectId(token.UserId)
-                   && path.StartsWith(ServiceIdentity.TokenNamespace(token.UserId) + "/", StringComparison.OrdinalIgnoreCase);
-        return path.StartsWith(token.UserId + "/", StringComparison.OrdinalIgnoreCase)
-               || path.StartsWith($"User/{token.UserId}/", StringComparison.OrdinalIgnoreCase);
-    }
+        => ApiTokenVerdict.IsBoundToItsLocation(path, token);
 
     /// <summary>Whether <paramref name="path"/> is a request in <see cref="TokenPrincipalAudit.Namespace"/>
     /// (a direct child of it).</summary>
