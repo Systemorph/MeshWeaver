@@ -3261,7 +3261,17 @@ def run_verdict_sweep(repo: str, name: str, gh=None, now_epoch: int | None = Non
             failed.append(p["number"])
             continue
         if not existing:
-            print(f"  #{p['number']}: no verdict check-run on {head[:10]} yet — its own event writes the first one")
+            # 🚨 An ABSENT required context may read as satisfied under a ruleset (Doc/Architecture/ReadingCiSignals),
+            # and the head's own event can have died before its first write (cancelled, a failed checkout) — so an
+            # absent verdict is UNMEASURED and judged now (#7653 review). Dependabot's pull requests keep the
+            # job-shaped check (read-only token), so the writer never owns their context.
+            if ((p.get("user") or {}).get("login") or "") == "dependabot[bot]":
+                print(f"  #{p['number']}: Dependabot — its context is the job-shaped check, not the writer's")
+                continue
+            judged.append(p["number"])
+            if run_verdict(repo, p["number"], name, gh=gh) == VERDICT_UNPUBLISHED_EXIT:
+                print(f"::error::#{p['number']}: no verdict on {head[:10]}, and it could NOT be published")
+                failed.append(p["number"])
             continue
         live = [c for c in existing if parse_verdict_external_id(c.get("external_id"))[1] != SUPERSEDED_KIND] or existing
         newest = max(live, key=lambda c: parse_verdict_external_id(c.get("external_id"))[0])
@@ -5249,6 +5259,16 @@ def pending_self_test(HEAD: str) -> int:
         rc = run_verdict_sweep("o/r", "Automatic review answered", gh=g, now_epoch=0)
     check("sweep NEG: a completed success is not re-judged (it changes only on an event)", rc == 0 and g.writes == [],
           f"writes={g.writes}")
+    absent = _VerdictGh([ONE, ANSWER], runs=[], pulls=[pull(7)])
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_verdict_sweep("o/r", "Automatic review answered", gh=absent, now_epoch=0)
+    check("sweep: a head with NO verdict (its event died before writing) is judged and gets one",
+          rc == 0 and len(absent.writes) == 1 and absent.writes[0][0] == "POST", f"rc={rc} writes={absent.writes}")
+    bot = _VerdictGh([ONE, ANSWER], runs=[], pulls=[dict(pull(7), user={"login": "dependabot[bot]", "type": "Bot"})])
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_verdict_sweep("o/r", "Automatic review answered", gh=bot, now_epoch=0)
+    check("sweep NEG: a Dependabot pull request with no writer verdict is left to its job-shaped check",
+          rc == 0 and bot.writes == [], f"writes={bot.writes}")
     late = _VerdictGh([], runs=[dict(mine(5, T0, "review-overdue", "completed"), conclusion="failure")], pulls=[pull(7)])
     with contextlib.redirect_stdout(io.StringIO()):
         rc = run_verdict_sweep("o/r", "Automatic review answered", gh=late, now_epoch=0)
