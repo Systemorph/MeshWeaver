@@ -1206,8 +1206,34 @@ def compile_set(work: Path, cs_files, ref_xml: str, restored: bool, ai_available
                     infra_error = line.strip()[:200]
                     break
         if infra_error is None:
-            infra_error = f"dotnet build exited {proc.returncode} with no diagnostic captured"
+            # 🚨 Name what the process DID print (#7596): the bare "no diagnostic captured" left a
+            # recurring CD red with nothing to read — an unhandled CLI exception carries no word
+            # "error", so the two scans above miss it and the cause died with the work directory.
+            infra_error = (f"dotnet build exited {proc.returncode} with no diagnostic captured"
+                           f"{output_tail(out)}")
     return errors, needs_external, infra_error
+
+
+def output_tail(out: str, lines: int = 6, width: int = 400) -> str:
+    """The last non-empty lines of a process's output, as a suffix for a failure reason. Pure."""
+    kept = [line.strip() for line in out.splitlines() if line.strip()][-lines:]
+    if not kept:
+        return " (the process printed nothing)"
+    return " — last output: " + " | ".join(kept)[-width:]
+
+
+def restore_dir(work: Path, ref_xml: str, impl_frameworks: bool) -> "str | None":
+    """Restore one work directory's generated project. None on success, else the reason.
+
+    The project is the one `compile_set` writes for EVERY set (`build_csproj` reads neither the
+    sources nor the lambda), so a directory restored here builds every later set `--no-restore`."""
+    (work / "check.csproj").write_text(
+        build_csproj(work, ref_xml, impl_frameworks=impl_frameworks), encoding="utf-8")
+    proc = subprocess.run(["dotnet", "restore", "check.csproj", "--nologo", "-v", "q"],
+                          cwd=work, capture_output=True, text=True)
+    if proc.returncode == 0:
+        return None
+    return f"dotnet restore exited {proc.returncode}{output_tail(proc.stdout + proc.stderr)}"
 
 
 # ── parallel builds ────────────────────────────────────────────────────────────────────────────
@@ -1289,9 +1315,19 @@ def compile_parallelism(sets: int, override: "str | None", cpus: int,
 def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: bool, workers: int):
     """Yield (item, compile_set result, seconds) for each ((sources, lambda), names) item, in the
     ORDER GIVEN, building up to `workers` sets at once. Each worker borrows one work directory for
-    the duration of a build, so two builds never share a project file or an obj/ directory; a
-    directory restores on its first build and passes `--no-restore` after, exactly as the single
-    directory of the serial loop did."""
+    the duration of a build, so two builds never share a project file or an obj/ directory.
+
+    🚨 RESTORES RUN ONE AT A TIME, BEFORE ANY BUILD (#7596). The restore is the half of a build
+    that touches state SHARED across processes — the CLI's first-use setup, the NuGet caches — and
+    on a cold runner four simultaneous first builds lost that race: one build of the first wave
+    exited 1 with nothing on its output, in one compatibility leg after another, while the SAME
+    sets built clean in the same job's second, warm invocation. Restoring serially up front keeps
+    the race out and costs one small restore per worker.
+
+    🚨 A DIRECTORY COUNTS AS RESTORED ONLY WHILE ITS RESTORE IS KNOWN GOOD. The flag used to flip
+    after ANY build, so one failed restore turned every later set that drew that directory into
+    `NETSDK1004: Assets file … not found` — one infra fault reported as dozens of NodeType breaks
+    (53 in one leg). A directory whose restore failed restores again on its next build instead."""
     import queue
     import tempfile
     import time
@@ -1301,7 +1337,7 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
     restored = {}
     for _ in range(max(1, workers)):
         work = Path(tempfile.mkdtemp(prefix="compile-check-"))
-        restored[work] = False
+        restored[work] = restore_dir(work, ref_xml, impl_frameworks) is None
         dirs.put(work)
 
     def build(item):
@@ -1311,7 +1347,9 @@ def compile_sets(ordered, ref_xml: str, ai_available: bool, impl_frameworks: boo
             started = time.time()
             outcome = compile_set(work, sources, ref_xml, restored[work], ai_available,
                                   lambda_src=lam, impl_frameworks=impl_frameworks)
-            restored[work] = True
+            # CS errors still mean the restore worked; only an infra error (no CS diagnostic at
+            # all) leaves this directory's restore in doubt, so its next build restores again.
+            restored[work] = outcome[2] is None
             return outcome, time.time() - started
         finally:
             dirs.put(work)
@@ -1869,7 +1907,8 @@ def _self_test() -> int:
           "diagnostic line maps back to its authored file; and the csproj compiles exactly one file")
     print("✓ parallel builds: the width follows CPUs, memory and the override (a non-integer override "
           "is refused), results stream in the serial order, no two builds share a work directory, "
-          "each directory restores once, and four workers do overlap")
+          "each directory restores once, serially and before any build, a restore in doubt is redone "
+          "(#7596), and four workers do overlap")
     print("✓ short-reference-set refusal: fires on an image set with no shared frameworks and on any "
           "set with no System.Reactive, names the refill, stays silent on a complete image cache and "
           "on a core source build — and the generated csproj restores no Rx version (#4404)")
@@ -1921,11 +1960,26 @@ def _self_test_parallel(failures: list) -> None:
             pass
 
     # The pool, with compile_set replaced by a fake that finishes the EARLY sets LAST, so a pool that
-    # yielded in completion order would print them out of order.
-    global compile_set
-    real = compile_set
+    # yielded in completion order would print them out of order — and restore_dir replaced by a fake
+    # that records WHEN each restore ran relative to the builds (#7596).
+    global compile_set, restore_dir
+    real, real_restore = compile_set, restore_dir
     lock = threading.Lock()
-    state = {"live": 0, "peak": 0, "dirs": set(), "restores": [], "clash": False}
+    state = {"live": 0, "peak": 0, "dirs": set(), "build_restores": [], "clash": False,
+             "restores": [], "restore_live": 0, "restore_peak": 0, "restore_during_build": False,
+             "built": 0}
+
+    def fake_restore(work, ref_xml, impl_frameworks):
+        with lock:
+            state["restore_live"] += 1
+            state["restore_peak"] = max(state["restore_peak"], state["restore_live"])
+            if state["live"] or state["built"]:
+                state["restore_during_build"] = True
+            state["restores"].append(work)
+        time.sleep(0.01)
+        with lock:
+            state["restore_live"] -= 1
+        return None
 
     def fake(work, sources, ref_xml, restored, ai_available, lambda_src=None, impl_frameworks=False):
         with lock:
@@ -1935,38 +1989,87 @@ def _self_test_parallel(failures: list) -> None:
             state["live"] += 1
             state["peak"] = max(state["peak"], state["live"])
             if not restored:
-                state["restores"].append(work)
+                state["build_restores"].append(work)
         time.sleep(0.02 * (10 - int(lambda_src)))
         with lock:
             state["dirs"].discard(work)
             state["live"] -= 1
+            state["built"] += 1
         return [f"E{lambda_src}"], False, None
 
+    def reset():
+        state.update(live=0, peak=0, build_restores=[], restores=[], restore_live=0,
+                     restore_peak=0, restore_during_build=False, built=0)
+
     ordered = [((frozenset(), str(i)), [f"Pkg/T{i}"]) for i in range(10)]
-    compile_set = fake
+    compile_set, restore_dir = fake, fake_restore
     try:
         got = [(item[1][0], outcome[0][0]) for item, outcome, _ in
                compile_sets(ordered, "", True, False, 4)]
-        wide_peak, wide_restores = state["peak"], len(state["restores"])
-        state.update(live=0, peak=0, restores=[])
+        wide = dict(state, restores=len(state["restores"]), build_restores=len(state["build_restores"]))
+        reset()
         list(compile_sets(ordered, "", True, False, 1))
-        serial_peak, serial_restores = state["peak"], len(state["restores"])
+        serial = dict(state, restores=len(state["restores"]), build_restores=len(state["build_restores"]))
     finally:
-        compile_set = real
+        compile_set, restore_dir = real, real_restore
     if got != [(f"Pkg/T{i}", f"E{i}") for i in range(10)]:
         failures.append(f"  parallel: results came back out of the serial order: {got}")
     if state["clash"]:
         failures.append("  parallel: two concurrent builds shared ONE work directory")
     # NEGATIVE CONTROL for the width: four workers must actually overlap, or this test would pass
     # over a pool that silently ran serially.
-    if wide_peak < 2:
-        failures.append(f"  parallel: four workers never ran two builds at once (peak {wide_peak})")
-    if wide_restores != 4:
-        failures.append(f"  parallel: four work directories restored {wide_restores} times, expected 4")
-    if serial_peak != 1:
-        failures.append(f"  parallel: one worker ran {serial_peak} builds at once")
-    if serial_restores != 1:
-        failures.append(f"  parallel: one worker restored {serial_restores} times, expected once")
+    if wide["peak"] < 2:
+        failures.append(f"  parallel: four workers never ran two builds at once (peak {wide['peak']})")
+    if wide["restores"] != 4:
+        failures.append(f"  parallel: four work directories restored {wide['restores']} times, expected 4")
+    # 🚨 #7596: restores are serial and all done before the first build, so no build restores.
+    if wide["restore_peak"] != 1:
+        failures.append(f"  parallel: {wide['restore_peak']} restores ran at once — the cold-runner race "
+                        "of #7596; restores must run one at a time")
+    if wide["restore_during_build"]:
+        failures.append("  parallel: a restore ran while a build was running or after one had finished "
+                        "— restores must all complete before the first build (#7596)")
+    if wide["build_restores"]:
+        failures.append(f"  parallel: {wide['build_restores']} build(s) restored although their "
+                        "directory's up-front restore succeeded")
+    if serial["peak"] != 1:
+        failures.append(f"  parallel: one worker ran {serial['peak']} builds at once")
+    if serial["restores"] != 1:
+        failures.append(f"  parallel: one worker restored {serial['restores']} times, expected once")
+
+    # 🚨 #7596, the cascade: a directory whose restore is in doubt must restore again on its next
+    # build. One worker, so every set draws the same directory; the up-front restore fails, so the
+    # first build must restore; that build fails with an INFRA error (no CS diagnostic), so the
+    # second must restore AGAIN; the second succeeds with a CS error (a restore that worked), so the
+    # third may skip it. The old flag flipped after any build: the second build ran `--no-restore`
+    # into a missing project.assets.json — NETSDK1004 for every later set in that directory.
+    calls = []
+
+    def failing_restore(work, ref_xml, impl_frameworks):
+        return "dotnet restore exited 1 (the process printed nothing)"
+
+    def flaky(work, sources, ref_xml, restored, ai_available, lambda_src=None, impl_frameworks=False):
+        calls.append(restored)
+        if len(calls) == 1:
+            return [], False, "dotnet build exited 1 with no diagnostic captured"
+        return [f"CS0000: E{lambda_src}"], False, None
+
+    compile_set, restore_dir = flaky, failing_restore
+    try:
+        list(compile_sets(ordered[:3], "", True, False, 1))
+    finally:
+        compile_set, restore_dir = real, real_restore
+    if calls != [False, False, True]:
+        failures.append(f"  parallel: restored flags per build were {calls}, expected "
+                        "[False, False, True] — a failed restore or an infra-failed build must leave "
+                        "the directory to restore again, never `--no-restore` into missing assets")
+
+    # The failure reason names what the process printed (#7596).
+    if output_tail("") != " (the process printed nothing)":
+        failures.append(f"  output_tail(''): {output_tail('')!r}")
+    tail = output_tail("a\n\nUnhandled exception. System.IO.IOException: in use\n")
+    if "Unhandled exception. System.IO.IOException: in use" not in tail:
+        failures.append(f"  output_tail dropped the last line: {tail!r}")
 
 
 def _self_test_exit_codes(failures: list) -> None:
