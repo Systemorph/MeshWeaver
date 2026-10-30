@@ -3113,6 +3113,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/acr-retention-protection.py --self-test
 
+    # `apply` itself, driven offline against an `az` that accepts exactly the real CLI's options
+    # (MeshWeaver#3438). The first governed apply died `unrecognized arguments: --schedule` — a call
+    # shape nothing had ever run, because the only place `apply` runs is an approved registry change.
+    - name: "…and the retention apply speaks the az CLI it calls (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/acr-retention-apply-selftest.py
+
     # The premise the lock rests on, asserted with NO credential: a lock protects only because
     # `acr purge` skips locked manifests unless `--include-locked` is passed. The purge tasks are
     # CLOUD-ONLY (`az acr task show` returns an EncodedTask with `contextPath: null`), so
