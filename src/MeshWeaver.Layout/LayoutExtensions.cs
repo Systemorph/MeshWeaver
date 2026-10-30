@@ -796,12 +796,12 @@ public static class LayoutExtensions
     private static IMessageDelivery HandleGetLayoutAreasRequest(IMessageHub hub, IMessageDelivery<GetLayoutAreasRequest> request)
     {
         var uiControlService = hub.ServiceProvider.GetRequiredService<IUiControlService>();
-        var layoutDefinition = uiControlService.LayoutDefinition;
-        var areas = layoutDefinition
-            .AreaDefinitions
-            .Values
-            .Where(l => l.IsVisible());
-        hub.Post(new LayoutAreasResponse(areas), o => o.ResponseFor(request));
+        // Answered once the area descriptions are in memory — their documentation files are read on
+        // the I/O pool, never on this handler's turn (Doc/Architecture/XmlDocumentationReader).
+        hub.SubscribeHeldUntilTerminal(uiControlService.LayoutDefinition.ObserveVisibleAreaDefinitions(), areas => areas
+            .Subscribe(
+                list => hub.Post(new LayoutAreasResponse(list), o => o.ResponseFor(request)),
+                ex => hub.Post(DeliveryFailure.FromException(request, ex), o => o.ResponseFor(request))));
         return request.Processed();
     }
 
@@ -869,13 +869,11 @@ public static class LayoutExtensions
             c => c
         );
 
-        // Pure in-memory projection — no I/O, no async. Defer keeps it cold (the area list is
-        // built on Subscribe, on the subscriber's turn), reactive, with no Observable.FromAsync.
-        var observable = Observable.Defer(() => Observable.Return((object)uiControlService.LayoutDefinition
-            .AreaDefinitions
-            .Values
-            .Where(l => l.IsVisible())
-            .ToList()));
+        // Cold: the area list is built on Subscribe. The descriptions' documentation files are read
+        // through the mesh's I/O pool first (ObserveVisibleAreaDefinitions) — synchronous once they
+        // are in memory, never a file read on the subscriber's turn.
+        var observable = uiControlService.LayoutDefinition.ObserveVisibleAreaDefinitions()
+            .Select(list => (object)list);
 
         stream.RegisterForDisposal(
             observable
@@ -901,8 +899,8 @@ public static class LayoutExtensions
     /// <summary>
     /// Handles GetDataRequest for layoutAreas: prefix directly, bypassing the
     /// Observable/SynchronizationStream/FirstAsync chain that can race.
-    /// AreaDefinitions are immutable and fully known at config time — this is pure
-    /// in-memory work, so the handler is synchronous (no Task.FromResult bridge).
+    /// AreaDefinitions are immutable and fully known at config time; the response is posted once
+    /// their XML-doc descriptions are in memory, which the mesh's I/O pool reads off this turn.
     /// </summary>
     private static IMessageDelivery HandleLayoutAreasRequest(
         IMessageHub hub,
@@ -916,13 +914,10 @@ public static class LayoutExtensions
             return request.Processed();
         }
 
-        var areas = uiControlService.LayoutDefinition
-            .AreaDefinitions
-            .Values
-            .Where(l => l.IsVisible())
-            .ToList();
-
-        hub.Post(new GetDataResponse(areas, hub.Version), o => o.ResponseFor(request));
+        hub.SubscribeHeldUntilTerminal(uiControlService.LayoutDefinition.ObserveVisibleAreaDefinitions(), areas => areas
+            .Subscribe(
+                list => hub.Post(new GetDataResponse(list, hub.Version), o => o.ResponseFor(request)),
+                ex => hub.Post(DeliveryFailure.FromException(request, ex), o => o.ResponseFor(request))));
         return request.Processed();
     }
 }

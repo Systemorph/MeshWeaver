@@ -33,9 +33,9 @@ public static class DomainCatalogLayoutArea
                 Controls.H2(typeDefinition.DisplayName).WithStyle("margin: 0;"),
                 DomainViews.NavGlyph("⧉", host.Localize("ui.dataModel"), $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}")));
 
-        if (DomainViews.Description(host.Hub.XmlDocs().Summary(typeDefinition.Type)) is { } descriptionLine)
-            ret = ret.WithView(descriptionLine);
-        
+        // Data-bound: the documentation file is read on the I/O pool, not while this view is built.
+        ret = ret.WithView(DomainViews.DescriptionOf(host.Hub, typeDefinition.Type));
+
         return ret.WithView((areaHost, ctx) => RenderCatalog(areaHost, ctx, typeDefinition));
     }
 
