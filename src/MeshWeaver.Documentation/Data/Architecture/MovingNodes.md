@@ -126,6 +126,25 @@ the source is absent. This distinction matters for a move from a private user sp
 Inbox: reporting “source not found” for a node storage still holds leaves the submitted record in
 the user's space and prevents its destination watcher from handing it over.
 
+### Every path in a query is a quoted literal (#7542)
+
+The source and container paths are spliced into the copy's queries through
+`QueryParser.PathLiteral` — `path:"P/License Email Rubin" scope:subtree`, never the bare path. The
+query tokenizer splits on whitespace, so a bare `path:P/License Email Rubin` reads as the filter
+`path:P/License` plus two free-text words: a query for a different node. Storage, enumerated by raw
+prefix, still lists the source, so the two surfaces disagreed on every attempt and each move of a
+node with a space in its path was refused as *"Copy reached no verdict: … is stored, but the subtree
+query under the caller did not return it yet"* — including the rename meant to remove the space.
+Regression guard: `MoveRenamesOffAWhitespacePathTest` (a spaceless move of the same shape is its
+control). A path that carries BOTH quote characters has no quoted literal (the query language
+has no escape). `PathLiteral` then writes it bare, as it always was: a bare value runs to the next
+whitespace and reads a quote inside it as data, so such a path still copies. A bare value still
+carries query syntax, though, so the bare form is used only when the path holds none of `| * ( )` AND
+reads back as exactly one exact path anchor equal to itself — `a'b"c|other` would otherwise be two
+path alternatives, a copy aimed at a different set of nodes. Anything else (whitespace, that syntax,
+a leading quote) cannot be written at all and is refused by name. Guards: the copy theory in the same
+test class, with a mixed-quote leaf, and `PathLiteralReadsBackAsOnePathTest`.
+
 ## The refusal — `RequireComplete`
 
 Carrying satellites fixes the case we know about. The rule the operation actually needs is stronger,
@@ -268,15 +287,23 @@ finishes it:
 | the SOURCE edited | either | refused — resuming would discard the source's edit; both kept |
 | a different node at the target | either | refused — a genuine collision |
 
-Once a retry has converged, a further one answers `SourceNotFound` and touches nothing. On the
-file-system store a node kept as `.md` front matter carries neither `CreatedBy` nor `CreatedDate`, so
-"the same node" cannot be established for it and its retry is refused like any collision; JSON-stored
-nodes on that store, and every node on Postgres, carry both. Pinned by
+Once a retry has converged, a further one answers `SourceNotFound` and touches nothing. "The same
+node" needs the store to keep `CreatedBy` and `CreatedDate`, and every store does: Postgres in its
+columns, the file-system store in a JSON node file and, for a node it keeps as `.md`, in the front
+matter (`CreatedBy:` / `CreatedDate:`, #7352). The front-matter keys are written only for a node that
+has them and are never invented on read, so an authored `.md` file that carries neither stays
+byte-identical on save — but such a node is unattributed, so a half-landed move of it is refused like
+any collision rather than resumed. The keys are for the STORE, not for a git mirror: a sync export
+writes `.md` (and `.cs`) files without the two stamps, exactly as before, so a mirror of hand-edited
+pages never gains a creator id and an instant per page. JSON files are the full node and keep them.
+Pinned by
 `MoveResumesAHalfLandedMoveTest` (the copy leg alone landed, root only; a source edit; a foreign
 target), `MoveConvergesAfterAFailedCopyLegTest` (a real move whose copy leg failed on a descendant,
 retried to convergence and once more; a target edit on a store without history) and
 `MoveResumesOverAnEditedTargetWithHistoryTest` (the file-system store, which keeps versions: a target
-edit resumes and is kept, a source edit is refused).
+edit resumes and is kept, a source edit is refused, a half-landed `.md` node resumes, a different
+`.md` node at the target is refused); the front-matter round trip is pinned by
+`MarkdownFrontMatterTolerantYamlTest`.
 
 ## A relocation carries what is on disk
 

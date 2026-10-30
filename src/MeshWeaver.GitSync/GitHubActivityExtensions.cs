@@ -1091,15 +1091,20 @@ public static class GitHubActivityExtensions
     /// a token (<see cref="GitHubSyncService.ReadIdentityFor"/>, the same decision the read takes).
     /// Without it an import said "Imported" and nothing about its credential, so nobody could show
     /// that a sync ran on the App rather than on a personal access token. A Space with no repository
-    /// or an Azure Repos one (its own identity, <see cref="AzureReposTokenService"/>) writes nothing;
+    /// or one on a git hosting provider (its own identity, <see cref="IGitHostingProvider"/>) writes nothing;
     /// a reading that faults says so at Warning and never stops the sync.
     /// </summary>
     internal static IObservable<Unit> NameReadIdentity(
         ActivityContext ctx, GitHubSyncService sync, string userId, string? repositoryUrl)
     {
-        if (repositoryUrl is not { Length: > 0 } || GitRepositoryProvider.IsAzureRepos(repositoryUrl))
+        if (repositoryUrl is not { Length: > 0 })
             return Observable.Return(Unit.Default);
-        return sync.ReadIdentityFor(userId, repositoryUrl).Take(1)
+        // A hosting provider's source reads with that provider's own instance identity, not a
+        // GitHub one: nothing to name here. Resolved on subscribe, so an ambiguous URL faults the
+        // reading (logged below at Warning) instead of throwing out of this call.
+        return Observable.Defer(() => sync.HostingProviders.For(repositoryUrl) is not null
+                ? Observable.Empty<GitHubReadIdentity>()
+                : sync.ReadIdentityFor(userId, repositoryUrl).Take(1))
             .Do(identity => ctx.Log(identity.ToLogMessage()))
             .Select(_ => Unit.Default)
             .DefaultIfEmpty(Unit.Default)

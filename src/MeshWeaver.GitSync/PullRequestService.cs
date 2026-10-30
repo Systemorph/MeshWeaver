@@ -85,9 +85,9 @@ public sealed class PullRequestService
     /// <paramref name="baseRef"/> (a branch name or commit SHA), authenticated as
     /// <paramref name="userId"/>. Emits the created branch + the SHA it points at.
     /// </summary>
-    /// <remarks>An Azure Repos source creates the branch too (MeshWeaver#6500): it is a ref
-    /// operation, not a pull request, and authenticates with the instance's DECLARED Azure DevOps
-    /// identity (<see cref="AzureReposTokenService"/>) — never a GitHub credential.</remarks>
+    /// <remarks>A source on a git hosting provider (Azure Repos, …) creates the branch too: it is a
+    /// ref operation, not a pull request, and authenticates with the provider's instance identity
+    /// (<see cref="IGitHostingProvider.GetAccessToken"/>) — never a GitHub credential.</remarks>
     public IObservable<GitHubBranchResult> CreateBranch(
         string spacePath, string newBranch, string baseRef, string userId)
     {
@@ -99,10 +99,8 @@ public sealed class PullRequestService
             AccessToken = token,
         };
         return sync.ReadConfig(spacePath).Take(1).SelectMany(config =>
-            GitRepositoryProvider.IsAzureRepos(config?.RepositoryUrl)
-                ? (hub.ServiceProvider.GetService<AzureReposTokenService>() is { } azure
-                    ? azure.GetToken().SelectMany(token => repoClient.CreateBranch(Request(config!.RepositoryUrl!, token)))
-                    : Observable.Throw<GitHubBranchResult>(GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException()))
+            sync.HostingProviders.For(config?.RepositoryUrl) is { } provider
+                ? provider.GetAccessToken().SelectMany(token => repoClient.CreateBranch(Request(config!.RepositoryUrl!, token)))
                 : WithRepoAndToken(spacePath, userId, (repoUrl, _, token) => repoClient.CreateBranch(Request(repoUrl, token))));
     }
 
@@ -151,10 +149,9 @@ public sealed class PullRequestService
         return ReadSpace(spacePath).SelectMany(space =>
             sync.ReadConfig(spacePath).Take(1).SelectMany(config =>
             {
-                // Policy azure-repos-two-way: pull requests are not offered on an Azure Repos source
-                // in this version, so none is drafted for one.
-                if (AzureReposSyncPolicy.Refuse(config?.RepositoryUrl,
-                        AzureReposSyncPolicy.Unsupported.PullRequest) is { } refusal)
+                // A hosting provider that does not offer pull requests (Azure Repos) refuses by name,
+                // so none is drafted for one.
+                if (sync.HostingProviders.Refuse(config?.RepositoryUrl, GitHostingOperation.PullRequest) is { } refusal)
                     return Observable.Throw<MeshNode>(refusal.ToException());
                 var head = !string.IsNullOrWhiteSpace(headBranch) ? headBranch!
                     : !string.IsNullOrWhiteSpace(config?.Branch) ? config!.Branch : "main";
@@ -368,10 +365,14 @@ public sealed class PullRequestService
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<T>(new InvalidOperationException(
                     "No repository URL is set for this Space. Set one in the Repository section, then try again."));
-            // Policy azure-repos-two-way (MeshWeaver#6500): no pull-request operation is offered on an
-            // Azure Repos source in this version — a GitHub token against an Azure URL could never work.
-            if (AzureReposSyncPolicy.Refuse(repoUrl, AzureReposSyncPolicy.Unsupported.PullRequest) is { } refusal)
+            // A hosting provider that does not offer pull requests (Azure Repos) refuses by name; one
+            // that does authenticates with its own instance identity — a GitHub token against
+            // another provider's URL could never work.
+            var provider = sync.HostingProviders.For(repoUrl);
+            if (provider?.Refuse(repoUrl, GitHostingOperation.PullRequest) is { } refusal)
                 return Observable.Throw<T>(refusal.ToException());
+            if (provider is not null)
+                return provider.GetAccessToken().SelectMany(token => op(repoUrl, config, token));
             return credentials.Get(userId).Take(1).SelectMany(cred =>
             {
                 if (cred?.AccessToken is not { Length: > 0 } token)
