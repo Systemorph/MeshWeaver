@@ -35,6 +35,27 @@ public record SelfUpdateOptions
     public string RegistryUsername { get; init; } = "instance";
 
     /// <summary>
+    /// 🚨 Whether <see cref="Registry"/> is a PUBLIC OCI registry — one that lists tags and serves
+    /// pulls to a caller presenting no credential (MeshWeaver.Deploy#65). Default <c>false</c>.
+    ///
+    /// <para>Set (<c>SelfUpdate__RegistryIsPublic=true</c>, the chart's
+    /// <c>selfUpdate.registryIsPublic</c>) the non-ACR lister runs the anonymous token flow — the
+    /// realm is asked for a pull bearer with NO <c>Authorization</c> header — and NEVER resolves or
+    /// presents this installation's plugin-registry instance key, whatever <c>PluginCatalog</c> holds
+    /// for that host. The case it exists for is a local install in registry mode that runs
+    /// <c>ghcr.io/systemorph/memex-portal-ai</c> with no pull secret: it has no managed identity for
+    /// the upstream ACR, and the <c>mwi_</c> key a private registry checks is minted inside the pod,
+    /// so a credential-free source is the only one it can read. A public registry also needs no
+    /// <c>portal.imagePullSecret</c>, so the roll names an image its kubelet can pull.</para>
+    ///
+    /// <para>Unset, a non-ACR registry keeps the keyed behaviour exactly: the instance key is
+    /// presented only on the pairing <see cref="RegistryValidationUrl"/> documents, and a registry
+    /// with no key to present is refused by name. Ignored for an Azure Container Registry, which is
+    /// listed through its own API with the workload identity.</para>
+    /// </summary>
+    public bool RegistryIsPublic { get; init; }
+
+    /// <summary>
     /// 🚨 The portal that VALIDATES this installation's instance key at <see cref="Registry"/> —
     /// the container registry's own <c>RegistrySpec.ValidationUrl</c>, restated on the consuming
     /// side. Blank (the default) declares no pairing, and an absent declaration is never
