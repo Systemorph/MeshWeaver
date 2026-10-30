@@ -71,7 +71,11 @@ jobs:
           # gate's 15-minute wait had already published RED, and the review's own arrival re-ran
           # nothing that branch protection reads, so core sat idle. The re-run below changes no
           # verdict — the gate judges the head itself — and a gate already green is left alone.
-          if [ "$NAME" != "internal-review" ] || [ "$APP_ID" != "4918443" ] || [ "$APP_SLUG" != "systemorph-com" ]; then
+          # Both slugs of the one App across its rename (`systemorph-com` → `systemorph`, step 1 of 3;
+          # check-review-answered.py DEGRADATION_APP_SLUGS); the App id does not change.
+          slug_ok=false
+          case "$APP_SLUG" in systemorph-com|systemorph) slug_ok=true ;; esac
+          if [ "$NAME" != "internal-review" ] || [ "$APP_ID" != "4918443" ] || [ "$slug_ok" != "true" ]; then
             echo "check run $CHECK_RUN_ID ('$NAME' from ${APP_SLUG:-?}/${APP_ID:-?}, $CONCLUSION) is not the internal reviewer's — nothing to re-evaluate"
             exit 0
           fi
