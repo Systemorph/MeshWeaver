@@ -76,6 +76,12 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
         if (userId == WellKnownUsers.System)
             return Observable.Return(NodeValidationResult.Valid());
 
+        // 🛡️ An API token's principal is bound to its writer (ApiTokenPrincipalBinding) — ahead of the
+        // own-scope shortcut, which would otherwise let a person write any token into their own partition.
+        if (context.Operation is NodeOperation.Create or NodeOperation.Update
+            && ApiTokenPrincipalBinding.Refusal(context.ExistingNode, context.Node, userId,
+                context.AccessContext?.Locale, _hub.JsonSerializerOptions) is { } principalRefusal)
+            return Observable.Return(NodeValidationResult.Unauthorized(principalRefusal));
         // 🛡️ The API-token SCOPE cap (ApiTokenScope) — ahead of every shortcut below. The own-scope
         // shortcut grants a user everything in their own partition without asking the fold, so a
         // cap applied only inside the fold would let a token scoped to, say, the device relay
@@ -117,8 +123,24 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
         // PseudoIdentity.)
         if (WellKnownUsers.IsAuthenticated(userId))
         {
-            var ownMainNode = !string.IsNullOrEmpty(context.Node.MainNode)
-                && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase);
+            // 🛡️ Only a STORED MainNode speaks for ownership (#7598, review of #7601). On a create the
+            // node is the caller's proposal, so its MainNode is whatever the caller wrote: trusting it
+            // let a person create anywhere — a service's token namespace in the Admin partition
+            // included — by naming themselves. A create is decided by the path (ownScope below); an
+            // update by the node it replaces; a read or delete by the stored node itself. Every
+            // platform writer that sets MainNode to the user writes under `{userId}/…`, which the path
+            // shortcut already covers.
+            var trustedMainNode = context.Operation switch
+            {
+                NodeOperation.Create => null,
+                NodeOperation.Update => context.ExistingNode?.MainNode,
+                _ => context.Node.MainNode,
+            };
+            // …and only one that is the node or one of its ancestors (MainNodeTrust): a stored pointer
+            // to the writer's home from a node elsewhere is not ownership of that node.
+            var ownMainNode = !string.IsNullOrEmpty(trustedMainNode)
+                && MainNodeTrust.IsAncestorOrSelf(trustedMainNode, context.Node.Path)
+                && string.Equals(trustedMainNode, userId, StringComparison.OrdinalIgnoreCase);
 
             // Per-user own-scope shortcut: every user owns the partition
             // named after their userId. A node at `{userId}` or `{userId}/…`

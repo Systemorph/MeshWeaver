@@ -20,7 +20,10 @@ namespace MeshWeaver.Messaging;
 /// response returns — so a lookup here is authoritative at exactly the moment a racing delivery
 /// arrives at the dying hub. A legitimate re-create SUPERSEDES the tombstone just as synchronously —
 /// at the durable write's commit, before its <c>Created</c> is published (#3008) — so a recycled or
-/// re-created address is never reported as deleted once the store holds it again.</para>
+/// re-created address is never reported as deleted once the store holds it again. Because the store
+/// publishes a row on its own change feed inside the commit — before that supersede runs — a write the
+/// storage guard has ADMITTED to the path already answers "not deleted" while it is in flight: a reader
+/// that saw the recreated row in a listing must never be told by the old hub that it will not come back.</para>
 ///
 /// <para>Optional: meshes without a delete tombstone (bare messaging fixtures) register no
 /// implementation and the pipeline keeps its historical <see cref="ErrorType.ShuttingDown"/>
