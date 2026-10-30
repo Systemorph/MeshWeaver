@@ -1179,8 +1179,8 @@ def _regenerated_at_tip(root: Path, trunk: str, head: str, regenerate) -> list[s
         added = True
         if git(tree, ["-c", "user.name=gen-manifests", "-c", "user.email=gen-manifests@invalid",
                       "merge", "--no-ff", "--no-edit", "-q", head], timeout=180) is None:
-            conflicted = [p for p in (git(tree, ["diff", "--name-only", "--diff-filter=U"]) or "").splitlines()
-                          if p.strip()]
+            conflicted = [p for p in (git(tree, ["diff", "-z", "--name-only", "--diff-filter=U"],
+                                          preserve_output=True) or "").split("\0") if p.strip()]
             return [f"the settlement PR does not merge cleanly onto {at}"
                     + (f" (conflicts: {', '.join(conflicted[:12])})" if conflicted else "")
                     + " — the next main run must refresh the generated lock branch"]

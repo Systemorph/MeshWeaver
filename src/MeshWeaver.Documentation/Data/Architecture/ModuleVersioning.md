@@ -663,7 +663,9 @@ no package does not change any lock, and the settlement still holds. Three outco
 
 - **A lock would differ.** The verdict names each file and the entries that differ (for example
   `moduleVersion`, `version`, a `files.<path>` hash), with the PR's value beside the regenerated one.
-  A new module on `main` with no lock in the PR counts as a differing lock.
+  A new module whose lock neither `main` nor the PR carries counts as a differing lock. The
+  comparison reads the MERGED tree, which is what lands, so a valid lock `main` already carries
+  counts as carried.
 - **The PR does not merge cleanly onto the tip.** The conflicted paths are named, and the next main
   run refreshes the branch.
 - **Regeneration could not run** (no verified tip, the scratch worktree could not be made, or
