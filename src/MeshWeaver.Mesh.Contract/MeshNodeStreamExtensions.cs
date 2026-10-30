@@ -3842,13 +3842,29 @@ public static class MeshNodeStreamExtensions
                 // "owner answered, reply lost" indistinguishable. HostedHubCreation.Never is a pure
                 // probe — a dictionary lookup that must NEVER activate the hub as a side effect of
                 // diagnosing it.
+                //
+                // 🚨 Looked up on the MESH hub, never on the caller's hub (#7395). A per-node hub is a
+                // hosted hub of the mesh ROOT (MessageHubGrain and MeshExtensions both create it
+                // there), while the caller is a sibling — the reads hub, a NodeType hub, a session
+                // hub — whose own hosted collection never holds it. Asking the caller therefore
+                // answered "NO LOCAL HUB" even with the owner's activation (dying or successor)
+                // sitting on this very pod, so the reading could not tell the two apart.
+                // The activation token and IsShuttingDown are printed beside the owner's state for
+                // the same question: the token is the one a ShuttingDown NACK carries, so a target
+                // that is STILL the refusing activation (shutting down, same token) is the dying
+                // hub holding the re-probe. A successor with a new token says only that the address
+                // reactivated: at RunLevel=Starting it is still initializing (the re-probe may be
+                // deferred behind its gates), while at Started it is up, so slow activation does
+                // not explain the silence and its queue / pending callbacks must be read.
                 string targetState;
                 try
                 {
                     targetState = string.Equals(hub.Address.ToString(), path, StringComparison.Ordinal)
                         ? "Target: this hub itself."
-                        : hub.GetHostedHub(new Address(path), HostedHubCreation.Never) is { } owner
-                            ? $"Target: {owner.GetPendingRequestDiagnostics()}"
+                        : hub.GetMeshHub().GetHostedHub(new Address(path), HostedHubCreation.Never) is { } owner
+                            ? $"Target: {owner.GetPendingRequestDiagnostics()} "
+                              + $"IsShuttingDown={owner.IsShuttingDown} "
+                              + $"{ShutdownNack.FormatActivationTag(owner)}"
                             : $"Target: NO LOCAL HUB at '{path}' — it never activated here (or is owned "
                               + "by another silo), so no reply was ever going to be produced.";
                 }
