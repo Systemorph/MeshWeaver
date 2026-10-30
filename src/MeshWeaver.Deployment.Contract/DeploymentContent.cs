@@ -610,6 +610,16 @@ public record DeploymentContent
     public BuildHostsBlock? BuildHosts { get; init; }
 
     /// <summary>
+    /// The node pools' spare slots (the control record only) — one low-priority placeholder per declared
+    /// pool, sized like a portal pod, that a surge pod preempts so a surge-first roll never deadlocks on a
+    /// full pool; see <see cref="NodeHeadroomSlot"/> and Doc/Architecture/DeploymentAKS ("A spare slot per node pool"). Empty → none,
+    /// and nothing renders.
+    /// </summary>
+    [Description("Spare node slots per node pool (the control record only)")]
+    public ImmutableList<NodeHeadroomSlot> NodeHeadroom { get; init; }
+        = ImmutableList<NodeHeadroomSlot>.Empty;
+
+    /// <summary>
     /// The platform SET each standing build host channel runs, by channel — MESH-OWNED, never authored
     /// (<see cref="BuildHostsBlock"/>, Doc/Architecture/BuildHosts). Written only by core's CD through the
     /// operations instance; GitSync strips it on export and keeps the live value on import

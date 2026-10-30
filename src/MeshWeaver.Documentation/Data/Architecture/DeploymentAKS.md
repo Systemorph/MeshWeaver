@@ -304,6 +304,46 @@ were readable at 01:08Z and gone at 01:11Z) — read a cluster-wide incident pro
 header of `deploy/aks/scripts/values.observability.yaml` for what the loki-stack chart can and
 cannot persist.
 
+## A spare slot per node pool — the roll never waits for a node
+
+Every portal Deployment rolls **surge-first** (`maxSurge: 1` / `maxUnavailable: 0`): an old pod
+leaves only after its surge pod has scheduled and turned Ready, so a serving pod is never removed
+before its replacement is up. The price is that the surge pod needs a free slot. On a pool sitting
+at its autoscaler maximum with no node able to fit one more portal pod, the surge pod stays
+`Pending` (`max node group size reached`), no old pod can leave, and the roll deadlocks
+(Memex#863: a memex-cloud roll with the silos pool at its maximum).
+
+**The fix keeps the zero-downtime roll and reserves the slot ahead of time.** The control record
+declares `nodeHeadroom` — one entry per node pool, sized like the largest pod that must always find
+room there (a portal: `cpu: "4"`, `memory: "8Gi"`):
+
+```json
+"nodeHeadroom": [ { "pool": "silos", "cpu": "4", "memory": "8Gi", "replicas": 1 } ]
+```
+
+The chart renders it as cluster-autoscaler **overprovisioning**: one `PriorityClass`
+`node-headroom` with a negative value (below every real workload, which runs at priority 0) and
+`preemptionPolicy: Never`, and per pool a Deployment `node-headroom-<pool>` of `pause` containers
+whose requests equal its limits, pinned to the pool by `kubernetes.azure.com/agentpool`. When a
+surge pod (or any real pod) cannot otherwise schedule, the scheduler **preempts** a placeholder and
+places the real pod in its slot at once; the evicted placeholder goes `Pending`, and the cluster
+autoscaler adds a node for it — so the slot is restored before the next roll needs it.
+
+- **Declared on the control record only.** The placeholder is cluster-scoped, like a cluster
+  manifest; declared on every instance it would hold one slot per instance instead of one per pool.
+  `HelmValues` renders `nodeHeadroom` from the record, and `Problems` refuses a malformed entry
+  (`NodeHeadroomSlot.ProblemsOf`: a name that is not a pool name, a pool declared twice, a CPU or
+  memory that is not a positive Kubernetes quantity, fewer than one replica).
+- **The cost is the slot: it stays idle.** At most one extra node per pool, and only while the
+  real workloads leave no slot free; the autoscaler never exceeds the pool's `maxCount`.
+- **What it does NOT guarantee.** At the pool's `maxCount` the evicted placeholder cannot get a
+  node, so the slot is consumed until something leaves. Any normal-priority pod preempts it too — a
+  KEDA scale-out takes the slot exactly as a surge pod does. The pool bound therefore still has to
+  hold the floors, the surge pods AND the placeholder; the estate's pool-fit check counts the
+  placeholder as a pod.
+- **Delivery** is the ordinary path: the record change, then a governed `Roll` (or `ApplyChart`)
+  of the control instance — never a hand `kubectl apply`.
+
 ## Kubernetes version upgrades — the governed `UpgradeCluster` action, never `az aks upgrade`
 
 Upgrading the cluster's Kubernetes version is a node drain of every pool, so it is the one
