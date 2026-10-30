@@ -8,8 +8,8 @@
     fallback folder (NUGET_FALLBACK_PACKAGES) and downloads nothing it holds complete
     (Doc/Architecture/NuGetRuntimeAssets, "Offline-first resolution").
 
-    Keep the list EXACT: the id and the version the directive or test names. core-build-stages.py --check reds a
-    `#r "nuget:…"` in a sample's code or an executable doc fence (--render / --execute) whose id and exact version
+    Keep the list EXACT: the id and the version the directive or test names. core-build-stages.py (check mode) reds a
+    `#r "nuget:…"` in a sample's code or an executable doc fence (a render or execute cell) whose id and exact version
     are not listed here, and a version-less one there; a test's own directive is listed by hand.
   -->
   <PropertyGroup>
