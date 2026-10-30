@@ -122,10 +122,19 @@ the fault is, *what* it is, and *which* one it is:
   pods are recorded on the incident instead — and so a defect every tenant hits opens one ticket
   rather than one per tenant.
 
-🚨 **Which means `namespace` on an incident is FIRST-SEEN, while `pods[]`, `occurrences`, `lastSeen`
-and `samples[]` keep folding — across DEPLOYMENTS.** The auto-filed issue prints that stale
-`namespace` in its evidence table as though it described every occurrence, and it is the first thing
-a reader uses to pick which portal to go and look at. Measured on the control instance,
+✅ **Read `namespaces[]` to say which portal an occurrence came from** (MeshWeaver.Plugins#4469, for
+#7334). Each row is one Kubernetes namespace's share of the incident: its own pods, occurrence count
+and first and last sighting. The watcher queries Loki one namespace at a time, so every report names
+exactly one namespace and the pairing of pod and namespace is exact. Pods recorded before the ledger
+existed are listed apart in `unplacedPods`, because their namespace was never recorded. The filed
+issue and its recurrence comments print one row per namespace. The scalar `namespace` is still
+FIRST-SEEN and never moves, so never use it to name a portal. The rest of this section is the measurement
+that motivated the ledger. It still describes every incident whose history predates it.
+
+🚨 **Before that ledger, `namespace` on an incident was FIRST-SEEN, while `pods[]`, `occurrences`, `lastSeen`
+and `samples[]` kept folding — across DEPLOYMENTS.** The auto-filed issue printed that stale
+`namespace` in its evidence table as though it described every occurrence, and it was the first thing
+a reader used to pick which portal to go and look at. Measured on the control instance,
 2026-09-11 — `Admin/_LogIncident/c0b1424c7beb28e0`, `content.namespace: "<control-ns>"`, `occurrences: 62`:
 
 | pod, from that incident's `pods[]` | actually in namespace | established by |
@@ -142,7 +151,8 @@ is titled after and whose last recorded occurrence is still 2026-09-10 02:30:43Z
 > **So `occurrences` counts the FINGERPRINT, not the defect named in the title, and `lastSeen` is
 > the last time ANY member of the group fired on ANY portal.** A rising counter on an auto-filed
 > issue is not evidence that its headline defect is still live; read `samples[]` — the unmasked node
-> paths are in there — and resolve each `pods[]` entry to a deployment before naming a portal.
+> paths are in there — and name a portal from `namespaces[]` (for history older than that ledger,
+> resolve each `unplacedPods` entry to a deployment first).
 
 ### 🚨 A REOPEN is not a recurrence — read `samples[]` before you believe it
 
