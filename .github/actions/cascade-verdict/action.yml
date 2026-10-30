@@ -1,0 +1,52 @@
+name: Report an upstream red once
+description: >-
+  An aggregator's FIRST step. When a need ended failure/cancelled, print ONE line — "red because
+  <root> failed — see it" (a waiting-for-platform root keeps its own waiting sentence) — and fail,
+  so the aggregator stays RED without painting an independent red of its own. When no need failed,
+  pass silently and let the aggregator's own checks decide.
+# Policy `report-a-cascade-once` — Doc/Architecture/ReadingCiSignals → "A cascade is reported once".
+# The mechanism and its self-test live in .github/scripts/ci-cascade-verdict.py (beside this action,
+# at the ref `uses:` named).
+#
+# 🚨 Never `continue-on-error` on this step and never an `if:` that skips the aggregator instead: a
+# SKIPPED required check counts as satisfied. The step fails the job; the job stays a red context.
+#
+# 🚨 Re-export the outputs as the job's `cascade-root` / `cascade-waiting` outputs. That is what lets
+# the NEXT aggregator downstream name the true root instead of this job.
+inputs:
+  needs:
+    description: "toJSON(needs) — or a hand-built JSON object of only the needs that are roots (each value toJSON(needs.<id>))."
+    required: true
+  names:
+    description: "Newline-separated `job-id=Display name` lines, so the line names the job as the UI shows it."
+    default: ''
+  job:
+    description: This job's display name (only for the green 'no root failed' line).
+    default: ''
+outputs:
+  cascade:
+    description: "'true' when an upstream root failed (this step then failed), 'false' otherwise."
+    value: ${{ steps.verdict.outputs.cascade }}
+  root:
+    description: The root(s) named, ' + '-joined; empty when none failed.
+    value: ${{ steps.verdict.outputs.root }}
+  waiting:
+    description: The root's waiting-for-platform sentence, when the root is waiting rather than broken.
+    value: ${{ steps.verdict.outputs.waiting }}
+runs:
+  using: composite
+  steps:
+    - name: An upstream root failed? Then say which, once
+      id: verdict
+      shell: bash
+      env:
+        CASCADE_NEEDS: ${{ inputs.needs }}
+        CASCADE_NAMES: ${{ inputs.names }}
+        CASCADE_JOB: ${{ inputs.job }}
+        CASCADE_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        script="$CASCADE_ACTION_PATH/../../scripts/ci-cascade-verdict.py"
+        head -c 400 "$script" | grep -q "ci-cascade-verdict" \
+          || { echo "::error::ci-cascade-verdict.py is missing beside this action ($script)"; exit 1; }
+        python3 "$script" --job "$CASCADE_JOB"
