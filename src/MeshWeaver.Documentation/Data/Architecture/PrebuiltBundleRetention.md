@@ -443,7 +443,15 @@ to change):
   fenced the same way (`IsHeldBy`): a stale holder never stamps or releases a lease of another
   generation. The generation is always written, `0` included. An omitted `0` would give the owner's
   merge no conflict signal, and a stale claimant's generation would land over a newer one, the same
-  trap as a lapsed claim of `0`. Pinned in `PrebuiltBundleRetentionLeaseTerminalTest` and, across two
+  trap as a lapsed claim of `0`. A release writes a lapsed claim that names its generation
+  (`LapsedClaimOf`: `-(generation + 1)`), never one constant. The owner's merge sees no conflict on a
+  leaf whose proposed value already is the live value, so with one constant a take from a stale lapsed
+  base conflicted on neither leaf against a lease lapsed one generation later: the claim had not
+  changed since the base, and the stale take proposed exactly the live generation. It landed a
+  generation a lost take may already have handed to another holder. A generation-specific lapsed claim
+  makes that take conflict whole on the claim, so its fold re-runs and takes the next generation
+  (`AStaleLapsedBase_AgainstANewerReleasedLease_IsRefusedWhole_AndTheRerunTakesTheNextGeneration`).
+  Pinned in `PrebuiltBundleRetentionLeaseTerminalTest` and, across two
   silos, `AHolderWhoseAckedClaimDiedWithTheOwner_IsRefused_EvenWhenItFirstLooksAfterTheLoss`.
   Persistence itself is still not confirmed before a pass counts as held. The fence makes that safe
   for the lease; whether an `Update` ack should ever mean durable is a data-layer question this does
@@ -459,7 +467,7 @@ produced a torn lease: the winner's holder with the loser's hold end and replica
 therefore packs the hold's end and the holder's nonce into a single `long`. The hub serializer
 omits default values, so a lapsed claim of `0` is missing from the writer's base, and the owner
 then applied a losing claim over the winner's: both claimants settled as holders. A lapsed lease
-therefore carries `-1`. The replica name is diagnostic only. The confirmed holder stamps it in a
+therefore carries a negative claim: `-1` at generation `0`, and `-(generation + 1)` once released. The replica name is diagnostic only. The confirmed holder stamps it in a
 second write, after its claim has landed, and a claimant never writes it.
 
 A replica decides "held by another" on its own mirror of the lease, and then writes nothing. A mirror

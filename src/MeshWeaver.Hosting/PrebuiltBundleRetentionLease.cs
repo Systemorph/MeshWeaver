@@ -30,7 +30,7 @@ namespace MeshWeaver.Hosting;
 /// <c>WhenWritingDefault</c>, so a claim of <c>0</c> is OMITTED from the writer's base — and a leaf the
 /// base lacks carries no conflict signal, so the owner APPLIES the writer's claim over the winner's.
 /// Measured on two silos: both claimants of a lease lapsed at <c>0</c> settled as holders. A lapsed lease
-/// therefore carries <see cref="PrebuiltBundleRetentionLease.LapsedClaim"/>.</para>
+/// therefore carries a negative claim, one per generation (<see cref="PrebuiltBundleRetentionLease.LapsedClaimOf"/>).</para>
 /// </summary>
 /// <param name="Claim">The hold's end in Unix seconds (high bits) and the holding pass's nonce (low
 /// <see cref="PrebuiltBundleRetentionLease.NonceBits"/> bits); <see cref="PrebuiltBundleRetentionLease.LapsedClaim"/>
@@ -60,6 +60,10 @@ public sealed record PrebuiltBundleRetentionLeaseState(long Claim, string? Repli
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public long Generation { get; init; }
+
+    /// <summary>Whether nobody holds the lease: its claim is a lapsed claim (<see cref="PrebuiltBundleRetentionLease.LapsedClaimOf"/>).</summary>
+    [JsonIgnore]
+    public bool IsLapsed => Claim <= 0;
 
     /// <summary>The nonce of the pass holding the claim; <c>0</c> when lapsed.</summary>
     [JsonIgnore]
@@ -130,6 +134,27 @@ public static class PrebuiltBundleRetentionLease
     /// a claimant's base always carries the leaf the owner needs to refuse a stale claim.
     /// </summary>
     public const long LapsedClaim = -1L;
+
+    /// <summary>
+    /// The claim a lease of <paramref name="generation"/> carries once it is released: <c>-(generation + 1)</c>,
+    /// so <see cref="LapsedClaim"/> at generation <c>0</c>, and never <c>0</c>. Pure.
+    ///
+    /// <para>🚨 <b>One lapsed value per generation (#7459).</b> The owner's merge sees no conflict on a leaf
+    /// whose proposed value already IS the live value. With one constant lapsed claim, a take from a STALE
+    /// lapsed base (generation <c>g</c>) against a live lease lapsed at <c>g + 1</c> conflicted on neither
+    /// leaf: the claim had not changed since the base, and the stale take proposed exactly the live
+    /// generation. The take landed at <c>g + 1</c>, the generation a lost take may already have handed to
+    /// another holder, whose watch waits past it as a pre-take snapshot. A lapsed claim that names its
+    /// generation changes whenever the generation does, so such a take conflicts WHOLE on the claim and its
+    /// fold re-runs on the live lease, landing the next generation.</para>
+    /// </summary>
+    /// <param name="generation">The generation of the lease being released.</param>
+    public static long LapsedClaimOf(long generation) => -(Math.Max(generation, 0) + 1);
+
+    /// <summary>The lease <paramref name="lease"/> becomes when released: lapsed, in its own generation. Pure.</summary>
+    /// <param name="lease">The lease as read.</param>
+    internal static PrebuiltBundleRetentionLeaseState Released(PrebuiltBundleRetentionLeaseState lease)
+        => lease with { Claim = LapsedClaimOf(lease.Generation) };
 
     /// <summary>The mask selecting the nonce bits of a claim.</summary>
     public const long NonceMask = (1L << NonceBits) - 1;
@@ -337,7 +362,7 @@ public static class PrebuiltBundleRetentionLease
         var options = hub.JsonSerializerOptions;
         return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
                 .Update(current => Read(current, options) is { } lease && held(lease)
-                    ? current with { Content = lease with { Claim = LapsedClaim } }
+                    ? current with { Content = Released(lease) }
                     : current)
                 .Take(1))
             .Select(_ => Unit.Default);
