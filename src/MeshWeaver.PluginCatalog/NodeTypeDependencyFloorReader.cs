@@ -6,6 +6,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +19,17 @@ namespace MeshWeaver.PluginCatalog;
 /// <c>index.json</c> lands), judged against the modules THIS process loaded
 /// (<see cref="ILoadedPackageModules"/>) by the same rule the import and the installer use
 /// (<see cref="PackageDependencyFloorGate.FirstUnmet"/>).
+///
+/// <para>🚨 <b>And the PLATFORM floor (MeshWeaver#7467).</b> The same root declares
+/// <c>minMeshVersion</c>, the platform its sources were written against. A replica on an older
+/// image compiled sources a newer replica had synced, and failed on the platform members the floor
+/// names (<c>CS1061 'BuildHostsBlock' does not contain a definition for 'PullIdentityClientId'</c>,
+/// memex-cloud 2026-10-26). So the root's <c>minMeshVersion</c> is judged FIRST, by the one rule
+/// every package lane uses (<see cref="PlatformFloor.Evaluate"/> against
+/// <see cref="PackagePlatformFloorGate.RunningVersion"/>): a floor ABOVE the running platform is
+/// refused by name ("package X requires platform ≥ N; this instance runs M") and the compile never
+/// runs. A floor that cannot be ordered (a source build, an unknown running version) never holds,
+/// exactly as on the install lane.</para>
 ///
 /// <para>Absent means "not judged": a root that declares nothing, a root that cannot be read, a
 /// dependency with no loaded version here and a range that cannot be read all answer <c>null</c>,
@@ -62,18 +74,25 @@ public sealed class NodeTypeDependencyFloorReader(
         if (PackageRootOf(nodeTypePath) is not { } root)
             return Observable.Return<string?>(null);
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // 🚨 The platform floor (#7467) needs the root whatever modules this process loaded: an
+        // older IMAGE is exactly the replica with nothing newer loaded. It is skipped only where no
+        // floor could hold at all (a source build, an unknown running version), so those processes
+        // still never read the root for it.
+        var running = PackagePlatformFloorGate.RunningVersion(hub);
+        var platformJudged = PlatformFloor.CanHold(running);
         // The loaded modules FIRST: a process that loaded no package module (a mesh without a module
-        // host, every test mesh) has nothing to judge, so it never reads the root at all.
+        // host, every test mesh) has no dependency floor to judge, and unless its platform floor can
+        // hold it never reads the root at all.
         return modules.Read()
             .Take(1)
             .DefaultIfEmpty(ImmutableDictionary<string, LoadedPackageModule>.Empty)
-            .SelectMany(loaded => loaded.IsEmpty
+            .SelectMany(loaded => loaded.IsEmpty && !platformJudged
                 ? Observable.Return<string?>(null)
                 // RunAsSystem (never Observable.Using, #1790): the package root is read as
                 // infrastructure, exactly as the compile that asks reads its sources.
                 : access.RunAsSystem(() => ReadRoot(root))
                     .Take(1)
-                    .Select(node => Judge(root, node, loaded, hub.JsonSerializerOptions)))
+                    .Select(node => Judge(root, node, loaded, hub.JsonSerializerOptions, running)))
             .DefaultIfEmpty(null)
             .Take(1)
             .Timeout(budget, Observable.Throw<string?>(new TimeoutException(
@@ -124,7 +143,28 @@ public sealed class NodeTypeDependencyFloorReader(
     public static string? Judge(
         string root, MeshNode? rootNode, IReadOnlyDictionary<string, LoadedPackageModule> loaded,
         JsonSerializerOptions options)
+        => Judge(root, rootNode, loaded, options, runningPlatformVersion: null);
+
+    /// <summary>
+    /// The judgement over an already-read package root, the PLATFORM floor first (#7467): its
+    /// <see cref="MinMeshVersionOf"/> against <paramref name="runningPlatformVersion"/> by
+    /// <see cref="PlatformFloor.Evaluate"/> (held answers <see cref="DescribePlatform"/>), and then
+    /// its <see cref="RequiresOf"/> against what this process loaded. <c>null</c> when nothing is
+    /// unmet or nothing could be judged. Pure.
+    /// </summary>
+    /// <param name="root">The package root's path, for the sentence.</param>
+    /// <param name="rootNode">The package root as read, or null when it could not be read.</param>
+    /// <param name="loaded">Package id → the module this process has loaded for it.</param>
+    /// <param name="options">The reading hub's serializer options.</param>
+    /// <param name="runningPlatformVersion">The platform this process runs, or null when unknown
+    /// (then the platform floor is not judged).</param>
+    public static string? Judge(
+        string root, MeshNode? rootNode, IReadOnlyDictionary<string, LoadedPackageModule> loaded,
+        JsonSerializerOptions options, string? runningPlatformVersion)
     {
+        var platform = PlatformFloor.Evaluate(MinMeshVersionOf(rootNode, options), runningPlatformVersion);
+        if (platform.IsHeld)
+            return DescribePlatform(root, platform);
         var requires = RequiresOf(rootNode, options);
         return requires.IsEmpty ? null : Describe(root, PackageDependencyFloorGate.FirstUnmet(requires, loaded));
     }
@@ -169,6 +209,37 @@ public sealed class NodeTypeDependencyFloorReader(
             .Select(e => e.GetString()!.Trim())
             .Where(text => text.Length > 0)];
     }
+
+    /// <summary>
+    /// The <c>minMeshVersion</c> a package root's content declares (camel or Pascal case, typed or
+    /// untyped content), or null when it declares none or the value is not a string. Pure.
+    /// </summary>
+    /// <param name="root">The package root node, or null when it could not be read.</param>
+    /// <param name="options">The reading hub's serializer options.</param>
+    public static string? MinMeshVersionOf(MeshNode? root, JsonSerializerOptions options)
+    {
+        if (root?.Content is not { } content)
+            return null;
+        var element = content is JsonElement json
+            ? json
+            : JsonSerializer.SerializeToElement(content, content.GetType(), options);
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+        if (!(element.TryGetProperty("minMeshVersion", out var floor)
+              || element.TryGetProperty("MinMeshVersion", out floor))
+            || floor.ValueKind != JsonValueKind.String)
+            return null;
+        return floor.GetString() is { } text && !string.IsNullOrWhiteSpace(text) ? text.Trim() : null;
+    }
+
+    /// <summary>
+    /// The sentence a HELD platform floor answers (#7467): the package, its declared floor and the
+    /// platform this instance runs. Pure.
+    /// </summary>
+    /// <param name="root">The package root.</param>
+    /// <param name="verdict">A <see cref="PlatformFloorKind.Held"/> verdict.</param>
+    public static string DescribePlatform(string root, PlatformFloorVerdict verdict) =>
+        $"package '{root}' requires platform ≥ {verdict.Floor}; this instance runs {verdict.Running}";
 
     /// <summary>The sentence <see cref="Unmet"/> returns, or null when nothing is unmet. Pure.</summary>
     /// <param name="root">The package root.</param>
