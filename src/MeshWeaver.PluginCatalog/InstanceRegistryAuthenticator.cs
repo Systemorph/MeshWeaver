@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -48,10 +49,18 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// is answered <see cref="InstanceAuthResult.Unavailable"/>. The SAME ten seconds the one-shot
     /// read had — deliberately not widened, #3119 was never a budget problem — but it now bounds only
     /// a cold hydration: the entry keeps hydrating after this subscriber gives up, so the retry the
-    /// 503 asks for finds the frame in memory. Init-only for tests that pin the classification
-    /// without waiting ten seconds.
+    /// 503 asks for finds the frame in memory. It is ALSO the deadline of the three node legs
+    /// together (#7484, see <see cref="WithinBudget"/>), so a key resolution answers within it
+    /// rather than within three of it. Init-only for tests that pin the classification without
+    /// waiting ten seconds.
     /// </summary>
     internal TimeSpan ReadBudget { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The scheduler the whole-resolution deadline (<see cref="ReadBudget"/> over all three node legs,
+    /// #7484) runs on. Init-only so a test drives the deadline on virtual time.
+    /// </summary>
+    internal IScheduler DeadlineScheduler { get; init; } = Scheduler.Default;
 
     /// <summary>
     /// Retained for source compatibility with callers compiled outside this repository (in-mesh
@@ -401,7 +410,57 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
         // then continue with Permission.All. RunAsSystem enters at Subscribe, leaves on the way out
         // of that same Subscribe, and delivers every notification under the subscriber's own
         // identity, so the three reads below are System and nothing downstream inherits it.
-        return accessService.RunAsSystem(() => Read(indexPath)
+        return accessService.RunAsSystem(() => WithinBudget(ResolveNodes(hash, indexPath), indexPath)
+            // The plan ladder rides on the caller: a plan-scoped grant entry is decided against it
+            // at every surface, and reading it HERE — inside the same System scope — is what keeps
+            // the endpoints from each resolving a ladder of their own. A ladder read that fails
+            // yields Empty: plan-scoped entries then license nothing (fail closed), plan-less
+            // entries are untouched, and the verdict itself stays a verdict. Outside the deadline
+            // on purpose: the ladder is bounded by its own query budget and answers from its
+            // snapshot, and cutting it here would cancel the one read that warms that snapshot.
+            .SelectMany(result => result.Instance is null
+                ? Observable.Return(result)
+                : Ladder().Select(ranks =>
+                {
+                    ReportPlanStanding(result.Instance.Instance, ranks);
+                    return InstanceAuthResult.Resolved(result.Instance with { Ranks = ranks });
+                })));
+    }
+
+    /// <summary>
+    /// 🚨 <b>ONE deadline over the three node legs, never one per leg (#7484).</b> The index,
+    /// instance and grant reads run one after another, and each was bounded by
+    /// <see cref="ReadBudget"/> on its own — so a resolution whose legs were each slow, but each
+    /// inside its bound, took up to three budgets before it said anything. A caller that gave the
+    /// exchange the advertised budget (the registry's authentication hook waits ten seconds) had
+    /// hung up by then, so a correct retryable 503 reached nobody and the hook reported a bare 500.
+    /// Now the legs SHARE the budget: whatever they have not answered when it is spent is
+    /// <see cref="InstanceAuthResult.Unavailable"/> — retryable, never "unknown key" — and each
+    /// leg's own hydration keeps running in the process-wide cache, so the retry the 503 asks for
+    /// reads it from memory. COLD.
+    /// </summary>
+    /// <param name="legs">The index → instance → grant chain.</param>
+    /// <param name="indexPath">The index path, for the diagnostic.</param>
+    private IObservable<InstanceAuthResult> WithinBudget(IObservable<InstanceAuthResult> legs, string indexPath)
+        => legs
+            .Take(1)
+            .Timeout(
+                ReadBudget,
+                Observable.Defer(() =>
+                {
+                    logger.LogWarning(
+                        "Instance key resolution: {Path} reached no verdict within {Budget}s across its index, "
+                        + "instance and grant reads — answering retryable, never 'unknown key', and caching nothing",
+                        indexPath, ReadBudget.TotalSeconds);
+                    return Observable.Return(InstanceAuthResult.Unavailable(
+                        $"{indexPath}: the index, instance and grant reads reached no verdict within "
+                        + $"{ReadBudget.TotalSeconds:F0}s together — retry; their hydration continues"));
+                }),
+                DeadlineScheduler);
+
+    /// <summary>The three node legs of <see cref="Resolve"/>: index → instance → grant.</summary>
+    private IObservable<InstanceAuthResult> ResolveNodes(string hash, string indexPath)
+        => Read(indexPath)
             .SelectMany(indexRead =>
             {
                 if (Unavailable(indexRead, indexPath) is { } unavailable)
@@ -451,24 +510,9 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                                     InstancePath = index.InstancePath,
                                     PresentedKeyHash = hash,
                                 });
-                            })
-                            // The plan ladder rides on the caller: a plan-scoped grant entry is
-                            // decided against it at every surface, and reading it HERE — inside the
-                            // same System scope — is what keeps the endpoints from each resolving a
-                            // ladder of their own.
-                            // A ladder read that fails yields Empty: plan-scoped entries then license
-                            // nothing (fail closed), plan-less entries are untouched, and the
-                            // verdict itself stays a verdict.
-                            .SelectMany(result => result.Instance is null
-                                ? Observable.Return(result)
-                                : Ladder().Select(ranks =>
-                                {
-                                    ReportPlanStanding(result.Instance.Instance, ranks);
-                                    return InstanceAuthResult.Resolved(result.Instance with { Ranks = ranks });
-                                }));
+                            });
                     });
-            }));
-    }
+            });
 
     /// <summary>
     /// 🚨 Names a plan the registry is about to decide with WITHOUT knowing it (#5894). An unknown

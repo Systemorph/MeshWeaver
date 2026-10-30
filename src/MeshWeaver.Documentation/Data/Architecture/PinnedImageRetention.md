@@ -901,6 +901,36 @@ job look like it read stale content when it read correctly.
 Locks are still applied on a degraded run, so those three never blocked the protection of anything
 else.
 
+### 🚨 The log is public, and it names no client
+
+This repository is public, so the log of every run is public too (policy `issue-text-name-scan`). Two
+things the fleet lanes read are private, and neither may reach that log in plain text:
+
+- **The names of private repositories.** The lock, the pinned-digest sweep and the combo derivation
+  each discover the org's repositories and print them, and a client's repository is named after the
+  client. `ghrest.installation_repo_names` is the one door every discovery goes through. It asks for
+  each repository's `private` flag and registers the full name and the bare name of every
+  repository that is not explicitly public as an `::add-mask::`, **before** it returns a single name.
+  A missing or unreadable flag counts as private. The only names left in clear are the public
+  repositories and the private ones whose names this repository already publishes
+  (`PRIVATE_NAMES_ALREADY_PUBLIC`). That set is an allowlist, so a new repository is masked until a
+  person adds it.
+- **The private roster's prose.** `ACR_RETENTION_PRIVATE_ROSTER` declares a client estate's
+  installations and registries. Its identifiers are masked, but a mask is exact and case-sensitive.
+  A `reason` or an `estate` names the client in its own words (capitalised, possessive, a
+  subscription's display name), so it got past every mask and was printed on every nightly run.
+  `read_roster_document` now replaces every prose string of the private roster before any reader
+  sees it: any string that holds whitespace, and any value of a prose key (`reason`, `estate`,
+  `verdict`, …). The placeholder is `PRIVATE_PROSE_PLACEHOLDER`. Validators only require prose to be
+  non-empty, so their verdicts do not change. The `out-of-estate` line now reads *decided by:
+  (stated in the private roster; …)*. Who decides is recorded in the private roster, and that is
+  where to read it.
+
+Both are pinned by self-test arms, and each arm was checked by reverting the code it guards: ghrest's
+*private names are masked before they are returned*, and ARM 35 and ARM 36b of
+`lock-pinned-digests.py --self-test`. Run logs that already carry such text are not changed by this
+fix. Deleting them is a maintainer's act (`DELETE /repos/{owner}/{repo}/actions/runs/{id}/logs`).
+
 ### The exact commands, by hand
 
 Lock one pinned manifest (idempotent):

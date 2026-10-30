@@ -42,6 +42,7 @@ directory — `CiRestBudgetGuard` holds every `node-repo-*.yml` lane to that.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -78,12 +79,84 @@ def gh_cli(path: str, paginate: bool = False, jq: str | None = None) -> tuple[in
     return proc.returncode, proc.stdout, proc.stderr
 
 
+# 🚨 A PRIVATE REPOSITORY'S NAME IS PRIVATE TEXT (policy `issue-text-name-scan`, Plugins#4364).
+# This repository is public, so are its Actions logs, and a fleet lane that discovers the org's
+# repositories prints their names — a client's own repository is named after the client. Every
+# repository the installation reports as anything but `private: false` therefore has its name
+# registered as a log mask the moment it is discovered, BEFORE any caller can print it.
+#
+# The one exception is this set: PRIVATE repositories whose names this public repository already
+# publishes (its AGENTS.md and docs name them as the fleet's own). It is an allowlist, so it fails
+# CLOSED — a repository missing from it is masked, never printed. Add a name here only when the
+# name is already public; a client's name never belongs here.
+PRIVATE_NAMES_ALREADY_PUBLIC = frozenset({
+    "Systemorph/Memex",
+    "Systemorph/MeshWeaver.Plugins",
+    "Systemorph/MeshWeaver.Deploy",
+    "Systemorph/MeshWeaver.Crm",
+    "Systemorph/MeshWeaver.Education",
+    "Systemorph/MeshWeaver.Reinsurance",
+    "Systemorph/MeshWeaver.SocialMedia",
+    "Systemorph/MeshWeaver.Manufacturing",
+    "Systemorph/MeshWeaver.FundReporting",
+    "Systemorph/MeshWeaver.Feedback",
+})
+
+# One line per repository: the full name, a tab, and the `private` flag as jq renders it.
+INSTALLATION_REPO_JQ = '.repositories[] | "\\(.full_name)\\t\\(.private)"'
+
+
+def parse_installation_repos(out: str) -> list[tuple[str, bool]]:
+    """`INSTALLATION_REPO_JQ` output → [(full name, is public)]. Pure.
+
+    PUBLIC ONLY ON AN EXPLICIT `false`: a line with no flag, a `null`, or anything this parser does
+    not recognise reads as PRIVATE — so an answer that lost its visibility masks the name instead
+    of printing it."""
+    rows: dict[str, bool] = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        name, _, flag = line.partition("\t")
+        name = name.strip()
+        if name:
+            rows[name] = rows.get(name, True) and flag.strip() == "false"
+    return sorted(rows.items())
+
+
+def log_masks_for(repos: list[tuple[str, bool]]) -> list[str]:
+    """The log masks discovery registers: the full AND the bare name of every repository that is
+    not public and not in `PRIVATE_NAMES_ALREADY_PUBLIC` — a lane prints both spellings. Pure."""
+    masks: set[str] = set()
+    for name, public in repos:
+        if public or name in PRIVATE_NAMES_ALREADY_PUBLIC:
+            continue
+        masks.add(name)
+        bare = name.split("/", 1)[-1]
+        if bare:
+            masks.add(bare)
+    return sorted(masks)
+
+
+def register_log_masks(values: list[str]) -> None:
+    """`::add-mask::` for each value, on GitHub Actions only (a local run's terminal is not
+    published). The runner masks a value in every LATER line of the job, so this runs before the
+    names are returned to anything that could print them."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    for value in values:
+        print(f"::add-mask::{value}", flush=True)
+
+
 def installation_repo_names() -> tuple[int, list[str], str]:
     """Every repository the App installation reaches (needs an INSTALLATION token) →
     (returncode, sorted unique full names, stderr). The caller decides what an error or an empty
-    fleet means — both must be RED, never "nothing to check"."""
-    rc, out, err = gh_cli("/installation/repositories", paginate=True, jq=".repositories[].full_name")
-    return rc, sorted({line.strip() for line in out.splitlines() if line.strip()}), err
+    fleet means — both must be RED, never "nothing to check".
+
+    🚨 Masks every private name it returns (`log_masks_for`) before returning it."""
+    rc, out, err = gh_cli("/installation/repositories", paginate=True, jq=INSTALLATION_REPO_JQ)
+    repos = parse_installation_repos(out)
+    register_log_masks(log_masks_for(repos))
+    return rc, [name for name, _ in repos], err
 
 
 def gh_cli_status(method: str, path: str, fields: dict | None = None,
@@ -401,6 +474,73 @@ def self_test() -> int:
         check("next_link reads rel=next among other rels",
               next_link('<https://a/1>; rel="prev", <https://a/3>; rel="next"') == "https://a/3"
               and next_link('<https://a/1>; rel="last"') is None)
+
+        # ── private repository names never reach a public log (Plugins#4364) ──
+        listing = ("acme/Public\tfalse\n"
+                   "acme/Acme.Client\ttrue\n"
+                   "Systemorph/Memex\ttrue\n"
+                   "acme/NoFlag\n"
+                   "acme/Nulled\tnull\n")
+        repos = parse_installation_repos(listing)
+        check("discovery returns every repository, public or not",
+              [n for n, _ in repos] == ["Systemorph/Memex", "acme/Acme.Client", "acme/NoFlag",
+                                        "acme/Nulled", "acme/Public"])
+        masks = log_masks_for(repos)
+        check("a private repository is masked by its full AND its bare name",
+              "acme/Acme.Client" in masks and "Acme.Client" in masks)
+        check("FAIL CLOSED: a repository whose visibility is missing or null is masked",
+              {"acme/NoFlag", "NoFlag", "acme/Nulled", "Nulled"} <= set(masks))
+        check("control: a public repository is not masked",
+              "acme/Public" not in masks and "Public" not in masks)
+        check("control: a private repository whose name is already public is not masked",
+              "Systemorph/Memex" not in masks and "Memex" not in masks)
+        check("NEGATIVE CONTROL: the old full-name-only listing carries no visibility, so every "
+              "name is masked rather than printed",
+              set(log_masks_for(parse_installation_repos("acme/Acme.Client\nacme/Public\n")))
+              >= {"acme/Acme.Client", "acme/Public"})
+        import contextlib
+        import io
+        saved = os.environ.get("GITHUB_ACTIONS")
+        try:
+            os.environ["GITHUB_ACTIONS"] = "true"
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                register_log_masks(masks)
+            check("on Actions every mask is registered as ::add-mask::",
+                  printed.getvalue().splitlines() == [f"::add-mask::{m}" for m in masks])
+            os.environ["GITHUB_ACTIONS"] = "false"
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                register_log_masks(masks)
+            check("off Actions nothing is printed", printed.getvalue() == "")
+            # THE DOOR ITSELF: discovery registers the masks BEFORE it hands a name to a caller.
+            os.environ["GITHUB_ACTIONS"] = "true"
+            real_gh_cli = globals()["gh_cli"]
+            asked: list[str | None] = []
+
+            def fake_gh_cli(path, paginate=False, jq=None):
+                asked.append(jq)
+                return 0, listing, ""
+            globals()["gh_cli"] = fake_gh_cli
+            try:
+                printed = io.StringIO()
+                with contextlib.redirect_stdout(printed):
+                    rc, names, _ = installation_repo_names()
+            finally:
+                globals()["gh_cli"] = real_gh_cli
+            check("installation_repo_names asks for each repository's visibility",
+                  asked == [INSTALLATION_REPO_JQ])
+            check("installation_repo_names returns the full names",
+                  rc == 0 and names == [n for n, _ in repos])
+            check("installation_repo_names masks the private names before returning them",
+                  "::add-mask::acme/Acme.Client" in printed.getvalue().splitlines()
+                  and "::add-mask::Acme.Client" in printed.getvalue().splitlines()
+                  and "::add-mask::acme/Public" not in printed.getvalue())
+        finally:
+            if saved is None:
+                os.environ.pop("GITHUB_ACTIONS", None)
+            else:
+                os.environ["GITHUB_ACTIONS"] = saved
     finally:
         api.shutdown()
         storage.shutdown()

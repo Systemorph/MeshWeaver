@@ -29,6 +29,34 @@ So, in `OciTagLister.ResolveCredential` — **selecting** the credential:
 Both rows need TWO explicit statements. A declaration alone grants nothing (there is still no key for
 that host); a key alone grants nothing (nothing says that registry trusts that portal).
 
+### A registry declared PUBLIC: no key is selected at all
+
+A third shape sits OUTSIDE the table: **`SelfUpdate:RegistryIsPublic=true`** (the chart's
+`selfUpdate.registryIsPublic`) declares that `SelfUpdate:Registry` lists tags and serves pulls to a
+caller presenting nothing. The lister then never reaches `ResolveCredential`: it reads through
+`OciRegistryClient.Anonymous`, which runs the same `401` → realm → bearer handshake and the same
+paginated `/v2/<repo>/tags/list`, but asks the realm for a pull bearer with **no `Authorization`
+header** — so no plugin-registry key can travel to that host, even when `PluginCatalog` holds one for
+it. A realm that refuses the anonymous request faults by name (*"refused an ANONYMOUS pull token … No
+credential was sent"*); it is never read as an empty listing, and the lister never falls back to a
+key.
+
+The case it exists for is a **local install in registry mode** (MeshWeaver.Deploy#65). It runs
+`ghcr.io/systemorph/memex-portal-ai` with no pull secret, has no managed identity for the upstream
+ACR, and cannot present the `mwi_` key `cr.meshweaver.cloud` checks, because that key is minted
+inside the pod. GHCR lists that public package anonymously, so `memex-local` sets
+`selfUpdate.registry: ghcr.io` + `registryIsPublic: true`, and the chart derives the repositories
+(`systemorph/memex-portal-ai`, `systemorph/memex-migration`) from the images the release runs. See
+[Running memex locally on Colima k3s](../LocalColimaMac) → *Registry mode updates from public GHCR*.
+
+The declaration is the operator's, never inferred: a registry is not treated as public because a
+probe succeeded, and an unset flag keeps the keyed rule above byte for byte. `OciTagListerTest`
+(MeshWeaver.Plugins) pins both directions: a public registry is listed past its first page while the
+fake sees no `Basic` credential although one is configured for that host, and the same host NOT
+declared public, with no key held for it, is refused by name before a byte is sent.
+`AnAnonymousOciClientSendsNoCredentialTest` (core) pins the client half, with the keyed client as the
+negative control that proves the fake can see a credential.
+
 ### The SHAPE of the credential follows the row
 
 🚨 **A declared validator is handed the DURABLE `mwi_` key, never an exchanged token.** The Store's
