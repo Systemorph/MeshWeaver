@@ -24,7 +24,7 @@ namespace MeshWeaver.Hosting.Test;
 /// filter <c>path:P/Lic</c> plus the free-text word <c>Rubin</c> — a query for a different node. Storage,
 /// enumerated by raw prefix, still listed the source, so the two surfaces disagreed permanently and
 /// the move refused deterministically. The path is now written as a quoted literal
-/// (<see cref="Query.QueryParser.QuoteLiteral"/>).</para>
+/// (<see cref="QueryParser.QuoteLiteral"/>).</para>
 ///
 /// <para>The control in the same suite: a spaceless move of the same shape succeeds either way, so the
 /// whitespace is the only variable.</para>
@@ -103,4 +103,40 @@ public class MoveRenamesOffAWhitespacePathTest(ITestOutputHelper output) : Monol
                 State = MeshNodeState.Active,
             })
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+}
+
+/// <summary>
+/// <see cref="QueryParser.PathLiteral"/>'s contract: a value that reads back as exactly the one
+/// path, or a refusal by name — never a query for different nodes (review of #7627). A path with both
+/// quote characters is written bare, and a bare value still carries query syntax, so <c>|</c> would
+/// make it two alternatives and <c>*</c>, <c>(</c> or <c>)</c> a pattern or a group.
+/// </summary>
+public class PathLiteralReadsBackAsOnePathTest
+{
+    [Theory]
+    [InlineData("TestData/plain")]
+    [InlineData("TestData/License Email Rubin")]
+    [InlineData("TestData/it's-\"x\"")]
+    public void A_writable_path_reads_back_as_exactly_itself(string path)
+    {
+        var parsed = new QueryParser().Parse($"path:{QueryParser.PathLiteral(path)} scope:subtree");
+        Assert.Equal(path, parsed.Path);
+        Assert.True(parsed.Paths is null || (parsed.Paths.Count == 1 && parsed.Paths[0] == path),
+            $"one path alternative expected, got [{string.Join(", ", parsed.Paths ?? [])}]");
+        Assert.Null(parsed.Filter);
+        Assert.True(string.IsNullOrEmpty(parsed.TextSearch));
+    }
+
+    [Theory]
+    [InlineData("TestData/a'b\"c|TestData/other")]
+    [InlineData("TestData/a'b\"c*")]
+    [InlineData("TestData/a'b\"c)")]
+    [InlineData("TestData/a'b\"(c")]
+    [InlineData("TestData/a'b \"c")]
+    [InlineData("'TestData/a\"b")]
+    public void A_path_no_value_can_hold_is_refused_by_name(string path)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => QueryParser.PathLiteral(path));
+        Assert.Contains(path, ex.Message);
+    }
 }

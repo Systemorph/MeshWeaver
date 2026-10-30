@@ -138,9 +138,12 @@ query under the caller did not return it yet"* — including the rename meant to
 Regression guard: `MoveRenamesOffAWhitespacePathTest` (a spaceless move of the same shape is its
 control). A path that carries BOTH quote characters has no quoted literal (the query language
 has no escape). `PathLiteral` then writes it bare, as it always was: a bare value runs to the next
-whitespace and reads a quote inside it as data, so such a path still copies. Only one that also
-carries whitespace cannot be written at all, and that is refused by name. Guard: the copy theory in
-the same test class, with a mixed-quote leaf.
+whitespace and reads a quote inside it as data, so such a path still copies. A bare value still
+carries query syntax, though, so the bare form is used only when the path holds none of `| * ( )` AND
+reads back as exactly one exact path anchor equal to itself — `a'b"c|other` would otherwise be two
+path alternatives, a copy aimed at a different set of nodes. Anything else (whitespace, that syntax,
+a leading quote) cannot be written at all and is refused by name. Guards: the copy theory in the same
+test class, with a mixed-quote leaf, and `PathLiteralReadsBackAsOnePathTest`.
 
 ## The refusal — `RequireComplete`
 

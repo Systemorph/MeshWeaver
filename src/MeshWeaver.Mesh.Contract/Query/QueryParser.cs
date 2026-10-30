@@ -192,17 +192,34 @@ public partial class QueryParser
     /// </summary>
     /// <param name="path">The node path.</param>
     /// <returns>The value to splice after <c>path:</c> or <c>namespace:</c>.</returns>
-    /// <exception cref="ArgumentException">The path has both quote characters and whitespace, or starts with a quote.</exception>
+    /// <exception cref="ArgumentException">The path has both quote characters and whitespace, query syntax
+    /// (<c>| * ( )</c>) or a leading quote, or does not read back as exactly itself.</exception>
     public static string PathLiteral(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
         if (!path.Contains('"') || !path.Contains('\''))
             return QuoteLiteral(path);
-        if (path.Length > 0 && path[0] is not ('"' or '\'') && !path.Any(char.IsWhiteSpace))
+        // 🚨 The bare form is accepted only when it reads back as EXACTLY this one path: a bare value
+        // still carries query syntax, so `a'b"c|other` would be two path alternatives and a `*`, `(`
+        // or `)` a pattern or a group — a copy query aimed at a different set of nodes. Parse it
+        // and demand one exact anchor equal to the input and nothing else.
+        if (path.Length > 0 && path[0] is not ('"' or '\'') && !path.Any(char.IsWhiteSpace)
+            && path.AsSpan().IndexOfAny(BareValueSyntax) < 0 && ReadsBackAsExactly(path))
             return path;
         throw new ArgumentException(
-            $"'{path}' contains both quote characters and whitespace (or starts with a quote), so it cannot be written as one query value.",
+            $"'{path}' contains both quote characters and whitespace, query syntax or a leading quote, so it cannot be written as one query value.",
             nameof(path));
+    }
+
+    private const string BareValueSyntax = "|*()";
+
+    private static bool ReadsBackAsExactly(string path)
+    {
+        var parsed = new QueryParser().Parse($"path:{path}");
+        return parsed.Path == path
+               && parsed.Filter is null
+               && string.IsNullOrEmpty(parsed.TextSearch)
+               && (parsed.Paths is null || (parsed.Paths.Count == 1 && parsed.Paths[0] == path));
     }
 
     /// <summary>
