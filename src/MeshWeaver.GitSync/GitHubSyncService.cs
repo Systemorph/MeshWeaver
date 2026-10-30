@@ -42,7 +42,7 @@ public sealed class GitHubSyncService
     private readonly IGitHubRepoClient repoClient;
     private readonly GitHubCredentialService credentials;
     private readonly GitHubAppTokenService? appTokens;
-    private readonly AzureReposTokenService? azureRepos;
+    private readonly GitHostingProviders providers;
     private readonly ILogger? logger;
     private readonly FileFormatParserRegistry parsers;
     private readonly FileFormatParserRegistry strictImportParsers;
@@ -68,11 +68,25 @@ public sealed class GitHubSyncService
         GitHubCredentialService credentials,
         ILogger<GitHubSyncService>? logger = null,
         GitHubAppTokenService? appTokens = null)
-        : this(hub, meshService, repoClient, credentials, logger, appTokens, azureRepos: null)
     {
-        // Kept as its own signature (not an added optional parameter on it): a module compiled
-        // against this constructor binds to it by exact signature, and an appended optional
-        // parameter would replace it (MissingMethodException in a mixed set of builds).
+        this.hub = hub;
+        this.meshService = meshService;
+        this.repoClient = repoClient;
+        this.credentials = credentials;
+        this.appTokens = appTokens;
+        this.logger = logger;
+        // The hosting providers (Azure Repos, …) a URL may belong to: registered beside the sync
+        // (GitHubSyncConfiguration.AddGitHubSyncServices + AddGitHostingProvider).
+        providers = hub.ServiceProvider.GetRequiredService<GitHostingProviders>();
+        var contributedParsers = hub.ServiceProvider.GetServices<IFileFormatParser>().ToArray();
+        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, contributedParsers);
+        // A newer authored record must not be materialized by an older image while silently
+        // dropping properties it does not know. Keep the normal options for hub traffic and
+        // export; only GitSync's repository read is strict. The object converter lets a strict
+        // read's JsonException escape, and ParseSnapshot refuses the whole snapshot before any
+        // node is written or the commit is acknowledged.
+        strictImportOptions = StrictImportOptions(hub.JsonSerializerOptions);
+        strictImportParsers = new FileFormatParserRegistry(strictImportOptions, contributedParsers);
     }
 
     /// <summary>Initializes a new instance of the <c>GitHubSyncService</c> class, with the declared
@@ -85,6 +99,7 @@ public sealed class GitHubSyncService
     /// <param name="appTokens">The GitHub App identity, when configured.</param>
     /// <param name="azureRepos">The declared Azure DevOps identity an Azure Repos push authenticates
     /// with, when registered.</param>
+    [Obsolete("Azure Repos is a git hosting provider now: register it with AddGitHostingProvider and use the six-parameter constructor.")]
     public GitHubSyncService(
         IMessageHub hub,
         IMeshService meshService,
@@ -93,30 +108,28 @@ public sealed class GitHubSyncService
         ILogger<GitHubSyncService>? logger,
         GitHubAppTokenService? appTokens,
         AzureReposTokenService? azureRepos)
+        : this(hub, meshService, repoClient, credentials, logger, appTokens)
     {
-        this.azureRepos = azureRepos;
-        this.hub = hub;
-        this.meshService = meshService;
-        this.repoClient = repoClient;
-        this.credentials = credentials;
-        this.appTokens = appTokens;
-        this.logger = logger;
-        var contributedParsers = hub.ServiceProvider.GetServices<IFileFormatParser>().ToArray();
-        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, contributedParsers);
-        // A newer authored record must not be materialized by an older image while silently
-        // dropping properties it does not know. Keep the normal options for hub traffic and
-        // export; only GitSync's repository read is strict. The object converter lets a strict
-        // read's JsonException escape, and ParseSnapshot refuses the whole snapshot before any
-        // node is written or the commit is acknowledged.
-        var strictOptions = new JsonSerializerOptions(hub.JsonSerializerOptions)
+        // An explicitly passed identity takes the Azure Repos kind over from the registered one.
+        if (azureRepos is not null)
+            providers = new GitHostingProviders(
+                [new AzureReposGitHostingProvider(azureRepos, hub.ServiceProvider.GetRequiredService<AzureReposRepoClient>())],
+                providers.All);
+    }
+
+    private static JsonSerializerOptions StrictImportOptions(JsonSerializerOptions hubOptions)
+    {
+        var strictOptions = new JsonSerializerOptions(hubOptions)
         {
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         };
         strictOptions.TypeInfoResolver = new StrictImportTypeInfoResolver(
             strictOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver());
-        strictImportOptions = strictOptions;
-        strictImportParsers = new FileFormatParserRegistry(strictOptions, contributedParsers);
+        return strictOptions;
     }
+
+    /// <summary>The git hosting providers a repository URL is resolved against.</summary>
+    internal GitHostingProviders HostingProviders => providers;
 
     /// <summary>The sync-config node path for a Space: <c>{spacePath}/_GitSync</c>.</summary>
     /// <param name="spacePath">The Space (partition root) path.</param>
@@ -162,9 +175,9 @@ public sealed class GitHubSyncService
                     "URL like https://github.com/owner/repo (the repo is created automatically if it doesn't " +
                     "exist), then Sync."));
 
-            // The guard (AzureReposSyncPolicy.ExportGuard): the import-only direction rule, the same
-            // for every provider (policy azure-repos-two-way, MeshWeaver#6500).
-            if (AzureReposSyncPolicy.ExportGuard(config) is { } refusal)
+            // The guard (SyncDirectionGuards.ExportGuard): the import-only direction rule, the same
+            // for every provider.
+            if (SyncDirectionGuards.ExportGuard(config) is { } refusal)
                 return Observable.Throw<GitHubPushResult>(refusal.ToException());
 
             return ResolveAuthFor(repoUrl, userId).SelectMany(auth =>
@@ -174,12 +187,12 @@ public sealed class GitHubSyncService
                     SerializeAll(nodes, spacePath, progress).SelectMany(files =>
                     {
                         // App-identity exports author as the bot (no personal credential involved).
-                        // An Azure Repos push (MeshWeaver#5248) authors as the instance's
-                        // declared Azure DevOps identity — a GitHub noreply address means nothing there.
+                        // A hosting provider's push (Azure Repos, …) authors as that provider's
+                        // instance identity — a GitHub noreply address means nothing there.
                         var (name, email) = auth.Credential is not null
                             ? AuthorIdentity(auth.Credential)
-                            : GitRepositoryProvider.IsAzureRepos(repoUrl)
-                                ? ("MeshWeaver", "noreply@meshweaver.cloud")
+                            : auth.Provider is { } hosting
+                                ? (hosting.CommitAuthorName, hosting.CommitAuthorEmail)
                                 : ("meshweaver-app[bot]", "meshweaver-app[bot]@users.noreply.github.com");
                         var request = new GitHubPushRequest
                         {
@@ -345,6 +358,15 @@ public sealed class GitHubSyncService
             throw new InvalidOperationException(message);
         }
         var ext = serializer.SupportedExtensions.FirstOrDefault() ?? ".json";
+        // An AUTHORED file format (.md, .cs) reaches the mirror without the mesh's authorship stamps.
+        // The Markdown parser round-trips CreatedBy/CreatedDate for the file-system store (#7352),
+        // but a mirror of hand-edited pages is not where they belong: every page created or imported
+        // in the mesh would gain a creator id and an instant on its next export, and two meshes
+        // exporting the same content would disagree byte-for-byte. The mirror's .md bytes are
+        // therefore exactly what they were before #7352. JSON files are the full node and keep them,
+        // as they always have.
+        if (!string.Equals(ext, ".json", StringComparison.OrdinalIgnoreCase))
+            node = node with { CreatedBy = null, CreatedDate = default };
         var repoPath = NodeFileMapper.ToRepoPath(node.Path, partition, ext, NodeFileMapper.HasChildren(node.Path, allPaths));
         // Serialize is pure in-memory work — no pool, just project the value into the chain.
         return Observable.Return<RepoFile?>(new RepoFile(repoPath, serializer.Serialize(node)));
@@ -447,9 +469,9 @@ public sealed class GitHubSyncService
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
                     "No GitHub repository configured for this Space."));
-            // The guard (AzureReposSyncPolicy.ReimportGuard): the export-only direction rule, the
-            // same for every provider (policy azure-repos-two-way, MeshWeaver#6500).
-            if (AzureReposSyncPolicy.ReimportGuard(config) is { } refusal)
+            // The guard (SyncDirectionGuards.ReimportGuard): the export-only direction rule, the
+            // same for every provider.
+            if (SyncDirectionGuards.ReimportGuard(config) is { } refusal)
                 return Observable.Throw<StaticRepoImportResult>(refusal.ToException());
             // Two-way (config.TwoWay): don't overwrite/prune nodes changed on the server since the last
             // recorded sync (config.LastSyncedAt) — they are carried back on the next commit. `force`
@@ -843,34 +865,30 @@ public sealed class GitHubSyncService
         => ResolveReadAuth(userId, repositoryUrl).SelectMany(auth => repoClient.GetHeadSha(repositoryUrl, branch, auth.Token));
 
     /// <summary>A resolved GitHub authentication: the token plus the user credential when the token is theirs (null = App identity).</summary>
-    private sealed record ResolvedGitHubAuth(string Token, GitHubCredential? Credential);
+    private sealed record ResolvedGitHubAuth(string Token, GitHubCredential? Credential, IGitHostingProvider? Provider = null);
 
     /// <summary>
     /// The authentication for a READ of <paramref name="repositoryUrl"/> (import, re-import, branch
-    /// state, branch head): an Azure Repos URL takes the instance's declared Azure DevOps identity
-    /// (<see cref="AzureReposAuth"/>) — never a user's GitHub credential, which means nothing there;
+    /// state, branch head): a URL a hosting provider claims takes that provider's instance identity
+    /// (<see cref="ProviderAuth"/>) — never a user's GitHub credential, which means nothing there;
     /// every other URL takes <see cref="ResolveAuth"/>, unchanged.
     /// </summary>
     private IObservable<ResolvedGitHubAuth> ResolveReadAuth(string userId, string repositoryUrl)
-        => GitRepositoryProvider.IsAzureRepos(repositoryUrl)
-            ? AzureReposAuth()
-            : ResolveAuth(userId, repositoryUrl);
+        => Observable.Defer(() => providers.For(repositoryUrl) is { } provider
+            ? ProviderAuth(provider)
+            : ResolveAuth(userId, repositoryUrl));
 
     /// <summary>
-    /// The instance's declared Azure DevOps identity (<see cref="AzureReposTokenService"/>,
-    /// MeshWeaver#5248): one Entra token, for reads and pushes alike. Refused by name when GitSync
-    /// was registered without it.
+    /// A hosting provider's instance identity (<see cref="IGitHostingProvider.GetAccessToken"/>): one
+    /// token, for reads and pushes alike.
     /// </summary>
-    private IObservable<ResolvedGitHubAuth> AzureReposAuth()
-        => azureRepos is null
-            ? Observable.Throw<ResolvedGitHubAuth>(
-                GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException())
-            : azureRepos.GetToken().Select(token => new ResolvedGitHubAuth(token, null));
+    private static IObservable<ResolvedGitHubAuth> ProviderAuth(IGitHostingProvider provider)
+        => provider.GetAccessToken().Select(token => new ResolvedGitHubAuth(token, null, provider));
 
     /// <summary>
-    /// The authentication for an EXPORT to <paramref name="repositoryUrl"/>: an Azure Repos URL
-    /// takes the instance's declared Azure DevOps identity (<see cref="AzureReposAuth"/>); every
-    /// other URL takes <see cref="ResolveAuth"/> without a source's read credential.
+    /// The authentication for an EXPORT to <paramref name="repositoryUrl"/>: a URL a hosting provider
+    /// claims takes that provider's instance identity (<see cref="ProviderAuth"/>); every other URL
+    /// takes <see cref="ResolveAuth"/> without a source's read credential.
     /// </summary>
     private IObservable<ResolvedGitHubAuth> ResolveAuthFor(string repositoryUrl, string userId)
     {
@@ -878,9 +896,9 @@ public sealed class GitHubSyncService
         // credential — provisioned with Contents: Read, for the import and reconcile call sites
         // that pass their repository to ResolveAuth. A push therefore keeps the identity it always
         // had: the user's, else the instance's own App installation.
-        return GitRepositoryProvider.IsAzureRepos(repositoryUrl)
-            ? AzureReposAuth()
-            : ResolveAuth(userId, repositoryUrl: null);
+        return Observable.Defer(() => providers.For(repositoryUrl) is { } provider
+            ? ProviderAuth(provider)
+            : ResolveAuth(userId, repositoryUrl: null));
     }
 
     /// <summary>

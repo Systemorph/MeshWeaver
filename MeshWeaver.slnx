@@ -49,7 +49,6 @@
     <Project Path="src/MeshWeaver.Kernel/MeshWeaver.Kernel.csproj" />
     <Project Path="src/MeshWeaver.Layout/MeshWeaver.Layout.csproj" />
     <Project Path="src/MeshWeaver.Markdown/MeshWeaver.Markdown.csproj" />
-    <Project Path="src/MeshWeaver.Markdown.Export.Contract/MeshWeaver.Markdown.Export.Contract.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Operations/MeshWeaver.Mesh.Operations.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />

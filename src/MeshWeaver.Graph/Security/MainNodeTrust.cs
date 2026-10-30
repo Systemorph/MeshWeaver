@@ -28,9 +28,17 @@ public static class MainNodeTrust
     }
 
     /// <summary>
-    /// The satellite's OWNER: the path before its first satellite segment (one starting with
-    /// <c>_</c>), e.g. <c>Space/Doc</c> for <c>Space/Doc/_Comment/c1</c>; the parent when the path
-    /// carries no satellite segment. Null for a single-segment path.
+    /// The satellite's OWNER: the path before its own satellite segment when that segment holds the
+    /// node DIRECTLY — the segment right above the leaf starts with <c>_</c> — e.g. <c>Space/Doc</c>
+    /// for <c>Space/Doc/_Comment/c1</c>; otherwise the PARENT. Null for a single-segment path, or one
+    /// whose satellite segment is the first.
+    /// <para>Only the segment directly above the leaf (review of #7601, rounds 3 and 4). An unmapped
+    /// <c>_</c> segment higher up is ordinary content (<c>Space/_ledger/Private/c1</c> is owned by
+    /// <c>Space/_ledger/Private</c>), and a node nested inside a satellite
+    /// (<c>Space/Doc/_Comment/c1/reply</c>) is owned by that satellite, since a scope in between can
+    /// break the inherited grant. A pointer further up must then also pass the landing check. Erring
+    /// deeper only ever adds that check, which a legitimate writer passes through ordinary
+    /// inheritance, so it cannot widen anything.</para>
     /// </summary>
     /// <param name="path">The satellite's path.</param>
     public static string? OwnerOf(string? path)
@@ -38,8 +46,9 @@ public static class MainNodeTrust
         if (string.IsNullOrEmpty(path))
             return null;
         var segments = path.Trim('/').Split('/');
-        var first = Array.FindIndex(segments, s => s.StartsWith('_'));
-        var take = first > 0 ? first : first == 0 ? 0 : segments.Length - 1;
+        if (segments.Length < 2)
+            return null;
+        var take = segments[^2].StartsWith('_') ? segments.Length - 2 : segments.Length - 1;
         return take <= 0 ? null : string.Join('/', segments, 0, take);
     }
 

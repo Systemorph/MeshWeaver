@@ -76,6 +76,22 @@ public sealed class ApiTokenPrincipalCommitGuard : IEntityCommitGuard
             || !string.Equals(collection, nameof(MeshNode), StringComparison.Ordinal)
             || after.As<MeshNode>(options) is not { } next)
             return null;
-        return ApiTokenPrincipalBinding.Refusal(before?.As<MeshNode>(options), next, writer.ObjectId, writer.Locale, options);
+        var previous = before?.As<MeshNode>(options);
+        // 🛡️ A token record or index commits only at ITS OWN hub (review of #7601, round 4). A data
+        // change sent to another node's hub can carry it, and that hub holds no predecessor under its
+        // key, so the rule below would read a rewrite of an existing record as a create — and the
+        // service exception would accept a replaced hash in a service's own token namespace. Its
+        // owner never sees such a write; System, which writes the index, is exempt.
+        if (!string.Equals(writer.ObjectId, WellKnownUsers.System, StringComparison.Ordinal)
+            && !PolicyCommitGuard.IsOwnPath(next.Path, ownerPath)
+            && (CarriesAToken(next, options) || CarriesAToken(previous, options)))
+            return LocalizationCatalog.Get("access.apiToken.foreignWrite", writer.Locale, next.Path, ownerPath);
+        return ApiTokenPrincipalBinding.Refusal(previous, next, writer.ObjectId, writer.Locale, options);
     }
+
+    private static bool CarriesAToken(MeshNode? node, JsonSerializerOptions options) =>
+        node is not null
+        && (ApiTokenScope.IsTokenRecordType(node.NodeType)
+            || node.Path?.StartsWith(ApiTokenVerdict.IndexNamespace + "/", StringComparison.OrdinalIgnoreCase) == true
+            || ApiTokenVerdict.ReadToken(node, options) is { TokenHash.Length: > 0 });
 }

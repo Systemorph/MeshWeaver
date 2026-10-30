@@ -751,6 +751,70 @@ jobs:
         compression-level: 9
         retention-days: 15
 
+  # The host `build` stage hands back what the two DEPENDENT LEGS read from the Actions `build` job
+  # (core-build-stages.py BUILD_COMMAND → host-build-outputs.py stage): shard 0's plugin tester, the
+  # licence evidence staged from the host build's restore, and the tree it compiled. This job fetches
+  # them from the BUILD API over HTTPS by receipt with the run's own OIDC token (host-build-outputs.py
+  # fetch: the build stage's SUCCEEDED receipts only, each verified against its receipt, every tar
+  # member held to its shape), proves the fresh merge onto the main it names arrives at EXACTLY the
+  # tree the host built, and uploads them under the Actions names — `build-output-0` (the same
+  # zstd --long=27 tarball shape) and `licence-evidence` — so `platform-compat` and `licence-gate` run
+  # their unchanged steps against them. GitHub-hosted for the reason host-results is. RED, never a
+  # skip, on anything missing, foreign, failed or mismatched (core-build-stages.py --check holds this
+  # wiring).
+  host-build-outputs:
+    name: "Host build outputs (for platform-compat and licence-gate)"
+    needs: [admission, host-follow]
+    if: ${{ !cancelled() && needs.admission.outputs.executor == 'host' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      main-sha: ${{ steps.fetch.outputs.main-sha }}
+      tree: ${{ steps.fetch.outputs.tree }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: Fetch the host build's handed-back outputs by receipt, over HTTPS
+      id: fetch
+      env:
+        API_URL: ${{ needs.admission.outputs.api-url }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/host-build-outputs.py --self-test > /dev/null
+        python3 .github/scripts/host-build-outputs.py fetch --api-url "$API_URL" --sha "$SHA" \
+          --channel latest --out "$RUNNER_TEMP/host-build"
+    # 🔀 The consumers merge the head onto this main-sha (policy suites-test-fresh-merge); a fresh merge
+    # is a pure function of (main, head), so this one proves theirs is the tree the host compiled.
+    - name: Merge the head onto the main the host build compiled
+      uses: ./.github/actions/fresh-merge
+      with:
+        main-sha: ${{ steps.fetch.outputs.main-sha }}
+    - name: The merged tree is the one the host built
+      env:
+        BUILT_TREE: ${{ steps.fetch.outputs.tree }}
+      run: |
+        set -euo pipefail
+        here=$(git rev-parse 'HEAD^{tree}')
+        if [ "$here" != "$BUILT_TREE" ]; then
+          echo "::error title=Host build outputs::the fresh merge arrives at tree ${here:0:12}, but the host built ${BUILT_TREE:0:12} — platform-compat and licence-gate would judge another tree than the one the host compiled"
+          exit 1
+        fi
+        echo "the consumers' fresh merge is the host's tree ${here:0:12}"
+    - name: Pack the plugin tester as shard 0's build output
+      run: |
+        set -euo pipefail
+        tar -I 'zstd -T0 --long=27' -cf build-output-0.tar.zst -C "$RUNNER_TEMP/host-build/build-output-0" tools
+        echo "build-output-0 (from the host): $(du -h build-output-0.tar.zst | cut -f1)"
+    - name: "Upload artifact: shard 0 (from the host)"
+      uses: actions/upload-artifact@v7
+      with: { name: build-output-0, path: build-output-0.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
+    - name: "Upload artifact: licence evidence (from the host)"
+      uses: actions/upload-artifact@v7
+      with: { name: licence-evidence, path: "${{ runner.temp }}/host-build/licence-evidence", retention-days: 1, overwrite: true, if-no-files-found: error }
+
   build:
     name: "Build solution (once)"
     needs: [precheck, stage-gate, admission]
@@ -2132,8 +2196,10 @@ jobs:
   # RED (fetch-deployed-plugin-set.sh), never a skip.
   platform-compat:
     name: "Platform compatibility: deployed plugin set links against this platform (ladder)"
-    needs: [build, precheck]
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # On the host route the build ran on a build host and `host-build-outputs` brought its shard-0 output
+    # back under the same artifact name (and the main it compiled), so this job's steps are the same.
+    needs: [build, precheck, admission, host-build-outputs]
+    if: ${{ !cancelled() && (needs.build.result == 'success' || (needs.admission.outputs.executor == 'host' && needs.host-build-outputs.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
@@ -2155,7 +2221,7 @@ jobs:
     - name: Merge the head onto the main the build compiled
       uses: ./.github/actions/fresh-merge
       with:
-        main-sha: ${{ needs.build.outputs.main-sha }}
+        main-sha: ${{ needs.build.outputs.main-sha || needs.host-build-outputs.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: 10.0.x
@@ -2226,12 +2292,13 @@ jobs:
     # 🚨 NO `continue-on-error`, and NO input-shaped `if:`. This gate reads only the repo
     # and the public NuGet feed — it needs no secret, so it has no legitimate reason to be
     # skipped and no fork exemption. It runs on every PR including forks.
-    needs: [precheck, build]
+    needs: [precheck, build, admission, host-build-outputs]
     # Mirrors `build`: the ONLY thing that skips this is the already-green-tree
     # optimisation, which means this exact tree already passed this exact gate. A build that
     # did not succeed leaves this job skipped, and collect-results names THAT as "no
-    # verdict", never as a licence finding.
-    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.build.result == 'success' }}
+    # verdict", never as a licence finding. On the host route the evidence comes from the
+    # host build's restore, brought back under the same artifact name by `host-build-outputs`.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && (needs.build.result == 'success' || (needs.admission.outputs.executor == 'host' && needs.host-build-outputs.result == 'success')) }}
     runs-on: ubuntu-latest
     # ⏱️ It does not restore (MeshWeaver#6596): the `build` job's restore — the one restore of
     # the run, of the tree CI actually builds and ships — stages the evidence this gate reads,
@@ -2247,7 +2314,7 @@ jobs:
     - name: Merge the head onto the main the build compiled
       uses: ./.github/actions/fresh-merge
       with:
-        main-sha: ${{ needs.build.outputs.main-sha }}
+        main-sha: ${{ needs.build.outputs.main-sha || needs.host-build-outputs.outputs.main-sha }}
     # The gate resolves licences from the RESTORED graph — direct and transitive — because a
     # copyleft dependency that arrives transitively binds us exactly as hard as a declared one.
     # No `continue-on-error`: a missing artifact fails the download, and an artifact without a
@@ -2338,6 +2405,14 @@ jobs:
     - name: "Prove the gate is non-vacuous (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-shell.py --self-test
+
+    # template-feed.yml runs after CD on main only, so its first execution would be in production.
+    # Proven here both ways: the derived list equals the template's pins plus their closure, and an
+    # id the template pins that no project packs, an own-line pin above its version, a pack missing
+    # a pinned id, a dependency outside the plan and a push to nuget.org are each RED (#4467).
+    - name: "The template feed packs exactly what the template restores, and is RED otherwise (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/template-feed.py --self-test
 
     - name: "Image-set reads retain registry failures"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -2508,6 +2583,10 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-executor.py --self-test
 
+    - name: "A stage moves to the build host only on declared parity evidence (≥ 20 comparable, 0 disagreements)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-executor.py --check-routing .github/build-routing.json
+
     - name: "A stage's database is disposable: no TCP, a private socket, refused without a server (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/sandbox-postgres.sh --self-test
@@ -2519,6 +2598,10 @@ jobs:
     - name: "A host shard's results reach Consolidate only by verified receipt over HTTPS — none, foreign, extra or truncated is red (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/host-shard-results.py --self-test
+
+    - name: "The host build's outputs reach platform-compat and licence-gate only by verified receipt — none, failed, foreign, escaping or truncated is red (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/host-build-outputs.py --self-test
 
     - name: "A node repo's ratchet reads a host gate log only by verified receipt — none, empty, truncated or foreign is red (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -4353,7 +4436,7 @@ jobs:
     # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
     # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
     # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
-    needs: [precheck, stage-gate, admission, host-follow, host-results, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
+    needs: [precheck, stage-gate, admission, host-follow, host-results, host-build-outputs, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, pr-body, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords, chart-freeze]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4592,6 +4675,11 @@ jobs:
       if: always() && needs.precheck.outputs.skip != 'true' && needs.admission.outputs.executor == 'host' && needs.host-results.result != 'success'
       run: |
         echo "::error::Host route: fetching the shards' handed-back results concluded '${{ needs.host-results.result }}' — see the 'Host shard results' jobs."
+        exit 1
+    - name: "Fail if the host build's outputs were not brought back"
+      if: always() && needs.precheck.outputs.skip != 'true' && needs.admission.outputs.executor == 'host' && needs.host-build-outputs.result != 'success'
+      run: |
+        echo "::error::Host route: fetching the build's handed-back outputs (shard 0's plugin tester, the licence evidence) concluded '${{ needs.host-build-outputs.result }}' — see the 'Host build outputs' job; platform-compat and licence-gate have nothing to judge without them."
         exit 1
 
     - name: Publish Test Results

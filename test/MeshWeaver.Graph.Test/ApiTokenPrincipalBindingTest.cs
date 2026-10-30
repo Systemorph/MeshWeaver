@@ -140,6 +140,9 @@ public class ApiTokenPrincipalBindingTest(ITestOutputHelper output) : MonolithMe
     [InlineData("User/" + Owner + "/ApiToken/x", "User", null, false)]
     [InlineData("User/" + Owner + "/ApiToken/x", Owner, null, true)]
     [InlineData(Owner + "/ApiToken/x", Owner + "/ApiToken", null, false)]
+    // Review of #7601 (round 3): a record in a partition NAMED like System never authenticates as a
+    // case variant of System.
+    [InlineData("System-Security/ApiToken/x", "System-Security", null, false)]
     public async Task AStoredRecord_AuthenticatesOnlyAsThePrincipalOfItsLocation(
         string recordPath, string principal, string? serviceIdentityPath, bool authenticatesAsNamed)
     {
@@ -208,6 +211,10 @@ public class ApiTokenPrincipalBindingTest(ITestOutputHelper output) : MonolithMe
     /// </summary>
     [Theory(Timeout = 60_000)]
     [InlineData(WellKnownUsers.System, false)]
+    // A case variant of System is System to the platform predicate (AccessService.IsPlatformPrincipal
+    // compares case-insensitively), so it may not authenticate either (review of #7601, round 3).
+    [InlineData("SYSTEM-SECURITY", false)]
+    [InlineData("System-Security", false)]
     [InlineData(Owner + "/x", false)]
     [InlineData(Owner, true)]
     public async Task ALegacyInlineIndex_NeverAuthenticatesAsSystem(string principal, bool authenticates)
@@ -251,6 +258,56 @@ public class ApiTokenPrincipalBindingTest(ITestOutputHelper output) : MonolithMe
 
         var own = new MeshNode("c1", $"{Owner}/Page/_Comment") { NodeType = "Comment", Name = "c1", MainNode = $"{Owner}/Page" };
         (await Validate(own)).IsValid.Should().BeTrue("the control: an ancestor main node in the writer's own partition");
+    }
+
+    /// <summary>
+    /// 🚨 THE CARRIED SERVICE-TOKEN PIN (review of #7601, round 4). A <c>DataChangeRequest</c> sent to a
+    /// node the writer may update can carry ANOTHER node — here an existing service token, its hash
+    /// replaced by one whose bearer the writer holds. The receiving workspace holds nothing under that
+    /// key, so the commit point sees no predecessor and the service exception (the path is the
+    /// service's own token namespace) would accept it. A token record or index is committed only by
+    /// its own hub; carried anywhere else it is refused and the stored record is untouched. The
+    /// writer's own carrier node, written through the same hub, is the control.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task AServiceTokenCarriedThroughAnotherNodesHub_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string service = "svc-carried";
+        var identityPath = ServiceIdentity.PathFor(service);
+        var recordPath = $"{ServiceIdentity.TokenNamespace(service)}/t1";
+        var carrierPath = $"{Owner}/Carrier";
+        var original = new string('a', 64);
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("t1", ServiceIdentity.TokenNamespace(service))
+            {
+                Name = "t1", NodeType = ApiTokenNodeType.NodeType,
+                Content = new ApiToken { TokenHash = original, UserId = service, ServiceIdentityPath = identityPath, Label = "t1" },
+            }))
+            .Should().Within(Budget).Emit("the service token must exist first", ct);
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(
+                new MeshNode("Carrier", Owner) { Name = "Carrier", NodeType = "Markdown", MainNode = Owner }))
+            .Should().Within(Budget).Emit("the carrier must exist first", ct);
+        var record = await Access.RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(recordPath)
+                .Where(n => n is not null).Take(1))
+            .Select(n => n!)
+            .Should().Within(Budget).Emit("the service token must be readable", ct);
+
+        var forged = record with { Content = TokenOf(record) with { TokenHash = Hash } };
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(DataChangeRequest.Update([forged]),
+                o => o.WithTarget(new Address(carrierPath)).WithAccessContext(Person(Owner)))
+            .Select(d => d.Message.Status.ToString())
+            .Catch((Exception ex) => Observable.Return("refused:" + ex.GetType().Name))
+            .Should().Within(Budget).Emit("the carried write must answer", ct);
+        Output.WriteLine($"carried service-token write: {response}");
+
+        response.Should().NotBe(nameof(DataChangeStatus.Committed),
+            "a token record carried through another node's hub never meets its own owner's rule");
+        TokenOf(await Access.RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(recordPath)
+                    .Where(n => n is not null).Take(1))
+                .Select(n => n!)
+                .Should().Within(Budget).Emit("the service token must still be readable", ct))
+            .TokenHash.Should().Be(original, "the carried hash never reached the stored record");
     }
 
     private Task<string> CreateAs(string principal, string nodeType, string id, CancellationToken ct) =>

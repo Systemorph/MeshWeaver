@@ -1289,6 +1289,25 @@ reaches `user_effective_permissions` and `partition_access` like an assignment d
 lists the partition for the subject. A rule change re-projects every partition; a root whose type
 or content changes re-projects its own partition, but only when some rule names its type.
 
+**Both evaluators match the content filter against the SAME bytes: the root's STORED JSON.** The
+fold's root read carries the query qualifier `content:stored` (`ParsedQuery.StoredContent`): a
+provider that stores serialised JSON hands the `content` column back as a `JsonElement` instead of
+deserialising it, and the node-stream cache passes such a result through untouched instead of
+re-typing it for the caller's options. Without it the fold matched a DESERIALISED root written back
+by the current serializer, and that round trip is lossy in two directions, both reachable on rows an
+older serializer (or an untyped write) left behind (#7426):
+
+- a field ABSENT from the stored JSON whose CLR member has a non-default initializer read as that
+  initializer — the fold granted where Postgres' `content->>'field'` is NULL;
+- an explicit CLR default stored in the JSON (`"approved": false`) was omitted on the way back — the
+  fold denied where Postgres matches `'false'`.
+
+Neither direction can be repaired by re-saving the root (for a row that already lost a value, the
+stored bytes are the truth both evaluators now agree on). Pinned by `GrantRuleStoredContentTest`
+(MeshWeaver.Hosting.Test: both directions on legacy-shaped rows, plus a typed row as the negative
+control) and, for the Postgres provider honouring the qualifier, by MeshWeaver.Plugins'
+grant-rule parity test.
+
 > ⚠️ **One pre-existing difference between the evaluators applies here too.** The C# fold denies by
 > ROLE (a `Denied: Viewer` removes the Viewer role and nothing else), the SQL projection by
 > PERMISSION (a denied Viewer writes deny rows for Viewer's permissions, which also block an Editor's
@@ -1425,6 +1444,11 @@ own-scope shortcut that otherwise lets a person write anything into their own pa
 owner's commit point (`ApiTokenPrincipalCommitGuard`, an `IEntityCommitGuard`), which every routed
 update, merge patch and data change meets. Binding at the write side covers both verdicts at once.
 
+A token record or index commits only at ITS OWN hub. A data change sent to another node's hub can
+carry one, and that hub holds no predecessor under its key, so a rewrite would read as a create there
+and a service token's replaced hash would pass in the service's own namespace. Such a carried write by
+anyone but System is refused at the commit point.
+
 **The verdict binds the principal to the record's LOCATION** (`ApiTokenVerdict.IsBoundToItsLocation`).
 The write rules above cover the seams they see; several write routes do not reach them (a node cleared
 and restored, a data change reaching a cold owner, a transient confirmed straight to storage, content
@@ -1440,9 +1464,13 @@ as System.
 
 **A writer-chosen main node outside the node's ancestry does not delegate alone.** Satellite delegation
 (`SatelliteAccessRule`) authorises a satellite against its main node. When the WRITER chooses that
-pointer on a create and it is not the node or one of its ancestors, the write must also pass the
-path check where the node lands. A stored off-partition main node still governs reads. The
-own-main-node shortcut trusts only an ancestor main node (`MainNodeTrust`).
+pointer — on a create, or on an update that changes it — and it is not the satellite's OWNER, the
+write must also pass the path check where the node lands. The owner is the path before the satellite
+segment only when that segment holds the node directly (`Space/Doc` for `Space/Doc/_Comment/c1`);
+otherwise it is the parent, so a node under an ordinary `_` content segment or nested inside another
+satellite never borrows an owner above a scope that can break the inherited grant. A stored off-partition main
+node still governs reads. The own-main-node shortcut trusts only an ancestor main node
+(`MainNodeTrust`).
 
 **Delegation never skips a policy between the main node and the satellite.** When the main node is an
 ANCESTOR of where the satellite lands (its parent on a create, its own path otherwise), the scopes in

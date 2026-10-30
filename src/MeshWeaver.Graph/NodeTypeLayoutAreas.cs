@@ -635,6 +635,7 @@ public static class NodeTypeLayoutAreas
         // sections derived from the definition.
         var compilePanel = BuildCompileStatusPanel(hubPath)
             .PublishingTo(NodeTypeStatusView.DataId, StatusProjection(host));
+        var deliveryHold = BuildDeliveryHoldTemplate();
         var latestReleases = BuildLatestReleasesSection(hubPath, locale);
 
         return GetNodeStream(host)
@@ -652,6 +653,8 @@ public static class NodeTypeLayoutAreas
                 // Compile-state banner + Compile button — the "ability to compile" affordance on
                 // the landing page.
                 content = content.WithView(compilePanel);
+                // #7356 — why the last release produced no new build, when a delivery hold answered it.
+                content = content.WithView(deliveryHold);
 
                 // Markdown description from the mesh node's NodeTypeDefinition.
                 if (!string.IsNullOrEmpty(typeDef?.Description))
@@ -1359,7 +1362,8 @@ public static class NodeTypeLayoutAreas
             .WithWidth("100%")
             .WithStyle("padding: 24px; gap: 20px;")
             .WithView(headerRow)
-            .WithView(BuildCompileLogTemplate());
+            .WithView(BuildCompileLogTemplate())
+            .WithView(BuildDeliveryHoldTemplate());
 
         // Editable settings form — bound DIRECTLY to the node stream (IMeshNodeStreamCache), ONE
         // source of truth. Display Name / Icon are node TOP-LEVEL fields (fields-mode DataContext);
@@ -1485,6 +1489,29 @@ public static class NodeTypeLayoutAreas
             })
             .WithView(Controls.Markdown(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LogLinks)))
                 .WithStyle("font-size: 12px; color: var(--neutral-foreground-hint);") with { DataContext = status });
+    }
+
+    /// <summary>
+    /// The delivery-hold block (MeshWeaver#7356), bound to the <see cref="NodeTypeStatusView"/>
+    /// projection: hidden unless the record carries a <see cref="NodeTypeDefinition.DeliveryHoldReason"/>;
+    /// then a headline (serving the last build, or held) and the recorded reason. Without it a
+    /// release request a delivery hold answered — the unknown-membership hold above all, which keeps
+    /// <c>Compiled</c> provenance — read as a successful compile on the page.
+    /// </summary>
+    internal static UiControl BuildDeliveryHoldTemplate()
+    {
+        var status = NodeTypeStatusView.DataContext;
+        return (Controls.Stack with
+            {
+                Style = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.HoldStyle)),
+                DataContext = status
+            })
+            .WithView(Controls.Body(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.HoldHeadline)))
+                .WithStyle("font-weight: 600; color: var(--warning-foreground);") with { DataContext = status })
+            .WithView(Controls.Markdown(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.HoldDetail))) with
+            {
+                DataContext = status
+            });
     }
 
     /// <summary>
