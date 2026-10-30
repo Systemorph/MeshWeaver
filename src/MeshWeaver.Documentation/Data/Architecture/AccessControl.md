@@ -1498,10 +1498,15 @@ namespace's first satellite segment):
 
 - **A carried write.** A data change sent to ANOTHER node's hub can carry a satellite. That hub holds
   no predecessor under the satellite's key, so there is nothing to compare. A satellite committed
-  anywhere but its own hub may carry only a derived pointer.
+  anywhere but its own hub may carry only a derived pointer. **Not closed:** with no predecessor, the
+  carrier cannot tell a create from a rewrite. So a carried rewrite can still replace a stored
+  off-ancestry pointer with a derived one, or with a nested satellite's outer storage owner. Closing
+  that needs the carried write to reach the satellite's owner, where the stored node is compared
+  (filed to triage).
 - **A retype into the satellite class.** Retype a satellite out, change its pointer while it is an
   ordinary node, and retype it back. Each write alone passes the comparison, so the write that makes a
-  node a satellite may only bring a derived pointer.
+  node a satellite may only bring its SECURITY owner or itself. The storage owner of an outer satellite
+  segment is not enough, because for `Doc/_Thread/t1/_Comment/c1` it is `Doc`, above the thread.
 - **A module's satellite type.** The rule set hands a module's rule out behind a lease wrapper, so the
   guard asks the set (`NodeTypeAccessRuleSet.IsGovernedBy<SatelliteAccessRule>`), which tests the
   leased rule itself, instead of testing what `Find` returns.

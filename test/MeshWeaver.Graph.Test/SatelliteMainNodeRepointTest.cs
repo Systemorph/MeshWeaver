@@ -205,4 +205,26 @@ public class SatelliteMainNodeRepointTest(ITestOutputHelper output) : MonolithMe
         Commit(asMarkdown, asMarkdown with { NodeType = "Comment" }, CommentPath).Should().BeNull(
             "the control: retyping back with the path-derived pointer lands");
     }
+
+    /// <summary>
+    /// 🚨 The same three writes on a NESTED satellite: a comment on a thread
+    /// (<c>Doc/_Thread/t1/_Comment/c1</c>), whose security owner is the thread <c>t1</c>. The storage
+    /// owner of its first satellite segment (<c>Doc</c>) sits above <c>t1</c>, and a policy on <c>t1</c>
+    /// can break inheritance, so a node that becomes a satellite may not bring that pointer either.
+    /// The control is the thread itself.
+    /// </summary>
+    [Fact]
+    public void RetypingANestedSatelliteBackWithTheOuterOwner_IsRefused()
+    {
+        const string thread = Doc + "/_Thread/t1";
+        var nested = new MeshNode("c1", thread + "/_Comment")
+            { Name = "c1", NodeType = "Markdown", MainNode = Doc };
+        var ownPath = thread + "/_Comment/c1";
+
+        Commit(nested, nested with { NodeType = "Comment" }, ownPath).Should().NotBeNull(
+            "the outer document is above the nested satellite's security owner (the thread), so retyping back "
+            + "with it would restore delegation above any inheritance-breaking policy on the thread");
+        Commit(nested with { MainNode = thread }, nested with { MainNode = thread, NodeType = "Comment" }, ownPath)
+            .Should().BeNull("the control: the thread, the nested satellite's security owner, is accepted");
+    }
 }
