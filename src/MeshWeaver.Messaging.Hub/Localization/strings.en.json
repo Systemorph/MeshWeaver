@@ -1642,6 +1642,7 @@
   "setup.problem.keyUnstorable": "This instance registered as {0}, but its key could not be stored: the data directory is not writable. That id is now claimed and cannot be re-used — make the directory writable and restart, rather than registering again under a new id.",
   "activity.codeRun.failed": "{language} run failed: {reason}",
   "activity.codeRun.failedNoReason": "{language} run failed: the kernel reported a failure without giving a reason.",
+  "activity.codeRun.kernelHostShutDown": "The kernel host shut down while this run was in progress, so the run did not finish. Run the cell again.",
   "activity.codeRun.kernelSaturated": "The cell was not run: all {max} kernel slot(s) of this process are busy, and a cell that waits on another cell may not queue behind it. Run it again once other cells have finished.",
   "activity.codeRun.noWorker": "No {language} worker connected at '{target}'. The language gate is not running in this deployment — see Doc/Architecture/PythonCodeNodes.",
   "kernel.executionFailed": "Execution failed",
