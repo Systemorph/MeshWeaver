@@ -2162,9 +2162,6 @@ public record LayoutAreaHost : IDisposable
         hub.Post(request, o => o.WithTarget(subscriber));
     }
 
-    internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
-        => LayoutDefinition.AreaDefinitions.Values.Where(l => l.IsVisible());
-
     /// <summary>The area a node falls back to when nothing declares a default. See <see cref="ResolveDefaultArea"/>.</summary>
     public const string ConventionalDefaultArea = "Overview";
 

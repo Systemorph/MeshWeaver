@@ -14,13 +14,13 @@ public class LayoutAreaAutocompleteProvider(IUiControlService uiControlService, 
     /// <inheritdoc />
     public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
     {
-        // Pure in-memory enumeration of registered layout area definitions.
+        // The registered layout area definitions, with their XML-doc descriptions read through the
+        // mesh's I/O pool rather than on the caller's thread.
         var layoutDefinition = uiControlService.LayoutDefinition;
         var address = hub.Address;
         var addressStr = address.ToString();
 
-        var items = layoutDefinition.AreaDefinitions.Values
-            .Where(area => area.IsInvisible != true && !area.Area.StartsWith("$"))
+        return layoutDefinition.ObserveVisibleAreaDefinitions().Select(areas => (IReadOnlyCollection<AutocompleteItem>)areas
             .Select(area =>
             {
                 var priority = area.Order ?? 500;
@@ -41,7 +41,6 @@ public class LayoutAreaAutocompleteProvider(IUiControlService uiControlService, 
                     Priority: priority,
                     Kind: AutocompleteKind.Other);
             })
-            .ToList();
-        return Observable.Return((IReadOnlyCollection<AutocompleteItem>)items);
+            .ToList());
     }
 }

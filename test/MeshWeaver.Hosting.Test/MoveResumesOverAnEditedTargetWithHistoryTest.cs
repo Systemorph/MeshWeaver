@@ -84,6 +84,62 @@ public class MoveResumesOverAnEditedTargetWithHistoryTest(ITestOutputHelper outp
         (await Stored(target))!.Name.Should().Be("Submission", "and leaves the target as the copy left it");
     }
 
+    /// <summary>
+    /// #7352: a Markdown node — written by the file-system store as <c>.md</c> front matter — is
+    /// recognised as itself relocated, so the retry of its half-landed move finishes it. Before
+    /// #7352 the front matter carried neither <c>CreatedBy</c> nor <c>CreatedDate</c>, the "same
+    /// node" check had nothing to compare, and this retry was refused <c>TargetAlreadyExists</c>
+    /// on every attempt.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task ARetry_OfAHalfLandedMarkdownMove_Resumes()
+    {
+        Access.SetCircuitContext(TestUsers.Admin);
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var source = $"{TestPartition}/note-{suffix}";
+        var target = $"{TestPartition}/filed-{suffix}";
+        await Seed(source, "Note", MarkdownNodeType);
+        var seeded = (await Stored(source))!;
+        Output.WriteLine($"stored stamps: type={seeded.NodeType} by={seeded.CreatedBy} created={seeded.CreatedDate:O}");
+        seeded.CreatedBy.Should().NotBeNullOrEmpty("precondition: the .md file carries who created the node");
+        seeded.CreatedDate.Should().NotBe(default, "precondition: the .md file carries when the node was created");
+        await HalfLand(source, target, TestContext.Current.CancellationToken);
+
+        var retry = await Move(source, target);
+        Output.WriteLine($"markdown retry: success={retry.Success} reason={retry.RejectionReason} error={retry.Error}");
+
+        retry.Success.Should().BeTrue(retry.Error
+            ?? "the target holds this Markdown node relocated, and the source is unchanged — the move resumes");
+        (await Stored(target))!.Name.Should().Be("Note", "the resume stands in for the create");
+        (await Stored(source)).Should().BeNull("the move completed: the source is gone");
+    }
+
+    /// <summary>
+    /// Negative control for #7352: carrying authorship in the front matter must not make two
+    /// DIFFERENT Markdown nodes look alike. A separately created node at the target has its own
+    /// <c>CreatedDate</c>, so the move is still refused and nothing is deleted or overwritten.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task AMarkdownMove_OntoADifferentMarkdownNode_IsStillRefused()
+    {
+        Access.SetCircuitContext(TestUsers.Admin);
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var source = $"{TestPartition}/note-{suffix}";
+        var target = $"{TestPartition}/occupied-{suffix}";
+        await Seed(source, "Note", MarkdownNodeType);
+        await Seed(target, "Someone else's note", MarkdownNodeType);
+
+        var moved = (await ObserveNodeOperation(new MoveNodeRequest(source, target))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken))
+            .Message;
+        Output.WriteLine($"markdown collision: success={moved.Success} reason={moved.RejectionReason} error={moved.Error}");
+
+        moved.Success.Should().BeFalse("the target holds a different node");
+        moved.RejectionReason.Should().Be(NodeMoveRejectionReason.TargetAlreadyExists);
+        (await Stored(source))!.Name.Should().Be("Note", "a refused move removes nothing");
+        (await Stored(target))!.Name.Should().Be("Someone else's note", "a refused move overwrites nothing");
+    }
+
     /// <summary>The copy leg a move issues, and no delete leg — the half-landing of #6107.</summary>
     private async Task HalfLand(string source, string target, System.Threading.CancellationToken ct)
     {
@@ -105,15 +161,15 @@ public class MoveResumesOverAnEditedTargetWithHistoryTest(ITestOutputHelper outp
         await Storage.Read(path, Mesh.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
-    // A JSON-stored type, deliberately not Markdown: the file-system store writes a Markdown node as
-    // `.md` front matter, which keeps neither CreatedBy nor CreatedDate and reads LastModified from
-    // the file's timestamp, so the identity a resume needs is not there to compare and such a retry
-    // is refused (fail-closed). Measured while writing this test: `by= created=0001-01-01…`.
-    private async Task Seed(string path, string name) =>
+    private const string MarkdownNodeType = "Markdown";
+
+    // A JSON-stored type (`Group`) by default; the Markdown arms pass "Markdown", which the
+    // file-system store writes as `.md` front matter (#7352).
+    private async Task Seed(string path, string name, string nodeType = "Group") =>
         await NodeFactory.CreateNode(MeshNode.FromPath(path) with
         {
             Name = name,
-            NodeType = "Group",
+            NodeType = nodeType,
             State = MeshNodeState.Active,
         }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 

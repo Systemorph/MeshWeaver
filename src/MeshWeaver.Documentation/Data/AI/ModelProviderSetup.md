@@ -196,6 +196,21 @@ An instance that must keep prompts inside the EU (policy `ai-eu-only-processing`
 
 **Every one of these keys is rendered only when a deployment sets it** (trimmed; a blank or whitespace-only value renders no key), and the chart defaults set none — so a deployment record that declares nothing renders exactly what it did before. That guard is load-bearing for the endpoints: the catalog seeder falls back to a section's default endpoint only when the key is *absent*, so a rendered `""` would replace the default with nothing. `deploy/aks/scripts/check-chart-invariants.sh` asserts all of this against a fixture (`testdata/values.eu-ai-residency.yaml`), and its invariant 9 refuses a blank `OpenRouter__Endpoint` or `OpenRouterEU__Endpoint`.
 
+### Declaring each model's context window
+
+The context-window guard (MeshWeaver.Plugins#3517) arms for a model only when its node carries `contextWindowTokens`. The catalog seeder stamps that value from the deployment record, which DECLARES it per model beside the model list (policy `declared-not-derived` — the record is the source of truth, nothing is derived per model in code):
+
+```json
+"ai": {
+  "openRouterEU": {
+    "models": [ "z-ai/glm-5.3", "anthropic/claude-opus-5.5" ],
+    "contextWindowTokens": { "z-ai/glm-5.3": 1048576, "anthropic/claude-opus-5.5": 1000000 }
+  }
+}
+```
+
+The map is additive: `models` is unchanged. Because a model id carries `/`, which no ConfigMap key or environment variable may, the map renders as indexed pairs in ordinal order of the id — `{Section}__ContextWindowTokens__{i}__Model` and `{Section}__ContextWindowTokens__{i}__Tokens`. A window that is not a positive integer is refused when the record is rendered. A model the map does not name keeps no window, so the guard stays unarmed for it, and the seeder logs that once per model by name (`no declared context window`); a map entry naming a model the list does not carry is logged the same way. Take each value from the provider's documented context length (OpenRouter's `context_length`).
+
 ### Choosing models: open-weight, and Auto routes only to these
 
 The Systemorph deployments run their tiers on **open-weight** models — cheap, fast, strong at programming and structured output, and (uniquely) able to run on-device — served through the single funded **OpenRouter** key. **Auto routes only to these**; Claude/GPT/Gemini/Grok stay installed but **untiered** (a manual pick — see the note below, and [Auto and the tiers route to open-weight models only](/Doc/AI/ModelTiers)).

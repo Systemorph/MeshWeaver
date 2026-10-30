@@ -351,6 +351,10 @@ public partial class MarkdownFileParser : IFileFormatParser
             // counter and the next write collides with an existing version-history row.
             // Absent (authored / imported content) ⇒ 0, i.e. "never versioned".
             Version = frontMatter?.Version ?? 0,
+            // Authorship, symmetric with Serialize: carried when the file says so, never invented —
+            // an authored file without the keys reads back unattributed (null / default), as before.
+            CreatedBy = NullIfEmpty(frontMatter?.CreatedBy),
+            CreatedDate = ParseCreatedDate(frontMatter?.CreatedDate),
             LastModified = lastModified,
             Content = nodeContent,
             PreRenderedHtml = markdownDocument.PrerenderedHtml
@@ -429,7 +433,13 @@ public partial class MarkdownFileParser : IFileFormatParser
             // Persist the revision counter so a reload does not restart it at 0 — see the
             // field's declaration. 0 (never versioned) stays absent, so authored content
             // files are unaffected.
-            Version = node.Version > 0 ? node.Version : null
+            Version = node.Version > 0 ? node.Version : null,
+            // Authorship (#7352): emitted only when the node HAS it, so a file that never carried
+            // it serializes byte-identically. Round-trip form ("O"), so the instant reads back exact.
+            CreatedBy = NullIfEmpty(node.CreatedBy),
+            CreatedDate = node.CreatedDate != default
+                ? node.CreatedDate.ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+                : null
         };
 
         // Only write YAML block if there's meaningful content
@@ -446,7 +456,9 @@ public partial class MarkdownFileParser : IFileFormatParser
                             frontMatter.Notes != null ||
                             frontMatter.Background != null ||
                             frontMatter.ExcludeFromContext?.Count > 0 ||
-                            frontMatter.Version != null;
+                            frontMatter.Version != null ||
+                            frontMatter.CreatedBy != null ||
+                            frontMatter.CreatedDate != null;
 
         if (hasYamlContent)
         {
@@ -619,6 +631,17 @@ public partial class MarkdownFileParser : IFileFormatParser
         return (id, ns);
     }
 
+    /// <summary>
+    /// A front-matter <c>CreatedDate</c> as the instant it names, or <c>default</c> (unset) when it is
+    /// absent or not a date — authorship is never invented from a value that does not parse.
+    /// </summary>
+    private static DateTimeOffset ParseCreatedDate(string? text) =>
+        !string.IsNullOrWhiteSpace(text)
+        && DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var value)
+            ? value
+            : default;
+
     private static MeshNodeState ParseState(string? state)
     {
         if (string.IsNullOrEmpty(state))
@@ -733,6 +756,18 @@ public partial class MarkdownFileParser : IFileFormatParser
         // content files stay byte-identical. Declared last for the same byte-stability
         // reason as the keys above.
         public long? Version { get; set; }
+
+        // 🚨 Authorship — MUST round-trip (#7352). MeshNode.CreatedBy / CreatedDate are the node's
+        // identity across a relocation: a preserving copy carries them verbatim, and both the move
+        // resume (#6310, IsSameNodeRelocated) and the create rollback (CompensateFailedCreate,
+        // #638) recognise "this is the node I wrote" by comparing them. A format that drops them
+        // makes every .md node on the file-system store unrecognisable to both, and loses who
+        // created it. Emitted only when set, so an authored file (which carries neither) stays
+        // byte-identical; never invented on read. The date is kept as TEXT and parsed tolerantly,
+        // so a hand-mangled value degrades to "unset" instead of failing the whole front matter.
+        // Declared after Version for the same byte-stability reason as the keys above.
+        public string? CreatedBy { get; set; }
+        public string? CreatedDate { get; set; }
 
         // Legacy aliases. The binder doesn't follow C# property hierarchy, so we
         // expose them as plain settable properties and fold them in below

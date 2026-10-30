@@ -1,3 +1,7 @@
+using System.Reactive.Linq;
+using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
+
 namespace MeshWeaver.Layout.Domain;
 
 /// <summary>
@@ -41,4 +45,15 @@ internal static class DomainViews
     /// <returns>A <see cref="Controls.Hint"/> label, or null.</returns>
     internal static UiControl? Description(string? summary) =>
         string.IsNullOrWhiteSpace(summary) ? null : Controls.Hint(summary).WithStyle("margin-bottom: 1rem;");
+
+    /// <summary>
+    /// The type's XML-doc summary as a DATA-BOUND hint line: the page renders without waiting for it,
+    /// and the line binds once the summary is in memory — the documentation file is read on the mesh's
+    /// I/O pool, never on the thread building the view (Doc/Architecture/XmlDocumentationReader).
+    /// </summary>
+    /// <param name="hub">The hub rendering the view.</param>
+    /// <param name="type">The documented type.</param>
+    /// <returns>The hint line, or null when the type has no summary.</returns>
+    internal static IObservable<UiControl?> DescriptionOf(IMessageHub hub, Type type) =>
+        hub.ObserveXmlDocsSummary(type).Select(Description);
 }

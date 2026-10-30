@@ -298,6 +298,11 @@ public static class Controls
     /// <returns>A new <see cref="VideoControl"/>.</returns>
     public static VideoControl Video(object src) => new(src);
 
+    /// <summary>Creates an in-place audio player control for the given source.</summary>
+    /// <param name="src">The audio source URL (a media file), or a data-binding expression.</param>
+    /// <returns>A new <see cref="AudioControl"/>.</returns>
+    public static AudioControl Audio(object src) => new(src);
+
     /// <summary>Creates an info / success / warning / error banner (<see cref="MessageBarControl"/>); <see cref="MessageBarIntent.Info"/> until <see cref="MessageBarControl.WithIntent"/> says otherwise.</summary>
     /// <param name="body">The message text, or a data-binding expression. User-facing: pass a localized string.</param>
     /// <returns>A new <see cref="MessageBarControl"/>.</returns>

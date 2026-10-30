@@ -441,11 +441,29 @@ instance-activation self-heal binds those bytes. That heal excludes `Unavailable
 leave the type on the overlay everywhere, and the record is rebuilt instead
 (`DecideStaleBuildAction(recordUnavailable: true)`).
 
+🚨 **The PLATFORM floor is judged by the same reading (#7467).** The package root also declares
+`minMeshVersion`, the platform its sources were written against. A floor on the package lane
+(`PackagePlatformFloorGate`) holds an install or update, but once a replica on a newer image has
+synced the sources, a replica still on the older image compiled them anyway. Measured on memex-cloud
+on 2026-10-26: core added `BuildHostsBlock.PullIdentityClientId`, Hosting started reading it, and
+pods on the older image failed with `CS1061` on exactly that member. `NodeTypeDependencyFloorReader`
+now judges the root's `minMeshVersion` FIRST, with the one platform-floor rule (`PlatformFloor.Evaluate`
+against the running platform). A floor above it ends the attempt before Roslyn with the sentence
+*"package X requires platform ≥ N; this instance runs M"*, and the record is stamped `Unavailable`
+with that reason — the same non-verdict, the same entries, the same recovery as an unmet `requires`.
+This changes WHEN the root is read: the platform floor needs it whatever modules the process loaded
+(an older image is exactly the replica with nothing newer loaded), so the root is now read on every
+process whose running platform CAN hold a floor. A source build (`-dev`) or an unknown running
+version can hold none (`PlatformFloor.CanHold` is false), so those processes still skip the read.
+The read is the same persisted, bounded, path-resolver read described above; nothing new blocks.
+
 Pinned by `AnUnmetDependencyFloorIsNotACompileVerdictTest` (with met-floor negative controls for the
 compile and the hydration), `ABatchBakeBelowADependencyFloorFormsNoVerdictTest`,
 `ACompileDependencyFloorReadsThePackageRootTest` (including a lower-cased reference and a silent
 resolver), `ABelowFloorReplicaRequestsNoSharedRecompileTest`,
-`AFloorRefusedTypeRecoversWhereTheFloorIsMetTest` and
+`AFloorRefusedTypeRecoversWhereTheFloorIsMetTest`,
+`APlatformFloorAboveTheRunningPlatformIsNotCompiledTest` (floor above, equal to and below the
+running platform, and a source build that never holds) and
 `ContentKeyReevaluationTest.DecideStaleBuildAction_AnUnavailableRecordOnAStoreHit_IsRebuilt`.
 
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here

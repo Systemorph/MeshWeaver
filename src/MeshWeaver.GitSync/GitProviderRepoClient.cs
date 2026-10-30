@@ -3,13 +3,13 @@ using System.Reactive.Linq;
 namespace MeshWeaver.GitSync;
 
 /// <summary>
-/// The provider seam of GitSync (MeshWeaver#6500): ONE <see cref="IGitHubRepoClient"/> that sends
-/// every operation on an <b>Azure Repos</b> URL (<see cref="GitRepositoryProvider.AzureRepos"/>) to
-/// <see cref="AzureReposRepoClient"/> and every other URL to the GitHub client it wraps. The
-/// provider is read off the URL on each call (<see cref="GitRepositoryProvider.Classify"/>), never
+/// The provider seam of GitSync: ONE <see cref="IGitHubRepoClient"/> that sends every operation on a
+/// URL a registered <see cref="IGitHostingProvider"/> claims to that provider's
+/// <see cref="IGitHostingProvider.RepoClient"/>, and every other URL to the GitHub client it wraps.
+/// The provider is resolved off the URL on each call (<see cref="GitHostingProviders.For"/>), never
 /// stored, so <see cref="GitHubSyncService"/>, the pull-request and issue services and the branch
 /// reconcile keep ONE code path and the import, export and two-way rules above the client are the
-/// same for both providers by construction.
+/// same for every provider by construction.
 ///
 /// <para>🚨 <b>Every interface member is forwarded explicitly — the default-implemented ones
 /// included</b> (<c>Fetch</c> with a filter, <c>GetHeadSha</c>, <c>GetChangedPaths</c>,
@@ -17,110 +17,152 @@ namespace MeshWeaver.GitSync;
 /// here would silently replace the inner client's real implementation with the fallback (a full
 /// fetch for a head lookup, "diff unknown" for every diff), because a default member is bound on
 /// the type that declares the interface, not on the object it would have reached.</para>
+///
+/// <para>Every member resolves the provider when it is SUBSCRIBED, so a URL two providers claim
+/// faults that subscription by name (<c>gitsync.provider.ambiguous</c>) instead of throwing out of
+/// the call that composed it.</para>
 /// </summary>
-/// <param name="github">The client for GitHub and every other git remote.</param>
-/// <param name="azureRepos">The client for Azure Repos URLs.</param>
-public sealed class GitProviderRepoClient(IGitHubRepoClient github, IGitHubRepoClient azureRepos) : IGitHubRepoClient
+public sealed class GitProviderRepoClient : IGitHubRepoClient
 {
+    private readonly IGitHubRepoClient github;
+    private readonly GitHostingProviders providers;
+
+    /// <summary>Routes every URL a registered hosting provider claims to that provider.</summary>
+    /// <param name="github">The client for GitHub and every other git remote.</param>
+    /// <param name="providers">The registered hosting providers.</param>
+    public GitProviderRepoClient(IGitHubRepoClient github, GitHostingProviders providers)
+    {
+        this.github = github;
+        this.providers = providers;
+    }
+
+    /// <summary>The shipped two-client signature: Azure Repos URLs to <paramref name="azureRepos"/>,
+    /// everything else to <paramref name="github"/>. Kept so a module compiled against it still
+    /// binds; new code passes the <see cref="GitHostingProviders"/>.</summary>
+    /// <param name="github">The client for GitHub and every other git remote.</param>
+    /// <param name="azureRepos">The client for Azure Repos URLs.</param>
+    [Obsolete("Pass the registered GitHostingProviders: GitProviderRepoClient(github, providers).")]
+    public GitProviderRepoClient(IGitHubRepoClient github, IGitHubRepoClient azureRepos)
+        : this(github, new GitHostingProviders([], [new RoutedAzureRepos(azureRepos)]))
+    {
+    }
+
     /// <summary>The client <paramref name="repositoryUrl"/> is served by.</summary>
     /// <param name="repositoryUrl">The repository URL.</param>
-    /// <returns>The Azure Repos client for an Azure Repos URL, else the GitHub client.</returns>
+    /// <returns>The claiming provider's client, else the GitHub client.</returns>
+    /// <exception cref="GitSyncRefusalException">Two providers claim the URL.</exception>
     public IGitHubRepoClient For(string? repositoryUrl)
-        => GitRepositoryProvider.IsAzureRepos(repositoryUrl) ? azureRepos : github;
+        => providers.For(repositoryUrl)?.RepoClient ?? github;
+
+    private IObservable<T> Route<T>(string? repositoryUrl, Func<IGitHubRepoClient, IObservable<T>> call)
+        => Observable.Defer(() => call(For(repositoryUrl)));
 
     /// <inheritdoc />
     public IObservable<GitHubPushResult> Push(GitHubPushRequest request)
-        => For(request.RepositoryUrl).Push(request);
+        => Route(request.RepositoryUrl, c => c.Push(request));
 
     /// <inheritdoc />
     public IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken)
-        => For(repositoryUrl).Fetch(repositoryUrl, commitish, subdirectory, accessToken);
+        => Route(repositoryUrl, c => c.Fetch(repositoryUrl, commitish, subdirectory, accessToken));
 
     /// <inheritdoc />
     public IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken,
         Func<string, bool> pathFilter)
-        => For(repositoryUrl).Fetch(repositoryUrl, commitish, subdirectory, accessToken, pathFilter);
+        => Route(repositoryUrl, c => c.Fetch(repositoryUrl, commitish, subdirectory, accessToken, pathFilter));
 
     /// <inheritdoc />
     public IObservable<string> GetHeadSha(string repositoryUrl, string commitish, string accessToken)
-        => For(repositoryUrl).GetHeadSha(repositoryUrl, commitish, accessToken);
+        => Route(repositoryUrl, c => c.GetHeadSha(repositoryUrl, commitish, accessToken));
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<string>?> GetChangedPaths(
         string repositoryUrl, string baseSha, string headSha, string? subdirectory, string accessToken)
-        => For(repositoryUrl).GetChangedPaths(repositoryUrl, baseSha, headSha, subdirectory, accessToken);
+        => Route(repositoryUrl, c => c.GetChangedPaths(repositoryUrl, baseSha, headSha, subdirectory, accessToken));
 
     /// <inheritdoc />
     public IObservable<bool> IsAncestor(
         string repositoryUrl, string ancestorSha, string descendantRef, string accessToken)
-        => For(repositoryUrl).IsAncestor(repositoryUrl, ancestorSha, descendantRef, accessToken);
+        => Route(repositoryUrl, c => c.IsAncestor(repositoryUrl, ancestorSha, descendantRef, accessToken));
 
     /// <inheritdoc />
-    /// <remarks>An Azure Repos URL answers null ("unknown"): the GitHub rename lookup does not apply
-    /// to it, and <see cref="GitHubRepoIdentityResolver"/> never resolves one.</remarks>
+    /// <remarks>A URL a hosting provider claims answers null ("unknown"): the GitHub rename lookup
+    /// does not apply to it, and <see cref="GitHubRepoIdentityResolver"/> never resolves one.</remarks>
     public IObservable<RepoIdentity?> GetCanonicalRepository(string repositoryUrl, string accessToken)
-        => GitRepositoryProvider.IsAzureRepos(repositoryUrl)
+        => Observable.Defer(() => providers.For(repositoryUrl) is not null
             ? Observable.Return<RepoIdentity?>(null)
-            : github.GetCanonicalRepository(repositoryUrl, accessToken);
+            : github.GetCanonicalRepository(repositoryUrl, accessToken));
 
     /// <inheritdoc />
     public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request)
-        => For(request.RepositoryUrl).CreateBranch(request);
+        => Route(request.RepositoryUrl, c => c.CreateBranch(request));
 
     /// <inheritdoc />
     public IObservable<GitHubPullRequestInfo> OpenPullRequest(GitHubOpenPullRequestRequest request)
-        => For(request.RepositoryUrl).OpenPullRequest(request);
+        => Route(request.RepositoryUrl, c => c.OpenPullRequest(request));
 
     /// <inheritdoc />
     public IObservable<GitHubPullRequestInfo> GetPullRequestStatus(
         string repositoryUrl, int number, string accessToken)
-        => For(repositoryUrl).GetPullRequestStatus(repositoryUrl, number, accessToken);
+        => Route(repositoryUrl, c => c.GetPullRequestStatus(repositoryUrl, number, accessToken));
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<GitHubIssue>> ListIssues(
         string repositoryUrl, GitHubIssueState? state, string accessToken)
-        => For(repositoryUrl).ListIssues(repositoryUrl, state, accessToken);
+        => Route(repositoryUrl, c => c.ListIssues(repositoryUrl, state, accessToken));
 
     /// <inheritdoc />
     public IObservable<GitHubIssue> GetIssue(string repositoryUrl, int number, string accessToken)
-        => For(repositoryUrl).GetIssue(repositoryUrl, number, accessToken);
+        => Route(repositoryUrl, c => c.GetIssue(repositoryUrl, number, accessToken));
 
     /// <inheritdoc />
     public IObservable<GitHubIssue?> FindIssueState(string repositoryUrl, int number, string accessToken)
-        => For(repositoryUrl).FindIssueState(repositoryUrl, number, accessToken);
+        => Route(repositoryUrl, c => c.FindIssueState(repositoryUrl, number, accessToken));
 
     /// <inheritdoc />
     public IObservable<GitHubIssue> CreateIssue(GitHubCreateIssueRequest request)
-        => For(request.RepositoryUrl).CreateIssue(request);
+        => Route(request.RepositoryUrl, c => c.CreateIssue(request));
 
     /// <inheritdoc />
     public IObservable<GitHubIssueComment> CommentIssue(
         string repositoryUrl, int number, string body, string accessToken)
-        => For(repositoryUrl).CommentIssue(repositoryUrl, number, body, accessToken);
+        => Route(repositoryUrl, c => c.CommentIssue(repositoryUrl, number, body, accessToken));
 
     /// <inheritdoc />
     public IObservable<GitHubIssue> SetIssueState(
         string repositoryUrl, int number, GitHubIssueState state, string accessToken)
-        => For(repositoryUrl).SetIssueState(repositoryUrl, number, state, accessToken);
+        => Route(repositoryUrl, c => c.SetIssueState(repositoryUrl, number, state, accessToken));
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<GitHubPullRequestSummary>> ListPullRequests(
         string repositoryUrl, PullRequestStatus? state, string accessToken)
-        => For(repositoryUrl).ListPullRequests(repositoryUrl, state, accessToken);
+        => Route(repositoryUrl, c => c.ListPullRequests(repositoryUrl, state, accessToken));
 
     /// <inheritdoc />
     public IObservable<GitHubPullRequestDetail> GetPullRequestDetail(
         string repositoryUrl, int number, string accessToken)
-        => For(repositoryUrl).GetPullRequestDetail(repositoryUrl, number, accessToken);
+        => Route(repositoryUrl, c => c.GetPullRequestDetail(repositoryUrl, number, accessToken));
 
     /// <inheritdoc />
     public IObservable<GitHubIssueComment> CommentPullRequest(
         string repositoryUrl, int number, string body, string accessToken)
-        => For(repositoryUrl).CommentPullRequest(repositoryUrl, number, body, accessToken);
+        => Route(repositoryUrl, c => c.CommentPullRequest(repositoryUrl, number, body, accessToken));
 
     /// <inheritdoc />
     public IObservable<GitHubMergeResult> MergePullRequest(GitHubMergePullRequestRequest request)
-        => For(request.RepositoryUrl).MergePullRequest(request);
+        => Route(request.RepositoryUrl, c => c.MergePullRequest(request));
 }
+
+/// <summary>The obsolete two-client constructor's Azure Repos route: claims what the URL parser
+/// names Azure Repos, and has no identity of its own (the router never asks it for one).</summary>
+#pragma warning disable CS0618
+file sealed class RoutedAzureRepos(IGitHubRepoClient client) : IGitHostingProvider
+{
+    public string Kind => GitRepositoryProvider.AzureRepos;
+    public bool Claims(string repositoryUrl) => AzureReposRepository.TryParse(repositoryUrl, out _);
+    public IGitHubRepoClient RepoClient => client;
+    public IObservable<string> GetAccessToken()
+        => Observable.Throw<string>(GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException());
+}
+#pragma warning restore CS0618
