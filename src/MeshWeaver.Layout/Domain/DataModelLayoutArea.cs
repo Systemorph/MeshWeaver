@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using System.Reflection;
 using System.Text;
 using MeshWeaver.Domain;
@@ -274,11 +275,27 @@ public static class DataModelLayoutArea
         if (catalogHref?.Invoke(typeDef) is { } catalogLink)
             links = links.Add(DomainViews.NavGlyph("🗃️", LocalizationCatalog.Get("ui.viewCatalog", locale), catalogLink));
 
-        var details = Controls.Stack.WithWidth("100%")
-            .WithView(DomainViews.TitleRow(Controls.H1(type.Name).WithStyle("margin: 0;"), links.ToArray()));
-        if (DomainViews.Description(typeDef.XmlDocsSummary(type)) is { } descriptionLine)
-            details = details.WithView(descriptionLine);
-        return details.WithView(new MarkdownControl(TypeDetailsMarkdown(typeDef, allDomainTypes, linkBase)));
+        // The title row renders at once; the summary and the property table — every line of which may
+        // carry an XML-doc summary — bind once those summaries are in memory. Their documentation
+        // files are read on the rendering hub's I/O pool, never on the thread building this view
+        // (Doc/Architecture/XmlDocumentationReader).
+        return Controls.Stack.WithWidth("100%")
+            .WithView(DomainViews.TitleRow(Controls.H1(type.Name).WithStyle("margin: 0;"), links.ToArray()))
+            .WithView((host, _) => typeDef
+                .WhenXmlDocsLoaded(host.Hub, DocumentedMembers(type))
+                .Select(_ => (UiControl?)DetailsBody(typeDef, allDomainTypes, linkBase)));
+    }
+
+    /// <summary>The type and the properties <see cref="TypeDetailsMarkdown"/> reads summaries of.</summary>
+    private static IEnumerable<MemberInfo> DocumentedMembers(Type type)
+        => type.GetProperties(BindingFlags.Public | BindingFlags.Instance).Prepend<MemberInfo>(type);
+
+    private static UiControl DetailsBody(ITypeDefinition typeDef, IReadOnlyCollection<ITypeDefinition> allDomainTypes, string linkBase)
+    {
+        var body = Controls.Stack.WithWidth("100%");
+        if (DomainViews.Description(typeDef.XmlDocsSummary(typeDef.Type)) is { } descriptionLine)
+            body = body.WithView(descriptionLine);
+        return body.WithView(new MarkdownControl(TypeDetailsMarkdown(typeDef, allDomainTypes, linkBase)));
     }
 
     /// <summary>

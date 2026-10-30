@@ -108,9 +108,9 @@ public static class GitHubSyncConfiguration
         // The production repo client: BULK transfer (push/fetch) over the git protocol — REST
         // paid one request PER FILE, so one big-repo sync exhausted the GitHub App installation's
         // hourly budget — with refs/PRs/issues remaining on the GitHub REST client it wraps.
-        // 🚨 Behind ONE seam, per provider (MeshWeaver#6500): GitProviderRepoClient reads the provider
-        // off each URL and sends an Azure Repos one to the Azure DevOps REST client, every other one
-        // to the GitHub client — so the sync, its two-way rules and every caller stay one code path.
+        // 🚨 Behind ONE seam, per provider: GitProviderRepoClient resolves each URL against the
+        // registered hosting providers and sends a claimed one to that provider's client, every other
+        // one to the GitHub client — so the sync, its two-way rules and every caller stay one code path.
         // Built explicitly, never activated: a container that registers HttpClient (AddHttpClient)
         // would otherwise inject one that follows redirects itself and strips the credential on
         // the hop (see GitHubRestApi) — the client builds its own when handed none.
@@ -121,15 +121,33 @@ public static class GitHubSyncConfiguration
             sp.GetRequiredService<IoPoolRegistry>(),
             httpClient: null,
             sp.GetService<ILogger<AzureReposRepoClient>>()));
+        // The git hosting providers (Doc/Architecture/GitHubSync → "Hosting providers"): every
+        // IGitHostingProvider a module registers (AddGitHostingProvider), plus the platform's
+        // built-in Azure Repos provider — TRANSITIONAL, replaced by a contributed provider of the
+        // same kind and then removed from the platform with Azure.Identity.
+        services.AddSingleton(sp => new GitHostingProviders(
+            sp.GetServices<IGitHostingProvider>(),
+            [new AzureReposGitHostingProvider(
+                sp.GetRequiredService<AzureReposTokenService>(),
+                sp.GetRequiredService<AzureReposRepoClient>())],
+            sp.GetService<ILogger<GitHostingProviders>>()));
         services.AddSingleton<IGitHubRepoClient>(sp => new GitProviderRepoClient(
             new GitProtocolRepoClient(
                 sp.GetRequiredService<OctokitGitHubRepoClient>(),
                 sp.GetRequiredService<GitCli>(),
                 sp.GetRequiredService<IoPoolRegistry>(),
                 sp.GetService<ILogger<GitProtocolRepoClient>>()),
-            sp.GetRequiredService<AzureReposRepoClient>()));
+            sp.GetRequiredService<GitHostingProviders>()));
         services.AddSingleton<GitHubCredentialService>();
-        services.AddSingleton<GitHubSyncService>();
+        // Built explicitly: the obsolete constructor that takes an Azure DevOps identity must never
+        // be the one the container picks.
+        services.AddSingleton(sp => new GitHubSyncService(
+            sp.GetRequiredService<IMessageHub>(),
+            sp.GetRequiredService<IMeshService>(),
+            sp.GetRequiredService<IGitHubRepoClient>(),
+            sp.GetRequiredService<GitHubCredentialService>(),
+            sp.GetService<ILogger<GitHubSyncService>>(),
+            sp.GetService<GitHubAppTokenService>()));
         services.AddSingleton<PullRequestService>();
         services.AddSingleton<IssueService>();
         // Canonical repository identity (rename-tolerant webhook matching), TTL-cached. Built

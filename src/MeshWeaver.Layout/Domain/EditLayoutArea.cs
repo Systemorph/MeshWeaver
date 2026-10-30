@@ -158,9 +158,9 @@ public static class EditLayoutArea
         var stack = Controls.Stack.WithWidth("100%")
             .WithView(DomainViews.TitleRow(Controls.H1(typeDefinition.DisplayName).WithStyle("margin: 0;"), links.ToArray()));
 
-        // Description if available
-        if (DomainViews.Description(host.Hub.XmlDocs().Summary(typeDefinition.Type)) is { } descriptionLine)
-            stack = stack.WithView(descriptionLine);
+        // Description if available — data-bound: the documentation file is read on the I/O pool, not
+        // while this view is built.
+        stack = stack.WithView(DomainViews.DescriptionOf(host.Hub, typeDefinition.Type));
 
         // Use Overview with startInEditMode=true for the form
         return stack.WithView((areaHost, ctx) => EditLayout(areaHost, ctx, typeDefinition, id));

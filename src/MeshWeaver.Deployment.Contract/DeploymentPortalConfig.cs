@@ -1401,6 +1401,37 @@ public static class DeploymentPortalConfig
         if (flagKey is not null && p.Enabled is bool enabled) c[flagKey] = enabled ? "true" : "false";
         if (!string.IsNullOrWhiteSpace(p.DataResidency)) c[$"{section}__DataResidency"] = p.DataResidency.Trim();
         if (!string.IsNullOrWhiteSpace(p.DataRetention)) c[$"{section}__DataRetention"] = p.DataRetention.Trim();
+        var windows = ContextWindowPairs(section, p);
+        for (var i = 0; i < windows.Count; i++)
+        {
+            c[$"{section}__ContextWindowTokens__{i}__Model"] = windows[i].Model;
+            c[$"{section}__ContextWindowTokens__{i}__Tokens"] = windows[i].Tokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+    }
+
+    /// <summary>
+    /// A provider's declared context windows (<see cref="ModelProvider.ContextWindowTokens"/>) as the
+    /// ordered pairs the portal reads: blank ids dropped, ids trimmed, ordinal order — so the rendered
+    /// keys are stable across renders. A window that is not positive throws: it would render a key the
+    /// seeder must reject, and the record is where that mistake belongs to be named.
+    /// </summary>
+    /// <param name="section">The provider's configuration section, for the error text.</param>
+    /// <param name="p">The provider.</param>
+    /// <returns>The pairs, in rendering order.</returns>
+    public static IReadOnlyList<(string Model, int Tokens)> ContextWindowPairs(string section, ModelProvider p)
+    {
+        var pairs = p.ContextWindowTokens
+            .Where(e => !string.IsNullOrWhiteSpace(e.Key))
+            .Select(e => (Model: e.Key.Trim(), Tokens: e.Value))
+            .OrderBy(e => e.Model, StringComparer.Ordinal)
+            .ToList();
+        foreach (var (model, tokens) in pairs)
+            if (tokens <= 0)
+                throw new InvalidOperationException(
+                    $"ai.{section}.contextWindowTokens['{model}'] is {tokens} — a context window is a positive token "
+                    + "count. Name the model's documented window, or leave it out of the map (the guard then stays "
+                    + "unarmed for that model).");
+        return pairs;
     }
 
     /// <summary>The platform self-update policies the portal binds (<c>UpdatePolicyKind</c>), in the casing the binder reads.</summary>
