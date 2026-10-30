@@ -255,6 +255,11 @@ The defect was that nothing recovered it. A cut job concludes `cancelled`, so th
   sentence is a failure annotation of the job. No annotation says a newer run superseded it. And every
   work step completed with success or skipped; only the runner's own `Post …` and `Complete job`
   bookkeeping may be unfinished.
+- A job that did not conclude `failure` is judged on its annotations first. A superseded one is
+  vetoed before any other proof, even when its cancelled step's log carries a named transient: a
+  re-run would revive the old head and take the pull request's concurrency group from the current
+  one. Any other cancelled job counts only through a named annotation or a lost completion, never a
+  log signature, because a cancelled step's log shows what it was doing, not why it was stopped.
 - A real hang at the cap leaves a work step unfinished, so it stays unproven and red.
 - So does a run superseded by a push (*"Canceling since a higher priority waiting request …"*) and a
   run cancelled by a person.

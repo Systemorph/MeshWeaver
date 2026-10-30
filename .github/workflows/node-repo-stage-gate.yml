@@ -174,7 +174,7 @@ jobs:
             # A `cancelled` control did not fail its check — it was cut: GitHub's time limit over a
             # finished job (MeshWeaver#7694 — the retry steward re-runs that once), or a newer run.
             case " $red " in
-              *=cancelled*) hint="a CANCELLED control was cut, not failed (a job time limit, or a newer run) — the retry steward re-runs a proven cut once; otherwise re-run it" ;;
+              *=cancelled*) hint="a CANCELLED control was cut, not failed. Superseded by a newer push: follow the newer run and never re-run this one (a re-run takes the pull request's run slot from the current head). A finished job cut at its time limit: the retry steward re-runs it once. Any other cancel: investigate the job before re-running" ;;
               *) hint="fix it and push; the new head restarts at stage 0" ;;
             esac
             echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control is red (${red# }) — ${hint}"

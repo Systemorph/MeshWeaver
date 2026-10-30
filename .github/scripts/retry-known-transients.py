@@ -150,6 +150,15 @@ SIGNATURES = re.compile(
 # evidence — measured on MeshWeaver#7694 run 41100409024, where the two controls were CANCELLED by a
 # lost completion (see JOB_TIME_LIMIT_ANNOTATION) and this line was the gate's only red.
 STAGE0_HOLD_LINE = "STAGE 2 HELD (stage 0 red): "
+
+
+def stage_gate_emits_hold(lane_text: str) -> bool:
+    """True when the stage-gate lane still EMITS the hold line as an error record — an `echo` of a
+    `::error …::` command whose message starts with STAGE0_HOLD_LINE. A comment or any other mention
+    does not count (review on #7704): the signature is only evidence while the producer prints it."""
+    return re.search(r'^\s*echo "::error[^"]*::' + re.escape(STAGE0_HOLD_LINE), lane_text, re.M) is not None
+
+
 CONSEQUENTIAL_SIGNATURES = re.compile(
     r"The test matrix concluded 'skipped' — at least one shard did not succeed"
     r"|##\[error\]red because .+ — see (?:it|them)\."
@@ -486,8 +495,28 @@ def judge(repo: str, job: dict, fetch) -> tuple[str, str, bool]:
       3. A step failed and the log was NEVER WRITTEN (404) — GitHub deletes the log of a job whose
          runner died mid-step (Plugins#2773). Only a "the runner went away" annotation excuses that;
          an EXPIRED log (410) never does, because it existed and may have shown a real red.
+
+    🚨 A job that did NOT conclude `failure` (cancelled, timed out) is judged BEFORE all three, on its
+    annotations alone (review on #7704). A superseded job is vetoed outright: re-running it revives an
+    old head, which takes the pull request's concurrency group from the current head (#7696). Every
+    other cancelled job is proven only by a named annotation or a lost completion — never by a log
+    signature, because a cancelled step's log says what the step was doing when it was STOPPED, not
+    why it was stopped.
     """
     job_id = job["id"]
+    if job.get("conclusion") != "failure":
+        annotations = read_annotations(repo, job_id, fetch)
+        if any(re.search(SUPERSEDED_ANNOTATION, m) for m in _failure_messages(annotations)):
+            return UNPROVEN, (f"cancelled because a NEWER run of its concurrency group superseded it — "
+                              "the newer run is the one that counts; re-running this one would take "
+                              "the group from it, so no retry"), True
+        matched = match_annotations(annotations) or lost_completion(job, annotations)
+        if matched:
+            return TRANSIENT, f"{matched} (concluded {job.get('conclusion')})", True
+        seen = _failure_messages(annotations)[:3] or ["no failure-level annotation"]
+        return UNPROVEN, (f"concluded {job.get('conclusion')} with no named proof (annotations: "
+                          f"{[m[:120] for m in seen]}) — a cancel nobody can explain is not a "
+                          "transient, no retry. Investigate it."), True
     own = failed_steps(job)
     if not own:
         annotations = read_annotations(repo, job_id, fetch)
@@ -1338,8 +1367,28 @@ def _self_test_cases(live_summary: str | None) -> int:
     # The hold line is only evidence while the gate still prints it.
     gate_lane = workflows / "node-repo-stage-gate.yml"
     gate_text = gate_lane.read_text(encoding="utf-8") if gate_lane.is_file() else ""
-    check(f"node-repo-stage-gate.yml still prints {STAGE0_HOLD_LINE!r} (read: {gate_lane.is_file()})",
-          STAGE0_HOLD_LINE in gate_text)
+    check(f"node-repo-stage-gate.yml still EMITS {STAGE0_HOLD_LINE!r} as an error (read: {gate_lane.is_file()})",
+          stage_gate_emits_hold(gate_text))
+    # Review on #7704: a mention in a COMMENT must not satisfy the guard once the echo is gone.
+    comment_only = ("            # The prefix \"" + STAGE0_HOLD_LINE + "\" is a contract.\n"
+                    "            echo \"::error title=Stage 2 held::stage zero is red\"\n")
+    check("...and a lane that only MENTIONS the line (its echo renamed) fails that guard",
+          not stage_gate_emits_hold(comment_only))
+    check("...while the real echo shape passes it (positive control)",
+          stage_gate_emits_hold("            echo \"::error title=Stage 2 held — stage 0 red::"
+                                + STAGE0_HOLD_LINE + "a cheap static control is red\"\n"))
+    # Review on #7704: a SUPERSEDED job is vetoed before ANY proof — even a cancelled work step whose
+    # log carries a named transient signature (re-running it would revive the old head).
+    cancelled_step = _steps(("Set up job", "completed", "success"), ("Run", "completed", "cancelled"))
+    fetch = _fake({1: escaped}, steps={1: cancelled_step}, annotations={1: SUPERSEDED},
+                  conclusions={1: "cancelled"}, run_state=dict(RUN_CANCELLED))
+    check("a SUPERSEDED job with a cancelled step and a TRANSIENT log signature → NO retry, no POST",
+          run("o/r", "9", fetch, dry_run=False, attempt=1) == 0 and not _posted(fetch))
+    check("...nor a cancelled job with a transient log and NO named proof (a cancel's log is not why)",
+          not decide("o/r", "9", _fake({1: escaped}, steps={1: cancelled_step},
+                                       annotations={1: [{"annotation_level": "failure",
+                                                         "message": "The operation was canceled."}]},
+                                       conclusions={1: "cancelled"})).retry)
 
     # ── The lane grants what this script reads. A lane without `checks: read` is blind to deaths. ──
     lane = workflows / "node-repo-retry-transients.yml"
