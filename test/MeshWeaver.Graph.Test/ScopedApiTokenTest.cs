@@ -344,6 +344,32 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 THE OWN-STREAM PIN. The same rewrite, issued on the record's OWN hub through
+    /// <c>GetMeshNodeStream().Update</c> — the route code running on the owner takes (a rollback
+    /// request's handler, an activity script, a layout-area action). That write never reached the
+    /// commit point, so the token-record rule was skipped and a capped token could strip its own
+    /// scopes. The unscoped arm is the control: the owner's own write on the same route lands.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task AScopedToken_CannotRewriteItsOwnRecord_ThroughTheOwnersOwnStream()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = $"{TokenUser}/_Api/ownstream";
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(TokenRecord("ownstream", [ApiTokenScope.Read, ApiTokenScope.Write])))
+            .Should().Within(TestTimeouts.Convergence).Emit("the token record must exist first", ct);
+        await StoredRecord(path, ct);
+
+        BecomeToken(ApiTokenScope.Read, ApiTokenScope.Write);
+        (await OwnStreamUpdate(path, n => n with { Content = TokenOf(n) with { Scopes = null } }, ct))
+            .Should().StartWith("refused:", "a capped token must not strip its own record's scopes on the owner's own stream");
+        TokenOf(await StoredRecord(path, ct)).Scopes.Should().Equal(ApiTokenScope.Read, ApiTokenScope.Write);
+
+        BecomeToken(null);
+        (await OwnStreamUpdate(path, n => n with { Content = TokenOf(n) with { Label = "renamed" } }, ct))
+            .Should().Be("landed", "the control: the owner's own write on the same route lands");
+    }
+
+    /// <summary>
     /// 🚨 THE RETYPE-INTO PIN (review of #7585, round 3). A scoped token holding <c>tokens</c> may
     /// delete a token it minted, and may create an ordinary node. Recreating the record's path as
     /// Markdown and then retyping it INTO <c>ApiToken</c> with unscoped content through the routed
@@ -515,6 +541,19 @@ public class ScopedApiTokenTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Select(_ => "landed")
             .Catch((Exception ex) => Observable.Return("refused:" + ex.GetType().Name + ": " + ex.Message))
             .Should().Within(TestTimeouts.Convergence).Emit("the update must answer", ct);
+
+    /// <summary>A write on the node's OWN hub, through its own stream, as the current identity.</summary>
+    private Task<string> OwnStreamUpdate(string path, Func<MeshNode, MeshNode> change, CancellationToken ct)
+    {
+        var owner = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never)
+                    ?? throw new InvalidOperationException($"the owning hub of {path} is not active");
+        return owner.GetWorkspace().GetMeshNodeStream()
+            .Update(change)
+            .Take(1)
+            .Select(_ => "landed")
+            .Catch((Exception ex) => Observable.Return("refused:" + ex.GetType().Name + ": " + ex.Message))
+            .Should().Within(TestTimeouts.Convergence).Emit("the own write must answer", ct);
+    }
 
     private Task<MeshNode> StoredRecord(string path, CancellationToken ct) =>
         Access.RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null).Take(1))

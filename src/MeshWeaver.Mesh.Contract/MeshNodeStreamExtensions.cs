@@ -1729,6 +1729,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // turn (a DI touch from a turn that can run at teardown throws). See the #6673 gate below.
             var versionGuard = _workspace.Hub.ServiceProvider
                 .GetService<MeshWeaver.Mesh.Services.RecentlyDeletedRegistry>();
+            // 🚨 THE COMMIT POINT for an OWN write — the same IEntityCommitGuards the merge patch and
+            // the data-change apply ask. Before this, an own write committed without them, so every
+            // rule judged at the commit point (policy create-only, token-record and token-principal
+            // rules, …) was skipped by any code that wrote through the owner's own stream as a person:
+            // a rollback request, an activity script on its own hub, a layout-area action. Resolved
+            // here for the same reason as the version guard above.
+            var commitGuards = adoptPersisted
+                ? []
+                : _workspace.Hub.ServiceProvider.GetServices<MeshWeaver.Mesh.IEntityCommitGuard>().ToArray();
 
             // 🚨 Single-emit guard shared by the post-write stream echo AND the no-op
             // short-circuit below. Without it a no-op write would either hang (echo never
@@ -1954,6 +1963,15 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             {
                                 Version = MeshNode.NextVersion(Math.Max(current.Version, updated.Version))
                             };
+                            // 🚨 THE COMMIT POINT (IEntityCommitGuard): the node exactly as it would
+                            // commit, against the one it replaces, judged as the writer whose identity
+                            // the write was issued under. Refused, nothing commits and the writer hears
+                            // the refusal. Never for an adoption, which observes state already durable.
+                            if (MeshWeaver.Mesh.EntityCommitGuards.FirstRefusal(commitGuards, nameof(MeshNode),
+                                    current, updated, _workspace.Hub.Address.Path, auditContext, _jsonOptions)
+                                is { } commitRefusal)
+                                throw new MeshNodeStreamException(new MeshNodeError(
+                                    MeshNodeErrorCode.Validation, current.Path, commitRefusal));
                         }
                         // Stamp BEFORE the commit — the echo subscription above only emits
                         // once it can see this write's Version on the target node.
