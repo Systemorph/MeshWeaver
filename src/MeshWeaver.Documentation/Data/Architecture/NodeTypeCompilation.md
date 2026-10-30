@@ -1364,6 +1364,20 @@ clears it. Read it first when a type serves an old build after a release request
 names this gate, recycling again changes nothing — publish a bundle of the current source for this
 framework identity, or add a sync source for the partition. Pinned by `AHeldReleaseRequestSaysWhyTest`.
 
+**The NodeType page shows it** (#7356). The Overview and the Configuration pane render a
+delivery-hold block for ANY record that carries `DeliveryHoldReason`: a localized headline
+("Serving the last build — delivery hold" for an `Ok` record, "Delivery hold: the last release
+produced no new build" otherwise) and the recorded reason verbatim. The reason is mesh-written
+operator data, so it is not translated. On an `Ok` record the Overview's compile chip reads the
+held state instead of "Up to date" or "Source changed". The page keys on the reason, not on
+`BuildDeliveryHold.IsHeld`. That predicate reads the provenance, and the unknown-membership hold
+keeps `Compiled`, so before this change a release that hold answered looked successful on the page.
+`IsHeld` itself was left as it is: its only caller is the notifier's transition test, and widening
+it would make that hold send notifications. Whether it should is an open owner decision. The
+decision lives in `NodeTypeStatusView.From`, and the block is the `BuildDeliveryHoldTemplate`
+bound to it. The compile-progress overlay redirects as soon as a record is `Ok`, so it never shows
+a serving hold. Pinned by `ADeliveryHoldIsShownOnTheNodeTypePageTest`.
+
 **The boot sweep's batch compile asks the same question first** (#6930). The batch drives Roslyn
 directly — no activation, no compile watcher — so for a long time it never reached `DispatchOrPark`
 at all. Measured on memex.systemorph.com between 2026-10-17 18:55Z and 2026-10-18 07:56Z, the
