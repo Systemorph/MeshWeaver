@@ -111,8 +111,8 @@ public class AzureReposSyncPolicyTest
         // gone from the sync path, not merely unused.
         var source = System.IO.File.ReadAllText(System.IO.Path.Combine(
             RepoPaths.Root, "src", "MeshWeaver.GitSync", "GitHubSyncService.cs"));
-        source.Should().Contain("AzureReposSyncPolicy.ExportGuard(config)");
-        source.Should().Contain("AzureReposSyncPolicy.ReimportGuard(config)");
+        source.Should().Contain("SyncDirectionGuards.ExportGuard(config)");
+        source.Should().Contain("SyncDirectionGuards.ReimportGuard(config)");
         source.Contains("config.Direction == SyncDirection.ImportOnly", StringComparison.Ordinal)
             .Should().BeFalse("an inline import-only check in the service would bypass the guard");
         source.Contains("if (config.Direction == SyncDirection.ExportOnly)", StringComparison.Ordinal)
@@ -217,7 +217,8 @@ public class AzureReposSyncPolicyTest
         using var pools = new IoPoolRegistry(new IoPoolOptions());
         var azure = new AzureReposRepoClient(pools);
         var github = new AzureReposRepoClient(pools);   // any distinct instance stands for "the GitHub client"
-        var router = new GitProviderRepoClient(github, azure);
+        var router = new GitProviderRepoClient(github,
+            new GitHostingProviders([new AzureReposGitHostingProvider(null, azure)]));
         router.For(AzureUrl).Should().BeSameAs(azure);
         router.For("https://client-a.visualstudio.com/DefaultCollection/Memex/_git/content").Should().BeSameAs(azure);
         router.For(GitHubUrl).Should().BeSameAs(github);
@@ -234,6 +235,39 @@ public class AzureReposSyncPolicyTest
         var descriptor = services.Last(d => d.ServiceType == typeof(IGitHubRepoClient));
         descriptor.ImplementationFactory.Should().NotBeNull();
         services.Should().Contain(d => d.ServiceType == typeof(AzureReposRepoClient));
+        services.Should().Contain(d => d.ServiceType == typeof(GitHostingProviders));
+
+        // …and the built-in Azure Repos provider is in the registry the router and the sync read.
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<GitHostingProviders>();
+        registry.Classify(AzureUrl).Should().Be(GitRepositoryProvider.AzureRepos);
+        registry.Classify(GitHubUrl).Should().Be(GitRepositoryProvider.GitHub);
+    }
+
+    [Fact]
+    public void AContributedAzureReposProvider_ReplacesTheBuiltIn()
+    {
+        // The deleting half lands last: the module's provider takes the kind over while the
+        // platform still ships its own copy, and nothing is ambiguous in between.
+        using var pools = new IoPoolRegistry(new IoPoolOptions());
+        var builtIn = new AzureReposGitHostingProvider(null, new AzureReposRepoClient(pools));
+        var contributed = new AzureReposGitHostingProvider(null, new AzureReposRepoClient(pools));
+        var registry = new GitHostingProviders([contributed], [builtIn]);
+        registry.For(AzureUrl).Should().BeSameAs(contributed);
+        registry.All.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void TheAzureReposProvider_RefusesPullRequestsAndIssues_AndAuthorsAsTheInstance()
+    {
+        using var pools = new IoPoolRegistry(new IoPoolOptions());
+        IGitHostingProvider provider = new AzureReposGitHostingProvider(null, new AzureReposRepoClient(pools));
+        provider.Refuse(AzureUrl, GitHostingOperation.PullRequest)!.Key.Should().Be("gitsync.azure.unsupported.pullRequest");
+        provider.Refuse(AzureUrl, GitHostingOperation.Issues)!.Key.Should().Be("gitsync.azure.unsupported.issues");
+        provider.Refuse(AzureUrl, "somethingElse").Should().BeNull("an operation it does not name is offered");
+        (provider.CommitAuthorName, provider.CommitAuthorEmail).Should().Be(("MeshWeaver", "noreply@meshweaver.cloud"));
+        provider.DisplayNameKey.Should().Be("ui.gitSync.provider.AzureRepos");
+        provider.Claims(GitHubUrl).Should().BeFalse("the negative control");
     }
 
     // ── The REST client's pure planning ──────────────────────────────────────
@@ -476,7 +510,9 @@ public class AzureReposSyncPolicyTest
     [InlineData("/tmp/remote.git", "ui.gitSync.provider.Git")]
     public void TheSettingsTab_NamesTheProvider_WithAKeyBothLanguagesCarry(string url, string key)
     {
-        GitHubSyncSettingsTab.ProviderKey(url).Should().Be(key);
+        using var pools = new IoPoolRegistry(new IoPoolOptions());
+        var registry = new GitHostingProviders([new AzureReposGitHostingProvider(null, new AzureReposRepoClient(pools))]);
+        GitHubSyncSettingsTab.ProviderKey(registry, url).Should().Be(key);
     }
 
     private sealed class RecordingCredential(string token) : TokenCredential
