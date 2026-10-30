@@ -376,4 +376,24 @@ public class SecurityQueryShapesTest
         ParsedQuery.AsksForStoredContent("path:acme \"content:stored\"").Should().BeFalse(
             "a quoted literal is free text, not the qualifier");
     }
+
+    /// <summary>
+    /// The string helper must agree with the parser on every form: the node-stream cache decides
+    /// from the helper whether to hand content back as stored, so a form the parser accepts and
+    /// the helper's prefilter rejects silently materialises the result (review on #7652).
+    /// </summary>
+    [Theory]
+    [InlineData("path:acme content:stored", true)]
+    [InlineData("path:acme CONTENT:STORED", true)]
+    [InlineData("path:acme content:\"stored\"", true)]
+    [InlineData("path:acme content:'stored'", true)]
+    [InlineData("path:acme \"content:stored\"", false)]
+    [InlineData("path:acme -content:stored", false)]
+    [InlineData("path:acme content:other", false)]
+    [InlineData("path:acme", false)]
+    public void AsksForStoredContent_AgreesWithTheParser(string query, bool expected)
+    {
+        new QueryParser().Parse(query).StoredContent.Should().Be(expected, $"the parser's verdict on '{query}'");
+        ParsedQuery.AsksForStoredContent(query).Should().Be(expected, $"the helper must agree with the parser on '{query}'");
+    }
 }

@@ -151,12 +151,18 @@ public record ParsedQuery(
     /// <param name="query">A mesh query string.</param>
     /// <returns>True when the query asks for content exactly as stored.</returns>
     public static bool AsksForStoredContent(string? query)
-        // The substring test first: this runs on every GetQuery call of a hot reader (the
-        // permission fold), and almost no query carries the qualifier. The parse then decides, so a
-        // quoted literal or a negated term is not mistaken for it.
+        // A cheap substring prefilter first: this runs on every GetQuery call of a hot reader (the
+        // permission fold), and almost no query carries the qualifier. It tests only the VALUE,
+        // `stored`, because every form the parser accepts contains it while the full qualifier is
+        // absent from the quoted-value forms (`content:"stored"`, `content:'stored'`) — the
+        // prefilter may admit too much, never reject a form the parser accepts. The parse then
+        // decides, so a quoted literal or a negated term is not mistaken for it.
         => !string.IsNullOrWhiteSpace(query)
-           && query.Contains(StoredContentQualifier, StringComparison.OrdinalIgnoreCase)
+           && query.Contains(StoredContentValue, StringComparison.OrdinalIgnoreCase)
            && new QueryParser().Parse(query).StoredContent;
+
+    /// <summary>The value half of <see cref="StoredContentQualifier"/>, present in every accepted form.</summary>
+    private const string StoredContentValue = "stored";
 
     /// <summary>
     /// An empty query with no filters.
