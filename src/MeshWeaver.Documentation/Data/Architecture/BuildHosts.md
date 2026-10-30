@@ -448,11 +448,22 @@ Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
   identity token restricted to the `build` container. The container's seccomp / AppArmor profiles
   can be stated (`buildHosts.sandbox.*`) for what `bwrap` needs on the pool's nodes — measured, not
   assumed;
-- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` 0, `maxReplicaCount` per channel,
+- a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` the channel's declared floor
+  (default 0 — see "Declared host floor" below), `maxReplicaCount` per channel,
   ONE `metrics-api` trigger on `<apiUrl>/queue?channel=<c>` with `valueLocation: demand`
   (= claimable + running, so the metric never drops to zero while a host holds a run) and a
   scale-down stabilization window (`scaleDownStabilizationSeconds`, default 300) longer than a
   claim's round trip.
+
+### Declared host floor
+
+A channel's floor is DECLARED on the record, never derived (policy `declared-not-derived`):
+`BuildHostChannel.MinReplicas` (default 0, scale to zero) renders as the channel's `minReplicas`,
+which the chart writes as the ScaledObject's `minReplicaCount`; `MaxReplicas` stays the one
+declaration of capacity and the admission cap. A floor of one keeps a host warm, so an admitted run
+is claimed without first waiting for a node and a pod to start. The chart refuses a floor below 0
+or above the channel's `maxReplicas`. A floor is paid for around the clock, so it is a record
+change the owner approves like any other, and the record says why it holds the value it does.
 
 **A host holds no publication credential, no registry token and no bake share.** The gate refuses
 `buildHosts.pluginsPullSecret` and `buildHosts.bakeShares`; `imagePullSecret` is the kubelet's image
@@ -904,7 +915,13 @@ would replace, and the claim is refused until that list is empty.
   the warm cache as a NuGet fallback folder ([NuGet Runtime Assets](../NuGetRuntimeAssets#offline-first-resolution)).
   The host reads it from the default branch's tip, never from a run's own tree, and runs it once per restore key to
   fill the shared NuGet cache (MeshWeaver.Deploy#68); `check-build-stages.py` validates its shape and, for core, reds
-  a restore that drifts from the build's solution and properties or drops the resolver fixtures.
+  a restore that drifts from the build's solution and properties or drops the resolver fixtures. `core-build-stages.py
+  --check` holds the fixture list to the code: a `#r "nuget:…"` in a sample's source or an executable doc fence
+  (`--render` / `--execute`) whose id and exact version the fixture project does not list — or that names no exact
+  version — is red, because the host would download it on every run without naming it. Measured on build-latest
+  (2026-10-30): host-forced shadow runs of core warmed core's restore key from the default branch's tip (`warm NuGet
+  cache: filled … 3 package(s) promoted`, then `holds the default branch's restore`) and their `build` stage reported
+  no `MWPREP001` — nothing restored per run — so `prepared packages` is no longer owed.
 - **Remove an `owes` entry only in the change that pays it.** The claim then follows mechanically.
 
 **Core's stages serve a DEPLOYMENT today, and are declared for its pull requests.** Core declares
