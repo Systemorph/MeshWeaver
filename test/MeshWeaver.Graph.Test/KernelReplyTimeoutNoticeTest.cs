@@ -17,36 +17,14 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// #7362 — a C# cell whose kernel has not answered within the dispatcher's request budget must SAY
-/// so on its Activity ("No answer from the kernel yet", keyed so it renders in the viewer's
-/// language) instead of staying Running silently. It is not a verdict: the status stays Running, and
-/// a late reply completes the run exactly as an in-time one would.
-///
-/// <para>Only the CELL's hub (the dispatcher, <c>CodeNodeType</c>) runs on the short budget; the
-/// kernel side keeps its default. The cell's script parks on a GATE node the test opens, so "the
-/// kernel has not answered" lasts exactly as long as the test needs — the wait is on conditions,
-/// never on the clock. The gate is opened in a <c>finally</c>, so a failing assertion cannot strand
-/// the parked script.</para>
+/// A C# cell parked on a GATE node the test opens: "the kernel has not answered" lasts exactly as
+/// long as the test needs, and the wait is on conditions, never on the clock. Open the gate in a
+/// <c>finally</c>, so a failing assertion cannot strand the parked script.
 /// </summary>
-public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : CSharpCellRunTestBase(output)
+public abstract class GatedCellRunTestBase(ITestOutputHelper output) : CSharpCellRunTestBase(output)
 {
-    /// <summary>The dispatcher's request budget — far below how long the gated script is held.</summary>
-    private static readonly TimeSpan ShortBudget = TimeSpan.FromSeconds(2);
-
-    /// <inheritdoc />
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
-            .ConfigureDefaultNodeHub(c =>
-            {
-                var address = c.Address.ToString();
-                return address.Contains("/cell", StringComparison.Ordinal)
-                       && !address.Contains("/_Activity/", StringComparison.Ordinal)
-                    ? c.WithRequestTimeout(ShortBudget)
-                    : c;
-            });
-
     /// <summary>A cell that waits until the gate node is named "go", then returns 7.</summary>
-    private static string WaitsForGate(string gatePath) => $$"""
+    protected static string WaitsForGate(string gatePath) => $$"""
         using System.Reactive.Linq;
         await Mesh.GetMeshNodeStream("{{gatePath}}")
             .Where(n => n?.Name == "go")
@@ -55,7 +33,7 @@ public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : CSharpCell
         7
         """;
 
-    private async Task<string> CreateGate(CancellationToken ct)
+    protected async Task<string> CreateGate(CancellationToken ct)
     {
         var path = $"{TestPartition}/gate{Guid.NewGuid():N}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -74,7 +52,7 @@ public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : CSharpCell
         return path;
     }
 
-    private async Task OpenGate(string gatePath, CancellationToken ct)
+    protected async Task OpenGate(string gatePath, CancellationToken ct)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await access
@@ -84,6 +62,36 @@ public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : CSharpCell
             .Timeout(Bound)
             .Await(ct);
     }
+}
+
+/// <summary>
+/// #7362 — a C# cell whose kernel has not answered within the dispatcher's request budget must SAY
+/// so on its Activity ("No answer from the kernel yet", keyed so it renders in the viewer's
+/// language) instead of staying Running silently. It is not a verdict: the status stays Running, and
+/// a late reply completes the run exactly as an in-time one would.
+///
+/// <para>Only the CELL's hub (the dispatcher, <c>CodeNodeType</c>) runs on the short budget; the
+/// kernel side keeps its default. The cell's script parks on a GATE node the test opens, so "the
+/// kernel has not answered" lasts exactly as long as the test needs — the wait is on conditions,
+/// never on the clock. The gate is opened in a <c>finally</c>, so a failing assertion cannot strand
+/// the parked script.</para>
+/// </summary>
+public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : GatedCellRunTestBase(output)
+{
+    /// <summary>The dispatcher's request budget — far below how long the gated script is held.</summary>
+    private static readonly TimeSpan ShortBudget = TimeSpan.FromSeconds(2);
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureDefaultNodeHub(c =>
+            {
+                var address = c.Address.ToString();
+                return address.Contains("/cell", StringComparison.Ordinal)
+                       && !address.Contains("/_Activity/", StringComparison.Ordinal)
+                    ? c.WithRequestTimeout(ShortBudget)
+                    : c;
+            });
 
     /// <summary>The Activity once it is still Running AND carries the no-answer-yet notice.</summary>
     private async Task<ActivityLog> AwaitingNotice(string activityPath, CancellationToken ct)
@@ -166,29 +174,59 @@ public class KernelReplyTimeoutNoticeTest(ITestOutputHelper output) : CSharpCell
 /// The negative control for <see cref="KernelReplyTimeoutNoticeTest"/>: a run whose kernel answers
 /// within the (default) budget never shows the no-answer-yet notice on ANY snapshot of its Activity —
 /// so the notice cannot be satisfied by a write that fires on every run.
+///
+/// <para>The run is GATED, and observation is established — and has seen the run <c>Running</c> —
+/// BEFORE the gate opens. An ungated run can already be terminal when the test subscribes, so the
+/// stream may replay only the final state, and a regression that adds the notice while Running and
+/// erases it on completion would pass unseen.</para>
 /// </summary>
-public class KernelReplyInTimeShowsNoNoticeTest(ITestOutputHelper output) : CSharpCellRunTestBase(output)
+public class KernelReplyInTimeShowsNoNoticeTest(ITestOutputHelper output) : GatedCellRunTestBase(output)
 {
-    /// <summary>An in-time reply: every snapshot up to the terminal one is free of the notice.</summary>
+    /// <summary>An in-time reply: every snapshot from Running to the terminal one is free of the notice.</summary>
     [Fact(Timeout = 180_000)]
     public async Task AnInTimeReply_NeverShowsTheNoAnswerYetNotice()
     {
         var ct = TestContext.Current.CancellationToken;
-        var cell = await CreateCell("1 + 1", ct);
-        var activity = await Run(cell, ct);
         var options = Mesh.JsonSerializerOptions;
+        var gate = await CreateGate(ct);
+        ImmutableList<ActivityLog> snapshots;
+        try
+        {
+            var cell = await CreateCell(WaitsForGate(gate), ct);
+            var activity = await Run(cell, ct);
 
-        var snapshots = await Mesh.GetWorkspace().GetMeshNodeStream(activity)
-            .Where(node => node is not null)
-            .Select(node => node.ContentAs<ActivityLog>(options))
-            .Where(log => log is not null)
-            .Select(log => log!)
-            .TakeUntil(log => log.Status.IsTerminal())
-            .Aggregate(ImmutableList<ActivityLog>.Empty, (acc, log) => acc.Add(log))
-            .Timeout(Bound)
-            .Await(ct);
+            var observed = Mesh.GetWorkspace().GetMeshNodeStream(activity)
+                .Where(node => node is not null)
+                .Select(node => node.ContentAs<ActivityLog>(options))
+                .Where(log => log is not null)
+                .Select(log => log!)
+                .TakeUntil(log => log.Status.IsTerminal())
+                .Replay();
+            using var connection = observed.Connect();
 
-        snapshots[^1].Status.Should().Be(ActivityStatus.Succeeded, "the real kernel ran `1 + 1` in time");
+            // Observation is live and has seen the run Running — the script is parked on the gate,
+            // so it cannot have finished — before anything is released.
+            await observed
+                .Where(log => log.Status == ActivityStatus.Running)
+                .FirstAsync()
+                .Timeout(Bound)
+                .Await(ct);
+
+            await OpenGate(gate, ct);
+
+            snapshots = await observed
+                .Aggregate(ImmutableList<ActivityLog>.Empty, (acc, log) => acc.Add(log))
+                .Timeout(Bound)
+                .Await(ct);
+        }
+        finally
+        {
+            await OpenGate(gate, CancellationToken.None);
+        }
+
+        snapshots.Should().Contain(log => log.Status == ActivityStatus.Running,
+            "the control watched the run while it was Running — otherwise it checks nothing");
+        snapshots[^1].Status.Should().Be(ActivityStatus.Succeeded, "the gate opened well inside the default budget");
         snapshots.Should().NotContain(
             log => log.Messages.Any(m => m.MessageKey == KernelReplyOverdue.NoticeKey),
             "the kernel answered within the budget, so no snapshot may say it has not");
