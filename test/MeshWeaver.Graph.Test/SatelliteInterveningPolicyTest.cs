@@ -12,11 +12,11 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// 🛡️ A satellite's access is delegated to its main node, but a policy on the path BETWEEN the main
-/// node and where the satellite lands still applies (stricter outcome wins). Delegating to the main
-/// node alone skipped every scope in between, so an inheritance-breaking or capping policy on an
-/// intermediate segment did not stop a write the main node's grant allowed. Each case carries a
-/// control that differs only by that policy.
+/// 🛡️ A satellite's access is delegated to its main node, but a policy or a denied role on the path
+/// BETWEEN the main node and where the satellite lands still applies (stricter outcome wins).
+/// Delegating to the main node alone skipped every scope in between, so an inheritance-breaking or
+/// capping policy, or a role denied on an intermediate segment, did not stop a write the main node's
+/// grant allowed. Each case carries a control that differs only by that policy or denial.
 /// </summary>
 public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -37,6 +37,16 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
     /// <summary>Commenter on the whole partition.</summary>
     private const string PartitionCommenter = "sat-policy-partition-commenter";
 
+    /// <summary>A main node whose comment container denies <see cref="DeniedCommenter"/> the Commenter role.</summary>
+    private const string Sealed = Partition + "/Sealed";
+
+    /// <summary>The same shape without a denial — the control for <see cref="Sealed"/>.</summary>
+    private const string Unsealed = Partition + "/Unsealed";
+
+    /// <summary>Commenter on the whole partition, with that role denied on <c>Sealed/_Comment</c>: a
+    /// segment strictly between the comment's owner (its main node) and where it lands.</summary>
+    private const string DeniedCommenter = "sat-policy-denied-commenter";
+
     private static TimeSpan Budget => TestTimeouts.Quick;
 
     // ConfigureMeshBase: no blanket Public-admin grant, so each identity holds only its own grant.
@@ -46,12 +56,16 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
                 new MeshNode(Partition) { Name = Partition, NodeType = "Markdown" },
                 new MeshNode("Doc", Partition) { Name = "Doc", NodeType = "Markdown" },
                 new MeshNode("Locked", Partition) { Name = "Locked", NodeType = "Markdown" },
+                new MeshNode("Sealed", Partition) { Name = "Sealed", NodeType = "Markdown" },
+                new MeshNode("Unsealed", Partition) { Name = "Unsealed", NodeType = "Markdown" },
                 new MeshNode("Tokened", Partition) { Name = "Tokened", NodeType = "Markdown" },
                 AssignmentNodeFactory.Policy(Ledger, new PartitionAccessPolicy { BreaksInheritance = true }),
                 // A static policy on a mapped satellite container: comments under Locked are closed.
                 AssignmentNodeFactory.Policy($"{Locked}/_Comment", new PartitionAccessPolicy { Read = false }),
                 AssignmentNodeFactory.Policy($"{Tokened}/_Comment", new PartitionAccessPolicy { Api = false }),
-                AssignmentNodeFactory.UserRole(PartitionCommenter, Role.Commenter.Id, Partition));
+                AssignmentNodeFactory.UserRole(PartitionCommenter, Role.Commenter.Id, Partition),
+                AssignmentNodeFactory.UserRole(DeniedCommenter, Role.Commenter.Id, Partition),
+                AssignmentNodeFactory.UserRole(DeniedCommenter, Role.Commenter.Id, $"{Sealed}/_Comment", denied: true));
 
     private static AccessContext Person(string id) => new() { ObjectId = id, Name = id };
 
@@ -77,6 +91,31 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
 
         (await CreateVerdict(PartitionCommenter, Comment(Open, Partition), ct)).IsValid.Should().BeTrue(
             "the control: the same write with no policy in between follows the main node");
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task ARoleDeniedBetweenMainNodeAndLanding_RefusesTheCreate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await CreateVerdict(DeniedCommenter, Comment($"{Sealed}/_Comment", Sealed), ct)).IsValid.Should().BeFalse(
+            "Commenter is denied on Sealed/_Comment: Comment on the main node must not reach past that denial");
+
+        (await CreateVerdict(DeniedCommenter, Comment($"{Unsealed}/_Comment", Unsealed), ct)).IsValid.Should().BeTrue(
+            "the control: the same writer, the same write, on a segment with no denial follows the main node");
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task ARoleDeniedBetweenMainNodeAndSatellite_RefusesTheRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rule = NodeTypeAccessRuleGate.Find(Mesh, "Comment", NodeOperation.Read);
+        rule.Should().NotBeNull("Comment registers the satellite rule");
+
+        (await ReadVerdict(rule!, Comment($"{Sealed}/_Comment", Sealed), ct, DeniedCommenter)).Should().BeFalse(
+            "Commenter is denied on Sealed/_Comment: a comment stored in it is not readable through the main node");
+
+        (await ReadVerdict(rule!, Comment($"{Unsealed}/_Comment", Unsealed), ct, DeniedCommenter)).Should().BeTrue(
+            "the control: a comment beneath a segment with no denial follows the main node");
     }
 
     [Fact(Timeout = 60_000)]
@@ -144,10 +183,11 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
 
     // The rule is asked about the satellite as the delivery gate asks about a stored one: the node
     // itself, with its stored main node. Loading it first would read it through this very rule.
-    private Task<bool> ReadVerdict(INodeTypeAccessRule rule, MeshNode comment, CancellationToken ct)
+    private Task<bool> ReadVerdict(
+        INodeTypeAccessRule rule, MeshNode comment, CancellationToken ct, string who = PartitionCommenter)
         => rule.HasAccess(new NodeValidationContext
                 {
-                    Operation = NodeOperation.Read, Node = comment, AccessContext = Person(PartitionCommenter),
-                }, PartitionCommenter)
+                    Operation = NodeOperation.Read, Node = comment, AccessContext = Person(who),
+                }, who)
             .FirstAsync().Timeout(Budget).Await(ct);
 }
