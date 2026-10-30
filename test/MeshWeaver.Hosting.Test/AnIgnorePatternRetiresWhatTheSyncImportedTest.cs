@@ -323,6 +323,79 @@ public class AnIgnorePatternRetiresWhatTheSyncImportedTest(ITestOutputHelper out
         importedGuard("Sp/Api").Should().BeFalse("no pattern excludes it, so the guard has nothing to spare");
     }
 
+    /// <summary>
+    /// Review on #7641: every compiled NodeType has a mesh-minted <c>Release/</c> record beneath it,
+    /// which is never pruned. So an Ignore pattern over a type keeps the definition (a survivor sits
+    /// under it) — and the guard must then keep the type's own <c>Source/</c> and <c>Test/</c> too.
+    /// Deleting them would leave a definition with nothing to compile against, and because the
+    /// definition is no longer a prune candidate the instance probe never sees it, so its instances
+    /// get neither a hold nor a <c>PendingRetirement</c> stamp.
+    /// </summary>
+    [Fact]
+    public void ARetiredNodeTypeKeptByItsReleaseRecord_KeepsItsSourcesAndTests()
+    {
+        var widget = new MeshNode("Widget", "Sp") { NodeType = MeshNode.NodeTypePath };
+        var body = new MeshNode("Body", "Sp/Widget/Source") { NodeType = "Code" };
+        var test = new MeshNode("Spec", "Sp/Widget/Test") { NodeType = "Code" };
+        var release = new MeshNode("1", "Sp/Widget/Release") { NodeType = "Release" };
+        var plain = new MeshNode("Other", "Sp") { NodeType = "Markdown" };
+        static bool Retired(string p) => p.StartsWith("Sp/Widget", StringComparison.OrdinalIgnoreCase)
+                                         || p.StartsWith("Sp/Other", StringComparison.OrdinalIgnoreCase);
+
+        var result = StaticRepoImporter.WithoutRetiredAncestorsOfSurvivors(
+            [widget, body, test, plain], [widget, body, test, release, plain], Retired);
+
+        string.Join(", ", result.Select(n => n.Path)).Should().Be("Sp/Other",
+            "the definition stays over its Release record, so the sources it compiles from stay with it; "
+            + "a retired node with nothing beneath it still leaves");
+    }
+
+    /// <summary>
+    /// Review on #7641: the retired-ancestor guard must not run BEFORE the conflict policy. In a
+    /// bidirectional Space an imported <c>Other</c> edited on the server, with a mesh-created
+    /// <c>Other/Local</c> beneath it, is kept by the guard either way — but if the guard drops it from
+    /// the candidates first, the policy never counts the edit as Preserved, the sync baseline advances
+    /// past it, and a later import (once <c>Local</c> is gone) deletes the edited node.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task RetiringAnEditedParent_CountsItsServerEditAsPreserved()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await SetUpSpace(ct, direction: SyncDirection.Bidirectional);
+        var parent = $"{space}/Other";
+
+        repoClient.Serve(FirstSha, complete: true, "Api.md", "Other.md");
+        var first = await Sync.ReimportAtCommit(space, FirstSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        first.WrittenPaths.Should().Contain(parent, "precondition: the sync imported the parent");
+
+        await NodeFactory.CreateNode(new MeshNode("Local", parent)
+        {
+            NodeType = "Markdown",
+            Name = "Minted by the mesh",
+            State = MeshNodeState.Active,
+        }).Timeout(TestTimeouts.Convergence).Await(ct);
+        await Mesh.GetWorkspace().GetMeshNodeStream(parent)
+            .Update(node => node with { Name = "Edited on the server" })
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        await Mesh.GetWorkspace().GetMeshNodeStream(parent)
+            .Where(n => n is { Name: "Edited on the server" })
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        await SetIgnore(space, ["Other*"], ct);
+
+        repoClient.Serve(SecondSha, complete: true, "Api.md", "Other.md");
+        var second = await Sync.ReimportAtCommit(space, SecondSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        Output.WriteLine($"{space} import 2: outcome={second.Outcome} preserved={second.Preserved} pruned=[{string.Join(", ", second.PrunedPaths)}]");
+
+        second.PrunedPaths.Should().NotContain(parent, "its recursive delete would take the mesh-minted child");
+        second.Preserved.Should().BeGreaterThan(0,
+            "the server edit of the retired parent is ahead of the repository; reporting 0 lets the "
+            + "baseline advance past it, and the next import would delete it");
+    }
+
     /// <summary>Authoritative read of a node expected to exist; times out (fails) when it was deleted.</summary>
     private Task<MeshNode> ReadSurvivor(string path, CancellationToken ct)
         => Mesh.GetWorkspace().GetMeshNodeStream(path)

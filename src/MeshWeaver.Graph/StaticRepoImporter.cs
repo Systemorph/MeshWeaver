@@ -2195,16 +2195,11 @@ public static class StaticRepoImporter
                         existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode,
                         SparedAsNeverMirrored(source, manifest),
                         sourceListingIsComplete);
-                    // 🚨 …and a RETIRED node is never deleted over a node that stays (review on
-                    // #7641). DeleteNode is recursive, so retiring `Sp/Other` would take a
-                    // mesh-minted `Sp/Other/Local` (or a Release record) with it — the very #1326
-                    // loss the provenance guard exists to prevent. Such a node is kept until its
-                    // subtree holds nothing that stays. The survivors include the nodes THIS import
-                    // writes: `existing` is the snapshot read before the upserts, so a child the run
-                    // just imported (a `!Other/Local*` re-include) would otherwise be deleted with
-                    // its retired parent.
-                    toPrune = WithoutRetiredAncestorsOfSurvivors(
-                        toPrune, existing.Values.Concat(nodes), source.IsRetiredFromMirror);
+                    // 🚨 The retired-ancestor guard (WithoutRetiredAncestorsOfSurvivors) runs AFTER
+                    // the conflict policy below, never before it (review on #7641): a retired node the
+                    // guard keeps because of a surviving child must still reach the policy, or a
+                    // server edit of that node is never counted Preserved and the baseline advances
+                    // past it — deleting it on a later import once the child is gone.
 
                     // Never prune a node CREATED/changed on the server since the last sync when the
                     // policy protects it (two-way, OR prune-only protection for bidirectional spaces —
@@ -2227,15 +2222,19 @@ public static class StaticRepoImporter
                             logger?.LogInformation(
                                 "[StaticRepoImport] {Partition}: keeping server-added {Path} (not pruned).",
                                 source.Partition, kept.Path);
-                        // 🚨 A node the policy just kept is now a SURVIVOR, so the ancestor guard
-                        // runs again over the narrowed set (review on #7641): a retired parent of a
-                        // kept server edit would otherwise still be deleted, and DeleteNode is
-                        // recursive. Deterministic repro:
-                        // AnIgnorePatternRetiresWhatTheSyncImportedTest.RetiringAnImportedParent_NeverDeletesAPolicyProtectedChildEdit.
-                        if (keptFromPrune.Length > 0)
-                            toPrune = WithoutRetiredAncestorsOfSurvivors(
-                                toPrune, existing.Values.Concat(nodes), source.IsRetiredFromMirror);
                     }
+
+                    // 🚨 …and a RETIRED node is never deleted over a node that stays (review on
+                    // #7641). DeleteNode is recursive, so retiring `Sp/Other` would take a
+                    // mesh-minted `Sp/Other/Local` (or a Release record) with it — the very #1326
+                    // loss the provenance guard exists to prevent. Such a node is kept until its
+                    // subtree holds nothing that stays. The survivors include the nodes THIS import
+                    // writes (`existing` is the snapshot read before the upserts) and the nodes the
+                    // policy just kept (they are no longer in toPrune). Deterministic repros:
+                    // AnIgnorePatternRetiresWhatTheSyncImportedTest.RetiringAnImportedParent_NeverDeletesAPolicyProtectedChildEdit
+                    // and …RetiringAnEditedParent_CountsItsServerEditAsPreserved.
+                    toPrune = WithoutRetiredAncestorsOfSurvivors(
+                        toPrune, existing.Values.Concat(nodes), source.IsRetiredFromMirror);
 
                     // Collect the actually-pruned PATHS (not just a count): a pruned Source/Test
                     // node affects its owning NodeType exactly like a written one, so the recompile
@@ -3029,6 +3028,13 @@ public static class StaticRepoImporter
     /// descendant which stays — an existing node that is not itself pruned and is not one of its
     /// governance satellites. <c>DeleteNode</c> deletes a subtree, so pruning such a node would delete
     /// the survivor with it (review on #7641). Candidates that are not retired are returned as before.
+    ///
+    /// <para>A retired NodeType definition kept this way keeps its own subtree too (its
+    /// <c>Source/</c> and <c>Test/</c>) — exactly as a held type does
+    /// (<see cref="NodeTypeInstanceProbe.WithoutHeld"/>). Every compiled type has a mesh-minted
+    /// <c>Release/</c> record beneath it, so without this an Ignore pattern over a type would keep
+    /// the definition, delete the sources it compiles from, and never put the type in front of the
+    /// instance probe (review on #7641).</para>
     /// </summary>
     /// <param name="toPrune">The prune candidates.</param>
     /// <param name="existing">Every node that stays unless pruned: the partition snapshot the
@@ -3045,9 +3051,16 @@ public static class StaticRepoImporter
             .Where(n => !string.IsNullOrEmpty(n.Path) && !pruned.Contains(n.Path) && !IsGovernance(n))
             .Select(n => n.Path)
             .ToImmutableArray();
-        return toPrune
-            .Where(n => !isRetired(n.Path)
-                        || !survivors.Any(s => s.StartsWith(n.Path + "/", StringComparison.OrdinalIgnoreCase)))
+        var keptAncestors = toPrune
+            .Where(n => isRetired(n.Path)
+                        && survivors.Any(s => s.StartsWith(n.Path + "/", StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        if (keptAncestors.Length == 0)
+            return toPrune;
+        var keptPaths = keptAncestors.Select(n => n.Path).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        return NodeTypeInstanceProbe.WithoutHeld(
+                toPrune.Where(n => !keptPaths.Contains(n.Path)),
+                NodeTypeInstanceProbe.NodeTypePathsAmong(keptAncestors))
             .ToImmutableList();
     }
 
