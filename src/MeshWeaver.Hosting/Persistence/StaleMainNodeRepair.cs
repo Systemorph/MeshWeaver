@@ -150,7 +150,7 @@ public static class StaleMainNodeRepair
             }
 
             var options = hub.JsonSerializerOptions;
-            return EnumeratePaths(storage, roots, logger)
+            return StorageTreeWalk.EnumeratePaths(storage, roots, logger, nameof(StaleMainNodeRepair))
                 .SelectMany(paths => ReadCandidates(storage, paths, options)
                     .SelectMany(read => Process(hub, storage, read.Candidates, options, write, logger)
                         .Select(findings => new StaleMainNodeRepairReport(
@@ -164,46 +164,6 @@ public static class StaleMainNodeRepair
                     report.RepairedCount, report.FailedCount,
                     string.Join(", ", report.Findings.Select(f => $"{f.Path}→{f.StaleMainNode}"))));
         });
-
-    /// <summary>
-    /// Every node path in scope, enumerated by PATH through the storage tree — never through the
-    /// query index, which by the definition of this defect cannot see the rows being looked for.
-    /// A null/empty <paramref name="roots"/> starts from the adapter's root listing, whose DIRECTORY
-    /// paths are recursed into as well as its node paths (a node-less intermediate level still
-    /// anchors real descendants).
-    /// </summary>
-    private static IObservable<ImmutableList<string>> EnumeratePaths(
-        IStorageAdapter storage, IReadOnlyCollection<string>? roots, ILogger? logger)
-        => (roots is { Count: > 0 }
-            ? Observable.Return((
-                Roots: (IEnumerable<string>)roots,
-                Seed: ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase)
-                    .Union(roots)))
-            : storage.ListChildPaths(null).Take(1).Select(level =>
-            {
-                var nodes = (level.NodePaths ?? []).Where(p => !string.IsNullOrEmpty(p)).ToArray();
-                var directories = (level.DirectoryPaths ?? []).Where(p => !string.IsNullOrEmpty(p));
-                return (
-                    Roots: nodes.Concat(directories).Distinct(StringComparer.OrdinalIgnoreCase),
-                    Seed: ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, nodes));
-            }))
-        .SelectMany(start => start.Roots
-            // Sequential, not merged: a whole-mesh walk must not open one storage round-trip per
-            // partition at once. Ordering also keeps the log line reproducible.
-            .Select(root => storage.ListDescendantPaths(root)
-                // Per-root tolerance: a partition that cannot be listed (an absent schema, a
-                // backend hiccup) ends THIS root, not the sweep. Logged, never swallowed silently —
-                // a root that answered nothing must be distinguishable from a root that is clean.
-                .Catch<IReadOnlyCollection<string>, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "[StaleMainNodeRepair] enumerating descendants of '{Root}' failed; any stale "
-                        + "MainNode under it is NOT covered by this sweep", root);
-                    return Observable.Return<IReadOnlyCollection<string>>([]);
-                }))
-            .Concat()
-            .Aggregate(start.Seed, (acc, descendants) => acc.Union(descendants)))
-        .Select(set => set.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToImmutableList());
 
     /// <summary>
     /// Reads the enumerated paths in batches and keeps the ones the SHARED predicate accepts. Paths
@@ -229,7 +189,7 @@ public static class StaleMainNodeRepair
     /// against an expected set — which would make the one artifact that renders the run auditable
     /// unreliable. A stable order is also what lets a second run's report be compared to the first,
     /// which is how the idempotence claim gets checked in practice rather than merely asserted.
-    /// Ordinal-ignore-case, the same comparer <see cref="EnumeratePaths"/> orders paths with, so the
+    /// Ordinal-ignore-case, the same comparer <see cref="StorageTreeWalk.EnumeratePaths"/> orders paths with, so the
     /// two stages cannot disagree.</para>
     /// </summary>
     private static IObservable<(ImmutableList<MeshNode> Candidates, int NodesRead)> ReadCandidates(
