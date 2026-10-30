@@ -1,7 +1,7 @@
 ---
 Name: Badges, Icons & Status
 Category: Documentation
-Description: Small display controls — badges, icons, images, progress bars, spacers, dividers, embedded documents and apps, menu items, and card skins.
+Description: Small display controls — badges, icons, images, progress bars, spacers, dividers, embedded documents and apps, audio players, menu items, and card skins.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.5 13 17 22l-5-3-5 3 1.5-9"/></svg>
 ---
 
@@ -302,6 +302,27 @@ Controls.Stack
 ```
 
 For a video use `Controls.Video`, which frames embed players itself.
+
+---
+
+# Audio
+
+`Controls.Audio(src)` is an in-place audio player: the control for a hand-built `<audio controls>`
+tag. It has no frame and no aspect ratio, so it fits a table cell or a stack row — a 16/9
+`Controls.Video` is not a substitute. `Title` is the player's accessible name (`title` and
+`aria-label`); the caller localizes it. `Preload` takes an `AudioPreload` value — `None`,
+`Metadata` (the default) or `Auto` — and a list of clips wants `None`, so nothing downloads until
+the viewer presses play.
+
+```csharp
+// One clip.
+Controls.Audio(previewUrl).WithTitle(previewTitle).WithPreload(AudioPreload.None)
+
+// A preview column in a grid: the source is bound to each row's property.
+Controls.Audio(new ContextProperty(nameof(Song.PreviewUrl))).WithPreload(AudioPreload.None)
+```
+
+`Src` is an ordinary bindable property, so it takes a data-binding expression as well as a URL.
 
 ---
 
