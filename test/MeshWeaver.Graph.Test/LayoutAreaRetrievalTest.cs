@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
 
@@ -108,7 +109,7 @@ public class LayoutAreaRetrievalTest(ITestOutputHelper output) : HubTestBase(out
             .Should().Emit();
 
         response.Message.Error.Should().BeNull($"'{path}' names the layout-area listing, not a data collection");
-        var areas = (response.Message.Data as IEnumerable<LayoutAreaDefinition>)?.Select(a => a.Area).ToList();
+        var areas = response.Message.Data.As<IReadOnlyList<LayoutAreaDefinition>>(client.JsonSerializerOptions)?.Select(a => a.Area).ToList();
         areas.Should().NotBeNull($"'{path}' answers a list of LayoutAreaDefinition");
         areas!.Should().Contain(CustomVisibleArea);
     }
@@ -125,7 +126,7 @@ public class LayoutAreaRetrievalTest(ITestOutputHelper output) : HubTestBase(out
             .Should().Emit();
         viaReference.Message.Error.Should().BeNull();
 
-        var referenceAreas = (viaReference.Message.Data as IEnumerable<LayoutAreaDefinition>)?
+        var referenceAreas = viaReference.Message.Data.As<IReadOnlyList<LayoutAreaDefinition>>(client.JsonSerializerOptions)?
             .Select(a => a.Area).OrderBy(a => a).ToList();
         referenceAreas.Should().NotBeNull("the layoutAreas: reference returns a list of LayoutAreaDefinition");
         referenceAreas!.Should().Contain(CustomVisibleArea);
