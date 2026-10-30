@@ -32,6 +32,7 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     </ItemGroup>
 

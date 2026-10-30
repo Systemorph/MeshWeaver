@@ -451,6 +451,9 @@ public static class GraphConfigurationExtensions
                 // An API token's principal is bound to the caller that writes it, at the commit point
                 // every routed write meets. See ApiTokenPrincipalBinding.
                 services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.ApiTokenPrincipalCommitGuard>();
+                // A scoped API token never rewrites a node into, out of, or as a token record — judged
+                // against the merged entity, so a retype INTO ApiToken is seen. See ApiTokenRecordCommitGuard.
+                services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.ApiTokenRecordCommitGuard>();
 
                 // The create BOUNDARY's half of CreatableTypes (#4077). Until this, a parent
                 // NodeType's whitelist was honoured by the Create FORM alone and the write boundary

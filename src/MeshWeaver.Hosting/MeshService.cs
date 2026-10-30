@@ -358,7 +358,7 @@ internal sealed class MeshService(
         var stamped = StampViewer(request);
         // The reader scope covers BOTH answers: the refusal's empty Initial is delivered on the
         // SUBSCRIBING turn, which need not be the reader's.
-        return (RefusesAnonymousViewer(ViewerOf(request, stamped))
+        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
             // One definitive, empty Initial read from NO partition — an answer, not silence, so a
             // consumer waiting on the Initial is released rather than parked.
             ? Observable.Return(new QueryResultChange<T>
@@ -371,14 +371,14 @@ internal sealed class MeshService(
     }
 
     public IObservable<T?> Select<T>(string path, string property)
-        => RefusesAnonymousViewer(AmbientViewer())
+        => RefusesAnonymousViewer(AmbientViewer()) || RefusesScopedReader()
             ? Observable.Return(default(T))
             : _query.Select<T>(path, property);
 
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
         var stamped = StampViewer(request);
-        return (RefusesAnonymousViewer(ViewerOf(request, stamped))
+        return (RefusesAnonymousViewer(ViewerOf(request, stamped)) || RefusesScopedReader()
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
             : _query.Query(stamped)).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
@@ -423,6 +423,20 @@ internal sealed class MeshService(
         => viewer is not null
            && AnonymousAccess.IsAnonymousSubject(viewer)
            && AnonymousAccess.IsDenied(hub.ServiceProvider);
+
+    /// <summary>
+    /// 🛡️ The READ half of the API-token scope cap (<see cref="ApiTokenScope"/>): a caller whose
+    /// token carries scopes but none that allows <see cref="Permission.Read"/> reads NOTHING through
+    /// a query. For the same reason as the anonymous switch above: the SQL-backed providers filter
+    /// rows in the database against the viewer's projected grants and never consult the C# fold the
+    /// cap lives in, and the in-process providers rebuild the row check's context from the viewer's
+    /// id alone. Refusing here, at the one call boundary every secured read passes, closes that path
+    /// for every backend at once. A token WITH a read-allowing scope is capped to reading anyway, so
+    /// the providers' own filtering is the whole answer for it; an unscoped caller is untouched.
+    /// Decided off the caller's context on the CALLING thread, like <see cref="StampViewer"/>.
+    /// </summary>
+    private bool RefusesScopedReader()
+        => !ApiTokenScope.AllowsPermission(CaptureContext(), Permission.Read);
 
     /// <summary>
     /// The ambient viewer for the reads that carry no request to stamp (<see cref="Select{T}"/>,
@@ -507,7 +521,7 @@ internal sealed class MeshService(
         int limit = 10,
         string? contextPath = null,
         string? context = null)
-        => RefusesAnonymousViewer(AmbientViewer())
+        => RefusesAnonymousViewer(AmbientViewer()) || RefusesScopedReader()
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
             : _query.Autocomplete(basePath, prefix, mode, limit, contextPath, context);
 

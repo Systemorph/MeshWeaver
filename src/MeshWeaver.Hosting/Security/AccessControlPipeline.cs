@@ -235,6 +235,63 @@ public static class AccessControlPipeline
     }
 
     /// <summary>
+    /// 🛡️ The API-token scope cap's rule for an API-token RECORD (<see cref="ApiTokenScope"/>), decided
+    /// at the owner's gate. A scoped token holding <c>write</c> holds Update on its owner's own records,
+    /// its own token record included — and the fold the gate asks is path-only, so it cannot tell that
+    /// record from a note. Rewriting the record would let the token strip its own scopes (or retype the
+    /// record out of the token-record rule's sight while the verdict still authenticates its content)
+    /// and be unscoped on its next request, so the cap would be one write deep.
+    ///
+    /// <para>So, for a SCOPED caller on a node whose type is an API-token record: every write is
+    /// refused, except a delete by a token holding <see cref="ApiTokenScope.Tokens"/> (deleting
+    /// removes authority; the delete handler's RLS chain applies the same rule). Minting a NEW token
+    /// is a create, which the RLS validator decides with the subset rule
+    /// (<see cref="ApiTokenScope.MintRefusal"/>). Reads, unscoped callers and every other node type
+    /// pass unchanged — and the node is read only on that narrow path.</para>
+    /// </summary>
+    private static IObservable<PermissionCheckOutcome> CapScopedTokenRecordWrite(
+        IMessageHub hub,
+        IMessageDelivery delivery,
+        string hubPath,
+        (string Path, Permission Permission) check,
+        AccessContext? caller,
+        PermissionCheckOutcome outcome,
+        ILogger? logger)
+    {
+        if (!outcome.IsGranted
+            || !ApiTokenScope.IsScoped(caller)
+            || (check.Permission & ~(Permission.Read | Permission.Export)) == Permission.None
+            || !string.Equals(check.Path, hubPath, StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(outcome);
+
+        var deleteByTokensScope = CascadeRootOf(delivery.Message) is not null
+                                  && ApiTokenScope.Allows(caller, ApiTokenScope.Tokens);
+        return NodeTypeAccessRuleGate.ReadSubjectNode(hub, hubPath)
+            .Take(1)
+            .DefaultIfEmpty()
+            .Select(node =>
+            {
+                if (node is null || !ApiTokenScope.IsTokenRecordType(node.NodeType) || deleteByTokensScope)
+                    return outcome;
+                logger?.LogDebug(
+                    "AccessControlPipeline: {Permission} on API-token record {Path} refused — the caller's "
+                    + "token is scoped to [{Scopes}] and a scoped token never rewrites a token record",
+                    check.Permission, check.Path, ApiTokenScope.Format(caller!.Scopes));
+                return PermissionCheckOutcome.Denied;
+            })
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "AccessControlPipeline: could not read the node at {Path} to apply the API-token "
+                    + "record rule — reporting UNAVAILABLE rather than a grant nobody established",
+                    hubPath);
+                return Observable.Return(PermissionCheckOutcome.Undetermined(
+                    $"the node at '{hubPath}' could not be read to apply the API-token record rule "
+                    + $"({ex.GetType().Name})"));
+            });
+    }
+
+    /// <summary>
     /// The cascade root a delete-shaped message belongs to, or <c>null</c> for every other message.
     /// Mirrors what <c>MeshExtensions.CheckDeletePermissionByRule</c> puts on the context, so a rule
     /// sees the same input whichever seam asked it.
@@ -382,7 +439,11 @@ public static class AccessControlPipeline
                         // here so the reactive pipeline below only handles the remaining checks.
                         foreach (var check in attr.GetPermissionChecks(delivery, hubPath))
                         {
-                            if (hubPermissions != null && hubPermissions.HasPermission(check.Permission, delivery, userId))
+                            // 🛡️ A hub-level grant never lifts the API-token scope cap (review of
+                            // #7585): a capped check falls through to the fold, which applies it.
+                            if (hubPermissions != null
+                                && ApiTokenScope.AllowsPermission(trustedCaller, check.Permission)
+                                && hubPermissions.HasPermission(check.Permission, delivery, userId))
                                 continue;
                             pendingChecks = pendingChecks.Add(check);
                         }
@@ -618,6 +679,11 @@ public static class AccessControlPipeline
                                     : Observable.Return(outcome)
                                 : ReconsiderThroughNodeTypeRule(
                                     hub, delivery, hubPath, check, effectiveUserId, trustedCaller, logger))
+                        // 🛡️ The API-token scope cap's TOKEN-RECORD rule, at the one seam every
+                        // owner-side write passes (review of #7585). The RLS validator carries the
+                        // same rule but is owner-enforced, so the canonical stream.Update never runs it.
+                        .SelectMany(outcome => CapScopedTokenRecordWrite(
+                            hub, delivery, hubPath, check, trustedCaller, outcome, logger))
                         .Select(outcome => new EvaluatedCheck(check.Path, check.Permission, outcome)))
                     // Concat, not Merge: the checks run ONE AT A TIME, in order — which is what
                     // makes the termination below actually save the remaining evaluations, and

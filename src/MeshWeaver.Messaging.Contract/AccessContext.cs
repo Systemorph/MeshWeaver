@@ -66,6 +66,17 @@ public record AccessContext
     public bool IsApiToken { get; init; }
 
     /// <summary>
+    /// The scope CAP of the API token this context was established by, or <c>null</c> for an
+    /// unscoped token and for every other kind of session. When non-empty, the caller can do at
+    /// most what these scopes allow (<see cref="MeshWeaver.Mesh.Security.ApiTokenScope"/>): the
+    /// permission fold, the node-type access rules and the RLS validator cap node permissions by
+    /// it, and each authenticating surface (MCP, REST, a transport connection) checks its own
+    /// scope. Set ONLY by token validation, from the token record — never from anything the
+    /// caller sent. Additive and wire-compatible: absent on old payloads ⇒ unscoped.
+    /// </summary>
+    public IReadOnlyCollection<string>? Scopes { get; init; }
+
+    /// <summary>
     /// When true, this context is a SERVICE principal (a non-person identity, <c>ServiceIdentity</c>):
     /// <see cref="ObjectId"/> is a service object id (<c>svc-…</c>) and the context was established by
     /// one of that service's API tokens. Set ONLY by token validation — a session that resolves to a

@@ -42,6 +42,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -98,6 +99,11 @@ class Inputs:
     run_url: str = ""
     requested_by: str = ""
     change_mode: str = ""
+    # The pull request's LIVE labels as the admission's `change-set` job read them (comma-separated `LABELS`), carried
+    # on the request so a host's selectors classify with the SAME labels the Actions legs do (`full-run` widens a host
+    # run as it widens Actions) — a build host holds no credential to read them itself. None = the caller handed no
+    # `LABELS` at all (an older workflow): the request then carries no `labels` key, and the host says it was not told.
+    labels: Optional[list] = None
     channel: str = "latest"
     stages_file: str = STAGES_FILE
 
@@ -249,6 +255,8 @@ def request_body(i: Inputs, executor: str = HOST) -> dict:
         body["requestedBy"] = i.requested_by
     if i.change_mode:
         body["changeMode"] = i.change_mode
+    if i.labels is not None:
+        body["labels"] = i.labels
     body["executor"] = executor
     return body
 
@@ -412,6 +420,27 @@ def _routing() -> tuple[int, str]:
     return _http_get(ROUTING_URL)
 
 
+MAX_LABELS = 100        # GitHub allows 100 labels on an issue or pull request
+MAX_LABEL_LENGTH = 50   # and a label name of at most 50 characters
+
+
+def parse_labels(raw: str) -> list:
+    """`LABELS` (comma-separated, as ci-change-set.py --labels reads it) → the sorted, de-duplicated names. A name
+    no GitHub label could have (too long, a control character) is malformed input — exit 2, never dropped quietly:
+    a dropped `full-run` would narrow a host run the Actions legs run in full."""
+    # A control character (C0, DEL, C1 — Unicode category Cc) is refused in the RAW value, before any trimming: a
+    # stripped "full-run\n" would otherwise pass as "full-run" and an all-control value as no labels at all.
+    if any(unicodedata.category(c) == "Cc" for c in (raw or "")):
+        raise BadInput(f"LABELS carries a control character ({(raw or '')[:60]!r}) — no pull-request label name has one")
+    names = sorted({n.strip() for n in (raw or "").split(",") if n.strip()})
+    for n in names:
+        if len(n) > MAX_LABEL_LENGTH:
+            raise BadInput(f"LABELS carries {n[:60]!r}, which is not a pull-request label name")
+    if len(names) > MAX_LABELS:
+        raise BadInput(f"LABELS carries {len(names)} names — a pull request has at most {MAX_LABELS}")
+    return names
+
+
 def inputs_from_env(e: dict) -> Inputs:
     def num(name: str, default: int = 0) -> int:
         v = (e.get(name) or "").strip()
@@ -427,6 +456,7 @@ def inputs_from_env(e: dict) -> Inputs:
                   pr=pr or None, base_ref=e.get("BASE_REF", "").strip(), main_sha=e.get("MAIN_SHA", "").strip().lower(),
                   run_id=num("RUN_ID"), run_attempt=num("RUN_ATTEMPT", 1), run_url=e.get("RUN_URL", "").strip(),
                   requested_by=e.get("REQUESTED_BY", "").strip(), change_mode=e.get("CHANGE_MODE", "").strip(),
+                  labels=parse_labels(e["LABELS"]) if "LABELS" in e else None,
                   channel=(e.get("CHANNEL") or "latest").strip(), stages_file=(e.get("STAGES_FILE") or STAGES_FILE).strip())
 
 
@@ -536,6 +566,23 @@ def self_test() -> int:
     check("trunk/a push to main", tb["isTrunk"] is True and tb["ref"] == {"kind": "branch", "name": "main"}, tb)
     check("trunk/a push to a branch is not trunk", request_body(with_(event="push", ref_name="feat/y", pr=None))["isTrunk"] is False)
     check("trunk/a merge group is not trunk", request_body(with_(event="merge_group", ref_name="main", pr=None))["isTrunk"] is False)
+    # 2b. labels: the admission's live labels ride the request, so a host classifies with what Actions classifies with
+    check("labels/no LABELS handed → the request carries no `labels` key (the host is told it was not told)",
+          "labels" not in request_body(base), request_body(base))
+    lb = request_body(with_(labels=parse_labels("tests-before-review, full-run,,full-run")))
+    check("labels/the live labels ride the request, sorted and de-duplicated", lb.get("labels") == ["full-run", "tests-before-review"], lb)
+    check("labels/an EMPTY label set is carried as [] — known to be none, never unknown",
+          request_body(with_(labels=parse_labels(""))).get("labels") == [], request_body(with_(labels=parse_labels(""))))
+    e0 = {"HEAD_SHA": "a" * 40, "EVENT": "pull_request", "PR_NUMBER": "7"}
+    check("labels/env without LABELS reads as unknown (None)", inputs_from_env(e0).labels is None)
+    check("labels/env LABELS=\"\" reads as none ([])", inputs_from_env({**e0, "LABELS": ""}).labels == [])
+    check("labels/env LABELS reads the comma-separated names", inputs_from_env({**e0, "LABELS": "full-run,ci"}).labels == ["ci", "full-run"])
+    for bad in ("x" * 51, "a\nb", "full-run\n", "\n", "\t", "full-\x7frun", "full-\x85run", ",".join(f"l{n}" for n in range(101))):
+        try:
+            parse_labels(bad)
+            check(f"labels/{bad[:12]!r} is refused as malformed", False, "accepted")
+        except BadInput:
+            pass
     # 3. every failure answers actions, said
     cases = [
         ("no stages declared", with_(stages_file=os.path.join(tmp, "absent.json")), host_q, ok_post, "declares no stages", False),

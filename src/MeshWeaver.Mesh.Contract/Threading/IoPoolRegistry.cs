@@ -302,12 +302,41 @@ public sealed class IoPoolRegistry : IDisposable
         /// </summary>
         public IReadOnlyList<string> Sites { get; init; } = [];
 
+        /// <summary>
+        /// The residual's SYNCHRONOUS leaves — a blocking leaf or a <c>SubscribeThroughPool</c>
+        /// subscribe — with the managed thread each one is still holding, so a caller whose join
+        /// expired can read that thread's stack (#7277). Not part of <see cref="ToString"/>: the
+        /// sites already name them there.
+        /// </summary>
+        public IReadOnlyList<SynchronousLeaf> SynchronousLeaves { get; init; } = [];
+
         /// <inheritdoc />
         public override string ToString() =>
             Sites.Count == 0
                 ? $"{Pool}={Residual}"
                 : $"{Pool}={Residual} [{string.Join(" | ", Sites)}]";
     }
+
+    /// <summary>
+    /// One synchronous leaf still in flight: its site (as <see cref="PoolResidual.Sites"/> names it)
+    /// and the managed thread it holds until it returns.
+    /// </summary>
+    /// <param name="Site">The leaf's call site.</param>
+    /// <param name="ManagedThreadId">The managed thread the leaf started on and is still holding.</param>
+    /// <param name="Ticket">The leaf's own ticket in its pool — unique for the pool's life, unlike the
+    /// thread id, which the thread takes on to its next work item once the leaf returns.</param>
+    public readonly record struct SynchronousLeaf(string Site, int ManagedThreadId, long Ticket);
+
+    /// <summary>
+    /// Whether the synchronous leaf <paramref name="leaf"/> of the draining pool <paramref name="pool"/>
+    /// is still in flight. A stack read between two readings that both say yes belongs to that leaf;
+    /// once it says no, the thread may already be running unrelated work (#7277).
+    /// </summary>
+    /// <param name="pool">The pool's name, as <see cref="PoolResidual.Pool"/> carries it.</param>
+    /// <param name="leaf">The leaf, as <see cref="PoolResidual.SynchronousLeaves"/> carries it.</param>
+    public bool IsLeafInFlight(string pool, SynchronousLeaf leaf) =>
+        _draining.Any(kvp => string.Equals(kvp.Key, pool, StringComparison.Ordinal)
+                             && kvp.Value.IsLeafInFlight(leaf.Ticket));
 
     /// <summary>
     /// The budget a host's terminal drain holds shutdown for while waiting on <see cref="Disposed"/>
@@ -343,7 +372,8 @@ public sealed class IoPoolRegistry : IDisposable
             .Where(kvp => !_reported.ContainsKey(kvp.Key))
             .Select(kvp => new PoolResidual(kvp.Key, kvp.Value.CurrentInFlight)
             {
-                Sites = kvp.Value.PendingLeafSites
+                Sites = kvp.Value.PendingLeafSites,
+                SynchronousLeaves = kvp.Value.PendingSynchronousLeaves,
             })
             .ToArray();
 
