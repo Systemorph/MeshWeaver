@@ -179,6 +179,28 @@ Offline, the rule is a pure function over strings and is pinned by
 root mount does not) and a negative control that a genuinely absent sibling is still reported as a
 missing source.
 
+## What the samples gate does and does not prove
+
+Core's samples gate (`dotnet-test.yml` → doc-gate, staged by `.github/scripts/stage-samples-gate.sh`)
+compiles every NodeType under `samples/Graph/Data` on every pull request. It stages each tree at its
+**authored root** (`MathDemo/…`), never under the prefix a statically imported partition serves it
+from (`MeshWeaver/samples/Graph/Data/MathDemo/…`). So **a defect that exists only under a mount prefix
+cannot fail it.** That is the class of #4813 above: the gate was green for weeks while every pod that
+served the tree from a prefix failed the compile (#7344).
+
+The mount class is pinned where it lives, in the resolver. `CodeIncludePatternTest` drives the
+mount-anchored spelling under a root mount and under a prefixed one, and `MountRelativeSourceQueryTest`
+does the same for source queries (see *Verifying*). The gate proves something else: the authored
+content compiles at all. Read its green as that, and never as "this tree resolves from every mount".
+
+The gate's *coverage* is enforced rather than stated. The staging script lists the trees it gates,
+which since #7344 include `Type` (one NodeType, `Type/Article`, and its Code node, which nothing
+else type-checked). It **fails** when any other top-level tree carries a `.cs` file or a NodeType
+definition. `User` is the one named exception: the gate mesh serves it from a static node provider,
+and installing over that path is refused by design. The old comment claimed every excluded tree held
+"no compilable content", and that was false for `Type` with nothing to notice it. A tree that grows
+compilable content now reds the gate until someone decides where it is checked.
+
 ## See also
 
 - [Node Type Compilation](/Doc/Architecture/NodeTypeCompilation) — the pipeline, and the source-set

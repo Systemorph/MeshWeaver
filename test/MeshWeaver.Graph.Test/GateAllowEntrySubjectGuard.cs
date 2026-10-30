@@ -59,9 +59,10 @@ public class GateAllowEntrySubjectGuard
     private static readonly ImmutableHashSet<string> PackageLevelChecks =
         ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "install", "idempotence");
 
-    /// <summary>The <c>for name in A B C; do</c> line that names every package the samples gate stages.</summary>
+    /// <summary>The <c>GATED="A B C"</c> line that names every package the samples gate stages (the
+    /// staging loop and the "nothing compilable outside the gate" check both read it, #7344).</summary>
     private static readonly Regex StagedPackagesPattern =
-        new(@"^for name in (?<names>[^;]+); do\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
+        new(@"^GATED=""(?<names>[^""]+)""\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
 
     /// <summary>
     /// One gate lane: its ratchet file, the content tree it judges, and the path prefix its staging
@@ -165,11 +166,13 @@ public class GateAllowEntrySubjectGuard
         // what the message below is for.
         Assert.True(samples.StagedPackages.Count >= 3,
             "expected stage-samples-gate.sh to name every staged package; parsed "
-            + $"{samples.StagedPackages.Count}. If that script's `for name in …; do` line changed "
+            + $"{samples.StagedPackages.Count}. If that script's `GATED=\"…\"` line changed "
             + "shape, teach StagedPackagesPattern rather than letting the parse yield nothing — a "
             + "guard that reads its own input as empty is a guard that passes on no evidence.");
         Assert.Contains("MathDemo", samples.StagedPackages);
         Assert.Contains("Systemorph", samples.StagedPackages);
+        // Type carries a real NodeType and its Code node; it is gated since #7344.
+        Assert.Contains("Type", samples.StagedPackages);
         Assert.DoesNotContain("Doc", samples.StagedPackages);
         // Witnesses that the parse reflects the CURRENT script rather than a remembered one: Doc was
         // never staged, and Cornerstone and the four product demos were until they moved out. A
