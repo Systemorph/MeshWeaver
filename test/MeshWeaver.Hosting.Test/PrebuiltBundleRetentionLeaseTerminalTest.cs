@@ -149,8 +149,76 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
     private static readonly TimeSpan HoldSpan = TimeSpan.FromHours(1);
     private static readonly long OurClaim = PrebuiltBundleRetentionLease.ClaimFor(ClaimedAt + HoldSpan, 5) | PrebuiltBundleRetentionLease.StampedFlag;
 
-    private static PrebuiltBundleRetentionLeaseState Claimed(DateTimeOffset at, int nonce)
-        => new(PrebuiltBundleRetentionLease.ClaimFor(at + HoldSpan, nonce) | PrebuiltBundleRetentionLease.StampedFlag);
+    private const long OurGeneration = 7;
+    private static readonly PrebuiltBundleRetentionLeaseState Ours = new(OurClaim) { Generation = OurGeneration };
+
+    private static PrebuiltBundleRetentionLeaseState Claimed(DateTimeOffset at, int nonce, long generation = 0)
+        => new(PrebuiltBundleRetentionLease.ClaimFor(at + HoldSpan, nonce) | PrebuiltBundleRetentionLease.StampedFlag) { Generation = generation };
+
+    /// <summary>
+    /// 🚨 #7459, the fence. The owner acknowledged this pass's claim, died before it persisted, reloaded the
+    /// lease as it was one generation back, and granted it to another pass, which landed the SAME generation.
+    /// The holder's watch first looks only now. Before the fence it waited for its own claim to appear, which
+    /// never happens, and swept beside the new holder.
+    /// </summary>
+    [Fact]
+    public void AClaimLostBeforeTheWatchFirstLooks_ToATakeOfTheSameGeneration_IsALoss()
+    {
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var outcome = new Outcome<OperationCanceledException>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim, OurGeneration));
+
+        live.OnNext(Claimed(ClaimedAt, 9, OurGeneration));
+
+        outcome.Values.Should().ContainSingle(
+            "another claim in this pass's own generation means its take was superseded — it must stop");
+        outcome.Completed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ANewerGeneration_IsALoss_WhateverItsClaim()
+    {
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var outcome = new Outcome<OperationCanceledException>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim, OurGeneration));
+
+        live.OnNext(PrebuiltBundleRetentionLeaseState.Lapsed with { Generation = OurGeneration + 1 });
+
+        outcome.Values.Should().ContainSingle("a newer generation exists, so this holder is stale");
+    }
+
+    [Fact]
+    public void AnOlderGeneration_IsWaitedPast_AndTheSupersedingTakeIsStillALoss()
+    {
+        // NEGATIVE CONTROL: a snapshot from before the take (the previous holder's ended claim, the lease
+        // lapsed one generation back, which is also what a reload of an unpersisted claim looks like) is
+        // not a loss: nobody can sweep on it without taking a newer generation.
+        var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
+        var outcome = new Outcome<OperationCanceledException>();
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim, OurGeneration));
+
+        live.OnNext(Claimed(ClaimedAt - HoldSpan - TimeSpan.FromMinutes(1), 3, OurGeneration - 1));
+        live.OnNext(PrebuiltBundleRetentionLeaseState.Lapsed with { Generation = OurGeneration - 1 });
+        outcome.Values.Should().BeEmpty("older generations are snapshots from before this take");
+
+        live.OnNext(Claimed(ClaimedAt, 9, OurGeneration));
+        outcome.Values.Should().ContainSingle("the take that superseded this one is still seen");
+    }
+
+    [Fact]
+    public void TheFence_HoldsOnlyTheClaimInItsOwnGeneration()
+    {
+        PrebuiltBundleRetentionLease.IsHeldBy(Ours, OurClaim, OurGeneration).Should().BeTrue("NEGATIVE CONTROL: the holder itself");
+        PrebuiltBundleRetentionLease.IsHeldBy(Ours with { Claim = OurClaim & ~PrebuiltBundleRetentionLease.StampedFlag }, OurClaim, OurGeneration)
+            .Should().BeTrue("…before its stamp landed");
+        PrebuiltBundleRetentionLease.IsHeldBy(Ours with { Generation = OurGeneration + 1 }, OurClaim, OurGeneration).Should().BeFalse(
+            "the SAME claim in a newer generation is not this holder's: a stale holder never stamps or releases it");
+        PrebuiltBundleRetentionLease.IsHeldBy(Claimed(ClaimedAt, 9, OurGeneration), OurClaim, OurGeneration).Should().BeFalse();
+        PrebuiltBundleRetentionLease.IsHeldBy(null, OurClaim, OurGeneration).Should().BeFalse();
+
+        PrebuiltBundleRetentionLease.Taken(Ours with { Claim = PrebuiltBundleRetentionLease.LapsedClaim }, 123L << PrebuiltBundleRetentionLease.NonceBits | 4)
+            .Generation.Should().Be(OurGeneration + 1, "every take bumps the generation");
+    }
 
     [Fact]
     public void ASnapshotFromBeforeTheClaim_IsNotALoss_AndALaterLossStillIs()
@@ -159,11 +227,11 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
         // ended claim, or lapsed — is not a loss; the claim then appears, and a loss after it counts.
         var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
         var outcome = new Outcome<OperationCanceledException>();
-        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim));
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim, OurGeneration));
 
         live.OnNext(Claimed(ClaimedAt - HoldSpan - TimeSpan.FromMinutes(1), 3));
         live.OnNext(PrebuiltBundleRetentionLeaseState.Lapsed);
-        live.OnNext(new PrebuiltBundleRetentionLeaseState(OurClaim));
+        live.OnNext(Ours);
         outcome.Values.Should().BeEmpty("stale snapshots from before the claim, then the claim itself");
 
         live.OnNext(PrebuiltBundleRetentionLeaseState.Lapsed);
@@ -177,9 +245,9 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
         var fault = new InvalidOperationException("lease stream failed");
         var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
         var outcome = new Outcome<OperationCanceledException>();
-        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim));
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim, OurGeneration));
 
-        live.OnNext(new PrebuiltBundleRetentionLeaseState(OurClaim));
+        live.OnNext(Ours);
         live.OnError(fault);
 
         outcome.Error.Should().BeNull("a fault of the watch must not reach the pass as an ordinary fault, which releases under its leaf");
@@ -191,9 +259,9 @@ public class PrebuiltBundleRetentionLeaseTerminalTest
     {
         var live = new Subject<PrebuiltBundleRetentionLeaseState?>();
         var outcome = new Outcome<OperationCanceledException>();
-        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim));
+        outcome.Observe(PrebuiltBundleRetentionLease.Lost(live, OurClaim, OurGeneration));
 
-        live.OnNext(new PrebuiltBundleRetentionLeaseState(OurClaim));
+        live.OnNext(Ours);
         live.OnCompleted();
 
         outcome.Values.Should().ContainSingle("a watch that ended can no longer see a loss — the guard must not vanish silently");
