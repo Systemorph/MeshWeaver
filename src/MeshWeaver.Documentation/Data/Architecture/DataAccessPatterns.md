@@ -154,7 +154,17 @@ hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
 
 **Behaviour summary:**
 
-- `CreateNode` — runs `INodeValidator`, sets state to Active.
+- `CreateNode` — runs `INodeValidator`, sets state to Active. **A create is an INSERT that the store
+  decides:** it commits with `IStorageAdapter.WriteIfVersion(node, 0)` (Postgres `ON CONFLICT … DO
+  NOTHING`, in-memory `TryAdd`), so of N concurrent creates of one path — across replicas or within
+  one process — exactly one succeeds and every other one fails with
+  `NodeCreationRejectionReason.NodeAlreadyExists`, the same answer as for a row the existence check
+  could already see. A create-only node is therefore a sound cross-replica claim. Before #7347 the
+  create committed with the ordinary upsert, which applies at equal versions, so two creates that
+  both read the path as absent both succeeded at version 1 and the later one overwrote the earlier
+  one. That is how one log incident opened two GitHub issues in the same second despite its
+  per-attempt filing claim. The batch `CreateNodesRequest` still commits with `WriteMany`, which
+  is not exclusive.
 - `UpdateNode` — validates; routes through the canonical `GetMeshNodeStream(path).Update` write path on the owning hub.
 - `DeleteNode` — removes the node and all descendants (bottom to top).
 - `CreateOrUpdateNodeRequest` — upsert; checks existence on the handler side and dispatches create or merge-patch update (see [CQRS](/Doc/Architecture/CqrsAndContentAccess)).
