@@ -65,6 +65,18 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
                 return Observable.Return(true);
         }
 
+        // 🛡️ An update never CHOOSES a satellite's main node (MainNodeTrust.Repoints). The stored pointer
+        // governs the satellite — who reads it, who writes it, where its grants project — so a write that
+        // moved it would decide access by a pointer its writer picked: a satellite could be moved under a
+        // main node its writer cannot write to, or pointed at one whose grants it then borrows. This is
+        // the update half of the create rule below: a create derives ownership from the path, an update
+        // from the stored node. The one change allowed is the path-derived one (an unset self-default
+        // normalised to the owner), which is decided like any other update of the stored node.
+        if (context.Operation == NodeOperation.Update
+            && context.ExistingNode is { } stored
+            && MainNodeTrust.Repoints(stored, context.Node))
+            return Observable.Return(false);
+
         var mainNodePath = context.Node.MainNode;
         // Degenerate case: no MainNode (or self-referencing). The rule has no
         // opinion — fall back to the same path-based check the validator would
@@ -87,9 +99,9 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
         var permission = MainNodeDelegatedPermission(context);
         var delegated = hub.CheckPermission(mainNodePath, userId, permission);
 
-        // 🛡️ A main node the WRITER is choosing — on a create, or an update that changes it — and that
-        // is not the satellite's OWNER is not enough on its own (review of #7601). MainNode is a field
-        // the writer supplies: a comment in another person's partition naming the writer's own home
+        // 🛡️ A main node the WRITER is choosing on a create (an update that changes it is refused
+        // above) that is not the satellite's OWNER is not enough on its own (review of #7601).
+        // MainNode is a field the writer supplies: a comment in another person's partition naming the writer's own home
         // would otherwise be authorised against the writer's home rather than where it lands. Such a
         // write must ALSO pass the path check where the node lands. "Owner" is exact and ordinal
         // (MainNodeTrust.IsOwnerOf): an ancestor further up is not enough, since a scope in between can
@@ -97,18 +109,14 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
         // A STORED pointer (a read, a delete, an update that keeps it) is delegated to as before — that
         // is how an off-partition main node legitimately governs its satellites. An Update without an
         // ExistingNode is a decision about the STORED node itself (the delivery gate and the verbs'
-        // pre-flights build it that way); the update pipeline, which carries a proposal, always sets
-        // ExistingNode.
-        var writerChoosesPointer = context.Operation == NodeOperation.Create
-            || (context.Operation == NodeOperation.Update
-                && context.ExistingNode is { } existing
-                && !string.Equals(existing.MainNode, mainNodePath, StringComparison.Ordinal));
+        // pre-flights build it that way). A routed write that reaches the owner never meets this rule
+        // with its proposal, so the same refusal is held at the owner's commit point too
+        // (SatelliteMainNodeCommitGuard).
+        var writerChoosesPointer = context.Operation == NodeOperation.Create;
         if (!writerChoosesPointer || MainNodeTrust.IsOwnerOf(mainNodePath, context.Node.Path))
             return delegated;
 
-        var landingPath = context.Operation == NodeOperation.Create
-            ? (context.Node.GetParentPath() ?? context.Node.Path)
-            : context.Node.Path;
+        var landingPath = context.Node.GetParentPath() ?? context.Node.Path;
         var landingPermission = StandardPathPermission(context);
         var landing = landingPermission == Permission.None
             ? Observable.Return(true)
