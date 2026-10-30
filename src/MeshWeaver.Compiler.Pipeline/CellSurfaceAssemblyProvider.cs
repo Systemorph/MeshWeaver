@@ -105,44 +105,60 @@ internal sealed class CellSurfaceAssemblyProvider(
 
     /// <summary>
     /// <c>ToList</c> that OWNS what it buffers (#7362 review). Each entry carries a lease on its
-    /// collectible load context. A plain <c>ToList</c> unsubscribed — the kernel cancelled the run
-    /// parked here — or faulted while another entry is still resolving drops the entries it had
-    /// already buffered, and their leases are never disposed, so those contexts can never unload.
-    /// Here the buffered leases are handed over only WITH the completed list; an unsubscribe before
-    /// that, or an error, disposes them.
+    /// collectible load context. A plain <c>ToList</c> unsubscribed, or faulted, while another entry is
+    /// still resolving drops the entries it had already buffered, and their leases are never
+    /// disposed, so those contexts can never unload.
+    ///
+    /// <para>Here the buffer is ONE atomic cell that is either open (a list) or closed (<c>null</c>):
+    /// buffering an entry and closing the buffer are each a single interlocked transition, so they
+    /// are totally ordered. An entry that arrives once the buffer is closed — a callback already in
+    /// flight when the subscription was disposed, which disposal does not wait for — loses to the
+    /// closure and its lease is disposed on the spot. Closure by completion hands the list over;
+    /// closure by an error or an unsubscribe disposes it.</para>
     /// </summary>
     internal static IObservable<IReadOnlyCollection<CellSurfaceAssembly>> CollectOwned(
         IObservable<CellSurfaceAssembly> entries)
         => Observable.Create<IReadOnlyCollection<CellSurfaceAssembly>>(observer =>
         {
-            var held = ImmutableList<CellSurfaceAssembly>.Empty;
-            var settled = 0;
-            void ReleaseHeld()
+            ImmutableList<CellSurfaceAssembly>? held = ImmutableList<CellSurfaceAssembly>.Empty;
+
+            // Closes the buffer; the caller now owns whatever it held. Null when already closed.
+            ImmutableList<CellSurfaceAssembly>? Close() => Interlocked.Exchange(ref held, null);
+
+            void Release(ImmutableList<CellSurfaceAssembly>? owned)
             {
-                foreach (var entry in Interlocked.Exchange(ref held, ImmutableList<CellSurfaceAssembly>.Empty))
+                foreach (var entry in owned ?? ImmutableList<CellSurfaceAssembly>.Empty)
                     entry.Lease.Dispose();
             }
 
             var subscription = entries.Subscribe(
-                entry => ImmutableInterlocked.Update(ref held, list => list.Add(entry)),
+                entry =>
+                {
+                    var buffered = false;
+                    ImmutableInterlocked.Update<ImmutableList<CellSurfaceAssembly>?>(ref held, list =>
+                    {
+                        buffered = list is not null;
+                        return list?.Add(entry);
+                    });
+                    if (!buffered)
+                        entry.Lease.Dispose();
+                },
                 error =>
                 {
-                    if (Interlocked.Exchange(ref settled, 1) != 0) return;
-                    ReleaseHeld();
+                    if (Close() is not { } owned) return;
+                    Release(owned);
                     observer.OnError(error);
                 },
                 () =>
                 {
-                    if (Interlocked.Exchange(ref settled, 1) != 0) return;
-                    var handedOver = Interlocked.Exchange(ref held, ImmutableList<CellSurfaceAssembly>.Empty);
-                    observer.OnNext(handedOver);
+                    if (Close() is not { } owned) return;
+                    observer.OnNext(owned);
                     observer.OnCompleted();
                 });
             return Disposable.Create(() =>
             {
                 subscription.Dispose();
-                if (Interlocked.Exchange(ref settled, 1) == 0)
-                    ReleaseHeld();
+                Release(Close());
             });
         });
 

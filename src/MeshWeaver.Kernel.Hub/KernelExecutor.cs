@@ -570,14 +570,19 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// <summary>
     /// The FIRST value of the single-value stage <paramref name="source"/>, or an
     /// <see cref="OperationCanceledException"/> once <paramref name="ct"/> is cancelled — whichever
-    /// CLAIMS the outcome first; the loser is dropped and the source unsubscribed.
+    /// CLAIMS the outcome first.
     /// <list type="bullet">
     ///   <item>A token already cancelled fails at once, before the source is subscribed, so a stage
     ///   that answers synchronously can never outrun a cancel that came first.</item>
-    ///   <item>The cancellation arm is registered BEFORE the source is subscribed.</item>
-    ///   <item>One claim (an interlocked flag) decides, so the observer never sees a value and a
-    ///   cancellation both; a value that loses is handed to <paramref name="release"/>, so what it
-    ///   owns (a lease) is not leaked.</item>
+    ///   <item>The cancellation arm is registered BEFORE the source is subscribed, and one claim (an
+    ///   interlocked flag) decides, so the observer never sees both a value and a cancellation.</item>
+    ///   <item>🚨 A cancel answers the run at once but does NOT unsubscribe the stage: the stage runs
+    ///   to its own end and a value it then produces goes to <paramref name="release"/>. Unsubscribing
+    ///   would let Rx drop a value still in flight inside the stage — a lease created by a blocking
+    ///   load, a set being materialized — before anything could release it, because disposal does
+    ///   not wait for an emission already under way. A stage that never ends is therefore held, not
+    ///   leaked; the stages used here are bounded by their own timeouts. Disposal from downstream
+    ///   BEFORE any claim (the pipeline torn down) still unsubscribes the stage.</item>
     /// </list>
     /// </summary>
     internal static IObservable<T> UntilCancelled<T>(
@@ -591,12 +596,14 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             }
 
             var claimed = 0;
+            var detached = 0;
             bool Claim() => Interlocked.Exchange(ref claimed, 1) == 0;
             var subscription = new System.Reactive.Disposables.SingleAssignmentDisposable();
             var registration = ct.Register(() =>
             {
                 if (!Claim()) return;
-                subscription.Dispose();
+                // The stage keeps running; what it produces from here on is released, never dropped.
+                Volatile.Write(ref detached, 1);
                 observer.OnError(new OperationCanceledException(ct));
             });
             subscription.Disposable = source.Subscribe(
@@ -613,12 +620,19 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 error =>
                 {
                     if (Claim()) observer.OnError(error);
+                    else subscription.Dispose();
                 },
                 () =>
                 {
                     if (Claim()) observer.OnCompleted();
+                    else subscription.Dispose();
                 });
-            return new System.Reactive.Disposables.CompositeDisposable(registration, subscription);
+            return System.Reactive.Disposables.Disposable.Create(() =>
+            {
+                registration.Dispose();
+                if (Volatile.Read(ref detached) == 0)
+                    subscription.Dispose();
+            });
         });
 
     /// <summary>The compiler's diagnostics, one per line — the reason a cell did not compile.</summary>
@@ -724,7 +738,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     return cpuLane
                         .InvokeBlocking(t =>
                         {
-                            var submission = current.Compile(cleaned, options, typeof(MeshScriptGlobals), t);
+                            // The run's cancel reaches the compile (#7362): a cancel that lands while
+                            // the submission waits for, or runs on, the CPU lane ends it here.
+                            using var compileCancellation = CancellationTokenSource.CreateLinkedTokenSource(t, ct);
+                            var submission = current.Compile(cleaned, options, typeof(MeshScriptGlobals), compileCancellation.Token);
                             // Option C (Doc/Architecture/InMeshImpersonation): judge the submission's
                             // references to impersonation APIs BEFORE any of it runs. A script session is
                             // never trusted; LogOnly logs, Enforce refuses the cell. The scan covers
@@ -750,7 +767,14 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                                        ? null
                                        : publicHub.ServiceProvider.GetService<AccessService>()
                                            ?.SwitchAccessContext(accessContext))
+                            {
+                                // …and the start of user code: a run cancelled while it waited for a
+                                // script-lane slot never starts. Once started, cancellation is the
+                                // script's own, cooperative (Ct), as it always was.
+                                if (ct.IsCancellationRequested)
+                                    return Task.FromCanceled<object?>(ct);
                                 return current.ExecuteAsync(compiled, t);
+                            }
                         }));
                 })
                 .Select(returnValue =>

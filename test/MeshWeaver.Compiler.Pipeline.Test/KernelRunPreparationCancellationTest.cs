@@ -70,26 +70,73 @@ public class KernelRunPreparationCancellationTest
     }
 
     /// <summary>
-    /// The cancel claims first: the stage is unsubscribed, so its later value never reaches the
-    /// observer. (What a stage owns when it is unsubscribed is the stage's to release — see
-    /// <see cref="AnUnsubscribeBeforeCompletion_DisposesTheBufferedLeases"/>; a value that races the
-    /// claim inside the window is handed to <c>release</c>.)
+    /// The cancel claims first and answers the run at once — but the stage is NOT unsubscribed: what
+    /// it produces afterwards (a lease from a blocking load, a set being materialized) is handed to
+    /// <c>release</c> instead of being dropped by Rx with nobody left to dispose it.
     /// </summary>
     [Fact]
-    public void AValueAfterTheCancel_IsNeverDelivered_AndTheStageIsUnsubscribed()
+    public void AValueAfterTheCancel_IsReleased_NotDropped()
+    {
+        using var cts = new CancellationTokenSource();
+        var released = new List<int>();
+        var stage = new Subject<int>();
+        var (values, errors, _) = Observe(
+            KernelExecutor.UntilCancelled(stage, cts.Token, released.Add), out var subscription);
+
+        cts.Cancel();
+        errors.Should().ContainSingle().Which.Should().BeOfType<OperationCanceledException>();
+        subscription.Dispose(); // what the pipeline does once the run has failed
+        stage.HasObservers.Should().BeTrue("the stage runs to its own end, so nothing it produces is dropped");
+
+        stage.OnNext(7);
+        stage.OnCompleted();
+
+        released.Should().ContainSingle().Which.Should().Be(7, "a value that lost to the cancel is released, never leaked");
+        values.Should().BeEmpty();
+        stage.HasObservers.Should().BeFalse("the stage's own end releases the subscription");
+    }
+
+    /// <summary>A torn-down pipeline (no claim yet) still unsubscribes the stage.</summary>
+    [Fact]
+    public void ADisposalBeforeAnyClaim_UnsubscribesTheStage()
     {
         using var cts = new CancellationTokenSource();
         var stage = new Subject<int>();
-        var (values, errors, _) = Observe(
-            KernelExecutor.UntilCancelled(stage, cts.Token, _ => { }), out _);
+        Observe(KernelExecutor.UntilCancelled(stage, cts.Token), out var subscription);
 
-        cts.Cancel();
-        stage.OnNext(7);
+        subscription.Dispose();
 
-        errors.Should().ContainSingle().Which.Should().BeOfType<OperationCanceledException>();
-        values.Should().BeEmpty();
-        stage.HasObservers.Should().BeFalse("the cancel unsubscribes the stage");
+        stage.HasObservers.Should().BeFalse();
+    }
 
+    /// <summary>A source that keeps the RAW observer, so an emission can arrive after disposal.</summary>
+    private sealed class RawSource : IObservable<CellSurfaceAssembly>
+    {
+        public IObserver<CellSurfaceAssembly>? Observer { get; private set; }
+
+        public IDisposable Subscribe(IObserver<CellSurfaceAssembly> observer)
+        {
+            Observer = observer;
+            return Disposable.Empty;
+        }
+    }
+
+    /// <summary>
+    /// An entry callback already in flight when the collection was closed by an unsubscribe — which
+    /// does not wait for it — lands AFTER the closure: its lease is disposed, not buffered into a
+    /// list nobody will ever release.
+    /// </summary>
+    [Fact]
+    public void AnEntryArrivingAfterTheClosure_IsDisposed()
+    {
+        var disposed = 0;
+        var source = new RawSource();
+        var subscription = CellSurfaceAssemblyProvider.CollectOwned(source).Subscribe(_ => { });
+
+        subscription.Dispose();
+        source.Observer!.OnNext(Entry("late", () => disposed++));
+
+        disposed.Should().Be(1, "an entry that loses to the closure owns nobody but itself");
     }
 
     private static CellSurfaceAssembly Entry(string name, Action onRelease) =>

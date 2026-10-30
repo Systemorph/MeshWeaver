@@ -274,10 +274,15 @@ either could leave a run `Running` for good:
       still write the session.
     - The cell-surface and NuGet stages are pure: they return what they resolved, run under
       `KernelExecutor.UntilCancelled`, and their result is published into the session in the next
-      step, on the pump. A stage abandoned by a cancel writes nothing. A result that loses the race
-      releases its leases, and the provider's collection (`CellSurfaceAssemblyProvider.CollectOwned`)
-      disposes the leases it had buffered when it is unsubscribed.
-    - A run whose token is already cancelled never subscribes a stage and never reaches the script.
+      step, on the pump. A cancel answers the run at once but does not unsubscribe the stage. The
+      stage runs to its own end, bounded by its own timeouts, and what it then produces is released,
+      never published. Unsubscribing would let Rx drop a lease still in flight inside the stage, with
+      nobody left to dispose it. The provider's collection (`CellSurfaceAssemblyProvider.CollectOwned`)
+      is one atomic open-or-closed buffer: an entry that arrives after it was closed has its lease
+      disposed, and a closure by an error or an unsubscribe disposes what it held.
+    - A run whose token is already cancelled never subscribes a stage. The compile takes the run's
+      token too, and a run cancelled while it waits for a script-lane slot never starts its user
+      code. Once the script is running, cancellation is cooperative, as before.
   - A callback that a script registered on its token and that throws cannot stop the loops that cancel,
     or fail, the other pending runs.
   - A submission admitted while teardown is already running is failed at once and never queued.
