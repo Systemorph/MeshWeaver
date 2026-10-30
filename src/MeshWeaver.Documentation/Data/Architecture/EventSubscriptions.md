@@ -24,7 +24,7 @@ Because the mesh node is the durable source of truth (Postgres), durability is *
 
 ## The shape
 
-`EventSubscription` (project `MeshWeaver.Mesh.Contract`) is flat + enum-discriminated — it serialises through the mesh content serializer like any node content (no polymorphic-content risk), and new trigger/continuation kinds are added as new enum values + nullable fields (additive):
+`EventSubscription` (project `MeshWeaver.Mesh.Contract`) is flat + enum-discriminated — it serialises through the mesh content serializer like any node content (no polymorphic-content risk), and new trigger/continuation kinds are added as new enum values APPENDED at the end + nullable fields (additive). A module's own effect needs no member of its own: it uses the generic `DeliverToNode` (see "A module's own continuation: DeliverToNode" below):
 
 | Group | Field | Meaning |
 |---|---|---|
@@ -32,8 +32,9 @@ Because the mesh node is the durable source of truth (Postgres), durability is *
 | NodeChange | `TriggerNodeType`, `TriggerKind`, `MatchField`, `MatchValue` | fire when a node of this type is created/updated/deleted and its field matches |
 | Timer | `FireAt` | fire once at/after this instant (a past time fires on the next boot) |
 | NodeStatus | `WatchPath`, `StatusField`, `RestingValues`, `RequireActiveFirst` | fire when the watched node's status enters a resting value |
-| **Effect** | `ContinuationType` | `GrantSpaceAccess` \| `AddToGroup` \| `PostThreadMessage` |
+| **Effect** | `ContinuationType` | `GrantSpaceAccess` \| `AddToGroup` \| `PostThreadMessage` \| `PublishSocialPost` \| `RunScript` \| `DeliverToNode` |
 | | `TargetPath`, `SubjectId`, `Role`, `Pin` | what the continuation does (and to whom) |
+| | `DeliverTo` | [DeliverToNode] the node whose own hub acts on the firing |
 | **Lifecycle** | `Status`, `CreatedBy`, `CreatedAt`, `FiredAt`, `LastError` | runner-managed (`Pending → Fired \| Failed \| Cancelled`) |
 
 ## Trigger 1 — react to a CRUD event (the email invite)
@@ -99,6 +100,29 @@ This is the durable backbone of **delegation**: a parent agent delegates to a su
 
 > **Asking a question vs. done.** A sub-thread that finished a task and one that asked the user a clarifying question both currently reach `Idle` — the thread status alone can't tell them apart. The `RequireActiveFirst` + summary-presence heuristic covers the common case. An explicit round disposition (something like `Completed` / `AwaitingInput` / `Failed`) would make the resting trigger fire only on genuine completion; **it is a proposal, not a type that exists today**.
 
+## A module's own continuation: DeliverToNode
+
+In-mesh source cannot register a root-DI `IEventContinuationHandler`, so before `DeliverToNode` it could not own a continuation at all. `DeliverToNode` is the ONE generic continuation for that: the runner writes an `EventDelivery` (subscription id, the subject's id — for a sign-up, the new user's id — the time, and `CreatedBy`) onto the content of the node named by `DeliverTo`, as System, through the node's own stream. The node's own hub, which belongs to the module's node type, decides what the firing means. The node must exist when the subscription fires.
+
+```csharp
+new EventSubscription
+{
+    TriggerType = EventTriggerType.NodeChange,
+    TriggerNodeType = "User",
+    MatchField = "email",
+    MatchValue = email,
+    ContinuationType = EventContinuationType.DeliverToNode,
+    DeliverTo = "Admin/TierInvites/someone_example_com",   // its content declares EventDelivery? EventDelivery
+    CreatedBy = inviter,                                    // the receiver re-checks this person's right
+};
+```
+
+The receiver re-checks `EventDelivery.CreatedBy` before it acts: the firing comes long after the request was written, and the person who asked may have lost the right in between (policy `authorize-as-caller-execute-as-system`). The Store's tier invitation (MeshWeaver.Plugins, `Store/TierInvite`) is the first receiver. A delivered subscription is `Fired` once the delivery is written; what the module then does is reported on its own node.
+
+**How the runner resolves a continuation.** The platform's members run in the runner; `DeliverToNode` delivers (and fails, named, without a `DeliverTo`); everything else goes to the exactly-one DI-registered `IEventContinuationHandler` claiming it (`PublishSocialPost` reaches `MeshWeaver.Social` that way). A value nobody claims — including a number this build has never heard of — is logged by name and ends `Failed` with the value on `LastError`; it is never run as a continuation that means something.
+
+**Why an enum member, not open string constants (yet).** `EventContinuationType` is persisted and module-extended, so policy `open-vocabulary-string-constants` says it should become a `static class` of `const string`. That conversion is a BINARY break for modules already compiled against the enum (`MeshWeaver.Social`'s handler declares the enum type; MeshWeaver.Plugins' `ContentIndexBackfill` calls the enum-typed setter), so it is a planned, coordinated rebuild, not a side effect of a feature. Appending a member is binary-safe: every earlier member keeps its number.
+
 ## Why one runner, reconciled on startup (not Orleans reminders)
 
 - **Durability is already in the node.** The subscription is a Postgres-backed MeshNode; `Pending → Fired` is the durable checkpoint. The reconcile query gives exact replay for `Created` triggers and at-least-once for timers/status — for free.
@@ -111,4 +135,4 @@ This is the durable backbone of **delegation**: a parent agent delegates to a su
 
 ## Testing
 
-`test/MeshWeaver.Graph.Test/EventSubscriptionRunnerTest` covers the NodeChange grant (fires when the matching user is created), the legacy migration, the Timer (a past-due timer fires + grants), and the NodeStatus trigger (a watched node flipped `Running → Idle` fires). `SpaceInviteServiceTest` covers the invite → subscription write.
+`test/MeshWeaver.Graph.Test/EventContinuationDeliverToNodeTest` covers `DeliverToNode` writing the new user's id onto the module's node, `DeliverToNode` without a node failing by name, an unknown value failing under its own number, and every earlier member keeping its number. `test/MeshWeaver.Graph.Test/EventSubscriptionRunnerTest` covers the NodeChange grant (fires when the matching user is created), the legacy migration, the Timer (a past-due timer fires + grants), and the NodeStatus trigger (a watched node flipped `Running → Idle` fires). `SpaceInviteServiceTest` covers the invite → subscription write.
