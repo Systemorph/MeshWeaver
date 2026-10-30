@@ -131,7 +131,9 @@ def decide(pr: dict, head: str, run: dict | None, jobs: list[dict], edited_at: d
     if reader is None or reader.get("status") in ("queued", "waiting", "pending", "requested") or not started:
         return Action("none", "the run's body reader has not started — it will read the current body")
     read_at = min(started)
-    if read_at >= edited_at:
+    # STRICTLY later only: both stamps have one-second precision, so a reader that started in the same
+    # second as the edit may have fetched the old body.
+    if read_at > edited_at:
         return Action("none", f"the run read the body at {read_at.isoformat()}, after the edit "
                               f"({edited_at.isoformat()}) — its verdict is already the current body's")
     completed = run.get("status") == "completed"
@@ -539,6 +541,12 @@ def self_test() -> int:
     case("reader started after the edit", FakeApi(jobs=_jobs("red", started=T_AFTER)), "green", [])
     if len(asked) != before:
         failures.append("the body was judged although the run could not have been stale")
+    before = len(asked)
+    # Same-second stamps: the reader may have read the OLD body, so the body IS judged (and here re-run).
+    case("reader started in the SAME second as the edit: judged, not skipped",
+         FakeApi(jobs=_jobs("red", started="2026-01-01T10:05:00Z")), "green", ["rerun-job:1"])
+    if len(asked) != before + 1:
+        failures.append("a same-second reader was not judged")
 
     # Stale, finished run.
     same = {g: ("red" if g == CLOSING else "green") for g in GATES}

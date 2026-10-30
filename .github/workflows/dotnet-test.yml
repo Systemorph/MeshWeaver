@@ -3025,6 +3025,9 @@ jobs:
     - name: "An edited body re-runs only what its edit made stale (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/pr-body-regate.py --self-test
+    - name: "Consolidation fails over an edited body the gates did not pass (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/consolidation-body-check.py --self-test
 
     # issue-text-names.yml runs only on a schedule, so a pull request that breaks the scanner (a Pass
     # read as green, a NotChecked swallowed) would go red a day later on nobody's change. Proving it
@@ -4399,6 +4402,14 @@ jobs:
       TESTS_MODE: ${{ needs.precheck.outputs.tests-mode }}
       TESTS_REASON: ${{ needs.precheck.outputs.tests-reason }}
     name: "Consolidate test results"
+    # The workflow-level map PLUS `issues: read`: the current-body re-judgment below runs the
+    # closing-keyword gate, which reads issue labels (its own job declares the same grant).
+    permissions:
+      contents: write
+      checks: write
+      pull-requests: write
+      actions: read
+      issues: read
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
     # broken by this PR — that is the whole point of the gate (see its step below). preflight
     # is a NEEDS for the same reason one level up: this job is the repo's ONLY required status
@@ -4962,6 +4973,57 @@ jobs:
         echo "::error::A sev:B/sev:H issue closes on POST-ROLL PRODUCTION VERIFICATION, never on a merge — the merge puts the fix on main, and what the label gates is whether the defect is gone from the running portal (policy 'severity-closes-on-verification'). Use 'Refs #N' or 'see #N' to mention an issue without closing it, and close it after the roll."
         echo "::error::If the verification has ALREADY happened, declare it per issue in the PR BODY: 'Verified-closing: #N — <what was verified, and where>'. That releases the severity check only; a negation is a contradiction to delete rather than out-vote, and a possessive is reworded ('Fixes the <half> of #N'). Rationale: Doc/Architecture/ClosingKeywordsAndIssueState."
         exit 1
+
+    # ── …and the body the gates judged must STILL BE the current body (MeshWeaver#7659) ────────
+    # The body-edit lane (pr-body-edited.yml) never cancels a running build, so an edit made while
+    # this run was building would otherwise let this job publish green over the OLD body's verdict.
+    # So the CURRENT body is read here, at consolidation time, and compared with the one the gates
+    # judged; an edited body is judged with the SAME gate scripts (scripts/preflight-pr.py) and must
+    # come back GREEN. This is an ADDITIONAL reason to fail — every step above keeps its own line, and
+    # a failed gate still fails this job through its own step. Doc/Architecture/PrePrPreflight.
+    # The exemption is on the EVENT (a fork's head gets no secret; the gates' own posture).
+    - name: Assert the fleet credential for the current-body check, or fail naming what to provision
+      if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      env:
+        FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+        FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+      run: |
+        missing=()
+        [ -n "${FLEET_READER_APP_ID:-}" ] || missing+=("secrets.FLEET_READER_APP_ID            app id of the org's READ-ONLY fleet-reader GitHub App — in BOTH the Actions and the Dependabot secret stores")
+        [ -n "${FLEET_READER_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY   that App's private key (PEM), in BOTH stores like the id")
+        if [ ${#missing[@]} -gt 0 ]; then
+          echo "::error::The current body cannot be re-judged at consolidation — provision the following, then re-run:"
+          for m in "${missing[@]}"; do echo "  • $m"; done
+          exit 1
+        fi
+        echo "Credential inputs are present (the mint below proves them)."
+    - name: Mint a read-only fleet token (current-body check)
+      id: body-fleet
+      if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ secrets.FLEET_READER_APP_ID }}
+        private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+        owner: Systemorph
+        repositories: >-
+          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex,CreditReRate,DecisionModels,MeshWeaver.Deploy
+        permission-contents: read
+        permission-pull-requests: read
+    - name: Fail if the body was edited after the gates judged it and the current body fails them
+      if: always() && github.event_name == 'pull_request' && needs.pr-body.result == 'success'
+      env:
+        JUDGED_PR_BODY_B64: ${{ needs.pr-body.outputs.body-b64 }}
+        # The body read and the closing-keyword gate's label reads: this run's token (issues: read above).
+        GH_TOKEN: ${{ github.token }}
+        # The pair gate resolves a declared counterpart in a sibling repository with the fleet token.
+        GITHUB_TOKEN: ${{ steps.body-fleet.outputs.token || github.token }}
+        BASE_REF: ${{ github.base_ref }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        # The gates compare against the MERGE BASE; this job checked out one commit.
+        git fetch --no-tags --quiet --depth=200 origin "$BASE_REF" "$HEAD_SHA"
+        python3 .github/scripts/consolidation-body-check.py --base-ref "$BASE_REF"
 
     # ── …and a change to the FROZEN chart decides it too (policy `chart-lives-in-deploy`) ──────
     # `!= 'success'` for the same reason as every gate above; the event predicate is IDENTICAL to

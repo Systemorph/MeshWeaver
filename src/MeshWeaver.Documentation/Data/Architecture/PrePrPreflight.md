@@ -158,6 +158,13 @@ If GitHub refuses the re-run (a Dependabot-triggered edit runs with a read-only 
 workflow's `permissions:` say), the lane goes red and names the run whose `pr-body` job needs a re-run by
 hand. No extra credential is given to an edit-triggered job.
 
+Because a running build is never cancelled, the required check closes the remaining window itself.
+`Consolidate test results` reads the CURRENT body at consolidation time and compares it with the body
+the gates judged (`.github/scripts/consolidation-body-check.py`). If the body was edited, the same gate
+scripts judge it there, and anything but GREEN fails the job. So an edit that breaks a body gate while
+the build runs can never let the required check publish green over the old body, whatever the lane's
+timing. This is an additional reason to fail. Every other failure line of the job stays as it was.
+
 A corrective edit after a broken one re-runs the build and the suites even when the tree was already
 tested. That is a deliberate trade: the lane never decides a tree is already tested, so it costs runner
 time and never correctness. Reusing tree evidence belongs to the build's own green-tree reuse

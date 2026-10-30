@@ -151,7 +151,8 @@ edited body with the same gate scripts the run uses (through `scripts/preflight-
 whether the Build-and-Test run's verdict went stale and has to be re-run, so it needs the same
 counterpart resolution, with the same App and the same scoped read-only token. It checks nothing out
 and decides no merge; it only re-runs core's own run — see [Pre-PR Preflight](../PrePrPreflight).
-`ApiReadLedger` carries it.
+`ApiReadLedger` carries it. The same read is made once more inside `dotnet-test.yml`'s
+`Consolidate test results`, which re-judges the body when it was edited after the gates read it.
 
 The FIFTH edge of this class, `build-host-stable.yml` (the daily roll of the standing build host
 `build-stable`, which reads MeshWeaver.Plugins' main runs to find the main-passed ceiling), LEFT

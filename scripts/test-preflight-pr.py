@@ -427,6 +427,34 @@ def test_guard_roots(tmp: Path) -> None:
         check(f"guards: {label}", needle in out and (rc == 1 if expect_rc == 1 else rc == 2 and "could not resolve" in out),
               out)
 
+    # An array initializer `new[] { Project }` resolves its same-file const; an initializer the scan does not
+    # model (`ImmutableArray.Create(Project)`) is INCOMPLETE and named — never silently dropped.
+    arr_guard = textwrap.dedent("""\
+        namespace G;
+        public class ArrayGuard
+        {
+            private const string Project = "src/A";
+            private static readonly string[] ScannedRoots = new[] { Project };
+            public void Scan() { var root = RepoPaths.Root; SourceScan.SourceFiles(root, ScannedRoots).ToList(); }
+        }
+        """)
+    for label, text, expect_rc, needle in (
+            ("`new[] { Project }` resolves the const and is RED when its directory is deleted", arr_guard, 1,
+             "ArrayGuard.cs:5 ScannedRoots names root `src/A`"),
+            ("an initializer the scan does not model is INCOMPLETE, naming it",
+             arr_guard.replace("new[] { Project }", "ImmutableArray.Create(Project)"), 2,
+             "ImmutableArray.Create(Project)")):
+        repo = guard_repo(tmp, f"g16-{expect_rc}")
+        write(repo, "test/G.Test/ArrayGuard.cs", text)
+        commit(repo, "array guard")
+        publish_main(repo)
+        git(repo, "rm", "-q", "docs/readme.md")
+        if expect_rc == 1:
+            git(repo, "rm", "-q", "src/A/a.cs")
+        commit(repo, "deletions")
+        rc, r, out = guards_status(repo, tmp)
+        check(f"guards: {label}", rc == expect_rc and needle in out, out)
+
     # A root list handed to a LOCAL helper that calls SourceScan.SourceFiles (ObservableToTaskBridgeGuard's
     # ProductionRoots → Scan(root, roots)) is SourceScan-backed: a README left behind does not keep it alive.
     helper_guard = textwrap.dedent("""\

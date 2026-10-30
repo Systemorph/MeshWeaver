@@ -543,16 +543,24 @@ def parse_root_declarations(rel: str, text: str) -> list[RootDecl]:
     decls: list[RootDecl] = []
     text = strip_comments(text)
     consts = dict(re.findall(r"\bconst\s+string\s+([A-Za-z_]\w*)\s*=\s*\"([^\"\\]*)\"\s*;", text))
-    root_lists = {m.group("name") for m in ROOTS_DECL.finditer(text)}
+    root_lists = {m.group("name") for m in ROOTS_DECL.finditer(text)
+                  if re.search(r"\bstatic\b", text[text.rfind("\n", 0, m.start()) + 1:m.start()])}
     for rx, symbol_of in ((ROOTS_DECL, lambda m: m.group("name")), (INLINE_ROOTS, lambda m: "SourceScan.SourceFiles([...])")):
         for m in rx.finditer(text):
             if rx is INLINE_ROOTS and not scans_repo_root(m.group("arg"), text):
                 continue  # a fixture scan over a planted temp tree (`dir.FullName`), not the repository
+            if rx is ROOTS_DECL and not re.search(r"\bstatic\b", text[text.rfind("\n", 0, m.start()) + 1:m.start()]):
+                continue  # a local or an object-initializer member (`var acrossRoots = …`): a runtime value, not a guard's root list
             span = initializer_span(text, m.end() if rx is INLINE_ROOTS else _skip_ws(text, m.end()))
             unresolved: list[str] = []
-            elements = list_elements(span)
+            arr = re.fullmatch(r"\s*new\s*(?:[A-Za-z_][\w.<>]*)?\s*\[\s*\]\s*\{(.*)\}\s*", span, re.S)
+            elements = list_elements("[" + arr.group(1) + "]") if arr else list_elements(span)
             if elements is None:
                 roots = [s.strip("/") for s in STRING.findall(span) if looks_like_root(s.strip("/"))]
+                if not roots and re.search(r"[A-Za-z_]", span):
+                    # An initializer this scan does not model (`ImmutableArray.Create(Project)`, a method
+                    # call…): never dropped — named as unresolved.
+                    unresolved.append(f"initializer `{' '.join(span.split())[:80]}` is not statically resolvable")
             else:
                 roots = []
                 for e in elements:
