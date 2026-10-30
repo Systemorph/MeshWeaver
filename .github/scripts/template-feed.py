@@ -315,6 +315,16 @@ def workflow_findings(text: str) -> list[str]:
     if "status=success" in text:
         out.append("the dispatch path selects CD runs by `status=success` — a sealed set in a "
                    "failed run is invisible to it; select completed runs and let the job results decide")
+    # The publish job checks out the SET's core at core_sha, which is usually older than the lane.
+    # Running this script out of that tree runs whatever copy the set happens to hold — none at all
+    # for a set sealed before the lane existed (MeshWeaver#7660: `can't open file`).
+    if re.search(r"python3\s+\.github/scripts/template-feed\.py", text):
+        out.append("the lane runs template-feed.py out of the SET's core checkout (core_sha) — a set "
+                   "older than the lane has no such script, or an older one; run the lane's own copy "
+                   "(the `lane` checkout at github.sha)")
+    if "ref: ${{ github.sha }}" not in text or "path: lane" not in text:
+        out.append("the publish job does not check out the lane's own tooling at github.sha into "
+                   "`lane` — the script it runs would come from the set's tree")
     return out
 
 
@@ -459,6 +469,16 @@ def self_test() -> int:
                 "gh api actions/workflows/main-cd.yml/runs?branch=main&status=success\n"):
         if not workflow_findings(bad):
             failures.append(f"workflow_findings missed a conclusion-gated shape: {bad.strip()}")
+    # 8b. … and runs its own tool from the lane's commit, never from the set's tree (#7660).
+    lane_ok = ("          ref: ${{ github.sha }}\n          path: lane\n"
+               '        run: python3 "$FEED_TOOL" --self-test\n')
+    if workflow_findings(lane_ok):
+        failures.append(f"workflow_findings refused the lane-tool shape: {workflow_findings(lane_ok)}")
+    set_tree = lane_ok.replace('python3 "$FEED_TOOL"', "python3 .github/scripts/template-feed.py")
+    if not any("SET's core checkout" in f for f in workflow_findings(set_tree)):
+        failures.append("workflow_findings missed the script run out of the set's tree (#7660)")
+    if not any("github.sha" in f for f in workflow_findings('        run: python3 "$FEED_TOOL" plan\n')):
+        failures.append("workflow_findings missed a publish job with no lane checkout (#7660)")
     wf = Path(__file__).resolve().parents[1] / "workflows" / "template-feed.yml"
     if wf.is_file():
         for f in workflow_findings(wf.read_text(encoding="utf-8")):
@@ -472,7 +492,7 @@ def self_test() -> int:
             print(f"  ✗ {f}")
         return 1
     print("template-feed self-test: 8 scenarios, all held (derive, unknown id RED, own-line pin RED, "
-          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results)")
+          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results, lane tool from the lane's commit)")
     return 0
 
 
