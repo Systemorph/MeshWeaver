@@ -123,10 +123,18 @@ public static class MarkdownBodyKeyRepair
     /// <param name="options">Serializer options of the hub that owns the type.</param>
     /// <returns>The typed content, or null.</returns>
     public static MarkdownContent? Rewrite(MeshNode node, JsonSerializerOptions options)
+        => RewriteOrRefusal(node, options).Typed;
+
+    /// <summary>
+    /// <see cref="Rewrite"/>, plus the reason a Repairable row cannot be rewritten mechanically
+    /// when it cannot (null <c>Typed</c>, non-null <c>Refusal</c>).
+    /// </summary>
+    private static (MarkdownContent? Typed, string? Refusal) RewriteOrRefusal(
+        MeshNode node, JsonSerializerOptions options)
     {
         var (outcome, key) = Classify(node);
         if (outcome != MarkdownBodyKeyOutcome.Repairable)
-            return null;
+            return (null, null);
         var obj = JsonNode.Parse(((JsonElement)node.Content!).GetRawText())!.AsObject();
         var body = obj[key]!.GetValue<string>();
         obj.Remove(key);
@@ -135,12 +143,28 @@ public static class MarkdownBodyKeyRepair
         foreach (var meta in obj.Select(p => p.Key).Where(k => k.StartsWith('$')).ToArray())
             obj.Remove(meta);
         obj[ContentMember] = body;
-        var typed = obj.Deserialize<MarkdownContent>(options);
+        MarkdownContent? typed;
+        try
+        {
+            typed = obj.Deserialize<MarkdownContent>(options);
+        }
+        catch (JsonException ex)
+        {
+            // A declared member whose stored value cannot bind to its typed shape (e.g. `abstract`
+            // stored as an object) is not a mechanical rename: this IS the classification — the row
+            // is reported for review, per row, so it never aborts the sweep over the others.
+            return (null, $"a declared member does not bind ({ex.Path})");
+        }
+        if (typed is null)
+            return (null, "the payload binds to null");
         // 🚨 The rename must be the ONLY change. A declared member the typed shape cannot carry
         // unchanged (e.g. `tags` stored as a string, which the list converter reads as an empty
         // list) would be rewritten by the write: data loss beyond the move. Such a row is not
         // mechanical and is left for review.
-        return typed is null || LossyMembers(obj, typed, options).Count > 0 ? null : typed;
+        var lossy = LossyMembers(obj, typed, options);
+        return lossy.Count > 0
+            ? (null, $"the rename would change a declared member ({string.Join(", ", lossy)})")
+            : (typed, null);
     }
 
     /// <summary>
@@ -162,15 +186,19 @@ public static class MarkdownBodyKeyRepair
 
     /// <summary>
     /// <see cref="Classify"/>, plus the round-trip check only the hub's serializer options can make:
-    /// a Repairable row whose rename would change a declared member is reported as
+    /// a Repairable row whose rename would change a declared member, or one of whose declared members
+    /// does not bind to its typed shape, is reported as
     /// <see cref="MarkdownBodyKeyOutcome.NeedsReview"/> by Detect and Repair alike.
     /// </summary>
     private static (MarkdownBodyKeyOutcome Outcome, string Detail) ClassifyForRepair(
         MeshNode node, JsonSerializerOptions options)
     {
         var result = Classify(node);
-        return result.Outcome == MarkdownBodyKeyOutcome.Repairable && Rewrite(node, options) is null
-            ? (MarkdownBodyKeyOutcome.NeedsReview, $"{result.Detail}: the rename would change a declared member")
+        if (result.Outcome != MarkdownBodyKeyOutcome.Repairable)
+            return result;
+        var (typed, refusal) = RewriteOrRefusal(node, options);
+        return typed is null
+            ? (MarkdownBodyKeyOutcome.NeedsReview, $"{result.Detail}: {refusal}")
             : result;
     }
 

@@ -149,6 +149,42 @@ public class MarkdownBodyKeyRepairTest(ITestOutputHelper output) : MonolithMeshT
             "the stored value must not be replaced by the converter's empty list");
     }
 
+    /// <summary>
+    /// A declared member whose stored value cannot bind to its typed shape (here <c>abstract</c>,
+    /// a string, stored as an object) makes the typed binding THROW. That row is not repairable and
+    /// is reported for review — and it must not abort the sweep: Detect still reports, and Repair
+    /// still repairs, every other row beside it.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task A_member_that_does_not_bind_is_reported_for_review_and_the_sweep_continues()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        const string ns = "BodyKeyUnbindable";
+        var unbindable = await SeedAsync("Unbindable", ns,
+            """{"$type":"MarkdownContent","body":"x","abstract":{}}""");
+        var valid = await SeedAsync("Valid", ns, """{"$type":"MarkdownContent","body":"keep me"}""");
+        StateOf(unbindable).Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable,
+            "the fixture must be the refused shape — otherwise this test proves nothing");
+
+        var detected = await DetectAsync(ns);
+        detected.Findings.Should().ContainSingle(f => f.Path == unbindable.Path)
+            .Which.Outcome.Should().Be(MarkdownBodyKeyOutcome.NeedsReview,
+                "a row whose declared member does not bind is not mechanical");
+        detected.Findings.Should().ContainSingle(f => f.Path == valid.Path)
+            .Which.Outcome.Should().Be(MarkdownBodyKeyOutcome.Repairable);
+
+        var report = await RepairAsync(ns);
+
+        report.Findings.Should().ContainSingle(f => f.Path == unbindable.Path)
+            .Which.Outcome.Should().Be(MarkdownBodyKeyOutcome.NeedsReview);
+        report.Findings.Should().ContainSingle(f => f.Path == valid.Path)
+            .Which.Outcome.Should().Be(MarkdownBodyKeyOutcome.Repaired);
+        StateOf(await ReadRawAsync(unbindable.Path)).Should().Be(
+            MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable, "an unbindable row is never rewritten");
+        (await ReadRawAsync(valid.Path)).ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)!
+            .Content.Should().Be("keep me", "the valid row beside it is repaired");
+    }
+
     /// <summary>Healthy Markdown rows are not findings, and Detect writes nothing.</summary>
     [Fact(Timeout = 120000)]
     public async Task Detect_reports_without_writing_and_ignores_healthy_rows()
