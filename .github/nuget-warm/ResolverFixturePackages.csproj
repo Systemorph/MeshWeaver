@@ -8,8 +8,9 @@
     fallback folder (NUGET_FALLBACK_PACKAGES) and downloads nothing it holds complete
     (Doc/Architecture/NuGetRuntimeAssets, "Offline-first resolution").
 
-    Keep the list EXACT: the id and the version the directive or test names. A directive whose package is not
-    listed here still resolves — it is downloaded per run, as before.
+    Keep the list EXACT: the id and the version the directive or test names. core-build-stages.py (check mode) reds a
+    `#r "nuget:…"` in a sample's code or an executable doc fence (a render or execute cell) whose id and exact version
+    are not listed here, and a version-less one there; a test's own directive is listed by hand.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
