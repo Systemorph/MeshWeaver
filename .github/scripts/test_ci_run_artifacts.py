@@ -34,6 +34,10 @@ def contend_for_attempt(folder, connection):
 
 class ArtifactTests(unittest.TestCase):
     def setUp(self):
+        # The one mechanical re-read on an exact-name miss waits in production; not in a unit test.
+        patcher = patch.object(ART, "MISS_RECHECK_SECONDS", 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -369,6 +373,66 @@ class ArtifactTests(unittest.TestCase):
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(0, ART.main(args))
         self.assertIn(f"download-path={(self.root / 'cli').resolve()}", output.getvalue())
+
+    # ── An exact-name miss is INFRA (NOT MEASURED), says what the store holds, and re-reads ONCE ──
+    def miss(self, name="build", client=None):
+        with self.assertRaises(ART.StoreMiss) as caught:
+            (client or self.art).download(self.root / "out", name=name)
+        return str(caught.exception)
+
+    def test_a_miss_is_a_store_miss_naming_the_tracking_issue(self):
+        message = self.miss("absent")
+        self.assertIsInstance(ART.StoreMiss("x"), ART.Red)   # still red to every existing caller
+        self.assertIn("holds NOTHING under this name", message)
+        self.assertIn("INFRA, not a code finding", message)
+        self.assertIn(ART.MISS_TRACKING_ISSUE, message)
+
+    def test_a_miss_names_a_later_attempt_as_the_wrong_attempt(self):
+        self.publish(client=self.client(attempt=2))
+        self.assertIn("LATER attempt(s) [2]", self.miss(client=self.client(attempt=1)))
+
+    def test_a_miss_names_an_expired_publication(self):
+        self.publish()
+        manifest = self.share / self.art.name_prefix("build") / "1/manifest.json"
+        doc = json.loads(manifest.read_text())
+        doc["expiresAt"] = 1
+        manifest.write_text(json.dumps(doc))
+        self.assertIn("EXPIRED", self.miss())
+
+    def test_a_miss_names_an_upload_still_in_flight(self):
+        folder = self.share / self.art.name_prefix("build")
+        (folder / ".publish-abc").mkdir(parents=True)
+        self.assertIn("IN FLIGHT", self.miss())
+
+    def test_the_one_re_read_finds_a_publication_the_first_read_missed(self):
+        published = []
+
+        def publish_between_reads(_seconds):
+            published.append(self.publish())
+
+        with patch.object(ART.time, "sleep", side_effect=publish_between_reads) as sleep:
+            self.assertEqual(1, self.art.download(self.root / "out", name="build"))
+        self.assertEqual(1, sleep.call_count)          # exactly one re-read, never a loop
+        self.assertEqual("data", (self.root / "out/payload.txt").read_text())
+
+    def test_the_re_read_happens_once_and_then_the_miss_is_final(self):
+        with patch.object(ART.time, "sleep") as sleep:
+            self.miss("absent")
+        self.assertEqual(1, sleep.call_count)
+
+    def test_a_pattern_download_never_waits_and_an_empty_collection_stays_valid(self):
+        with patch.object(ART.time, "sleep") as sleep:
+            self.assertEqual(0, self.art.download(self.root / "out", pattern="none-*"))
+        sleep.assert_not_called()
+
+    def test_cli_prints_the_miss_as_NOT_MEASURED_infra_and_stays_red(self):
+        err = io.StringIO()
+        args = ["download", "--store", self.store, "--repository", "Systemorph/Plugins",
+                "--run-id", "12", "--path", str(self.root / "out"), "--name", "absent"]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            self.assertEqual(1, ART.main(args))
+        self.assertIn(f"::error title={ART.MISS_TITLE}::", err.getvalue())
+        self.assertIn("(infra)", err.getvalue())
 
 
 if __name__ == "__main__":
