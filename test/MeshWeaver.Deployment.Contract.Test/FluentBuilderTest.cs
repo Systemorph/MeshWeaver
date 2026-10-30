@@ -168,6 +168,65 @@ public class FluentBuilderTest
         Assert.Equal("ZDR", back.Ai.Anthropic!.DataRetention);
     }
 
+    /// <summary>
+    /// Systemorph/MeshWeaver.Plugins#4366 — the per-model context-window map
+    /// (<c>ai.&lt;provider&gt;.contextWindowTokens</c>) reaches the portal as indexed PAIRS, never with the
+    /// model id in the key (an id carries <c>/</c>, which no ConfigMap or environment variable may). Read
+    /// from the record's JSON exactly as a deployment record states it; blank ids render nothing, the
+    /// order is ordinal and therefore stable, and a non-positive window is refused at render.
+    /// </summary>
+    [Fact]
+    public void TheContextWindowMapRendersAsIndexedPairs()
+    {
+        const string json = """
+            {
+              "ai": {
+                "openRouterEU": {
+                  "models": [ "z-ai/glm-5.3", "anthropic/claude-opus-5.5" ],
+                  "contextWindowTokens": { "z-ai/glm-5.3": 202752, "anthropic/claude-opus-5.5": 1000000, "  ": 5 }
+                }
+              }
+            }
+            """;
+        var record = DeploymentRecordJson.Read(json)!;
+        Assert.Equal(202752, record.Ai!.OpenRouterEU!.ContextWindowTokens["z-ai/glm-5.3"]);
+
+        var c = DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm);
+
+        Assert.Equal("anthropic/claude-opus-5.5", c["OpenRouterEU__ContextWindowTokens__0__Model"]);
+        Assert.Equal("1000000", c["OpenRouterEU__ContextWindowTokens__0__Tokens"]);
+        Assert.Equal("z-ai/glm-5.3", c["OpenRouterEU__ContextWindowTokens__1__Model"]);
+        Assert.Equal("202752", c["OpenRouterEU__ContextWindowTokens__1__Tokens"]);
+        Assert.False(c.ContainsKey("OpenRouterEU__ContextWindowTokens__2__Model"), "a blank id renders nothing");
+        Assert.DoesNotContain(c.Keys, k => k.Contains('/'));
+        // The models list is untouched — the map is additive.
+        Assert.Equal("z-ai/glm-5.3", c["OpenRouterEU__Models__0"]);
+
+        // A record without the map renders no window key at all.
+        var plain = DeploymentPortalConfig.PortalConfig(
+            new DeploymentContent().WithAi(a => a.OpenRouterEU(["z-ai/glm-5.3"])), PortalConfigOptions.Helm);
+        Assert.DoesNotContain(plain.Keys, k => k.Contains("__ContextWindowTokens__", StringComparison.Ordinal));
+
+        // The map survives the record's JSON round trip.
+        var back = DeploymentRecordJson.Read(DeploymentRecordJson.Write(record))!;
+        Assert.Equal(1000000, back.Ai!.OpenRouterEU!.ContextWindowTokens["anthropic/claude-opus-5.5"]);
+
+        // A window that is not positive is a record mistake, named at render.
+        var zero = record with
+        {
+            Ai = record.Ai with
+            {
+                OpenRouterEU = record.Ai.OpenRouterEU with
+                {
+                    ContextWindowTokens = record.Ai.OpenRouterEU.ContextWindowTokens.SetItem("z-ai/glm-5.3", 0),
+                },
+            },
+        };
+        var refused = Assert.Throws<InvalidOperationException>(
+            () => DeploymentPortalConfig.PortalConfig(zero, PortalConfigOptions.Helm));
+        Assert.Contains("z-ai/glm-5.3", refused.Message);
+    }
+
     [Fact]
     public void TheActionsExecutorReachesTheConfigWithTheOperatorJobOff()
     {

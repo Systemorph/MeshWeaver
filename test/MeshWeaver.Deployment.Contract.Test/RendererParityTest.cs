@@ -183,7 +183,14 @@ public class RendererParityTest
                 var ai = a.OpenRouter(["anthropic/claude-sonnet-4"]).OpenRouterEU(["z-ai/glm-5.3"], endpoint: "https://eu.openrouter.ai/api/v1")
                     .Anthropic(["claude-sonnet-4"], enabled: true).AzureFoundry(["gpt-5"], enabled: true).AzureAis(["deepseek"])
                     .RequiredDataResidency("Eu").Tiers("heavy", "standard", "light", "utility");
-                return ai with { Anthropic = ai.Anthropic! with { DataResidency = "Eu", DataRetention = "ZDR" } };
+                return ai with
+                {
+                    Anthropic = ai.Anthropic! with { DataResidency = "Eu", DataRetention = "ZDR" },
+                    OpenRouterEU = ai.OpenRouterEU! with
+                    {
+                        ContextWindowTokens = System.Collections.Immutable.ImmutableDictionary<string, int>.Empty.Add("z-ai/glm-5.3", 202752),
+                    },
+                };
             })
             .WithOperator(true, "hosting", "hosting-operator", "ghcr.io/systemorph/hosting-operator:1")
             .WithOperatorExecutor("Job", "maintainer")

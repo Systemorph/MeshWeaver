@@ -29,6 +29,16 @@ internal sealed partial class YamlParser
     private long expansionBudget = MaxExpandedNodes;
 
     /// <summary>
+    /// The SOURCE spelling of every plain scalar whose resolved node reads differently
+    /// (<c>00123</c> → 123, <c>0x1F</c> → 31, <c>TRUE</c> → true, <c>.inf</c> → "Infinity"), keyed
+    /// by the node's REFERENCE. Local to this one parse: the tree stays core-schema-correct, and
+    /// <see cref="TolerantYaml.Deserialize{T}"/> reads this table to bind such a scalar into a
+    /// <see cref="string"/> as it was written (#7398).
+    /// </summary>
+    private ImmutableDictionary<JsonNode, string> spellings =
+        ImmutableDictionary.Create<JsonNode, string>(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
     /// The deepest a collection may nest. The reader recurses per level, so an unbounded depth is an
     /// uncatchable stack overflow on hostile input; 64 is also System.Text.Json's default
     /// <c>MaxDepth</c>, so nothing deeper could be bound anyway.
@@ -83,7 +93,47 @@ internal sealed partial class YamlParser
         if (depth + levels > MaxDepth)
             throw ErrorAt($"alias expansion nests deeper than {MaxDepth} levels", mark);
         expansionBudget -= size;
-        return target.DeepClone();
+        var copy = target.DeepClone();
+        if (!spellings.IsEmpty)
+            CopySpellings(target, copy);
+        return copy;
+    }
+
+    /// <summary>
+    /// Carries the source spellings of <paramref name="original"/>'s scalars over to the same
+    /// positions of its deep copy, so an alias or a merged key binds into a string exactly as the
+    /// anchored text was written.
+    /// </summary>
+    private void CopySpellings(JsonNode original, JsonNode copy)
+    {
+        switch (original)
+        {
+            case JsonValue when spellings.TryGetValue(original, out var text):
+                spellings = spellings.SetItem(copy, text);
+                break;
+            case JsonObject map:
+                foreach (var (from, to) in map.Zip((JsonObject)copy))
+                    if (from.Value is not null && to.Value is not null)
+                        CopySpellings(from.Value, to.Value);
+                break;
+            case JsonArray seq:
+                foreach (var (from, to) in seq.Zip((JsonArray)copy))
+                    if (from is not null && to is not null)
+                        CopySpellings(from, to);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Resolves an untagged PLAIN scalar under the core schema and, when the node reads
+    /// differently from <paramref name="text"/>, records the text as the node's source spelling.
+    /// </summary>
+    private JsonNode? ResolvePlain(string text)
+    {
+        var node = YamlScalars.Resolve(text);
+        if (node is not null && YamlScalars.Text(node) != text)
+            spellings = spellings.SetItem(node, text);
+        return node;
     }
 
     /// <summary>The node count (every null slot included — DeepClone allocates it) and collection depth of a tree, counting stops past <paramref name="cap"/>.</summary>
@@ -110,7 +160,18 @@ internal sealed partial class YamlParser
 
     /// <summary>Reads every document in <paramref name="text"/>.</summary>
     internal static ImmutableList<JsonNode?> ParseStream(string text, bool strict) =>
-        new YamlParser(text, strict).ParseDocuments();
+        ParseStreamWithSpellings(text, strict).Documents;
+
+    /// <summary>
+    /// Reads every document in <paramref name="text"/>, and returns with them the source spelling
+    /// of each plain scalar whose resolved node reads differently (keyed by node reference).
+    /// </summary>
+    internal static (ImmutableList<JsonNode?> Documents, ImmutableDictionary<JsonNode, string> Spellings) ParseStreamWithSpellings(string text, bool strict)
+    {
+        var parser = new YamlParser(text, strict);
+        var documents = parser.ParseDocuments();
+        return (documents, parser.spellings);
+    }
 
     // ───────────────────────────── cursor ─────────────────────────────
 
@@ -942,7 +1003,7 @@ internal sealed partial class YamlParser
                         throw Error("a block sequence cannot start on the line of its key");
                     RefuseReservedPlainStart();
                     var text = ParsePlainBlock(parentIndent);
-                    return DefersResolution(tag) ? JsonValue.Create(text) : YamlScalars.Resolve(text);
+                    return DefersResolution(tag) ? JsonValue.Create(text) : ResolvePlain(text);
                 }
         }
     }
@@ -1487,7 +1548,7 @@ internal sealed partial class YamlParser
                         throw Error("a flow collection entry is empty");
                     if (props.Tag is null)
                         plainText = text;
-                    node = DefersResolution(props.Tag) ? JsonValue.Create(text) : YamlScalars.Resolve(text);
+                    node = DefersResolution(props.Tag) ? JsonValue.Create(text) : ResolvePlain(text);
                     break;
                 }
         }
@@ -1801,8 +1862,9 @@ internal static partial class YamlScalars
     }
 
     /// <summary>
-    /// A scalar node's text as YAML wrote it: a string's value, <c>true</c>/<c>false</c>, a
-    /// number's digits. <c>null</c> for a null node; a collection's JSON text otherwise.
+    /// A scalar node's text as the core schema RESOLVED it: a string's value, <c>true</c>/<c>false</c>,
+    /// a number's digits (normalised — <c>007</c> reads <c>7</c>, <c>0x1F</c> reads <c>31</c>).
+    /// <c>null</c> for a null node; a collection's JSON text otherwise.
     /// </summary>
     internal static string? Text(JsonNode? node) => node switch
     {

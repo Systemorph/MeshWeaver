@@ -33,7 +33,8 @@ command — so a stage cannot quietly shed a check it has:
              a restore from the host's prepared package cache as fallback folder, the test pack) first; every
              `test-shard-<i>` and `doc-gate` run from a pack whose commit is the run's own commit; a
              `restore` that warms the build's own closure (the solution, Configuration=Release, CIRun=true,
-             never a --source).
+             never a --source); the build stages the licence evidence from its own restore and hands it back
+             with shard 0's plugin tester (host-build-outputs.py), the inputs of platform-compat and licence-gate.
   node-repo  the stages follow the lanes `.github/workflows/ci.yml` calls: `node-repo-compile-check.yml`
              ⇒ `compile-check` (core's compile-check.py, the repository's compile-check.allow, the
              host's reference set); `node-repo-gate.yml` ⇒ `gate` (the tester and dotnet through the
@@ -80,6 +81,10 @@ CORE_BUILD_PARITY = [
     ("are not in MeshWeaver.slnx", "every test project is a solution member (the `build` job's step of that name)"),
     ("core-tests.py pack", "the shards' units packed by shard-assign.sh, the SAME assignment the matrix uses"),
     ("--sha \"${MW_BUILD_SHA", "the pack names the commit it was built from"),
+    ("check-licenses.py --stage-evidence", "the licence evidence staged from THIS build's restore, as the `build` job "
+     "stages it for licence-gate"),
+    ("host-build-outputs.py stage", "shard 0's plugin tester, the licence evidence and the tested tree handed back for "
+     "platform-compat and licence-gate (the `build` job's two artifacts)"),
 ]
 # The host's default-branch restore must warm the closure the `build` stage's implicit restore reads — the same
 # solution and the same global properties — or every run restores per run again (MWPREP001).
@@ -633,7 +638,9 @@ def problems(text: Optional[str], profile: str, workflow_text: Optional[str] = N
 def _core_doc(total: int = 2) -> dict:
     build = ("set -euo pipefail; fb=\"${NUGET_FALLBACK_PACKAGES:?}\"; dotnet build MeshWeaver.slnx -c Release -p:CIRun=true "
              "-warnaserror; echo prepared package cache did not hold; echo are not in MeshWeaver.slnx; "
-             "python3 deploy/core-tests/core-tests.py pack --repo . --out \"${MW_BUILD_OUTPUTS:?}/core-tests\" --sha \"${MW_BUILD_SHA:?}\"")
+             "python3 deploy/core-tests/core-tests.py pack --repo . --out \"${MW_BUILD_OUTPUTS:?}/core-tests\" --sha \"${MW_BUILD_SHA:?}\"; "
+             "python3 .github/scripts/check-licenses.py --stage-evidence e; python3 .github/scripts/host-build-outputs.py stage "
+             "--repo . --sha \"${MW_BUILD_SHA:?}\" --evidence e --artifacts \"${MW_BUILD_ARTIFACTS:?}\"")
     roots = "--root \"${MW_BUILD_OUTPUTS:?}/core-tests\" --root /core-tests --require-sha \"${MW_BUILD_SHA:?}\""
     stages = [{"name": "build", "kind": "build", "command": build, "timeoutMinutes": 25, "needs": ["nuget"]}]
     stages += [{"name": f"test-shard-{i}", "kind": "test", "command": f"python3 deploy/core-tests/core-tests.py run --shard {i} --total {total} {roots} --repo .",
