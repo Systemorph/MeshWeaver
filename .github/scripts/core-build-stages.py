@@ -122,11 +122,6 @@ OWES = [
     "fetch itself: host-results runs only on the plain `host` route, never in host-forced shadow, so no run has yet "
     "fetched a tree that way with its OIDC token. Paid only when collect-results consolidates results fetched that "
     "way on a host run (Actions: collect-results over the testResults-shard<i>-attempt<a> artifacts)",
-    "prepared packages: the build restores through the repository's nuget.config with the host's cache as the "
-    "fallback folder, and a package the cache lacks is restored for the run and named; the host WARMS the cache from "
-    "the default branch's tip by running the declared `restore` once per restore key (MeshWeaver.Deploy#68) - until "
-    "that is on build-latest and has warmed core's key there, core's restore closure is not in the cache (Actions: "
-    "the `build` job's NuGet-shelf hydration and restore)",
     "prepared mesh: on a host no test may install a mesh from scratch — a prepared mesh snapshot is cloned per run; "
     "which of core's fixtures that replaces is not established (owned by the prepared-server work)",
     "evidence: no stage has run on a host — a probe of every stage on build-latest must be green and agree with the "
@@ -391,6 +386,99 @@ def container_problems(root: str, owes: list[str] | None = None) -> list[str]:
                 out.append(f"{rel} {what} ({hit[:80]}) — a build host's sandbox has no Docker daemon; "
                            f"run the suite against the host's prepared service, or re-open the `containers:` debt in "
                            f"core-build-stages.py OWES in this change")
+    return out
+
+
+# THE TEST-TIME HALF OF THE PREPARED PACKAGES. The host warms <cache>/nuget from the default branch's `restore`, which
+# restores RESOLVER_FIXTURES after the solution; NuGetAssemblyResolver reads that folder as a NuGet fallback folder at
+# TEST time. A `#r "nuget:Id, Version"` in code core's own tests compile or render — a sample NodeType's Source, an
+# executable doc fence (```csharp --render X / --execute X) — that the fixture project does not list is downloaded on
+# every host run instead, and nothing names it. So each one is held to the list, at the exact version it names; a
+# version-less directive in such code is red too (floating resolves "latest" — nothing can be prepared for it).
+# Plain (non-executable) fences are prose and are not read. Measured paid on build-latest 2026-10-30: host-forced
+# shadow runs of core (Hosting/Builds/MeshWeaver/c0cfb542…, 4b4b3e83…) warmed core's restore key c63b9cd3 from the
+# default branch's tip ("filled … 3 package(s) promoted", then "holds the default branch's restore") and their build
+# stage reported no MWPREP001 (nothing restored per run).
+NUGET_DIRECTIVE = re.compile(r'^\s*#r\s+"nuget:\s*([^,"\s]+)\s*(?:,\s*([^"]*?))?\s*"')
+CODE_FENCE = re.compile(r"^\s*(`{3,})\s*([A-Za-z#+-]*)(.*)$")
+EXECUTABLE_FENCE = re.compile(r"(?:^|\s)--(?:render|execute)\b")
+EXACT_VERSION = re.compile(r"^\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.-]+)?$")
+
+
+def fixture_packages(text: str) -> set[tuple[str, str]]:
+    """(id lower-cased, version) of every PackageReference the resolver-fixture project lists. Raises ValueError when
+    it is not MSBuild XML."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        raise ValueError(f"not parseable as MSBuild XML: {e}") from e
+    out: set[tuple[str, str]] = set()
+    for el in root.iter():
+        if isinstance(el.tag, str) and el.tag.rsplit("}", 1)[-1] == "PackageReference" and el.get("Include"):
+            out.add((el.get("Include").strip().lower(), (el.get("Version") or "").strip()))
+    return out
+
+
+def executable_directives(rel: str, text: str) -> list[tuple[int, str, str | None]]:
+    """(line, id, version or None) of every `#r "nuget:…"` in what EXECUTES: a whole .cs file, or the executable
+    C# fences of a .md page (closed by a fence of at least the opening's backticks)."""
+    out: list[tuple[int, str, str | None]] = []
+    lines = text.splitlines()
+    if rel.endswith(".cs"):
+        for i, line in enumerate(lines, 1):
+            m = NUGET_DIRECTIVE.match(line)
+            if m:
+                out.append((i, m.group(1), (m.group(2) or "").strip() or None))
+        return out
+    fence: str | None = None
+    executable = False
+    for i, line in enumerate(lines, 1):
+        if fence is None:
+            m = CODE_FENCE.match(line)
+            if m:
+                fence = m.group(1)
+                executable = m.group(2).lower() in ("csharp", "cs", "c#") and bool(EXECUTABLE_FENCE.search(m.group(3)))
+            continue
+        bare = line.strip()
+        if bare.startswith(fence) and not bare.strip("`"):
+            fence = None
+            continue
+        m = NUGET_DIRECTIVE.match(line) if executable else None
+        if m:
+            out.append((i, m.group(1), (m.group(2) or "").strip() or None))
+    return out
+
+
+def fixture_problems(root: str) -> list[str]:
+    """Every NuGet package core's executable samples and doc cells name that the warm restore does not prepare."""
+    try:
+        with open(os.path.join(root, RESOLVER_FIXTURES), encoding="utf-8-sig") as fh:
+            listed = fixture_packages(fh.read())
+    except (OSError, ValueError) as e:
+        return [f"{RESOLVER_FIXTURES}: unreadable ({e}) — the test-time packages check reached no verdict"]
+    out: list[str] = []
+    for top, suffixes in (("samples", (".cs", ".md")), ("src", (".md",))):
+        for dirpath, dirnames, filenames in os.walk(os.path.join(root, top)):
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            for n in sorted(filenames):
+                if not n.endswith(suffixes):
+                    continue
+                rel = os.path.relpath(os.path.join(dirpath, n), root)
+                try:
+                    with open(os.path.join(dirpath, n), encoding="utf-8-sig", errors="replace") as fh:
+                        found = executable_directives(rel, fh.read())
+                except OSError as e:
+                    out.append(f"{rel}: unreadable ({e}) — the test-time packages check reached no verdict on it")
+                    continue
+                for line, pid, ver in found:
+                    if ver is None or not EXACT_VERSION.match(ver):
+                        out.append(f"{rel}:{line}: #r \"nuget:{pid}{', ' + ver if ver else ''}\" names no exact version — "
+                                   f"a floating package cannot be prepared in the host's cache; pin it")
+                    elif (pid.lower(), ver) not in listed:
+                        out.append(f"{rel}:{line}: #r \"nuget:{pid}, {ver}\" is not in {RESOLVER_FIXTURES} — the host's "
+                                   f"warm restore does not prepare it, so every host run downloads it unnamed; add "
+                                   f'<PackageReference Include="{pid}" Version="{ver}" />')
     return out
 
 
@@ -683,6 +771,42 @@ def _self_test() -> int:
         open(os.path.join(t, "test", "A", "T.cs"), "w").write("using Xunit;\n")
         open(os.path.join(t, "test", "A", "A.csproj"), "w").write("<Project><ItemGroup>")
         expect(any("no verdict" in p for p in container_problems(t, debt_free)), "RED: an unparseable project file reaches no verdict")
+    print("prepared packages — the warm restore prepares every package core's executable code names:")
+    expect(not any(str(o).startswith("prepared packages") for o in OWES), "the `prepared packages` debt is paid, so it is not owed")
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(os.path.join(t, os.path.dirname(RESOLVER_FIXTURES)))
+        os.makedirs(os.path.join(t, "samples", "S", "Source"))
+        os.makedirs(os.path.join(t, "src", "D", "Data"))
+        fixture = os.path.join(t, RESOLVER_FIXTURES)
+        open(fixture, "w").write('<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+                                 '<PackageReference Include="MathNet.Numerics" Version="5.0.0" />'
+                                 '<PackageReference Include="Humanizer.Core" Version="2.14.1" /></ItemGroup></Project>')
+        cs = os.path.join(t, "samples", "S", "Source", "M.cs")
+        md = os.path.join(t, "src", "D", "Data", "Page.md")
+        open(cs, "w").write('#r "nuget:MathNet.Numerics, 5.0.0"\nusing MathNet.Numerics;\n')
+        open(md, "w").write('```csharp --render A --show-code\n#r "nuget: humanizer.core, 2.14.1"\n```\n'
+                            '```csharp\n#r "nuget:ThisPackageDoesNotExist, 1.0.0"\n#r "nuget:Floating"\n```\n'
+                            '```python --render P\n#r "nuget:NotCSharp, 1.0.0"\n```\n')
+        expect(fixture_problems(t) == [], "listed packages (id case-insensitive) are green; plain and non-C# fences are prose")
+        open(cs, "w").write('#r "nuget:MathNet.Numerics, 5.0.1"\n')
+        expect(any("M.cs:1" in p and "MathNet.Numerics, 5.0.1" in p for p in fixture_problems(t)),
+               "RED: a sample naming a version the fixture does not list")
+        open(cs, "w").write('#r "nuget:MathNet.Numerics, 5.0.0"\n')
+        open(md, "a").write('````csharp --execute Setup\n```\n#r "nuget:Markdig, 0.37.0"\n````\n')
+        expect(any("Page.md:" in p and "Markdig" in p for p in fixture_problems(t)),
+               "RED: an unlisted package in a 4-backtick executable fence (an inner ``` does not close it)")
+        open(md, "w").write('```csharp --render F\n#r "nuget:Humanizer.Core"\n```\n')
+        expect(any("no exact version" in p for p in fixture_problems(t)), "RED: a version-less directive in an executable cell")
+        open(md, "w").write('```csharp --render F\n#r "nuget:Humanizer.Core, [2.0,3.0)"\n```\n')
+        expect(any("no exact version" in p for p in fixture_problems(t)), "RED: a ranged directive in an executable cell")
+        open(md, "w").write("")
+        open(fixture, "w").write("<Project>")
+        expect(any("no verdict" in p for p in fixture_problems(t)), "RED: an unparseable fixture project reaches no verdict")
+        os.remove(fixture)
+        expect(any("no verdict" in p for p in fixture_problems(t)), "RED: an absent fixture project reaches no verdict")
+    repo_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+    if os.path.isfile(os.path.join(repo_root, RESOLVER_FIXTURES)):
+        expect(fixture_problems(repo_root) == [], "the real tree: every package an executable sample or doc cell names is prepared")
     print(f"\n{'SELF-TEST FAILED' if fails else 'self-test: every drift is red, the generated file is green'}")
     return 1 if fails else 0
 
@@ -701,7 +825,7 @@ def main(argv: list[str]) -> int:
         print(f"wrote {STAGES} for CI_SHARD_TOTAL={read_shard_total(workflow)}")
         return 0
     if argv == ["--check"]:
-        found = (problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root)
+        found = (problems(_read(os.path.join(root, STAGES)), workflow) + container_problems(root) + fixture_problems(root)
                  + route_problems(workflow, read_shard_total(workflow)) + handback_problems(workflow))
         for p in found:
             print(f"::error::{p}")
