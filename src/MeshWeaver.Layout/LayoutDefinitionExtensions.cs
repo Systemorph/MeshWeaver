@@ -276,8 +276,10 @@ public static class LayoutDefinitionExtensions
         if (delgate is not null)
         {
             var method = delgate.Method;
-            var doc = layout.Hub.XmlDocs().Summary(method);
-            ret = ret.WithDescription(doc);
+            // The method, not its summary: reading the summary is a documentation-file read, and this
+            // runs while the hub's layout is being configured (hub initialization). The text is
+            // filled in when the definitions are served — ObserveVisibleAreaDefinitions.
+            ret = ret with { SummarySource = method };
 
             // Check class-level DisplayAttribute for GroupName and fallback Order
             var declaringType = method.DeclaringType;

@@ -107,10 +107,11 @@ name, would need a migration of every stored `$type` and could break code CI nev
 `Provider` field could also disagree with the URL beside it.
 
 **One seam, one sync.** Every GitSync caller talks to ONE `IGitHubRepoClient`, and the production
-registration is `GitProviderRepoClient`: it sends each call on an Azure Repos URL to
-`AzureReposRepoClient` and every other URL to the GitHub client. Everything above the client — the
+registration is `GitProviderRepoClient`: it sends each call on a URL a registered **git hosting
+provider** claims (Azure Repos is one — see *Hosting providers* below) to that provider's client
+(`AzureReposRepoClient`), and every other URL to the GitHub client. Everything above the client — the
 import, the export, the authored-content comparison, the type protections and the two-way rules — is
-therefore the same code for both providers. `GitProviderRepoClient` forwards every interface member
+therefore the same code for every provider. `GitProviderRepoClient` forwards every interface member
 explicitly, the default-implemented ones included: inheriting a default would bind the *fallback* (a
 full fetch for a head lookup, "diff unknown" for every diff) instead of the provider's own.
 
@@ -139,7 +140,7 @@ commit and the conflict horizon, and is carried back by the next export) and the
 | An export that changes nothing | creates no commit (the pushes API refuses an empty commit); the result names the branch head, which holds exactly the exported content — what the sync records either way |
 | Create the repository if missing | not done — a missing repository (or one the identity cannot read) is refused by name, `gitsync.azure.repositoryNotFound` |
 | Inbound sync | **on demand** — *Update to latest*, *Re-import at commit*, *Check branch*. The GitHub push webhook, the branch reconcile and the sealed-publication reconcile are keyed to a GitHub `owner/repo`, which an Azure Repos URL never resolves to (`GitHubRepoIdentityResolver.Parse` answers null), so none of them reaches an Azure Repos source. Read positionally, `dev.azure.com/{org}/{project}/…` would have yielded `{org}/{project}` — some GitHub repository's name, whose webhook would then have imported into the Azure source |
-| Pull requests, issues | not offered — refused by name (`AzureReposSyncPolicy.Refuse`, `gitsync.azure.unsupported.*`), and the settings tab shows a notice under the draft button |
+| Pull requests, issues | not offered — refused by name (the provider's `Refuse`, `gitsync.azure.unsupported.*`), and the settings tab shows a notice under the draft button |
 
 **The credential is the instance's workload identity, declared per client tenant.** Nothing secret is
 stored: no PAT and no client secret. Every read and every push authenticates with an Entra access token
@@ -187,8 +188,40 @@ requests, and contract tests against a real Azure DevOps organisation — the su
 the HTTP boundary (`FakeAzureDevOpsServer`), so the REST calls, payloads and Bearer credential are
 exercised but the service itself is not. The rules, the seam and the client's pure planning (mirror
 changes, git blob ids, the push body, the diff rules) are pinned by `AzureReposSyncPolicyTest`
-(MeshWeaver.Documentation.Test). Azure Pipelines is a separate concern:
+(MeshWeaver.Documentation.Test); the provider-neutral seam by `GitHostingProvidersTest`. Azure Pipelines is a separate concern:
 [Hybrid delivery](../HybridGitHubAzureDevOps).
+
+### Hosting providers — how a service other than GitHub plugs in
+
+GitSync knows GitHub (REST plus the git protocol) and plain git remotes itself. Every other hosting
+service is an `IGitHostingProvider` a module registers with `services.AddGitHostingProvider(sp => …)`
+beside `AddGitHubSyncServices()`. A provider declares:
+
+| Member | What GitSync does with it |
+|---|---|
+| `Kind` | its name in the open provider vocabulary (`GitRepositoryProvider.GitHub` and `.Git` are the platform's and cannot be taken) |
+| `Claims(url)` | whether a repository URL is hosted there — resolved on every call, never stored on the source |
+| `RepoClient` | the `IGitHubRepoClient` every operation on a claimed URL runs on (`GitProviderRepoClient` routes to it) |
+| `GetAccessToken()` | the instance's own identity for that service — every read and push on a claimed URL uses it, never a user's GitHub credential |
+| `Refuse(url, operation)` | what it does not offer (`GitHostingOperation.PullRequest`, `.Issues`), refused by name before any credential is asked for; an operation it does offer runs with `GetAccessToken()` |
+| `CommitAuthorName` / `CommitAuthorEmail` | the author of an export (default `MeshWeaver` / `noreply@meshweaver.cloud`) |
+| `DisplayNameKey` | the settings tab's one-line description (default `ui.gitSync.provider.{Kind}`) |
+
+`GitHostingProviders` is the one place a URL is resolved, and it never picks silently: two providers
+of one kind, or a provider taking a platform kind, refuse the registry when it is built; a URL two
+providers both claim is refused by name (`gitsync.provider.ambiguous`) wherever it is resolved — on
+subscribe, so a composed call never throws. A URL nobody claims is the platform's own GitHub / git path.
+
+The push webhook, the branch reconcile and the sealed-publication reconcile are keyed to a GitHub
+`owner/repo`, and `GitHubRepoIdentityResolver.Parse` gives one only to `{host}/{owner}/{repo}`: an
+http(s) URL with a deeper path (Azure Repos' `{org}/{project}/_git/{repo}`, a GitLab subgroup) answers
+null. The rule is structural, so it needs no knowledge of which providers are registered.
+
+**Where Azure Repos lives.** The platform still registers its own Azure Repos provider as a BUILT-IN
+(`AzureReposGitHostingProvider`); a contributed provider of the same kind replaces it. That is how the
+provider leaves the platform without a gap: the module that carries it (with `Azure.Identity`) lands in
+MeshWeaver.Plugins first and takes the kind over, and only then does the platform delete its copy —
+see [Carving Projects Out Of Core](../CarvingProjectsOutOfCore).
 
 ### Multiple sync sources
 

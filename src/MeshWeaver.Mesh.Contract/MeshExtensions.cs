@@ -10883,7 +10883,7 @@ public static class MeshExtensions
                 // No .Catch here on purpose: a container query that fails must FAIL THE COPY, so the
                 // move's delete leg never runs. Swallowing it would rebuild the very defect this
                 // sweep exists to close, one level down.
-                .SelectMany(container => QueryUnderCaller($"path:{container} scope:subtree")
+                .SelectMany(container => QueryUnderCaller($"path:{QueryParser.PathLiteral(container)} scope:subtree")
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(15))
                     .SelectMany(change => copyRequest.RequireComplete
@@ -10985,7 +10985,11 @@ public static class MeshExtensions
 
                 EnterCopyStage("stored-inventory");
                 return StoredSubtreePaths().SelectMany(storedPaths =>
-                    QueryUnderCaller($"path:{sourcePath} scope:subtree")
+                    // 🚨 The path is a quoted LITERAL (#7542): spliced bare, a space in it split the
+                    // term — `path:P/Lic Rubin` read as the filter `path:P/Lic` plus the free-text
+                    // word `Rubin` — so the query never returned a source storage still listed, and
+                    // every move of a node with a space in its path refused deterministically.
+                    QueryUnderCaller($"path:{QueryParser.PathLiteral(sourcePath)} scope:subtree")
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(15))
             .DefaultIfEmpty()
