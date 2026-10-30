@@ -1407,13 +1407,14 @@ PRIVATE_PROSE_KEYS = frozenset({"reason", "estate", "verdict", "mechanism", "ope
 def redact_private_prose(value, key: str | None = None):
     """`value` with every prose string replaced by `PRIVATE_PROSE_PLACEHOLDER`. Pure.
 
-    Keys, types and emptiness are kept: an empty string stays empty and a non-string stays as it
+    Emptiness is kept: an empty string or object stays empty and a scalar non-string stays as it
     is, so a validator that refuses a missing `reason` or a `null` estate still refuses it."""
     if isinstance(value, dict):
-        # Under a prose key everything is prose, nested objects included: the readers stringify
-        # the whole value, so the enclosing key — not the inner one — decides.
-        return {k: redact_private_prose(v, key if key in PRIVATE_PROSE_KEYS else k)
-                for k, v in value.items()}
+        # Under a prose key nothing is an identifier — not a value and not a KEY — and the readers
+        # stringify the whole object, so a non-empty object there becomes the placeholder outright.
+        if key in PRIVATE_PROSE_KEYS:
+            return PRIVATE_PROSE_PLACEHOLDER if value else value
+        return {k: redact_private_prose(v, k) for k, v in value.items()}
     if isinstance(value, list):
         return [redact_private_prose(v, key) for v in value]
     # Whitespace INSIDE the value marks a sentence; padding does not — the readers `.strip()`.
@@ -7843,6 +7844,12 @@ ingress:
             check("AcmeCorp" not in json.dumps(_nested),
                   f"ARM 35: a prose key's nested object kept its words, and the readers print it "
                   f"stringified into the public log: {_nested}")
+            # …and its KEYS are prose too: nothing under a prose key is an identifier.
+            _keyed = redact_private_prose({"reason": {"AcmeCorp": "retired"},
+                                           "notes": [{"AcmeCorp": {"AcmeCorp": 1}}]})
+            check("AcmeCorp" not in json.dumps(_keyed),
+                  f"ARM 35: a key inside a prose field kept its word, and the readers print it "
+                  f"stringified into the public log past every mask: {_keyed}")
             # Padding is not prose: the readers `.strip()` an identifier, so a padded one must keep
             # its value and its verdict, never become the placeholder.
             _padded = redact_private_prose({"id": " acme-x ", "state": " not-installed ",
