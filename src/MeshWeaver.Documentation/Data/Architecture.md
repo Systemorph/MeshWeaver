@@ -156,6 +156,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Satellite Entity Patterns](SatelliteEntityPatterns)
 - [Satellite Node Patterns](SatelliteNodePatterns)
 - [Repairing a Stale MainNode — When the Broken Field Guards Itself](StaleMainNodeRepair)
+- [Repairing a Markdown Body Stored Under the Wrong Key](MarkdownBodyKeyRepair) — a Markdown node whose body sits under `body`, `markdown` or `text` renders as Unreadable because the record refuses to bind it; the detection-driven repair moves the body under `content` without guessing
 - [Synced Mesh Node Queries](SyncedMeshNodeQueries)
 - [Update Validators See Typed Content](UpdateValidatorsSeeTypedContent)
 - [Content Is Validated Against Its Declared Shape On Write](ContentSchemaOnWrite) — content that cannot bind to its NodeType's declared content type was stored verbatim and then read as absent everywhere; the two shapes the write boundary refuses, the narrow rule that keeps legitimate writers landing, and the wire-boundary residue it does not close
