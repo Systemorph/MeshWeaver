@@ -33,6 +33,15 @@ namespace MeshWeaver.PluginCatalog;
 /// this client and sent on every later request. A bearer the registry refuses is dropped and
 /// exchanged once more; a second refusal is reported as the revocation it is.</para>
 ///
+/// <para><b>Or no credential at all — for a registry DECLARED public</b>
+/// (<see cref="Anonymous"/>, MeshWeaver.Deploy#65). A public registry (<c>ghcr.io</c> for a public
+/// package) answers the same <c>401</c> challenge, and its realm issues a pull bearer to a caller
+/// that presents NOTHING. An anonymous client runs the identical handshake and pagination, but the
+/// realm request carries no <c>Authorization</c> header — there is no key in it to send, so none can
+/// be disclosed to a registry an operator chose to read without one. A realm that refuses the
+/// anonymous request is reported as exactly that: the repository is not public, and the
+/// declaration that said it was is wrong.</para>
+///
 /// <para><b>Every byte that comes back is verified.</b> A manifest asked for by digest must hash
 /// to that digest; one asked for by tag must hash to the <c>Docker-Content-Digest</c> the registry
 /// states; a blob must hash to the digest it was asked for. A mismatch FAULTS with
@@ -122,6 +131,7 @@ public sealed class OciRegistryClient
     private readonly Uri baseUri;
     private readonly IObservable<string> credential;
     private readonly string username;
+    private readonly bool anonymous;
     private readonly ILogger? logger;
     private readonly IIoPool httpPool;
     private readonly IIoPool blobPool;
@@ -151,7 +161,41 @@ public sealed class OciRegistryClient
         string username = DefaultUsername,
         string? httpClientName = null,
         ILogger? logger = null)
+        : this(hub, registry, credential, username, httpClientName, logger, anonymous: false)
     {
+    }
+
+    /// <summary>
+    /// 🚨 A client for a registry the caller has DECLARED public: the same handshake, manifests,
+    /// blobs and paginated tag listing, but the token realm is asked for a pull bearer WITHOUT any
+    /// <c>Authorization</c> header (MeshWeaver.Deploy#65). The client holds no credential, so it can
+    /// send none — which is the property a public registry needs: an installation that reads its
+    /// platform images from a public package must never hand that host the instance key it holds
+    /// for its plugin registry. A realm that refuses the anonymous request faults with
+    /// <see cref="RegistryRefusedException"/> naming the anonymous request, never with an empty
+    /// answer.
+    /// </summary>
+    /// <param name="hub">The hub whose I/O pools and <see cref="IHttpClientFactory"/> the client uses.</param>
+    /// <param name="registry">The registry host, with a port when not the default (<c>ghcr.io</c>).</param>
+    /// <param name="httpClientName">The named client to take from the factory.</param>
+    /// <param name="logger">Optional.</param>
+    public static OciRegistryClient Anonymous(
+        IMessageHub hub,
+        string registry,
+        string? httpClientName = null,
+        ILogger? logger = null) =>
+        new(hub, registry, Observable.Return(string.Empty), DefaultUsername, httpClientName, logger, anonymous: true);
+
+    private OciRegistryClient(
+        IMessageHub hub,
+        string registry,
+        IObservable<string> credential,
+        string username,
+        string? httpClientName,
+        ILogger? logger,
+        bool anonymous)
+    {
+        this.anonymous = anonymous;
         this.registry = (registry ?? string.Empty).Trim().TrimEnd('/');
         if (this.registry.Length == 0)
             throw new ArgumentException("An OCI registry host is required.", nameof(registry));
@@ -172,6 +216,10 @@ public sealed class OciRegistryClient
 
     /// <summary>The host this client talks to, as given.</summary>
     public string Registry => registry;
+
+    /// <summary>Whether this client asks the realm for a bearer without any credential
+    /// (<see cref="Anonymous"/>) — true means no key can leave through it.</summary>
+    public bool IsAnonymous => anonymous;
 
     // ══════════════════════════════════════════════════════════════════════════
     //  Surfaces
@@ -465,9 +513,17 @@ public sealed class OciRegistryClient
             realmBase.AbsoluteUri + (realmBase.Query.Length > 0 ? "&" : "?") + string.Join('&', query));
 
         using var request = new HttpRequestMessage(HttpMethod.Get, realmUri);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Basic",
-            Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{key}")));
+        // 🚨 An anonymous client sends NO Authorization header — not an empty Basic pair, not the
+        // user name: a registry declared public receives nothing that identifies this installation.
+        if (!anonymous)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic",
+                Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{key}")));
         using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        if (anonymous && response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            throw new RegistryRefusedException(
+                $"{realmUri.Host} refused an ANONYMOUS pull token for {repository} at its token endpoint "
+                + $"({(int)response.StatusCode}) — the repository is not public to an unauthenticated caller, "
+                + "so the declaration that this registry is public is wrong. No credential was sent.");
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             throw new RegistryRefusedException(
                 $"{realmUri.Host} refused this installation's instance key at its token endpoint "
