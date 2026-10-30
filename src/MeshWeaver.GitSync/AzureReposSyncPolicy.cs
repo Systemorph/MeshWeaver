@@ -27,9 +27,9 @@ public static class AzureReposSyncPolicy
     public static class Unsupported
     {
         /// <summary>Any pull-request operation.</summary>
-        public const string PullRequest = "pullRequest";
+        public const string PullRequest = GitHostingOperation.PullRequest;
         /// <summary>Any issue operation (Azure Repos has no issues; work items are not GitSync's).</summary>
-        public const string Issues = "issues";
+        public const string Issues = GitHostingOperation.Issues;
     }
 
     /// <summary>
@@ -41,27 +41,11 @@ public static class AzureReposSyncPolicy
             ? GitSyncRefusal.Of("gitsync.azure.unsupported." + operation, ("url", repositoryUrl!))
             : null;
 
-    /// <summary>
-    /// The EXPORT guard <see cref="GitHubSyncService.SyncToGitHub"/> runs: the import-only
-    /// direction rule, identical for every provider.
-    /// </summary>
-    public static GitSyncRefusal? ExportGuard(GitHubSyncConfig config)
-        => config.Direction == SyncDirection.ImportOnly
-            ? GitSyncRefusal.Legacy("activity.gitsync.importOnlyNoExport",
-                $"This sync source is import-only (repo → mesh): exporting to {config.RepositoryUrl} is not allowed. " +
-                "Change the source's Sync direction to Bidirectional or Export-only to commit.",
-                ("url", config.RepositoryUrl ?? ""))
-            : null;
+    /// <summary>Forwards to <see cref="SyncDirectionGuards.ExportGuard"/> — the direction rule
+    /// every provider shares.</summary>
+    public static GitSyncRefusal? ExportGuard(GitHubSyncConfig config) => SyncDirectionGuards.ExportGuard(config);
 
-    /// <summary>
-    /// The RE-IMPORT guard <see cref="GitHubSyncService.ReimportAtCommit"/> runs: the export-only
-    /// direction rule, identical for every provider.
-    /// </summary>
-    public static GitSyncRefusal? ReimportGuard(GitHubSyncConfig config)
-        => config.Direction == SyncDirection.ExportOnly
-            ? GitSyncRefusal.Legacy("activity.gitsync.exportOnlyNoImport",
-                $"This sync source is export-only (mesh → repo): importing from {config.RepositoryUrl} is not allowed. " +
-                "Change the source's Sync direction to Bidirectional or Import-only to re-import.",
-                ("url", config.RepositoryUrl ?? ""))
-            : null;
+    /// <summary>Forwards to <see cref="SyncDirectionGuards.ReimportGuard"/> — the direction rule
+    /// every provider shares.</summary>
+    public static GitSyncRefusal? ReimportGuard(GitHubSyncConfig config) => SyncDirectionGuards.ReimportGuard(config);
 }

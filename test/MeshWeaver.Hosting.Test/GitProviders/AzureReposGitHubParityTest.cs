@@ -40,7 +40,8 @@ namespace MeshWeaver.Hosting.Test.GitProviders;
 /// production <see cref="AzureReposRepoClient"/> against Azure DevOps faked at the HTTP boundary
 /// (<see cref="FakeAzureDevOpsServer"/>) — so the Azure half exercises the REST calls, the payloads
 /// and the Bearer credential, not a stand-in for them. The Azure token is the one the DECLARED
-/// identity mints (<see cref="AzureReposTokenService"/> over a test credential); the fake refuses
+/// identity mints (<see cref="AzureReposTokenService"/> over a test credential, registered as a
+/// contributed <see cref="IGitHostingProvider"/>); the fake refuses
 /// any other with 401, so every green Azure scenario proves the credential travelled.</para>
 /// </summary>
 public class AzureReposGitHubParityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -62,17 +63,20 @@ public class AzureReposGitHubParityTest(ITestOutputHelper output) : MonolithMesh
                 services.AddGitHubSyncServices();
                 // The DECLARED identity (AzureDevOps:TenantId/ClientId) with a test credential in place
                 // of the workload-identity exchange — last registration wins.
-                services.AddSingleton(sp => new AzureReposTokenService(
-                    sp.GetRequiredService<IoPoolRegistry>(),
-                    Options.Create(new AzureDevOpsOptions { TenantId = "client-tenant", ClientId = "client-app" }),
-                    credentialFactory: _ => new StaticCredential(EntraToken),
-                    environment: name => name == AzureReposTokenService.FederatedTokenFileVariable
-                        ? "/var/run/secrets/azure/tokens/azure-identity-token"
-                        : null));
+                // Registered as a CONTRIBUTED hosting provider — the shape a module registers it in —
+                // so it replaces the platform's built-in Azure Repos provider by kind.
+                services.AddGitHostingProvider(sp => new AzureReposGitHostingProvider(
+                    new AzureReposTokenService(
+                        sp.GetRequiredService<IoPoolRegistry>(),
+                        Options.Create(new AzureDevOpsOptions { TenantId = "client-tenant", ClientId = "client-app" }),
+                        credentialFactory: _ => new StaticCredential(EntraToken),
+                        environment: name => name == AzureReposTokenService.FederatedTokenFileVariable
+                            ? "/var/run/secrets/azure/tokens/azure-identity-token"
+                            : null),
+                    new AzureReposRepoClient(sp.GetRequiredService<IoPoolRegistry>(), new HttpClient(azure))));
                 // The production seam, with GitHub faked at the client and Azure DevOps at HTTP.
                 services.AddSingleton<IGitHubRepoClient>(sp => new GitProviderRepoClient(
-                    github,
-                    new AzureReposRepoClient(sp.GetRequiredService<IoPoolRegistry>(), new HttpClient(azure))));
+                    github, sp.GetRequiredService<GitHostingProviders>()));
                 return services;
             });
 

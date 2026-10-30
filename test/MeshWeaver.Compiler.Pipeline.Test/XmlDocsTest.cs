@@ -1,3 +1,7 @@
+using System.Collections.Immutable;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
@@ -53,6 +57,73 @@ public sealed class XmlDocsTest
         var second = MessageHubExtensions.CreateTypeRegistry().XmlDocs().Summary(method);
         first.Length.Should().BeGreaterThan(0);
         ReferenceEquals(first, second).Should().BeTrue("both meshes' snapshots of a non-collectible assembly point at the interned text");
+    }
+
+    /// <summary>
+    /// Systemorph/MeshWeaver#7386: the reactive lookup never reads a documentation file on the
+    /// subscribing thread. A cold summary is read through the blocking-read edge it is handed, and only
+    /// once that edge runs; afterwards the answer is in memory and the lookup emits synchronously
+    /// without asking the edge at all. <see cref="XmlDocsReader.TrySummary"/> is the instrument: it
+    /// reads nothing, and says whether the snapshot has been loaded.
+    /// <b>Should fail if</b> <c>ObserveSummary</c>/<c>WhenLoaded</c> reads on subscribe, or if
+    /// <c>TrySummary</c> starts loading files.
+    /// </summary>
+    [Fact]
+    public async Task TheReactiveLookup_ReadsAtTheEdge_ThenAnswersFromMemory()
+    {
+        var docs = MessageHubExtensions.CreateTypeRegistry().XmlDocs();
+        var method = typeof(ObjectPolymorphicConverter).GetMethod(nameof(ObjectPolymorphicConverter.CanConvert))!;
+        docs.TrySummary(method, out _).Should().BeFalse("a fresh mesh's reader has loaded nothing, and TrySummary itself reads nothing");
+
+        var edge = new HeldReads();
+        var pending = docs.ObserveSummary(method, edge).Should().Within(TimeSpan.FromSeconds(10)).Emit("the released edge reads the summary");
+        await edge.Requests.Should().Within(TimeSpan.FromSeconds(10)).Emit("a cold summary is routed to the edge");
+        docs.TrySummary(method, out _).Should().BeFalse("subscribing read nothing — the edge is still held");
+
+        edge.Release();
+        var summary = await pending;
+        summary.Should().StartWith("Determines whether this converter applies.");
+        docs.TrySummary(method, out var inMemory).Should().BeTrue("the edge loaded the snapshot");
+        inMemory.Should().Be(summary);
+
+        // Warm: answered on subscribe, never asking the edge (which would refuse).
+        var refusing = new RefusingReads();
+        var emitted = ImmutableList<string>.Empty;
+        using (docs.ObserveSummary(method, refusing).Subscribe(s => emitted = emitted.Add(s)))
+            emitted.Should().Equal([summary], "a warm lookup emits synchronously on subscribe");
+        refusing.Asked.Should().BeFalse("a warm lookup never goes to the edge");
+    }
+
+    /// <summary>A blocking-read edge that announces each request and runs it only once released.</summary>
+    private sealed class HeldReads : IBlockingReadScheduler
+    {
+        private readonly ReplaySubject<Unit> released = new(1);
+        private readonly ReplaySubject<Unit> requests = new(1);
+
+        public IObservable<Unit> Requests => requests;
+
+        public void Release() => released.OnNext(Unit.Default);
+
+        public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
+            => Observable.Defer(() =>
+            {
+                requests.OnNext(Unit.Default);
+                return released.Take(1).Select(_ => work(CancellationToken.None));
+            });
+    }
+
+    /// <summary>A blocking-read edge that must not be used.</summary>
+    private sealed class RefusingReads : IBlockingReadScheduler
+    {
+        private int asked;
+
+        public bool Asked => Volatile.Read(ref asked) != 0;
+
+        public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
+        {
+            Volatile.Write(ref asked, 1);
+            return Observable.Throw<T>(new InvalidOperationException("a warm lookup must not read"));
+        }
     }
 
     [Fact]
