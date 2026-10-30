@@ -238,7 +238,8 @@ the check belongs on readiness.
 | `process_progress` (`live`) | Plugins host | Yes, and it restarts via `/alive` | A GC-bound process is fixed by a restart. |
 | `PostgreSql` | Plugins host | Yes | No database, no portal. |
 | `self` (`live`, `ready`) | core | Never fails | The process can run a delegate. |
-| `content-types`, `storage_capacity`, `data_volume_free_space`, `pending_module_activation`, `bundle_adoption`, `entitlement_anchor`, `view_packs` | core / Plugins host | No: Degraded at worst, which is a 200 | Readings, never verdicts. |
+| `view_packs` | Plugins host | **No: roll gate, `/ready` only** (MeshWeaver#7328, MeshWeaver.Plugins#4471) | A required render pack (default views, entity-views, graph-views) or the layout client did not register on the root hub, so every form on this replica would render as the control's own `ToString()`. Unhealthy holds the replica out of the Service and stalls the roll; each change of the missing set logs one Error, which feeds the red-log path. It never fails the startup probe: on a fresh install the packs arrive after boot, and a restart would not bring them sooner. Until 2026-10-28 it answered Degraded at worst, and a customer installation served `ToString()` forms on three Ready pods with nothing raised. |
+| `content-types`, `storage_capacity`, `data_volume_free_space`, `pending_module_activation`, `bundle_adoption`, `entitlement_anchor` | core / Plugins host | No: Degraded at worst, which is a 200 | Readings, never verdicts. |
 | `bake-report`, `source-discovery`, `publication-seal` (`census`) | core | No: Degraded at worst, which is a 200 | They always print; they never gate. |
 
 This table is correct for core's `main` and Plugins' `main` on the day it was written. A check added
