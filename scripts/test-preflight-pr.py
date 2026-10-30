@@ -511,6 +511,7 @@ BODY_GATES = {
     "Implementers (interface additions)": "IFACE-BAD",
     "Mirror-sync (i18n catalog)": "I18N-BAD",
     "Closing keywords / Verified-closing": "Does not close #7",
+    "Parser-delta (surface detector)": "PARSER-BAD",
 }
 
 
@@ -521,6 +522,7 @@ def core_repo(tmp: Path) -> tuple[Path, str]:
     write(repo, "scripts/check-package-pin-removal.py", stub("package-pin-removal", "PIN-BAD"))
     write(repo, "scripts/check-interface-addition.py", stub("interface-addition", "IFACE-BAD"))
     write(repo, "scripts/check-i18n-mirror-sync.py", stub("i18n-mirror-sync", "I18N-BAD"))
+    write(repo, "scripts/check-parser-delta.py", stub("parser-delta", "PARSER-BAD"))
     shutil.copy(REAL_CLOSING, repo / "scripts/check-closing-keywords.py")
     write(repo, "src/x.cs", "// x\n")
     write(repo, ".gitignore", "calls.log\n")
@@ -553,7 +555,7 @@ def test_core_body_gates(tmp: Path) -> None:
     rc, st, out, _ = preflight(repo, tmp, "--body-file", str(b), "--only", "body")
     check("core: a clean body is GREEN online", rc == 0 and all(st.get(n) == "PASS" for n in BODY_GATES), out)
     by_gate = {c["gate"]: c["argv"] for c in calls(repo)}
-    for gate in ("package-pin-removal", "i18n-mirror-sync"):
+    for gate in ("package-pin-removal", "i18n-mirror-sync", "parser-delta"):
         argv = by_gate.get(gate, [])
         check(f"core: {gate} is handed the MERGE BASE and the body file",
               argv[:2] == ["--base", mb] and argv[2:] == ["--pr-body-file", str(b.resolve())], str(argv))

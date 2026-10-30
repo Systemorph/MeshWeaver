@@ -1,7 +1,7 @@
 ---
 Name: Pre-PR Preflight
 Category: Architecture
-Description: One command before opening or pushing a pull request — scripts/preflight-pr.py runs every body-declaration gate, the source-guard root scan and (in MeshWeaver.Plugins) the platform-mount checks locally, reusing the CI gate scripts; offline mode reports what it could not ask as SKIPPED; and how an edited pull-request body re-judges the body gates without re-running the build.
+Description: One command before opening or pushing a pull request — scripts/preflight-pr.py runs every body-declaration gate, the source-guard root scan and (in MeshWeaver.Plugins) the platform-mount checks locally, reusing the CI gate scripts; offline mode reports what it could not ask as SKIPPED; and the design notes for re-judging an edited pull-request body automatically, which is still a follow-up.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
 ---
 
@@ -53,6 +53,7 @@ the `Committed state` line names the changes) and never GREEN. Commit, then run 
 | Satellite-pins | `check-package-pin-removal.py` | none |
 | Implementers | `check-interface-addition.py` on the same surface report | none |
 | Mirror-sync | `check-i18n-mirror-sync.py` | none |
+| Parser-delta | `check-parser-delta.py` (the `record-signatures` job's control) | none |
 | Closing keywords and `Verified-closing:` | `check-closing-keywords.py --repo <this repo>` | reads each closed issue's labels |
 | Db-migration | the repository's own `scripts/check-db-migration-declaration.py`, where it exists (MeshWeaver.Plugins) | none |
 | Source-guard scanned roots | the preflight's own scan (below) | none |
@@ -104,74 +105,58 @@ it, whatever else is there, because that is all SourceScan reads. Any other root
 is left. The fix belongs in the
 same change: point the root at the new home of a moved directory, or drop the root of a retired one.
 
-## An edited body re-judges the body gates — without re-running the build
+## Not yet: re-judging an edited body automatically
 
-The body gates in `MeshWeaver Build and Test` are every job that `needs: [pr-body]`. They judge the
-body as the run's `pr-body` job read it, and that workflow does not fire on `edited`. Adding `edited`
-to it would be wrong twice over. Its concurrency group cancels the in-flight run of the same pull
-request, so every edit would throw a running build away. And a run for an edit would still have to
-publish the required `Consolidate test results`, where a skipped required context counts as satisfied.
+**A PR-body edit still needs a manual re-run of the failed body-gate jobs.** The `MeshWeaver Build and
+Test` workflow does not fire on `edited`, and its body gates (every job that `needs: [pr-body]`, plus
+the parser-delta control in `record-signatures`) judge the body their run read. Fix the body, run the
+preflight on it, then re-run the failed jobs. The automatic re-run is a follow-up.
 
-`.github/workflows/pr-body-edited.yml` fires on `pull_request: edited` when the **body** changed, on a
-same-repository head. It acts on the **existing** run, and only when that run's verdict is no longer
-true. Verdicts are compared **per gate**, never as one aggregate: an edit can clear one red gate and
-break a green one while the run stays red, and a later partial re-run would then refresh only the
-first. The run is the newest one **associated with this pull request** (two pull requests can share a
-head sha). Its jobs are read across every attempt, keeping the newest execution of each, because a
-partial re-run's attempt lists only what it re-ran. The pull request is read again just before anything
-is posted, and a closed pull request or a moved head stops the lane.
+### Design notes for the follow-up
 
-🚨 **The lane never cancels anything.** If the run is still in progress and a gate's verdict changed
-(or a gate is still judging, or has not even been listed yet, which counts as pending and never as
-green), the lane waits for the run to finish, then re-runs `pr-body` on the finished run. The wait is
-a bounded script poll inside the 45-minute job cap; past it, the lane goes red and says to re-run
-`pr-body` by hand. When every gate's verdict holds, it stops at once and holds no runner. Its
-concurrency group sits on the job, which runs only for body edits, so a title-only edit never enters
-it. The group never cancels the running lane: a newer body edit queues behind it and judges the newer
-body once the first lane has finished. `.github/scripts/pr-body-regate.py` holds the decision table, and its self-test proves every arm:
+An event-driven lane plus a consolidation-time re-check was built and taken out again, after five
+review rounds each found a new interleaving. A follow-up design has to answer every one of these
+before it is built:
 
-| The run… | Current body (same gates, via this preflight) | Action |
-|---|---|---|
-| read the body after the edit, or has not read it yet | not judged | nothing |
-| every gate's verdict unchanged | (per gate) | **nothing.** The verdict holds for the current body, and the build is not re-run |
-| a gate red | that gate now passes (or cannot be judged) | re-run the `pr-body` job by id once the run has finished. Every body gate needs it and re-runs with it, reading the current body, because a new attempt never reuses the old read (`read-current-pr-body.py --reuse-from-env`), and the build they held runs. It never ran, so it is owed, not repeated |
-| a gate red | that gate still red, and no other gate changed | nothing. The required check is red and stays red |
-| a gate green | that gate now fails (or cannot be judged) — even if another gate keeps the run red | re-run the `pr-body` job by id. Its dependents follow: the gates go red, stage 0 holds the build, and the required check turns red within minutes |
-| any | undecided (could not be judged) | the `pr-body` job is re-run either way: truthful, and cheap whenever a gate is red, because a red gate holds the build |
-
-🚨 **The lane never posts `rerun-failed-jobs` on the whole run.** Every re-run is one job, `pr-body`,
-by id; GitHub re-runs the jobs that need it along with it. Before posting, the lane asserts that the
-run belongs to `.github/workflows/dotnet-test.yml` by its workflow path, not its name. It also computes
-that re-run set from the `needs:` graph of that workflow **at the run's own revision** (read through
-the contents API at the run's `head_sha`, refusing red when it cannot be read) and refuses, red and named, if any job in it
-matches *review answered*. `Automatic review answered` is an API-written check-run per head, and a
-re-run that included a legacy job of that name would overwrite the API verdict. `dotnet-test.yml`
-carries no such job today; the assertion keeps it that way, and the self-test measures the real
-workflow's set.
-
-So an edit that fixes a body declaration turns `Consolidate test results` green with no manual
-re-run. An edit that breaks one turns it red. An edit that changes nothing the gates read re-runs
-nothing. While a held run is still finishing, the lane waits within a bounded poll, a script and
-never a model loop, and goes red past its budget, saying what to re-run by hand.
-
-If GitHub refuses the re-run (a Dependabot-triggered edit runs with a read-only token, whatever the
-workflow's `permissions:` say), the lane goes red and names the run whose `pr-body` job needs a re-run by
-hand. No extra credential is given to an edit-triggered job.
-
-Because a running build is never cancelled, the required check closes the remaining window itself.
-`Consolidate test results` reads the CURRENT body at consolidation time and compares it with the body
-the gates judged (`.github/scripts/consolidation-body-check.py`). If the body was edited, the same gate
-scripts judge it there, and anything but GREEN fails the job. So an edit that breaks a body gate while
-the build runs can never let the required check publish green over the old body, whatever the lane's
-timing. This is an additional reason to fail. Every other failure line of the job stays as it was.
-
-A corrective edit after a broken one re-runs the build and the suites even when the tree was already
-tested. That is a deliberate trade: the lane never decides a tree is already tested, so it costs runner
-time and never correctness. Reusing tree evidence belongs to the build's own green-tree reuse
-(`precheck`), not to this lane.
-
-A fork's head is exempt on the event: GitHub gives its run no secrets and a read-only token. Re-run
-its failed jobs by hand.
+- **Cancel handoff.** Cancelling a running build, then re-running `pr-body`, can be interrupted
+  between the two steps by a newer edit's lane, leaving the run cancelled with no re-run. Cancelling
+  the whole run also cancels independent jobs (`workflow-shell`, `shared-rules`), and re-running
+  `pr-body` does not bring them back.
+- **Merge window.** If the build is not cancelled, it can publish `Consolidate test results = success`
+  over the old body, and an armed pull request can merge before any lane reacts. Whatever re-judges
+  the body must sit where the required verdict is made, or block merging until it has re-judged.
+- **Title-only edits.** `edited` also fires for a title or base change. A workflow-level concurrency
+  group lets those edits cancel or displace a body handler; filter them before any group is entered.
+- **Attempt snapshots.** A partial re-run's attempt lists only the jobs it re-ran (`filter=latest`
+  loses an earlier reader). `pr-body`'s outputs keep the attempt they were read in, so the gates of a
+  later attempt may have judged a different body than `pr-body` reports. Compare per attempt.
+- **Equal timestamps.** Job start times and `pull_request.updated_at` have one-second precision. A
+  reader that started in the same second as the edit may have read the old body.
+- **Per-gate verdicts.** One edit can clear a red gate and break a green one while the run stays red
+  overall, so verdicts must be compared gate by gate, never as one aggregate. Gate jobs a run has not
+  listed yet are pending, never green.
+- **Recovery after a consolidation red.** If consolidation rejects an intervening bad body while every
+  gate job stays green, a later corrective edit sees green → green and must still refresh the stale
+  consolidation failure, without retrying unrelated failures.
+- **Empty body.** A successfully read empty body encodes as an empty string. Tell it apart from a
+  missing handover by the reader's head and attempt metadata.
+- **Shallow checkout.** On the green-tree reuse path `collect-results` has a depth-1 checkout of the
+  merge commit. Fetching only the base and the head leaves that commit as a shallow boundary, and
+  `git merge-base` fails. Fetch the checked-out merge sha, or check out full history.
+- **Dependabot's read-only token.** An edit by Dependabot runs with a read-only token whatever
+  `permissions:` says, so a re-run POST is refused. Report it red with the run to re-run by hand.
+  Never hand a write credential to a job that runs the pull request's code.
+- **Run picked by head commit alone.** Two pull requests can share a head sha. Choose the run by its
+  pull-request association.
+- **Workflow revision.** The `needs:` graph that scopes a re-run must be the one the run executed (its
+  head merged with the base as it stood then), not the edited event's checkout. A review-answered job
+  in the re-run set must refuse the re-run: `Automatic review answered` is an API-written check-run
+  that a re-run would overwrite. Never use `rerun-failed-jobs` on the whole run.
+- **Gates outside the `pr-body` subtree.** The parser-delta control lives in `record-signatures`,
+  which does not need `pr-body`, so re-running `pr-body` does not refresh it.
+- **Re-running a tested tree.** A corrective edit re-runs the build and the suites even when the tree
+  was already tested. That costs runner time, never correctness. Reusing tree evidence belongs with
+  the build's own `precheck`.
 
 ## Proof
 
@@ -181,9 +166,7 @@ its failed jobs by hand.
   never 0. A neutered root detector turns the guard-root red green, so the red cases cannot pass
   vacuously. The closing-keyword gate under test is the real script, and the pair gate's offline
   adapter runs against the real `check-cross-repo-pair.py`.
-- `pr-body-regate.py --self-test` covers every row of the table above, a wait that outlasts its
-  budget (red), and a neutered table (it must not act).
-- Both run in `CI's own shell` in `dotnet-test.yml`, and again in the lane before it decides anything.
+- It runs in `CI's own shell` in `dotnet-test.yml`.
 
 Related: [Closing Keywords and Issue State](../ClosingKeywordsAndIssueState) ·
 [The Cross-Repo Pair Gate](../CrossRepoPairGate) · [Reading CI Signals](../ReadingCiSignals) ·

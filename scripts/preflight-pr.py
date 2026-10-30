@@ -329,7 +329,7 @@ def body_gates(ctx: Context) -> list[Result]:
     if ctx.body_file is None:
         names = (["Pairs-with (cross-repo pair)", "Satellite-pins (package pin removal)",
                   "Implementers (interface additions)", "Mirror-sync (i18n catalog)",
-                  "Closing keywords / Verified-closing"] if ctx.is_core
+                  "Closing keywords / Verified-closing", "Parser-delta (surface detector)"] if ctx.is_core
                  else ["Closing keywords / Verified-closing (core issues)"])
         if (ctx.root / "scripts" / "check-db-migration-declaration.py").is_file():
             names.append("Db-migration (database version)")
@@ -362,6 +362,12 @@ def body_gates(ctx: Context) -> list[Result]:
         results.append(closing_gate(ctx, body, ctx.root / "scripts" / "check-closing-keywords.py",
                                     ["--repo", ctx.slug], "Closing keywords / Verified-closing",
                                     {ctx.slug.lower()}, False))
+        # The `record-signatures` job's parser-delta control: a change that makes the surface detector see
+        # LESS is refused unless the body declares the decrease.
+        rc, out = run_script(ctx.root / "scripts" / "check-parser-delta.py",
+                             ["--base", ctx.merge_base, "--pr-body-file", str(ctx.body_file)], ctx.root)
+        results.append(from_exit("Parser-delta (surface detector)", rc, out,
+                                 "the surface detector sees no less than before, or the decrease is declared"))
     else:
         name = "Closing keywords / Verified-closing (core issues)"
         if ctx.core_scripts is None:
