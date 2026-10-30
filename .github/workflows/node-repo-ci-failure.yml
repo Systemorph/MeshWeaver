@@ -253,7 +253,10 @@ jobs:
   report:
     name: "The red has an audience: one issue, one signed event"
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 10
+    # 30, not 10: a rate-limited GitHub API is WAITED OUT to its reset (MW_API_OUTAGE_WAIT_MINUTES on
+    # the ledger step, 22), because a reporter that gives up files nothing — the empty room again
+    # (MeshWeaver#7416). Only an outage spends that time; past it the step exits 3, NO VERDICT.
+    timeout-minutes: 30
     # A REQUIREMENT on every caller (a called workflow can only narrow its caller's grant), and it
     # REPLACES the defaults: `contents: read` is listed explicitly because a block that names only
     # `issues` takes `contents` away — and the caller's map must carry all three or the run ends in
@@ -310,23 +313,13 @@ jobs:
             for m in "${missing[@]}"; do echo "  • $m"; done
             exit 1
           fi
-          # The token can at least READ this repo's issues — a wrong token, a repo the token cannot
-          # see, or a revoked run token is named HERE rather than as a 401 four steps later. The
-          # WRITE half is proven by the first write the ledger makes (the label ensure): a 403 there
-          # names the `issues: write` grant on the caller job.
-          # 🚨 `--get --data-urlencode`, never string interpolation. `label` is caller-controlled now,
-          # and a perfectly legal GitHub label may contain a space, `&`, `?` or `#` — interpolated
-          # straight into the query those either truncate the value or silently probe a DIFFERENT
-          # label, so the preflight would refuse a label the ledger itself handles fine.
-          code=$(curl -sS -o "$RUNNER_TEMP/issues-probe" -w '%{http_code}' --connect-timeout 10 --max-time 30 \
-            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-            --get --data-urlencode "labels=${LEDGER_LABEL}" --data-urlencode "state=all" --data-urlencode "per_page=1" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues") || code=000
-          if [ "$code" != "200" ]; then
-            echo "::error::GET /repos/${GITHUB_REPOSITORY}/issues answered HTTP ${code} with the token this lane was handed. It must be the caller's secrets.GITHUB_TOKEN, forwarded as \`secrets: github-token:\`, on a caller job granting \`permissions: {contents: read, issues: write, actions: read}\`. Response: $(head -c 300 "$RUNNER_TEMP/issues-probe" || true)"
-            exit 1
-          fi
-          echo "inputs present; the token reads ${GITHUB_REPOSITORY}'s issues (HTTP 200); outcome=${OUTCOME}"
+          # 🚨 STRUCTURAL ONLY — no GitHub call here (MeshWeaver#7448). A shell probe of `/issues` used
+          # to stand here and read every non-200 as a missing grant, so a rate-limited installation
+          # was told to grant `issues: write` and the ledger never ran: nothing filed, no NO VERDICT.
+          # The token is proven by the ledger's own first call, whose client waits out a rate limit
+          # and a 5xx (then exits 3, NO VERDICT) and names the grant only on a real 401/403.
+          # `scripts/test-gate-api-outage.py` keeps any api.github.com call out of this file.
+          echo "inputs present; the token is proven by the ledger's first call; outcome=${OUTCOME}"
 
       # The ledger logic is core's script, fetched at the lane's scripts ref — a caller cannot
       # silently retain an old rule, and this lane runs in the CALLER's checkout context (where the
@@ -370,6 +363,9 @@ jobs:
           # NEVER ci-failure — that is main-cd.yml's delivery alert; the script refuses that label outright.
           LEDGER_LABEL: ${{ inputs.label }}
           LEDGER_SEVERITY: ${{ inputs.severity }}
+          # A rate limit / 5xx is retried to its reset inside this budget, then NO VERDICT (exit 3) —
+          # never "grant `issues: write`" to a caller that granted it (MeshWeaver#7416, #7448).
+          MW_API_OUTAGE_WAIT_MINUTES: "22"
         run: |
           set -euo pipefail
           export LEDGER_EVENT_OUT="$RUNNER_TEMP/event.json"
@@ -384,7 +380,7 @@ jobs:
       # curl that fails at the transport level would kill the step before the verdict names what is
       # wrong. The timeouts stop an unreachable instance from burning the job timeout.
       - name: Sign and POST the event to the control portal's triage inbox
-        if: steps.ledger.outputs.post == 'true'
+        if: ${{ !cancelled() && steps.ledger.outputs.post == 'true' }}
         env:
           URL: ${{ inputs.control-webhook-url }}
           SECRET: ${{ secrets.control-webhook-secret }}
@@ -436,7 +432,7 @@ jobs:
       # FAILS (we always sign, so "never looked at it" means the secret is unexercised); no verdict
       # at all is a receiver that predates #3312 and WARNS — nothing in the calling repo can fix it.
       - name: "Did the inbox VERIFY the event?"
-        if: steps.ledger.outputs.post == 'true'
+        if: ${{ !cancelled() && steps.ledger.outputs.post == 'true' }}
         run: |
           set -euo pipefail
           RESP="${RESP:-$RUNNER_TEMP/resp}"
