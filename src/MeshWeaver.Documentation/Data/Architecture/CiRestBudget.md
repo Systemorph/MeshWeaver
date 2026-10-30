@@ -158,6 +158,24 @@ Three changes, all in core:
    the chosen run a second time: its head sha is taken from the lookup that already read the run.
    Every listing asks for `per_page=100`.
 
+4. **Every other caller that asked GitHub on its own now asks through the same reader.** The two
+   scripts above were the ones the outage was first seen in; the same shape sat in five more places,
+   each turning a rate-limit 403 into a sentence that read like a provisioning defect (#7448, #7416):
+
+   | Caller | It used to say on a rate-limit 403 | Now |
+   |---|---|---|
+   | The fleet-token probes of `shared-rules` and `cross-repo-pair` (`dotnet-test.yml`) and the `shared-rules.yml` sweep — three copies of a `curl -w '%{http_code}'` loop | *"the token is valid but lacks contents:read here, or is rate-limited"* | `.github/scripts/probe-fleet-read.py`: NO VERDICT, exit 3, for an outage; a plain 401/403/404 stays a finding, exit 1; a finding beats an outage |
+   | `check-cross-repo-pair.py` resolving a `Pairs-with:` counterpart | *"lacks pull-requests:read here, or is rate-limited"* | `PairResolutionError` carrying the NO VERDICT sentence |
+   | `transitional_allow.py` (record-signature, type-forward and parser-delta allow entries) | the same | `AllowResolutionError` carrying the NO VERDICT sentence — still never an allowance |
+   | `check-shared-rules.py` reading each repo's `AGENTS.md` | *"lacks contents:read on this repo (or is rate-limited)"* | `Problem` carrying the NO VERDICT sentence (`api_get(raw=True)` for the raw file) |
+   | `ci-failure-ledger.py`, the ci-failure ledger every scheduled lane reports through | *"the CALLER job must grant `actions: read` …"* — on run 40598141020 (the merge push of #7422), whose caller had granted it | waits for the reset inside `MW_API_OUTAGE_WAIT_MINUTES` (22 in the ledger job, which is capped at 30; 3 in a caller's 5-minute `cause` job), then exits 3 with NO VERDICT. A 5xx on a WRITE is not replayed, because it may have filed the issue. |
+
+   The ledger is fetched ALONE at a scripts ref, so it carries its own copy of the classification
+   (`classify_answer`). Everything else imports `api_get`, so there is one rule to change. Each site
+   has a test against a fake transport that fails on the old code: `scripts/test-gate-api-outage.py`,
+   `probe-fleet-read.py --self-test` and case 20 of `ci-failure-ledger.py --self-test`. A plain
+   permission 403 is their negative control and must still name the grant.
+
 **What still spends `GITHUB_TOKEN`:** the ladder's artifact reads (`fleet-reader` has no Actions
 permission, and `meshweaver-cloud` is reserved for writes), the closing-keyword gate's issue and label
 reads (no read-only App holds Issues), and the Public-surface gate's own body read. That gate also runs
