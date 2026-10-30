@@ -1484,6 +1484,47 @@ the owner's relabel and their own token are the controls; a stored record authen
 principal of its location; a person cannot write into a service token namespace by naming themselves
 as main node).
 
+## Auditing token principals
+
+A token record's `UserId` is the principal every token verdict authenticates as. The **token principal
+audit** (`TokenPrincipalAudit`, #7598) lists every token record on an instance whose principal is not
+bound to it. It is **read-only**: it lists and never revokes.
+
+**What it flags** (`TokenPrincipalFinding`):
+
+- `PrincipalOutsideLocation`: a person's token outside `{UserId}/…`, or a service's outside its own
+  token namespace (`Admin/_ServiceIdentity/{svc}/ApiToken`);
+- `PrincipalDiffersFromCreator`: a person's token whose principal is not the person who created the
+  record (records created by System, such as migrations, are not judged on this);
+- `NamesSystem`: any token naming System, a case variant included.
+
+The location test is the verdict's own (`ApiTokenVerdict.IsBoundToItsLocation`), never a copy, so the
+audit lists exactly the records the verdict would not authenticate. That includes a service namespace
+naming its partition (`Admin`), the pre-migration layout naming `User`, and a path-shaped principal.
+
+Index rows (`ApiToken/{prefix}`, which name the record they point to) are not credentials and are
+skipped. A finding names the record's path, id, label, principal and creator. The `TokenHash` field is
+never copied into the report.
+
+**How to run it.** A platform admin creates a request node in the Admin partition of the instance to
+audit. The request's own hub checks again that its creator is a platform admin, then runs the sweep as
+System and writes the result back onto the same node. Over MCP, on each instance:
+
+```
+create {"id":"audit-<date>","namespace":"Admin/_TokenAudit","name":"Token principal audit",
+        "nodeType":"TokenPrincipalAudit","content":{"$type":"TokenPrincipalAudit","reason":"<why>"}}
+get @Admin/_TokenAudit/audit-<date>
+```
+
+The `get` also activates the request's hub. Read `status` (`Running` → `Done`, or `Refused` /
+`Failed` with `error`), then the DENOMINATOR before the findings: `partitionsRead` (null means the
+store did not report it, and is never read as "all"), `tokensRead`, and `complete` / `incomplete`. A
+result whose `complete` is false is a FLOOR. The sweep reads `nodeType:ApiToken partitions:all` and,
+because a declared fan-out never enumerates the system schemas, the Admin partition on its own anchor.
+
+Pinned by `TokenPrincipalAuditTest` (a mismatching token is listed, a matching one is not, no hash in
+the report; a platform admin's request runs, an ordinary user's is refused).
+
 ## Scoped API tokens — a cap, never a grant
 
 A token may carry an optional **`Scopes`** list (`ApiToken.Scopes`). A token **with** scopes can do
