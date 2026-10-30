@@ -1472,6 +1472,51 @@ satellite never borrows an owner above a scope that can break the inherited gran
 node still governs reads. The own-main-node shortcut trusts only an ancestor main node
 (`MainNodeTrust`).
 
+**An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
+the satellite and where its grants project, so a write that changed it would let its writer decide
+access: move a comment or thread under a main node they cannot write to, or point it at one whose
+grants it then borrows. Any change to `MainNode` on an update of a satellite is REFUSED, for every
+writer except System, even to a target the writer may write: this is the update half of the create
+rule, ownership derives from the path or the stored node and is never chosen. The one change allowed
+is path-derived: a never-set self-default moving to the satellite's owner, which is what the create
+and upsert normalisation writes. A satellite here is a node type governed by `SatelliteAccessRule` or
+a standard satellite type. A node that merely lives under an underscore segment (an app tile under
+`_App`) keeps a pointer its owner chose.
+
+The refusal is held at two seams, both reading `MainNodeTrust.Repoints`: the rule itself, when it is
+asked about an update with the stored node, and the owner's commit point
+(`SatelliteMainNodeCommitGuard`). The commit point is the one that matters for a routed write: a merge
+patch reaches the owning hub, whose delivery check decides from the STORED node and never sees the
+proposed pointer. A commit guard cannot read or wait, so it cannot re-validate a new target, which is
+one more reason the rule refuses rather than re-checks. Pinned by `SatelliteMainNodeRepointTest`
+(a routed repoint to a locked target and to the writer's own target are both refused; an update that
+keeps the pointer lands; the rule refuses a changed pointer and allows the path-derived one).
+
+Three routes around the stored-vs-proposed comparison are closed at the commit point too. In each,
+the pointer must be one the path derives (unset or self, the satellite's owner, or the owner of its
+namespace's first satellite segment):
+
+- **A carried write.** A data change sent to ANOTHER node's hub can carry a satellite. That hub holds
+  no predecessor under the satellite's key, so there is nothing to compare. A satellite committed
+  anywhere but its own hub may carry only a derived pointer. **Not closed:** with no predecessor, the
+  carrier cannot tell a create from a rewrite. So a carried rewrite can still replace a stored
+  off-ancestry pointer with a derived one, or with a nested satellite's outer storage owner. Closing
+  that needs the carried write to reach the satellite's owner, where the stored node is compared
+  (filed to triage).
+- **A retype into the satellite class.** Retype a satellite out, change its pointer while it is an
+  ordinary node, and retype it back. Each write alone passes the comparison, so the write that makes a
+  node a satellite must point at its SECURITY owner. It may not point at the storage owner of an outer
+  satellite segment: for `Doc/_Thread/t1/_Comment/c1` that is `Doc`, above the thread. It may not point
+  at itself or carry an unset pointer either, because the next update could then "normalise" the pointer
+  to that storage owner.
+- **A module's satellite type.** The rule set hands a module's rule out behind a lease wrapper, so the
+  guard asks the set (`NodeTypeAccessRuleSet.IsGovernedBy<SatelliteAccessRule>`), which tests the
+  leased rule itself, instead of testing what `Find` returns.
+
+Pinned by `SatelliteMainNodeRepointTest` (the carried write and the three-write retype, each with a
+derived-pointer control) and `ModuleSatelliteMainNodeRepointTest` (MeshWeaver.Compiler.Pipeline.Test:
+a compiled module's satellite type outside the standard list).
+
 **A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
 (`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a
 create proposed, which let a person create anywhere — a service's token namespace in the Admin
