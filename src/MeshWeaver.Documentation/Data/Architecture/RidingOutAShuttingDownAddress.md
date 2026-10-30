@@ -205,6 +205,15 @@ If you write code that must survive a `ShuttingDown` answer:
    each attempt its own `SingleAssignmentDisposable`, put it in the serial slot FIRST, then subscribe
    into it — a late assignment into a slot a re-ask has already replaced disposes the finished
    attempt, never its successor.
+7. **Count the asks you ISSUED, not only the refusals you received, and say which ending it was.**
+   A budget can end two ways after a `ShuttingDown`: every ask was refused (a recycler outlasted the
+   budget), or the LAST ask was never answered at all, neither refused nor served. They point at
+   different places, and reporting the second as the first is a false diagnosis. After #7418 rolled,
+   memex-cloud still logged "still recycling (ShuttingDown) after 1 probe(s) over 15.0s": one refusal
+   at +0.7 s, then a re-probe outstanding for 14 s. `GetMeshNodeOutcome` now reports that ending as
+   "answered ShuttingDown N time(s), and then the re-probe issued at T was NEVER ANSWERED" with the
+   probes issued, and attaches the reader and target diagnostics the plain timeout prints, so the
+   reading can tell the dying activation from a successor still activating from a lost reply (#7395).
 
 ## A give-up ends the stream (#6602)
 
