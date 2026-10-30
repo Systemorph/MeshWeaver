@@ -189,6 +189,21 @@ wait expires. The Activity stays the authority and the kernel settles it when th
 `LongCellOutlivesThe{Dispatchers,KernelContainers}RequestBudgetTest` pin each hop with a two-second
 budget and a six-second cell; both read `Failed` while the script was still running before the change.
 
+**But the dispatcher's timeout is SAID, not swallowed (#7362).** Not a verdict is not the same as
+silence: a run whose kernel never answered used to stay `Running` with nothing on it, indistinguishable
+from one computing normally. When the dispatcher's wait expires it now appends a keyed warning to the
+Activity — *"No answer from the kernel yet. The run is still in progress and completes when the kernel
+answers."* (`activity.codeRun.noKernelReplyYet`, en + de) — and leaves the status `Running`. While a run
+is `Running` the Output pane shows its latest transcript line, so that is what the reader sees. A late
+reply settles the run exactly as an in-time one does: the kernel owns the transcript and writes its own
+window on every snapshot, so its first output or its terminal write replaces the notice, and a finished
+run never still says it is waiting. The write is skipped when the dispatcher's copy already reads
+terminal, and is made once per run. `KernelReplyTimeoutNoticeTest` parks a real cell on a gate node
+past a two-second dispatcher budget: the notice appears on a `Running` Activity, and once the gate opens
+the run ends `Succeeded` with its return value and without the notice. Its control,
+`KernelReplyInTimeShowsNoNoticeTest`, collects every snapshot of an in-time run and finds the notice on
+none of them.
+
 Three more holes the same review found, each of which could again leave a run wrong or `Running`:
 
 - **A reconcile from a lagging copy.** The dispatcher's terminal guard reads ITS copy of the Activity,
