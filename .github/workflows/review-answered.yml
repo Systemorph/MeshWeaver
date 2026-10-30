@@ -61,6 +61,13 @@ on:
     types: [created, deleted]
   merge_group:
     types: [checks_requested]
+  # ⏳ Policy review-pending-while-answering: the verdict WRITER's sweep. A pending verdict (threads awaiting
+  # answers, a review awaiting arrival) changes with NO event here when Copilot's review lands (its own event
+  # is `action_required`, see `--wait-for-review` below) or a deadline passes (policy review-answer-deadline),
+  # so every 15 minutes `--verdict-sweep` re-judges the open pull requests whose verdict check-run is pending
+  # or unmeasured — and nothing else (each other pull request costs one listing read).
+  schedule:
+    - cron: "4,19,34,49 * * * *"
 
 # Reads only, and only what the predicate needs: the pull request, its reviews and review comments
 # (pull-requests), the label events that attribute a waiver (issues), and the checkout (contents).
@@ -124,9 +131,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ⏳ PENDING WHILE ANSWERING (policy review-pending-while-answering, deadlines: review-answer-deadline).
+  # For a same-repository, non-Dependabot pull request (and the schedule's sweep) this job is the verdict
+  # WRITER: it judges once and writes the required context `Automatic review answered` THROUGH THE CHECKS API
+  # — ONE check-run per head, `in_progress` (no conclusion: still BLOCKS, never satisfied) while threads await
+  # answers or the head awaits its review inside the deadlines, `success` when answered, `failure` past a
+  # deadline, on a refusal, or when the state could not be measured. The job is then NAMED differently, so its
+  # own check-run never carries the required name, and it goes red only on a real failure. Everywhere else —
+  # a fork (read-only token: no verdict could be written), Dependabot (read-only token), the merge queue — the
+  # job keeps the required name and its old red/green, unchanged. The one condition that picks the shape is
+  # written TWICE below (the job name and VERDICT_CHECK_RUN); the predicate's self-test asserts they agree.
+  # 🛡️ Still no job-level `if:` — the shape is chosen by NAME, never by skipping.
   answered:
-    name: Automatic review answered
+    name: ${{ (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) && 'Review answered — verdict writer' || 'Automatic review answered' }}
     runs-on: ubuntu-latest
+    # The verdict writer's one write: POST/PATCH the head's `Automatic review answered` check-run.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      checks: write
     # 30 = the 15-minute bounded wait below + the 3-minute settle cap + the 5-minute API outage budget
     # (MW_API_OUTAGE_WAIT_MINUTES, MeshWeaver#7187) + headroom for the checkout and the reads. The
     # review wait is not slack: it is the measured consequence of the reviewer's own event being
@@ -205,10 +229,17 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
           QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          VERDICT_CHECK_RUN: ${{ (github.event_name == 'schedule' || (github.event_name != 'merge_group' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) && 'Automatic review answered' || '' }}
           MW_API_OUTAGE_WAIT_MINUTES: "5"
+        # The writer takes NO review wait and NO settle wait: a pending verdict is not red, the sweep above
+        # re-judges it, and every evaluation PATCHes the same check-run (the newest READ stands).
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "merge_group" ]; then
+          if [ -n "${VERDICT_CHECK_RUN:-}" ] && [ "$EVENT_NAME" = "schedule" ]; then
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --verdict-sweep --verdict-check-run "$VERDICT_CHECK_RUN"
+          elif [ -n "${VERDICT_CHECK_RUN:-}" ]; then
+            python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --verdict-check-run "$VERDICT_CHECK_RUN"
+          elif [ "$EVENT_NAME" = "merge_group" ]; then
             python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --merge-group-ref "$QUEUE_REF" --wait-for-review 15 --settle-replies 60
           else
             python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --wait-for-review 15 --settle-replies 60
@@ -255,7 +286,10 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
-      checks: read
+      checks: write       # the lane's verdict writer (opted in below) — policy review-pending-while-answering
       actions: write
     with:
       scripts-ref: ${{ github.sha }}
+      # Core opts its lane in, so the writer path every satellite will adopt runs on live pull requests here
+      # first. NOT required in core: the ruleset requires the bare `Automatic review answered` above.
+      verdict-check-run: 'lane / Automatic review answered'
