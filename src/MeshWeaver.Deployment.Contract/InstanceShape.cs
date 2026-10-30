@@ -789,6 +789,24 @@ public sealed record ModelProvider
     /// <summary>What the endpoint does with prompts after answering (e.g. <c>ZDR</c>). Free text; renders <c>{Section}__DataRetention</c>. Null → not stated.</summary>
     [Description("Retention note, e.g. ZDR — blank = not stated")]
     public string? DataRetention { get; init; }
+
+    /// <summary>
+    /// The context window each model declares, in tokens, keyed by the model id as it appears in
+    /// <see cref="Models"/> (<c>"z-ai/glm-5.3": 1048576</c>). The catalog seeder stamps it onto the
+    /// model's node (<c>ModelDefinition.ContextWindowTokens</c>), which arms the context-window guard
+    /// for that model; a model the map does not name stays unarmed, and the seeder says so by name.
+    /// Declared, not derived (policy <c>declared-not-derived</c>): the record is the source of truth.
+    ///
+    /// <para>Renders as indexed PAIRS, <c>{Section}__ContextWindowTokens__{i}__Model</c> and
+    /// <c>{Section}__ContextWindowTokens__{i}__Tokens</c>, in ordinal order of the model id —
+    /// never with the id in the key: a model id carries <c>/</c>, which is not a valid ConfigMap or
+    /// environment-variable name. A blank id renders nothing; a window that is not positive is
+    /// refused at render. Empty → nothing rendered, so a record without the map renders exactly as
+    /// before.</para>
+    /// </summary>
+    [Description("Context window in tokens per model id — a model not named stays unchecked")]
+    public ImmutableDictionary<string, int> ContextWindowTokens { get; init; } =
+        ImmutableDictionary<string, int>.Empty;
 }
 
 /// <summary>Which model serves each tier — keyed by RANK, not by kind: Heavy is coding, not reasoning.</summary>
