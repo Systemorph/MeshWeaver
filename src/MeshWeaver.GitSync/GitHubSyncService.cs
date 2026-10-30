@@ -345,6 +345,15 @@ public sealed class GitHubSyncService
             throw new InvalidOperationException(message);
         }
         var ext = serializer.SupportedExtensions.FirstOrDefault() ?? ".json";
+        // An AUTHORED file format (.md, .cs) reaches the mirror without the mesh's authorship stamps.
+        // The Markdown parser round-trips CreatedBy/CreatedDate for the file-system store (#7352),
+        // but a mirror of hand-edited pages is not where they belong: every page created or imported
+        // in the mesh would gain a creator id and an instant on its next export, and two meshes
+        // exporting the same content would disagree byte-for-byte. The mirror's .md bytes are
+        // therefore exactly what they were before #7352. JSON files are the full node and keep them,
+        // as they always have.
+        if (!string.Equals(ext, ".json", StringComparison.OrdinalIgnoreCase))
+            node = node with { CreatedBy = null, CreatedDate = default };
         var repoPath = NodeFileMapper.ToRepoPath(node.Path, partition, ext, NodeFileMapper.HasChildren(node.Path, allPaths));
         // Serialize is pure in-memory work — no pool, just project the value into the chain.
         return Observable.Return<RepoFile?>(new RepoFile(repoPath, serializer.Serialize(node)));
