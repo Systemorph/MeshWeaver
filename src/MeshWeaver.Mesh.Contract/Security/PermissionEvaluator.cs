@@ -546,15 +546,9 @@ internal static class PermissionEvaluator
     public static IObservable<bool> ObserveRestrictingPolicyBetween(
         IMessageHub hub, string ancestorPath, string descendantPath)
     {
-        var ancestor = ToMeshPath(ancestorPath).Trim('/');
-        var descendant = ToMeshPath(descendantPath).Trim('/');
-        if (descendant.Length == 0
-            || !(ancestor.Length == 0 || descendant.StartsWith(ancestor + "/", StringComparison.Ordinal)))
+        if (ScopesBetween(ancestorPath, descendantPath) is not { } scopes)
             return Observable.Return(false);
-
-        var between = GetScopeHierarchy(descendant)
-            .Where(scope => scope.Length > ancestor.Length)
-            .ToImmutableList();
+        var (descendant, between) = scopes;
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);
         return ObserveScopePolicies(hub, cache, descendant, staticPolicies)
@@ -567,6 +561,70 @@ internal static class PermissionEvaluator
                        && (policy.BreaksInheritance || policy.GetPermissionCap() != (Permission)~0);
             }))
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// 🛡️ The assignment twin of <see cref="ObserveRestrictingPolicyBetween"/>: whether a role is
+    /// DENIED to <paramref name="userId"/> — directly or through any group they belong to,
+    /// transitively — on a scope strictly beneath <paramref name="ancestorPath"/> and at or above
+    /// <paramref name="descendantPath"/>. A denial there subtracts that role from everything the
+    /// descendant inherits, so a delegation that decides the descendant by the ancestor's
+    /// permissions alone would never see it. Reads the same assignment and membership legs, and the
+    /// same subject expansion, as the fold, so the two never disagree about which denial applies —
+    /// including the fold's <see cref="WellKnownUsers.Public"/> leg: for a signed-in caller (neither
+    /// Anonymous nor Public) a role denied to Public, or to a group Public belongs to, counts too.
+    /// </summary>
+    /// <param name="hub">The hub whose assignments are read (the mesh hub).</param>
+    /// <param name="ancestorPath">The path whose permissions are delegated to.</param>
+    /// <param name="descendantPath">The path the decision is about.</param>
+    /// <param name="userId">The identity the decision is for.</param>
+    /// <returns>Live: true while such a denial exists; false when the descendant is not strictly
+    /// beneath the ancestor.</returns>
+    public static IObservable<bool> ObserveDeniedRoleBetween(
+        IMessageHub hub, string ancestorPath, string descendantPath, string userId)
+    {
+        if (string.IsNullOrEmpty(userId) || ScopesBetween(ancestorPath, descendantPath) is not { } scopes)
+            return Observable.Return(false);
+        var (descendant, between) = scopes;
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var options = hub.JsonSerializerOptions;
+        var staticNodes = CollectStaticAccessAssignments(hub);
+        return ObserveEffectiveAssignments(hub, cache, descendant, staticNodes)
+            .CombineLatest(ObserveAllMembershipNodes(cache, options), (nodes, memberships) =>
+            {
+                bool DeniedBetween(string subject)
+                {
+                    var subjects = ResolveUserGroups(subject, memberships, options).Add(subject);
+                    var (_, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, options);
+                    return between.Any(scope => denied.TryGetValue(scope, out var roles) && !roles.IsEmpty);
+                }
+                // The fold ORs a signed-in caller's own roles with the Public leg, and a denial to
+                // Public narrows that leg at the descendant — so it is an intervening denial for the
+                // caller too. Over-inclusive by design: a true only asks for the landing check, which
+                // folds the descendant exactly.
+                return DeniedBetween(userId)
+                       || (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public
+                           && DeniedBetween(WellKnownUsers.Public));
+            })
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// The scopes strictly beneath <paramref name="ancestorPath"/> and at or above
+    /// <paramref name="descendantPath"/>, with the normalised descendant; null when the descendant
+    /// is not strictly beneath the ancestor.
+    /// </summary>
+    private static (string Descendant, ImmutableList<string> Between)? ScopesBetween(
+        string ancestorPath, string descendantPath)
+    {
+        var ancestor = ToMeshPath(ancestorPath).Trim('/');
+        var descendant = ToMeshPath(descendantPath).Trim('/');
+        if (descendant.Length == 0
+            || !(ancestor.Length == 0 || descendant.StartsWith(ancestor + "/", StringComparison.Ordinal)))
+            return null;
+        return (descendant, GetScopeHierarchy(descendant)
+            .Where(scope => scope.Length > ancestor.Length)
+            .ToImmutableList());
     }
 
     public static IObservable<PartitionAccessPolicy?> GetPolicy(IMessageHub hub, string targetNamespace)
