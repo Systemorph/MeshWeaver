@@ -110,7 +110,7 @@ public class EventContinuationDeliverToNodeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60000)]
     public async Task DeliverToNode_WithoutANode_FailsNamingIt()
     {
-        var subscription = await ArmDueTimer(EventContinuationType.DeliverToNode);
+        var subscription = await ArmDueTimer(EventContinuationType.DeliverToNode, TestContext.Current.CancellationToken);
         var final = await Settled(subscription.Id);
         Assert.Equal(EventSubscriptionStatus.Failed, final.Status);
         Assert.Contains("names no DeliverTo node", final.LastError ?? "");
@@ -124,7 +124,7 @@ public class EventContinuationDeliverToNodeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 60000)]
     public async Task AnUnknownValue_FailsNamingItself()
     {
-        var subscription = await ArmDueTimer((EventContinuationType)99);
+        var subscription = await ArmDueTimer((EventContinuationType)99, TestContext.Current.CancellationToken);
         var final = await Settled(subscription.Id);
         Assert.Equal(EventSubscriptionStatus.Failed, final.Status);
         Assert.Contains("99", final.LastError ?? "");
@@ -152,7 +152,7 @@ public class EventContinuationDeliverToNodeTest(ITestOutputHelper output) : Mono
         Assert.Equal(EventContinuationType.DeliverToNode, read.ContinuationType);
     }
 
-    private async Task<EventSubscription> ArmDueTimer(EventContinuationType continuation)
+    private async Task<EventSubscription> ArmDueTimer(EventContinuationType continuation, CancellationToken ct)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var subscription = new EventSubscription
@@ -162,7 +162,7 @@ public class EventContinuationDeliverToNodeTest(ITestOutputHelper output) : Mono
             ContinuationType = continuation,
         };
         await EventSubscriptionOps.CreateSubscription(meshService, subscription)
-            .Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Emit(cancellationToken: ct);
         var runner = NewRunner();
         runners.Add(runner);
         await runner.StartAsync(default);
