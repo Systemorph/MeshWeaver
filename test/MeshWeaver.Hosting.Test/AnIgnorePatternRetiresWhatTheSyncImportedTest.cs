@@ -132,6 +132,122 @@ public class AnIgnorePatternRetiresWhatTheSyncImportedTest(ITestOutputHelper out
     }
 
     /// <summary>
+    /// Review on #7641: an Ignore pattern that excludes EVERY remaining child (here <c>*</c>) leaves
+    /// the source with no child nodes at all. The partition snapshot must still be read, or the
+    /// manifest-owned nodes are never evaluated and stay frozen in place.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AnIgnorePatternExcludingEveryChild_StillRetiresWhatTheSyncImported()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await SetUpSpace(ct);
+
+        repoClient.Serve(FirstSha, complete: true, "Other.md");
+        var first = await Sync.ReimportAtCommit(space, FirstSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        first.WrittenPaths.Should().Contain($"{space}/Other", "precondition: the sync imported the node");
+
+        await SetIgnore(space, ["*"], ct);
+
+        repoClient.Serve(SecondSha, complete: true, "Other.md");
+        var second = await Sync.ReimportAtCommit(space, SecondSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        Output.WriteLine($"{space} import 2: outcome={second.Outcome} pruned=[{string.Join(", ", second.PrunedPaths)}]");
+
+        second.PrunedPaths.Should().Contain($"{space}/Other",
+            "the pattern excludes every child, and the manifest records this sync importing it");
+    }
+
+    /// <summary>
+    /// Review on #7641: retiring an imported node must not delete a node the MESH created beneath it.
+    /// <c>DeleteNode</c> is recursive, so pruning <c>Other</c> would take <c>Other/Local</c> with it —
+    /// the #1326 loss the provenance guard exists to prevent.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task RetiringAnImportedNode_NeverDeletesAMeshMintedChildBeneathIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await SetUpSpace(ct, beforeConfig: async s =>
+        {
+            await NodeFactory.CreateNode(new MeshNode("Other", s)
+            {
+                NodeType = "Markdown",
+                Name = "Parent",
+                State = MeshNodeState.Active,
+            }).Timeout(TestTimeouts.Convergence).Await(ct);
+            await NodeFactory.CreateNode(new MeshNode("Local", $"{s}/Other")
+            {
+                NodeType = "Markdown",
+                Name = "Minted by the mesh",
+                State = MeshNodeState.Active,
+            }).Timeout(TestTimeouts.Convergence).Await(ct);
+        });
+        var meshMinted = $"{space}/Other/Local";
+
+        repoClient.Serve(FirstSha, complete: true, "Api.md", "Other.md");
+        var first = await Sync.ReimportAtCommit(space, FirstSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        first.WrittenPaths.Should().Contain($"{space}/Other", "precondition: the sync imported the parent");
+
+        await SetIgnore(space, ["Other*"], ct);
+
+        repoClient.Serve(SecondSha, complete: true, "Api.md", "Other.md");
+        var second = await Sync.ReimportAtCommit(space, SecondSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        Output.WriteLine($"{space} import 2: outcome={second.Outcome} pruned=[{string.Join(", ", second.PrunedPaths)}]");
+
+        second.PrunedPaths.Should().NotContain($"{space}/Other",
+            "its recursive delete would take the mesh-minted child with it");
+        var children = await NodeFactory
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{meshMinted}"))
+            .Take(1)
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        children.Items.Should().ContainSingle(n => n.Path == meshMinted,
+            "the mesh-minted child under the retired node is still there");
+    }
+
+    private async Task<string> SetUpSpace(CancellationToken ct, Func<string, Task>? beforeConfig = null)
+    {
+        var space = "Ig" + Guid.NewGuid().ToString("N")[..8];
+        await NodeFactory.CreateNode(new MeshNode(space)
+        {
+            NodeType = "Space",
+            Name = "Ignore after import",
+            State = MeshNodeState.Active,
+            Content = new Space(),
+        }).Timeout(TestTimeouts.Convergence).Await(ct);
+        if (beforeConfig is not null)
+            await beforeConfig(space);
+        var configNode = await Sync
+            .SaveConfig(space, RepoUrl, "main", null,
+                createBranchIfMissing: false, createRepoIfMissing: false,
+                direction: SyncDirection.ImportOnly)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        var credentials = Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
+        foreach (var owner in new[] { configNode.CreatedBy, UserId }.Where(o => !string.IsNullOrEmpty(o)).Distinct())
+            await credentials
+                .Save(owner!, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
+                .Timeout(TestTimeouts.Convergence).Await(ct);
+        return space;
+    }
+
+    private async Task SetIgnore(string space, string[] ignore, CancellationToken ct)
+    {
+        await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Update(node => node with
+            {
+                Content = node.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)! with { Ignore = ignore },
+            })
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)?.Ignore is { } i
+                        && i.SequenceEqual(ignore))
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+    }
+
+    /// <summary>
     /// The retirement predicate covers ONLY what the owner's patterns exclude. A HELD path (a NodeType
     /// whose sources this instance must keep, #3845) and the README slot a non-package repository
     /// never mirrors are excluded from the mirror too, but nobody wrote a rule retiring them — reading

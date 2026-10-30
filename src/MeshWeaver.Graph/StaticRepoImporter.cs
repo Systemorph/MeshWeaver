@@ -1573,8 +1573,14 @@ public static class StaticRepoImporter
         // running the same fingerprint writes byte-identical content, so a snapshot that misses its
         // writes re-upserts rather than diverging. (The marker at import-{fingerprint} is a
         // short-circuit record, not a lock — a Running one is reclaimed, not obeyed.)
+        // 🚨 …and ALWAYS the source's own partition (review on #7641): when an Ignore pattern
+        // excludes every remaining child (`*`, or the last one), `nodes` is empty and no partition
+        // would be read — the snapshot comes back empty and the nodes the manifest records this
+        // source importing are never even evaluated for retirement. The manifest is per
+        // source.Partition, so that partition is always the one a prune may have to look at.
         var partitions = nodes
             .Select(n => FirstSegment(n.Path))
+            .Append(source.Partition)
             .Where(p => !string.IsNullOrEmpty(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -2187,6 +2193,13 @@ public static class StaticRepoImporter
                         existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode,
                         path => source.IsExcludedFromMirror(path) && !source.IsRetiredFromMirror(path),
                         sourceListingIsComplete);
+                    // 🚨 …and a RETIRED node is never deleted over a node that stays (review on
+                    // #7641). DeleteNode is recursive, so retiring `Sp/Other` would take a
+                    // mesh-minted `Sp/Other/Local` (or a Release record) with it — the very #1326
+                    // loss the provenance guard exists to prevent. Such a node is kept until its
+                    // subtree holds nothing that stays.
+                    toPrune = WithoutRetiredAncestorsOfSurvivors(
+                        toPrune, existing.Values, source.IsRetiredFromMirror);
 
                     // Never prune a node CREATED/changed on the server since the last sync when the
                     // policy protects it (two-way, OR prune-only protection for bidirectional spaces —
@@ -2973,6 +2986,32 @@ public static class StaticRepoImporter
         if (string.IsNullOrEmpty(path)) return string.Empty;
         var slash = path.IndexOf('/');
         return slash < 0 ? path : path[..slash];
+    }
+
+    /// <summary>
+    /// Drops every RETIRED prune candidate (<paramref name="isRetired"/>, issue #7611) that has a
+    /// descendant which stays — an existing node that is not itself pruned and is not one of its
+    /// governance satellites. <c>DeleteNode</c> deletes a subtree, so pruning such a node would delete
+    /// the survivor with it (review on #7641). Candidates that are not retired are returned as before.
+    /// </summary>
+    /// <param name="toPrune">The prune candidates.</param>
+    /// <param name="existing">The partition snapshot the candidates were chosen from.</param>
+    /// <param name="isRetired">The source's retirement predicate.</param>
+    /// <returns>The candidates whose recursive delete removes nothing that stays.</returns>
+    internal static IReadOnlyList<MeshNode> WithoutRetiredAncestorsOfSurvivors(
+        IReadOnlyList<MeshNode> toPrune, IEnumerable<MeshNode> existing, Func<string, bool> isRetired)
+    {
+        if (toPrune.Count == 0 || !toPrune.Any(n => isRetired(n.Path)))
+            return toPrune;
+        var pruned = toPrune.Select(n => n.Path).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var survivors = existing
+            .Where(n => !string.IsNullOrEmpty(n.Path) && !pruned.Contains(n.Path) && !IsGovernance(n))
+            .Select(n => n.Path)
+            .ToImmutableArray();
+        return toPrune
+            .Where(n => !isRetired(n.Path)
+                        || !survivors.Any(s => s.StartsWith(n.Path + "/", StringComparison.OrdinalIgnoreCase)))
+            .ToImmutableList();
     }
 
     /// <summary>True if <paramref name="path"/> equals <paramref name="root"/> or is a descendant.</summary>
