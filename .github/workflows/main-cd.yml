@@ -3517,8 +3517,10 @@ jobs:
       #     `MeshWeaver` partition, where the node paths read `MeshWeaver/samples/Graph/Data/ACME/…`
       #     while the bundles are keyed `ACME/…` — and the seeder matches by node PATH, so they are
       #     inert there too. They still compile-GATE on every PR (dotnet-test.yml's doc-gate runs
-      #     the samples stage): correctness of that content is proven, its assemblies are simply
-      #     not worth shipping. Before/after for this job: 8 packages / 28 assemblies → 1 / 4.
+      #     the samples stage): that the content compiles AT ITS AUTHORED ROOT is proven, its
+      #     assemblies are simply not worth shipping. It is NOT proof that it resolves under a mount
+      #     prefix (#7344 — Doc/Architecture/MountRelativeSourceQueries → "What the samples gate
+      #     does and does not prove"). Before/after for this job: 8 packages / 28 assemblies → 1 / 4.
       # ── THE BAKE — a BUILD STEP, with no mesh anywhere in it (#1763) ────────────────────────
       # 🚨 This step and the GATE below used to be ONE `docker run`, and that fusion is the finding
       # #1763 opens with: producing an assembly is a build step, and the mesh's job is to CONSUME a
