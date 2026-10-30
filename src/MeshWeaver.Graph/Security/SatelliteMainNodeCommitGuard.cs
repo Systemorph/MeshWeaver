@@ -88,9 +88,10 @@ public sealed class SatelliteMainNodeCommitGuard(IServiceProvider services) : IE
     /// </summary>
     private static bool CarriesOnlyADerivedPointer(MeshNode node)
     {
-        var main = (node.MainNode ?? "").Trim('/');
+        // RAW, as the rule reads it: a slash-only pointer delegates to the root scope (review of #7655).
+        var main = node.MainNode ?? "";
         return main.Length == 0
-               || string.Equals(main, node.Path.Trim('/'), StringComparison.Ordinal)
+               || string.Equals(main, node.Path, StringComparison.Ordinal)
                || MainNodeTrust.IsOwnerOf(main, node.Path)
                || (!string.IsNullOrEmpty(node.Namespace)
                    && string.Equals(main, SatelliteTableMapping.OwnerOfSatellitePath(node.Namespace),

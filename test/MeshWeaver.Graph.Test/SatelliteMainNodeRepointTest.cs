@@ -247,4 +247,28 @@ public class SatelliteMainNodeRepointTest(ITestOutputHelper output) : MonolithMe
             "re-entering the satellite class with a self pointer would let the next write 'normalise' it to the "
             + "outer document, above the thread's own policy");
     }
+
+    /// <summary>
+    /// 🚨 A slash-only pointer is not "unset". <c>SatelliteAccessRule</c> falls back to the node's own path
+    /// only for an EMPTY (or self) pointer, and delegates <c>"/"</c> to the ROOT scope, which can bypass a
+    /// restrictive policy below it. So an update from <c>""</c> to <c>"/"</c> is a repoint, and a carried
+    /// satellite may not bring <c>"/"</c>. The controls are a write that keeps the empty pointer and a
+    /// carried write with the path-derived owner.
+    /// </summary>
+    [Fact]
+    public void ASlashOnlyPointer_IsARepoint_NotAnUnsetOne()
+    {
+        var unset = Comment("");
+        MainNodeTrust.Repoints(unset, unset with { MainNode = "/" }).Should().BeTrue(
+            "the rule delegates '/' to the root scope, so moving from unset to '/' changes who decides access");
+        Commit(unset, unset with { MainNode = "/" }, CommentPath).Should().NotBeNull(
+            "an own-hub update from an empty pointer to '/' is refused like any other repoint");
+        Commit(before: null, Comment("/"), ownerPath: Doc).Should().NotBeNull(
+            "a carried satellite may not bring a slash-only pointer");
+
+        MainNodeTrust.Repoints(unset, unset with { Name = "renamed" }).Should().BeFalse(
+            "the control: keeping the empty pointer is not a repoint");
+        Commit(before: null, Comment(Doc), ownerPath: Doc).Should().BeNull(
+            "the control: a carried satellite with its path-derived owner lands");
+    }
 }

@@ -79,12 +79,15 @@ public static class MainNodeTrust
     /// <returns>True when the write changes the main node to something the path does not derive.</returns>
     public static bool Repoints(MeshNode before, MeshNode after)
     {
-        var previous = (before.MainNode ?? "").Trim('/');
-        var next = (after.MainNode ?? "").Trim('/');
+        // RAW values, never slash-trimmed (review of #7655): SatelliteAccessRule falls back to the
+        // node's own path only for an EMPTY or self pointer and delegates "/" to the ROOT scope, so
+        // "" -> "/" changes who decides access and must read as a repoint.
+        var previous = before.MainNode ?? "";
+        var next = after.MainNode ?? "";
         if (string.Equals(previous, next, StringComparison.Ordinal))
             return false;
         var previousWasUnset = previous.Length == 0
-                               || string.Equals(previous, before.Path.Trim('/'), StringComparison.Ordinal);
+                               || string.Equals(previous, before.Path, StringComparison.Ordinal);
         var nextIsDerivedOwner = IsOwnerOf(next, after.Path)
                                  || (!string.IsNullOrEmpty(after.Namespace)
                                      && next.Length > 0
