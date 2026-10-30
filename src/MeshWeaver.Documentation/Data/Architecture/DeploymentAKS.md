@@ -7,7 +7,7 @@ Icon: Cloud
 
 # Deploying to AKS
 
-This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `<aks-cluster>`** (resource group `<aks-resource-group>`, region `<region>`) — one namespace per portal instance, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
+This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `<aks-cluster>`** (resource group `<aks-resource-group>`, region `<region>`) — one namespace per portal instance, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via MeshWeaver.Plugins `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
 
 > 🚨 **This runbook is the bootstrap / break-glass form of a `Roll`.** Since 2026-09-08 the rule is that operations go through the control instance's Hosting API: the instance is a `Deployments/<name>` record, its image pin is the roll, and a `Roll` (or `Restart`, `Suspend`, `Audit`, `Reconcile`) `Hosting/InstanceAction` is what the in-cluster operator executes — running exactly the commands below for you. Read them as what happens, not as what you type. Policy, and what the API does not answer yet: [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).
 >
@@ -321,10 +321,12 @@ room there (a portal: `cpu: "4"`, `memory: "8Gi"`):
 "nodeHeadroom": [ { "pool": "silos", "cpu": "4", "memory": "8Gi", "replicas": 1 } ]
 ```
 
-The chart renders it as cluster-autoscaler **overprovisioning**: one `PriorityClass`
-`node-headroom` with a negative value (below every real workload, which runs at priority 0) and
-`preemptionPolicy: Never`, and per pool a Deployment `node-headroom-<pool>` of `pause` containers
-whose requests equal its limits, pinned to the pool by `kubernetes.azure.com/agentpool`. When a
+The chart renders it as cluster-autoscaler **overprovisioning**: per pool a Deployment
+`node-headroom-<pool>` of `pause` containers whose requests equal its limits, pinned to the pool by
+`kubernetes.azure.com/agentpool`, running under the `PriorityClass` `node-headroom` — value `-10`
+(below every real workload, which runs at priority 0, and not below the cluster autoscaler's
+expendable cutoff, so an evicted placeholder still asks for a node), `globalDefault: false`,
+`preemptionPolicy: Never`. When a
 surge pod (or any real pod) cannot otherwise schedule, the scheduler **preempts** a placeholder and
 places the real pod in its slot at once; the evicted placeholder goes `Pending`, and the cluster
 autoscaler adds a node for it — so the slot is restored before the next roll needs it.
@@ -341,8 +343,24 @@ autoscaler adds a node for it — so the slot is restored before the next roll n
   KEDA scale-out takes the slot exactly as a surge pod does. The pool bound therefore still has to
   hold the floors, the surge pods AND the placeholder; the estate's pool-fit check counts the
   placeholder as a pod.
-- **Delivery** is the ordinary path: the record change, then a governed `Roll` (or `ApplyChart`)
-  of the control instance — never a hand `kubectl apply`.
+- **The PriorityClass is INFRA-DECLARED — the chart only references it.** A PriorityClass is
+  cluster-scoped, and the hosting operator that applies a release holds `get` on priorityclasses and
+  deliberately no write: write there would let a compromised operator Job mint a high-priority or
+  `globalDefault` class and preempt every portal. So the class is declared once per cluster in the
+  estate's configuration repository (`deployments/aks/cluster-bootstrap/`) and applied by the
+  governed `InfraDeploy` (its estate job's `bootstrap` step: a what-if prints the server-side
+  `kubectl diff`, a deploy applies it and reads it back). hosting-deploy's preflight reads every
+  class the rendered release references and refuses BEFORE helm when one is missing, naming it and
+  saying "apply InfraDeploy first" — instead of a placeholder Deployment whose pods admission
+  rejects while the release reports deployed. A refused read is reported as refused, never as
+  absent.
+- **Delivery, in this order** — never a hand `kubectl apply`:
+  1. **merge** the changes (the infra declaration, the chart, the operator's preflight, the record);
+  2. a governed **`InfraDeploy` what-if** on the control instance — the `bootstrap` step shows the
+     PriorityClass it will create;
+  3. the approved **`InfraDeploy` deploy** — the class is applied;
+  4. a governed **`Roll`** (or `ApplyChart`) of the control instance renders the placeholder. Rolled
+     before step 3, the roll is refused before helm, naming the missing class.
 
 ## Kubernetes version upgrades — the governed `UpgradeCluster` action, never `az aks upgrade`
 
