@@ -548,10 +548,15 @@ The rule, for core's caller, the lane's caller contract and `stage-advance.yml`:
   review-event run. The `refresh` job follows a GREEN verdict on a `pull_request_review` run exactly
   as it followed one on a comment run.
 - **It is enforced.** `check-review-answered.py --self-test` reads all three workflow files and
-  refuses a `created` trigger (`review_comment_trigger_types`, `trigger_self_test`). A bare trigger
-  or a block-style `types:` list counts as listening to every type. Each refused shape has a
-  negative-control fixture. Run against main's three files as they stood before this change, the
-  self-test fails three cases.
+  refuses a `created` trigger (`trigger_contract_failures`, `trigger_self_test`). It reads the
+  active YAML and a caller contract written as `#` comments as two separate layers, so a commented
+  `# types: [deleted]` under a bare active trigger does not count. It reads one shape only:
+  `pull_request_review_comment:` followed by `types: [..]` on the next line. Any other shape is red
+  and named: a flow mapping such as `{types: [created]}`, `on: [..]`, or a block-style `types:` list.
+  A bare trigger counts as listening to every type. When a workflows directory sits beside the
+  script, each expected file is checked, and a missing one is red. The check is skipped only when
+  there is no workflows directory at all, which is how the lanes run a fetched copy. Each refused
+  shape has a negative-control fixture that must fail for exactly its own reason.
 
 What was **not** measured: how many REST calls one judgement of this check makes. A satellite whose
 caller still lists `created` keeps paying double until it adopts the contract. The self-test checks

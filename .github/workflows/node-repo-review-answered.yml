@@ -82,7 +82,7 @@ name: Node repo review answered (reusable)
 # runs and the installation's budget ran out. Measured on core 2026-10-30: 232 of 232 comment runs had
 # a same-head review run within 15 s. So the caller listens to `created` NOT AT ALL; `deleted` stays,
 # because a reply going raises no review event and can make a thread unanswered again. The predicate's
-# self-test asserts this contract and core's caller (`review_comment_trigger_types`).
+# self-test asserts this contract and core's caller (`trigger_contract_failures`).
 #
 # ⏳ OPT-IN: PENDING WHILE ANSWERING (policy review-pending-while-answering). With the default empty
 # `verdict-check-run` the lane behaves exactly as before. To have the context read PENDING (not red)
