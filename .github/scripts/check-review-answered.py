@@ -146,6 +146,11 @@ USAGE
 -----
   check-review-answered.py --self-test
   check-review-answered.py --repo O/R --pr N [--as-of 2026-09-14T14:04:21Z]
+  check-review-answered.py --repo O/R --pr N --verdict-check-run "Automatic review answered"
+        (policy review-pending-while-answering: judge once and WRITE the required context as one check-run
+         per head — PENDING while threads await answers inside the deadlines of policy review-answer-deadline,
+         red only on a real failure; see "PENDING WHILE ANSWERING" below)
+  check-review-answered.py --repo O/R --verdict-sweep --verdict-check-run NAME   (the schedule: re-judge pending verdicts)
   check-review-answered.py --repo O/R --pr N --arm-gate     (the control plane's arm decision: may auto-merge be armed now?)
   check-review-answered.py --repo O/R --merge-group-ref refs/heads/gh-readonly-queue/main/pr-N-<sha>
   check-review-answered.py --repo O/R --pr N --stage-gate --since <run created_at>
@@ -220,6 +225,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 
@@ -363,6 +369,14 @@ class Verdict:
     #: head owes its own review. Structured for the same reason as `refused`: its remedy is a review
     #: that ARRIVES (the review-on-change lane requests it), so it is waited for, never "reply to threads".
     stale: str = ""
+    #: Condition 3 failed — the inputs could not be shown complete. Structured so the pending report
+    #: (policy review-pending-while-answering) can never read an unmeasured state as "still answering".
+    incomplete: str = ""
+    #: Condition 1's reason when it stands (no review, no Copilot review, or this head owes one) — the
+    #: input that ARRIVES. Empty when a review covers the head or a waiver / not-owed released it.
+    review_missing: str = ""
+    #: How many threads the automatic reviewer opened (condition 2's denominator, "N of M unanswered").
+    threads: int = 0
 
 
 def newest_landed_copilot_review(reviews, as_of: str | None = None) -> dict | None:
@@ -429,6 +443,7 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     refused: list[str] = []
     stale_reported = ""
     owes_review = ""
+    review_missing = ""
 
     # 3 (checked first: an incomplete listing makes every other statement unreliable)
     incomplete = listing_incomplete(pr, comments)
@@ -479,6 +494,7 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             else:
                 reasons.append(stale)
                 owes_review = stale
+                review_missing = stale
                 # A REFUSAL of this very head, after the review that no longer covers it, is terminal:
                 # the review-on-change lane requests nothing over a refusal, so waiting for the owed
                 # review would only sleep the full window. Report it as unreviewable (#7142 review).
@@ -525,6 +541,7 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             notes.append(f"WAIVED: {why}. {message}")
         else:
             reasons.append(why + (f". {message}" if message else ""))
+            review_missing = reasons[-1]
             stale_reported = not_copilot
             # Only when the state actually STANDS: a waived refusal is not an unreviewable pull
             # request, it is a reviewed-enough one, and saying otherwise would re-create the
@@ -540,7 +557,8 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         reasons.append(f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person")
 
     return Verdict(green=not reasons, reasons=tuple(reasons), notes=tuple(notes), unanswered=unanswered,
-                   refused=tuple(refused), not_copilot=stale_reported, stale=owes_review)
+                   refused=tuple(refused), not_copilot=stale_reported, stale=owes_review,
+                   incomplete=incomplete or "", review_missing=review_missing, threads=len(roots))
 
 
 def listing_incomplete(pr: dict, comments: list) -> str | None:
@@ -1956,6 +1974,27 @@ class Gh:
         if p.returncode != 0:
             raise ReadError(f"POST repos/{self.repo}/{path} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:600]}")
 
+    def write(self, method: str, path: str, body: dict):
+        """A REST write with a JSON body (the verdict check-run — policy review-pending-while-answering).
+        The body goes through a file (`--input`), never `-f`/`-F`, so no value is ever read as `@path`.
+        A refusal is a ReadError naming it; a capacity refusal is an outage like any other."""
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(body, f)
+            path_in = f.name
+        try:
+            p = self._call(["gh", "api", "-X", method, "-H", "Accept: application/vnd.github+json",
+                            f"repos/{self.repo}/{path}", "--input", path_in],
+                           f"{method} repos/{self.repo}/{path}", "core")
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(path_in)
+        if p.returncode != 0:
+            raise ReadError(f"{method} repos/{self.repo}/{path} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:600]}")
+        try:
+            return json.loads(p.stdout) if (p.stdout or "").strip() else {}
+        except json.JSONDecodeError as e:
+            raise ReadError(f"{method} repos/{self.repo}/{path} did not return JSON: {e}") from e
+
     def graphql(self, query: str, variables: dict) -> dict:
         """ONE GraphQL call — used for what REST cannot express (requesting a BOT reviewer), never in a
         loop. gh exits non-zero when the response carries `errors`; that, and an `errors` key on a
@@ -2853,9 +2892,357 @@ def run_request_review_sweep(repo: str, gh=None, now_epoch: int | None = None) -
     return 1 if failed else 0
 
 
-def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
+# ─────────────────────────── PENDING WHILE ANSWERING (policy review-pending-while-answering) ───────────────────────────
+#
+# 🚨 WHY. Measured on 2026-10-30: about 60% of that day's red pull requests were `Automatic review answered`
+# reading RED while Copilot's threads simply had not been answered YET — a state that is not a failure, that
+# nothing but a person's reply can change, and that a red X sends everybody to investigate. So the required
+# context now has THREE readings instead of two, and only a real failure is red:
+#
+#   success   — every reviewer thread answered and a review covers the head (the verdict is GREEN);
+#   pending   — the verdict is RED only because threads are not answered yet, or the head's review has not
+#               landed yet, and neither has outlived its deadline (policy review-answer-deadline): the
+#               check-run stays `in_progress`, its title says "N of M threads unanswered" and when it turns
+#               red, its summary names every unanswered thread;
+#   failure   — a thread unanswered past ANSWER_DEADLINE_HOURS after the review that opened it, a head that
+#               owes its review past REVIEW_DEADLINE_HOURS after it was first judged, a refusal (nothing that
+#               arrives can change it), or a state the gate could not MEASURE (an incomplete listing, a failed
+#               read) — fail closed.
+#
+# 🚨 IT STILL BLOCKS, EXACTLY AS BEFORE. A required context that is `in_progress` is not satisfied: branch
+# protection and rulesets accept only success / neutral / skipped, and auto-merge waits for a pending
+# required check. `pending` is never a skipped or neutral conclusion — it is a check-run with NO conclusion.
+#
+# 🚨 HOW A WORKFLOW CAN SAY "PENDING". A job's own check-run always ends with a conclusion when the job
+# ends (and every job is hard-cut at 45 minutes), so the verdict is written through the Checks API instead:
+# ONE check-run per head, named exactly as the required context, created by the first evaluation and
+# PATCHed by every later one (`write_verdict_check_run`). The job that writes it is RENAMED
+# (VERDICT_WRITER_JOB) so its own check-run never carries the required name. Every evaluation now updates
+# the SAME check-run, whichever event started it — which is also what the #4649 duplicate problem (one
+# check-run per run, and branch protection reading an older red) needed. Ordering: the check-run's
+# `external_id` carries when the writing evaluation READ the pull request; an evaluation whose read is
+# older than the one on file writes nothing (`verdict_write_plan`).
+#
+# 🚨 WHAT RE-EVALUATES A PENDING VERDICT WITH NO EVENT. Copilot's own review event cannot start a run here
+# (`waiting_would_help`), and a deadline passes without any event at all — so the caller's `schedule` runs
+# `--verdict-sweep`, which re-judges every open pull request whose verdict check-run is pending or
+# unmeasured (and nothing else). That is also why the writer takes NO review wait and NO settle wait: a
+# pending verdict is not red, so there is nothing to wait out, and the sweep flips it within 15 minutes.
+#
+# 🚨 WHERE IT DOES NOT APPLY — the job keeps its old name and its old red/green: a FORK pull request (its
+# token is read-only, so it could write no verdict at all), a Dependabot pull request (its token is
+# read-only unless granted), a merge-queue entry (a queue commit is judged once, at admission), and every
+# caller of the fleet lane that has not opted in (`verdict-check-run` input). In those shapes nothing changed.
+
+VERDICT_EXTERNAL_PREFIX = "mw-review-answered:v1:"
+#: The job name the verdict WRITER runs under, so its own check-run never carries the required name.
+VERDICT_WRITER_JOB = "Review answered — verdict writer"
+#: The App every GITHUB_TOKEN-written check-run belongs to (GitHub Actions, app id 15368 — the id
+#: MeshWeaver.Plugins' classic protection pins its required review context to).
+ACTIONS_APP_SLUG = "github-actions"
+#: Policy review-answer-deadline. A thread unanswered this long after the review that opened it is RED.
+ANSWER_DEADLINE_HOURS = 24
+#: Policy review-answer-deadline. A head whose review has not landed this long after the gate first judged
+#: it is RED (Copilot measured median 4.1 min, max 17.2 min; the 2026-09-18 quota refusal lasted 4 h+).
+REVIEW_DEADLINE_HOURS = 6
+#: The verdict kinds the sweep re-judges: a pending one (a review or a deadline can arrive with no
+#: event) and an unmeasured one (the next read can complete). Every other kind changes only on an event.
+SWEEP_KINDS = frozenset({"answering", "awaiting-review", "unmeasurable"})
+#: The kind of a completed verdict check-run GitHub would not re-open, closed as `failure` so it can never
+#: stand as an old success beside a newer pending one.
+SUPERSEDED_KIND = "superseded"
+CHECK_RUN_SUMMARY_MAX = 60000
+
+
+@dataclasses.dataclass(frozen=True)
+class Reported:
+    """What the verdict check-run says. `state` is `success`, `pending` or `failure`; `kind` names why."""
+    state: str
+    kind: str
+    title: str
+    red_at: str = ""
+
+
+def _stamp(dt: datetime.datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def reported_state(verdict: Verdict, now: str, first_seen: str,
+                   answer_hours: float = ANSWER_DEADLINE_HOURS, review_hours: float = REVIEW_DEADLINE_HOURS) -> Reported:
+    """Policy review-pending-while-answering + review-answer-deadline. Pure. `now` and `first_seen` (when
+    the gate first judged this head) are ISO-8601 UTC. Fails CLOSED: an unparseable clock, an incomplete
+    read, a refusal, or a red reason this function does not recognise is `failure`, never `pending`."""
+    roots = len(verdict.unanswered)
+    if verdict.green:
+        return Reported("success", "answered", "Answered — every thread the automatic reviewer opened has a person's reply")
+    if verdict.incomplete:
+        return Reported("failure", "unmeasurable", "Could not measure — " + verdict.incomplete[:180])
+    if verdict.refused:
+        return Reported("failure", "refused", "Unreviewable — the automatic reviewer refused to review this pull request")
+    t_now, t_seen = parse_stamp(now), parse_stamp(first_seen)
+    if t_now is None or t_seen is None:
+        return Reported("failure", "unmeasurable", f"Could not measure — no readable clock (now={now!r}, first judged={first_seen!r})")
+    # Every reason must be one the pending reading knows: condition 1 (review_missing) or condition 2
+    # (unanswered threads). Anything else is unmeasured, and stays red.
+    known = (1 if verdict.review_missing else 0) + (1 if verdict.unanswered else 0)
+    if known != len(verdict.reasons):
+        return Reported("failure", "unmeasurable", "Could not classify the verdict — " + "; ".join(verdict.reasons)[:180])
+    answer_due = []
+    for c in verdict.unanswered:
+        opened = parse_stamp(c.get("created_at"))
+        if opened is None:
+            return Reported("failure", "unmeasurable", f"Could not measure — thread {c.get('id')} carries no readable created_at")
+        answer_due.append((opened + datetime.timedelta(hours=answer_hours), c))
+    overdue = [c for due, c in answer_due if due <= t_now]
+    if overdue:
+        return Reported("failure", "answer-overdue",
+                        f"{len(overdue)} of {roots} unanswered thread(s) open longer than {answer_hours:g} h — answer each ON its thread")
+    review_due = t_seen + datetime.timedelta(hours=review_hours) if verdict.review_missing else None
+    if review_due is not None and review_due <= t_now:
+        return Reported("failure", "review-overdue",
+                        f"The automatic review of this head has not landed in {review_hours:g} h — a maintainer re-requests it or waives it")
+    red_at = _stamp(min([due for due, _ in answer_due] + ([review_due] if review_due else [])))
+    if verdict.unanswered:
+        return Reported("pending", "answering",
+                        f"Pending — {roots} of {verdict.threads} thread(s) unanswered; red at {red_at} if still unanswered", red_at)
+    return Reported("pending", "awaiting-review", f"Pending — awaiting the automatic review of this head; red at {red_at}", red_at)
+
+
+def verdict_summary(number: int, verdict: Verdict, reported: Reported) -> str:
+    """The check-run's summary: the reading, every unanswered thread by link, then the verdict's own
+    step summary (reasons, notes, guidance)."""
+    icon = {"success": "✅", "pending": "⏳"}.get(reported.state, "❌")
+    out = [f"### {icon} {reported.title}", ""]
+    if reported.state == "pending":
+        out += ["This check is **pending, not red**: it still blocks the merge (a required context with no conclusion is "
+                "never satisfied), and it turns green the moment the last thread has a reply. Policy "
+                "`review-pending-while-answering`; deadlines: policy `review-answer-deadline`.", ""]
+    body = summary_markdown(number, verdict).split("\n", 1)
+    out.append(body[1] if len(body) > 1 else "")
+    text = "\n".join(out)
+    return text if len(text) <= CHECK_RUN_SUMMARY_MAX else text[:CHECK_RUN_SUMMARY_MAX] + "\n\n…(truncated)"
+
+
+def verdict_external_id(read_at: str, kind: str) -> str:
+    return f"{VERDICT_EXTERNAL_PREFIX}{read_at}:{kind}"
+
+
+def parse_verdict_external_id(external_id) -> tuple[str, str] | None:
+    """(read_at, kind) of a check-run this file wrote, or None for any other check-run. Pure."""
+    m = re.fullmatch(re.escape(VERDICT_EXTERNAL_PREFIX) + r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z):([a-z-]+)", str(external_id or ""))
+    return (m.group(1), m.group(2)) if m else None
+
+
+def verdict_runs(check_runs, name: str) -> list:
+    """The verdict check-runs THIS file wrote for `name` — provenance (the Actions App) AND the
+    external_id this file stamps. A job's own check-run of the same name (a fork's, an older shape's)
+    carries no such id and is never touched. Pure."""
+    return [c for c in check_runs or () if isinstance(c, dict) and c.get("name") == name
+            and ((c.get("app") or {}).get("slug") == ACTIONS_APP_SLUG)
+            and parse_verdict_external_id(c.get("external_id")) is not None]
+
+
+def verdict_write_plan(existing: list, read_at: str) -> tuple[str, list, str]:
+    """('create', [], why) | ('patch', [ids], why) | ('skip', [], why). Pure. A verdict whose READ is
+    older than the one already on file writes nothing: two evaluations of one head race only across the
+    `gate` and `feedback` concurrency lanes, and the one that read LAST must be the one that stands.
+    Every verdict check-run of the name is PATCHed, so a duplicate a race created converges."""
+    if not existing:
+        return "create", [], "no verdict check-run on this head yet"
+    newest = max((parse_verdict_external_id(c.get("external_id"))[0] for c in existing))
+    if newest > read_at:
+        return "skip", [], f"a verdict read at {newest} is already on file — this read ({read_at}) is older, so it writes nothing"
+    return "patch", sorted(c.get("id") for c in existing), f"updating {len(existing)} verdict check-run(s) (newest read {newest})"
+
+
+def first_judged(existing: list, now: str) -> str:
+    """When the gate first judged this head: the oldest verdict check-run's `started_at`, else now. Pure."""
+    starts = sorted(str(c.get("started_at")) for c in existing if parse_stamp(c.get("started_at")))
+    return starts[0] if starts else now
+
+
+def verdict_body(name: str, head: str, reported: Reported, summary: str, read_at: str, now: str,
+                 details_url: str = "") -> dict:
+    """The Checks API body. Pure. `pending` is `in_progress` with NO conclusion — never `neutral` or
+    `skipped`, which branch protection would accept as satisfied."""
+    body = {"name": name, "head_sha": head, "external_id": verdict_external_id(read_at, reported.kind),
+            "output": {"title": reported.title[:250], "summary": summary}}
+    if details_url:
+        body["details_url"] = details_url
+    if reported.state == "pending":
+        body["status"] = "in_progress"
+    else:
+        body.update(status="completed", conclusion=reported.state, completed_at=now)
+    return body
+
+
+def read_verdict_runs(gh, head: str, name: str) -> list:
+    listing = gh.api(f"commits/{head}/check-runs?check_name={urllib.parse.quote(name)}&filter=all&per_page=100")
+    runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
+    if not isinstance(runs, list) or not isinstance(listing.get("total_count"), int) or len(runs) < listing["total_count"]:
+        raise ReadError(f"commits/{head[:10]}/check-runs did not return the complete `{name}` listing")
+    return verdict_runs(runs, name)
+
+
+def write_verdict_check_run(gh, head: str, name: str, reported: Reported, summary: str, read_at: str, now: str,
+                            existing: list | None = None) -> str:
+    """Create or PATCH the head's verdict check-run. Returns what was done. A failed write raises ReadError
+    (an outage raises ApiOutage) — the caller turns either into a RED job, never a silent pass."""
+    existing = read_verdict_runs(gh, head, name) if existing is None else existing
+    action, ids, why = verdict_write_plan(existing, read_at)
+    if action == "skip":
+        return f"skip: {why}"
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    details = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{gh.repo}/actions/runs/{run_id}" if run_id else ""
+    body = verdict_body(name, head, reported, summary, read_at, now, details)
+    patch = {k: v for k, v in body.items() if k != "head_sha"}
+    if action == "create":
+        made = gh.write("POST", "check-runs", body)
+        return f"created verdict check-run {(made or {}).get('id')} ({reported.state}): {why}"
+    if reported.state != "pending":
+        for cid in ids:
+            gh.write("PATCH", f"check-runs/{cid}", patch)
+        return f"patched verdict check-run(s) {ids} to {reported.state}: {why}"
+    # PENDING over a head whose verdict had COMPLETED (a new thread on an answered head, a read that now
+    # completes): a completed check-run is re-opened when GitHub allows it; when it refuses, the old one is
+    # closed as `failure` ("superseded") — never left standing at its old success — and a new pending
+    # check-run carries the verdict. A superseded run is never re-opened again, so nothing accumulates.
+    done, open_runs = [], 0
+    for c in existing:
+        kind = parse_verdict_external_id(c.get("external_id"))[1]
+        if c.get("status") != "completed":
+            gh.write("PATCH", f"check-runs/{c.get('id')}", patch)
+            done.append(f"{c.get('id')} updated")
+            open_runs += 1
+        elif kind != SUPERSEDED_KIND:
+            try:
+                gh.write("PATCH", f"check-runs/{c.get('id')}", patch)
+                done.append(f"{c.get('id')} re-opened")
+                open_runs += 1
+            except ReadError as e:
+                gh.write("PATCH", f"check-runs/{c.get('id')}", {
+                    "status": "completed", "conclusion": "failure", "completed_at": now,
+                    "external_id": verdict_external_id(read_at, SUPERSEDED_KIND),
+                    "output": {"title": "Superseded — a newer, pending verdict is on this head",
+                               "summary": f"GitHub refused to re-open this check-run ({str(e)[:200]}), so it was closed and "
+                                          "a new one carries the verdict. Policy review-pending-while-answering."}})
+                done.append(f"{c.get('id')} superseded")
+    if not open_runs:
+        made = gh.write("POST", "check-runs", body)
+        done.append(f"created {(made or {}).get('id')}")
+    return f"pending verdict: {', '.join(done)}: {why}"
+
+
+def epoch_stamp(gh) -> str:
+    """`gh.now()` (epoch seconds) as ISO-8601 UTC — the fake adapter's clock in the self-test."""
+    t = getattr(gh, "now", time.time)()
+    return _stamp(datetime.datetime.fromtimestamp(t, datetime.UTC).replace(tzinfo=None))
+
+
+def run_verdict(repo: str, number: int, name: str, gh=None) -> int:
+    """The verdict WRITER (policy review-pending-while-answering): judge the pull request ONCE (no review
+    wait, no settle wait — a pending verdict is not red), write the head's verdict check-run, exit 0 for
+    success or pending and 1 for failure. A read that fails is UNMEASURABLE: written as `failure` when the
+    head is known, and the job is red either way."""
+    gh = gh if gh is not None else Gh(repo)
+    read_at = epoch_stamp(gh)
+    head = ""
+    try:
+        pr, reviews, comments, waiver, author_role, check_runs, files, commits, copilot_carry = read_inputs(gh, number, None)
+        head = str((pr.get("head") or {}).get("sha") or "")
+        existing = read_verdict_runs(gh, head, name)
+    except (ReadError, KeyError) as e:
+        print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
+        if not head:
+            # The failed read may have come after the pull request itself was read: one more read for the
+            # head, so an unmeasured state is WRITTEN as failure rather than left at an older verdict.
+            with contextlib.suppress(ReadError, KeyError, TypeError, AttributeError):
+                head = str(((gh.api(f"pulls/{number}") or {}).get("head") or {}).get("sha") or "")
+            head = head if re.fullmatch(r"[0-9a-f]{40}", head) else ""
+        if head:
+            unmeasured = Reported("failure", "unmeasurable", f"Could not measure — {str(e)[:200]}")
+            try:
+                print("  " + write_verdict_check_run(gh, head, name, unmeasured, f"### ❌ {unmeasured.title}\n", read_at, epoch_stamp(gh)))
+            except ReadError as w:
+                print(f"::error::and the verdict check-run `{name}` could not be written either: {w}")
+        _append("GITHUB_OUTPUT", "verdict-state=failure\n")
+        return 1
+    verdict = evaluate(pr, reviews, comments, waiver, None, check_runs, files, commits, copilot_carry)
+    now = epoch_stamp(gh)
+    reported = reported_state(verdict, now, first_judged(existing, now))
+    print(render(number, pr, verdict, author_role, None, reported))
+    summary = verdict_summary(number, verdict, reported)
+    try:
+        done = write_verdict_check_run(gh, head, name, reported, summary, read_at, now, existing)
+    except ReadError as e:
+        print(f"::error::the verdict ({reported.state}) was taken, but the check-run `{name}` could not be written on "
+              f"{head[:10]}: {e}. The required context is NOT updated — this run is red so the gap is seen.")
+        _append("GITHUB_OUTPUT", "verdict-state=failure\n")
+        return 1
+    print(f"  verdict check-run `{name}`: {done}")
+    _append("GITHUB_OUTPUT", f"verdict-state={reported.state}\n")
+    _append("GITHUB_STEP_SUMMARY", summary)
+    return 1 if reported.state == "failure" else 0
+
+
+def run_verdict_sweep(repo: str, name: str, gh=None, now_epoch: int | None = None) -> int:
+    """The scheduled half of the verdict writer: re-judge every open, non-draft, same-repository pull
+    request whose verdict check-run on its CURRENT head is pending or unmeasured (SWEEP_KINDS) — a review
+    that landed, or a deadline that passed, raises no event here. Every other pull request costs one
+    listing read and nothing else. Exit 1 when a read failed (named), 0 otherwise — a red pull request is
+    the pull request's verdict, not the sweep's."""
+    gh = gh if gh is not None else Gh(repo)
+    try:
+        pulls = gh.api("pulls?state=open&per_page=100", paginate=True)
+        if not isinstance(pulls, list):
+            raise ReadError("pulls?state=open did not return a listing")
+    except ReadError as e:
+        print(f"::error::the verdict sweep cannot list open pull requests: {e}")
+        return 1
+    mine = sorted((p for p in pulls if isinstance(p, dict) and p.get("number") and not p.get("draft")
+                   and ((p.get("head") or {}).get("repo") or {}).get("full_name") == repo),
+                  key=lambda p: p["number"])
+    numbers = [p["number"] for p in mine]
+    window = set(sweep_window(numbers, int(time.time()) if now_epoch is None else now_epoch))
+    failed, judged = [], []
+    for p in mine:
+        if p["number"] not in window:
+            continue
+        head = str((p.get("head") or {}).get("sha") or "")
+        try:
+            existing = read_verdict_runs(gh, head, name)
+        except ReadError as e:
+            print(f"::error::#{p['number']}: {e}")
+            failed.append(p["number"])
+            continue
+        if not existing:
+            print(f"  #{p['number']}: no verdict check-run on {head[:10]} yet — its own event writes the first one")
+            continue
+        live = [c for c in existing if parse_verdict_external_id(c.get("external_id"))[1] != SUPERSEDED_KIND] or existing
+        newest = max(live, key=lambda c: parse_verdict_external_id(c.get("external_id"))[0])
+        kind = parse_verdict_external_id(newest.get("external_id"))[1]
+        if kind not in SWEEP_KINDS:
+            print(f"  #{p['number']}: verdict `{kind}` on {head[:10]} changes only on an event — not re-judged")
+            continue
+        judged.append(p["number"])
+        if run_verdict(repo, p["number"], name, gh=gh) != 0:
+            print(f"  #{p['number']}: re-judged — the verdict is red (that is the pull request's state, not a sweep failure)")
+    print(f"verdict sweep: re-judged {len(judged)} pull request(s) {judged} of {len(numbers)} open")
+    if failed:
+        print(f"::error::the verdict sweep could not read {failed}")
+    return 1 if failed else 0
+
+
+def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None,
+           reported: Reported | None = None) -> str:
+    """`reported` is the verdict writer's reading (policy review-pending-while-answering): a PENDING
+    verdict is headed PENDING and its reasons print as notices, never as `::error::` annotations on a
+    run that did not fail."""
     head = f"#{number} ({'draft' if pr.get('draft') else pr.get('state')}) head {str((pr.get('head') or {}).get('sha'))[:10]}"
-    state = ("GREEN" if verdict.green else
+    pending = reported is not None and reported.state == "pending"
+    state = (f"PENDING — {reported.title}" if pending else
+             f"RED — {reported.title}" if reported is not None and reported.state == "failure" else
+             "GREEN" if verdict.green else
              "RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)" if verdict.refused else
              "RED — NO COPILOT REVIEW (the clean review on file is not a Copilot review of this pull request)"
              if verdict.not_copilot else
@@ -2866,7 +3253,7 @@ def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_
         lines.append(f"  waiver path readable: author @{(pr.get('user') or {}).get('login')} holds `{author_role or 'none'}`")
     lines += [f"  {n}" for n in verdict.notes]
     for r in verdict.reasons:
-        lines.append(f"::error::{r}")
+        lines.append(f"{'::notice::' if pending else '::error::'}{r}")
     for c in verdict.unanswered:
         where = f"{c.get('path')}:{c.get('line') or c.get('original_line') or '?'}"
         lines.append(f"  unanswered: {c.get('html_url') or c.get('id')} ({where}) — {first_line(c.get('body'))}")
@@ -4273,6 +4660,7 @@ def self_test() -> int:
 
     failures += duplicate_sweep_self_test(HEAD, ref_pr, red_read)
     failures += outage_self_test(HEAD, ref_pr, red_read)
+    failures += pending_self_test(HEAD)
 
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
@@ -4533,6 +4921,230 @@ def duplicate_sweep_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
     posted_all, worst = chain([802, 804, 806], stays_red={802})
     check("NEG chain: a re-run that stays RED (truly unanswered) refreshes nothing — the chain stops there",
           posted_all == [802], f"posted={posted_all}")
+    return failures
+
+
+def pending_self_test(HEAD: str) -> int:
+    """Policy review-pending-while-answering + review-answer-deadline: the verdict writer reports PENDING
+    (an in_progress check-run, no conclusion) while threads await answers or the head awaits its review
+    within the deadlines, FAILURE past a deadline or when it cannot measure, SUCCESS when answered. Every
+    case drives the code through a FAKE GitHub adapter — nothing here reaches GitHub. Returns the number
+    of failed cases."""
+    failures = 0
+
+    def check(name, ok, detail=""):
+        nonlocal failures
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} pending: {name:62} {'' if ok else detail}")
+
+    T0 = "2026-10-30T10:00:00Z"            # when Copilot's thread opened
+    FRESH = "2026-10-30T12:00:00Z"         # 2 h later
+    LATE = "2026-10-31T10:00:01Z"          # 24 h + 1 s later
+    ONE, ANSWER = _comment(1, at=T0), _comment(11, PERSON, 1, "2026-10-30T13:00:00Z")
+    TWO = _comment(2, at=T0)
+    review = dict(_review(at=T0), commit_id=HEAD)
+
+    def verdict_of(comments, reviews=(review,), count=None):
+        pr = dict(_pr(len(comments) if count is None else count), head={"sha": HEAD})
+        return evaluate(pr, list(reviews), comments, NO_WAIVER)
+
+    # ── the pure reading
+    unanswered = verdict_of([ONE, TWO, ANSWER])
+    r = reported_state(unanswered, FRESH, T0)
+    check("unanswered + fresh -> PENDING (not failure)", r.state == "pending" and r.kind == "answering"
+          and "1 of 2 thread(s) unanswered" in r.title and r.red_at == "2026-10-31T10:00:00Z", f"{r}")
+    r = reported_state(unanswered, LATE, T0)
+    check("unanswered past the 24 h deadline -> FAILURE", r.state == "failure" and r.kind == "answer-overdue", f"{r}")
+    r = reported_state(verdict_of([ONE, ANSWER]), LATE, T0)
+    check("all answered -> SUCCESS (even long after)", r.state == "success", f"{r}")
+    incomplete = verdict_of([ONE], count=5)
+    r = reported_state(incomplete, FRESH, T0)
+    check("unmeasurable (short listing) -> FAILURE, never pending", r.state == "failure" and r.kind == "unmeasurable", f"{r}")
+    no_review = verdict_of([], reviews=())
+    r = reported_state(no_review, "2026-10-30T15:59:59Z", T0)
+    check("review not landed, inside 6 h -> PENDING awaiting review", r.state == "pending" and r.kind == "awaiting-review", f"{r}")
+    r = reported_state(no_review, "2026-10-30T16:00:00Z", T0)
+    check("review not landed past 6 h -> FAILURE (the head owes its review)", r.state == "failure" and r.kind == "review-overdue", f"{r}")
+    refused = verdict_of([], reviews=(dict(review, body=REFUSAL_QUOTA),))
+    r = reported_state(refused, FRESH, T0)
+    check("a refusal -> FAILURE (nothing that arrives can change it)", r.state == "failure" and r.kind == "refused", f"{r}")
+    odd = dataclasses.replace(unanswered, reasons=unanswered.reasons + ("a reason nobody classified",))
+    r = reported_state(odd, FRESH, T0)
+    check("NEG: an unrecognised red reason -> FAILURE (fails closed)", r.state == "failure" and r.kind == "unmeasurable", f"{r}")
+    r = reported_state(unanswered, "not-a-time", T0)
+    check("NEG: an unreadable clock -> FAILURE (fails closed)", r.state == "failure", f"{r}")
+    pend_body = verdict_body("Automatic review answered", HEAD, reported_state(unanswered, FRESH, T0), "s", FRESH, FRESH)
+    check("a PENDING body is in_progress with NO conclusion (never neutral/skipped)",
+          pend_body["status"] == "in_progress" and "conclusion" not in pend_body, f"{pend_body}")
+    fail_body = verdict_body("Automatic review answered", HEAD, reported_state(unanswered, LATE, T0), "s", LATE, LATE)
+    check("a FAILURE body is completed/failure", fail_body["status"] == "completed" and fail_body["conclusion"] == "failure",
+          f"{fail_body}")
+    told = verdict_summary(7, unanswered, reported_state(unanswered, FRESH, T0))
+    check("the summary names every unanswered thread and says it still blocks",
+          "discussion_r2" in told and "discussion_r1" not in told and "still blocks the merge" in told, told[:300])
+
+    # ── the write plan
+    mine = lambda cid, read_at, kind="answering", status="in_progress": {   # noqa: E731
+        "id": cid, "name": "Automatic review answered", "app": {"slug": ACTIONS_APP_SLUG}, "status": status,
+        "started_at": "2026-10-30T10:05:00Z", "external_id": verdict_external_id(read_at, kind)}
+    job_shaped = {"id": 9, "name": "Automatic review answered", "app": {"slug": ACTIONS_APP_SLUG}, "status": "completed",
+                  "conclusion": "failure", "started_at": "2026-10-30T09:00:00Z", "external_id": ""}
+    other_app = dict(mine(8, FRESH), app={"slug": "someone-else"})
+    check("verdict_runs: a job's own check-run and another App's are never touched",
+          [c["id"] for c in verdict_runs([job_shaped, other_app, mine(5, FRESH)], "Automatic review answered")] == [5])
+    check("plan: none on the head -> create", verdict_write_plan([], FRESH)[0] == "create")
+    check("plan: an older read on file -> patch it", verdict_write_plan([mine(5, T0)], FRESH)[:2] == ("patch", [5]))
+    check("plan: a NEWER read on file -> skip (the last read stands)", verdict_write_plan([mine(5, LATE)], FRESH)[0] == "skip")
+    check("first judged = the oldest verdict check-run's start", first_judged([mine(5, T0)], FRESH) == "2026-10-30T10:05:00Z")
+
+    # ── end to end through a fake GitHub
+    class _VerdictGh:
+        repo = "o/r"
+
+        def __init__(self, comments, reviews=(review,), runs=(), now=FRESH, count=None, refuse_reopen=False,
+                     fail_reviews=False, fail_write=False, pulls=()):
+            self.comments, self.reviews, self.runs = list(comments), list(reviews), [dict(c) for c in runs]
+            self.t = datetime.datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.UTC).timestamp()
+            self.count = len(self.comments) if count is None else count
+            self.refuse_reopen, self.fail_reviews, self.fail_write = refuse_reopen, fail_reviews, fail_write
+            self.writes, self.pulls, self.next_id = [], list(pulls), 500
+
+        def now(self):
+            return self.t
+
+        def sleep(self, s):
+            self.t += s
+
+        def role(self, login):
+            return "write"
+
+        def api(self, path, paginate=False):
+            if path == "pulls?state=open&per_page=100":
+                return self.pulls
+            m = re.fullmatch(r"pulls/(\d+)", path)
+            if m:
+                return dict(_pr(self.count), number=int(m.group(1)), head={"sha": HEAD})
+            if re.fullmatch(r"pulls/\d+/reviews\?per_page=100", path):
+                if self.fail_reviews:
+                    raise ReadError(f"GET {path} failed (1): gh: Not Found (HTTP 404)")
+                return self.reviews
+            if re.fullmatch(r"pulls/\d+/comments\?per_page=100", path):
+                return self.comments
+            if re.fullmatch(r"issues/\d+/events\?per_page=100", path):
+                return []
+            if path.startswith(f"commits/{HEAD}/check-runs?check_name={DEGRADATION_CHECK_NAME}&"):
+                return {"total_count": 0, "check_runs": []}
+            if path.startswith(f"commits/{HEAD}/check-runs?check_name=Automatic%20review%20answered&"):
+                return {"total_count": len(self.runs), "check_runs": self.runs}
+            raise ReadError(f"unexpected GET {path}")
+
+        def write(self, method, path, body):
+            self.writes.append((method, path, body))
+            if self.fail_write:
+                raise ReadError(f"{method} {path} failed (1): gh: Resource not accessible by integration (HTTP 403)")
+            if method == "PATCH":
+                cid = int(path.rsplit("/", 1)[1])
+                run_ = next(c for c in self.runs if c["id"] == cid)
+                if self.refuse_reopen and run_["status"] == "completed" and body.get("status") == "in_progress":
+                    raise ReadError(f"PATCH {path} failed (1): gh: Validation Failed (HTTP 422)")
+                run_.update({k: v for k, v in body.items() if k != "output"})
+                return run_
+            self.next_id += 1
+            made = dict(body, id=self.next_id, app={"slug": ACTIONS_APP_SLUG}, started_at=epoch_stamp(self))
+            self.runs.append(made)
+            return made
+
+    def drive(g, number=7):
+        out = os.path.join(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir(), f"cra-pending-{os.getpid()}.out")
+        saved = {k: os.environ.get(k) for k in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
+        os.environ["GITHUB_OUTPUT"] = out
+        os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                rc = run_verdict("o/r", number, "Automatic review answered", gh=g)
+            written = open(out, encoding="utf-8").read() if os.path.exists(out) else ""
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(out)
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return rc, written, printed.getvalue()
+
+    g = _VerdictGh([ONE, TWO, ANSWER])
+    rc, out, text = drive(g)
+    check("e2e: unanswered + fresh -> creates an in_progress check-run, job green",
+          rc == 0 and "verdict-state=pending" in out and len(g.writes) == 1 and g.writes[0][0] == "POST"
+          and g.writes[0][2]["status"] == "in_progress" and "conclusion" not in g.writes[0][2]
+          and "::error::" not in text and "PENDING" in text, f"rc={rc} out={out!r} writes={g.writes}")
+    g = _VerdictGh([ONE, TWO, ANSWER, _comment(12, PERSON, 2, "2026-10-30T13:01:00Z")], runs=[mine(5, T0)])
+    rc, out, _ = drive(g)
+    check("e2e: all answered -> PATCHes the SAME check-run to success",
+          rc == 0 and "verdict-state=success" in out and [w[:2] for w in g.writes] == [("PATCH", "check-runs/5")]
+          and g.writes[0][2]["conclusion"] == "success", f"rc={rc} writes={g.writes}")
+    g = _VerdictGh([ONE, TWO, ANSWER], runs=[mine(5, T0)], now=LATE)
+    rc, out, _ = drive(g)
+    check("e2e: unanswered past the deadline -> PATCH failure, job RED",
+          rc == 1 and "verdict-state=failure" in out and g.writes[0][2]["conclusion"] == "failure", f"rc={rc} writes={g.writes}")
+    g = _VerdictGh([ONE], count=4)
+    rc, out, _ = drive(g)
+    check("e2e: unmeasurable listing -> failure written, job RED",
+          rc == 1 and g.writes and g.writes[0][2].get("conclusion") == "failure", f"rc={rc} writes={g.writes}")
+    g = _VerdictGh([ONE], fail_reviews=True)
+    rc, out, text = drive(g)
+    check("e2e: a failed read -> 'could not measure' failure written, job RED",
+          rc == 1 and g.writes and g.writes[0][2].get("conclusion") == "failure"
+          and "unmeasurable" in g.writes[0][2]["external_id"], f"rc={rc} writes={g.writes}")
+    g = _VerdictGh([ONE, TWO, ANSWER], runs=[mine(5, LATE)])
+    rc, out, _ = drive(g)
+    check("e2e: a newer verdict on file -> writes nothing", rc == 0 and g.writes == [], f"rc={rc} writes={g.writes}")
+    g = _VerdictGh([ONE, TWO, ANSWER], fail_write=True)
+    rc, out, text = drive(g)
+    check("NEG e2e: the check-run cannot be written -> job RED, named", rc == 1 and "could not be written" in text,
+          f"rc={rc} text={text[-300:]}")
+    g = _VerdictGh([ONE, TWO, ANSWER], runs=[dict(mine(5, T0, "answered", "completed"), conclusion="success")],
+                   refuse_reopen=True)
+    rc, out, _ = drive(g)
+    old = next(c for c in g.runs if c["id"] == 5)
+    check("e2e: success -> pending when GitHub will not re-open: old closed as failure, a new pending one",
+          rc == 0 and old["conclusion"] == "failure" and SUPERSEDED_KIND in old["external_id"]
+          and any(c["status"] == "in_progress" for c in g.runs if c["id"] != 5), f"runs={g.runs}")
+    rc, out, _ = drive(g)
+    check("e2e: ... and the next pending verdict PATCHes the new one, creating nothing more",
+          rc == 0 and len(g.runs) == 2, f"runs={[(c['id'], c['status']) for c in g.runs]}")
+
+    # ── the sweep: only a pending/unmeasured verdict of a same-repo, non-draft pull request is re-judged
+    def pull(n, draft=False, repo="o/r"):
+        return {"number": n, "draft": draft, "head": {"sha": HEAD, "repo": {"full_name": repo}}}
+    g = _VerdictGh([ONE, ANSWER], runs=[mine(5, T0)], pulls=[pull(7), pull(8, draft=True), pull(9, repo="fork/r")])
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        rc = run_verdict_sweep("o/r", "Automatic review answered", gh=g, now_epoch=0)
+    check("sweep: a pending verdict is re-judged (its review answered -> success); draft and fork are not",
+          rc == 0 and len(g.writes) == 1 and g.writes[0][2].get("conclusion") == "success", f"rc={rc} writes={g.writes}")
+    g = _VerdictGh([ONE], runs=[dict(mine(5, T0, "answered", "completed"), conclusion="success")], pulls=[pull(7)])
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run_verdict_sweep("o/r", "Automatic review answered", gh=g, now_epoch=0)
+    check("sweep NEG: a completed success is not re-judged (it changes only on an event)", rc == 0 and g.writes == [],
+          f"writes={g.writes}")
+
+    # ── the workflows: the writer's job name and its check-run name are chosen by ONE condition
+    here = os.path.dirname(os.path.abspath(__file__))
+    wf_dir = os.path.join(os.path.dirname(here), "workflows")
+    if os.path.isdir(wf_dir) and os.path.exists(os.path.join(wf_dir, "node-repo-review-answered.yml")):
+        for wf in ("review-answered.yml", "node-repo-review-answered.yml"):
+            with open(os.path.join(wf_dir, wf), encoding="utf-8") as f:
+                text = f.read()
+            named = re.findall(r"\$\{\{\s*\((.+?)\)\s*&&\s*'" + re.escape(VERDICT_WRITER_JOB) + "'", text)
+            chosen = re.findall(r"VERDICT_CHECK_RUN:\s*\$\{\{\s*\((.+?)\)\s*&&", text)
+            check(f"{wf}: writer job name and VERDICT_CHECK_RUN share one condition",
+                  len(named) == 1 and len(chosen) == 1 and named[0] == chosen[0], f"name={named} env={chosen}")
+            check(f"{wf}: the condition excludes forks, Dependabot and the merge queue",
+                  bool(named) and "head.repo.full_name == github.repository" in named[0]
+                  and "dependabot[bot]" in named[0], f"{named}")
+    else:
+        print(f"self-test note pending: the workflows are not beside this copy ({wf_dir}) — the workflow check runs in core's tree")
     return failures
 
 
@@ -5012,6 +5624,13 @@ def _main(argv=None) -> int:
                     help="the outage retry listener: re-run a completed `Review answered` run (--run-id, --attempt) "
                          "iff its red was an API outage, never a verdict (retry_outage_action)")
     ap.add_argument("--attempt", type=int, help="--retry-outage: the run attempt that completed (workflow_run.run_attempt)")
+    ap.add_argument("--verdict-check-run", metavar="NAME",
+                    help="policy review-pending-while-answering: judge --pr ONCE and write the verdict as the check-run NAME "
+                         "(the required context's exact name) — success, PENDING (in_progress) while threads await answers or "
+                         "the head awaits its review within the deadlines, failure otherwise; exit 1 only on failure")
+    ap.add_argument("--verdict-sweep", action="store_true",
+                    help="the scheduled half: re-judge every open pull request whose --verdict-check-run is pending or "
+                         "unmeasured (a review landing or a deadline passing raises no event here)")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
@@ -5039,6 +5658,24 @@ def _main(argv=None) -> int:
             print(f"::error::--refresh-read-run needs --pr <number> and --run-id <number>, got {args.pr!r} / {args.run_id!r}")
             return 2
         return run_refresh(args.repo, int(args.pr), args.event, args.run_id, args.evaluated_at or "")
+    if args.verdict_sweep or args.verdict_check_run:
+        name = (args.verdict_check_run or "").strip()
+        if not name:
+            print("::error::--verdict-sweep needs --verdict-check-run <the required context's exact name>")
+            return 2
+        if args.merge_group_ref or args.as_of or args.wait_for_review or args.settle_replies:
+            print("::error::--verdict-check-run takes --repo and --pr (or --verdict-sweep) only — a merge-queue entry, a "
+                  "replay and the review/settle waits all belong to the job-shaped check (policy review-pending-while-answering)")
+            return 2
+        if args.verdict_sweep:
+            if args.pr:
+                print("::error::--verdict-sweep re-judges every open pull request; it takes no --pr")
+                return 2
+            return run_verdict_sweep(args.repo, name)
+        if not args.pr or not re.fullmatch(r"[1-9]\d*", args.pr):
+            print(f"::error::--verdict-check-run needs --pr <number>, got {args.pr!r}")
+            return 2
+        return run_verdict(args.repo, int(args.pr), name)
     if args.request_review_sweep:
         if args.pr or args.merge_group_ref or args.before:
             print("::error::--request-review-sweep takes --repo only")
