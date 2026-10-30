@@ -69,6 +69,21 @@ public class BuildHostsRecordTest
     }
 
     [Fact]
+    public void AChannelsFloor_IsDeclared_DefaultsToZero_AndRoundTrips()
+    {
+        // Declared, never derived (Doc/Architecture/BuildHosts → "Declared host floor"): an unstated floor scales to zero.
+        var record = DeploymentRecordJson.Read(Json)!;
+        Assert.Equal(0, record.BuildHosts!.Channel(BuildHostsBlock.LatestChannel)!.MinReplicas);
+
+        var floored = DeploymentRecordJson.Read(Json.Replace("\"maxReplicas\": 3", "\"maxReplicas\": 3, \"minReplicas\": 1"))!;
+        Assert.Equal((1, 3), (floored.BuildHosts!.Channels["latest"].MinReplicas, floored.BuildHosts.Channels["latest"].MaxReplicas));
+        var json = DeploymentRecordJson.Write(floored);
+        Assert.Equal(1, (int)JsonNode.Parse(json)!["buildHosts"]!["channels"]!["latest"]!["minReplicas"]!);
+        Assert.Equal(1, DeploymentRecordJson.Read(json)!.BuildHosts!.Channels["latest"].MinReplicas);
+        Assert.Equal(0, floored.BuildHosts.Channels["stable"].MinReplicas);
+    }
+
+    [Fact]
     public void ARecordThatSaysNothing_RunsNoHosts()
     {
         var record = DeploymentRecordJson.Read("""{ "$type": "DeploymentContent", "host": "portal.example.com" }""")!;
