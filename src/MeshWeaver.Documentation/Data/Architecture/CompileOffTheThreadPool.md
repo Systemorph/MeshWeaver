@@ -243,6 +243,58 @@ Three more holes the same review found, each of which could again leave a run wr
   transcript entry (`activity.codeRun.kernelSaturated`, with the slot count) at its own failure boundary;
   the exception text stays for the host's diagnostics.
 
+**The executor settles every run it owns (#7362).** Two gaps remained inside `KernelExecutor`, and
+either could leave a run `Running` for good:
+
+- **Disposal wrote nothing.** When the executor or its host went away (a recycle, the idle sweep after a
+  crash, a process shutting down), its disposal stopped the submission pump and released the settlement
+  waiters, but recorded no verdict. Every run in flight or queued stayed `Running`. A C# cell dispatched
+  by `CodeNodeType` was then failed by the dispatcher with a delivery fault (*"Hub … was disposed before
+  the response arrived"*), but nothing said why, and a run nobody observed stayed `Running`.
+  - The executor now keeps every run it accepted and has not settled: its outcome sink, plus its own
+    cancellation.
+  - At the FIRST instant of teardown (`IMessageHub.ShuttingDown` — its own disposal, or the host's freeze
+    cascading into it) it fails each of them through the same sink a script failure takes. That records
+    `Failed` with a keyed reason, `activity.codeRun.kernelHostShutDown` (en + de), answers the caller and
+    releases the settlement.
+  - Only then is the run's token cancelled, so a still-running script is asked to stop. Cancelling first
+    would record a user's cancel that never happened.
+  - It cannot be done from the disposal registrants: those run in the ShutDown phase, after the host has
+    quiesced, force-cancelled the forwarded submission and stopped taking the Activity's writes. A
+    verdict written there never lands.
+  - `Complete` is idempotent, so a run that settled first keeps its own verdict.
+- **A cancel reached only the script pass, and only the newest run.** The cancel (the Activity's
+  `RequestedStatus = Cancelled`) tripped one token: the one most recently handed in, which is a QUEUED
+  run as soon as two are pending. That token reached only `RunOnePass`. A run parked in a preparation
+  stage — the session warm-up, the cell-surface resolution, a NuGet restore — could not be cancelled at
+  all.
+  - The cancel now trips every pending run's token.
+  - The preparation stages honour that token, so a cancel ends a run there `Cancelled` at once:
+    - The session warm-up takes it inside its pool leaf, so the leaf is never abandoned while it could
+      still write the session.
+    - The cell-surface and NuGet stages are pure: they return what they resolved, run under
+      `KernelExecutor.UntilCancelled`, and their result is published into the session in the next
+      step, on the pump. A stage abandoned by a cancel writes nothing. A result that loses the race
+      releases its leases, and the provider's collection (`CellSurfaceAssemblyProvider.CollectOwned`)
+      disposes the leases it had buffered when it is unsubscribed.
+    - A run whose token is already cancelled never subscribes a stage and never reaches the script.
+  - A callback that a script registered on its token and that throws cannot stop the loops that cancel,
+    or fail, the other pending runs.
+  - A submission admitted while teardown is already running is failed at once and never queued.
+  - The script pass keeps its cooperative token: abandoning a RUNNING script would let the next
+    submission start beside it.
+
+Pinned in Graph.Test on a real mesh with the real kernel:
+- `KernelHostDisposedMidRunFailsTheRunTest`: a script parked on a gate when its Activity hub is disposed
+  ends `Failed` with the keyed reason. Its control is a run that finished before its host went away and
+  keeps `Succeeded`.
+- `KernelCancelReachesAParkedStageTest`: a cell-surface provider that never answers parks the run in
+  that stage, and a cancel ends it `Cancelled`.
+- `KernelOrdinaryRunIsUnaffectedTest`: an ordinary run still succeeds with its value.
+
+The first two fail on the unfixed executor: the run ends `Failed` without the reason, or stays
+`Running` until the test's bound.
+
 Tests, each with a negative control that fails on the unfixed code:
 
 - `CompileCpuLaneIsBoundedAndOffThePoolTest` (Hosting.Test) — six parked leaves on a cap-2 lane: at

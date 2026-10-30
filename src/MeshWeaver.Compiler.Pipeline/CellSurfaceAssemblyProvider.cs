@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Kernel.Hub;
@@ -87,7 +88,7 @@ internal sealed class CellSurfaceAssemblyProvider(
         if (candidatePaths.Count == 0)
             return Observable.Return<IReadOnlyCollection<CellSurfaceAssembly>>([]);
 
-        return candidatePaths
+        return CollectOwned(candidatePaths
             .Select(path => ReadNodeAsSystem(hub, path)
                 .SelectMany(node =>
                 {
@@ -99,10 +100,51 @@ internal sealed class CellSurfaceAssemblyProvider(
                 }))
             .Merge()
             .Where(resolved => resolved is not null)
-            .Select(resolved => resolved!)
-            .ToList()
-            .Select(resolved => (IReadOnlyCollection<CellSurfaceAssembly>)resolved);
+            .Select(resolved => resolved!));
     }
+
+    /// <summary>
+    /// <c>ToList</c> that OWNS what it buffers (#7362 review). Each entry carries a lease on its
+    /// collectible load context. A plain <c>ToList</c> unsubscribed — the kernel cancelled the run
+    /// parked here — or faulted while another entry is still resolving drops the entries it had
+    /// already buffered, and their leases are never disposed, so those contexts can never unload.
+    /// Here the buffered leases are handed over only WITH the completed list; an unsubscribe before
+    /// that, or an error, disposes them.
+    /// </summary>
+    internal static IObservable<IReadOnlyCollection<CellSurfaceAssembly>> CollectOwned(
+        IObservable<CellSurfaceAssembly> entries)
+        => Observable.Create<IReadOnlyCollection<CellSurfaceAssembly>>(observer =>
+        {
+            var held = ImmutableList<CellSurfaceAssembly>.Empty;
+            var settled = 0;
+            void ReleaseHeld()
+            {
+                foreach (var entry in Interlocked.Exchange(ref held, ImmutableList<CellSurfaceAssembly>.Empty))
+                    entry.Lease.Dispose();
+            }
+
+            var subscription = entries.Subscribe(
+                entry => ImmutableInterlocked.Update(ref held, list => list.Add(entry)),
+                error =>
+                {
+                    if (Interlocked.Exchange(ref settled, 1) != 0) return;
+                    ReleaseHeld();
+                    observer.OnError(error);
+                },
+                () =>
+                {
+                    if (Interlocked.Exchange(ref settled, 1) != 0) return;
+                    var handedOver = Interlocked.Exchange(ref held, ImmutableList<CellSurfaceAssembly>.Empty);
+                    observer.OnNext(handedOver);
+                    observer.OnCompleted();
+                });
+            return Disposable.Create(() =>
+            {
+                subscription.Dispose();
+                if (Interlocked.Exchange(ref settled, 1) == 0)
+                    ReleaseHeld();
+            });
+        });
 
     /// <summary>
     /// Authoritative single-node read under the System identity. The scope is established at
