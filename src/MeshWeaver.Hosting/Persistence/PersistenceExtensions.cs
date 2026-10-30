@@ -727,7 +727,11 @@ public static class PersistenceExtensions
                 // with the same validators the storage providers use — resolved lazily, in the scope
                 // SingletonNodeValidators owns (MeshWeaver#6584), see there.
                 sp.GetRequiredService<SingletonNodeValidators>().Validators,
-                sp.GetService<AccessService>());
+                sp.GetService<AccessService>())
+            {
+                // What an open secured query follows grants on (MeshWeaver#7365), read at subscribe time.
+                AccessFollowServices = sp,
+            };
         });
 
         // AddMeshNodes seed flows through StaticMeshNodeListProvider, registered
@@ -822,7 +826,11 @@ public static class PersistenceExtensions
                 // with the same validators the storage providers use — resolved lazily, in the scope
                 // SingletonNodeValidators owns (MeshWeaver#6584), see there.
                 sp.GetRequiredService<SingletonNodeValidators>().Validators,
-                sp.GetService<AccessService>());
+                sp.GetService<AccessService>())
+            {
+                // What an open secured query follows grants on (MeshWeaver#7365), read at subscribe time.
+                AccessFollowServices = sp,
+            };
         });
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StaticNodeQueryProvider>());
 

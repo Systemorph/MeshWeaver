@@ -212,10 +212,31 @@ The gate now builds up to *N* sets at a time:
 
 Only the wall clock changes:
 
-- Each worker owns its own work directory (`Combined.cs`, `check.csproj`, `obj/`). It restores once
-  and passes `--no-restore` after, as the single directory used to.
+- Each worker owns its own work directory (`Combined.cs`, `check.csproj`, `obj/`).
+- The directories are restored ONE AT A TIME, before the first build. Builds then pass
+  `--no-restore`.
+- A directory counts as restored only while its restore is known good. If a restore fails, or a
+  build fails with no `CS` diagnostic, that directory's next build restores again.
 - Verdicts print in the serial order as they arrive.
 - A closing line gives the summed build time against the wall time.
+
+### Why the restores are serial (#7596)
+
+The first version restored inside each directory's first build, so on a cold runner four restores
+started at the same moment. The restore touches state shared across processes: the CLI's first-use
+setup and the NuGet caches. One build of that first wave then exited 1 with nothing on its output.
+It happened in compatibility leg after compatibility leg on main CD (for example run 40925753083:
+Reinsurance, SocialMedia and Crm). The same sets built clean in the same job's second, warm
+invocation. Because the new image is always compiled first, the red always read as "this core build
+broke the satellite".
+
+A second defect multiplied it. The directory's "restored" flag flipped after any build, so every
+later set that drew the failed directory ran `--no-restore` and failed with `NETSDK1004: Assets file
+… not found`. One infrastructure fault was reported as up to 53 NodeType breaks in one leg.
+
+Not established: the exact process-level cause of the empty-output exit, because the gate printed
+nothing about it. A build that fails with no diagnostic now carries the last lines of its output in
+the failure reason.
 
 Measured locally on the Plugins Hosting unit against the 3.1.11919 portal image's reference set
 (48 sets, all clean):
@@ -228,7 +249,8 @@ Measured locally on the Plugins Hosting unit against the 3.1.11919 portal image'
 | 18 | 40 s |
 
 The 48 verdict lines were identical in all four runs. The self-test asserts the serial order, no
-shared work directory, one restore per directory, and real overlap. Its negative controls (a pool
+shared work directory, one restore per directory, run serially before any build, a redone restore
+after a failed one, and real overlap. Its negative controls (a pool
 fixed at one worker, and one yielding in completion order) both go red.
 
 ## Related
