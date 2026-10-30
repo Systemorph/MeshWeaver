@@ -183,6 +183,46 @@ public partial class QueryParser
     }
 
     /// <summary>
+    /// A node <paramref name="path"/> as ONE query value: the quoted literal (<see cref="QuoteLiteral"/>)
+    /// whenever one can hold it. A path carrying BOTH quote characters has no quoted literal (the query
+    /// language has no escape), and is then written bare, as it always was: a bare value runs to the next
+    /// whitespace and reads a quote inside it as data, so such a path without whitespace still parses
+    /// whole. One that also carries whitespace (or starts with a quote) cannot be written at all, and
+    /// that is refused by name rather than read as a different query.
+    /// </summary>
+    /// <param name="path">The node path.</param>
+    /// <returns>The value to splice after <c>path:</c> or <c>namespace:</c>.</returns>
+    /// <exception cref="ArgumentException">The path has both quote characters and whitespace, query syntax
+    /// (<c>| * ( )</c>) or a leading quote, or does not read back as exactly itself.</exception>
+    public static string PathLiteral(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (!path.Contains('"') || !path.Contains('\''))
+            return QuoteLiteral(path);
+        // 🚨 The bare form is accepted only when it reads back as EXACTLY this one path: a bare value
+        // still carries query syntax, so `a'b"c|other` would be two path alternatives and a `*`, `(`
+        // or `)` a pattern or a group — a copy query aimed at a different set of nodes. Parse it
+        // and demand one exact anchor equal to the input and nothing else.
+        if (path.Length > 0 && path[0] is not ('"' or '\'') && !path.Any(char.IsWhiteSpace)
+            && path.AsSpan().IndexOfAny(BareValueSyntax) < 0 && ReadsBackAsExactly(path))
+            return path;
+        throw new ArgumentException(
+            $"'{path}' contains both quote characters and whitespace, query syntax or a leading quote, so it cannot be written as one query value.",
+            nameof(path));
+    }
+
+    private const string BareValueSyntax = "|*()";
+
+    private static bool ReadsBackAsExactly(string path)
+    {
+        var parsed = new QueryParser().Parse($"path:{path}");
+        return parsed.Path == path
+               && parsed.Filter is null
+               && string.IsNullOrEmpty(parsed.TextSearch)
+               && (parsed.Paths is null || (parsed.Paths.Count == 1 && parsed.Paths[0] == path));
+    }
+
+    /// <summary>
     /// Recognizes a whole-query explicit path list <c>[a, b, c]</c> and returns its ordered,
     /// trimmed, non-blank entries. Returns <c>false</c> (and null) when the query is not a
     /// bracket list or contains no entries.
