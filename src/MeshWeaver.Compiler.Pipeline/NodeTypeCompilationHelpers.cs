@@ -457,9 +457,9 @@ internal static class NodeTypeCompilationHelpers
                             is null)
                             return false;
                         logger?.LogWarning(
-                            "Compile watcher: {HubPath} is of unknown module membership — its last build keeps "
-                            + "serving and its provenance is kept, so the next release after a complete "
-                            + "discovery decides afresh. {Reason}",
+                            "Compile watcher: {HubPath} is of unknown module membership (or declares a module "
+                            + "version with no install record, #7336) — its last build keeps serving and its "
+                            + "provenance is kept, so the next release decides afresh. {Reason}",
                             hubPath, reason);
                         SettlePending(parkedDef => BuildDeliveryHold.StampErrorText(
                             BuildDeliveryHold.SettleUnknownMembership(
@@ -823,7 +823,17 @@ internal static class NodeTypeCompilationHelpers
                         var unknownMembership = pendingDefinition is not null && !moduleContent
                             ? Volatile.Read(ref incompleteDiscovery)
                             : null;
-                        if (pendingDefinition is null || (!moduleContent && unknownMembership is null))
+                        // 🚨 #7336 — owner decision: "park only if there is no install record". A
+                        // partition root that DECLARES a module version (CurrentModuleVersion) marks
+                        // the type as a module's content even when no bundle offered it and it never
+                        // adopted one. In an untracked partition such a type compiles locally only
+                        // when an install record names the partition (a registry install, dev builds
+                        // included); with no record it is a module's leftover copy and parks, named.
+                        var declaredModuleVersion = pendingDefinition is null
+                            ? null
+                            : DeclaredModuleVersionOnly(pendingDefinition, moduleContent);
+                        if (pendingDefinition is null
+                            || (!moduleContent && unknownMembership is null && declaredModuleVersion is null))
                         {
                             Dispatch();
                             return;
@@ -833,36 +843,73 @@ internal static class NodeTypeCompilationHelpers
                         onDemandAdoptionSubs.Add(tracking);
                         tracking.Disposable = PartitionTracksSources(hub, hubPath)
                             .Timeout(OnDemandAdoptionBudget)
+                            // The install-record read is asked only where it can change the verdict:
+                            // an untracked partition, a type that is module content by its declared
+                            // version alone. Unreadable reads null, and null compiles (below).
+                            .SelectMany(tracked => tracked || declaredModuleVersion is null
+                                ? Observable.Return((Tracked: tracked, Installed: (bool?)null))
+                                : InstalledPartitions(hub, logger)
+                                    .Select(installed => (Tracked: tracked,
+                                        Installed: installed is null
+                                            ? (bool?)null
+                                            : installed.Contains(PartitionOf(hubPath)))))
                             .Finally(() => onDemandAdoptionSubs.Remove(tracking))
                             .Subscribe(
-                                tracked =>
+                                answer =>
                                 {
-                                    if (tracked)
+                                    if (answer.Tracked)
                                     {
                                         Dispatch();
                                         return;
                                     }
-                                    var reason = unknownMembership is null
+                                    var declaredWithoutRecord = declaredModuleVersion is not null
+                                                                && answer.Installed == false;
+                                    if (!moduleContent && !declaredWithoutRecord && unknownMembership is null)
+                                    {
+                                        // An install record names the partition (or the records
+                                        // could not be read — not a verdict, as everywhere in
+                                        // this gate): a registry-installed package compiles here.
+                                        logger?.LogInformation(
+                                            "Compile watcher: {HubPath} declares module version {Version} in an "
+                                            + "untracked partition, and an install record names it (record read: "
+                                            + "{Readable}) — compiling locally (MeshWeaver#7336).",
+                                            hubPath, declaredModuleVersion, answer.Installed is not null);
+                                        Dispatch();
+                                        return;
+                                    }
+                                    var reason = moduleContent
                                         ? PrebuiltAssemblySeeder.UntrackedPartitionParkReason(hubPath, offeredByBundle)
-                                        : PrebuiltAssemblySeeder.UnknownModuleMembershipParkReason(
-                                            hubPath, unknownMembership);
-                                    var reasonText = unknownMembership is null
+                                        : declaredWithoutRecord
+                                            ? PrebuiltAssemblySeeder.DeclaredModuleWithoutInstallRecordParkReason(
+                                                hubPath, declaredModuleVersion!)
+                                            : PrebuiltAssemblySeeder.UnknownModuleMembershipParkReason(
+                                                hubPath, unknownMembership!);
+                                    var reasonText = moduleContent
                                         ? PrebuiltAssemblySeeder.UntrackedPartitionParkText(hubPath, offeredByBundle)
-                                        : PrebuiltAssemblySeeder.UnknownModuleMembershipParkText(
-                                            hubPath, unknownMembership);
+                                        : declaredWithoutRecord
+                                            ? PrebuiltAssemblySeeder.DeclaredModuleWithoutInstallRecordParkText(
+                                                hubPath, declaredModuleVersion!)
+                                            : PrebuiltAssemblySeeder.UnknownModuleMembershipParkText(
+                                                hubPath, unknownMembership!);
                                     // #3583 — a type that still holds a build is HELD, not parked
                                     // dead: the last build keeps serving (same module MAJOR) or is
                                     // refused-but-not-errored (a MAJOR bump), and a person is told.
-                                    if (unknownMembership is null
+                                    // #7336 — the declared-without-record hold keeps the record's own
+                                    // provenance, exactly as the unknown-membership hold does: a
+                                    // delivery provenance would read as module content for ever and
+                                    // outlive the install record that is supposed to lift it.
+                                    if (moduleContent
                                             ? SettleAsHold(pendingDefinition, reason, reasonText)
                                             : SettleAsUnknownMembershipHold(pendingDefinition, reason, reasonText))
                                         return;
                                     logger?.LogError(
                                         "Compile watcher: {HubPath} is a module's content (or of unknown "
-                                        + "membership: {Unknown}) in a partition this mesh does not track, and "
+                                        + "membership: {Unknown}; declared module version without an install "
+                                        + "record: {Declared}) in a partition this mesh does not track, and "
                                         + "no prebuilt build for it landed — PARKING with a named refusal "
                                         + "instead of compiling (offered by a bundle: {Offered}). {Reason}",
-                                        hubPath, unknownMembership is not null, offeredByBundle, reason);
+                                        hubPath, unknownMembership is not null, declaredWithoutRecord,
+                                        offeredByBundle, reason);
                                     var registry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>()
                                         ?? parkRegistry;
                                     registry?.OnCompileFailed(
@@ -3719,6 +3766,204 @@ internal static class NodeTypeCompilationHelpers
             .Take(1);
     }
 
+    /// <summary>The partition that holds the install records — one <c>Package</c> node per installed
+    /// package at <c>Plugins/{id}</c>, written by the platform installer after the content lands and
+    /// removed by an uninstall's phase 1 (<c>PackageInstaller.InstalledPartition</c>).</summary>
+    internal const string InstallRecordsPartition = "Plugins";
+
+    /// <summary>The NodeType of an install record (<c>PackageInstaller.PackageNodeType</c>).</summary>
+    internal const string InstallRecordNodeType = "Package";
+
+    /// <summary>The children listing of the install records — the EXISTENCE half of the read
+    /// (<see cref="InstalledPartitions"/>).</summary>
+    internal static readonly string InstallRecordsQuery =
+        $"path:{InstallRecordsPartition} scope:children nodeType:{InstallRecordNodeType}";
+
+    /// <summary>How long each half of <see cref="InstalledPartitions"/> may take. A bound on a
+    /// BROKEN read, not a slow one: hitting it yields "unknown", never a default answer.</summary>
+    internal static readonly TimeSpan InstallRecordReadBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 🚨 MeshWeaver#7336 — the partitions an install record names on this mesh, or
+    /// <see langword="null"/> when that could not be read. ONE emission; never faults.
+    ///
+    /// <para>The CQRS split for a set of records that may or may not exist: a fresh children listing
+    /// of <see cref="InstallRecordsPartition"/> says WHICH records exist, and each listed record's
+    /// content is then read from its own node (as System) for the partition it targets —
+    /// <c>targetPartition</c> when it declares one, else its id, which is the partition by default
+    /// (<c>PackageInstaller.TargetPartitionOf</c>). The content is read through JSON, in whatever
+    /// shape it arrives, so the compiler layer needs no reference to the catalog's
+    /// <c>PackageManifest</c>. A listed record that has gone by the time it is read is not
+    /// installed; a listed record that cannot be read, or a listing that is incomplete (silent providers,
+    /// <c>SnapshotIncomplete</c>), makes the whole answer unknown (null) — never a guessed target.</para>
+    ///
+    /// <para>The listing is a fresh query, never the shared synced cache: a replayed snapshot taken
+    /// before the installer wrote its record would read "no record" for a package whose release
+    /// request (issued right after the record write) is the very thing being decided.</para>
+    /// </summary>
+    internal static IObservable<ImmutableHashSet<string>?> InstalledPartitions(IMessageHub hub, ILogger? logger)
+    {
+        var mesh = hub.ServiceProvider.GetService<IMeshService>();
+        if (mesh is null)
+            return Observable.Return<ImmutableHashSet<string>?>(null);
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var options = hub.JsonSerializerOptions;
+        return access
+            .RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(InstallRecordsQuery)).Take(1))
+            .Timeout(InstallRecordReadBudget)
+            .SelectMany(change =>
+            {
+                var listed = CompleteInstallRecordListing(change)
+                    .Where(n => !string.IsNullOrWhiteSpace(n.Path) && !string.IsNullOrWhiteSpace(n.Id))
+                    .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => (Path: g.Key, Id: g.First().Id))
+                    .ToArray();
+                if (listed.Length == 0)
+                    return Observable.Return(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
+                return listed
+                    .Select(record => access
+                        .RunAsSystem(() => hub.GetMeshNodeOutcome(
+                            record.Path, InstallRecordReadBudget, ReadTimeoutBehavior.EmitNull))
+                        .Take(1)
+                        .ToList()
+                        // An empty read is no answer: unknown, never the record's id.
+                        .Select(read => read.Count == 0
+                            ? throw new InvalidOperationException(
+                                $"the install record '{record.Path}' answered no read, so the partition it targets is unknown")
+                            : InstalledTargetOf(read[0], record.Path, record.Id, options)))
+                    .Merge()
+                    .ToList()
+                    .Select(targets => targets
+                        .OfType<string>()
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+            })
+            .Take(1)
+            .Select(set => (ImmutableHashSet<string>?)set)
+            .DefaultIfEmpty(null)
+            .Catch<ImmutableHashSet<string>?, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "Install records under '{Partition}' could not be read within {Budget}s — whether a "
+                    + "package is installed is UNKNOWN (MeshWeaver#7336).",
+                    InstallRecordsPartition, InstallRecordReadBudget.TotalSeconds);
+                return Observable.Return<ImmutableHashSet<string>?>(null);
+            });
+    }
+
+    /// <summary>
+    /// The install-record listing's items, when the listing was read COMPLETELY. A frame naming
+    /// silent providers, or marked <see cref="QueryResultChange{T}.SnapshotIncomplete"/>, is a FLOOR
+    /// that may be missing a record, and read as the installed set it would park or hold an installed
+    /// package during a provider failure. So it throws, which <see cref="InstalledPartitions"/> turns
+    /// into "unknown" (null) — and unknown compiles. Pure.
+    /// </summary>
+    /// <param name="change">The listing's first frame.</param>
+    /// <returns>The listed records.</returns>
+    /// <exception cref="InvalidOperationException">The listing is incomplete.</exception>
+    internal static IReadOnlyList<MeshNode> CompleteInstallRecordListing(QueryResultChange<MeshNode> change)
+    {
+        if (change.SilentProviders is { Count: > 0 } silent)
+            throw new InvalidOperationException(
+                $"the install-record listing under '{InstallRecordsPartition}' is INCOMPLETE: query provider(s) "
+                + $"[{string.Join(", ", silent)}] did not answer, so which packages are installed is unknown");
+        if (change.SnapshotIncomplete)
+            throw new InvalidOperationException(
+                $"the install-record listing under '{InstallRecordsPartition}' is INCOMPLETE: a provider dropped "
+                + "part of its read, so which packages are installed is unknown");
+        return change.Items;
+    }
+
+    /// <summary>
+    /// The partition one listed install record names, from its point read: its
+    /// <c>targetPartition</c>, else its id (the installer's default) — but only when the record was
+    /// READ. <see langword="null"/> when the record is genuinely gone (not installed). Any other
+    /// outcome — unavailable, a delete in flight, content that could not be read — is UNKNOWN and
+    /// throws: substituting the id would invent a target partition (a record <c>Store</c> that
+    /// targets <c>Shop</c> would then park <c>Shop</c>). Pure.
+    /// </summary>
+    /// <param name="outcome">The point read of the record.</param>
+    /// <param name="path">The record's path, for the refusal.</param>
+    /// <param name="id">The record's id — its target when its readable content declares none.</param>
+    /// <param name="options">Serializer options for the content.</param>
+    /// <returns>The target partition, or null when the record is absent.</returns>
+    /// <exception cref="InvalidOperationException">The record's target could not be determined.</exception>
+    internal static string? InstalledTargetOf(
+        NodeReadOutcome outcome, string path, string id, System.Text.Json.JsonSerializerOptions options)
+        => outcome.Status switch
+        {
+            NodeReadStatus.Absent => null,
+            NodeReadStatus.Present when ReadsAsObject(outcome.Node, options) =>
+                TargetPartitionOf(outcome.Node, options) ?? id,
+            NodeReadStatus.Present => throw new InvalidOperationException(
+                $"the install record '{path}' was read but its content could not be, so the partition it targets is unknown"),
+            _ => throw new InvalidOperationException(
+                $"the install record '{path}' could not be read ({outcome.Status}), so the partition it targets is unknown",
+                outcome.Failure),
+        };
+
+    /// <summary>Whether a record's content reads as a JSON object — the shape a <c>targetPartition</c>
+    /// member is read from. Pure.</summary>
+    private static bool ReadsAsObject(MeshNode? record, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (record?.Content is null)
+            return false;
+        try
+        {
+            var element = record.Content switch
+            {
+                System.Text.Json.JsonElement e => e,
+                System.Text.Json.Nodes.JsonNode n => System.Text.Json.JsonSerializer.SerializeToElement(n, options),
+                var o => System.Text.Json.JsonSerializer.SerializeToElement(o, o.GetType(), options),
+            };
+            return element.ValueKind == System.Text.Json.JsonValueKind.Object;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The <c>targetPartition</c> member of an install record's content, whatever shape the
+    /// content arrived in; null when it carries none. Pure.</summary>
+    internal static string? TargetPartitionOf(MeshNode? record, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (record?.Content is null)
+            return null;
+        try
+        {
+            var element = record.Content switch
+            {
+                System.Text.Json.JsonElement e => e,
+                System.Text.Json.Nodes.JsonNode n => System.Text.Json.JsonSerializer.SerializeToElement(n, options),
+                var o => System.Text.Json.JsonSerializer.SerializeToElement(o, o.GetType(), options),
+            };
+            if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return null;
+            foreach (var member in element.EnumerateObject())
+                if (string.Equals(member.Name, "targetPartition", StringComparison.OrdinalIgnoreCase)
+                    && member.Value.ValueKind == System.Text.Json.JsonValueKind.String
+                    && member.Value.GetString()?.Trim().Trim('/') is { Length: > 0 } target)
+                    return target;
+            return null;
+        }
+        catch (Exception)
+        {
+            // An unserialisable record keeps its id as its target — the installer's default.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 🚨 MeshWeaver#7336 — the module version a NodeType's partition root DECLARES, when that alone
+    /// marks the type as a module's content: not already module content by
+    /// <see cref="IsModuleContent"/>, and <see cref="NodeTypeDefinition.CurrentModuleVersion"/> set.
+    /// Such a type compiles locally only where an install record names its partition. Pure.
+    /// </summary>
+    internal static string? DeclaredModuleVersionOnly(NodeTypeDefinition def, bool moduleContent) =>
+        !moduleContent && def.CurrentModuleVersion is { Length: > 0 } version && !string.IsNullOrWhiteSpace(version)
+            ? version
+            : null;
+
     /// <summary>
     /// 🚨 MeshWeaver#6930 — the types among <paramref name="candidates"/> that the untracked-module
     /// gate of the compile watcher REFUSES a local compile: a module's content (<see cref="IsModuleContent"/>)
@@ -3848,8 +4093,26 @@ internal static class NodeTypeCompilationHelpers
                             return Observable.Return(false);
                         });
 
-                return completed.Select(complete => inUntracked
-                    .Where(c => !complete || IsModuleContent(c.Value!, offered.ContainsKey(c.Key)))
+                // #7336 — a type that is module content by its DECLARED version alone compiles in
+                // the batch only where an install record names its partition; the records are
+                // read once per pass, and only when such a type is among the candidates. An
+                // unreadable read (null) refuses nothing, as the watcher's gate compiles on it.
+                var anyDeclaredOnly = inUntracked.Any(c => c.Value!.CurrentModuleVersion is { Length: > 0 });
+                var installed = anyDeclaredOnly
+                    ? InstalledPartitions(hub, logger)
+                    : Observable.Return<ImmutableHashSet<string>?>(null);
+
+                return completed.Zip(installed, (complete, records) => inUntracked
+                    .Where(c =>
+                    {
+                        if (!complete)
+                            return true;
+                        var moduleContent = IsModuleContent(c.Value!, offered.ContainsKey(c.Key));
+                        return moduleContent
+                               || (DeclaredModuleVersionOnly(c.Value!, moduleContent) is not null
+                                   && records is not null
+                                   && !records.Contains(PartitionOf(c.Key)));
+                    })
                     .Select(c => c.Key)
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
             })
