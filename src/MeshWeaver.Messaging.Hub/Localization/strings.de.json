@@ -130,6 +130,7 @@
   "access.anonymousDenied.signInRequired": "Melden Sie sich an, um auf '{0}' zuzugreifen: Diese Instanz erlaubt keinen anonymen Zugriff.",
   "access.apiToken.principalFixed": "Das Token '{0}' gehört '{1}': der Principal eines bestehenden API-Tokens ändert sich nie.",
   "access.apiToken.principalNotCaller": "Das API-Token '{0}' nennt '{1}', aber ein Token darf nur den schreibenden Aufrufer nennen ('{2}').",
+  "access.apiToken.foreignWrite": "Ein API-Token unter '{0}' kann nur über seinen eigenen Knoten geschrieben werden, dieser Schreibvorgang kam jedoch bei '{1}' an. Es wurde nichts geändert.",
   "access.apiTokenScope.refused": "Dieses API-Token ist auf die Scopes [{0}] beschränkt: {2} auf '{3}' erfordert den Scope '{1}'.",
   "access.apiTokenScope.mintRefused": "Dieses API-Token ist auf die Scopes [{0}] beschränkt und darf den Token-Eintrag '{1}' nicht schreiben: {2}",
   "access.partitionCreate.undetermined": "Ob '{0}' eine eigene Partition besitzt, konnte nicht festgestellt werden — der Lesevorgang für die NodeType-Definition ist fehlgeschlagen oder blieb länger als {1} s ohne Antwort. '{2}' wurde nicht erstellt; bitte versuchen Sie es erneut.",

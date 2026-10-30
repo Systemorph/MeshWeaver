@@ -120,6 +120,27 @@ public class SatelliteMainNodeLandingTest(ITestOutputHelper output) : MonolithMe
             "the control: the owner pointer under the content segment inherits the partition's grant");
     }
 
+    /// <summary>
+    /// The owner is the path before a satellite segment only when that segment holds the node
+    /// DIRECTLY (review of #7601, round 4). A node under an ordinary content segment
+    /// (<c>_ledger/Private/c1</c>), or nested inside another satellite (<c>_Comment/c1/reply</c>),
+    /// has its parent as owner, so a pointer further up must also pass the landing check: a scope in
+    /// between can break the inherited grant.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ANodeNotDirectlyInASatelliteSegment_HasItsParentAsOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await CreateVerdict(PartitionCommenter, Comment(LedgerPrivate, Partition), ct)).IsValid.Should().BeFalse(
+            "'SatLanding/_ledger/Private' breaks the partition's grant, with or without a '_Comment' segment below it");
+
+        MainNodeTrust.OwnerOf($"{Doc}/_Comment/c1/reply").Should().Be($"{Doc}/_Comment/c1",
+            "a nested satellite's owner is the satellite it sits in, so an intervening policy is checked");
+        MainNodeTrust.OwnerOf($"{Doc}/_Comment/c1").Should().Be(Doc, "the control: a direct satellite's owner");
+        (await CreateVerdict(DocCommenter, Comment($"{Doc}/_Comment", Doc), ct)).IsValid.Should().BeTrue(
+            "the control: a comment directly in its owner's satellite segment");
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task AStoredOffPartitionPointer_GovernsAnUpdateOfTheStoredNode()
     {
