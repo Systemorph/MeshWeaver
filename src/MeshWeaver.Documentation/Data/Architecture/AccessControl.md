@@ -1472,6 +1472,76 @@ satellite never borrows an owner above a scope that can break the inherited gran
 node still governs reads. The own-main-node shortcut trusts only an ancestor main node
 (`MainNodeTrust`).
 
+**An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
+the satellite and where its grants project, so a write that changed it would let its writer decide
+access: move a comment or thread under a main node they cannot write to, or point it at one whose
+grants it then borrows. Any change to `MainNode` on an update of a satellite is REFUSED, for every
+writer except System, even to a target the writer may write: this is the update half of the create
+rule, ownership derives from the path or the stored node and is never chosen. The one change allowed
+is path-derived: a never-set self-default moving to the satellite's owner, which is what the create
+and upsert normalisation writes. A satellite here is a node type governed by `SatelliteAccessRule` or
+a standard satellite type. A node that merely lives under an underscore segment (an app tile under
+`_App`) keeps a pointer its owner chose.
+
+The refusal is held at two seams, both reading `MainNodeTrust.Repoints`: the rule itself, when it is
+asked about an update with the stored node, and the owner's commit point
+(`SatelliteMainNodeCommitGuard`). The commit point is the one that matters for a routed write: a merge
+patch reaches the owning hub, whose delivery check decides from the STORED node and never sees the
+proposed pointer. A commit guard cannot read or wait, so it cannot re-validate a new target, which is
+one more reason the rule refuses rather than re-checks. Pinned by `SatelliteMainNodeRepointTest`
+(a routed repoint to a locked target and to the writer's own target are both refused; an update that
+keeps the pointer lands; the rule refuses a changed pointer and allows the path-derived one).
+
+**The invariant.** For every write by anyone but System that commits a satellite (a node of a
+satellite type before the write, after it, or both), the committed `MainNode` is one of exactly two
+values:
+
+- the STORED satellite's pointer, unchanged byte for byte; or
+- EXACTLY the satellite's path-derived security owner (`MainNodeTrust.OwnerOf`), and only where nothing
+  satellite-shaped was stored: the stored pointer was never set (empty, or the node itself), or the node
+  is entering the satellite class by a retype.
+
+A satellite CARRIED in a data change to another node's hub is refused outright, because that hub holds
+no predecessor and cannot tell a create from a rewrite. A create at the satellite's own hub is the
+creation chain's decision (the landing check above). The comparison is RAW and ordinal: `""` and `"/"`
+differ (the rule falls back to the node's own path for the first and delegates the second to the root
+scope), and so do case variants, trailing slashes and `..` segments.
+
+So a writer can move a satellite's delegation only to its path-derived owner, and only when nothing
+chose it before. A pointer that differs from that owner was written by the platform (System) or by the
+create chain, and has stood unchanged since. In particular the storage owner of the first satellite
+segment, which the platform's create and upsert normalisation writes, is NOT accepted from a writer.
+For a nested satellite it sits above the security owner (`Doc` against `Doc/_Thread/t1` for
+`Doc/_Thread/t1/_Comment/c1`). A user's upsert of a nested satellite whose stored pointer is unset is
+therefore refused; the platform repairs such rows as System.
+
+**Why the owner is not simply always derived from the path.** The stored pointer is load-bearing for
+satellites that are LEGITIMATELY governed by a node other than their path owner: an activity run for
+another node, a notification addressed to a person, a user activity naming its target. It is also what
+`is:main` and the SQL grant projection (`COALESCE(main_node, namespace)`) read. Deciding access by the
+path alone would silently change who can read those satellites, in core and in every module. Holding
+the WRITE side instead (only System or the create chain chooses a pointer; a writer keeps it or sets
+the path owner) closes the same class without moving any existing decision.
+
+A module's satellite type counts too: the guard classifies through the rule set
+(`NodeTypeAccessRuleSet.IsGovernedBy<SatelliteAccessRule>`), which tests the leased rule itself rather
+than the lease wrapper `Find` returns.
+
+Pinned by `SatelliteMainNodeRepointTest.TheInvariant_HoldsForEveryRouteThatSetsAPointer`, one row per
+route that can set a pointer:
+
+- update and merge patch: keep, chosen target, the writer's own target, a stored off-ancestry pointer
+  moved to the path owner;
+- normalisation of an unset or self pointer: to the exact owner, to the outer storage owner of a nested
+  satellite, to `/`, a trailing slash, a case variant, a `..` path, an ancestor;
+- retype in with the owner, self, empty, a chosen pointer or the outer owner, and retype out;
+- carried writes, whatever they carry;
+- a create at the satellite's own hub.
+
+A row that lands must leave the pointer at the stored value or exactly the path owner. Also pinned by
+`ANestedSatelliteStoredUnset_CannotBeNormalisedToTheOuterOwner` (routed end to end) and
+`ModuleSatelliteMainNodeRepointTest` (MeshWeaver.Compiler.Pipeline.Test).
+
 **A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
 (`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a
 create proposed, which let a person create anywhere — a service's token namespace in the Admin
