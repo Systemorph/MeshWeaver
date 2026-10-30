@@ -325,7 +325,12 @@ python3 devtools/run-node-tests.py Hosting --type InstanceAction --refs "$REFS"
 Measured on darwin-arm64 (Apple silicon): the set held 224 assemblies; `canonical-compile-check.py
 --modules Hosting` compiled 48 of 48 NodeTypes clean in 64 s; `run-node-tests.py Hosting --type
 InstanceAction` ran 56 suites with 760 of 760 cases passing in 21 s. Old sets stay under
-`~/.cache/meshweaver/refs/host-*` (one per core commit) until you delete them.
+`~/.cache/meshweaver/refs/host-*` until you delete them. The default path is keyed by the SOURCE STATE:
+the core commit, plus a digest of its uncommitted tracked changes when there are any, and the same for
+the Plugins checkout. Many worktrees sit at one commit and share this cache, so two dirty worktrees never
+build into the same path. Each build stages in a directory of its own, and a set already at its path is
+kept, never replaced under a session that uses it as `--refs`. Only this host's RID is accepted: the
+manifest declares the set host-built, which is what lets `run-node-tests.py` execute it here.
 
 ### Testcontainers on Colima: no hand-set variables
 
