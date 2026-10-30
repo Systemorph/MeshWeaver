@@ -202,6 +202,17 @@ in with one change to its caller:
 3. add a `schedule:` trigger (the sweep);
 4. update its row in `.github/lane-caller-grants.yml` (core first, as `pending:`).
 
+**Answering automatically** (policy [`review-thread-auto-answer`](../PolicyNotProse)). When Copilot's
+threads land, the control plane's babysitter pass queues ONE agent run per (pull request, head, review
+round). The pass is fed by the org webhook, and no model polls. The run answers the findings that are
+not defects ON their threads, through the App. It leaves every real defect unanswered, so this check
+stays pending until a fix with a test lands. The lane is off by default, and its model and effort are
+deployment-record config. Its manual is MeshWeaver.Plugins `Hosting/PrThreadAnswerer`.
+
+🚨 That lane's answers are posted by a **Bot**, and condition 2 above counts only a `type: User`
+reply. Until the owner decides that a marked App answer counts, they inform the author but do not
+turn this check green.
+
 🚨 **Why the lane's judging job has no `permissions:` block any more.** The writer needs
 `checks: write`. A called job's `permissions:` is a hard requirement on every caller. Writing
 `checks: write` there would startup-fail every caller that has not granted it, and five of six call
