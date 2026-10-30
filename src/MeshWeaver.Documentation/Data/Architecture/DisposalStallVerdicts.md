@@ -849,8 +849,20 @@ ALREADY exists (hosted hub, else registered stream), whose own intake decides. T
 used: past `DisposeHostedHubs` its intake admits a reply only until `ShutDown`, and the activation queue
 can be disposed later than that. With no live recipient the drop is NAMED on the request's trail
 (`REQUEST_REFUSED_DURING_MESH_TEARDOWN`, then `REPLY_UNROUTABLE_DURING_MESH_TEARDOWN`). Each delivery in
-the activation queue is answered once: the route's own verdict, its fault NACK and the queue's
-`Dispose` CLAIM it, and only the claimant answers.
+the activation queue is answered at most once, by whoever CLAIMS it: its route, when the route STARTS
+and before any side effect (the route's verdict or fault NACK then answers), or the queue's `Dispose`,
+for a delivery whose route never started. The claim used to be taken when the route reached its
+verdict. That raced `Dispose` on another thread: a route that had already handed a request to its
+recipient was still refused as "cannot route" (pinned by
+`ARequestAlreadyHandedToItsRecipient_IsNotRefusedByTheQueueTeardown`). A route that `Dispose` cuts
+mid-flight therefore keeps the historical drop.
+
+**Not covered: a sender that is a hosted hub, waiting behind a queue head that stays pending.** The
+queue's `Dispose` runs in the mesh's `ShutDown` phase (a `RegisterForDisposal` action), and that phase
+starts only after every hosted hub has finished disposing. So its refusal can reach a registered stream,
+but never a hosted sender, which has already sat out its quiesce budget by then. The measured case is
+the queued request whose route runs after the mark (above), not this one; this case keeps the
+historical behaviour.
 
 It answers only a request whose sender is waiting — one posted through `hub.Observe`, which stamps
 `PostOptions.AcceptsProgress` on every request it awaits — never fire-and-forget traffic, never a

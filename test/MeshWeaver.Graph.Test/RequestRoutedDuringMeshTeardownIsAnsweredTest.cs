@@ -172,6 +172,84 @@ public class RequestRoutedDuringMeshTeardownIsAnsweredTest(ITestOutputHelper out
         }
     }
 
+    /// <summary>
+    /// 🚨 A request whose route ALREADY REACHED its recipient when the activation queue is torn down is
+    /// NOT refused by that teardown. The route handed it over (the side effect happened), so a
+    /// "cannot route" refusal would be false, and a second terminal answer if the recipient answers
+    /// too. The queue's head is an awaited request from a stream-registered sender (the kind of sender
+    /// that is still reachable when the queue is disposed, in the mesh's ShutDown phase). Its route
+    /// delivered it to the target's registration, which holds the route's verdict open. Then the mesh
+    /// is disposed.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARequestAlreadyHandedToItsRecipient_IsNotRefusedByTheQueueTeardown()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var routing = Mesh.ServiceProvider.GetRequiredService<IRoutingService>();
+
+        var targetPath = $"{TestPartition}/request-teardown-inflight-{Guid.NewGuid():N}";
+        var target = new Address(targetPath);
+        await NodeFactory.CreateNode(MeshNode.FromPath(targetPath) with
+            {
+                Name = "in-flight activation",
+                NodeType = "Markdown",
+                State = MeshNodeState.Active,
+            })
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        Mesh.GetHostedHub(target, HostedHubCreation.Never).Should().BeNull(
+            "the target must have no live hub, or the request would bypass the activation queue");
+
+        var senderAddress = new Address("request-teardown-stream-sender", Guid.NewGuid().ToString("N"));
+        var atSender = new ConcurrentQueue<string>();
+        using var senderRegistration = routing.RegisterStream(senderAddress, (SyncDelivery)(d =>
+        {
+            atSender.Enqueue(d.Message is DeliveryFailure f
+                ? $"nack:{f.ErrorType}:{f.Message}"
+                : $"{d.Message.GetType().Name}");
+            return d.Processed();
+        }));
+
+        var headEntered = new AsyncSubject<Unit>();
+        var releaseHead = new AsyncSubject<Unit>();
+        var pingsAtTarget = 0;
+        using var targetRegistration = routing.RegisterStream(target, (AsyncDelivery)((d, _) =>
+        {
+            if (d.Message is RawJson raw && raw.Content.Contains(nameof(Ping), StringComparison.Ordinal))
+                Interlocked.Increment(ref pingsAtTarget);
+            headEntered.OnNext(Unit.Default);
+            headEntered.OnCompleted();
+            return releaseHead.Select(_ => d.Processed());
+        }));
+
+        try
+        {
+            routing.DeliverMessage(new MessageDelivery<Ping>(
+                        new Ping(),
+                        new PostOptions(senderAddress).WithTarget(target).AcceptingProgress(),
+                        Mesh.JsonSerializerOptions)
+                    .Package(Mesh.JsonSerializerOptions))
+                .Subscribe(_ => { }, ex => atSender.Enqueue($"route-error:{ex.Message}"));
+            await headEntered.Should().Within(TestTimeouts.Convergence).Emit(
+                "the request's route must have handed it to the target's registration before the teardown",
+                cancellationToken: ct);
+            Volatile.Read(ref pingsAtTarget).Should().Be(1, "the request reached its recipient");
+
+            Mesh.Dispose();
+            await TheMeshIsDead(ct);
+
+            foreach (var o in atSender)
+                Output.WriteLine($"[at-sender] {o}");
+            atSender.Should().NotContain(o => o.StartsWith($"nack:{ErrorType.ShuttingDown}:"),
+                "the request was already handed to its recipient; the queue's teardown cut only the wait for the "
+                + "route's verdict, so refusing it as 'cannot route' would be false, and a second terminal answer "
+                + "whenever the recipient answers too");
+        }
+        finally
+        {
+            releaseHead.OnCompleted();
+        }
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task ARequestInALiveMesh_GetsItsOrdinaryAnswer()
     {

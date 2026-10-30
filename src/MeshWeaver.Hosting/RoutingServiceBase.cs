@@ -424,9 +424,9 @@ namespace MeshWeaver.Hosting
             private int pending;
             private bool completed;
 
-            // Every delivery accepted into this queue whose route has not yet reached a verdict —
-            // queued, or in flight. What Dispose finds here was cut off by the mesh's teardown and is
-            // answered there (by reference: two deliveries are never "the same" by value).
+            // Every delivery accepted into this queue whose route has not STARTED yet. Its route
+            // claims it on entry; what Dispose still finds here never left the queue and is answered
+            // there (by reference: two deliveries are never "the same" by value).
             private readonly ConcurrentDictionary<IMessageDelivery, byte> unanswered =
                 new(ReferenceEqualityComparer.Instance);
 
@@ -443,6 +443,14 @@ namespace MeshWeaver.Hosting
             private IObservable<IMessageDelivery> RouteOne(IMessageDelivery delivery) =>
                 Observable.Defer(() =>
                 {
+                    // 🚨 Ownership is taken when the route STARTS, before any side effect: from here on
+                    // the route (its verdict, or its fault NACK below) answers, and Dispose never does.
+                    // Claiming only after the route's verdict raced it: the route could hand the
+                    // delivery to its recipient and Dispose, on another thread, still refuse it as
+                    // "cannot route" (review of #7673). Losing the claim means Dispose answered first.
+                    if (!Claim(delivery))
+                        return Observable.Empty<IMessageDelivery>();
+
                     // Never resolve, activate or post once the mesh is tearing down. The ONE
                     // exception is an ANSWER to a caller that is still waiting (#4023): it is
                     // carried to a recipient that already exists — nothing is created — exactly as
@@ -453,31 +461,28 @@ namespace MeshWeaver.Hosting
                     // mesh was live, and its sender holds a callback for it.
                     if (owner.Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                     {
-                        if (!Claim(delivery))
-                            return Observable.Empty<IMessageDelivery>();
                         if (TryGetReplyCorrelation(delivery, out var requestId))
                             owner.DeliverReplyToLiveRecipient(delivery, requestId, address);
                         else
                             owner.AnswerRequestRefusedDuringMeshTeardown(delivery);
                         return Observable.Empty<IMessageDelivery>();
                     }
-                    return owner.RouteMessage(delivery, address)
-                        // The route reached its verdict (delivered, or answered by RouteImpl):
-                        // nothing is owed to this delivery from here on.
-                        .Do(_ => Claim(delivery));
+                    return owner.RouteMessage(delivery, address);
                 })
+                // This RouteOne owns the delivery once it is claimed (Dispose skips it), so a fault
+                // anywhere in its route is NACKed here — and nowhere else.
                 .Catch<IMessageDelivery, Exception>(ex =>
                 {
-                    if (Claim(delivery))
-                        owner.NackRouteFailure(delivery, ex);
+                    owner.NackRouteFailure(delivery, ex);
                     return Observable.Empty<IMessageDelivery>();
                 })
                 .Finally(OnMessageDone);
 
             /// <summary>
-            /// Takes ownership of answering <paramref name="delivery"/> — exactly one of the route's own
-            /// verdict, its fault NACK, or <see cref="Dispose"/>'s teardown refusal gets it, so a sender
-            /// is answered once.
+            /// Takes ownership of answering <paramref name="delivery"/>. Exactly one of two claims it: the
+            /// route, when it STARTS and before any side effect (its verdict or fault NACK then answers),
+            /// or <see cref="Dispose"/>, for a delivery whose route never started. So a sender is
+            /// answered at most once, and never refused for a request its route already handed over.
             /// </summary>
             private bool Claim(IMessageDelivery delivery) => unanswered.TryRemove(delivery, out _);
 
@@ -522,11 +527,13 @@ namespace MeshWeaver.Hosting
             /// otherwise pin the disposed MeshHub. Idempotent with the self-retire
             /// path via the <c>completed</c> flag.
             ///
-            /// <para>🚨 Tearing the pump down CUTS every delivery still queued or in flight, and each of
-            /// them was accepted while the mesh was live. A request among them whose sender is still
-            /// waiting is refused back to it (<see cref="AnswerRequestRefusedDuringMeshTeardown"/>), and an
-            /// answer among them is carried — the pump is stopped first, so nothing it still routes can
-            /// race the answer, and <see cref="Claim"/> keeps it to one answer per delivery.</para>
+            /// <para>🚨 Tearing the pump down CUTS every delivery still queued, and each of them was
+            /// accepted while the mesh was live. A request among them whose sender is still waiting is
+            /// refused back to it (<see cref="AnswerRequestRefusedDuringMeshTeardown"/>), and an answer
+            /// among them is carried. A delivery whose route already STARTED is not answered here: its
+            /// route claimed it before any side effect and may already have handed it to its recipient,
+            /// so a refusal would be false (review of #7673). Such a route cut mid-flight keeps the
+            /// historical drop.</para>
             /// </summary>
             public void Dispose()
             {
