@@ -1485,10 +1485,14 @@ permission must also hold at the landing path, and the stricter outcome wins
 (`PermissionEvaluator.ObserveRestrictingPolicyBetween`, read from the same runtime-then-static policy
 chain as the fold). With no such policy the landing check is not run: the landing inherits every grant
 of the main node, and additive surfaces declared on the main node alone (a type gate's public cover)
-keep reaching its satellites. A role DENIED on an intermediate scope is an assignment, not a policy,
-and is not consulted by this check. Pinned by `SatelliteInterveningPolicyTest` (an inheritance break
-on an intermediate segment refuses a create, a cap on a mapped container refuses a read; each with
-the same shape minus the policy as the control).
+keep reaching its satellites. A role DENIED on an intermediate scope counts the same way: it is an
+assignment rather than a policy, but it subtracts that role from everything beneath it, so while one
+is denied to the caller (directly, or through any group they belong to) on a scope in between, the
+landing check runs too (`PermissionEvaluator.ObserveDeniedRoleBetween`, read from the same assignment
+and membership legs, and the same subject expansion, as the fold). Pinned by
+`SatelliteInterveningPolicyTest` (an inheritance break on an intermediate segment refuses a create, a
+cap on a mapped container refuses a read, and a Commenter denied on the main node's `_Comment`
+container is refused both; each with the same shape minus the policy or the denial as the control).
 
 **An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
 the satellite and where its grants project, so a write that changed it would let its writer decide
