@@ -1642,6 +1642,7 @@
   "setup.problem.keyUnstorable": "Diese Instanz wurde als {0} registriert, aber ihr Schlüssel konnte nicht gespeichert werden: das Datenverzeichnis ist nicht beschreibbar. Diese ID ist nun vergeben und nicht wiederverwendbar — machen Sie das Verzeichnis beschreibbar und starten Sie neu, statt sich erneut unter einer neuen ID zu registrieren.",
   "activity.codeRun.failed": "{language}-Ausführung fehlgeschlagen: {reason}",
   "activity.codeRun.failedNoReason": "{language}-Ausführung fehlgeschlagen: der Kernel hat einen Fehler ohne Begründung gemeldet.",
+  "activity.codeRun.kernelHostShutDown": "Der Kernel-Host wurde beendet, während dieser Lauf noch aktiv war; der Lauf wurde nicht abgeschlossen. Führen Sie die Zelle erneut aus.",
   "activity.codeRun.kernelSaturated": "Die Zelle wurde nicht ausgeführt: alle {max} Kernel-Plätze dieses Prozesses sind belegt, und eine Zelle, die auf eine andere Zelle wartet, darf nicht hinter ihr anstehen. Führen Sie sie erneut aus, sobald andere Zellen beendet sind.",
   "activity.codeRun.noWorker": "Kein {language}-Worker unter '{target}' verbunden. Das Sprach-Gateway läuft in dieser Bereitstellung nicht — siehe Doc/Architecture/PythonCodeNodes.",
   "kernel.executionFailed": "Ausführung fehlgeschlagen",

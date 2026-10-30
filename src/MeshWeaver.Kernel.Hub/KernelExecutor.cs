@@ -146,12 +146,24 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.CompileCpu)
             ?? IoPool.Unbounded;
 
-    // Cancellation source for the script currently inside ExecuteAsync. Replaced
-    // on each submission. CancelScriptRequest cancels it; the script's
-    // CancellationToken trips at the next await point, RunAsync/ContinueWithAsync
-    // throws OperationCanceledException, the activity log flips to Failed.
-    private CancellationTokenSource? activeCancellation;
-    private readonly object cancellationLock = new();
+    // Every submission this executor has accepted and not yet settled — running AND queued —
+    // keyed by its delivery id, with its outcome sink and its own cancellation (#7362, option A).
+    // Two things need the WHOLE set, never "the one currently running":
+    //   * a cancel (CancelScriptRequest — the Activity's RequestedStatus = Cancelled) cancels every
+    //     run of this Activity, wherever it is parked: queued behind the Concat pump, in a
+    //     preparation stage, or in the script itself. It used to cancel only the LAST submission
+    //     handed in, which is a queued one as soon as two are pending, and the token reached only
+    //     the script pass — a run parked in a preparation stage could not be cancelled at all.
+    //   * the executor's disposal settles every one of them Failed, with a stated reason. Disposal
+    //     used to stop the pump and release the settlement waiters but write NOTHING, so every run
+    //     in flight or queued stayed Running for ever.
+    // Immutable map + ImmutableInterlocked: no lock. The CancellationTokenSources are never
+    // disposed — they own no timer and no linked token, and a source disposed while the cancel or
+    // the disposal path is cancelling it would throw there.
+    private ImmutableDictionary<string, PendingRun> pendingRuns =
+        ImmutableDictionary<string, PendingRun>.Empty;
+
+    private sealed record PendingRun(AsyncSubject<object?> Result, CancellationTokenSource Cancellation);
 
     private ILogger Logger => publicHub.ServiceProvider.GetRequiredService<ILoggerFactory>()
         .CreateLogger<KernelExecutor>();
@@ -174,6 +186,18 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 "Kernel submission pump terminated with a fault; no further submission will run on this session"));
         return config
             .WithInitialization(hub =>
+            {
+                // 🚨 #7362 — every run this executor still owes an answer is failed, with its
+                // reason, at the FIRST instant of teardown: this hub's own disposal, or its host's
+                // (the Activity hub's freeze cascades here synchronously inside its Dispose()).
+                // Not in the disposal registrants below: those run in the ShutDown phase, AFTER
+                // the host has quiesced, force-cancelled the forwarded submission and stopped
+                // taking writes — a terminal write issued there never reaches the Activity, and
+                // the run stays Running (or is failed by the dispatcher with no reason of the
+                // kernel's). ShuttingDown replays, so subscribing late still fires.
+                hub.RegisterForDisposal(hub.ShuttingDown.Subscribe(
+                    _ => FailPendingRuns(),
+                    ex => Logger.LogWarning(ex, "Kernel executor {Address}: shutdown signal faulted", hub.Address)));
                 // Executor hub disposal (idle disconnect / session close) eagerly unloads the
                 // session's collectible AssemblyLoadContext — the per-cell script assemblies
                 // die with the session instead of accumulating for the process lifetime — and
@@ -181,6 +205,9 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 // safe: unloading is cooperative and completes when the last reference dies.
                 hub.RegisterForDisposal(System.Reactive.Disposables.Disposable.Create(() =>
                 {
+                    // A run that reached the executor after the shutdown signal is settled here
+                    // (a no-op when the signal already settled everything); then stop the pump.
+                    FailPendingRuns();
                     submissionPump?.Dispose();
                     // Nothing here will settle any more: release every waiter (the claim's dead-executor
                     // check would too, but only at the next idle tick).
@@ -193,18 +220,54 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     cellSurfaceLeases.Dispose();
                     // …and the module generations it bound into, likewise.
                     moduleBindings?.Dispose();
-                })))
+                }));
+            })
             .WithHandler<SubmitCodeRequest>(HandleSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(HandleCancelRequest);
     }
 
     private IMessageDelivery HandleCancelRequest(IMessageHub _, IMessageDelivery<CancelScriptRequest> request)
     {
-        lock (cancellationLock)
-        {
-            activeCancellation?.Cancel();
-        }
+        // Every run of this Activity — queued, preparing or executing. Each run's token is
+        // observed by every stage of its pipeline (see Execute), so wherever it is parked it ends
+        // Cancelled.
+        foreach (var run in pendingRuns.Values)
+            run.Cancellation.Cancel();
         return request.Processed();
+    }
+
+    /// <summary>
+    /// The executor is going away: every run it accepted and has not settled is failed with a
+    /// keyed, localized reason, its caller answered and its settlement released (#7362). The
+    /// outcome sink is the same one a script failure goes through, so the Activity's terminal
+    /// write, the <see cref="SubmitCodeResponse"/> and the settlement happen exactly as they do for
+    /// any other failure — and <c>ActivityLogLogger.Complete</c> is idempotent, so a run that
+    /// settled a moment earlier keeps its own verdict. Only AFTER the verdict is recorded is the
+    /// run's token cancelled, so a script still executing on the lane is asked to stop: cancelling
+    /// first would run the token's registrations synchronously and record the run as Cancelled —
+    /// a user's act it never was.
+    /// </summary>
+    private void FailPendingRuns()
+    {
+        foreach (var deliveryId in pendingRuns.Keys)
+        {
+            if (!ImmutableInterlocked.TryRemove(ref pendingRuns, deliveryId, out var run))
+                continue;
+            try
+            {
+                run.Result.OnError(new KernelHostShutDownException());
+            }
+            catch (Exception sinkEx)
+            {
+                Logger.LogError(sinkEx,
+                    "Submission {DeliveryId}: outcome sink threw while failing the run on kernel shutdown",
+                    deliveryId);
+            }
+            finally
+            {
+                run.Cancellation.Cancel();
+            }
+        }
     }
 
     /// <summary>
@@ -229,10 +292,9 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // writes — minted version, serialised by the owner's action block, no mirror (#1784).
         var activityLogger = new ActivityLogLogger(publicHub, activityPath);
 
-        // Pair each submission with its own CancellationTokenSource. The handler
-        // for CancelScriptRequest cancels whatever's currently active.
+        // Pair each submission with its own CancellationTokenSource; it is registered as a pending
+        // run below, so a cancel and the executor's disposal reach it wherever it is parked.
         var cts = new CancellationTokenSource();
-        lock (cancellationLock) { activeCancellation = cts; }
 
         // The submission's outcome arrives on this AsyncSubject (one value + completion on
         // success, OnError on failure/cancel). Wire the request/response off it, then push
@@ -257,7 +319,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             returnValue =>
             {
                 using var _ = RestoreSubmissionContext();
-                ClearCancellationIf(cts);
+                ForgetRun(request.Id);
                 try
                 {
                     // Capture the script's return value as JsonElement on the activity's
@@ -293,12 +355,22 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             ex =>
             {
                 using var _ = RestoreSubmissionContext();
-                ClearCancellationIf(cts);
+                ForgetRun(request.Id);
                 var canceled = ex is OperationCanceledException;
                 if (canceled)
                 {
                     activityLogger.LogWarning("Script execution cancelled by user");
                     activityLogger.Complete(ActivityStatus.Cancelled);
+                }
+                else if (ex is KernelHostShutDownException)
+                {
+                    // Platform-owned, so KEYED: the Output pane renders it in the viewer's language.
+                    activityLogger.Append(new LogMessage(
+                            "The kernel host shut down while this run was in progress, so the run did not "
+                            + "finish. Run the cell again.",
+                            LogLevel.Error)
+                        .WithKey(KernelHostShutDownException.MessageKey));
+                    activityLogger.Complete(ActivityStatus.Failed);
                 }
                 else if (ex is IoPoolSaturatedException saturated)
                 {
@@ -332,6 +404,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 Settle(request.Id);
             });
 
+        ImmutableInterlocked.TryAdd(ref pendingRuns, request.Id, new PendingRun(result, cts));
         submissions.OnNext(new Submission(
             msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token, result, submissionContext));
         return request.Processed();
@@ -391,15 +464,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         }
                     }));
 
-    private void ClearCancellationIf(CancellationTokenSource cts)
-    {
-        lock (cancellationLock)
-        {
-            if (ReferenceEquals(activeCancellation, cts))
-                activeCancellation = null;
-        }
-        cts.Dispose();
-    }
+    private void ForgetRun(string deliveryId)
+        => ImmutableInterlocked.TryRemove(ref pendingRuns, deliveryId, out _);
 
     /// <summary>
     /// Run a single submission as an observable pipeline. Composition shape:
@@ -432,10 +498,21 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // nor cancelled by silo/mesh teardown. Its pool is the script lane, not Compile: the
         // leaf is mostly a WAIT on the process-wide warm-up, and a Compile slot held across a
         // wait starves every other async Compile leaf (other sessions, the language service).
+        //
+        // 🚨 The run's token governs EVERY stage, not only the script pass (#7362). The preparation
+        // stages are waits on shared work — the process-wide warm-up, the cell-surface resolution,
+        // a NuGet restore — and none of them took the token, so a cancel of a run parked there did
+        // nothing. They now run under UntilCancelled: a cancel (or a run cancelled while still
+        // queued) ends the run Cancelled at once, and unsubscribing the stage cancels its pool
+        // leaf. Each stage publishes its result into the session only after it completes, so an
+        // abandoned stage leaves nothing half-set. The script pass keeps its own cooperative token:
+        // abandoning a RUNNING script would let the next submission start beside it.
         return Observable.Defer(() =>
-                AdmitToScriptLane(t => EnsureInitializedAsync(t))
-                    .SelectMany(_ => EnsureCellSurfaceReferences())
-                    .SelectMany(_ => ResolveNuGetReferences(code))
+                UntilCancelled(
+                        AdmitToScriptLane(t => EnsureInitializedAsync(t))
+                            .SelectMany(_ => EnsureCellSurfaceReferences())
+                            .SelectMany(_ => ResolveNuGetReferences(code)),
+                        ct)
                     .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct)))
             .Catch<object?, Exception>(ex =>
             {
@@ -450,6 +527,16 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             })
             .SubscribeOn(TaskPoolScheduler.Default);
     }
+
+    /// <summary>
+    /// <paramref name="source"/>, ended with an <see cref="OperationCanceledException"/> the moment
+    /// <paramref name="ct"/> is cancelled (at once when it already is), unsubscribing the source.
+    /// <c>Amb</c> forwards whichever side signals first and unsubscribes the other, so a value the
+    /// source has already produced is never overtaken by a later cancel.
+    /// </summary>
+    internal static IObservable<T> UntilCancelled<T>(IObservable<T> source, CancellationToken ct)
+        => source.Amb(Observable.Create<T>(observer =>
+            ct.Register(() => observer.OnError(new OperationCanceledException(ct)))));
 
     /// <summary>The compiler's diagnostics, one per line — the reason a cell did not compile.</summary>
     private static string CompilerDiagnostics(CompilationErrorException compEx)
@@ -916,6 +1003,18 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 [])
         , _ => { });
     }
+}
+
+/// <summary>
+/// The reason a run ends when the kernel executor hosting it is disposed — the Activity hub was
+/// recycled, idled out after a crash, or the process is shutting down — before the run settled
+/// (#7362). Recorded on the Activity under <see cref="MessageKey"/>.
+/// </summary>
+public sealed class KernelHostShutDownException()
+    : Exception("The kernel host shut down while this run was in progress, so the run did not finish.")
+{
+    /// <summary>The catalog key of the transcript entry (<c>strings.{en,de}.json</c>).</summary>
+    public const string MessageKey = "activity.codeRun.kernelHostShutDown";
 }
 
 /// <summary>
