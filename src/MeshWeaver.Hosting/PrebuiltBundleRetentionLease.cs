@@ -440,7 +440,8 @@ public static class PrebuiltBundleRetentionLease
     /// having been COMMITTED by the lease node's owner, and a commit is acknowledged before it is durable
     /// (<c>DataExtensions.ArmPatchAckWatcher</c> acks on its flush bound). An owner that dies before the
     /// claim persisted is replaced by one that reloads the LAPSED lease and grants it to another replica.
-    /// So the holder watches the live lease while its pass runs (<see cref="Lost"/>): once its own claim has
+    /// So the pass STARTS only once the live lease carries the holder's own claim in its own generation
+    /// (<see cref="Fenced"/>), and the holder watches the live lease while its pass runs (<see cref="Lost"/>): once its own claim has
     /// been seen there, any later state that does not carry it (lapsed, unreadable, or another pass's claim)
     /// — and a lease stream that faults or ends — ends the pass with an <see cref="OperationCanceledException"/>, cancelling the pool leaf at its next step
     /// boundary — the same cooperative bound as the deadline — and leaves the lease alone. COLD.</para>
@@ -533,24 +534,70 @@ public static class PrebuiltBundleRetentionLease
     }
 
     /// <summary>
-    /// <paramref name="pass"/>, ended with an <see cref="OperationCanceledException"/> as soon as the live
-    /// lease no longer names <paramref name="stampedClaim"/> under <paramref name="generation"/>
-    /// (<see cref="Lost"/>): the lease node's owner reloaded a lease whose claim had not persisted, another
-    /// replica holds it, or the lease can no longer be followed. Unsubscribing the pass cancels its pool leaf
-    /// at the next step boundary. As System. COLD.
+    /// <paramref name="pass"/>, run under the fence of the live lease (<see cref="Fenced"/>). As System. COLD.
     /// </summary>
     private static IObservable<TResult> WhileHeld<TResult>(IMessageHub hub, long stampedClaim, long generation, IObservable<TResult> pass)
     {
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
-        var lost = Lost(
-                access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
-                    .Select(node => Read(node, options))),
-                stampedClaim,
-                generation)
-            .SelectMany(cancelled => Observable.Throw<TResult>(cancelled));
-        return pass.Publish(shared => shared.Merge(lost.TakeUntil(shared.LastOrDefaultAsync())));
+        return Fenced(
+            access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
+                .Select(node => Read(node, options))),
+            stampedClaim,
+            generation,
+            pass);
     }
+
+    /// <summary>
+    /// <paramref name="pass"/>, STARTED only once the <paramref name="live"/> lease carries
+    /// <paramref name="stampedClaim"/> under <paramref name="generation"/>, and ended with an
+    /// <see cref="OperationCanceledException"/> as soon as it no longer does (<see cref="Lost"/>). Pure
+    /// composition over ONE subscription of <paramref name="live"/>. COLD.
+    ///
+    /// <para>🚨 <b>Seen before it sweeps (#7459).</b> The fence reads a state of an OLDER generation as a
+    /// snapshot from before the take, and waits past it. That reading is right only while the pass has not
+    /// started: the same state is ALSO what a holder sees whose claim was lost together with a later take in
+    /// one owner loss (two unpersisted takes dropped, the lease reloaded two generations back and taken again
+    /// at a generation BELOW this holder's). A pass that ran from the verdict on swept through that wait until
+    /// its deadline, beside the new holder. So the pass is subscribed only after the live lease has carried
+    /// this holder's own claim in its own generation, which is the owner's committed state echoed back. Until
+    /// then it sweeps nothing; a superseding state, a fault or the end of the lease stream stops it before it
+    /// starts, and the deadline bounds the wait.</para>
+    /// </summary>
+    /// <typeparam name="TResult">The pass's result.</typeparam>
+    /// <param name="live">The lease as the live stream carries it; <c>null</c> when its content cannot be read.</param>
+    /// <param name="stampedClaim">The claim the holder's stamp settled.</param>
+    /// <param name="generation">The generation the holder's take settled: the fence.</param>
+    /// <param name="pass">The pass.</param>
+    internal static IObservable<TResult> Fenced<TResult>(
+        IObservable<PrebuiltBundleRetentionLeaseState?> live, long stampedClaim, long generation, IObservable<TResult> pass)
+        => Watch(live, stampedClaim, generation).Publish(watch =>
+        {
+            var started = watch.Where(stop => stop is null).Take(1).SelectMany(_ => pass);
+            var cancelled = watch.Where(stop => stop is not null).Take(1).SelectMany(stop => Observable.Throw<TResult>(stop!));
+            return started.Publish(running => running.Merge(cancelled.TakeUntil(running.LastOrDefaultAsync())));
+        });
+
+    /// <summary>
+    /// The fence's signals over ONE subscription of <paramref name="live"/>: <c>null</c> once, when the live
+    /// lease first carries <paramref name="stampedClaim"/> under <paramref name="generation"/>, then exactly
+    /// one <see cref="OperationCanceledException"/> when the holder must stop (<see cref="Lost"/>), then
+    /// completion. It never faults and never completes without that cancellation, so a lease stream that
+    /// faults or ends before the claim was seen stops the pass before it starts. Pure composition. COLD.
+    /// </summary>
+    /// <param name="live">The lease as the live stream carries it.</param>
+    /// <param name="stampedClaim">The claim the holder's stamp settled.</param>
+    /// <param name="generation">The generation the holder's take settled.</param>
+    internal static IObservable<OperationCanceledException?> Watch(
+        IObservable<PrebuiltBundleRetentionLeaseState?> live, long stampedClaim, long generation)
+        => live.Publish(shared => Lost(shared, stampedClaim, generation)
+            .Select(stop => (OperationCanceledException?)stop)
+            .Merge(shared
+                .Where(lease => IsHeldBy(lease, stampedClaim, generation))
+                .Take(1)
+                .Select(_ => (OperationCanceledException?)null)
+                // The lease stream's own fault or end is not lost here: Lost reports it as the cancellation.
+                .Catch<OperationCanceledException?, Exception>(_ => Observable.Empty<OperationCanceledException?>())));
 
     /// <summary>
     /// Emits ONE <see cref="OperationCanceledException"/> when the holder of <paramref name="stampedClaim"/>
