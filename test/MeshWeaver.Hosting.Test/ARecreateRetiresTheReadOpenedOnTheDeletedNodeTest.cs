@@ -134,6 +134,7 @@ public class ARecreateRetiresTheReadOpenedOnTheDeletedNodeTest(ITestOutputHelper
     [Fact(Timeout = 120_000)]
     public async Task WithNothingInFlight_ARecreatedNodeIsReadAsTheNewNode()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var path = NewPath();
         await Create(path, "first");
         await Delete(path);
