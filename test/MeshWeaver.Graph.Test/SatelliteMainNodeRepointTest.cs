@@ -178,8 +178,8 @@ public class SatelliteMainNodeRepointTest(ITestOutputHelper output) : MonolithMe
     {
         Commit(before: null, Comment(Locked), ownerPath: Doc).Should().NotBeNull(
             "a carrier holds no predecessor, so a satellite it commits may carry only a path-derived pointer");
-        Commit(before: null, Comment(Doc), ownerPath: Doc).Should().BeNull(
-            "the control: the path-derived pointer (the comment's owner) is what the satellite's location implies");
+        Commit(before: null, Comment(Doc), ownerPath: Doc).Should().NotBeNull(
+            "a carrier cannot tell a create from a rewrite, so even the path-derived pointer is refused there");
         Commit(before: null, Comment(Locked), ownerPath: CommentPath).Should().BeNull(
             "the control: at its OWN hub a satellite without a predecessor is a create, decided by the creation chain");
     }
@@ -268,7 +268,128 @@ public class SatelliteMainNodeRepointTest(ITestOutputHelper output) : MonolithMe
 
         MainNodeTrust.Repoints(unset, unset with { Name = "renamed" }).Should().BeFalse(
             "the control: keeping the empty pointer is not a repoint");
-        Commit(before: null, Comment(Doc), ownerPath: Doc).Should().BeNull(
-            "the control: a carried satellite with its path-derived owner lands");
+        Commit(before: null, Comment(Doc), ownerPath: CommentPath).Should().BeNull(
+            "the control: the same node at its own hub is a create, decided by the creation chain");
+    }
+
+    // ── THE INVARIANT, route by route ─────────────────────────────────────────────────────────────
+    // For every non-System write that commits a satellite, the committed MainNode is the stored
+    // satellite's pointer unchanged, or EXACTLY its path-derived security owner where nothing
+    // satellite-shaped was stored. Every route that can put a pointer on a satellite is a row below;
+    // a row that lands must leave the pointer at one of those two values.
+
+    private const string Thread = Doc + "/_Thread/t1";
+    private const string NestedPath = Thread + "/_Comment/c1";
+
+    private static MeshNode Nested(string mainNode, string nodeType = "Comment") =>
+        new("c1", Thread + "/_Comment") { Name = "c1", NodeType = nodeType, MainNode = mainNode };
+
+    /// <summary>One write: the stored node (null for none), the node to commit, and the committing hub.</summary>
+    public sealed record PointerRoute(string Name, MeshNode? Before, MeshNode After, string OwnerPath, bool Lands)
+    {
+        /// <inheritdoc />
+        public override string ToString() => Name;
+    }
+
+    /// <summary>Every route that can set or change a satellite's main node.</summary>
+    public static TheoryData<PointerRoute> PointerRoutes()
+    {
+        var unset = Comment("");
+        var self = Comment(CommentPath);
+        var stored = Comment(Doc);
+        var offAncestry = Comment(Locked); // as System or the create chain may have written it
+        var asMarkdown = stored with { NodeType = "Markdown" };
+        return new TheoryData<PointerRoute>
+        {
+            // Update / merge patch at the satellite's own hub.
+            new PointerRoute("update keeps the pointer", stored, stored with { Name = "renamed" }, CommentPath, true),
+            new PointerRoute("update to a locked target", stored, Comment(Locked), CommentPath, false),
+            new PointerRoute("update to the writer's own target", stored, Comment(Mine), CommentPath, false),
+            new PointerRoute("update from a stored off-ancestry pointer to the path owner", offAncestry, Comment(Doc), CommentPath, false),
+            new PointerRoute("update keeps a stored off-ancestry pointer", offAncestry, offAncestry with { Name = "renamed" }, CommentPath, true),
+            // Normalisation of a pointer that was never set.
+            new PointerRoute("unset to the exact owner", unset, Comment(Doc), CommentPath, true),
+            new PointerRoute("self to the exact owner", self, Comment(Doc), CommentPath, true),
+            new PointerRoute("unset nested to the OUTER storage owner", Nested(""), Nested(Doc), NestedPath, false),
+            new PointerRoute("unset nested to its own owner (the thread)", Nested(""), Nested(Thread), NestedPath, true),
+            new PointerRoute("unset to the root '/'", unset, Comment("/"), CommentPath, false),
+            new PointerRoute("unset to the owner with a trailing slash", unset, Comment(Doc + "/"), CommentPath, false),
+            new PointerRoute("unset to a case variant of the owner", unset, Comment(Doc.ToLowerInvariant()), CommentPath, false),
+            new PointerRoute("unset to a '..' path naming the owner", unset, Comment(Doc + "/_Comment/.."), CommentPath, false),
+            new PointerRoute("unset to an ancestor above the owner", unset, Comment(Partition), CommentPath, false),
+            // Retype into the satellite class.
+            new PointerRoute("retype in with the exact owner", asMarkdown, stored, CommentPath, true),
+            new PointerRoute("retype in with a self pointer", asMarkdown with { MainNode = CommentPath }, Comment(CommentPath), CommentPath, false),
+            new PointerRoute("retype in with an empty pointer", asMarkdown with { MainNode = "" }, Comment(""), CommentPath, false),
+            new PointerRoute("retype in with a chosen pointer", asMarkdown with { MainNode = Locked }, Comment(Locked), CommentPath, false),
+            new PointerRoute("retype in nested with the outer owner", Nested(Doc, "Markdown"), Nested(Doc), NestedPath, false),
+            new PointerRoute("retype out keeps the pointer", stored, asMarkdown, CommentPath, true),
+            new PointerRoute("retype out changes the pointer", stored, asMarkdown with { MainNode = Locked }, CommentPath, false),
+            // Carried to another node's hub: refused whatever it carries.
+            new PointerRoute("carried with the exact owner", null, Comment(Doc), Doc, false),
+            new PointerRoute("carried with a chosen pointer", null, Comment(Locked), Doc, false),
+            new PointerRoute("carried rewrite keeping the stored pointer", stored, stored with { Name = "x" }, Doc, false),
+            new PointerRoute("carried with the root '/'", null, Comment("/"), Doc, false),
+            // A create at the satellite's own hub is the creation chain's decision (SatelliteMainNodeLandingTest).
+            new PointerRoute("create at its own hub", null, Comment(Doc), CommentPath, true),
+        };
+    }
+
+    /// <summary>
+    /// 🚨 THE AUDIT. Each route either is refused at the commit point, or lands leaving the pointer at the
+    /// stored value or EXACTLY the path-derived security owner, so the access decision is the stored
+    /// node's or the path owner's and never one a writer chose.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PointerRoutes))]
+    public void TheInvariant_HoldsForEveryRouteThatSetsAPointer(PointerRoute route)
+    {
+        var refusal = Commit(route.Before, route.After, route.OwnerPath);
+        Output.WriteLine($"{route.Name}: {refusal ?? "lands"}");
+        if (!route.Lands)
+        {
+            refusal.Should().NotBeNull($"'{route.Name}' must be refused at the commit point");
+            return;
+        }
+        refusal.Should().BeNull($"'{route.Name}' is a write the invariant allows");
+        var committed = route.After.MainNode;
+        var leftAsStored = route.Before is not null && string.Equals(route.Before.MainNode, committed, StringComparison.Ordinal);
+        var isOwner = MainNodeTrust.IsOwnerOf(committed, route.After.Path);
+        var isCreate = route.Before is null;
+        (leftAsStored || isOwner || isCreate || route.After.NodeType == "Markdown").Should().BeTrue(
+            $"'{route.Name}' landed, so its pointer must be the stored one or exactly the path-derived owner");
+    }
+
+    /// <summary>
+    /// 🚨 Routed end to end: a nested comment stored with an EMPTY pointer (the create chain keeps
+    /// <c>""</c>; it only rewrites a self pointer) is updated by a writer, through the comment's own
+    /// stream, to the OUTER document. That would move delegation above the thread. It is refused, and the
+    /// empty pointer is still stored.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task ANestedSatelliteStoredUnset_CannotBeNormalisedToTheOuterOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("c1", Thread + "/_Comment")
+            {
+                Name = "c1", NodeType = "Comment", MainNode = "",
+                Content = new Comment { Author = Writer, PrimaryNodePath = Doc, HighlightedText = "nested" },
+            }))
+            .Should().Within(Budget).Emit("the nested comment must exist first", ct);
+
+        Access.SetContext(Person(Writer));
+        var answer = await Mesh.GetWorkspace().GetMeshNodeStream(NestedPath)
+            .Update(n => n with { MainNode = Doc })
+            .Take(1)
+            .Select(_ => "landed")
+            .Catch((Exception ex) => Observable.Return("refused:" + ex.GetType().Name + ": " + ex.Message))
+            .Should().Within(Budget).Emit("the update must answer", ct);
+        Output.WriteLine($"unset -> {Doc}: {answer}");
+        answer.Should().StartWith("refused:", "a writer never moves a nested satellite's delegation above its own owner");
+
+        var after = await Access.RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(NestedPath)
+                .Where(n => n is not null).Select(n => n!).Take(1))
+            .Should().Within(Budget).Emit("the stored comment must load", ct);
+        after.MainNode.Should().NotBe(Doc, "the outer owner was never committed");
     }
 }

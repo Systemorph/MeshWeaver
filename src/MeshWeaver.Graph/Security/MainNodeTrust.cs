@@ -53,46 +53,47 @@ public static class MainNodeTrust
     }
 
     /// <summary>
-    /// Whether <paramref name="mainNode"/> is exactly the satellite's owner (<see cref="OwnerOf"/>),
-    /// compared ordinally. Only that pointer is the one the satellite's location already implies; an
-    /// ANCESTOR further up is not, because a scope in between can break the inherited grant
-    /// (<c>_Policy</c> with <c>BreaksInheritance</c>), and a case-variant path is another node.
+    /// Whether <paramref name="mainNode"/> is EXACTLY the satellite's owner (<see cref="OwnerOf"/>):
+    /// the raw value, compared ordinally, with no trimming and no case folding. Only that pointer is the
+    /// one the satellite's location implies. An ANCESTOR further up is not, because a scope in between
+    /// can break the inherited grant (<c>_Policy</c> with <c>BreaksInheritance</c>). A case variant, a
+    /// trailing slash or a <c>..</c> segment names another scope to the permission fold, so none of them
+    /// is the owner (review of #7655).
     /// </summary>
     /// <param name="mainNode">The main node the writer chose.</param>
     /// <param name="path">The satellite's path.</param>
     public static bool IsOwnerOf(string? mainNode, string? path) =>
         !string.IsNullOrEmpty(mainNode)
         && OwnerOf(path) is { } owner
-        && string.Equals(mainNode.Trim('/'), owner, StringComparison.Ordinal);
+        && string.Equals(mainNode, owner, StringComparison.Ordinal);
 
     /// <summary>
     /// 🛡️ Whether writing <paramref name="after"/> over the stored <paramref name="before"/> REPOINTS
-    /// the node's main node: a change a writer chose, as opposed to the one change the platform
-    /// derives from the path. A satellite's stored <c>MainNode</c> governs it, so an update never
-    /// chooses a new one, the same way a create never trusts a proposed one. The one exception is
-    /// path-derived: a stored self-default (<c>MainNode</c> empty or equal to the node's own path,
-    /// i.e. never set) moving to the satellite's OWNER, which is what the create and upsert
-    /// normalisation writes. Ordinal, like every other main-node comparison here.
+    /// the node's main node. THE INVARIANT (review of #7655): a non-System write commits a satellite's
+    /// <c>MainNode</c> either UNCHANGED (the raw stored value, byte for byte) or, when the stored pointer
+    /// was never set (empty, or the node itself), as EXACTLY its path-derived security owner
+    /// (<see cref="IsOwnerOf"/>). Nothing else.
+    ///
+    /// <para>There is deliberately no other "normalisation" exception. The storage owner of the first
+    /// satellite segment (<c>SatelliteTableMapping.OwnerOfSatellitePath</c>, what the platform's create
+    /// and upsert normalisation writes) sits ABOVE a nested satellite's security owner
+    /// (<c>Doc</c> vs <c>Doc/_Thread/t1</c> for <c>Doc/_Thread/t1/_Comment/c1</c>), so accepting it let
+    /// every route that can produce an unset pointer (a create that kept <c>""</c>, a retype, a self
+    /// pointer) move delegation above a policy on the thread. Values are RAW: <c>""</c> and <c>"/"</c>
+    /// differ (the rule falls back to the node's own path for the first and delegates the second to the
+    /// root scope), and so do case variants and trailing slashes.</para>
     /// </summary>
     /// <param name="before">The stored node.</param>
     /// <param name="after">The node as it is about to be written.</param>
-    /// <returns>True when the write changes the main node to something the path does not derive.</returns>
+    /// <returns>True when the write commits any other main node.</returns>
     public static bool Repoints(MeshNode before, MeshNode after)
     {
-        // RAW values, never slash-trimmed (review of #7655): SatelliteAccessRule falls back to the
-        // node's own path only for an EMPTY or self pointer and delegates "/" to the ROOT scope, so
-        // "" -> "/" changes who decides access and must read as a repoint.
         var previous = before.MainNode ?? "";
         var next = after.MainNode ?? "";
         if (string.Equals(previous, next, StringComparison.Ordinal))
             return false;
         var previousWasUnset = previous.Length == 0
                                || string.Equals(previous, before.Path, StringComparison.Ordinal);
-        var nextIsDerivedOwner = IsOwnerOf(next, after.Path)
-                                 || (!string.IsNullOrEmpty(after.Namespace)
-                                     && next.Length > 0
-                                     && string.Equals(next, SatelliteTableMapping.OwnerOfSatellitePath(after.Namespace),
-                                         StringComparison.Ordinal));
-        return !(previousWasUnset && nextIsDerivedOwner);
+        return !(previousWasUnset && IsOwnerOf(next, after.Path));
     }
 }

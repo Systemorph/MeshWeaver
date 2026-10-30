@@ -1492,30 +1492,55 @@ one more reason the rule refuses rather than re-checks. Pinned by `SatelliteMain
 (a routed repoint to a locked target and to the writer's own target are both refused; an update that
 keeps the pointer lands; the rule refuses a changed pointer and allows the path-derived one).
 
-Three routes around the stored-vs-proposed comparison are closed at the commit point too. In each,
-the pointer must be one the path derives (unset or self, the satellite's owner, or the owner of its
-namespace's first satellite segment):
+**The invariant.** For every write by anyone but System that commits a satellite (a node of a
+satellite type before the write, after it, or both), the committed `MainNode` is one of exactly two
+values:
 
-- **A carried write.** A data change sent to ANOTHER node's hub can carry a satellite. That hub holds
-  no predecessor under the satellite's key, so there is nothing to compare. A satellite committed
-  anywhere but its own hub may carry only a derived pointer. **Not closed:** with no predecessor, the
-  carrier cannot tell a create from a rewrite. So a carried rewrite can still replace a stored
-  off-ancestry pointer with a derived one, or with a nested satellite's outer storage owner. Closing
-  that needs the carried write to reach the satellite's owner, where the stored node is compared
-  (filed to triage).
-- **A retype into the satellite class.** Retype a satellite out, change its pointer while it is an
-  ordinary node, and retype it back. Each write alone passes the comparison, so the write that makes a
-  node a satellite must point at its SECURITY owner. It may not point at the storage owner of an outer
-  satellite segment: for `Doc/_Thread/t1/_Comment/c1` that is `Doc`, above the thread. It may not point
-  at itself or carry an unset pointer either, because the next update could then "normalise" the pointer
-  to that storage owner.
-- **A module's satellite type.** The rule set hands a module's rule out behind a lease wrapper, so the
-  guard asks the set (`NodeTypeAccessRuleSet.IsGovernedBy<SatelliteAccessRule>`), which tests the
-  leased rule itself, instead of testing what `Find` returns.
+- the STORED satellite's pointer, unchanged byte for byte; or
+- EXACTLY the satellite's path-derived security owner (`MainNodeTrust.OwnerOf`), and only where nothing
+  satellite-shaped was stored: the stored pointer was never set (empty, or the node itself), or the node
+  is entering the satellite class by a retype.
 
-Pinned by `SatelliteMainNodeRepointTest` (the carried write and the three-write retype, each with a
-derived-pointer control) and `ModuleSatelliteMainNodeRepointTest` (MeshWeaver.Compiler.Pipeline.Test:
-a compiled module's satellite type outside the standard list).
+A satellite CARRIED in a data change to another node's hub is refused outright, because that hub holds
+no predecessor and cannot tell a create from a rewrite. A create at the satellite's own hub is the
+creation chain's decision (the landing check above). The comparison is RAW and ordinal: `""` and `"/"`
+differ (the rule falls back to the node's own path for the first and delegates the second to the root
+scope), and so do case variants, trailing slashes and `..` segments.
+
+So a writer can move a satellite's delegation only to its path-derived owner, and only when nothing
+chose it before. A pointer that differs from that owner was written by the platform (System) or by the
+create chain, and has stood unchanged since. In particular the storage owner of the first satellite
+segment, which the platform's create and upsert normalisation writes, is NOT accepted from a writer.
+For a nested satellite it sits above the security owner (`Doc` against `Doc/_Thread/t1` for
+`Doc/_Thread/t1/_Comment/c1`). A user's upsert of a nested satellite whose stored pointer is unset is
+therefore refused; the platform repairs such rows as System.
+
+**Why the owner is not simply always derived from the path.** The stored pointer is load-bearing for
+satellites that are LEGITIMATELY governed by a node other than their path owner: an activity run for
+another node, a notification addressed to a person, a user activity naming its target. It is also what
+`is:main` and the SQL grant projection (`COALESCE(main_node, namespace)`) read. Deciding access by the
+path alone would silently change who can read those satellites, in core and in every module. Holding
+the WRITE side instead (only System or the create chain chooses a pointer; a writer keeps it or sets
+the path owner) closes the same class without moving any existing decision.
+
+A module's satellite type counts too: the guard classifies through the rule set
+(`NodeTypeAccessRuleSet.IsGovernedBy<SatelliteAccessRule>`), which tests the leased rule itself rather
+than the lease wrapper `Find` returns.
+
+Pinned by `SatelliteMainNodeRepointTest.TheInvariant_HoldsForEveryRouteThatSetsAPointer`, one row per
+route that can set a pointer:
+
+- update and merge patch: keep, chosen target, the writer's own target, a stored off-ancestry pointer
+  moved to the path owner;
+- normalisation of an unset or self pointer: to the exact owner, to the outer storage owner of a nested
+  satellite, to `/`, a trailing slash, a case variant, a `..` path, an ancestor;
+- retype in with the owner, self, empty, a chosen pointer or the outer owner, and retype out;
+- carried writes, whatever they carry;
+- a create at the satellite's own hub.
+
+A row that lands must leave the pointer at the stored value or exactly the path owner. Also pinned by
+`ANestedSatelliteStoredUnset_CannotBeNormalisedToTheOuterOwner` (routed end to end) and
+`ModuleSatelliteMainNodeRepointTest` (MeshWeaver.Compiler.Pipeline.Test).
 
 **A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
 (`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a
