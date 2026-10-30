@@ -73,11 +73,16 @@ jobs:
   retry:
     name: Rerun iff EVERY failure is proven transient
     # A GREEN completion has nothing to judge, so it is skipped (this is never a required context).
+    # A `cancelled` run IS judged: a job GitHub cuts at its time limit concludes `cancelled`, so a run
+    # whose only reds were finished jobs cut that way concludes `cancelled` too (MeshWeaver#7694) —
+    # filtered to `failure`, this lane never saw it and the pull request stayed red. A run cancelled
+    # because a push superseded it is judged too, and declined by name (no proof).
     # Any event other than `workflow_run` is NOT skipped: the first step reds on it, so a miswired
     # caller is visible rather than silently idle.
     if: >
       github.event_name != 'workflow_run'
       || github.event.workflow_run.conclusion == 'failure'
+      || github.event.workflow_run.conclusion == 'cancelled'
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
@@ -101,8 +106,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The script's self-test reads the two workflow files beside it (the verdict step's defining
-      # lane, and this lane's own grants), so they are fetched into the SAME layout, at the same ref.
+      # The script's self-test reads the three workflow files beside it (the verdict step's defining
+      # lane, the stage gate's hold line, and this lane's own grants), so they are fetched into the SAME layout, at the same ref.
       - name: Fetch the decision script at the lane's scripts ref
         env:
           SCRIPTS_REF: ${{ inputs.scripts-ref }}
@@ -118,10 +123,12 @@ jobs:
             || { echo "::error::could not fetch node-repo-retry-transients.yml at ${SCRIPTS_REF} — the self-test reads its grants"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/workflows/node-repo-module-pack.yml" > "$workflows/node-repo-module-pack.yml" \
             || { echo "::error::could not fetch node-repo-module-pack.yml at ${SCRIPTS_REF} — the self-test reads its verdict step"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/workflows/node-repo-stage-gate.yml" > "$workflows/node-repo-stage-gate.yml" \
+            || { echo "::error::could not fetch node-repo-stage-gate.yml at ${SCRIPTS_REF} — the self-test reads its stage-0 hold line"; exit 1; }
           # The shared REST client the script imports from beside itself (`import ghrest`). Fetched
           # whenever the script at this ref imports it — an older scripts-ref predates the module
           # and has no such file to fetch — and RED if it cannot be.
-          fetched_files=("$scripts/retry-known-transients.py" "$workflows/node-repo-retry-transients.yml" "$workflows/node-repo-module-pack.yml")
+          fetched_files=("$scripts/retry-known-transients.py" "$workflows/node-repo-retry-transients.yml" "$workflows/node-repo-module-pack.yml" "$workflows/node-repo-stage-gate.yml")
           if grep -q '^import ghrest' "$scripts/retry-known-transients.py"; then
             "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/ghrest.py" > "$scripts/ghrest.py" \
               || { echo "::error::could not fetch ghrest.py at ${SCRIPTS_REF} — the decision script imports it"; exit 1; }
