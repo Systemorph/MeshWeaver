@@ -95,7 +95,15 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
     private static Task<MeshNode> ReloadedLapsed(IMessageHub hub, CancellationToken ct)
         => hub.ServiceProvider.GetService<AccessService>()
             .RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(PrebuiltBundleRetentionLease.LeasePath)
-                .Update(node => node with { Content = PrebuiltBundleRetentionLeaseState.Lapsed })
+                // What persisted BEFORE the lost claim: lapsed, one generation back.
+                .Update(node => node with
+                {
+                    Content = PrebuiltBundleRetentionLeaseState.Lapsed with
+                    {
+                        Generation = Math.Max(
+                            (node.ContentAs<PrebuiltBundleRetentionLeaseState>(hub.JsonSerializerOptions)?.Generation ?? 0) - 1, 0),
+                    },
+                })
                 .Take(1))
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
@@ -328,7 +336,7 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
             .Timeout(TestTimeouts.Convergence).Await(ct);
         landed!.Claim.Should().Be(claimA, "PRECONDITION: nobody holds the lease at a fresh epoch");
 
-        var stillOurs = await PrebuiltBundleRetentionLease.Stamp(hubA, claimA, "silo-0", t)
+        var stillOurs = await PrebuiltBundleRetentionLease.Stamp(hubA, claimA, landed.Generation, "silo-0", t)
             .Timeout(TestTimeouts.Convergence).Await(ct);
         stillOurs.Held.Should().BeTrue("NEGATIVE CONTROL: a stamp over its own claim holds the lease");
 
@@ -349,7 +357,7 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         // a host-shaped container, green on Actions — the mirror's lag, not the lease, decided it.
         var settledB = taken.Lease!.Claim;
         await Sees(hubA, lease => lease.Claim == settledB, ct);
-        var resumed = await PrebuiltBundleRetentionLease.Stamp(hubA, claimA, "silo-0", t)
+        var resumed = await PrebuiltBundleRetentionLease.Stamp(hubA, claimA, landed.Generation, "silo-0", t)
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
         resumed.Held.Should().BeFalse(
@@ -462,6 +470,101 @@ public class PrebuiltBundleRetentionLeaseAcrossSilosTest : IClassFixture<Retenti
         await PrebuiltBundleRetentionLease.Release(hubB, Taker).Timeout(TestTimeouts.Convergence).Await(ct);
         await Sees(hubA, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
     }
+
+    /// <summary>
+    /// 🚨 #7459, the fence. The lease node's owner ACKNOWLEDGED A's claim and stamp, then died before they
+    /// persisted. Its replacement reloads the lease as it was before A's take (lapsed, one generation back),
+    /// and B takes it, landing the SAME generation A took. A's watch on the live lease starts only now, so
+    /// the first state it sees is B's claim. Without a fence it cannot tell that state from a snapshot
+    /// from before its own take: it waited for its claim to appear, which never happens, and A swept beside
+    /// B. With the fence, a lease of A's generation (or a newer one) that does not carry A's claim stops
+    /// A, and none of A's stale writes (stamp, release) touches B's lease. NEGATIVE CONTROL: before the
+    /// loss, the same checks accept A as the holder.
+    /// </summary>
+    [Fact]
+    public async Task AHolderWhoseAckedClaimDiedWithTheOwner_IsRefused_EvenWhenItFirstLooksAfterTheLoss()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hubA = SiloMeshHub(0);
+        var hubB = SiloMeshHub(1);
+        const int Stale = 13;
+        const int Taker = 14;
+        var now = new DateTimeOffset(2509, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var heldA = await PrebuiltBundleRetentionLease.Take(hubA, now, Hold, Stale, "silo-0")
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        heldA.Held.Should().BeTrue("PRECONDITION: the lease is free at a fresh epoch");
+        var claimA = heldA.Lease!.Claim;
+        var generationA = heldA.Lease.Generation;
+        var seenByB = await Sees(hubB, lease => lease.Claim == claimA, ct);
+        PrebuiltBundleRetentionLease.IsHeldBy(seenByB, claimA, generationA).Should().BeTrue(
+            "NEGATIVE CONTROL: while A's claim stands, the fence accepts A as the holder");
+
+        // The owner lost the acknowledged claim: the lease reloads as it was before A's take, and B takes it.
+        await ReloadedLapsed(hubB, ct);
+        await Sees(hubB, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
+        var taken = await PrebuiltBundleRetentionLease.Take(hubB, now, Hold, Taker, "silo-1")
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        taken.Held.Should().BeTrue("PRECONDITION: the reloaded lease is lapsed, so the other replica takes it");
+        taken.Lease!.Generation.Should().Be(generationA,
+            "the reload lost A's generation too, so B's take lands the same number: the fence compares the claim within it");
+        await Sees(hubA, lease => lease.Claim == taken.Lease.Claim, ct);
+
+        // A's watch starts AFTER the loss: the first state it sees is B's claim.
+        var stopped = await PrebuiltBundleRetentionLease
+            .Lost(hubA.GetWorkspace().GetMeshNodeStream(PrebuiltBundleRetentionLease.LeasePath)
+                    .Select(node => node.ContentAs<PrebuiltBundleRetentionLeaseState>(hubA.JsonSerializerOptions)),
+                claimA, generationA)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        stopped.Message.Should().Contain($"this pass took generation {generationA}",
+            "a holder that first looks after its claim was lost must stop, not wait for a claim that never comes back");
+
+        // None of A's stale writes may act on B's lease.
+        var restamped = await PrebuiltBundleRetentionLease.Stamp(hubA, claimA, generationA, "silo-0", now)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        restamped.Held.Should().BeFalse("a stale holder's stamp finds another claim in its generation");
+        await PrebuiltBundleRetentionLease.Release(hubA, claimA, generationA).Timeout(TestTimeouts.Convergence).Await(ct);
+        var after = await Sees(hubB, lease => lease.Claim == taken.Lease.Claim, ct);
+        after.Replica.Should().Be("silo-1", "the stale holder neither stamps nor releases over the new holder");
+        after.Generation.Should().Be(generationA);
+
+        await PrebuiltBundleRetentionLease.Release(hubB, Taker).Timeout(TestTimeouts.Convergence).Await(ct);
+        await Sees(hubA, lease => lease.Claim == PrebuiltBundleRetentionLease.LapsedClaim, ct);
+    }
+
+    /// <summary>
+    /// The generation is always written, <c>0</c> included, so a stale claimant's base carries it and the
+    /// owner REFUSES its generation instead of letting it land over a newer one. NEGATIVE CONTROL: the
+    /// same merge on a shape that omits a default generation (the hub serializer's default) applies the
+    /// stale generation, and the fence goes backwards.
+    /// </summary>
+    [Fact]
+    public void AStaleClaimantsGeneration_IsRefused_NeverMovesTheFenceBack()
+    {
+        var t = new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var staleBase = PrebuiltBundleRetentionLeaseState.Lapsed;
+        var live = new PrebuiltBundleRetentionLeaseState(
+            PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(1), 41) | PrebuiltBundleRetentionLease.StampedFlag, "silo-0", t)
+        { Generation = 3 };
+        var stale = PrebuiltBundleRetentionLease.Taken(staleBase, PrebuiltBundleRetentionLease.ClaimFor(t.AddHours(2), 42));
+        stale.Generation.Should().Be(1, "PRECONDITION: a take bumps the generation it read");
+
+        var (merged, refused) = MergeLosingClaim(staleBase, live, stale);
+        refused.Should().Contain("generation", "the base carries generation 0, so the owner sees it changed on both sides");
+        merged.Deserialize<PrebuiltBundleRetentionLeaseState>(Web)!.Generation.Should().Be(3);
+
+        var (omitted, omittedRefused) = MergeLosingClaim(
+            new OmittingGenerationShape(staleBase.Claim, 0),
+            new OmittingGenerationShape(live.Claim, live.Generation),
+            new OmittingGenerationShape(stale.Claim, stale.Generation));
+        omittedRefused.Should().NotContain("generation", "NEGATIVE CONTROL: an omitted 0 gives the owner no conflict signal");
+        omitted.Deserialize<OmittingGenerationShape>(Web)!.Generation.Should().Be(1, "…and the fence moved backwards");
+    }
+
+    /// <summary>The lease shape with a generation the serializer OMITS at <c>0</c> — the negative control above.</summary>
+    private sealed record OmittingGenerationShape(long Claim, long Generation);
 
     /// <summary>
     /// 🚨 A stamp proposed from a STALE mirror — the stamper's base still carries its own claim while the

@@ -43,6 +43,24 @@ public sealed record PrebuiltBundleRetentionLeaseState(long Claim, string? Repli
     /// <summary>A lease nobody holds.</summary>
     public static PrebuiltBundleRetentionLeaseState Lapsed { get; } = new(PrebuiltBundleRetentionLease.LapsedClaim);
 
+    /// <summary>
+    /// 🚨 <b>The FENCE (#7459).</b> Bumped by every take, in the same write as the <see cref="Claim"/>; a
+    /// stamp and a release leave it. A holder carries the generation its take settled and stops (it never
+    /// stamps, releases or sweeps on) once a lease of that generation or a NEWER one does not carry its
+    /// claim (<see cref="PrebuiltBundleRetentionLease.Lost"/>). The generation is what tells a snapshot from
+    /// BEFORE the take (an older generation) from one AFTER the take was lost: the lease node's owner
+    /// acknowledged the claim, died before it persisted, reloaded the older lease and granted it to another
+    /// replica, whose take carries the same or a later generation. Without it, a loss that came before the
+    /// holder's first look at the live lease looked like a stale snapshot, and the holder swept beside the
+    /// new one.
+    ///
+    /// <para>Always WRITTEN, <c>0</c> included. A leaf the writer's base lacks carries no conflict signal
+    /// in the owner's merge, so an omitted <c>0</c> would let a stale claimant's generation land over a
+    /// newer one. That is the same trap as a lapsed claim of <c>0</c>.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public long Generation { get; init; }
+
     /// <summary>The nonce of the pass holding the claim; <c>0</c> when lapsed.</summary>
     [JsonIgnore]
     public int Holder => Claim <= 0 ? 0 : (int)(Claim & PrebuiltBundleRetentionLease.NonceMask & ~PrebuiltBundleRetentionLease.StampedFlag);
@@ -202,13 +220,15 @@ public static class PrebuiltBundleRetentionLease
         var claim = ClaimFor(now + hold, nonce);
         return Claim(hub, now, claim)
             .SelectMany(lease => lease is not null && lease.Claim == claim
-                // The claim landed: stamp who holds it. Held is decided by what the stamp SETTLED.
-                ? Stamp(hub, claim, replica, now)
+                // The claim landed: stamp who holds it. Held is decided by what the stamp SETTLED, and
+                // only under the generation this take settled (the fence).
+                ? Stamp(hub, claim, lease.Generation, replica, now)
                 : Observable.Return(new PrebuiltBundleRetentionLeaseVerdict(false, lease)));
     }
 
     /// <summary>
-    /// The claiming fold of <see cref="Take"/>: proposes <paramref name="claim"/> unless the lease is held
+    /// The claiming fold of <see cref="Take"/>: proposes <paramref name="claim"/>, and the NEXT
+    /// <see cref="PrebuiltBundleRetentionLeaseState.Generation"/> in the same write, unless the lease is held
     /// past <paramref name="now"/> or unreadable, and returns the lease as the owner settled it. As System. COLD.
     /// </summary>
     internal static IObservable<PrebuiltBundleRetentionLeaseState?> Claim(IMessageHub hub, DateTimeOffset now, long claim)
@@ -224,9 +244,9 @@ public static class PrebuiltBundleRetentionLease
                     // Held until a later instant, or unreadable: leave it.
                     if (lease is null || lease.Until > now)
                         return current;
-                    // ONLY the claim: a claimant never writes the diagnostic fields, so a losing
-                    // claim has nothing it could land beside the refused scalar.
-                    return current with { Content = lease with { Claim = claim } };
+                    // ONLY the claim and its generation: a claimant never writes the diagnostic
+                    // fields, so a losing claim has nothing it could land beside the refused scalars.
+                    return current with { Content = Taken(lease, claim) };
                 })
                 .Take(1))
             .Select(settled => Read(settled, options)));
@@ -242,24 +262,51 @@ public static class PrebuiltBundleRetentionLease
     /// </summary>
     /// <param name="hub">The hub to write from.</param>
     /// <param name="claim">The claim this pass landed.</param>
+    /// <param name="generation">The generation the claim landed under: the fence.</param>
     /// <param name="replica">This process's name.</param>
     /// <param name="now">The instant the claim was taken.</param>
     internal static IObservable<PrebuiltBundleRetentionLeaseVerdict> Stamp(
-        IMessageHub hub, long claim, string replica, DateTimeOffset now)
+        IMessageHub hub, long claim, long generation, string replica, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(hub);
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
         return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
-            .Update(current => Read(current, options) is { } held && (held.Claim == claim || held.Claim == (claim | StampedFlag))
+            .Update(current => Read(current, options) is { } held && IsHeldBy(held, claim, generation)
                 ? current with { Content = held with { Claim = claim | StampedFlag, Replica = replica, TakenAt = now } }
                 : current)
             .Take(1)
             .Select(stamped =>
             {
                 var lease = Read(stamped, options);
-                return new PrebuiltBundleRetentionLeaseVerdict(lease is not null && lease.Claim == (claim | StampedFlag), lease);
+                return new PrebuiltBundleRetentionLeaseVerdict(
+                    lease is not null && lease.Claim == (claim | StampedFlag) && lease.Generation == generation, lease);
             }));
+    }
+
+    /// <summary>
+    /// The lease a take of <paramref name="claim"/> writes over <paramref name="lease"/>: the claim and the
+    /// next generation (#7459). Pure.
+    /// </summary>
+    /// <param name="lease">The lease the take read.</param>
+    /// <param name="claim">The claim proposed.</param>
+    internal static PrebuiltBundleRetentionLeaseState Taken(PrebuiltBundleRetentionLeaseState lease, long claim)
+        => lease with { Claim = claim, Generation = Math.Max(lease.Generation, 0) + 1 };
+
+    /// <summary>
+    /// Whether <paramref name="lease"/> still carries <paramref name="claim"/> (stamped or not) under
+    /// <paramref name="generation"/>. This is the only state in which its holder may stamp, release or sweep:
+    /// a lease of another generation never counts as held, whatever its claim (#7459). Pure.
+    /// </summary>
+    /// <param name="lease">The lease as read.</param>
+    /// <param name="claim">The holder's claim, with or without <see cref="StampedFlag"/>.</param>
+    /// <param name="generation">The generation the holder's take settled.</param>
+    internal static bool IsHeldBy(PrebuiltBundleRetentionLeaseState? lease, long claim, long generation)
+    {
+        var unstamped = claim & ~StampedFlag;
+        return lease is not null
+            && lease.Generation == generation
+            && (lease.Claim == unstamped || lease.Claim == (unstamped | StampedFlag));
     }
 
     /// <summary>
@@ -270,12 +317,26 @@ public static class PrebuiltBundleRetentionLease
     /// <param name="hub">The hub to write from.</param>
     /// <param name="nonce">The nonce of the pass that took the lease.</param>
     public static IObservable<Unit> Release(IMessageHub hub, int nonce)
+        => ReleaseWhere(hub, lease => lease is { Claim: > 0 } && lease.Holder == nonce);
+
+    /// <summary>
+    /// Releases the lease only while it still carries <paramref name="claim"/> under
+    /// <paramref name="generation"/> (<see cref="IsHeldBy"/>). A stale holder never lapses a lease of a
+    /// newer generation, even one whose claim happens to carry its nonce (#7459). As System. COLD.
+    /// </summary>
+    /// <param name="hub">The hub to write from.</param>
+    /// <param name="claim">The claim the holder's take settled.</param>
+    /// <param name="generation">The generation the holder's take settled.</param>
+    internal static IObservable<Unit> Release(IMessageHub hub, long claim, long generation)
+        => ReleaseWhere(hub, lease => IsHeldBy(lease, claim, generation));
+
+    private static IObservable<Unit> ReleaseWhere(IMessageHub hub, Func<PrebuiltBundleRetentionLeaseState, bool> held)
     {
         ArgumentNullException.ThrowIfNull(hub);
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
         return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
-                .Update(current => Read(current, options) is { Claim: > 0 } lease && lease.Holder == nonce
+                .Update(current => Read(current, options) is { } lease && held(lease)
                     ? current with { Content = lease with { Claim = LapsedClaim } }
                     : current)
                 .Take(1))
@@ -352,14 +413,14 @@ public static class PrebuiltBundleRetentionLease
                             + "so the pass did not start — its sweep could have overlapped the next holder's; "
                             + "the lease is left to lapse and the next pass re-plans"));
                     return ReleasedAtTerminal(
-                        WhileHeld(hub, verdict.Lease!.Claim, Observable.Defer(pass))
+                        WhileHeld(hub, verdict.Lease!.Claim, verdict.Lease.Generation, Observable.Defer(pass))
                             // Unsubscribing cancels the pool leaf, so a pass past its deadline stops at
                             // its next step boundary — with the other half of the hold to reach it.
                             .Timeout(deadline, Observable.Throw<TResult>(new OperationCanceledException(
                                 $"the prebuilt-bundle retention pass outlived half its lease hold ({deadline}) "
                                 + "and was stopped, so no other replica's pass can overlap it; the lease is left "
                                 + "to lapse and the next pass re-plans what this one did not reach"))),
-                        Release(hub, nonce),
+                        Release(hub, verdict.Lease.Claim, verdict.Lease.Generation),
                         releaseFaulted);
                 });
         });
@@ -397,18 +458,20 @@ public static class PrebuiltBundleRetentionLease
 
     /// <summary>
     /// <paramref name="pass"/>, ended with an <see cref="OperationCanceledException"/> as soon as the live
-    /// lease no longer names <paramref name="stampedClaim"/> (<see cref="Lost"/>): the lease node's owner
-    /// reloaded a lease whose claim had not persisted, another replica holds it, or the lease can no longer
-    /// be followed. Unsubscribing the pass cancels its pool leaf at the next step boundary. As System. COLD.
+    /// lease no longer names <paramref name="stampedClaim"/> under <paramref name="generation"/>
+    /// (<see cref="Lost"/>): the lease node's owner reloaded a lease whose claim had not persisted, another
+    /// replica holds it, or the lease can no longer be followed. Unsubscribing the pass cancels its pool leaf
+    /// at the next step boundary. As System. COLD.
     /// </summary>
-    private static IObservable<TResult> WhileHeld<TResult>(IMessageHub hub, long stampedClaim, IObservable<TResult> pass)
+    private static IObservable<TResult> WhileHeld<TResult>(IMessageHub hub, long stampedClaim, long generation, IObservable<TResult> pass)
     {
         var access = hub.ServiceProvider.GetService<AccessService>();
         var options = hub.JsonSerializerOptions;
         var lost = Lost(
                 access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(LeasePath)
                     .Select(node => Read(node, options))),
-                stampedClaim)
+                stampedClaim,
+                generation)
             .SelectMany(cancelled => Observable.Throw<TResult>(cancelled));
         return pass.Publish(shared => shared.Merge(lost.TakeUntil(shared.LastOrDefaultAsync())));
     }
@@ -418,8 +481,15 @@ public static class PrebuiltBundleRetentionLease
     /// must stop, read off the <paramref name="live"/> lease (#7459). Pure composition. COLD.
     ///
     /// <list type="bullet">
+    ///   <item><description><b>Lost before it was seen: the fence.</b> A lease of
+    ///     <paramref name="generation"/> or a NEWER one that does not carry this claim means another take
+    ///     came after this one: the owner acknowledged this claim, lost it before it persisted, and granted
+    ///     the lease again. That is a loss even when it is the first state the watch sees. A lease of an OLDER
+    ///     generation is a snapshot from before the take (or the reload of one). No other replica can sweep on
+    ///     it without taking a newer generation, so it is waited past.</description></item>
     ///   <item><description><b>Lost after it was seen.</b> Once the live lease has carried this claim, any
-    ///     later state that does not (lapsed, unreadable, another pass's claim) is a loss.</description></item>
+    ///     later state that does not (lapsed, unreadable, another pass's claim, another generation) is a
+    ///     loss.</description></item>
     ///   <item><description><b>The lease can no longer be followed.</b> A fault of the live lease, or its
     ///     completion, leaves the holder unable to see a loss, so it is one: a cancellation (the fault kept
     ///     as its inner exception), never an ordinary pass fault — a pass that FAULTS releases at once, under
@@ -428,17 +498,21 @@ public static class PrebuiltBundleRetentionLease
     /// </summary>
     /// <param name="live">The lease as the live stream carries it; <c>null</c> when its content cannot be read.</param>
     /// <param name="stampedClaim">The claim the holder's stamp settled.</param>
+    /// <param name="generation">The generation the holder's take settled: the fence.</param>
     internal static IObservable<OperationCanceledException> Lost(
-        IObservable<PrebuiltBundleRetentionLeaseState?> live, long stampedClaim)
+        IObservable<PrebuiltBundleRetentionLeaseState?> live, long stampedClaim, long generation)
     {
-        var unstamped = stampedClaim & ~StampedFlag;
-        bool Ours(PrebuiltBundleRetentionLeaseState? lease) => lease is not null && (lease.Claim == stampedClaim || lease.Claim == unstamped);
+        bool Ours(PrebuiltBundleRetentionLeaseState? lease) => IsHeldBy(lease, stampedClaim, generation);
+        // Before the claim is seen, only a state of this generation or a newer one says the take was superseded.
+        bool Superseded(PrebuiltBundleRetentionLeaseState? lease) => lease is not null && lease.Generation >= generation && !Ours(lease);
         return live
-            .SkipWhile(lease => !Ours(lease))
+            .SkipWhile(lease => !Ours(lease) && !Superseded(lease))
             .Where(lease => !Ours(lease))
             .Select(lease => new OperationCanceledException(
                 "the prebuilt-bundle retention lease this pass held no longer names it (now: "
                 + (lease is null ? "unreadable" : lease.Claim <= 0 ? "lapsed" : $"pass {lease.Holder}")
+                + (lease is null ? "" : $" at generation {lease.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
+                + $"; this pass took generation {generation.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
                 + ") — its owner lost the claim or another replica took it, so this pass stops at its next "
                 + "step boundary rather than sweep beside another; the next pass re-plans what it did not reach"))
             .Catch<OperationCanceledException, Exception>(fault => Observable.Return(new OperationCanceledException(

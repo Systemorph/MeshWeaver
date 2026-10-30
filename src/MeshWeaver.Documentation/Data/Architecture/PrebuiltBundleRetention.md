@@ -430,10 +430,26 @@ to change):
   deadline. A lease stream that faults or completes also cancels the pass, keeping the fault as the
   inner exception. It never surfaces as an ordinary pass fault, which would release the lease under a
   leaf that is still winding down (`PrebuiltBundleRetentionLease.Lost`, pinned in
-  `PrebuiltBundleRetentionLeaseTerminalTest`). Known gap: a claim lost before the watcher's first
-  snapshot of it is not detected. The lease's content cannot tell a snapshot replayed from before the
-  claim apart from a later loss without a fencing token, and this is filed to triage. Persistence is still not confirmed before a pass counts as held; that guarantee belongs to
-  the data layer.
+  `PrebuiltBundleRetentionLeaseTerminalTest`).
+- **The lease carries a fence: a generation every take bumps (#7459).** An `Update` ack does not
+  promise the write persisted, so the lease does not rely on it. Every take writes the claim and the
+  next `Generation` in one write; a stamp and a release keep it. The holder carries the generation its
+  take settled. A lease of that generation or a newer one that does not carry its claim means another
+  take came after it, so the holder stops, even when that is the first state its watch sees. That is
+  the case the watch alone could not see: the owner acked the claim, died before it persisted,
+  reloaded the lease one generation back and granted it to another replica, which landed the same
+  generation. A lease of an older generation is a snapshot from before the take, and nobody can sweep
+  on it without taking a newer generation, so the holder waits past it. The stamp and the release are
+  fenced the same way (`IsHeldBy`): a stale holder never stamps or releases a lease of another
+  generation. The generation is always written, `0` included. An omitted `0` would give the owner's
+  merge no conflict signal, and a stale claimant's generation would land over a newer one, the same
+  trap as a lapsed claim of `0`. Pinned in `PrebuiltBundleRetentionLeaseTerminalTest` and, across two
+  silos, `AHolderWhoseAckedClaimDiedWithTheOwner_IsRefused_EvenWhenItFirstLooksAfterTheLoss`.
+  Persistence itself is still not confirmed before a pass counts as held. The fence makes that safe
+  for the lease; whether an `Update` ack should ever mean durable is a data-layer question this does
+  not answer. What the fence does not cover: one owner loss that drops TWO unpersisted takes, so the
+  next take lands an OLDER generation than the stale holder's. The stale holder then waits past it
+  until its own deadline, as before.
 
 🚨 **The claim is ONE number, and a lapsed claim is never `0`.** A remote `Update` reaches the owner
 as a three-way merge resolved per leaf (`MeshNodePatchMerge`). A string changed on both sides is
