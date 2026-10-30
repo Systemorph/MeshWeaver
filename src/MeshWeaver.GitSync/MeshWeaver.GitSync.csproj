@@ -23,6 +23,11 @@
     <!-- AHungImportCannotHoldTheRebootTest substitutes ModuleSourceUpdate's activity watch to fault
          or end it after the activity exists (#6753). -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
+    <!-- The Azure Repos hosting provider (MeshWeaver.Plugins src/MeshWeaver.GitSync.AzureRepos) reads
+         and writes files through the same strict text/binary codec as the GitHub path (RepoFileCodec),
+         so both providers classify a file identically. -->
+    <InternalsVisibleTo Include="MeshWeaver.GitSync.AzureRepos" />
+    <InternalsVisibleTo Include="MeshWeaver.GitSync.AzureRepos.Test" />
   </ItemGroup>
 
   <ItemGroup>
