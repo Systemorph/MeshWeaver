@@ -172,8 +172,13 @@ public record InstanceRebootRequest
     public ImmutableDictionary<string, InstanceRebootReplica> Replicas { get; init; } =
         ImmutableDictionary<string, InstanceRebootReplica>.Empty;
 
-    /// <summary>Why the request is red, by name. Executor-owned.</summary>
+    /// <summary>Why the request is red, by name. Executor-owned. 🚨 Its <see cref="InstanceReboot.StalledMarker"/>
+    /// is a MACHINE marker (<see cref="InstanceReboot.EndedAsStalled"/>) and stays English.</summary>
     public string? Failure { get; init; }
+
+    /// <summary>The keyed form of <see cref="Failure"/> (MeshWeaver#7322), rendered in the VIEWER's language
+    /// (<see cref="RebootText.Localize"/>) — used only while it reproduces <see cref="Failure"/>.</summary>
+    public RebootText? FailureText { get; init; }
 
     /// <summary>When the request reached a terminal status. Executor-owned.</summary>
     public DateTimeOffset? CompletedAt { get; init; }
@@ -208,6 +213,14 @@ public record InstanceRebootRequest
 
     /// <summary>Every step, in order — the audit trail. Executor-owned.</summary>
     public ImmutableList<string> Log { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The keyed form of each <see cref="Log"/> line (MeshWeaver#7322), aligned with <see cref="Log"/>
+    /// from its END — both only grow at the end and are trimmed at the front — so a request written
+    /// before keys existed simply has fewer of them. An empty entry is a line with no keyed form.
+    /// Read through <see cref="InstanceReboot.LocalizedLog"/>.
+    /// </summary>
+    public ImmutableList<RebootText>? LogText { get; init; }
 }
 
 /// <summary>One step of a reboot and how it ended.</summary>
@@ -221,6 +234,9 @@ public record InstanceRebootStep
 
     /// <summary>The step's own sentence: what it did, or why it was skipped or failed, by name.</summary>
     public string? Detail { get; init; }
+
+    /// <summary>The keyed form of <see cref="Detail"/> (MeshWeaver#7322) — used only while it reproduces it.</summary>
+    public RebootText? DetailText { get; init; }
 
     /// <summary>When the outcome was recorded.</summary>
     public DateTimeOffset? At { get; init; }
@@ -270,6 +286,10 @@ public record InstanceRebootCheck
 
     /// <summary>The check's own sentence.</summary>
     public string? Detail { get; init; }
+
+    /// <summary>The keyed form of <see cref="Detail"/> (MeshWeaver#7322) — used only while it reproduces it.
+    /// A check that sets none (a module's own smoke check) renders its <see cref="Detail"/> as written.</summary>
+    public RebootText? DetailText { get; init; }
 }
 
 /// <summary>What <see cref="InstanceReboot.Request"/> answers: the request's path, or why nothing was written.</summary>
@@ -284,7 +304,11 @@ public sealed record InstanceRebootTicket(string? Path, string? Refusal)
 /// <summary>The verdict <see cref="InstanceReboot.EvaluateVerification"/> reaches over the counted replica reports.</summary>
 /// <param name="Passed">Every counted replica passed every measured check, and at least one smoke check was measured.</param>
 /// <param name="Detail">The sentence naming every failed check by replica, and every check nobody could measure.</param>
-public sealed record InstanceRebootVerdict(bool Passed, string Detail);
+public sealed record InstanceRebootVerdict(bool Passed, string Detail)
+{
+    /// <summary>The keyed form of <see cref="Detail"/> (MeshWeaver#7322).</summary>
+    public RebootText? DetailText { get; init; }
+}
 
 /// <summary>
 /// The ONE way to ask an instance to reboot: <see cref="Request"/> writes the durable request, the
@@ -302,15 +326,70 @@ public static class InstanceReboot
     public const string SmokePrefix = "smoke:";
 
     /// <summary>Why <paramref name="request"/> must not be written, or null. Pure.</summary>
-    public static string? Validate(InstanceRebootRequest request)
+    public static string? Validate(InstanceRebootRequest request) => ValidateText(request)?.ToEnglish();
+
+    /// <summary>The keyed form of <see cref="Validate"/>'s answer, or null. Pure.</summary>
+    /// <param name="request">The request to check.</param>
+    public static RebootText? ValidateText(InstanceRebootRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Reason))
-            return "a reboot needs a reason — it is carried into the restart announcement and every log line";
+            return RebootText.Of("reboot.invalid.noReason");
         if (!string.Equals(request.Trigger, InstanceRebootTrigger.Person, StringComparison.Ordinal)
             && !string.Equals(request.Trigger, InstanceRebootTrigger.Watchdog, StringComparison.Ordinal))
-            return $"'{ActivationRecycle.SanitizeReason(request.Trigger)}' is not a reboot trigger this platform knows "
-                   + $"({InstanceRebootTrigger.Person}, {InstanceRebootTrigger.Watchdog})";
+            return RebootText.Of("reboot.invalid.trigger",
+                ("trigger", ActivationRecycle.SanitizeReason(request.Trigger)),
+                ("known", $"{InstanceRebootTrigger.Person}, {InstanceRebootTrigger.Watchdog}"));
         return null;
+    }
+
+    /// <summary>A check result whose detail is stored in English AND keyed (MeshWeaver#7322). Pure.</summary>
+    /// <param name="name">The check's name.</param>
+    /// <param name="outcome">How it ended — <see cref="InstanceRebootCheckOutcome"/>.</param>
+    /// <param name="detail">Its keyed sentence.</param>
+    public static InstanceRebootCheck CheckOf(string name, string outcome, RebootText detail) =>
+        new() { Name = name, Outcome = outcome, Detail = detail.ToEnglish(), DetailText = detail };
+
+    /// <summary>The time stamp a log line starts with — the universal sortable form every language reads.</summary>
+    /// <param name="at">The instant.</param>
+    public static string Stamp(DateTimeOffset at) => at.ToString("u", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// <paramref name="request"/>'s log with <paramref name="lines"/> appended — the English line in
+    /// <see cref="InstanceRebootRequest.Log"/> and its keyed form in <see cref="InstanceRebootRequest.LogText"/>,
+    /// both trimmed at the front to <paramref name="maxLines"/> so they stay aligned from the end. Pure.
+    /// </summary>
+    /// <param name="request">The request as it stands.</param>
+    /// <param name="maxLines">How many lines to keep, or a non-positive value for all.</param>
+    /// <param name="lines">The keyed lines (each already carries its time stamp).</param>
+    public static InstanceRebootRequest AppendLog(InstanceRebootRequest request, int maxLines, params RebootText[] lines)
+    {
+        if (lines.Length == 0)
+            return request;
+        var log = request.Log.AddRange(lines.Select(l => l.ToEnglish()));
+        var keyed = (request.LogText ?? ImmutableList<RebootText>.Empty).AddRange(lines);
+        if (maxLines > 0 && log.Count > maxLines)
+            log = log.RemoveRange(0, log.Count - maxLines);
+        if (keyed.Count > log.Count)
+            keyed = keyed.RemoveRange(0, keyed.Count - log.Count);
+        return request with { Log = log, LogText = keyed };
+    }
+
+    /// <summary>
+    /// The log as <paramref name="locale"/> reads it: each line's keyed form (aligned from the end)
+    /// while it reproduces the English line, otherwise the line verbatim. Pure.
+    /// </summary>
+    /// <param name="request">The request.</param>
+    /// <param name="locale">The viewer's language tag.</param>
+    /// <returns>One rendered line per <see cref="InstanceRebootRequest.Log"/> line, in order.</returns>
+    public static ImmutableList<string> LocalizedLog(InstanceRebootRequest request, string? locale)
+    {
+        var keyed = request.LogText ?? ImmutableList<RebootText>.Empty;
+        var offset = keyed.Count - request.Log.Count;
+        return request.Log
+            .Select((line, i) => i + offset >= 0 && i + offset < keyed.Count
+                ? RebootText.Localize(line, keyed[i + offset], locale) ?? line
+                : line)
+            .ToImmutableList();
     }
 
     /// <summary>
@@ -339,18 +418,22 @@ public static class InstanceReboot
     /// </summary>
     /// <param name="request">The faulted request.</param>
     /// <param name="now">The re-arm instant, for the log line.</param>
-    public static InstanceRebootRequest Rearm(InstanceRebootRequest request, DateTimeOffset now) => request with
+    public static InstanceRebootRequest Rearm(InstanceRebootRequest request, DateTimeOffset now) => AppendLog(request with
     {
         Status = InstanceRebootStatus.AwaitingRestart,
         Attempt = request.Attempt + 1,
         RestartRequestedAt = null,
         Replicas = ImmutableDictionary<string, InstanceRebootReplica>.Empty,
         Failure = null,
+        FailureText = null,
         FaultedAt = null,
         CompletedAt = null,
         ProgressAt = now,
-        Log = request.Log.Add($"{now:u} retry {request.Attempt + 1}: re-armed after the fault '{request.Failure}'"),
-    };
+    }, 0, RebootText.Verbatim(Stamp(now))
+        .Then(RebootText.Of("reboot.log.rearmed",
+            ("attempt", (request.Attempt + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))))
+        .Then(RebootText.Faithful(request.Failure ?? "", request.FailureText), glue: "")
+        .Then(RebootText.Verbatim("'"), glue: ""));
 
     /// <summary>
     /// 🚨 The retry half of <see cref="InstanceRebootStatus.Faulted"/>: lists the reboot requests,
@@ -443,6 +526,14 @@ public static class InstanceReboot
     /// <param name="defaultWindow">The window for a request that declares none (<see cref="InstanceRebootOptions.ExecutionWindow"/>).</param>
     /// <param name="retryUnit">The backoff unit of the faulted-restart re-arm (<see cref="RetryDueAt"/>).</param>
     public static string? Stalled(InstanceRebootRequest request, DateTimeOffset now, TimeSpan defaultWindow, TimeSpan retryUnit)
+        => StalledText(request, now, defaultWindow, retryUnit)?.ToEnglish();
+
+    /// <summary>The keyed form of <see cref="Stalled"/>'s sentence, or null while the request is not stalled. Pure.</summary>
+    /// <param name="request">The request as it stands.</param>
+    /// <param name="now">The reader's clock.</param>
+    /// <param name="defaultWindow">The window for a request that declares none.</param>
+    /// <param name="retryUnit">The backoff unit of the faulted-restart re-arm.</param>
+    public static RebootText? StalledText(InstanceRebootRequest request, DateTimeOffset now, TimeSpan defaultWindow, TimeSpan retryUnit)
     {
         if (InstanceRebootStatus.IsTerminal(request.Status))
             return null;
@@ -455,13 +546,22 @@ public static class InstanceReboot
         var where = request.Status switch
         {
             InstanceRebootStatus.AwaitingRestart when request.RestartRequestedAt is { } restart =>
-                $"the restart was requested at {restart:u} and no process booted after it has reported its checks",
+                RebootText.Of("reboot.stalled.awaitingRestart", ("at", Stamp(restart))),
             InstanceRebootStatus.Faulted =>
-                $"its restart faulted ({request.Failure ?? "no reason recorded"}) and nothing re-armed it when its retry was due",
-            _ => at is null ? "no step has started" : $"its last step is {at.Name} ({at.Outcome})",
+                RebootText.Of("reboot.stalled.faultedOpen")
+                    .Then(request.Failure is null
+                        ? RebootText.Of("reboot.noReasonRecorded")
+                        : RebootText.Faithful(request.Failure, request.FailureText), glue: "")
+                    .Then(RebootText.Of("reboot.stalled.faultedClose"), glue: ""),
+            _ => at is null
+                ? RebootText.Of("reboot.stalled.noStep")
+                : RebootText.Of("reboot.stalled.lastStep", ("step", at.Name), ("outcome", at.Outcome)),
         };
-        return $"status {request.Status}, no progress since {last:u} — longer than its declared execution window of "
-               + $"{window.TotalMinutes:0} min; {where}";
+        return RebootText.Of("reboot.stalled",
+                ("status", request.Status),
+                ("last", Stamp(last)),
+                ("minutes", window.TotalMinutes.ToString("0", System.Globalization.CultureInfo.InvariantCulture)))
+            .Then(where, glue: "; ");
     }
 
     /// <summary>
@@ -477,17 +577,26 @@ public static class InstanceReboot
     /// <param name="now">The owner's clock.</param>
     /// <param name="defaultWindow">The window for a request that declares none.</param>
     /// <param name="retryUnit">The backoff unit (<see cref="RetryDueAt"/>).</param>
-    public static InstanceRebootRequest EndIfStalled(InstanceRebootRequest current, DateTimeOffset now, TimeSpan defaultWindow, TimeSpan retryUnit) =>
-        Stalled(current, now, defaultWindow, retryUnit) is { } why
-            ? current with
-            {
-                Status = InstanceRebootStatus.Failed,
-                Failure = current.Failure is null ? $"{StalledMarker}{why}" : $"{current.Failure}; {StalledMarker}{why}",
-                CompletedAt = now,
-                RequestedEndIfStalledAt = null,
-                Log = current.Log.Add($"{now:u} ended as Failed — stalled: {why}"),
-            }
-            : current with { RequestedEndIfStalledAt = null };
+    public static InstanceRebootRequest EndIfStalled(InstanceRebootRequest current, DateTimeOffset now, TimeSpan defaultWindow, TimeSpan retryUnit)
+    {
+        if (StalledText(current, now, defaultWindow, retryUnit) is not { } whyText)
+            return current with { RequestedEndIfStalledAt = null };
+        var why = whyText.ToEnglish();
+        // 🚨 The English Failure is composed exactly as before: StalledMarker is the MACHINE marker
+        // EndedAsStalled (and the watchdog through it) reads back, so it never passes through a catalog.
+        // The keyed form (MeshWeaver#7322) is stored BESIDE it, for a viewer to read in their language.
+        var stalled = RebootText.Of("reboot.failure.stalled").Then(whyText);
+        return AppendLog(current with
+        {
+            Status = InstanceRebootStatus.Failed,
+            Failure = current.Failure is null ? $"{StalledMarker}{why}" : $"{current.Failure}; {StalledMarker}{why}",
+            FailureText = current.Failure is null
+                ? stalled
+                : RebootText.Faithful(current.Failure, current.FailureText).Then(stalled, glue: "; "),
+            CompletedAt = now,
+            RequestedEndIfStalledAt = null,
+        }, 0, RebootText.Verbatim(Stamp(now)).Then(RebootText.Of("reboot.log.endedStalled")).Then(whyText));
+    }
 
     /// <summary>The marker <see cref="EndIfStalled"/> writes into <see cref="InstanceRebootRequest.Failure"/>,
     /// before the stall's sentence — what <see cref="EndedAsStalled"/> reads back.</summary>
@@ -679,42 +788,64 @@ public static class InstanceReboot
         if (counted.IsEmpty)
             return null;
 
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
         var failures = (from r in counted
                         from c in r.Checks
                         where string.Equals(c.Outcome, InstanceRebootCheckOutcome.Failed, StringComparison.Ordinal)
-                        select $"{r.Process}: {c.Name} — {c.Detail ?? "failed"}")
+                        select RebootText.Of("reboot.verify.checkFailed", ("process", r.Process), ("check", c.Name))
+                            .Then(c.Detail is null ? RebootText.Of("reboot.word.failed") : RebootText.Faithful(c.Detail, c.DetailText)))
             .Concat(counted
                 .Where(r => !r.Checks.Any(c => c.Name.StartsWith(SmokePrefix, StringComparison.Ordinal)
                                               && c.Outcome != InstanceRebootCheckOutcome.NotMeasured))
-                .Select(r => $"{r.Process}: no smoke check was measured (none registered on this host) — "
-                             + "whether a thread can start is NOT established"))
+                .Select(r => RebootText.Of("reboot.verify.noSmoke", ("process", r.Process))))
             .ToImmutableList();
         var unmeasured = (from r in counted
                           from c in r.Checks
                           where string.Equals(c.Outcome, InstanceRebootCheckOutcome.NotMeasured, StringComparison.Ordinal)
-                          select $"{r.Process}: {c.Name} not measured ({c.Detail ?? "not registered"})")
+                          select RebootText.Of("reboot.verify.notMeasured", ("process", r.Process), ("check", c.Name))
+                              .Then(c.Detail is null ? RebootText.Of("reboot.word.notRegistered") : RebootText.Faithful(c.Detail, c.DetailText), glue: "")
+                              .Then(RebootText.Verbatim(")"), glue: ""))
             .ToImmutableList();
-        var unmeasuredNote = unmeasured.IsEmpty ? "" : " [" + string.Join("; ", unmeasured) + "]";
-        return failures.IsEmpty
-            ? new InstanceRebootVerdict(true,
-                $"{counted.Count} replica(s) booted after the restart verified green: "
-                + string.Join(", ", counted.Select(r => $"{r.Process} on {r.Image ?? "?"} ({r.Checks.Count(c => c.Outcome == InstanceRebootCheckOutcome.Passed)} check(s) passed)"))
-                + unmeasuredNote)
-            : new InstanceRebootVerdict(false, string.Join("; ", failures) + unmeasuredNote);
+        RebootText WithNote(RebootText detail) => unmeasured.IsEmpty
+            ? detail
+            : detail.Then(RebootText.Join("; ", unmeasured), glue: " [").Then(RebootText.Verbatim("]"), glue: "");
+        var text = failures.IsEmpty
+            ? WithNote(RebootText.Of("reboot.verify.green", ("count", counted.Count.ToString(invariant)))
+                .Then(RebootText.Join(", ", counted.Select(r => RebootText.Of("reboot.verify.greenReplica",
+                    ("process", r.Process), ("image", r.Image ?? "?"),
+                    ("passed", r.Checks.Count(c => c.Outcome == InstanceRebootCheckOutcome.Passed).ToString(invariant)))))))
+            : WithNote(RebootText.Join("; ", failures));
+        return new InstanceRebootVerdict(failures.IsEmpty, text.ToEnglish()) { DetailText = text };
     }
 
     /// <summary>The red steps of <paramref name="request"/>, each by name with its detail — empty when none is red. Pure.</summary>
     public static ImmutableList<string> RedSteps(InstanceRebootRequest request) =>
+        RedStepsText(request).Select(s => s.ToEnglish()).ToImmutableList();
+
+    /// <summary>The keyed form of <see cref="RedSteps"/> (MeshWeaver#7322). Pure.</summary>
+    /// <param name="request">The request.</param>
+    public static ImmutableList<RebootText> RedStepsText(InstanceRebootRequest request) =>
         request.Steps
             .Where(s => InstanceRebootStepOutcome.IsRed(s.Outcome))
-            .Select(s => $"{s.Name}: {s.Detail ?? "failed"}")
+            .Select(s => RebootText.Of("reboot.redStep", ("step", s.Name))
+                .Then(s.Detail is null ? RebootText.Of("reboot.word.failed") : RebootText.Faithful(s.Detail, s.DetailText)))
             .ToImmutableList();
 
     /// <summary>Sets the outcome of step <paramref name="name"/> (adding the row when a request predates it). Pure.</summary>
     public static ImmutableList<InstanceRebootStep> WithStep(
         ImmutableList<InstanceRebootStep> steps, string name, string outcome, string? detail, DateTimeOffset at)
+        => WithStep(steps, name, outcome, detail is null ? null : RebootText.Verbatim(detail), at);
+
+    /// <summary>Sets the outcome of step <paramref name="name"/> with a keyed detail (MeshWeaver#7322). Pure.</summary>
+    /// <param name="steps">The step rows.</param>
+    /// <param name="name">The step.</param>
+    /// <param name="outcome">How it ended.</param>
+    /// <param name="detail">Its keyed sentence, or null.</param>
+    /// <param name="at">When.</param>
+    public static ImmutableList<InstanceRebootStep> WithStep(
+        ImmutableList<InstanceRebootStep> steps, string name, string outcome, RebootText? detail, DateTimeOffset at)
     {
-        var row = new InstanceRebootStep { Name = name, Outcome = outcome, Detail = detail, At = at };
+        var row = new InstanceRebootStep { Name = name, Outcome = outcome, Detail = detail?.ToEnglish(), DetailText = detail, At = at };
         var index = steps.FindIndex(s => string.Equals(s.Name, name, StringComparison.Ordinal));
         return index < 0 ? steps.Add(row) : steps.SetItem(index, row);
     }
