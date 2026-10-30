@@ -1,0 +1,343 @@
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# TEMPLATE FEED — the packages a generated Memex template restores, on the PRIVATE org feed
+# (MeshWeaver.Plugins#4467; Doc/Architecture/ReleaseProcess → "The template feed").
+#
+# The `dotnet new` template MeshWeaver.Plugins generates pins every `MeshWeaver.*` id at the
+# template's version, and its generated nuget.config maps that prefix to GitHub Packages
+# (`https://nuget.pkg.github.com/Systemorph/index.json`) and nowhere else. Library publishing was
+# retired, so no feed carried those ids and a generated portal could not restore. This lane packs,
+# for every SEALED platform set (`3.1.<run>`), exactly what a generated template restores — the ids
+# it pins plus their ProjectReference closure — and pushes them to that feed.
+#
+# 🚨 PRIVATE, ALWAYS. The only push source is the org's GitHub Packages feed; `template-feed.py
+# push-guard` refuses nuget.org (a nupkg there can never be recalled) and anything else. A new
+# package's visibility is asserted `private` after the push, and the lane is RED otherwise.
+#
+# 🚨 THE ID LIST IS DERIVED FROM THE TEMPLATE, NEVER LISTED. The lane runs the generator from the
+# Plugins commit the set was built from and reads the generated Directory.Packages.props; an id the
+# template pins that no project packs, or a pin the packed version cannot satisfy, is a RED naming it
+# (`template-feed.py plan`), and `verify` reds when a packed package depends on an id the lane does
+# not publish. `template-feed.py --self-test` proves both directions before every run.
+#
+# 🚨 WHY ITS OWN WORKFLOW, AND NOT A JOB IN main-cd.yml. A packing failure must never hold the
+# platform release (policy `platform-backwards-compatibility`: delivery-verdict judges platform legs
+# only). Here a red is this lane's alone, filed on its own ledger label, and main-cd is untouched.
+#
+# 🚨 IDEMPOTENT. `dotnet nuget push --skip-duplicate`: a version already on the feed is skipped,
+# never an error, so a re-run, a dispatch over an old set, or two CD runs naming one set are safe.
+#
+# 🚨 NO SKIP-TRAPDOORS. `preflight` asserts every external input and fails RED naming it. The one
+# condition on whether `publish` runs is a fact about the CD RUN (did it seal a set?), never about an
+# input — and that fact is read from the CD run's Promote / Verify / Bake JOB results, never from
+# the run's conclusion; `verdict` runs `always()` and fails explicitly unless publish succeeded or
+# preflight proved there was no sealed set to publish.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+name: Template feed (private GitHub Packages)
+
+on:
+  workflow_run:
+    workflows: ["Continuous Delivery (main)"]
+    types: [completed]
+    # Required (WorkflowRunTriggerBranchFilterGuard): an off-branch arrival would evict the
+    # on-branch run waiting in this lane's single concurrency slot.
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      cd-run-id:
+        description: "A 'Continuous Delivery (main)' run id whose sealed set to publish (empty = the newest run that promoted one)"
+        type: string
+        default: ""
+      dry-run:
+        description: "Pack, verify and list the packages, but push nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel: --skip-duplicate makes a second run over the same set a no-op, and a cancelled
+  # push can leave half a closure on the feed until the next set.
+  group: template-feed
+  cancel-in-progress: false
+
+env:
+  FEED: https://nuget.pkg.github.com/Systemorph/index.json
+
+jobs:
+  preflight:
+    name: "Inputs, and the sealed set this run publishes"
+    # 🚨 NO condition on the CD run's CONCLUSION. A CD run seals its platform set and can still
+    # conclude `failure` when an independent job (control-image, satellite-compat, …) fails; gating
+    # on the conclusion skipped that set and read green. Whether a set was sealed is decided ONLY
+    # by the Promote / Verify / Bake job results below (template-feed.py --self-test pins this).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      candidate: ${{ steps.set.outputs.candidate }}
+      version: ${{ steps.set.outputs.version }}
+      core_sha: ${{ steps.set.outputs.core_sha }}
+      plugins_sha: ${{ steps.set.outputs.plugins_sha }}
+      run_id: ${{ steps.run.outputs.run_id }}
+      dry_run: ${{ steps.run.outputs.dry_run }}
+    steps:
+      - name: Every external input, or a red build naming what to provision
+        env:
+          PLUGINS_REPO_SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${PLUGINS_REPO_SSH_KEY:-}" ] || missing+=("secrets.PLUGINS_REPO_SSH_KEY  the deploy key main-cd's host checkouts already use (Settings → Secrets → Actions). The lane checks out the Plugins commit the set was built from: the template generator and six of the packages live there.")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::The template feed cannot run — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "Every external input is present."
+
+      - name: Which CD run
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          WR_ID: ${{ github.event.workflow_run.id }}
+          INPUT_ID: ${{ inputs.cd-run-id }}
+          INPUT_DRY: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = workflow_run ]; then
+            id="$WR_ID"; dry=false
+          else
+            dry="${INPUT_DRY:-true}"
+            id="${INPUT_ID:-}"
+            if [ -z "$id" ]; then
+              # The newest COMPLETED CD run on main that uploaded a promotion record — whatever its
+              # conclusion: the job results below decide whether it sealed a set.
+              for cand in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/main-cd.yml/runs?branch=main&status=completed&per_page=30" --jq '.workflow_runs[].id'); do
+                n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$cand/artifacts?name=promotion-record" --jq '.total_count')
+                if [ "$n" -gt 0 ]; then id="$cand"; break; fi
+              done
+              [ -n "$id" ] || { echo "::error::no completed 'Continuous Delivery (main)' run among the newest 30 carries a promotion record — name one with cd-run-id"; exit 1; }
+            fi
+          fi
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::'$id' is not a run id"; exit 1; }
+          echo "CD run $id (dry-run: $dry)"
+          { echo "run_id=$id"; echo "dry_run=$dry"; } >> "$GITHUB_OUTPUT"
+
+      # A set is SEALED when Promote, Verify every image shipped and every platform bake leg
+      # succeeded (Doc/Architecture/ReleaseProcess; the release skill's precondition 1). A run that
+      # batched or found HEAD already published promoted nothing — that is "no candidate", printed,
+      # never a red and never a silent skip: `verdict` reads it.
+      - name: Did that run seal a set?
+        id: set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.run.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" --paginate \
+            --jq '.jobs[] | [.name, (.conclusion // "none")] | @tsv' > "$RUNNER_TEMP/jobs.tsv"
+          promote=$(awk -F'\t' '$1 ~ /^Promote: tag the full set/ {print $2}' "$RUNNER_TEMP/jobs.tsv" | head -1)
+          verify=$(awk -F'\t' '$1 == "Verify every image shipped" {print $2}' "$RUNNER_TEMP/jobs.tsv" | head -1)
+          bakes=$(awk -F'\t' '$1 ~ /^Bake platform content in the shipped image/ {print $2}' "$RUNNER_TEMP/jobs.tsv" | sort -u | tr '\n' ' ')
+          echo "promote=${promote:-absent} verify=${verify:-absent} bake=[${bakes:-absent}]"
+          if [ "$promote" != success ] || [ "$verify" != success ] || [ -z "$bakes" ] || [ "$(echo $bakes)" != success ]; then
+            echo "candidate=false" >> "$GITHUB_OUTPUT"
+            echo "### No sealed set in CD run $RUN_ID — nothing to publish (promote=${promote:-absent}, verify=${verify:-absent}, bake=[${bakes:-absent}])" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/rec"
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name promotion-record --dir "$RUNNER_TEMP/rec"
+          rec="$RUNNER_TEMP/rec/promotion-record.json"
+          version=$(jq -r '.v_portal' "$rec"); core=$(jq -r '.core_sha' "$rec"); plugins=$(jq -r '.plugins_sha' "$rec")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the promotion record's version '$version' is not a <major>.<minor>.<run> set version"; exit 1; }
+          [[ "$core" =~ ^[0-9a-f]{40}$ ]]    || { echo "::error::the promotion record's core_sha '$core' is not a commit"; exit 1; }
+          [[ "$plugins" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the promotion record's plugins_sha '$plugins' is not a commit"; exit 1; }
+          echo "sealed set $version = core $core + plugins $plugins"
+          { echo "candidate=true"; echo "version=$version"; echo "core_sha=$core"; echo "plugins_sha=$plugins"; } >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: "Pack the template's packages and push them to the private feed"
+    needs: [preflight]
+    if: needs.preflight.outputs.candidate == 'true'
+    runs-on: ubuntu-latest
+    # Measured locally: ~43 projects pack in well under the cap. Reaching 45 is STUCK, not slow.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.core_sha }}
+          fetch-depth: 1
+      # The template generator, and six of the packages the template restores, live in
+      # MeshWeaver.Plugins — checked out at the commit the sealed set was built from, exactly as
+      # main-cd's image legs do (PlatformNeverDependsOnPluginsGuard's Ledger names this lane).
+      - name: Check out MeshWeaver.Plugins (the template generator and its packages)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          ref: ${{ needs.preflight.outputs.plugins_sha }}
+          path: plugins-repo
+          ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+          fetch-depth: 1
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: "The derivation can say no (self-test)"
+        run: python3 .github/scripts/template-feed.py --self-test
+
+      - name: Generate the template at this set's version
+        run: |
+          set -euo pipefail
+          dotnet run plugins-repo/tools/generate-memex-template.cs -- \
+            "$VERSION" plugins-repo "$RUNNER_TEMP/template" --core "$GITHUB_WORKSPACE"
+
+      - name: Derive the package list from the template
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/template-feed.py plan --template "$RUNNER_TEMP/template" \
+            --core "$GITHUB_WORKSPACE" --plugins plugins-repo --version "$VERSION" --out "$RUNNER_TEMP/plan.json"
+          python3 .github/scripts/template-feed.py slnx --plan "$RUNNER_TEMP/plan.json" --line platform --out pack-platform.slnx
+          python3 .github/scripts/template-feed.py slnx --plan "$RUNNER_TEMP/plan.json" --line own --out pack-own.slnx
+
+      # 🚨 Two invocations, because the version lines differ: the platform line is stamped with the
+      # set's version; an own-line package (MeshWeaver.Aspire.Hosting.Memex) keeps the version its
+      # csproj declares and must NOT receive a global -p:Version. RepositoryUrl names THIS
+      # repository, which is what lets the workflow's GITHUB_TOKEN publish the package.
+      - name: Pack
+        run: |
+          set -euo pipefail
+          common=(-c Release -p:IsPackable=true -p:MeshWeaverRoot="$GITHUB_WORKSPACE"
+                  -p:RepositoryUrl=https://github.com/Systemorph/MeshWeaver -o "$RUNNER_TEMP/nupkgs" -nologo)
+          dotnet pack pack-platform.slnx "${common[@]}" -p:Version="$VERSION"
+          if grep -q '<Project ' pack-own.slnx; then dotnet pack pack-own.slnx "${common[@]}"; fi
+
+      - name: Verify every package the template restores was packed, closure complete
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/template-feed.py verify --plan "$RUNNER_TEMP/plan.json" --nupkgs "$RUNNER_TEMP/nupkgs"
+          echo "### Template feed — set $VERSION ($([ "$DRY_RUN" = true ] && echo 'DRY RUN, nothing pushed' || echo 'publishing'))" >> "$GITHUB_STEP_SUMMARY"
+          for f in "$RUNNER_TEMP"/nupkgs/*.nupkg; do
+            case "$f" in *.symbols.nupkg) continue ;; esac
+            echo "- $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Push to the private org feed (skip versions already there)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/template-feed.py push-guard --source "$FEED"
+          if [ "$DRY_RUN" = true ]; then
+            echo "dry run: pushing nothing"
+            exit 0
+          fi
+          for f in "$RUNNER_TEMP"/nupkgs/*.nupkg; do
+            case "$f" in *.symbols.nupkg) continue ;; esac
+            dotnet nuget push "$f" --source "$FEED" --api-key "$GH_TOKEN" --skip-duplicate
+          done
+
+      # A package the push CREATED must be private. GitHub creates a new package private by
+      # default; this reads it back rather than trusting the default, and is RED if any package is
+      # not private or cannot be read.
+      - name: Every published package is private
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then echo "dry run: nothing was published"; exit 0; fi
+          bad=0
+          for id in $(jq -r '.packages[].id' "$RUNNER_TEMP/plan.json"); do
+            vis=$(gh api "orgs/Systemorph/packages/nuget/$id" --jq '.visibility' 2>&1) || {
+              echo "::error::cannot read the visibility of $id ($vis). The workflow token needs read access to the org's packages; grant this repository access to the package (package settings → Manage Actions access)"; bad=1; continue; }
+            if [ "$vis" != private ]; then echo "::error::$id is '$vis' on the feed — it must be private. Change it in the package settings NOW."; bad=1; fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "every published package is private"
+
+  verdict:
+    name: "Template feed verdict"
+    needs: [preflight, publish]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      published: ${{ steps.v.outputs.published }}
+    steps:
+      - id: v
+        env:
+          PRE: ${{ needs.preflight.result }}
+          CANDIDATE: ${{ needs.preflight.outputs.candidate }}
+          PUB: ${{ needs.publish.result }}
+          DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "preflight=$PRE candidate=${CANDIDATE:-} publish=$PUB"
+          [ "$PRE" = success ] || { echo "::error::preflight did not succeed ($PRE)"; exit 1; }
+          if [ "$CANDIDATE" != true ]; then
+            echo "No sealed set in that CD run — nothing to publish."
+            echo "published=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          [ "$PUB" = success ] || { echo "::error::a sealed set exists and publish did not succeed ($PUB) — generated templates cannot restore it"; exit 1; }
+          # A dry run proves the pack, not the feed: it must never close the ledger.
+          if [ "$DRY_RUN" = true ]; then echo "dry run: packed and verified, nothing published"; echo "published=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+  # The red has an audience: this lane runs on no pull request, so its failure goes onto ONE
+  # ledger issue under its OWN label, cleared by the next real publication.
+  feed-red:
+    name: "Template feed red: file it"
+    needs: [preflight, publish, verdict]
+    if: always() && needs.verdict.result != 'success'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-template-feed
+      issue-title: "ci-template-feed: generated Memex templates cannot restore the newest set"
+      severity: "sev:M"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: main
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  feed-green:
+    name: "Template feed published: close the ledger"
+    needs: [verdict]
+    if: always() && needs.verdict.result == 'success' && needs.verdict.outputs.published == 'true'
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      label: ci-template-feed
+      issue-title: "ci-template-feed: generated Memex templates cannot restore the newest set"
+      severity: "sev:M"
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+      scripts-ref: main
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}

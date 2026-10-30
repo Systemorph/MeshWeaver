@@ -84,6 +84,13 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "that job only"),
             new KeyValuePair<string, string>("edge-images.yml",
                 "the manual edge channel — same two projects"),
+            new KeyValuePair<string, string>("template-feed.yml",
+                "publishes the packages a generated Memex template restores to the PRIVATE org feed "
+                + "(MeshWeaver.Plugins#4467). The template generator and six of those packages live in "
+                + "MeshWeaver.Plugins, so it checks out the Plugins commit a SEALED set was built from "
+                + "(main-cd's promotion record), exactly as the image legs do. It runs after CD as its "
+                + "own workflow_run: on no pull request, never a need of any platform delivery job, and "
+                + "its red lands on its own ledger label, never on the platform release"),
         ]);
 
     /// <summary>
