@@ -188,5 +188,20 @@ public class GetMeshNodeReProbeKeepsCallerIdentityTest(ITestOutputHelper output)
         error.Message.Should().Contain("Reader:",
             "an unanswered probe carries the reader/target diagnostics the plain timeout carries, so "
             + "the next reading can say where the re-probe went");
+
+        // 🚨 The TARGET half must find the owner where per-node hubs live — under the MESH hub —
+        // not in the caller's own hosted collection (#7395). The reader here is a SIBLING of the
+        // owner, exactly as portal/reads-{meshId} is a sibling of every per-node hub; looked up on
+        // the reader, the owner was always "NO LOCAL HUB", so the diagnostics #7600 added could
+        // never tell the dying activation from a successor still activating.
+        error.Message.Should().NotContain("NO LOCAL HUB",
+            "the owner IS hosted on this mesh — reporting it absent sends the reader to another silo");
+        error.Message.Should().Contain($"Target: Hub {owner.Address} RunLevel=",
+            "the owner's own state is what decides where the unanswered re-probe went");
+        error.Message.Should().Contain(ShutdownNack.FormatActivationTag(owner),
+            "the target's activation token is the one a ShuttingDown NACK carries, so the reading can "
+            + "say whether the re-probe sits at the activation that refused (the dying hub) or a successor");
+        error.Message.Should().Contain("IsShuttingDown=False",
+            "a dying activation and a live successor differ here, and the owner in this test is live");
     }
 }

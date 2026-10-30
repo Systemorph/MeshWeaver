@@ -214,6 +214,15 @@ If you write code that must survive a `ShuttingDown` answer:
    "answered ShuttingDown N time(s), and then the re-probe issued at T was NEVER ANSWERED" with the
    probes issued, and attaches the reader and target diagnostics the plain timeout prints, so the
    reading can tell the dying activation from a successor still activating from a lost reply (#7395).
+   The target half looks the owner up on the MESH hub, where every per-node hub is hosted, and
+   prints its run level, queue, `IsShuttingDown` and activation tag. Looked up on the caller's own
+   hub (a sibling, such as `portal/reads-{meshId}`), the owner was always reported as "NO LOCAL HUB",
+   even when its activation was on the same pod. So the reading of the next occurrence is:
+   - the owner is `IsShuttingDown=True` with the refusing activation's tag: the dying activation
+     accepted the re-probe and has not answered it;
+   - a `Started` owner with a new tag: a successor is still activating and holds the re-probe;
+   - "NO LOCAL HUB": nothing on this pod holds the address, so the re-probe is with another silo
+     or Orleans.
 
 ## A give-up ends the stream (#6602)
 
