@@ -706,6 +706,24 @@ from inside the rule, through a controlled switch, at each of the three points: 
 the evaluation, and inside `Find`'s metadata read. On the base, the first two fault on the disposed
 generation and the third throws out of `Find`.
 
+**Who holds a lease, and what a lease left at teardown means.** Every lease on a module context is
+recorded under the KIND of holder that took it (`AlcLeaseRegistry.Enter(context, holder)`,
+`AlcLeaseRegistry.Holders`): a service lease under the platform interface the consumer leased and its
+registration (`IMeshQueryProvider (registration 0)` is the query fan-out, `INodeTypeAccessRule` the
+access-rule set, `IConfigureOptions<T>` the options pipeline, `the forwarder health scan` the readiness
+probe), and a script session's binding under the assembly it bound. A generation that `Retire` keeps
+loaded, and one `ModuleContexts.Dispose` keeps loaded at mesh teardown, are reported with those holders
+(`NOT unloading module generation … still held, by IMeshQueryProvider (registration 0) ×1`), so the line
+names whose lease it was rather than only how many. At teardown, the line follows a lease whose holder
+was still alive when the container was disposed. The mesh's drain releases every POOLED query
+subscription (the Query pool's drain disposes it), so on a clean teardown the holders left are those that
+end only with their own subscriber: a live `Autocomplete` or `Select`, a kernel session whose hub never
+disposed. When the drain itself did not finish (`MeshTeardownHostedService: … did not finish draining`),
+the container is disposed over hubs and pooled subscriptions that were never torn down, and their leases
+are reported here too. Read the drain verdict from the same instant before reading this line as a leak.
+`ModuleLeasesAtMeshTeardownTest` pins both: a live autocomplete held across a real teardown is reported
+with its holder, and a live pooled query held the same way is released by the drain and reports nothing.
+
 **Why.** The container that preceded `MeshServiceProvider` (Autofac, removed in MeshWeaver#7145) held a
 scope's shared-instance lock for the whole build of a shared instance, and that one lock covered every
 shared instance of the scope; an instance that existed was answered without the lock. The root reaches a module's services from inside its own builds — `ModuleOwnedRootSource`'s
