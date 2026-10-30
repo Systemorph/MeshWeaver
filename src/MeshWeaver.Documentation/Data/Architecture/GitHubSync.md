@@ -127,7 +127,7 @@ the HTTP `IIoPool`:
 | Diff since the last sync | `GET …/diffs/commits` — used only when `commonCommit` is the base and `allChangesIncluded` is true; otherwise the import reads the full snapshot |
 | Ancestry | `diffs/commits`'s `commonCommit` equals the ancestor |
 
-**What is the same as GitHub** — pinned side by side by `AzureReposGitHubParityTest` (Hosting.Test),
+**What is the same as GitHub** — pinned side by side by `AzureReposGitHubParityTest` (MeshWeaver.Plugins, `MeshWeaver.GitSync.AzureRepos.Test`),
 every scenario a theory over both providers: export, import into a new Space, the mirror within a
 subdirectory, update to latest and the branch state, the two-way rules (a server addition survives every
 later repository commit; a server edit newer than the horizon is preserved, holds both the baseline
@@ -187,8 +187,8 @@ language (`GitSyncRefusal`). App-identity commits are authored as `MeshWeaver <n
 requests, and contract tests against a real Azure DevOps organisation — the suite fakes Azure DevOps at
 the HTTP boundary (`FakeAzureDevOpsServer`), so the REST calls, payloads and Bearer credential are
 exercised but the service itself is not. The rules, the seam and the client's pure planning (mirror
-changes, git blob ids, the push body, the diff rules) are pinned by `AzureReposSyncPolicyTest`
-(MeshWeaver.Documentation.Test); the provider-neutral seam by `GitHostingProvidersTest`. Azure Pipelines is a separate concern:
+changes, git blob ids, the push body, the diff rules) are pinned by `AzureReposSyncPolicyTest` (same
+project); the provider-neutral seam by core's `GitHostingProvidersTest`. Azure Pipelines is a separate concern:
 [Hybrid delivery](../HybridGitHubAzureDevOps).
 
 ### Hosting providers — how a service other than GitHub plugs in
@@ -217,11 +217,12 @@ The push webhook, the branch reconcile and the sealed-publication reconcile are 
 http(s) URL with a deeper path (Azure Repos' `{org}/{project}/_git/{repo}`, a GitLab subgroup) answers
 null. The rule is structural, so it needs no knowledge of which providers are registered.
 
-**Where Azure Repos lives.** The platform still registers its own Azure Repos provider as a BUILT-IN
-(`AzureReposGitHostingProvider`); a contributed provider of the same kind replaces it. That is how the
-provider leaves the platform without a gap: the module that carries it (with `Azure.Identity`) lands in
-MeshWeaver.Plugins first and takes the kind over, and only then does the platform delete its copy —
-see [Carving Projects Out Of Core](../CarvingProjectsOutOfCore).
+**Where Azure Repos lives.** In MeshWeaver.Plugins: `src/MeshWeaver.GitSync.AzureRepos` (with
+`Azure.Identity`), registered by the portal composition with `services.AddAzureReposGitHosting()`. The
+platform ships no hosting provider of its own; without that registration an Azure Repos URL is a plain
+git remote. The `gitsync.azure.*` refusal texts stay in the platform's catalog, which the provider
+renders through. It left in three steps — seam, module taking the kind over from a built-in copy,
+platform deleting its copy — see [Carving Projects Out Of Core](../CarvingProjectsOutOfCore).
 
 ### Multiple sync sources
 

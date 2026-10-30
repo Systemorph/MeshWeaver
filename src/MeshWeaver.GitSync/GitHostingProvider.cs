@@ -82,9 +82,9 @@ public static class GitHostingOperation
 /// provider claims is the platform's own GitHub / git path — that is the declared meaning of
 /// <see cref="GitRepositoryProvider.Git"/>, not a fallback.</para>
 ///
-/// <para><b>Built-in providers</b> are the platform's transitional own: a CONTRIBUTED provider of the
-/// same kind replaces one, so a module that takes a provider over can land before the platform
-/// drops its copy (policy <c>dependents-verify-on-their-side</c>: the deleting half lands last).</para>
+/// <para><b>Built-in providers</b> are a host's transitional copies (the platform registers none): a
+/// CONTRIBUTED provider of the same kind replaces one, so a module that takes a provider over can land
+/// before the copy is dropped — the deleting half lands last.</para>
 /// </summary>
 public sealed class GitHostingProviders
 {

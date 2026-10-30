@@ -36,17 +36,6 @@ public sealed class GitProviderRepoClient : IGitHubRepoClient
         this.providers = providers;
     }
 
-    /// <summary>The shipped two-client signature: Azure Repos URLs to <paramref name="azureRepos"/>,
-    /// everything else to <paramref name="github"/>. Kept so a module compiled against it still
-    /// binds; new code passes the <see cref="GitHostingProviders"/>.</summary>
-    /// <param name="github">The client for GitHub and every other git remote.</param>
-    /// <param name="azureRepos">The client for Azure Repos URLs.</param>
-    [Obsolete("Pass the registered GitHostingProviders: GitProviderRepoClient(github, providers).")]
-    public GitProviderRepoClient(IGitHubRepoClient github, IGitHubRepoClient azureRepos)
-        : this(github, new GitHostingProviders([], [new RoutedAzureRepos(azureRepos)]))
-    {
-    }
-
     /// <summary>The client <paramref name="repositoryUrl"/> is served by.</summary>
     /// <param name="repositoryUrl">The repository URL.</param>
     /// <returns>The claiming provider's client, else the GitHub client.</returns>
@@ -154,15 +143,3 @@ public sealed class GitProviderRepoClient : IGitHubRepoClient
         => Route(request.RepositoryUrl, c => c.MergePullRequest(request));
 }
 
-/// <summary>The obsolete two-client constructor's Azure Repos route: claims what the URL parser
-/// names Azure Repos, and has no identity of its own (the router never asks it for one).</summary>
-#pragma warning disable CS0618
-file sealed class RoutedAzureRepos(IGitHubRepoClient client) : IGitHostingProvider
-{
-    public string Kind => GitRepositoryProvider.AzureRepos;
-    public bool Claims(string repositoryUrl) => AzureReposRepository.TryParse(repositoryUrl, out _);
-    public IGitHubRepoClient RepoClient => client;
-    public IObservable<string> GetAccessToken()
-        => Observable.Throw<string>(GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException());
-}
-#pragma warning restore CS0618
