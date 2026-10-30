@@ -52,7 +52,11 @@ must never find the ledger any more than the ledger finds CD's.
 
 IT CANNOT PASS SILENTLY. A malformed `failed-jobs` input, an outcome that is neither word, a token
 that cannot write issues (403 → the message names the `issues: write` grant on the CALLER job), an
-API failure — each is RED naming the cause, never a quiet "nothing to do". The one deliberate
+API failure — each is RED naming the cause, never a quiet "nothing to do". An API OUTAGE (a
+rate-limit 403/429 — "API rate limit exceeded for installation" — a 5xx, or no connection) is NOT
+a permission defect: it is waited out to its reset inside MW_API_OUTAGE_WAIT_MINUTES, and past
+that the run exits 3 with "NO VERDICT — GitHub API rate-limited until <reset>" (`ApiOutage`,
+#7416/#7448). A plain 403 without a rate-limit sign stays the grant message. The one deliberate
 "nothing to do" (green, no open issue) SAYS so with the denominator.
 
     python3 ci-failure-ledger.py                 # in Actions: everything from the environment
@@ -67,6 +71,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -497,9 +502,80 @@ def event_body(kind: str, run: Run, issue: Issue) -> str:
 
 # ── GitHub, and what a token that cannot write looks like ─────────────────────────────────────
 
+class ApiOutage(Exception):
+    """GitHub could not be ASKED — rate-limited, 5xx or unreachable past the wait budget.
+
+    Deliberately NOT a `Red`: every `except Red` in this file degrades or re-words what it catches
+    (the taxonomy stamp becomes a warning, a job listing becomes a note in the entry, and the
+    message names a permission grant), so an outage raised as `Red` was reported as "the CALLER job
+    must grant `actions: read`" on a run whose caller DID grant it (MeshWeaver#7416: run
+    40598141020, both `Which red is this` and the red ledger answered `API rate limit exceeded for
+    installation`). `main` turns this into exit 3 and a NO VERDICT sentence naming the reset; it is
+    never a finding about the lane and never a permission defect."""
+
+    def __init__(self, method: str, path: str, reason: str, reset_epoch: int | None = None):
+        super().__init__(reason)
+        self.method, self.path, self.reason, self.reset_epoch = method, path, reason, reset_epoch
+
+    def sentence(self) -> str:
+        if self.reset_epoch:
+            until = datetime.fromtimestamp(self.reset_epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            when = f"rate-limited until {until}; re-run this job after it"
+        else:
+            when = "unavailable; re-run this job once it answers"
+        return (f"NO VERDICT — GitHub API {when} ({self.reason}; {self.method} {self.path}). Nothing was "
+                f"decided: this is an infrastructure outage, not a missing permission and not a finding "
+                f"about the run being reported.")
+
+
+API_OUTAGE_EXIT = 3
+DEFAULT_API_WAIT_MINUTES = 8       # inside the report job's cap; MW_API_OUTAGE_WAIT_MINUTES overrides it
+MAX_SINGLE_WAIT_SECONDS = 120
+
+
+def _header(headers, name: str) -> str:
+    value = headers.get(name) if headers is not None else None
+    return value.strip() if isinstance(value, str) else ""
+
+
+def classify_answer(status: int, headers, text: str) -> str:
+    """'ok', 'rate-limited', 'transient' or 'refused' for one HTTP answer — the same rule as
+    scripts/read-current-pr-body.py (this file is fetched ALONE, so it cannot import that one)."""
+    if 200 <= status < 300:
+        return "ok"
+    if status in (403, 429) and (status == 429 or _header(headers, "x-ratelimit-remaining") == "0"
+                                 or _header(headers, "retry-after") or "rate limit" in text.lower()):
+        return "rate-limited"
+    if status >= 500:
+        return "transient"
+    return "refused"
+
+
+def outage_wait(attempt: int, headers, now: float) -> tuple[int, int | None]:
+    """Seconds to wait before the next try, and the reset epoch the answer named (if any)."""
+    retry_after = _header(headers, "retry-after")
+    if retry_after.isdigit():
+        return int(retry_after), None
+    reset = _header(headers, "x-ratelimit-reset")
+    if _header(headers, "x-ratelimit-remaining") == "0" and reset.isdigit():
+        return max(1, int(reset) - int(now) + 1), int(reset)
+    return min(MAX_SINGLE_WAIT_SECONDS, 2 ** (attempt + 1)), None
+
+
+def _wait_budget_seconds() -> int:
+    raw = os.environ.get("MW_API_OUTAGE_WAIT_MINUTES", "")
+    return (int(raw) if raw.isdigit() else DEFAULT_API_WAIT_MINUTES) * 60
+
+
 class GitHub:
-    def __init__(self, repo: str, token: str):
+    def __init__(self, repo: str, token: str, *, urlopen=None, sleep=time.sleep, clock=time.time,
+                 wait_budget_seconds: int | None = None):
         self.repo, self.token = repo, token
+        self._urlopen = urlopen or urllib.request.urlopen
+        self._sleep, self._clock = sleep, clock
+        # ONE budget for the whole script, never one per call: N reads cannot add up to N waits.
+        budget = _wait_budget_seconds() if wait_budget_seconds is None else wait_budget_seconds
+        self._deadline = clock() + budget
 
     def call(self, method: str, path: str, params: dict | None = None, body: dict | None = None,
              ok=(200, 201)) -> tuple[int, object]:
@@ -507,17 +583,47 @@ class GitHub:
         if params:
             url += "?" + urllib.parse.urlencode(params)
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method, headers={
-            "Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json",
-            "User-Agent": "ci-failure-ledger"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                status, text = resp.status, resp.read().decode()
-        except urllib.error.HTTPError as e:
-            status, text = e.code, e.read().decode(errors="replace")
-        except urllib.error.URLError as e:
-            raise Red(f"{method} {path}: could not reach api.github.com ({e.reason})") from e
+        attempt = 0
+        while True:
+            req = urllib.request.Request(url, data=data, method=method, headers={
+                "Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json",
+                "User-Agent": "ci-failure-ledger"})
+            headers = None
+            try:
+                with self._urlopen(req, timeout=30) as resp:
+                    status, text = resp.status, resp.read().decode()
+                kind = classify_answer(status, None, text)
+            except urllib.error.HTTPError as e:
+                headers = e.headers
+                try:
+                    status, text = e.code, e.read().decode(errors="replace")
+                    kind = classify_answer(status, headers, text)
+                except (TimeoutError, OSError) as unread:
+                    # A 403 is told apart from a rate limit partly by its BODY: unread, it is an
+                    # outage to retry, never a permission verdict taken on a guess.
+                    status, text = e.code, f"(error body unreadable: {type(unread).__name__})"
+                    kind = "transient"
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                status, kind = 0, "transient"
+                text = f"could not reach api.github.com ({getattr(e, 'reason', e)})"
+            if kind in ("ok", "refused"):
+                break
+            reason = (f"HTTP {status} rate limit" if kind == "rate-limited"
+                      else f"HTTP {status}" if status else text)
+            # A WRITE that met a 5xx or a dropped connection may have been applied: replaying it could
+            # file a second issue or comment, so it is not retried. A rate-limited write was refused
+            # before it ran, so it is.
+            if kind == "transient" and method != "GET":
+                raise ApiOutage(method, path, reason + " — a write is not replayed blind")
+            delay, reset_epoch = outage_wait(attempt, headers, self._clock())
+            if self._clock() + delay > self._deadline:
+                # A wait the budget cannot cover is not slept at all: say when to re-run instead.
+                raise ApiOutage(method, path, reason, reset_epoch)
+            print(f"GitHub API {reason} on {method} {path}; retrying in {delay}s "
+                  f"(wait budget {int(self._deadline - self._clock())}s left)", file=sys.stderr)
+            self._sleep(delay)
+            attempt += 1
         if status == 403 or status == 401:
             raise Red(f"{method} {path} answered HTTP {status}. The token this lane was handed cannot do that: "
                       f"the CALLER job must grant `permissions: {{issues: write, contents: read, actions: read}}` "
@@ -756,7 +862,7 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
     labels_now = issue.labels if verdict.action == "create" else current.labels
     try:
         print(f"taxonomy: {gh.stamp_taxonomy(issue.number, labels_now, severity)}")
-    except Red as e:
+    except (Red, ApiOutage) as e:
         print(f"::warning title=ci-failure-ledger::could not stamp {', '.join(taxonomy(severity))} on #{issue.number} ({e}) — the issue-taxonomy lane will name it")
     return issue, event_body("ci-failure", run, issue)
 
@@ -803,6 +909,11 @@ def main(argv: list[str]) -> int:
             if not token or not a.repo or not a.list_failed_jobs.strip():
                 raise Red("--list-failed-jobs needs GH_TOKEN, GITHUB_REPOSITORY (or --repo) and a run id")
             jobs = GitHub(a.repo, token).failed_jobs_with_causes(a.list_failed_jobs.strip())
+        except ApiOutage as e:
+            print(f"::error title=NO VERDICT — GitHub API::could not list run {a.list_failed_jobs}'s failed jobs: "
+                  f"{e.sentence()} The grants are NOT in question; the ledger lists the run's jobs itself.",
+                  file=sys.stderr)
+            return API_OUTAGE_EXIT
         except Red as e:
             print(f"::error title=ci-failure-ledger::could not list run {a.list_failed_jobs}'s failed jobs with their "
                   f"causes — the job running this must grant `actions: read` and `checks: read`: {e}", file=sys.stderr)
@@ -836,7 +947,7 @@ def main(argv: list[str]) -> int:
         gh = GitHub(a.repo, token)
 
         jobs_note = ""
-        listing_error: Red | None = None
+        listing_error: Red | ApiOutage | None = None
         if a.outcome == "failure" and not failed_jobs:
             try:
                 failed_jobs = gh.failed_jobs_of_run(a.run_id)
@@ -844,6 +955,10 @@ def main(argv: list[str]) -> int:
                 # Recorded in the entry and then RED below: the ledger stays intact, the mis-grant is named.
                 listing_error = e
                 jobs_note = f"_(could not list this run's jobs — {e})_"
+            except ApiOutage as e:
+                # The red is still FILED (the entry says the listing was not measured), then NO VERDICT below.
+                listing_error = e
+                jobs_note = f"_(this run's jobs were not listed — {e.sentence()})_"
         run = Run(a.repo, a.outcome, str(a.run_id), a.run_url, a.sha, a.trigger, failed_jobs,
                   a.platform_set or "", jobs_note)
 
@@ -868,9 +983,14 @@ def main(argv: list[str]) -> int:
         _emit_outputs(env("GITHUB_OUTPUT"), action=verdict.action,
                       **{"issue-number": issue.number if issue else "", "issue-url": issue.html_url if issue else "",
                          "post": "true" if body is not None else "false"})
+        if isinstance(listing_error, ApiOutage):
+            raise listing_error
         if listing_error is not None:
             raise Red(f"the ledger entry is written, but this run's failed jobs could not be listed: {listing_error}")
         return 0
+    except ApiOutage as e:
+        print(f"::error title=NO VERDICT — GitHub API::{e.sentence()}", file=sys.stderr)
+        return API_OUTAGE_EXIT
     except Red as e:
         print(f"::error title=ci-failure-ledger::{e}", file=sys.stderr)
         return 1
@@ -1320,13 +1440,145 @@ def self_test() -> int:
             check(f"severity {bad!r} is refused", True)
     check("every severity has core's canonical label look", all(sv in TAXONOMY_LOOK for sv in SEVERITIES))
 
+    # 20. an API OUTAGE is NO VERDICT, never a permission finding (#7416, #7448). Run 40598141020 read
+    #     `API rate limit exceeded for installation` on both reporter jobs and printed "the CALLER job
+    #     must grant `actions: read`" — grants that job already had. Driven through a fake transport:
+    #     nothing here reaches GitHub.
+    import email.message
+    import io
+
+    class _Answer:
+        def __init__(self, status, text):
+            self.status, self._text = status, text
+
+        def read(self):
+            return self._text.encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def http_error(code, text, **hdrs):
+        h = email.message.Message()
+        for k, v in hdrs.items():
+            h[k.replace("_", "-")] = str(v)
+        return urllib.error.HTTPError("https://api.github.com/x", code, "x", h, io.BytesIO(text.encode()))
+
+    class _Transport:
+        """Answers scripted per call; records every request and every sleep."""
+        def __init__(self, answers, start=1_000_000.0):
+            self.answers, self.calls, self.slept, self.now = list(answers), [], [], start
+
+        def urlopen(self, req, timeout=None):
+            self.calls.append((req.get_method(), req.full_url))
+            a = self.answers.pop(0)
+            if isinstance(a, BaseException):
+                raise a
+            return a
+
+        def sleep(self, seconds):
+            self.slept.append(seconds)
+            self.now += seconds
+
+        def clock(self):
+            return self.now
+
+    rate_body = ('{"message":"API rate limit exceeded for installation ID 12345.",'
+                 '"documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}')
+
+    def client(t, budget):
+        return GitHub("o/r", "t", urlopen=t.urlopen, sleep=t.sleep, clock=t.clock, wait_budget_seconds=budget)
+
+    # (a) the reset is inside the budget: wait for it, then the answer — the red is still filed.
+    t20 = _Transport([http_error(403, rate_body, x_ratelimit_remaining=0, x_ratelimit_reset=1_000_030),
+                      _Answer(200, '{"jobs": []}')])
+    st20, data20 = client(t20, 300).call("GET", "actions/runs/25/jobs")
+    check("a rate-limited 403 whose reset is inside the budget waits for the reset, then reads",
+          st20 == 200 and data20 == {"jobs": []} and t20.slept == [31] and len(t20.calls) == 2,
+          f"slept {t20.slept}, {len(t20.calls)} calls")
+
+    # (b) the reset is beyond the budget: NO VERDICT at once (nothing slept), never `Red`.
+    t20b = _Transport([http_error(403, rate_body, x_ratelimit_remaining=0, x_ratelimit_reset=1_003_600)])
+    try:
+        client(t20b, 300).call("GET", "actions/runs/25/jobs")
+        check("a rate limit beyond the budget is an ApiOutage", False, "returned")
+    except Red as e:
+        check("a rate limit beyond the budget is an ApiOutage, NOT a permission Red", False, str(e)[:120])
+    except ApiOutage as e:
+        said = e.sentence()
+        check("a rate limit beyond the budget is NO VERDICT naming the reset, never a permission finding",
+              "NO VERDICT" in said and "rate-limited until" in said and "permissions:" not in said
+              and t20b.slept == [], said)
+
+    # (c) the same rate-limit text with NO rate headers (the secondary limit's shape) is still a rate limit.
+    t20c = _Transport([http_error(403, '{"message":"You have exceeded a secondary rate limit."}')])
+    try:
+        client(t20c, 0).call("GET", "issues")
+        check("a secondary-limit 403 is an ApiOutage", False, "returned")
+    except Red as e:
+        check("a secondary-limit 403 is an ApiOutage", False, str(e)[:120])
+    except ApiOutage:
+        check("a secondary-limit 403 (no headers, 'rate limit' in the body) is an ApiOutage", True)
+
+    # (d) NEGATIVE CONTROL: a real permission 403 stays the permission Red, at once, unretried.
+    t20d = _Transport([http_error(403, '{"message":"Resource not accessible by integration"}',
+                                  x_ratelimit_remaining=4000)])
+    try:
+        client(t20d, 300).call("GET", "actions/runs/25/jobs")
+        check("a permission 403 is Red", False, "returned")
+    except ApiOutage as e:
+        check("a permission 403 is NOT an outage", False, e.sentence())
+    except Red as e:
+        check("a permission 403 is still the permission Red, unretried",
+              "permissions:" in str(e) and len(t20d.calls) == 1 and t20d.slept == [], str(e)[:120])
+
+    # (e) a 5xx on a WRITE is not replayed (it may have filed the issue); on a READ it is retried.
+    t20e = _Transport([http_error(502, "bad gateway")])
+    try:
+        client(t20e, 300).call("POST", "issues", body={"title": "x"})
+        check("a 5xx on a write is an ApiOutage", False, "returned")
+    except ApiOutage:
+        check("a 5xx on a write is NO VERDICT, never replayed", len(t20e.calls) == 1)
+    t20f = _Transport([http_error(503, "unavailable"), _Answer(200, "[]")])
+    check("a 5xx on a read is retried", client(t20f, 300).call("GET", "issues")[1] == [] and len(t20f.calls) == 2)
+    t20g = _Transport([http_error(403, rate_body, retry_after=5), _Answer(201, '{"id": 1}')])
+    check("a rate-limited WRITE (refused before it ran) is retried after retry-after",
+          client(t20g, 300).call("POST", "issues/1/comments", body={"body": "x"})[1] == {"id": 1}
+          and t20g.slept == [5])
+
+    # (f) end to end through `main`: both reporter entry points exit 3 with NO VERDICT, not 1 with a
+    #     grant to add. `main` builds its own client, so the module's transport is swapped for the call.
+    real_urlopen, real_env = urllib.request.urlopen, dict(os.environ)
+    try:
+        os.environ.update({"GH_TOKEN": "t", "GITHUB_REPOSITORY": "o/r", "MW_API_OUTAGE_WAIT_MINUTES": "0"})
+        os.environ.pop("GITHUB_OUTPUT", None)
+        urllib.request.urlopen = lambda req, timeout=None: (_ for _ in ()).throw(
+            http_error(403, rate_body, x_ratelimit_remaining=0, x_ratelimit_reset=int(time.time()) + 3000))
+        import contextlib
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code_list = main(["--list-failed-jobs", "40598141020"])
+            code_ledger = main(["--outcome", "failure", "--run-id", "40598141020", "--run-url", "https://x/runs/1",
+                                "--sha", "abc", "--trigger", "push", "--label", "ci-lane-red", "--title", "lane is red"])
+        said = err.getvalue()
+        check("--list-failed-jobs on a rate limit exits 3 (NO VERDICT), not 1", code_list == API_OUTAGE_EXIT, said[-300:])
+        check("the ledger on a rate limit exits 3 (NO VERDICT), not 1", code_ledger == API_OUTAGE_EXIT, said[-300:])
+        check("neither entry point blames a grant the caller already gave",
+              "must grant" not in said and said.count("NO VERDICT") >= 2, said[-400:])
+    finally:
+        urllib.request.urlopen = real_urlopen
+        os.environ.clear()
+        os.environ.update(real_env)
+
     if fails:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
         return 1
     print("✓ ci-failure-ledger self-test: create / append / reopen-recent / create-after-old / close-with-comment / "
           "noop-when-green / refuse-malformed / cd-ci-failure-untouched / unmarked-ci-main-red-untouched / human-authored-is-foreign / "
           "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed / never-started-said / duplicate-folded / "
-          "cause-same-or-changed — every rule fires and stays silent as designed")
+          "cause-same-or-changed / api-outage-is-no-verdict — every rule fires and stays silent as designed")
     return 0
 
 

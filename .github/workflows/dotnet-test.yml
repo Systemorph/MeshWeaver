@@ -3015,6 +3015,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-review-answered.py --self-test
 
+    # The pre-PR preflight (Doc/Architecture/PrePrPreflight) is what authors run BEFORE CI, so nothing
+    # else exercises it — a pull request that breaks it is proven here, on fakes alone (temp git repos,
+    # a fake `gh`, a dead proxy against any real HTTP call).
+    - name: "The pre-PR preflight says red, green and skipped, each for its own reason (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 -I scripts/test-preflight-pr.py
+
     # issue-text-names.yml runs only on a schedule, so a pull request that breaks the scanner (a Pass
     # read as green, a NotChecked swallowed) would go red a day later on nobody's change. Proving it
     # here puts that red on the pull request that caused it (MeshWeaver.Plugins#2845). No network.
@@ -3631,39 +3638,15 @@ jobs:
       env:
         FLEET_TOKEN: ${{ steps.fleet-token.outputs.token }}
       run: |
-        set -uo pipefail
-        # 🚨 Read the register into a variable FIRST and assert it. `for repo in $(...)` would
-        # iterate ZERO times if that command failed — the loop would simply end, `bad` would
-        # still be 0, and the step would report every repo readable having contacted none of
-        # them. That is this gate's own defect turned on itself, so the list is proven
-        # non-empty before anything is looped over and counted after.
-        repos=$(python3 -c "import json;print(' '.join(json.load(open('.github/shared-rules.json'))['repos']))") \
-          || { echo "::error::Could not read the repo register from .github/shared-rules.json."; exit 1; }
-        [ -n "$repos" ] || { echo "::error::.github/shared-rules.json lists no repos — nothing to compare."; exit 1; }
-        bad=0
-        seen=0
-        for repo in $repos; do
-          seen=$((seen+1))
-          # `|| code=000` is not noise: `run:` is bash -e, so a TRANSPORT failure (DNS, TLS,
-          # connection refused) would kill the step before the case block — i.e. before the one
-          # sentence this probe exists to print.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' \
-            --connect-timeout 10 --max-time 30 \
-            -H "Authorization: Bearer $FLEET_TOKEN" \
-            -H "Accept: application/vnd.github.raw" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$repo/contents/AGENTS.md") || code=000
-          case "$code" in
-            200) echo "  ok   $repo" ;;
-            401) echo "::error::$repo -> 401: the App token is invalid or expired."; bad=1 ;;
-            403) echo "::error::$repo -> 403: the token is valid but lacks contents:read here, or is rate-limited."; bad=1 ;;
-            404) echo "::error::$repo -> 404: no AGENTS.md, or the App is not installed on this repo (GitHub reports an invisible private repo as 404, not 403)."; bad=1 ;;
-            000) echo "::error::$repo -> could not reach api.github.com."; bad=1 ;;
-            *)   echo "::error::$repo -> HTTP $code."; bad=1 ;;
-          esac
-        done
-        [ "$bad" = "0" ] || { echo "::error::The gate cannot read the whole fleet, so it cannot report on it. Refusing to pass on partial evidence."; exit 1; }
-        [ "$seen" -ge 2 ] || { echo "::error::The probe examined only $seen repo(s) — the register did not expand. Refusing to report success."; exit 1; }
+        set -euo pipefail
+        # 🚨 One classification, in Python (probe-fleet-read.py → read-current-pr-body.py's api_get):
+        # a rate-limit 403/429, a 5xx or no connection is retried to its reset inside the budget and
+        # then reported as NO VERDICT (exit 3) — never "lacks <grant>, or is rate-limited", which read
+        # as a finding about the pull request (MeshWeaver#7448). A real 401/403/404 stays a finding
+        # (exit 1) naming its fix; one repo, or a register that did not expand, is refused.
+        python3 .github/scripts/probe-fleet-read.py --self-test
+        python3 .github/scripts/probe-fleet-read.py --capability contents:read \
+          --path 'repos/{repo}/contents/AGENTS.md' --what 'no AGENTS.md, or '
 
     # 🚨 The self-test runs FIRST and fails the job. Every case below must be shown to FIRE on
     # its defect and stay SILENT on its fix before the verdict on the real fleet means anything.
@@ -3845,36 +3828,15 @@ jobs:
       env:
         FLEET_TOKEN: ${{ steps.fleet-token.outputs.token }}
       run: |
-        set -uo pipefail
-        # 🚨 Read the register into a variable FIRST and assert it. `for repo in $(...)` would
-        # iterate ZERO times if that command failed — the loop would simply end and the step would
-        # report every repo readable having contacted none of them.
-        repos=$(python3 -c "import json;d=json.load(open('.github/shared-rules.json'));print(' '.join(r for r in d['repos']+d.get('pair-only-repos',[]) if r != 'Systemorph/MeshWeaver'))") \
-          || { echo "::error::Could not read the repo register from .github/shared-rules.json."; exit 1; }
-        [ -n "$repos" ] || { echo "::error::.github/shared-rules.json lists no sibling repos — no declaration could be validated against it."; exit 1; }
-        bad=0
-        seen=0
-        for repo in $repos; do
-          seen=$((seen+1))
-          # `|| code=000` is not noise: `run:` is bash -e, so a TRANSPORT failure would kill the
-          # step before the case block — i.e. before the one sentence this probe exists to print.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' \
-            --connect-timeout 10 --max-time 30 \
-            -H "Authorization: Bearer $FLEET_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$repo/pulls?per_page=1") || code=000
-          case "$code" in
-            200) echo "  ok   $repo" ;;
-            401) echo "::error::$repo -> 401: the App token is invalid or expired."; bad=1 ;;
-            403) echo "::error::$repo -> 403: the token is valid but lacks pull-requests:read here, or is rate-limited."; bad=1 ;;
-            404) echo "::error::$repo -> 404: the App is not installed on this repo (GitHub reports an invisible private repo as 404, not 403)."; bad=1 ;;
-            000) echo "::error::$repo -> could not reach api.github.com."; bad=1 ;;
-            *)   echo "::error::$repo -> HTTP $code."; bad=1 ;;
-          esac
-        done
-        [ "$bad" = "0" ] || { echo "::error::The gate cannot read the fleet's pull requests, so it cannot report on a declared counterpart. Refusing to pass on partial evidence."; exit 1; }
-        [ "$seen" -ge 2 ] || { echo "::error::The probe examined only $seen repo(s) — the register did not expand. Refusing to report success."; exit 1; }
+        set -euo pipefail
+        # 🚨 One classification, in Python (probe-fleet-read.py → read-current-pr-body.py's api_get):
+        # a rate-limit 403/429, a 5xx or no connection is retried to its reset inside the budget and
+        # then reported as NO VERDICT (exit 3) — never "lacks <grant>, or is rate-limited", which read
+        # as a finding about the pull request (MeshWeaver#7448). A real 401/403/404 stays a finding
+        # (exit 1) naming its fix; one repo, or a register that did not expand, is refused.
+        python3 .github/scripts/probe-fleet-read.py --self-test
+        python3 .github/scripts/probe-fleet-read.py --capability pull-requests:read \
+          --path 'repos/{repo}/pulls?per_page=1' --pair-only --exclude Systemorph/MeshWeaver
 
     # 🚨 Both self-tests run FIRST and fail the job. The detector's cases prove it still reports a
     # departure, a forwarded move and a whole assembly leaving; the gate's cases prove it fires on
@@ -3885,6 +3847,8 @@ jobs:
       run: python3 scripts/check-type-forwards.py --self-test
     - name: "Prove the pair gate is not vacuous (self-test)"
       run: python3 scripts/check-cross-repo-pair.py --self-test
+    - name: "An API outage is NO VERDICT in every resolver, never a missing grant (self-test)"
+      run: python3 scripts/test-gate-api-outage.py
 
     # The event body is frozen at run creation, even on reruns. Read the current declaration
     # through REST and verify it still belongs to the event head. It stays file data throughout.
