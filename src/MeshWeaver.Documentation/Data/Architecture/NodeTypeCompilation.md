@@ -1456,6 +1456,25 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
 identical records, one reached by the watcher and one by the batch, must end word for word the
 same, with no Roslyn pass on either.
 
+**A declared module version parks only where no install record exists** (#7336, owner decision:
+"park only if there is no install record"). The classifier above reads what a BUNDLE said (an offer
+in this pass, or adoption history), so a module's leftover copy that never adopted a bundle and is
+offered none read as authored and compiled — and failed — on every pod boot (`SocialMedia/SocialTests`
+on the control instance: a removal failed on its last step, the partition root still declared module
+version `1.1`, no `_GitSync`, no install record). The record carries a DECLARED signal too:
+`NodeTypeDefinition.CurrentModuleVersion`, the partition root's `content.version`, which the sources
+watcher publishes. In an untracked partition a type with that signal and no bundle offered is parked
+with `PrebuiltAssemblySeeder.DeclaredModuleWithoutInstallRecordParkReason` (keyed text
+`compile.refusal.declaredModuleNoInstallRecord`) unless an install record names its partition — a
+`Package` node at `Plugins/{id}` whose `targetPartition` (or, by default, its id) is the partition.
+Registry-installed packages have that record and keep compiling locally. The record read follows the
+CQRS split: a fresh `path:Plugins scope:children nodeType:Package` listing for which records exist,
+then each record's own node for its target (`NodeTypeCompilationHelpers.InstalledPartitions`). A type
+that still holds a build is HELD instead, with the reason in `DeliveryHoldReason` and its provenance
+KEPT (as the unknown-membership hold does), so an install record that lands later lifts it on the next
+release. Unreadable records are not a verdict: the type compiles. The boot sweep's batch asks the same
+question (`RefusedByUntrackedModuleGate`). Pinned by `ADeclaredModuleParksOnlyWithoutAnInstallRecordTest`.
+
 Whether the answer could be read is never a verdict: a fault or a timeout while asking the tracking
 seam compiles, as the mesh did before the gate existed — a stranded type is worse than a redundant
 compile, and the refusal is only ever formed from a positive *false*.
@@ -1464,6 +1483,8 @@ compile, and the refusal is only ever formed from a positive *false*.
 |---|---|---|
 | yes | yes | compile the live source (today's behaviour — Crm and Edu on the production portals) |
 | no | **yes** | **PARK, named** (#3583 — Feedback on the control instance) |
+| no | no, but the partition root **declares a module version** and **no install record** names the partition | **PARK, named** (#7336) |
+| no | no, the root declares a module version, and an install record names the partition | compile (a registry install with no bundle offered, dev builds included) |
 | no | no | compile (authored content in a user's own space) |
 | unknown (no seam registered) | any | compile (local / CI / bake host) |
 
