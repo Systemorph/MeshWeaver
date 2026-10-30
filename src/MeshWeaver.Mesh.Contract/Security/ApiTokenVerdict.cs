@@ -73,11 +73,20 @@ public static class ApiTokenVerdict
                             // type — carrying ApiToken-shaped content with no scopes — would otherwise
                             // authenticate past every rule that protects token records.
                             ? Observable.Return(ValidateTokenResponse.Fail("Token not found"))
-                            : DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
+                            : ContentOf<ApiToken>(tokenNode, options) is { } record
+                              && !IsBoundToItsLocation(index.TokenPath, record)
+                                // 🛡️ The principal is bound to WHERE the record lives (#7598).
+                                ? Observable.Return(ValidateTokenResponse.Fail("Token not found"))
+                                : DecideToken(ContentOf<ApiToken>(tokenNode, options), hash, read, options));
                 }
 
-                // A legacy index node carries the token record itself.
-                return DecideToken(ContentOf<ApiToken>(indexNode, options), hash, read, options);
+                // A legacy index node carries the token record itself. It lives in the platform-only
+                // ApiToken partition, so it has no owner's location to bind to — but it still never
+                // authenticates as System or as a principal that is a path (review of #7601).
+                var legacy = ContentOf<ApiToken>(indexNode, options);
+                return legacy is not null && !IsAPersonOrServicePrincipal(legacy.UserId)
+                    ? Observable.Return(ValidateTokenResponse.Fail("Token not found"))
+                    : DecideToken(legacy, hash, read, options);
             })
             .Catch((Exception ex) => Observable.Return(
                 ValidateTokenResponse.Unavailable($"Validation error: {ex.GetType().Name}: {ex.Message}")));
@@ -91,6 +100,49 @@ public static class ApiTokenVerdict
     /// records are written typed (the store's <c>node_type = 'ApiToken'</c>). A legacy index that
     /// carries the record itself is decided on its own branch and is untouched.
     /// </summary>
+    /// <summary>
+    /// 🛡️ A token's PRINCIPAL is bound to the LOCATION of its record (#7598). The index is written
+    /// only by the platform, as System, and names the path the token was minted at. A person's token
+    /// is minted in that person's own partition (<c>{UserId}/…</c>), and a service's token in its own
+    /// token namespace under the Admin partition (<see cref="ServiceIdentity.TokenNamespace"/>). So
+    /// whatever later happens to the record — rewritten, cleared and restored, recreated, confirmed
+    /// from a transient, carried in a data change, reached through a cold owner — it authenticates
+    /// only as the principal whose location it is. A write inside a person's own partition can then
+    /// only ever yield a credential for that person. This is decided on the verdict, so it holds for
+    /// every write seam at once, including the ones no write rule sees.
+    /// </summary>
+    /// <param name="tokenPath">The record's path, as the platform-written index names it.</param>
+    /// <param name="token">The record's content.</param>
+    /// <returns>True when the record's principal is the one its location belongs to.</returns>
+    public static bool IsBoundToItsLocation(string tokenPath, ApiToken token)
+    {
+        if (string.IsNullOrEmpty(tokenPath) || !IsAPersonOrServicePrincipal(token.UserId))
+            return false;
+        var path = tokenPath.Trim('/');
+        // CLASSIFY the location first, then read its principal (review of #7601): a prefix test on
+        // the principal alone let the service namespace authenticate its partition's name ("Admin")
+        // and the pre-migration layout its first segment ("User").
+        if (path.StartsWith(ServiceIdentity.Namespace + "/", StringComparison.OrdinalIgnoreCase))
+            return ServiceIdentity.IsServiceObjectId(token.UserId)
+                   && path.StartsWith(ServiceIdentity.TokenNamespace(token.UserId) + "/", StringComparison.OrdinalIgnoreCase);
+        if (ServiceIdentity.IsServiceObjectId(token.UserId) || !string.IsNullOrEmpty(token.ServiceIdentityPath))
+            return false;
+        var segments = path.Split('/');
+        var owner = segments.Length > 2 && string.Equals(segments[0], "User", StringComparison.OrdinalIgnoreCase)
+            ? segments[1]   // the pre-migration layout, User/{userId}/…
+            : segments[0];  // a person's own partition, {userId}/…
+        return segments.Length > 1 && string.Equals(owner, token.UserId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Whether <paramref name="userId"/> can name a principal at all: not empty, not System,
+    /// and a single path segment (a principal is an id, never a path).</summary>
+    private static bool IsAPersonOrServicePrincipal(string? userId) =>
+        !string.IsNullOrWhiteSpace(userId)
+        // Case-insensitive, as the platform predicate reads it (AccessService.IsPlatformPrincipal):
+        // a case variant of System is System to every consumer of the identity (review of #7601).
+        && !string.Equals(userId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
+        && !userId.Contains('/');
+
     private static bool IsNotATokenRecord(MeshNode? node)
         => node is not null && !ApiTokenScope.IsTokenRecordType(node.NodeType);
 
@@ -141,6 +193,16 @@ public static class ApiTokenVerdict
 
     /// <summary>Reads the content in whatever shape it arrives — typed on the owning hub, a
     /// JsonElement from a store or across a hub boundary.</summary>
+    /// <summary>
+    /// The <see cref="ApiToken"/> a node carries, read EXACTLY as the verdict reads it — typed content,
+    /// or a raw JSON element deserialized as one — or null. The ONE reading the write rules use to
+    /// recognise a credential, so a write cannot produce a node the verdict would authenticate that the
+    /// rules did not see as one.
+    /// </summary>
+    /// <param name="node">The node.</param>
+    /// <param name="options">The serializer options.</param>
+    public static ApiToken? ReadToken(MeshNode? node, JsonSerializerOptions options) => ContentOf<ApiToken>(node, options);
+
     private static T? ContentOf<T>(MeshNode? node, JsonSerializerOptions options) where T : class
     {
         if (node is null)
