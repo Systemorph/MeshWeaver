@@ -800,6 +800,87 @@ stressed iterations and never in CI. Closing it is a change to what BOTH twins a
 - **Thread-pool starvation** — every monolith hub drains on `TaskScheduler.Default`, and the owner
   went `Started → Dead` in about 80 ms in the very iteration where the reply was lost.
 
+## A REQUEST accepted while live, routed after the mark: refused back to its sender, never dropped
+
+The #4023 fix carried ANSWERS past `DisposeHostedHubs` and kept "the historical drop" for everything
+else, on the ground that *"new requests have nothing to finish here"*. That is true of a request that
+ARRIVES after the mark — the mesh's intake refuses those, and a hosted hub's route-up refuses them
+with a NACK — but not of a request the mesh ACCEPTED while it was live and whose route ENDED after
+the mark. Routing a delivery to a not-yet-activated address is asynchronous (path resolution, hub
+creation, the per-address activation queue of #1145), so that window is ordinary.
+
+### What was measured
+
+A MeshWeaver.Plugins PR went red on `portal-hosts (Memex.Portal.Shared … leg 4/4)` although its test
+(`HeldNodeTypeBundleRetryTest`, 3 ms) passed: the teardown check found one callback pending past the
+quiesce budget. Its trail:
+
+```
+AWAITING SubscribeRequest→Plugins/_Policy     @cache/…   +0ms
+RECEIVED runLevel=Starting                    @cache/…   +0ms
+RECEIVED runLevel=Started                     @mesh/…    +1ms   (accepted while live)
+QUEUED queue=main depth=1                     @mesh/…    +1ms
+ROUTED onTarget=False state=Forwarded         @mesh/…    +26ms  (Mesh.Dispose() ran at ~+13ms)
+  — no hub ever RECEIVED it, nothing refused it —
+```
+
+The request came from a startup job (`InstalledPackageRepairService` → `EnsureRecordsPartitionReadable`
+writing `Plugins/_Policy`) still in flight when the test ended. The target's hub was never activated,
+so no per-node hub — and therefore not the access gate — was on the trail: the request ended inside
+the mesh's router.
+
+### The defect: every place that ended a route in teardown declined to answer
+
+Every branch of `RoutingServiceBase` that ends a route once the mesh is past `DisposeHostedHubs`
+declined to answer a request: the activation queue's teardown guard (`RouteOne`), the top of
+`RouteInMesh` and the retry in `EnqueueForActivation` (both dropped non-replies), the NotFound and
+route-failure NACKs (`PostNotFound`, `NackRouteFailure`, and `MonolithRoutingService.PostNotFound` —
+the usual end of such a route, because `Mesh.Dispose()` freezes hub creation), each guarded by
+`Mesh.RunLevel < DisposeHostedHubs`, and the queue's `Dispose`, which cut queued and in-flight routes
+silently. Each was the "nobody is waiting" assumption again.
+
+### The fix, and why it cannot storm
+
+`RoutingServiceBase.AnswerRequestRefusedDuringMeshTeardown` gives such a request ONE terminal
+`DeliveryFailure` — `ErrorType.ShuttingDown` with the routing layer's own sentence ("Mesh is shutting
+down, cannot route to …"), or the verdict the route had already reached (an authoritative NotFound) —
+and hands it to the sender the way every teardown-time answer of this router goes: to a recipient that
+ALREADY exists (hosted hub, else registered stream), whose own intake decides. The mesh's `Post` is not
+used: past `DisposeHostedHubs` its intake admits a reply only until `ShutDown`, and the activation queue
+can be disposed later than that. With no live recipient the drop is NAMED on the request's trail
+(`REQUEST_REFUSED_DURING_MESH_TEARDOWN`, then `REPLY_UNROUTABLE_DURING_MESH_TEARDOWN`). Each delivery in
+the activation queue is answered once: the route's own verdict, its fault NACK and the queue's
+`Dispose` CLAIM it, and only the claimant answers.
+
+It answers only a request whose sender is waiting — one posted through `hub.Observe`, which stamps
+`PostOptions.AcceptsProgress` on every request it awaits — never fire-and-forget traffic, never a
+reply, never a `DeliveryFailure` or a `[CanBeIgnored]` message (`AnswerPolicy`). The answer is
+classified as a ROUTE refusal (no owner banner), so the sync stream rides it out paced and bounded on
+its time axis (#6729) and the node stream cache files it in its transient breaker; neither re-asks
+unpaced, and a hub that is going down disposes its streams before either budget runs out.
+
+### The controls
+
+`MeshWeaver.Graph.Test.RequestRoutedDuringMeshTeardownIsAnsweredTest` builds the state with fences
+only: the activation queue for a real, never-activated node is held at its head (a delivery to a
+recipient registered with `IRoutingService.RegisterStream` whose answer is withheld); the sender's real
+`Observe` posts the request while the mesh is `Started`, and a marker the sender posts next arrives at a
+live hub only after the mesh has queued the request; the sender is parked so it stays below
+`DisposeHostedHubs`; the mesh is disposed and waited past the mark; only then is the head released.
+
+| build | request routed in `DisposeHostedHubs` | request in a live mesh |
+|---|---|---|
+| unfixed router | **fails** — the callback ends in `HubDisposedBeforeResponseException` at the sender's quiesce budget | passes |
+| the fix | passes — one `ShuttingDown` NACK, nothing delivered to the target | passes |
+
+`ReplyRoutedDuringMeshTeardownReachesItsWaiterTest` still pins that traffic nobody waits for is refused
+without an answer during teardown.
+
+**What this does not cover.** `AccessControlPipeline`'s refusal for a delivery that reaches a hub
+whose scope is already gone still skips its NACK when the parent is past `DisposeHostedHubs` ("nobody
+is waiting anyway"). That branch was not on this trail — the request never reached a per-node hub —
+and it has no deterministic test yet, so it is left unchanged here.
+
 ## The install holds the root: deferring a recycle instead of stranding a write (#3510)
 
 Naming the disposer (the section above) made the next occurrence a read. It did not stop the
