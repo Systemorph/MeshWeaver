@@ -108,14 +108,49 @@ public class TokenPrincipalAuditTest(ITestOutputHelper output) : MonolithMeshTes
                 Content = new TokenPrincipalAudit { Reason = "test" },
             })
             .Take(1).Select(_ => "created")
-            .Catch((Exception ex) => Observable.Return("refused:" + ex.Message))
+            // ONLY a permission refusal counts (review of #7619): any other fault propagates and fails
+            // the test instead of passing as a "refusal".
+            .Catch((UnauthorizedAccessException ex) => Observable.Return("refused:" + ex.Message))
             .Should().Within(Budget).Emit("the create must answer", ct);
         Output.WriteLine($"request by an ordinary user: {byUser}");
         if (byUser == "created")
             (await Settled("by-user", ct)).Status.Should().Be(TokenPrincipalAuditStatus.Refused,
                 "only a platform admin may run the audit");
         else
-            byUser.Should().StartWith("refused:");
+            byUser.Should().Contain("Create permission").And.Contain($"{TokenPrincipalAudit.Namespace}/by-user",
+                "the refusal is the Admin partition's create permission, for this request");
+    }
+
+    /// <summary>
+    /// 🚨 A node of this type OUTSIDE the protected namespace never runs (review of #7619): an editor
+    /// who retypes an admin-authored node elsewhere keeps its admin creator, and the result would be
+    /// written where that editor can read it. The node stays exactly as written — no status, no sweep.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARequestOutsideTheProtectedNamespace_IsNeverRun()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed(ct);
+        const string elsewhere = "AuditElsewhere/req";
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("req", "AuditElsewhere")
+            {
+                Name = "req", NodeType = TokenPrincipalAudit.NodeType,
+                Content = new TokenPrincipalAudit { Reason = "test" },
+            }))
+            .Should().Within(Budget).Emit("the node must exist", ct);
+
+        // Activate it (a read), then give its initialization ample turns; a request that would run
+        // reaches Running within one.
+        var read = await Access.RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(elsewhere))
+            .Where(n => n is not null).Select(n => n!)
+            .Should().Within(Budget).Emit("the node must be readable", ct);
+        read.ContentAs<TokenPrincipalAudit>(Mesh.JsonSerializerOptions)!.Status.Should().BeNull();
+        await Access.RunAsSystem(() => Mesh.GetWorkspace().GetMeshNodeStream(elsewhere))
+            .Select(n => n?.ContentAs<TokenPrincipalAudit>(Mesh.JsonSerializerOptions)?.Status)
+            .Where(status => status is not null)
+            .Should().NotEmit(TimeSpan.FromSeconds(3), "a request outside Admin/_TokenAudit is never run", ct);
+        TokenPrincipalAuditing.IsInProtectedNamespace(elsewhere).Should().BeFalse();
+        TokenPrincipalAuditing.IsInProtectedNamespace($"{TokenPrincipalAudit.Namespace}/x").Should().BeTrue();
     }
 
     /// <summary>The request, created by <paramref name="creator"/> as themselves, then read until it settles.</summary>

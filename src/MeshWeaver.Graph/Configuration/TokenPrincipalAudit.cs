@@ -180,6 +180,17 @@ public static class TokenPrincipalAuditing
                || path.StartsWith($"User/{token.UserId}/", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Whether <paramref name="path"/> is a request in <see cref="TokenPrincipalAudit.Namespace"/>
+    /// (a direct child of it).</summary>
+    /// <param name="path">The request node's path.</param>
+    internal static bool IsInProtectedNamespace(string path)
+    {
+        var prefix = TokenPrincipalAudit.Namespace + "/";
+        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+               && path.Length > prefix.Length
+               && path.IndexOf('/', prefix.Length) < 0;
+    }
+
     private static bool IsService(ApiToken token) =>
         ServiceIdentity.IsServiceObjectId(token.UserId) || !string.IsNullOrEmpty(token.ServiceIdentityPath);
 
@@ -208,7 +219,10 @@ public static class TokenPrincipalAuditing
     /// the Admin partition is read on its own anchor). Emits the finished result once.
     /// </summary>
     /// <param name="hub">Any hub of the mesh.</param>
-    public static IObservable<TokenPrincipalAudit> Sweep(IMessageHub hub)
+    /// <remarks>🛡️ INTERNAL on purpose (review of #7619): it reads every partition as System, so the
+    /// only way to run it is the authorized request (<see cref="Execute"/>). A public helper would be
+    /// reachable from in-mesh code with no platform-admin check at all.</remarks>
+    internal static IObservable<TokenPrincipalAudit> Sweep(IMessageHub hub)
     {
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -248,8 +262,10 @@ public static class TokenPrincipalAuditing
                     if (c.PartiallyReadPartitions is { Count: > 0 } partial)
                         gaps = gaps.Add($"partition(s) [{string.Join(", ", partial)}] were read only in part");
                 }
-                if (partitions is null)
-                    gaps = gaps.Add("the store did not report which partitions it read (denominator unknown)");
+                // EITHER read not reporting its partitions makes the denominator unknown for that
+                // read; the union of the others is kept as a partial denominator (review of #7619).
+                if (changes.Any(c => c.Partitions is null))
+                    gaps = gaps.Add("the store did not report which partitions one of the reads covered (denominator unknown)");
                 return new TokenPrincipalAudit
                 {
                     PartitionsRead = partitions,
@@ -280,6 +296,17 @@ public static class TokenPrincipalAuditing
                 Content = change(n.ContentAs<TokenPrincipalAudit>(options) ?? new TokenPrincipalAudit()),
             }));
 
+        // 🛡️ Only a request in the Admin partition's protected namespace ever runs (review of #7619).
+        // A node retyped into this type anywhere else keeps its original creator, so its creator's
+        // standing proves nothing about who can READ the result; nothing is swept or written there.
+        if (!IsInProtectedNamespace(path))
+        {
+            logger?.LogWarning(
+                "[TokenPrincipalAudit] {Path}: not under {Namespace}; a token principal audit runs only there, nothing was swept",
+                path, TokenPrincipalAudit.Namespace);
+            return;
+        }
+
         access.RunAsSystem(() => stream.Where(n => n is not null).Take(1))
             .SelectMany(node =>
             {
@@ -300,7 +327,9 @@ public static class TokenPrincipalAuditing
                         Error = "the request carries no creator, so its authority cannot be checked; nothing was swept",
                     });
                 // Authorize as the caller, AGAIN, immediately before executing as System.
-                return hub.IsGlobalAdmin(creator).Take(1).Timeout(ReadBudget)
+                // TakeDecisionOutsideGate, never a bare Take(1): the write that follows must not run
+                // inside the permission fold's Rx gate (HubPermissionExtensions, review of #7619).
+                return hub.IsGlobalAdmin(creator).TakeDecisionOutsideGate().Timeout(ReadBudget)
                     .SelectMany(isAdmin => !isAdmin
                         ? Write(r => r with
                         {
@@ -324,11 +353,14 @@ public static class TokenPrincipalAuditing
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "[TokenPrincipalAudit] {Path}: the sweep failed; nothing is claimed", path);
+                // No inner catch: if the Failed status cannot be written either, that reaches the
+                // subscriber's error arm and is logged, rather than leaving the request at Running
+                // with nothing said (review of #7619).
                 return Write(r => r with
                 {
                     Status = TokenPrincipalAuditStatus.Failed, CompletedAt = DateTimeOffset.UtcNow,
                     Error = $"{ex.GetType().Name}: {ex.Message}",
-                }).Catch((Exception _) => Observable.Empty<MeshNode>());
+                });
             })
             .Subscribe(
                 _ => { },
