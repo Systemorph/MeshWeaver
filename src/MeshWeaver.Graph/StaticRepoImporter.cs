@@ -2176,9 +2176,17 @@ public static class StaticRepoImporter
                     // enumerate itself in full (a TRUNCATED GitHub tree — HTTP 200, partial body), the
                     // prune's premise is gone and nothing is removed at all (issue #3589).
                     var sourceListingIsComplete = source.ListingIsComplete;
+                    // 🚨 #7611: a node the source's own DECLARED rules now exclude (a GitSync Ignore
+                    // pattern added after it was imported) is no longer spared as never-mirrored. The
+                    // provenance guard inside ComputePrunableNodes still has to pass, so only a node
+                    // the prior manifest records this source putting here can leave; a node the mesh
+                    // minted under the same pattern (the #1326 Release/ case) never was, and stays.
+                    // Holds and never-mirrored slots are not "retired" (IsRetiredFromMirror) and
+                    // stay spared exactly as before.
                     var toPrune = ComputePrunableNodes(
                         existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode,
-                        source.IsExcludedFromMirror, sourceListingIsComplete);
+                        path => source.IsExcludedFromMirror(path) && !source.IsRetiredFromMirror(path),
+                        sourceListingIsComplete);
 
                     // Never prune a node CREATED/changed on the server since the last sync when the
                     // policy protects it (two-way, OR prune-only protection for bidirectional spaces —
