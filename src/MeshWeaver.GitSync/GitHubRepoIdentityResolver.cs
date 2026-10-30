@@ -148,18 +148,20 @@ public sealed class GitHubRepoIdentityResolver(
     /// Parses a stored repository url to its <c>owner/repo</c> identity, or null when it cannot be
     /// parsed at all (an empty or malformed configuration value).
     ///
-    /// <para>🚨 <b>An Azure Repos url has NO GitHub identity and answers null</b> (MeshWeaver#6500).
-    /// Read positionally, <c>https://dev.azure.com/{org}/{project}/_git/{repo}</c> yields
-    /// <c>{org}/{project}</c> — the name of some GitHub repository, so a push webhook from that
-    /// GitHub repository would have imported into the Azure Repos source. Every caller treats null
+    /// <para>🚨 <b>Only <c>{host}/{owner}/{repo}</c> has a GitHub identity.</b> An http(s) url whose
+    /// path is deeper than two segments names another hosting service's layout (Azure Repos'
+    /// <c>https://dev.azure.com/{org}/{project}/_git/{repo}</c>, a GitLab subgroup, …) and answers
+    /// null: read positionally it would yield <c>{org}/{project}</c> — the name of some GitHub
+    /// repository, whose push webhook would then import into that source. Every caller treats null
     /// as "no GitHub repository here": the webhook, the branch reconcile and the sealed-publication
-    /// reconcile skip the source, and its inbound sync is on demand.</para>
+    /// reconcile skip the source, and its inbound sync is on demand. The rule is structural, so it
+    /// needs no knowledge of which hosting providers are registered.</para>
     /// </summary>
     /// <param name="repositoryUrl">The url to parse.</param>
     /// <returns>The identity, or null.</returns>
     public static RepoIdentity? Parse(string? repositoryUrl)
     {
-        if (string.IsNullOrWhiteSpace(repositoryUrl) || GitRepositoryProvider.IsAzureRepos(repositoryUrl))
+        if (string.IsNullOrWhiteSpace(repositoryUrl) || IsDeeperThanOwnerAndRepo(repositoryUrl))
             return null;
         try
         {
@@ -176,6 +178,13 @@ public sealed class GitHubRepoIdentityResolver(
             return null;
         }
     }
+
+    /// <summary>True for an http(s) url whose path has more than the two segments
+    /// <c>{owner}/{repo}</c> — a layout that is not a GitHub repository's.</summary>
+    private static bool IsDeeperThanOwnerAndRepo(string repositoryUrl)
+        => Uri.TryCreate(repositoryUrl.Trim(), UriKind.Absolute, out var uri)
+           && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+           && uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).Length > 2;
 
     /// <summary>
     /// The token to read with: the user's connected credential, else the GitHub App installation,
