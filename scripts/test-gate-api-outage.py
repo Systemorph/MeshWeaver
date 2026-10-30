@@ -126,6 +126,20 @@ class OutageIsNoVerdict(unittest.TestCase):
             self.assertEqual(rules.fetch_agents_md("o/r", "t"), "# AGENTS.md\n")
 
 
+class LedgerLaneHasNoOutageBlindProbe(unittest.TestCase):
+    """The ci-failure lane must reach the ledger's outage-aware client with nothing in front of it
+    that asks GitHub through a client that cannot tell a rate limit from a missing grant. A shell
+    probe of `/issues` did exactly that: a rate-limited 403 printed "it must be the caller's
+    GITHUB_TOKEN … granting issues: write" and exited before the ledger could file or say NO VERDICT."""
+
+    def test_no_step_calls_the_github_api_outside_the_ledger(self):
+        text = (ROOT / ".github/workflows/node-repo-ci-failure.yml").read_text(encoding="utf-8")
+        calls = [n for n, line in enumerate(text.splitlines(), 1)
+                 if "api.github.com" in line and not line.lstrip().startswith("#")]
+        self.assertEqual(calls, [], "node-repo-ci-failure.yml calls api.github.com outside the ledger "
+                                    f"at line(s) {calls}: a rate limit there is read as a missing grant")
+
+
 class RefusalStaysAFinding(unittest.TestCase):
     """NEGATIVE CONTROL: a real permission 403 is still the finding that names its grant, unretried."""
 
