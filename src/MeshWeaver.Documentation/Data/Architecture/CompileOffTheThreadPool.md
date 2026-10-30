@@ -241,9 +241,18 @@ either could leave a run `Running` for good:
   stage — the session warm-up, the cell-surface resolution, a NuGet restore — could not be cancelled at
   all.
   - The cancel now trips every pending run's token.
-  - The preparation stages run under that token (`KernelExecutor.UntilCancelled`), so a cancel ends a
-    run there `Cancelled` at once and unsubscribing the stage cancels its pool leaf. Each stage publishes
-    into the session only after it completes, so an abandoned stage leaves nothing half-set.
+  - The preparation stages honour that token, so a cancel ends a run there `Cancelled` at once:
+    - The session warm-up takes it inside its pool leaf, so the leaf is never abandoned while it could
+      still write the session.
+    - The cell-surface and NuGet stages are pure: they return what they resolved, run under
+      `KernelExecutor.UntilCancelled`, and their result is published into the session in the next
+      step, on the pump. A stage abandoned by a cancel writes nothing. A result that loses the race
+      releases its leases, and the provider's collection (`CellSurfaceAssemblyProvider.CollectOwned`)
+      disposes the leases it had buffered when it is unsubscribed.
+    - A run whose token is already cancelled never subscribes a stage and never reaches the script.
+  - A callback that a script registered on its token and that throws cannot stop the loops that cancel,
+    or fail, the other pending runs.
+  - A submission admitted while teardown is already running is failed at once and never queued.
   - The script pass keeps its cooperative token: abandoning a RUNNING script would let the next
     submission start beside it.
 

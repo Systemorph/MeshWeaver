@@ -231,8 +231,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // Every run of this Activity — queued, preparing or executing. Each run's token is
         // observed by every stage of its pipeline (see Execute), so wherever it is parked it ends
         // Cancelled.
-        foreach (var run in pendingRuns.Values)
-            run.Cancellation.Cancel();
+        foreach (var (deliveryId, run) in pendingRuns)
+            CancelRun(deliveryId, run);
         return request.Processed();
     }
 
@@ -265,8 +265,28 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             }
             finally
             {
-                run.Cancellation.Cancel();
+                CancelRun(deliveryId, run);
             }
+        }
+    }
+
+    /// <summary>
+    /// Cancels one run's token. A callback registered on it by the SCRIPT can throw, and
+    /// <see cref="CancellationTokenSource.Cancel()"/> then throws an <see cref="AggregateException"/>
+    /// — which must not stop the loop that is cancelling (or failing) every other run. The fault is
+    /// the script's, so it is logged against its run and the loop goes on.
+    /// </summary>
+    private void CancelRun(string deliveryId, PendingRun run)
+    {
+        try
+        {
+            run.Cancellation.Cancel();
+        }
+        catch (AggregateException callbackFault)
+        {
+            Logger.LogWarning(callbackFault,
+                "Submission {DeliveryId}: a callback on the run's cancellation token threw; the run is cancelled regardless",
+                deliveryId);
         }
     }
 
@@ -405,6 +425,17 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             });
 
         ImmutableInterlocked.TryAdd(ref pendingRuns, request.Id, new PendingRun(result, cts));
+        // 🚨 Admission races the shutdown pass: the host's freeze reaches this hub on ITS thread,
+        // independently of this action block, so the pass can have enumerated the pending runs
+        // just before the line above added this one. Registration happens FIRST, the shutdown flag
+        // is read SECOND: either the pass sees this run, or this check sees the flag and settles it
+        // here — while the host still takes the verdict — and the run is never queued.
+        // FailPendingRuns claims each run with TryRemove, so the two can never settle it twice.
+        if (hub.IsShuttingDown)
+        {
+            FailPendingRuns();
+            return request.Processed();
+        }
         submissions.OnNext(new Submission(
             msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token, result, submissionContext));
         return request.Processed();
@@ -499,21 +530,29 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // leaf is mostly a WAIT on the process-wide warm-up, and a Compile slot held across a
         // wait starves every other async Compile leaf (other sessions, the language service).
         //
-        // 🚨 The run's token governs EVERY stage, not only the script pass (#7362). The preparation
-        // stages are waits on shared work — the process-wide warm-up, the cell-surface resolution,
-        // a NuGet restore — and none of them took the token, so a cancel of a run parked there did
-        // nothing. They now run under UntilCancelled: a cancel (or a run cancelled while still
-        // queued) ends the run Cancelled at once, and unsubscribing the stage cancels its pool
-        // leaf. Each stage publishes its result into the session only after it completes, so an
-        // abandoned stage leaves nothing half-set. The script pass keeps its own cooperative token:
-        // abandoning a RUNNING script would let the next submission start beside it.
+        // 🚨 The run's token governs EVERY stage, not only the script pass (#7362):
+        //   * the warm-up leaf takes it (linked with the pool leaf's own), so a cancel ends the
+        //     wait from INSIDE the leaf — the stage is never abandoned while it can still write
+        //     the session, and the queue advances only once it has exited;
+        //   * the cell-surface and NuGet stages are PURE — they compute and return what the
+        //     session needs and write nothing — run under UntilCancelled, and their result is
+        //     PUBLISHED into the session in the step after it, on this pump. A cancel that wins
+        //     releases whatever a late result carried (the cell-surface leases); a result that
+        //     wins is published, and the run then stops at the next stage;
+        //   * a run cancelled while still queued, or between stages, never reaches the script:
+        //     UntilCancelled short-circuits a token that is already cancelled, and the script pass
+        //     is entered only with a live token.
+        // The script pass keeps its own cooperative token: abandoning a RUNNING script would let
+        // the next submission start beside it.
         return Observable.Defer(() =>
-                UntilCancelled(
-                        AdmitToScriptLane(t => EnsureInitializedAsync(t))
-                            .SelectMany(_ => EnsureCellSurfaceReferences())
-                            .SelectMany(_ => ResolveNuGetReferences(code)),
-                        ct)
-                    .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct)))
+                AdmitToScriptLane(t => EnsureInitializedAsync(t, ct))
+                    .SelectMany(_ => UntilCancelled(ResolveCellSurfaceReferences(), ct, prep => prep?.Release()))
+                    .Do(PublishCellSurfaceReferences)
+                    .SelectMany(_ => UntilCancelled(ResolveNuGetReferences(code), ct))
+                    .Select(PublishNuGetReferences)
+                    .SelectMany(cleaned => ct.IsCancellationRequested
+                        ? Observable.Throw<object?>(new OperationCanceledException(ct))
+                        : RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct)))
             .Catch<object?, Exception>(ex =>
             {
                 if (ex is OperationCanceledException) return Observable.Throw<object?>(ex);
@@ -529,14 +568,58 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     }
 
     /// <summary>
-    /// <paramref name="source"/>, ended with an <see cref="OperationCanceledException"/> the moment
-    /// <paramref name="ct"/> is cancelled (at once when it already is), unsubscribing the source.
-    /// <c>Amb</c> forwards whichever side signals first and unsubscribes the other, so a value the
-    /// source has already produced is never overtaken by a later cancel.
+    /// The FIRST value of the single-value stage <paramref name="source"/>, or an
+    /// <see cref="OperationCanceledException"/> once <paramref name="ct"/> is cancelled — whichever
+    /// CLAIMS the outcome first; the loser is dropped and the source unsubscribed.
+    /// <list type="bullet">
+    ///   <item>A token already cancelled fails at once, before the source is subscribed, so a stage
+    ///   that answers synchronously can never outrun a cancel that came first.</item>
+    ///   <item>The cancellation arm is registered BEFORE the source is subscribed.</item>
+    ///   <item>One claim (an interlocked flag) decides, so the observer never sees a value and a
+    ///   cancellation both; a value that loses is handed to <paramref name="release"/>, so what it
+    ///   owns (a lease) is not leaked.</item>
+    /// </list>
     /// </summary>
-    internal static IObservable<T> UntilCancelled<T>(IObservable<T> source, CancellationToken ct)
-        => source.Amb(Observable.Create<T>(observer =>
-            ct.Register(() => observer.OnError(new OperationCanceledException(ct)))));
+    internal static IObservable<T> UntilCancelled<T>(
+        IObservable<T> source, CancellationToken ct, Action<T>? release = null)
+        => Observable.Create<T>(observer =>
+        {
+            if (ct.IsCancellationRequested)
+            {
+                observer.OnError(new OperationCanceledException(ct));
+                return System.Reactive.Disposables.Disposable.Empty;
+            }
+
+            var claimed = 0;
+            bool Claim() => Interlocked.Exchange(ref claimed, 1) == 0;
+            var subscription = new System.Reactive.Disposables.SingleAssignmentDisposable();
+            var registration = ct.Register(() =>
+            {
+                if (!Claim()) return;
+                subscription.Dispose();
+                observer.OnError(new OperationCanceledException(ct));
+            });
+            subscription.Disposable = source.Subscribe(
+                value =>
+                {
+                    if (Claim())
+                    {
+                        observer.OnNext(value);
+                        observer.OnCompleted();
+                    }
+                    else
+                        release?.Invoke(value);
+                },
+                error =>
+                {
+                    if (Claim()) observer.OnError(error);
+                },
+                () =>
+                {
+                    if (Claim()) observer.OnCompleted();
+                });
+            return new System.Reactive.Disposables.CompositeDisposable(registration, subscription);
+        });
 
     /// <summary>The compiler's diagnostics, one per line — the reason a cell did not compile.</summary>
     private static string CompilerDiagnostics(CompilationErrorException compEx)
@@ -737,13 +820,18 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// <see cref="MeshScriptEnvironment.ReferencesAsync"/> can be genuinely slow the first time
     /// any mesh in the process touches it, and used to hold no pool gate at all while doing so —
     /// invisible to <c>IoPoolRegistry.DrainAll</c> and therefore never cancelled or joined by
-    /// teardown. Now the wait is a real, trackable, cancellable leaf; <paramref name="ct"/>
-    /// governs only how long THIS session waits, never the shared snapshot build itself (see
+    /// teardown. Now the wait is a real, trackable, cancellable leaf; <paramref name="leafCt"/>
+    /// (the pool leaf's) and <paramref name="runCt"/> (the run's — a cancel, #7362) govern only how
+    /// long THIS session waits, never the shared snapshot build itself (see
     /// <see cref="KernelScriptReferences.GetReferencesAsync"/>).</para>
     /// </summary>
-    private async Task<Unit> EnsureInitializedAsync(CancellationToken ct)
+    private async Task<Unit> EnsureInitializedAsync(CancellationToken leafCt, CancellationToken runCt)
     {
         if (initialized) return Unit.Default;
+        // The run's cancel ends this wait from INSIDE (#7362): the leaf is never abandoned while it
+        // could still publish the session's fields below, so the queue moves on only once it exits.
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(leafCt, runCt);
+        var ct = linked.Token;
 
         var defaultLogger = publicHub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger("MeshWeaver.Kernel.Script");
@@ -815,24 +903,22 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// this submission runs without pack references — but the failure is not latched, so the next
     /// submission re-attempts instead of replaying one transient fault for the session's life.</para>
     /// </summary>
-    private IObservable<Unit> EnsureCellSurfaceReferences()
+    private IObservable<CellSurfacePreparation?> ResolveCellSurfaceReferences()
     {
         if (cellSurfaceBindings is not null)
-            return Observable.Return(Unit.Default);
+            return Observable.Return<CellSurfacePreparation?>(null);
 
         var provider = publicHub.ServiceProvider.GetService<ICellSurfaceAssemblyProvider>();
         if (provider is null)
-        {
-            cellSurfaceBindings = ImmutableDictionary<string, Assembly>.Empty;
-            return Observable.Return(Unit.Default);
-        }
+            return Observable.Return<CellSurfacePreparation?>(CellSurfacePreparation.None);
 
         return provider.ResolveCellSurfaceAssemblies()
             .Take(1)
             .Select(resolved =>
             {
                 var bindings = ImmutableDictionary.CreateBuilder<string, Assembly>(StringComparer.Ordinal);
-                var references = new List<MetadataReference>();
+                var references = ImmutableList.CreateBuilder<MetadataReference>();
+                var leases = ImmutableList.CreateBuilder<IDisposable>();
                 foreach (var entry in resolved)
                 {
                     var reference = KernelScriptReferences.GetOrCreateFromFile(entry.AssemblyPath);
@@ -849,22 +935,57 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     references.Add(reference);
                     if (entry.Assembly.GetName().Name is { Length: > 0 } name)
                         bindings[name] = entry.Assembly;
-                    cellSurfaceLeases.Add(entry.Lease);
+                    leases.Add(entry.Lease);
                 }
-                scriptOptions = scriptOptions.AddReferences(references);
-                cellSurfaceBindings = bindings.ToImmutable();
-                if (!cellSurfaceBindings.IsEmpty)
-                    Logger.LogDebug(
-                        "Kernel session joined {Count} cell-surface pack assembly(ies): {Names}",
-                        cellSurfaceBindings.Count, string.Join(", ", cellSurfaceBindings.Keys));
-                return Unit.Default;
+                return (CellSurfacePreparation?)new CellSurfacePreparation(
+                    references.ToImmutable(), bindings.ToImmutable(), leases.ToImmutable());
             })
-            .Catch<Unit, Exception>(ex =>
+            .Catch<CellSurfacePreparation?, Exception>(ex =>
             {
                 Logger.LogWarning(ex,
                     "Cell-surface assembly resolution failed — this submission runs without pack references; the next submission re-attempts");
-                return Observable.Return(Unit.Default);
+                // Nothing published: not latched, so the next submission re-attempts.
+                return Observable.Return<CellSurfacePreparation?>(null);
             });
+    }
+
+    /// <summary>
+    /// Publishes a resolved cell-surface set into the session, on the pump — the ONE place the
+    /// session's references, bindings and leases change for it. <c>null</c> publishes nothing.
+    /// </summary>
+    private void PublishCellSurfaceReferences(CellSurfacePreparation? prep)
+    {
+        if (prep is null)
+            return;
+        scriptOptions = scriptOptions.AddReferences(prep.References);
+        cellSurfaceBindings = prep.Bindings;
+        foreach (var lease in prep.Leases)
+            cellSurfaceLeases.Add(lease);
+        if (!cellSurfaceBindings.IsEmpty)
+            Logger.LogDebug(
+                "Kernel session joined {Count} cell-surface pack assembly(ies): {Names}",
+                cellSurfaceBindings.Count, string.Join(", ", cellSurfaceBindings.Keys));
+    }
+
+    /// <summary>
+    /// What the cell-surface stage resolved, not yet part of the session. Owns its
+    /// <see cref="Leases"/> until <see cref="PublishCellSurfaceReferences"/> hands them to the
+    /// session; a result that loses to a cancel is <see cref="Release"/>d instead.
+    /// </summary>
+    private sealed record CellSurfacePreparation(
+        ImmutableList<MetadataReference> References,
+        ImmutableDictionary<string, Assembly> Bindings,
+        ImmutableList<IDisposable> Leases)
+    {
+        /// <summary>No provider: the surface is the platform baseline (latched as empty).</summary>
+        public static CellSurfacePreparation None { get; } = new([], ImmutableDictionary<string, Assembly>.Empty, []);
+
+        /// <summary>Disposes the leases of a result that never reached the session.</summary>
+        public void Release()
+        {
+            foreach (var lease in Leases)
+                lease.Dispose();
+        }
     }
 
     /// <summary>
@@ -954,36 +1075,47 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
 
     // Reactive end to end: the resolver runs its NuGet leaf on the Http lane and bounds it itself, so
     // this is NOT wrapped in a pool slot of that same lane — a slot held while waiting on a leaf of its
-    // own lane can starve it.
-    private IObservable<string> ResolveNuGetReferences(string source)
+    // own lane can starve it. PURE: it returns the cleaned source and what was resolved; the session
+    // is changed only by PublishNuGetReferences, on the pump.
+    private IObservable<NuGetPreparation> ResolveNuGetReferences(string source)
     {
         var (cleaned, refs) = NuGetDirectiveParser.Extract(source);
-        if (refs.Length == 0) return Observable.Return(source);
+        if (refs.Length == 0) return Observable.Return(new NuGetPreparation(source, null, 0));
 
         var resolver = publicHub.ServiceProvider.GetService<INuGetAssemblyResolver>();
         if (resolver is null)
         {
             Logger.LogWarning("INuGetAssemblyResolver not registered; #r \"nuget:...\" directives ignored.");
-            return Observable.Return(cleaned);
+            return Observable.Return(new NuGetPreparation(cleaned, null, 0));
         }
 
         return resolver.Resolve(refs)
-            .Select(resolved =>
-            {
-                // One assembly per name, the copy that runs (CompileReferences.WithPackageAssemblies):
-                // a closure assembly the session already references is not added a second time. The
-                // kernel's packages bind in the DEFAULT context, which cannot load a second version of a
-                // host assembly — so the host's reference is kept even when the package's is newer.
-                scriptOptions = scriptOptions.WithReferences(
-                    MeshWeaver.Compiler.CompileReferences.WithPackageAssemblies(
-                        [.. scriptOptions.MetadataReferences], resolved.AssemblyPaths,
-                        KernelScriptReferences.GetOrCreateFromFile, packagesLoadInIsolation: false));
-                InstallRuntimeProbe(resolved.ProbingDirectories);
-                Logger.LogInformation("Resolved {Count} NuGet package(s) for interactive cell.", refs.Length);
-                return cleaned;
-            })
+            .Select(resolved => new NuGetPreparation(cleaned, resolved, refs.Length))
             .Do(_ => { }, ex => Logger.LogError(ex, "NuGet restore failed for interactive cell."));
     }
+
+    /// <summary>
+    /// Publishes a NuGet resolution into the session, on the pump, and returns the source to run.
+    /// One assembly per name, the copy that runs (CompileReferences.WithPackageAssemblies): a closure
+    /// assembly the session already references is not added a second time. The kernel's packages
+    /// bind in the DEFAULT context, which cannot load a second version of a host assembly — so the
+    /// host's reference is kept even when the package's is newer.
+    /// </summary>
+    private string PublishNuGetReferences(NuGetPreparation prep)
+    {
+        if (prep.Resolved is not { } resolved)
+            return prep.Source;
+        scriptOptions = scriptOptions.WithReferences(
+            MeshWeaver.Compiler.CompileReferences.WithPackageAssemblies(
+                [.. scriptOptions.MetadataReferences], resolved.AssemblyPaths,
+                KernelScriptReferences.GetOrCreateFromFile, packagesLoadInIsolation: false));
+        InstallRuntimeProbe(resolved.ProbingDirectories);
+        Logger.LogInformation("Resolved {Count} NuGet package(s) for interactive cell.", prep.PackageCount);
+        return prep.Source;
+    }
+
+    /// <summary>What the NuGet stage resolved for one submission, not yet part of the session.</summary>
+    private sealed record NuGetPreparation(string Source, ResolvedPackageSet? Resolved, int PackageCount);
 
     /// <summary>
     /// Update the layout area on the PUBLIC hub (parent), not the executor.

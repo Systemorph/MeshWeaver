@@ -30,9 +30,13 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public abstract class KernelRunSettlementTestBase(ITestOutputHelper output) : CSharpCellRunTestBase(output)
 {
-    /// <summary>A cell that waits until the gate node is named "go", then returns 7.</summary>
+    /// <summary>What the gated script prints to its transcript the moment it reaches the gate.</summary>
+    protected const string ReachedGate = "reached-the-gate";
+
+    /// <summary>A cell that says it reached the gate, waits until the gate node is named "go", then returns 7.</summary>
     protected static string WaitsForGate(string gatePath) => $$"""
         using System.Reactive.Linq;
+        System.Console.WriteLine("{{ReachedGate}}");
         await Mesh.GetMeshNodeStream("{{gatePath}}")
             .Where(n => n?.Name == "go")
             .Take(1)
@@ -72,37 +76,38 @@ public abstract class KernelRunSettlementTestBase(ITestOutputHelper output) : CS
             .Await(ct);
     }
 
-    /// <summary>The run's Activity once it is Running — the script (or a stage) is parked.</summary>
-    protected async Task<ActivityLog> Running(string activityPath, CancellationToken ct)
+    /// <summary>
+    /// The run's Activity once its SCRIPT is running and parked on the gate: the executor accepted
+    /// the submission, prepared it and started the script, which printed <see cref="ReachedGate"/>.
+    /// The Activity reads Running from the moment the dispatcher creates it, so its status alone
+    /// would not show that the executor ever saw the run.
+    /// </summary>
+    protected async Task<ActivityLog> AtTheGate(string activityPath, CancellationToken ct)
     {
         var options = Mesh.JsonSerializerOptions;
         return (await Mesh.GetWorkspace().GetMeshNodeStream(activityPath)
             .Where(node => node is not null)
             .Select(node => node.ContentAs<ActivityLog>(options))
-            .Where(log => log is not null && log.Status == ActivityStatus.Running)
+            .Where(log => log is not null
+                          && log.Status == ActivityStatus.Running
+                          && log.Messages.Any(m => m.Message.Contains(ReachedGate, StringComparison.Ordinal)))
             .FirstAsync()
             .Timeout(Bound)
             .Await(ct))!;
     }
 
     /// <summary>
-    /// Disposes the Activity's hub — the kernel host and, with it, its executor — as a recycle does,
-    /// with a stated reason, issued off the router.
+    /// Recycles the Activity's hub — the kernel host and, with it, its executor — with a stated
+    /// reason, from the surviving client hub, and returns once a FRESH activation has answered: the
+    /// old one is gone, so whatever is read afterwards is what its teardown left in the store.
     /// </summary>
-    protected async Task DisposeKernelHost(string activityPath, CancellationToken ct)
+    protected async Task RecycleKernelHost(string activityPath, CancellationToken ct)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await access
-            .RunAsSystem(() => Observable.Defer(() =>
-            {
-                Mesh.NodeOperationIssuingHub().Post(
-                    new DisposeRequest
-                    {
-                        Reason = "KernelExecutorSettlesEveryRunTest: the kernel host goes away while a run is in flight",
-                    },
-                    o => o.WithTarget(new Address(activityPath)));
-                return Observable.Return(Unit.Default);
-            }))
+            .RunAsSystem(() => RequestHub.RecycleNode(activityPath,
+                reason: "KernelExecutorSettlesEveryRunTest: the kernel host goes away while a run is in flight"))
+            .FirstAsync()
             .Await(ct);
     }
 
@@ -134,9 +139,9 @@ public class KernelHostDisposedMidRunFailsTheRunTest(ITestOutputHelper output) :
         try
         {
             var activity = await Run(await CreateCell(WaitsForGate(gate), ct), ct);
-            await Running(activity, ct);
+            await AtTheGate(activity, ct);
 
-            await DisposeKernelHost(activity, ct);
+            await RecycleKernelHost(activity, ct);
 
             var log = await Terminal(activity, "its kernel host was disposed while the script was parked", ct);
             log.Status.Should().Be(ActivityStatus.Failed, "the run did not finish, and nobody cancelled it");
@@ -161,7 +166,7 @@ public class KernelHostDisposedMidRunFailsTheRunTest(ITestOutputHelper output) :
         var finished = await Terminal(activity, "the in-time `1 + 1` run", ct);
         finished.Status.Should().Be(ActivityStatus.Succeeded);
 
-        await DisposeKernelHost(activity, ct);
+        await RecycleKernelHost(activity, ct);
 
         // The re-activated hub serves what the store holds — the run's own verdict.
         var options = Mesh.JsonSerializerOptions;
