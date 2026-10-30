@@ -260,6 +260,11 @@ The defect was that nothing recovered it. A cut job concludes `cancelled`, so th
   re-run would revive the old head and take the pull request's concurrency group from the current
   one. Any other cancelled job counts only through a named annotation or a lost completion, never a
   log signature, because a cancelled step's log shows what it was doing, not why it was stopped.
+- A step that completed `failure` before the cancel is judged on its own log, as a failed job's is;
+  a runner-shutdown annotation never excuses it. A `Post …` step may be unfinished, never red.
+- Right before the POST, a pull-request run is re-run only while no newer run of the same workflow,
+  branch and event carries another head. A push that landed after the cut run completed leaves no
+  supersession annotation, and re-running the old run would cancel the new head's run.
 - A real hang at the cap leaves a work step unfinished, so it stays unproven and red.
 - So does a run superseded by a push (*"Canceling since a higher priority waiting request …"*) and a
   run cancelled by a person.

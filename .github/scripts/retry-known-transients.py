@@ -83,6 +83,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -454,6 +455,11 @@ def lost_completion(job: dict, annotations: list[dict]) -> str | None:
     limit = next((m for m in messages if re.search(JOB_TIME_LIMIT_ANNOTATION, m)), None)
     if limit is None or any(re.search(SUPERSEDED_ANNOTATION, m) for m in messages):
         return None
+    # Bookkeeping may be UNFINISHED, never FAILED (review on #7704): a `Post …` step that completed
+    # with a red conclusion is a failure nobody has explained, so it vetoes like any work step.
+    if any(s.get("status") == "completed" and s.get("conclusion") in FAILED_STEP_CONCLUSIONS
+           for s in job.get("steps") or []):
+        return None
     work = [s for s in job.get("steps") or []
             if not RUNNER_BOOKKEEPING_STEP.match(str(s.get("name", "")))]
     if not work or any(s.get("status") != "completed" or s.get("conclusion") not in ("success", "skipped")
@@ -510,13 +516,19 @@ def judge(repo: str, job: dict, fetch) -> tuple[str, str, bool]:
             return UNPROVEN, (f"cancelled because a NEWER run of its concurrency group superseded it — "
                               "the newer run is the one that counts; re-running this one would take "
                               "the group from it, so no retry"), True
-        matched = match_annotations(annotations) or lost_completion(job, annotations)
-        if matched:
-            return TRANSIENT, f"{matched} (concluded {job.get('conclusion')})", True
-        seen = _failure_messages(annotations)[:3] or ["no failure-level annotation"]
-        return UNPROVEN, (f"concluded {job.get('conclusion')} with no named proof (annotations: "
-                          f"{[m[:120] for m in seen]}) — a cancel nobody can explain is not a "
-                          "transient, no retry. Investigate it."), True
+        # A step that COMPLETED with `failure` before the cancel (a compile or test red, then a runner
+        # shutdown during cleanup) is the job's own red: it is judged on its own evidence below,
+        # exactly as a failed job's is — an infrastructure annotation never excuses it (review on
+        # #7704). Only a job with no such step is proven by its annotations alone.
+        if not any(s.get("status") == "completed" and s.get("conclusion") == "failure"
+                   for s in job.get("steps") or []):
+            matched = match_annotations(annotations) or lost_completion(job, annotations)
+            if matched:
+                return TRANSIENT, f"{matched} (concluded {job.get('conclusion')})", True
+            seen = _failure_messages(annotations)[:3] or ["no failure-level annotation"]
+            return UNPROVEN, (f"concluded {job.get('conclusion')} with no named proof (annotations: "
+                              f"{[m[:120] for m in seen]}) — a cancel nobody can explain is not a "
+                              "transient, no retry. Investigate it."), True
     own = failed_steps(job)
     if not own:
         annotations = read_annotations(repo, job_id, fetch)
@@ -657,6 +669,48 @@ def decide(repo: str, run_id: str, fetch, attempt: int | None = None,
                     scope=scope, logless=logless)
 
 
+PULL_REQUEST_EVENTS = frozenset({"pull_request", "pull_request_target"})
+
+
+def stale_pull_request_head(repo: str, run_id: str, current: dict, fetch) -> str | None:
+    """None when the run may be re-run; else why not (a line starting `BLIND:` means unreadable).
+
+    🚨 Review on #7704: a pull-request run shares ONE concurrency group per pull request. Once a newer
+    head was pushed, re-running the old run revives a head nobody will merge and takes the group from
+    the current head's run — the #7696 shape, reached without any supersession annotation when the
+    push lands AFTER the old run completed. So a pull-request run is re-run only while no NEWER run of
+    the same workflow, on the same branch and event, carries a different head. Read through the
+    Actions API alone (the lane holds `actions` and no `pull-requests` grant, and widening a reusable
+    lane's grants breaks every caller that has not widened its own). Not checked for a push, a
+    schedule or a dispatch.
+    """
+    if current.get("event") not in PULL_REQUEST_EVENTS:
+        return None
+    head = str(current.get("head_sha") or "")
+    branch = str(current.get("head_branch") or "")
+    workflow = current.get("workflow_id")
+    created = str(current.get("created_at") or "")
+    if not head or not branch or not isinstance(workflow, int) or not created:
+        return "BLIND:the pull-request run carries no head sha, head branch, workflow id or creation time"
+    query = urllib.parse.urlencode({"branch": branch, "event": current["event"], "per_page": 20})
+    try:
+        listing = fetch(f"/repos/{repo}/actions/workflows/{workflow}/runs?{query}")
+    except (urllib.error.HTTPError, urllib.error.URLError, LogUnreadable) as error:
+        return f"BLIND:listing the newer runs of branch {branch!r} before the POST failed: {error}"
+    runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+    if not isinstance(runs, list):
+        return f"BLIND:listing the newer runs of branch {branch!r} returned no workflow_runs list"
+    newer = [r for r in runs if isinstance(r, dict) and str(r.get("created_at") or "") > created
+             and r.get("head_sha") and r.get("head_sha") != head]
+    if newer:
+        n = newer[0]
+        return (f"run {run_id} tested head {head[:10]}, but run {n.get('id')} has since started on head "
+                f"{str(n.get('head_sha'))[:10]} of the same branch — a newer push owns the pull request's "
+                "concurrency group, and re-running this run would cancel that head's run. No retry; "
+                "follow the newer run.")
+    return None
+
+
 def summarize(lines: list[str]) -> None:
     """Every decision into the job SUMMARY too: on this lane a decline is the ROUTINE outcome, and a
     green job's log is a room nobody enters."""
@@ -727,6 +781,15 @@ def run(repo: str, run_id: str, fetch, dry_run: bool, attempt: int | None = None
         print(line)
         summarize([line])
         return 0
+    stale = stale_pull_request_head(repo, run_id, current, fetch)
+    if stale is not None:
+        if stale.startswith("BLIND:"):
+            print(f"::error title=Retry steward is blind::run {run_id} in {repo}: {stale[6:]}. "
+                  "Not retrying a pull-request run whose head cannot be shown to be current.")
+            return 1
+        print(stale)
+        summarize([stale])
+        return 0
     if dry_run:
         print(f"--dry-run: NOT posting {endpoint}.")
         return 0
@@ -765,7 +828,8 @@ def _fake(logs: dict[int, object], total: int | None = None,
           steps: dict[int, list[dict]] | None = None,
           annotations: dict[int, object] | None = None,
           run_state: object = None,
-          conclusions: dict[int, str] | None = None):
+          conclusions: dict[int, str] | None = None,
+          branch_runs: object = None):
     """A fetch double. `logs` maps job id → log text, or an Exception to raise.
 
     `pages` (a list of job-id lists) serves a DIFFERENT set of job records per page, so a test can
@@ -794,6 +858,11 @@ def _fake(logs: dict[int, object], total: int | None = None,
             if isinstance(state, Exception):
                 raise state
             return state
+        if "/actions/workflows/" in path:
+            value = branch_runs if branch_runs is not None else {"workflow_runs": []}
+            if isinstance(value, Exception):
+                raise value
+            return value
         if "/jobs?" in path:
             if pages is not None:
                 index = int(path.split("&page=")[1]) - 1
@@ -1388,6 +1457,59 @@ def _self_test_cases(live_summary: str | None) -> int:
           not decide("o/r", "9", _fake({1: escaped}, steps={1: cancelled_step},
                                        annotations={1: [{"annotation_level": "failure",
                                                          "message": "The operation was canceled."}]},
+                                       conclusions={1: "cancelled"})).retry)
+
+    # ── Review on #7704 (re-review): three more ways a cut could be retried that must not be. ──
+    # (a) A push AFTER the cut run completed leaves no supersession annotation on it; re-running the
+    #     old run would cancel the new head's run. The head is compared with the PR's right before the POST.
+    pr_run = dict(RUN_CANCELLED, event="pull_request", head_sha="a" * 40, head_branch="fix/x",
+                  workflow_id=77, created_at="2026-10-30T17:36:15Z")
+    cut_args = dict(steps={1: FINISHED_THEN_CUT}, annotations={1: TIME_LIMIT_5M}, conclusions={1: "cancelled"})
+    newer = {"workflow_runs": [{"id": 10, "head_sha": "b" * 40, "created_at": "2026-10-30T18:00:12Z"},
+                               {"id": 9, "head_sha": "a" * 40, "created_at": "2026-10-30T17:36:15Z"}]}
+    fetch = _fake({1: ""}, run_state=dict(pr_run), branch_runs=newer, **cut_args)
+    check("a cut pull-request run whose branch has since started a run on a NEWER head → no POST, exit 0",
+          run("o/r", "9", fetch, dry_run=False, attempt=1) == 0 and not _posted(fetch))
+    check("...and the newer runs were listed for THAT workflow, branch and event",
+          any("/actions/workflows/77/runs?branch=fix%2Fx&event=pull_request" in c
+              for c in fetch.calls))  # type: ignore[attr-defined]
+    only_self = {"workflow_runs": [{"id": 9, "head_sha": "a" * 40, "created_at": "2026-10-30T17:36:15Z"}]}
+    fetch = _fake({1: ""}, run_state=dict(pr_run), branch_runs=only_self, **cut_args)
+    check("...while the same run with no newer head on its branch is retried (positive control)",
+          run("o/r", "9", fetch, dry_run=False, attempt=1) == 0
+          and _posted(fetch) == ["POST /repos/o/r/actions/runs/9/rerun"])
+    fetch = _fake({1: ""}, run_state=dict(pr_run), branch_runs=_http(500), **cut_args)
+    check("...and an unreadable listing exits 1 and posts nothing",
+          run("o/r", "9", fetch, dry_run=False, attempt=1) == 1 and not _posted(fetch))
+    fetch = _fake({1: ""}, run_state=dict(pr_run, head_branch=None), **cut_args)
+    check("...and a pull-request run with no head branch exits 1 and posts nothing",
+          run("o/r", "9", fetch, dry_run=False, attempt=1) == 1 and not _posted(fetch))
+    fetch = _fake({1: ""}, run_state=dict(pr_run, event="push"), branch_runs=newer, **cut_args)
+    check("...while a PUSH run is not held by a newer head (main's runs group by sha)",
+          run("o/r", "9", fetch, dry_run=False, attempt=1) == 0 and len(_posted(fetch)) == 1)
+    # (b) Bookkeeping may be UNFINISHED, never FAILED.
+    failed_post = _steps(("Set up job", "completed", "success"), ("Run actions/checkout@v7", "completed", "success"),
+                         ("Post Run actions/checkout@v7", "completed", "failure"))
+    check("work green, a FAILED `Post …` step, then the time-limit cut → NO retry",
+          not decide("o/r", "9", _fake({1: REAL_LOG_HEAD + "2026-10-30T18:00:00.0Z post step error\n"},
+                                       steps={1: failed_post}, annotations={1: TIME_LIMIT_5M},
+                                       conclusions={1: "cancelled"})).retry)
+    check("...and lost_completion() itself refuses a job whose `Post …` step completed red",
+          lost_completion({"steps": failed_post}, TIME_LIMIT_5M) is None
+          and lost_completion({"steps": FINISHED_THEN_CUT}, TIME_LIMIT_5M) is not None)
+    # (c) A completed FAILED work step, then a runner shutdown during cleanup: the step's own log decides.
+    failed_then_shutdown = _steps(("Set up job", "completed", "success"), ("Build", "completed", "failure"),
+                                  ("Post Run actions/checkout@v7", "completed", "cancelled"))
+    compile_red = REAL_LOG_HEAD + "2026-10-30T18:00:00.0Z error CS0246: The type 'X' could not be found\n"
+    check("a compile red, then a runner SHUTDOWN in cleanup (cancelled job) → NO retry",
+          not decide("o/r", "9", _fake({1: compile_red}, steps={1: failed_then_shutdown},
+                                       annotations={1: SHUTDOWN_SIGNAL}, conclusions={1: "cancelled"})).retry)
+    check("...while the same job whose log was never written (runner gone mid-step) is still retried",
+          decide("o/r", "9", _fake({1: _http(404)}, steps={1: failed_then_shutdown},
+                                   annotations={1: SHUTDOWN_SIGNAL}, conclusions={1: "cancelled"})).retry)
+    check("...and a superseded job is still vetoed first, whatever its steps",
+          not decide("o/r", "9", _fake({1: _http(404)}, steps={1: failed_then_shutdown},
+                                       annotations={1: SUPERSEDED + SHUTDOWN_SIGNAL},
                                        conclusions={1: "cancelled"})).retry)
 
     # ── The lane grants what this script reads. A lane without `checks: read` is blind to deaths. ──
