@@ -199,7 +199,13 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones, IActiveDeletio
     /// routing NotFound on its re-probe. The resurrection guard (<see cref="IsRecentlyDeleted"/>) is
     /// unchanged: an in-flight write does not license a resurrecting save.</para>
     /// </remarks>
-    public bool IsDeleted(string? path) => IsRecentlyDeleted(path) && !HasAdmittedWriteAt(path!);
+    public bool IsDeleted(string? path)
+        // 🚨 The admission snapshot FIRST, the tombstone second. A recreate supersedes the tombstone
+        // before it releases its admission, so the reverse order could read the live tombstone, then
+        // — the recreate having committed and settled in between — no admission, and call a node the
+        // store holds again "gone for good". In this order a write that settled before the admission
+        // read has already superseded the tombstone the second read sees.
+        => !string.IsNullOrEmpty(path) && !HasAdmittedWriteAt(path) && IsRecentlyDeleted(path);
 
     /// <summary>
     /// True when a write the storage guard admitted to exactly <paramref name="path"/> has not settled —

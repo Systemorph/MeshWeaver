@@ -100,6 +100,63 @@ public class ARecreateRetiresTheReadOpenedOnTheDeletedNodeTest(ITestOutputHelper
     }
 
     /// <summary>
+    /// The same latch, with the background read opened while the recreate is ADMITTED but not yet
+    /// committed. In that window the pipeline's "gone for good" already answers no (an admitted write is
+    /// in flight), but the row is still absent, so the read's route is still decided "no node found".
+    /// The entry belongs to the deleted incarnation all the same and must be retired by the recreate's
+    /// commit; classified by the pipeline's reading it was not, and its late verdict ended both readers.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AReadOpenedWhileTheRecreateIsAdmitted_IsRetiredByItsCommit()
+    {
+        var path = NewPath();
+        await Create(path, "first");
+        await Delete(path);
+
+        using var hold = Storage.HoldWrites(path);
+        FaultSwitch? delay = null;
+        using var recreate = Access.RunAsSystem(() => NodeFactory.CreateNode(MeshNode.FromPath(path) with
+            {
+                NodeType = "Markdown", Name = "second", State = MeshNodeState.Active,
+            }))
+            .Subscribe(_ => { }, ex => Output.WriteLine($"recreate ended: {ex.Message}"));
+        IDisposable? backgroundSubscription = null;
+        try
+        {
+            await hold.Arrivals.Should().Within(TestTimeouts.Convergence)
+                .Emit("the recreate was admitted and reached the store", TestContext.Current.CancellationToken);
+            Mesh.ServiceProvider.GetRequiredService<IAddressTombstones>().IsDeleted(path).Should().BeFalse(
+                "the premise: with the recreate admitted, the pipeline no longer reads the address as gone");
+
+            // Armed only now, so the recreate's own reads pass untouched.
+            delay = Storage.DelayNextBatchReadAnswer(path);
+            var backgroundRead = Read(path, out backgroundSubscription);
+            await delay.Arrivals.Should().Within(TestTimeouts.Convergence)
+                .Emit("the background read's route was decided while the row was still absent",
+                    TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            hold.Release();
+        }
+        using var _ = backgroundSubscription;
+        using var ___ = delay;
+
+        var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Where(_ => !registry.IsRecentlyDeleted(path))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the recreate commits and supersedes the tombstone", TestContext.Current.CancellationToken);
+        var later = Read(path, out var laterSubscription);
+        using var __ = laterSubscription;
+        // The "no node found" decided while the row was absent is delivered only now.
+        delay!.Release();
+
+        (await FirstAnswer(later, "the reader that asked after the recreate is answered"))
+            .Should().Be("second", "the node exists; the deleted node's verdict is not this reader's answer");
+    }
+
+    /// <summary>
     /// The same latch opened by a background WRITE — the inbox's own shape: every write pins the path's
     /// read entry, so a write to the deleted path opens the entry whose verdict arrives late.
     /// </summary>

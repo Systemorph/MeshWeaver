@@ -1445,10 +1445,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         var negativeClaim = BeginNegativeProbe(p);
         try
         {
-            // Read BEFORE the upstream opens: an address that is gone for good at this instant can
-            // only answer this entry with its deleted incarnation's verdict (see
-            // RetireEntryOpenedOnDeletedAddress). Optional — a mesh without tombstones flags nothing.
-            var openedOnDeletedAddress = meshHub.ServiceProvider.GetService<IAddressTombstones>()?.IsDeleted(p) == true;
+            // Read BEFORE the upstream opens: an address whose delete is not yet superseded by a
+            // committed recreate can only answer this entry with its deleted incarnation's verdict
+            // (see RetireEntryOpenedOnDeletedAddress). 🚨 The UNSUPERSEDED tombstone, never the
+            // pipeline's "gone for good" (IAddressTombstones.IsDeleted): that one already answers no
+            // while a recreate is admitted but not committed, and a read opened in that window still
+            // has its route decided "no node found" against the absent row — so it, too, belongs to
+            // the deleted incarnation and must be retired by the recreate's commit. Optional — a mesh
+            // without tombstones flags nothing.
+            var openedOnDeletedAddress =
+                meshHub.ServiceProvider.GetService<RecentlyDeletedRegistry>() is { } recentlyDeleted
+                    ? recentlyDeleted.IsRecentlyDeleted(p)
+                    : meshHub.ServiceProvider.GetService<IAddressTombstones>()?.IsDeleted(p) == true;
             // 🚨 Bypass the cache when opening our OWN upstream — otherwise
             // GetMeshNodeStream(workspace, path) auto-redirects back into the
             // cache and we'd recurse forever waiting for ourselves. Use the
@@ -1631,9 +1639,24 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         Observable.Create<MeshNode>(observer =>
         {
             var link = new SerialDisposable();
-            link.Disposable = AttachToCurrentEntry(path, observer, link);
+            Attach(path, observer, link);
             return link;
         });
+
+    /// <summary>
+    /// Installs one attachment attempt into <paramref name="link"/>. 🚨 The attempt's slot goes into
+    /// the link BEFORE the attachment subscribes: a retirement can reach the new attachment while
+    /// <see cref="AttachToCurrentEntry"/> is still running and install its successor; were the link
+    /// assigned from the return value, that late assignment would dispose the successor (the live
+    /// reader) and keep the retired attachment. Each attempt fills only its own slot, and a slot the
+    /// link already replaced disposes its attachment the moment it is filled.
+    /// </summary>
+    private void Attach(string path, IObserver<MeshNode> observer, SerialDisposable link)
+    {
+        var slot = new SingleAssignmentDisposable();
+        link.Disposable = slot;
+        slot.Disposable = AttachToCurrentEntry(path, observer, link);
+    }
 
     /// <summary>
     /// One attachment of <paramref name="observer"/> to the path's CURRENT entry (see
@@ -1723,7 +1746,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             TaskPoolScheduler.Default.Schedule(() =>
                             {
                                 if (Volatile.Read(ref detached) == 0)
-                                    link.Disposable = AttachToCurrentEntry(path, observer, link);
+                                    Attach(path, observer, link);
                             });
                             return;
                         }
