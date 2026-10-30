@@ -59,6 +59,34 @@ public static class StorageAdapterChangeFeedExtensions
             });
 
     /// <summary>
+    /// INSERTS <paramref name="node"/> — writes it only if no row exists at its path, decided
+    /// atomically by the store (<see cref="IStorageAdapter.WriteIfVersion"/> with an expected
+    /// version of <c>0</c>) — and publishes a <see cref="MeshChangeEvent.Created"/> on
+    /// <paramref name="changeFeed"/> after an applied insert (post-commit).
+    ///
+    /// <para>Emits <c>true</c> when this call inserted the row, <c>false</c> when a row was already
+    /// there (another writer won; nothing was written and nothing is published), and <c>null</c>
+    /// when the adapter does not own the path (the try-then-claim sentinel of
+    /// <see cref="IStorageAdapter.Write"/>).</para>
+    ///
+    /// <para>🚨 This, not <see cref="WriteAndPublishCreated"/>, is what a CREATE commits with
+    /// (#7347). The ordinary upsert applies at equal versions, so two creates that each read the
+    /// path as absent both commit and both believe they created it.</para>
+    /// </summary>
+    public static IObservable<bool?> InsertAndPublishCreated(
+        this IStorageAdapter adapter,
+        MeshNode node,
+        JsonSerializerOptions options,
+        IMeshChangeFeed? changeFeed)
+        => adapter.WriteIfVersion(node, 0, options)
+            .Take(1)
+            .Do(inserted =>
+            {
+                if (inserted is true)
+                    changeFeed?.Publish(MeshChangeEvent.Created(node));
+            });
+
+    /// <summary>
     /// Writes <paramref name="node"/> via <paramref name="adapter"/> and publishes a
     /// <see cref="MeshChangeEvent.Updated"/> on <paramref name="changeFeed"/> after the
     /// write emits (post-commit). Same null-handling as
