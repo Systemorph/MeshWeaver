@@ -1440,10 +1440,29 @@ as System.
 
 **A writer-chosen main node outside the node's ancestry does not delegate alone.** Satellite delegation
 (`SatelliteAccessRule`) authorises a satellite against its main node. When the WRITER chooses that
-pointer — on a create, or on an update that changes it — and it is not the node or one of its
-ancestors, the write must also pass the path check where the node lands. A stored off-partition main
-node still governs reads. The own-main-node shortcut trusts only an ancestor main node
-(`MainNodeTrust`).
+pointer on a create and it is not the node or one of its ancestors, the write must also pass the
+path check where the node lands. A stored off-partition main node still governs reads. The
+own-main-node shortcut trusts only an ancestor main node (`MainNodeTrust`).
+
+**An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
+the satellite and where its grants project, so a write that changed it would let its writer decide
+access: move a comment or thread under a main node they cannot write to, or point it at one whose
+grants it then borrows. Any change to `MainNode` on an update of a satellite is REFUSED, for every
+writer except System, even to a target the writer may write: this is the update half of the create
+rule, ownership derives from the path or the stored node and is never chosen. The one change allowed
+is path-derived: a never-set self-default moving to the satellite's owner, which is what the create
+and upsert normalisation writes. A satellite here is a node type governed by `SatelliteAccessRule` or
+a standard satellite type. A node that merely lives under an underscore segment (an app tile under
+`_App`) keeps a pointer its owner chose.
+
+The refusal is held at two seams, both reading `MainNodeTrust.Repoints`: the rule itself, when it is
+asked about an update with the stored node, and the owner's commit point
+(`SatelliteMainNodeCommitGuard`). The commit point is the one that matters for a routed write: a merge
+patch reaches the owning hub, whose delivery check decides from the STORED node and never sees the
+proposed pointer. A commit guard cannot read or wait, so it cannot re-validate a new target, which is
+one more reason the rule refuses rather than re-checks. Pinned by `SatelliteMainNodeRepointTest`
+(a routed repoint to a locked target and to the writer's own target are both refused; an update that
+keeps the pointer lands; the rule refuses a changed pointer and allows the path-derived one).
 
 **A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
 (`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a

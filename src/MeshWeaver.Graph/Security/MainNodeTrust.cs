@@ -1,3 +1,5 @@
+using MeshWeaver.Mesh;
+
 namespace MeshWeaver.Graph.Security;
 
 /// <summary>
@@ -53,4 +55,32 @@ public static class MainNodeTrust
         !string.IsNullOrEmpty(mainNode)
         && OwnerOf(path) is { } owner
         && string.Equals(mainNode.Trim('/'), owner, StringComparison.Ordinal);
+
+    /// <summary>
+    /// 🛡️ Whether writing <paramref name="after"/> over the stored <paramref name="before"/> REPOINTS
+    /// the node's main node: a change a writer chose, as opposed to the one change the platform
+    /// derives from the path. A satellite's stored <c>MainNode</c> governs it, so an update never
+    /// chooses a new one, the same way a create never trusts a proposed one. The one exception is
+    /// path-derived: a stored self-default (<c>MainNode</c> empty or equal to the node's own path,
+    /// i.e. never set) moving to the satellite's OWNER, which is what the create and upsert
+    /// normalisation writes. Ordinal, like every other main-node comparison here.
+    /// </summary>
+    /// <param name="before">The stored node.</param>
+    /// <param name="after">The node as it is about to be written.</param>
+    /// <returns>True when the write changes the main node to something the path does not derive.</returns>
+    public static bool Repoints(MeshNode before, MeshNode after)
+    {
+        var previous = (before.MainNode ?? "").Trim('/');
+        var next = (after.MainNode ?? "").Trim('/');
+        if (string.Equals(previous, next, StringComparison.Ordinal))
+            return false;
+        var previousWasUnset = previous.Length == 0
+                               || string.Equals(previous, before.Path.Trim('/'), StringComparison.Ordinal);
+        var nextIsDerivedOwner = IsOwnerOf(next, after.Path)
+                                 || (!string.IsNullOrEmpty(after.Namespace)
+                                     && next.Length > 0
+                                     && string.Equals(next, SatelliteTableMapping.OwnerOfSatellitePath(after.Namespace),
+                                         StringComparison.Ordinal));
+        return !(previousWasUnset && nextIsDerivedOwner);
+    }
 }
