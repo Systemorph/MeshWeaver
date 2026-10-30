@@ -1289,6 +1289,25 @@ reaches `user_effective_permissions` and `partition_access` like an assignment d
 lists the partition for the subject. A rule change re-projects every partition; a root whose type
 or content changes re-projects its own partition, but only when some rule names its type.
 
+**Both evaluators match the content filter against the SAME bytes: the root's STORED JSON.** The
+fold's root read carries the query qualifier `content:stored` (`ParsedQuery.StoredContent`): a
+provider that stores serialised JSON hands the `content` column back as a `JsonElement` instead of
+deserialising it, and the node-stream cache passes such a result through untouched instead of
+re-typing it for the caller's options. Without it the fold matched a DESERIALISED root written back
+by the current serializer, and that round trip is lossy in two directions, both reachable on rows an
+older serializer (or an untyped write) left behind (#7426):
+
+- a field ABSENT from the stored JSON whose CLR member has a non-default initializer read as that
+  initializer — the fold granted where Postgres' `content->>'field'` is NULL;
+- an explicit CLR default stored in the JSON (`"approved": false`) was omitted on the way back — the
+  fold denied where Postgres matches `'false'`.
+
+Neither direction can be repaired by re-saving the root (for a row that already lost a value, the
+stored bytes are the truth both evaluators now agree on). Pinned by `GrantRuleStoredContentTest`
+(MeshWeaver.Hosting.Test: both directions on legacy-shaped rows, plus a typed row as the negative
+control) and, for the Postgres provider honouring the qualifier, by MeshWeaver.Plugins'
+grant-rule parity test.
+
 > ⚠️ **One pre-existing difference between the evaluators applies here too.** The C# fold denies by
 > ROLE (a `Denied: Viewer` removes the Viewer role and nothing else), the SQL projection by
 > PERMISSION (a denied Viewer writes deny rows for Viewer's permissions, which also block an Editor's
@@ -1404,6 +1423,66 @@ a future "just check the claims" is a regression, not a shortcut.
 > every token already minted. Authority is read from the authority, at the point of use.
 
 Pinned by `ApiTokenCapabilityFreshnessTest` (core) and `PaywallRealGateShapeTests` (plugins).
+
+## A token's principal is bound to its writer
+
+An API token record's `UserId` is the principal every token verdict authenticates as (core
+`ApiTokenVerdict`, and the Plugins `ApiTokenService.Validate`). So no writer except System may choose
+it (`ApiTokenPrincipalBinding`):
+
+- a node that newly carries a token (a create, or a write that turns a node into one) names only the
+  WRITER, with no service identity. A service token is the one exception: it names a service object
+  id only from inside that service's own token namespace, with the matching identity path, which only
+  the platform admin surface can write;
+- a node that already carries a token keeps its principal and its service identity path. A revoke or
+  a relabel lands; a rename never does.
+
+The credential is recognised by its CONTENT, read exactly as the verdict reads it
+(`ApiTokenVerdict.ReadToken`), never by the node type, so retyping a node cannot hide a credential from
+the rule. It is enforced at both write seams: the create chain (`RlsNodeValidator`, ahead of the
+own-scope shortcut that otherwise lets a person write anything into their own partition) and the
+owner's commit point (`ApiTokenPrincipalCommitGuard`, an `IEntityCommitGuard`), which every routed
+update, merge patch and data change meets. Binding at the write side covers both verdicts at once.
+
+A token record or index commits only at ITS OWN hub. A data change sent to another node's hub can
+carry one, and that hub holds no predecessor under its key, so a rewrite would read as a create there
+and a service token's replaced hash would pass in the service's own namespace. Such a carried write by
+anyone but System is refused at the commit point.
+
+**The verdict binds the principal to the record's LOCATION** (`ApiTokenVerdict.IsBoundToItsLocation`).
+The write rules above cover the seams they see; several write routes do not reach them (a node cleared
+and restored, a data change reaching a cold owner, a transient confirmed straight to storage, content
+read differently by the writer and the verifier). So the verdict does not trust the record's `UserId`
+on its own: the index is written only by the platform, as System, and names the path the token was
+minted at. A person's token authenticates only from `{UserId}/…`, and a service's only from its own
+token namespace under `Admin/_ServiceIdentity`. Whatever reaches a record in a person's own partition,
+it can only ever be a credential for that person. The location is CLASSIFIED before its principal is
+read: the service namespace authenticates only a service id, never its partition's name; the
+pre-migration layout `User/{userId}/…` only its second segment; and a principal is never empty,
+System, or a multi-segment path. A legacy index that carries the record itself never authenticates
+as System.
+
+**A writer-chosen main node outside the node's ancestry does not delegate alone.** Satellite delegation
+(`SatelliteAccessRule`) authorises a satellite against its main node. When the WRITER chooses that
+pointer — on a create, or on an update that changes it — and it is not the satellite's OWNER, the
+write must also pass the path check where the node lands. The owner is the path before the satellite
+segment only when that segment holds the node directly (`Space/Doc` for `Space/Doc/_Comment/c1`);
+otherwise it is the parent, so a node under an ordinary `_` content segment or nested inside another
+satellite never borrows an owner above a scope that can break the inherited grant. A stored off-partition main
+node still governs reads. The own-main-node shortcut trusts only an ancestor main node
+(`MainNodeTrust`).
+
+**A create never trusts a caller-supplied `MainNode`.** The RLS own-scope shortcut keys on the path
+(`{userId}/…`) and, for an existing node, on its STORED main node. It used to accept the main node a
+create proposed, which let a person create anywhere — a service's token namespace in the Admin
+partition included — by naming themselves. Every platform writer that sets the main node to the user
+writes under `{userId}/…`, which the path shortcut covers.
+
+Pinned by `ApiTokenPrincipalBindingTest` (the owner of a token cannot rename its principal to System
+or to another person; a person creates a token only for themselves, whatever the node is typed as;
+the owner's relabel and their own token are the controls; a stored record authenticates only as the
+principal of its location; a person cannot write into a service token namespace by naming themselves
+as main node).
 
 ## Auditing token principals
 

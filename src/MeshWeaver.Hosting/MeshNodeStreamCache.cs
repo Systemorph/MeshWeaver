@@ -107,8 +107,30 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         private long lastActiveAt = Environment.TickCount64; // monotonic ms
         private bool evicted;
         private bool faulted;
+        private bool resolved;
 
         public MeshNodeStreamHandle Handle { get; } = handle;
+
+        /// <summary>
+        /// True when the entry was opened while its address carried a live delete tombstone
+        /// (<see cref="IAddressTombstones.IsDeleted"/>): its upstream request went to a node that was
+        /// gone, so whatever terminal it later receives belongs to that deleted incarnation. See
+        /// <see cref="RetireEntryOpenedOnDeletedAddress"/>.
+        /// </summary>
+        public bool OpenedOnDeletedAddress { get; init; }
+
+        /// <summary>Records that the hydration delivered a node (never cleared).</summary>
+        public void MarkResolved() { lock (gate) resolved = true; }
+
+        /// <summary>True once the hydration has delivered at least one node.</summary>
+        public bool IsResolved { get { lock (gate) return resolved; } }
+
+        /// <summary>
+        /// Moves every reader still attached to this RETIRED entry onto the path's current entry
+        /// (<see cref="SharedView"/> re-attaches on <see cref="ReadEntryRetiredException"/>). Called
+        /// after the entry was unlinked and its upstream torn down, so nothing else writes its subject.
+        /// </summary>
+        public void Retire(string path) => readers.OnError(new ReadEntryRetiredException(path));
 
         /// <summary>Raw replay view over the hydration subject. Internal plumbing —
         /// consumers attach via the refcounted wrapper (<see cref="SharedView"/>),
@@ -1093,6 +1115,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         try
         {
             ResetFailureState(change.Path);
+            // A committed write that is not a delete: the path exists again, so an entry opened on
+            // its deleted incarnation is stale by construction — even one that has not faulted YET.
+            if (change.Kind != MeshChangeKind.Deleted)
+                RetireEntryOpenedOnDeletedAddress(change.Path);
         }
         catch (Exception ex)
         {
@@ -1419,6 +1445,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         var negativeClaim = BeginNegativeProbe(p);
         try
         {
+            // Read BEFORE the upstream opens: an address whose delete is not yet superseded by a
+            // committed recreate can only answer this entry with its deleted incarnation's verdict
+            // (see RetireEntryOpenedOnDeletedAddress). 🚨 The UNSUPERSEDED tombstone, never the
+            // pipeline's "gone for good" (IAddressTombstones.IsDeleted): that one already answers no
+            // while a recreate is admitted but not committed, and a read opened in that window still
+            // has its route decided "no node found" against the absent row — so it, too, belongs to
+            // the deleted incarnation and must be retired by the recreate's commit. Optional — a mesh
+            // without tombstones flags nothing.
+            var openedOnDeletedAddress =
+                meshHub.ServiceProvider.GetService<RecentlyDeletedRegistry>() is { } recentlyDeleted
+                    ? recentlyDeleted.IsRecentlyDeleted(p)
+                    : meshHub.ServiceProvider.GetService<IAddressTombstones>()?.IsDeleted(p) == true;
             // 🚨 Bypass the cache when opening our OWN upstream — otherwise
             // GetMeshNodeStream(workspace, path) auto-redirects back into the
             // cache and we'd recurse forever waiting for ourselves. Use the
@@ -1525,12 +1563,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // replays a terminal to late subscribers, so an error landing between
             // the hydration subscribe above and this attach is still observed.
             var disposal = new System.Reactive.Disposables.CompositeDisposable(hydrationSub);
-            var entry = new Entry(handle, inner.AsObservable(), disposal, synced);
+            var entry = new Entry(handle, inner.AsObservable(), disposal, synced)
+            {
+                OpenedOnDeletedAddress = openedOnDeletedAddress,
+            };
             var bookkeeping = inner.AsObservable().Subscribe(
                 node =>
                 {
                     if (node is not null)
                     {
+                        entry.MarkResolved();
                         TryRemoveNegativeGeneration(p, negativeClaim, out _);
                         CompleteNegativeProbe(p, negativeClaim);
                         _transientStreaks.TryRemove(p, out _);
@@ -1589,105 +1631,148 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// the refcount and restarts the idle window. A wrapper reference held across an
     /// idle release transparently re-opens the path on its next subscription: the
     /// subscribe IS a read, exactly like a write after update-queue eviction.
+    /// <para>A reader whose entry is RETIRED (<see cref="RetireEntryOpenedOnDeletedAddress"/>) is
+    /// moved to the path's current entry instead of being ended: the retirement is the cache
+    /// replacing an upstream that belonged to a deleted incarnation, not an answer about the node.</para>
     /// </summary>
     private IObservable<MeshNode> SharedView(string path) =>
         Observable.Create<MeshNode>(observer =>
         {
-            while (true)
-            {
-                Entry entry;
-                try
-                {
-                    entry = GetEntry(path); // pins: live entry, idle window refreshed
-                }
-                catch (ObjectDisposedException disposed)
-                {
-                    // A read that arrives after the cache is disposed is told so (#5011).
-                    observer.OnError(disposed);
-                    return System.Reactive.Disposables.Disposable.Empty;
-                }
-                // Between GetEntry's pin and this refcount registration the sweep
-                // cannot idle-evict (the pin just reset the window), but a FORCED
-                // eviction (node delete / storm breaker) can still land — loop and
-                // re-resolve; a fresh entry cannot be evicted before we register.
-                if (!entry.TryAddSubscriber())
-                    continue;
-                IDisposable sub;
-                // Set when this reader unsubscribes, so a terminal still on its way to the pool is
-                // not delivered to an observer that has already left.
-                var detached = 0;
-                try
-                {
-                    // 🚨 The TERMINAL is delivered in isolation (#5011), and OFF the turn that
-                    // raised it (#7548).
-                    //
-                    // Isolation: the entry's subject fans an error out by calling each reader in
-                    // turn, and a reader that throws from OnError (one subscribed with no error
-                    // handler rethrows) would abort that loop. Every reader after it would then
-                    // stay subscribed to a subject nothing writes again, which is the silent corpse
-                    // EndReaders exists to prevent. The throwing reader is named, not swallowed.
-                    //
-                    // Off the turn: the fault arrives on the stream's own sync/{id} hub, inside
-                    // SynchronizationStream.OnError and before that hub has settled
-                    // (FailStartup, OpenGate). A reader's error arm is where it chains its next
-                    // step (Catch, then the next read), so delivering inline ran that whole
-                    // continuation on the sync hub's action block. One reader that did not return
-                    // held every later reader of the path untold, held the hub at Starting with its
-                    // gate closed, and held its ShutdownRequest behind the turn. Production: 34 min
-                    // at Executing(DeliveryFailure, ...) on a serving replica. Each reader now gets
-                    // its terminal as its own pooled work item. The raising turn returns, and a
-                    // reader that blocks holds only itself. This is ordering-safe: an error is the
-                    // last notification a reader ever receives, and every OnNext before it was
-                    // delivered synchronously and has already returned.
-                    //
-                    // 🚨 But a FORCED end goes down the shared release lane, never one pool item per
-                    // reader (review of #7589). The cache's teardown ends every reader of every path
-                    // in ONE sweep; a pool item each delivers those terminals CONCURRENTLY, and a
-                    // consumer composing two node reads then takes them on two threads at once — the
-                    // Rx gate lock-order deadlock ReleaseLane exists to prevent. On the lane they run
-                    // one at a time, still off the turn that raised them. Upstream faults stay on the
-                    // pool: one stream raises one, and a reader that blocks in its error path must hold
-                    // only itself, never the mesh's lane.
-                    sub = entry.Replay.Subscribe(
-                        observer.OnNext,
-                        error =>
-                        {
-                            void Deliver()
-                            {
-                                if (Volatile.Read(ref detached) != 0)
-                                    return;
-                                try { observer.OnError(error); }
-                                catch (Exception thrown)
-                                {
-                                    logger.LogWarning(thrown,
-                                        "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
-                                        + "terminal ({Terminal}); the other readers of the path are still told",
-                                        path, error.Message);
-                                }
-                            }
-
-                            if (entry.EndedByForce)
-                                _releaseLane.Refuse<System.Reactive.Unit>(() => error).Subscribe(_ => { }, _ => Deliver());
-                            else
-                                TaskPoolScheduler.Default.Schedule(Deliver);
-                        },
-                        observer.OnCompleted);
-                }
-                catch
-                {
-                    entry.RemoveSubscriber();
-                    throw;
-                }
-                return System.Reactive.Disposables.Disposable.Create(() =>
-                {
-                    Volatile.Write(ref detached, 1);
-                    sub.Dispose();
-                    // Refcount release ALSO restarts the idle window — "idle" is
-                    // measured from the last unsubscribe, never mid-subscription.
-                    entry.RemoveSubscriber();
-                });
-            }
+            var link = new SerialDisposable();
+            Attach(path, observer, link);
+            return link;
         });
+
+    /// <summary>
+    /// Installs one attachment attempt into <paramref name="link"/>. 🚨 The attempt's slot goes into
+    /// the link BEFORE the attachment subscribes: a retirement can reach the new attachment while
+    /// <see cref="AttachToCurrentEntry"/> is still running and install its successor; were the link
+    /// assigned from the return value, that late assignment would dispose the successor (the live
+    /// reader) and keep the retired attachment. Each attempt fills only its own slot, and a slot the
+    /// link already replaced disposes its attachment the moment it is filled.
+    /// </summary>
+    private void Attach(string path, IObserver<MeshNode> observer, SerialDisposable link)
+    {
+        var slot = new SingleAssignmentDisposable();
+        link.Disposable = slot;
+        slot.Disposable = AttachToCurrentEntry(path, observer, link);
+    }
+
+    /// <summary>
+    /// One attachment of <paramref name="observer"/> to the path's CURRENT entry (see
+    /// <see cref="SharedView"/>). <paramref name="link"/> holds the attachment; a retired entry
+    /// replaces it with a new one, and disposing the link ends whichever is current.
+    /// </summary>
+    private IDisposable AttachToCurrentEntry(string path, IObserver<MeshNode> observer, SerialDisposable link)
+    {
+        while (true)
+        {
+            Entry entry;
+            try
+            {
+                entry = GetEntry(path); // pins: live entry, idle window refreshed
+            }
+            catch (ObjectDisposedException disposed)
+            {
+                // A read that arrives after the cache is disposed is told so (#5011).
+                observer.OnError(disposed);
+                return System.Reactive.Disposables.Disposable.Empty;
+            }
+            // Between GetEntry's pin and this refcount registration the sweep
+            // cannot idle-evict (the pin just reset the window), but a FORCED
+            // eviction (node delete / storm breaker) can still land — loop and
+            // re-resolve; a fresh entry cannot be evicted before we register.
+            if (!entry.TryAddSubscriber())
+                continue;
+            IDisposable sub;
+            // Set when this reader unsubscribes, so a terminal still on its way to the pool is
+            // not delivered to an observer that has already left.
+            var detached = 0;
+            try
+            {
+                // 🚨 The TERMINAL is delivered in isolation (#5011), and OFF the turn that
+                // raised it (#7548).
+                //
+                // Isolation: the entry's subject fans an error out by calling each reader in
+                // turn, and a reader that throws from OnError (one subscribed with no error
+                // handler rethrows) would abort that loop. Every reader after it would then
+                // stay subscribed to a subject nothing writes again, which is the silent corpse
+                // EndReaders exists to prevent. The throwing reader is named, not swallowed.
+                //
+                // Off the turn: the fault arrives on the stream's own sync/{id} hub, inside
+                // SynchronizationStream.OnError and before that hub has settled
+                // (FailStartup, OpenGate). A reader's error arm is where it chains its next
+                // step (Catch, then the next read), so delivering inline ran that whole
+                // continuation on the sync hub's action block. One reader that did not return
+                // held every later reader of the path untold, held the hub at Starting with its
+                // gate closed, and held its ShutdownRequest behind the turn. Production: 34 min
+                // at Executing(DeliveryFailure, ...) on a serving replica. Each reader now gets
+                // its terminal as its own pooled work item. The raising turn returns, and a
+                // reader that blocks holds only itself. This is ordering-safe: an error is the
+                // last notification a reader ever receives, and every OnNext before it was
+                // delivered synchronously and has already returned.
+                //
+                // 🚨 But a FORCED end goes down the shared release lane, never one pool item per
+                // reader (review of #7589). The cache's teardown ends every reader of every path
+                // in ONE sweep; a pool item each delivers those terminals CONCURRENTLY, and a
+                // consumer composing two node reads then takes them on two threads at once — the
+                // Rx gate lock-order deadlock ReleaseLane exists to prevent. On the lane they run
+                // one at a time, still off the turn that raised them. Upstream faults stay on the
+                // pool: one stream raises one, and a reader that blocks in its error path must hold
+                // only itself, never the mesh's lane.
+                sub = entry.Replay.Subscribe(
+                    observer.OnNext,
+                    error =>
+                    {
+                        void Deliver()
+                        {
+                            if (Volatile.Read(ref detached) != 0)
+                                return;
+                            try { observer.OnError(error); }
+                            catch (Exception thrown)
+                            {
+                                logger.LogWarning(thrown,
+                                    "MeshNodeStreamCache: a reader of {Path} threw while receiving its "
+                                    + "terminal ({Terminal}); the other readers of the path are still told",
+                                    path, error.Message);
+                            }
+                        }
+
+                        // A RETIRED entry is not an answer: move this reader to the current
+                        // entry. Off the retiring turn (the change feed's publisher), because the
+                        // attachment may open a fresh upstream, i.e. post a SubscribeRequest.
+                        if (error is ReadEntryRetiredException)
+                        {
+                            TaskPoolScheduler.Default.Schedule(() =>
+                            {
+                                if (Volatile.Read(ref detached) == 0)
+                                    Attach(path, observer, link);
+                            });
+                            return;
+                        }
+
+                        if (entry.EndedByForce)
+                            _releaseLane.Refuse<System.Reactive.Unit>(() => error).Subscribe(_ => { }, _ => Deliver());
+                        else
+                            TaskPoolScheduler.Default.Schedule(Deliver);
+                    },
+                    observer.OnCompleted);
+            }
+            catch
+            {
+                entry.RemoveSubscriber();
+                throw;
+            }
+            return System.Reactive.Disposables.Disposable.Create(() =>
+            {
+                Volatile.Write(ref detached, 1);
+                sub.Dispose();
+                // Refcount release ALSO restarts the idle window — "idle" is
+                // measured from the last unsubscribe, never mid-subscription.
+                entry.RemoveSubscriber();
+            });
+        }
+    }
 
     /// <summary>
     /// One idle-sweep pass over the read cache: releases every entry whose shared
@@ -1898,6 +1983,75 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             "MeshNodeStreamCache: evicted faulted read entry for {Path} ({Reason}; upstreams disposed: {Count}) "
             + "— the next resolution opens a fresh SubscribeRequest instead of replaying the stale terminal error",
             path, reason, detached.Count);
+        return true;
+    }
+
+    /// <summary>
+    /// Retires the path's read entry when it was opened on the path's DELETED incarnation
+    /// (<see cref="Entry.OpenedOnDeletedAddress"/>) and has delivered no node, so the next read — and
+    /// every reader still attached to it — goes to a fresh upstream. Called on every committed
+    /// non-delete change for the path: the path exists again.
+    ///
+    /// <para>🚨 <b>The latch this closes</b> (seen as the inbox's
+    /// <c>APreferencesNodeDeletedAndRecreated_NeverEndsTheFeed</c> timing out; pinned by
+    /// <c>ARecreateRetiresTheReadOpenedOnTheDeletedNodeTest</c>). Anything that touches a path while
+    /// its node is deleted — a background write (every write pins a read entry), a GUI binding —
+    /// opens an entry whose <c>SubscribeRequest</c> goes to the old, disposing hub. That hub
+    /// answers with the authoritative "the node was deleted, so this address will not reactivate",
+    /// but the answer can be DELIVERED after the node was created again. Until it lands the entry is
+    /// neither faulted nor resolved, so <see cref="ResetFailureState"/> leaves it alone (it evicts
+    /// faulted entries only), and a reader that opens the node's stream because a listing just
+    /// reported the recreated row JOINS that entry and receives the deleted incarnation's verdict.
+    /// By the read contract that verdict is final: the reader stops, and nothing ever tells it the
+    /// node exists.</para>
+    ///
+    /// <para>Scoped so it cannot churn a live path: only an entry opened while the address was
+    /// tombstoned qualifies, never one that resolved a node (a healthy reader is never severed) and
+    /// never a faulted one (its readers already have their terminal, and
+    /// <see cref="EvictFaultedEntry"/> owns it). The teardown is <see cref="EvictFaultedEntry"/>'s
+    /// detach-claim-dispose protocol; the readers are MOVED, not ended (<see cref="SharedView"/>).
+    /// Eviction only, like every other reset here: the fresh upstream is opened by the next read or by
+    /// a moved reader, never by a timer.</para>
+    /// </summary>
+    /// <returns>True when this caller retired the entry.</returns>
+    private bool RetireEntryOpenedOnDeletedAddress(string path)
+    {
+        if (!_streams.TryGetValue(path, out var lazy) || !lazy.IsValueCreated)
+            return false;
+        var stale = lazy.Value;
+        if (!stale.OpenedOnDeletedAddress || stale.IsResolved || stale.IsFaulted)
+            return false;
+
+        IReadOnlyList<ISynchronizationStream> detached;
+        try
+        {
+            detached = stale.Handle.DetachUpstreams();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error detaching upstreams for {Path}", path);
+            detached = [];
+        }
+
+        // Pair-exact, as in EvictFaultedEntry: never unlink an entry a concurrent reader replaced.
+        if (!_streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy)))
+        {
+            try { stale.Handle.ReparkUpstreams(detached); }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "MeshNodeStreamCache: error re-parking upstreams for {Path}", path);
+            }
+            return false;
+        }
+
+        stale.MarkEvicted();
+        var released = TearDownEntry(path, stale, detached);
+        stale.Retire(path);
+        readStreamEvictions.OnNext(new ReadStreamEviction(path, released, "recreated"));
+        logger.LogDebug(
+            "MeshNodeStreamCache: retired the read entry for {Path} opened on its deleted incarnation "
+            + "(upstreams disposed: {Count}) — its readers move to a fresh upstream",
+            path, detached.Count);
         return true;
     }
 
@@ -4163,6 +4317,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         var (raw, signature) = GetQueryRaw(id, queries);
         if (options is null) return raw;
+        // 🚨 `content:stored` (ParsedQuery.StoredContent): the caller asked for content EXACTLY AS
+        // STORED, so the round-trip below — which deserialises into the registered type, and so
+        // loses "absent" vs "declared default" — must not run. The grant-rule check reads the
+        // partition root this way so it matches the same JSON the Postgres projection matches
+        // (MeshWeaver#7426). Raw is already the shared Replay(1) chain for (id, signature).
+        if (queries.Any(ParsedQuery.AsksForStoredContent)) return raw;
         // Round-trip each emitted MeshNode's Content through the caller's
         // JsonSerializerOptions so consumers see typed domain instances
         // (AccessAssignment, PartitionAccessPolicy, etc.) rather than the
@@ -4468,7 +4628,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 /// stream (the <c>SubscribeRequest</c> client whose 45s heartbeat kept the
 /// owner-side mirror alive) was actually disposed as part of the release.
 /// <paramref name="Reason"/> ∈ { "idle", "invalidate", "storm-breaker", "transient-breaker",
-/// "faulted" } — the last three all come from <c>EvictFaultedEntry</c>, distinguished by which
-/// re-probe trigger claimed the entry.
+/// "faulted", "recreated" } — "storm-breaker", "transient-breaker" and "faulted" all come from
+/// <c>EvictFaultedEntry</c>, distinguished by which re-probe trigger claimed the entry; "recreated" is
+/// <c>RetireEntryOpenedOnDeletedAddress</c>.
 /// </summary>
 internal sealed record ReadStreamEviction(string Path, bool UpstreamReleased, string Reason);
+
+/// <summary>
+/// The cache's own signal that a read entry was RETIRED because it was opened on its path's deleted
+/// node and the path has been written again (<c>MeshNodeStreamCache.RetireEntryOpenedOnDeletedAddress</c>).
+/// Never delivered to a reader: <c>SharedView</c> intercepts it and moves the reader to the path's
+/// current entry. It is an exception only because a subject's terminal is the one notification every
+/// attached reader is guaranteed to receive.
+/// </summary>
+internal sealed class ReadEntryRetiredException(string path)
+    : InvalidOperationException($"The read entry for '{path}' was opened on its deleted node and retired when the node was written again.")
+{
+    /// <summary>The retired entry's path.</summary>
+    public string Path { get; } = path;
+}

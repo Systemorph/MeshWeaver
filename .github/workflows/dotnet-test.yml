@@ -2583,6 +2583,10 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/build-executor.py --self-test
 
+    - name: "A stage moves to the build host only on declared parity evidence (≥ 20 comparable, 0 disagreements)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-executor.py --check-routing .github/build-routing.json
+
     - name: "A stage's database is disposable: no TCP, a private socket, refused without a server (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/sandbox-postgres.sh --self-test
