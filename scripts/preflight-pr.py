@@ -426,6 +426,10 @@ class RootDecl:
     # True when the roots reach the guard through `SourceScan.SourceFiles`, which reads ONLY
     # non-excluded .cs/.razor/.csx files — a root left holding a README is empty to it.
     source_scan: bool = False
+    # What this scan could NOT resolve statically: a list entry that is neither a string nor a same-file
+    # `const string`, or the symbol handed to a method this file does not define (classification
+    # unknown). Never silently dropped — they make the verdict INCOMPLETE when the diff deletes anything.
+    unresolved: list[str] = field(default_factory=list)
 
 
 # Mirrors test/MeshWeaver.Documentation.Test/SourceScan.cs (SourceFiles + ExcludedSegments).
@@ -465,20 +469,112 @@ def strip_comments(text: str) -> str:
     return "".join(out)
 
 
+# Methods a root list may be handed to without that deciding how it is scanned (formatting, LINQ, asserts).
+NEUTRAL_CALLS = {"Join", "Concat", "Select", "Where", "Contains", "Any", "All", "Combine", "Exists", "ToArray",
+                 "ToList", "Distinct", "OrderBy", "Except", "Union", "SequenceEqual", "Count", "Equal", "Should",
+                 "BeEquivalentTo", "AddRange", "WriteLine", "Format", "True", "False", "Empty", "NotEmpty", "Single",
+                 "nameof", "Contain", "BeEmpty", "Fail"}
+
+
+def list_elements(span: str) -> list[str] | None:
+    """The top-level elements of a collection expression `[a, "b", .. c]`, or None when it is not one."""
+    span = span.strip()
+    if not span.startswith("[") or not span.endswith("]"):
+        return None
+    out, depth, cur, i = [], 0, "", 1
+    body = span[1:-1]
+    while i <= len(body):
+        ch = body[i - 1] if i - 1 < len(body) else ","
+        if ch == '"':
+            m = re.compile(r'@?"(?:[^"\\]|\\.)*"').match(body, i - 1)
+            if m:
+                cur += m.group(0)
+                i = m.end() + 1
+                continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            if cur.strip():
+                out.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+        i += 1
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
+def method_body(text: str, name: str) -> str | None:
+    """The text of a method this file DEFINES (`… Name(… ) =>` or `{`), up to the next member; None if absent."""
+    m = re.search(r"\b" + re.escape(name) + r"\s*\([^;{}]*\)\s*(=>|\{)", text)
+    if not m:
+        return None
+    nxt = re.search(r"\n    (private|public|internal|protected|\[)", text[m.end():])
+    return text[m.start(): m.end() + (nxt.start() if nxt else len(text))]
+
+
+def mask_strings(text: str) -> str:
+    """String literals blanked (length kept), so prose inside a message never reads as a call."""
+    return re.sub(r'@?"(?:[^"\\\n]|\\.)*"', lambda m: '"' + " " * (len(m.group(0)) - 2) + '"', text)
+
+
+def classify(symbol: str, text: str) -> tuple[bool, list[str]]:
+    """(reaches SourceScan.SourceFiles, unresolved reasons) for a named root list."""
+    text = mask_strings(text)
+    if re.search(r"SourceFiles\([^;]*\b" + re.escape(symbol) + r"\b", text):
+        return True, []
+    scanned, unknown = False, []
+    for call in re.finditer(r"\b([A-Za-z_]\w*)\s*\([^;()]*\b" + re.escape(symbol) + r"\b(?!\s*[.(])", text):
+        helper = call.group(1)
+        if helper == symbol or helper in NEUTRAL_CALLS:
+            continue
+        body = method_body(text, helper)
+        if body is None:
+            unknown.append(f"`{symbol}` is handed to `{helper}(...)`, which this file does not define")
+        elif "SourceFiles(" in body:
+            scanned = True
+    return scanned, ([] if scanned else unknown)
+
+
 def parse_root_declarations(rel: str, text: str) -> list[RootDecl]:
     decls: list[RootDecl] = []
     text = strip_comments(text)
+    consts = dict(re.findall(r"\bconst\s+string\s+([A-Za-z_]\w*)\s*=\s*\"([^\"\\]*)\"\s*;", text))
+    root_lists = {m.group("name") for m in ROOTS_DECL.finditer(text)}
     for rx, symbol_of in ((ROOTS_DECL, lambda m: m.group("name")), (INLINE_ROOTS, lambda m: "SourceScan.SourceFiles([...])")):
         for m in rx.finditer(text):
             if rx is INLINE_ROOTS and not scans_repo_root(m.group("arg"), text):
                 continue  # a fixture scan over a planted temp tree (`dir.FullName`), not the repository
             span = initializer_span(text, m.end() if rx is INLINE_ROOTS else _skip_ws(text, m.end()))
-            roots = [s.strip("/") for s in STRING.findall(span) if looks_like_root(s.strip("/"))]
-            if roots:
-                symbol = symbol_of(m)
-                scanned = rx is INLINE_ROOTS or bool(
-                    re.search(r"SourceFiles\([^;]*\b" + re.escape(symbol) + r"\b", text))
-                decls.append(RootDecl(rel, text.count("\n", 0, m.start()) + 1, symbol, roots, scanned))
+            unresolved: list[str] = []
+            elements = list_elements(span)
+            if elements is None:
+                roots = [s.strip("/") for s in STRING.findall(span) if looks_like_root(s.strip("/"))]
+            else:
+                roots = []
+                for e in elements:
+                    lit = STRING.fullmatch(e)
+                    ident = re.fullmatch(r"(?:\.\.\s*)?([A-Za-z_]\w*)", e)
+                    if lit and looks_like_root(lit.group(1).strip("/")):
+                        roots.append(lit.group(1).strip("/"))
+                    elif ident and ident.group(1) in consts:
+                        roots.append(consts[ident.group(1)].strip("/"))
+                    elif ident and ident.group(1) in root_lists:
+                        continue  # another root list in this file — inventoried on its own
+                    elif not lit:
+                        unresolved.append(f"list entry `{e}` is not a string or a same-file `const string`")
+            if not roots and not unresolved:
+                continue
+            symbol = symbol_of(m)
+            if rx is INLINE_ROOTS:
+                scanned = True
+            else:
+                scanned, why = classify(symbol, text)
+                unresolved.extend(why)
+            decls.append(RootDecl(rel, text.count("\n", 0, m.start()) + 1, symbol, roots, scanned, unresolved))
     return decls
 
 
@@ -585,14 +681,19 @@ def guard_roots(ctx: Context) -> list[Result]:
             why = "; ".join(f"{s} {o}" + (f" -> {n}" if n else "") for s, o, n in hits[:3])
             findings.append(f"{d.file}:{d.line} {d.symbol} names root `{r}`, now {state} — touched by: {why}"
                             + (f" (+{len(hits) - 3} more)" if len(hits) > 3 else ""))
+    unresolved = [f"{d.file}:{d.line} {d.symbol}: {u}" for d in decls for u in d.unresolved]
+    extra = ([Result("Source-guard roots the scan could not resolve", SKIPPED,
+                     f"{len(unresolved)} root entry/classification(s) are not statically resolvable, so a deletion "
+                     "could empty them unseen — check these guards by hand", unresolved, group="guards")]
+             if unresolved else [])
     if findings:
         findings.append("Point the root at the path's new home (a move) or drop it (a retirement) in THIS "
                         "change — a guard that fails on an absent root goes red in CI, and one that skips it "
                         "passes having scanned nothing.")
         return [Result(name, FAIL, f"{len(findings) - 1} guard root(s) left pointing at a deleted path",
-                       findings, group="guards")]
+                       findings, group="guards"), *extra]
     return [Result(name, PASS, f"{len(removed)} deleted/renamed path(s) leave every one of {len(decls)} "
-                   f"root declaration(s) non-empty", group="guards")]
+                   f"root declaration(s) non-empty", group="guards"), *extra]
 
 
 # ── MeshWeaver.Plugins: the platform-mount audit ───────────────────────────────────────────────
@@ -622,6 +723,10 @@ def plugins_checks(ctx: Context) -> list[Result]:
 # ── orchestration ───────────────────────────────────────────────────────────────────────────────
 
 
+class Ambiguous(RuntimeError):
+    """The preflight cannot tell which gates apply — INCOMPLETE (exit 2), never a guess."""
+
+
 def build_context(args, scratch: Path) -> Context:
     root = Path(args.repo_root).resolve()
     top = git(root, "rev-parse", "--show-toplevel").strip()
@@ -629,6 +734,11 @@ def build_context(args, scratch: Path) -> Context:
     slug = args.repo or slug_from_remote(git(root, "remote", "get-url", "origin", check=False))
     if not slug:
         raise RuntimeError("cannot tell which repository this is (no GitHub `origin` remote) — pass --repo owner/name")
+    if not args.repo and slug.split("/")[0].lower() != "systemorph":
+        # A FORK's `origin` (`contributor/MeshWeaver`) names neither core nor a satellite: guessing would pick
+        # satellite mode and skip the core gates, or check closing references against the wrong repository.
+        raise Ambiguous(f"`origin` is {slug}, not a Systemorph repository (a fork?) — the pull request's base "
+                        "repository decides which gates apply. Re-run with --repo Systemorph/<name>")
     if args.fetch and not args.offline:
         remote, _, branch = args.base.partition("/")
         if branch:
@@ -741,6 +851,9 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="preflight-pr-") as tmp:
         try:
             ctx = build_context(args, Path(tmp))
+        except Ambiguous as exc:
+            print(f"Verdict: INCOMPLETE — {exc}")
+            return 2
         except RuntimeError as exc:
             print(f"::error::preflight could not start: {exc}")
             return 1

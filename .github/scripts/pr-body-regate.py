@@ -389,8 +389,11 @@ def regate(api, number: int, head: str, edited_at: dt.datetime, body_verdict, *,
         try:
             api.rerun_job(reader["id"])
         except urllib.error.HTTPError as exc:
-            print(f"::error::GitHub refused the re-run of `{BODY_READER}` on {run.get('html_url')}: HTTP {exc.code}. "
-                  "Re-run it by hand.")
+            # A read-only token (a Dependabot-triggered edit gets one whatever `permissions:` says) cannot
+            # re-run anything. No credential is added for it: the lane says what to do, red.
+            print(f"::error::GitHub refused the re-run (HTTP {exc.code}; this event's token may be read-only, as a "
+                  f"Dependabot-triggered edit's is). The body gates' verdict is stale for the current body — re-run "
+                  f"the `{BODY_READER}` job by hand: {run.get('html_url')}")
             return 1
         print(f"Re-ran `{BODY_READER}` (job {reader['id']}) on {run.get('html_url')}.")
         return 0
@@ -626,6 +629,20 @@ def self_test() -> int:
     # The pull request is re-read right before posting; a moved head stops it.
     case("head moved before the re-run is posted: nothing posted", FakeApi(jobs=_jobs("green"), head_moves_after=1),
          "red", [])
+
+    # A refused re-run (a read-only token — a Dependabot-triggered edit) is RED, naming the run; nothing else.
+    refused = FakeApi(jobs=_jobs("red"))
+
+    def forbidden(job_id):
+        raise urllib.error.HTTPError("https://api.github.com/x", 403, "Resource not accessible by integration",
+                                     None, None)
+    refused.rerun_job = forbidden
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = regate(refused, 1, HEAD, T_EDIT, lambda: "green", sleep=lambda s: None, clock=lambda: 0.0)
+    count["cases"] += 1
+    if rc != 1 or "run/7" not in out.getvalue() or refused.calls:
+        failures.append(f"a 403 on the re-run must be red naming the run (rc={rc}, calls={refused.calls})")
 
     # SCOPE: a failed body gate AND failed review-answered jobs — only the reader's id is re-run.
     def with_review_jobs():

@@ -34,6 +34,9 @@ The verdict line and the exit code say the same thing:
 A SKIPPED check is never a pass. It always prints its reason: `--offline`, no token, no `--body-file`,
 an input only CI has.
 
+In a fork, `origin` names the fork, not the repository the pull request targets. Without `--repo
+Systemorph/<name>` the preflight then refuses with INCOMPLETE rather than guessing which gates apply.
+
 ## What it checks, and how
 
 The script never re-implements a gate. It invokes the gate script that CI's job invokes, with the
@@ -89,7 +92,11 @@ method initializer (`ScannedRoots`, `ProductionRoots`, `HomeRoots`, …), and ev
 passed to `SourceScan.SourceFiles(root, [...])` whose root is the repository (`RepoPaths.Root`, a local
 assigned from it, or a helper's `string root` parameter in a file that passes it). A scanner self-test
 over a planted temp tree (`SourceScan.SourceFiles(dir.FullName, [...])`) names the fixture, not the
-repository, and is skipped. Comments are blanked first. For every path the diff
+repository, and is skipped. A list entry naming a `const string` in the same file is resolved, and a
+root list handed to a local helper that calls `SourceScan.SourceFiles` counts as SourceScan-backed.
+Anything the scan cannot resolve statically (an entry built by an expression, a list handed to a method
+the file does not define) is never dropped: when the diff deletes or renames anything, it makes the
+verdict INCOMPLETE and is named. Comments are blanked first. For every path the diff
 deletes or renames (`git diff --name-status -M` against the merge base), it reports each root that path
 touches and that is now **missing** or **empty**, with the guard's `file:line`. A root read through
 `SourceScan.SourceFiles` is empty once no `.cs`/`.razor`/`.csx` outside `bin`/`obj`/… is left under
@@ -146,6 +153,15 @@ So an edit that fixes a body declaration turns `Consolidate test results` green 
 re-run. An edit that breaks one turns it red. An edit that changes nothing the gates read re-runs
 nothing. While a held run is still finishing, the lane waits within a bounded poll, a script and
 never a model loop, and goes red past its budget, saying what to re-run by hand.
+
+If GitHub refuses the re-run (a Dependabot-triggered edit runs with a read-only token, whatever the
+workflow's `permissions:` say), the lane goes red and names the run whose `pr-body` job needs a re-run by
+hand. No extra credential is given to an edit-triggered job.
+
+A corrective edit after a broken one re-runs the build and the suites even when the tree was already
+tested. That is a deliberate trade: the lane never decides a tree is already tested, so it costs runner
+time and never correctness. Reusing tree evidence belongs to the build's own green-tree reuse
+(`precheck`), not to this lane.
 
 A fork's head is exempt on the event: GitHub gives its run no secrets and a read-only token. Re-run
 its failed jobs by hand.

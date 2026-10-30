@@ -399,6 +399,62 @@ def test_guard_roots(tmp: Path) -> None:
         findings = [d for d in r["details"] if d.startswith("test/")]
         check(f"guards: {label}", rc == 1 and len(findings) == expect, "\n".join(r["details"]))
 
+    # A same-file `const string` entry (HubReachableAsyncGuard's `[MeshContractProject]`) is resolved;
+    # an entry that is not statically resolvable makes the verdict INCOMPLETE, never silently dropped.
+    const_guard = textwrap.dedent("""\
+        namespace G;
+        public class ContractGuard
+        {
+            private const string ContractProject = "src/A";
+            public void Scan() { var root = RepoPaths.Root; SourceScan.SourceFiles(root, [ContractProject]).ToList(); }
+        }
+        """)
+    for label, text, expect_rc, needle in (
+            ("a const-backed SourceScan root is resolved and RED when its project is deleted", const_guard, 1,
+             "ContractGuard.cs:5"),
+            ("an entry the scan cannot resolve is INCOMPLETE, naming it", const_guard.replace(
+                "[ContractProject]", "[Elsewhere.ContractProject]").replace(
+                'private const string ContractProject = "src/A";', ""), 2, "Elsewhere.ContractProject")):
+        repo = guard_repo(tmp, f"g14-{expect_rc}")
+        write(repo, "test/G.Test/ContractGuard.cs", text)
+        commit(repo, "contract guard")
+        publish_main(repo)
+        git(repo, "rm", "-q", "docs/readme.md")  # an unrelated deletion: something IS deleted
+        if expect_rc == 1:
+            git(repo, "rm", "-q", "src/A/a.cs")
+        commit(repo, "deletions")
+        rc, r, out = guards_status(repo, tmp)
+        check(f"guards: {label}", needle in out and (rc == 1 if expect_rc == 1 else rc == 2 and "could not resolve" in out),
+              out)
+
+    # A root list handed to a LOCAL helper that calls SourceScan.SourceFiles (ObservableToTaskBridgeGuard's
+    # ProductionRoots → Scan(root, roots)) is SourceScan-backed: a README left behind does not keep it alive.
+    helper_guard = textwrap.dedent("""\
+        namespace G;
+        public class HelperGuard
+        {
+            private static readonly string[] HelperRoots = ["tools"];
+            public void Check(string root) => Scan(root, HelperRoots);
+            private static int Scan(string root, IEnumerable<string> roots) =>
+                SourceScan.SourceFiles(root, roots).Count();
+        }
+        """)
+    for label, text, expect_rc, needle in (
+            ("a root list routed through a local SourceScan helper is SourceScan-backed (README left → RED)",
+             helper_guard, 1, "HelperGuard.cs:4 HelperRoots names root `tools`, now EMPTY to SourceScan"),
+            ("a root list handed to a helper this file does not define is INCOMPLETE",
+             helper_guard.replace("Scan(root, HelperRoots)", "Shared.Inspect(root, HelperRoots)"), 2,
+             "`HelperRoots` is handed to `Inspect(...)`")):
+        repo = guard_repo(tmp, f"g15-{expect_rc}")
+        write(repo, "test/G.Test/HelperGuard.cs", text)
+        write(repo, "tools/README.md", "docs only\n")
+        commit(repo, "helper guard")
+        publish_main(repo)
+        git(repo, "rm", "-q", "tools/t.cs")
+        commit(repo, "drop the last tools source")
+        rc, r, out = guards_status(repo, tmp)
+        check(f"guards: {label}", rc == expect_rc and needle in out, out)
+
     # NEUTERED DETECTOR: with no declaration recognised, the RED case above turns GREEN — so the red
     # cases depend on the detector, and a detector that stopped detecting would be caught here.
     pf = load_preflight()
@@ -645,6 +701,21 @@ def test_satellite(tmp: Path) -> None:
           rc == 2 and st.get(name) == "SKIPPED" and "--core-root" in out, f"{st}\n{out}")
 
 
+# ── 4b. a fork checkout ─────────────────────────────────────────────────────────────────────────
+
+
+def test_fork(tmp: Path) -> None:
+    repo = make_repo(tmp / "fork", "contributor/MeshWeaver")
+    write(repo, "src/x.cs", "// x\n")
+    commit(repo, "base")
+    publish_main(repo)
+    rc, st, out, _ = preflight(repo, tmp, "--offline", "--only", "guards")
+    check("fork: an `origin` outside Systemorph is INCOMPLETE and asks for --repo, never a silent satellite mode",
+          rc == 2 and "--repo Systemorph/<name>" in out and not st, out)
+    rc, st, out, _ = preflight(repo, tmp, "--offline", "--only", "guards", "--repo", "Systemorph/Fixture")
+    check("fork: with --repo it runs (control)", rc == 0 and st.get("Source-guard scanned roots") == "PASS", out)
+
+
 # ── 5. the verdict mapping itself ───────────────────────────────────────────────────────────────
 
 
@@ -669,13 +740,14 @@ def main() -> int:
         return 1
     with tempfile.TemporaryDirectory(prefix="test-preflight-pr-") as t:
         tmp = Path(t)
-        for sub in ("guards", "corecase", "realpair", "satellite"):
+        for sub in ("guards", "corecase", "realpair", "satellite", "fork"):
             (tmp / sub).mkdir()
         test_verdict()
         test_guard_roots(tmp / "guards")
         test_core_body_gates(tmp / "corecase")
         test_real_pair_adapter(tmp / "realpair")
         test_satellite(tmp / "satellite")
+        test_fork(tmp / "fork")
     if failures:
         print(f"test-preflight-pr: {len(failures)} FAILED, {passed} passed:")
         for f in failures:
