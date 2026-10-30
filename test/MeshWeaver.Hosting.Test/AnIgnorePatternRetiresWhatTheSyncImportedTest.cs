@@ -237,6 +237,59 @@ public class AnIgnorePatternRetiresWhatTheSyncImportedTest(ITestOutputHelper out
     }
 
     /// <summary>
+    /// Review on #7641: the survivor guard must see the FINAL prune set. In a bidirectional Space a
+    /// child edited on the server since the last sync is kept from the prune by the conflict policy
+    /// (#604) — but that filter ran AFTER the survivor guard, so with the parent and the child both
+    /// retired by one pattern the guard saw both as leaving, kept the parent a candidate, and the
+    /// parent's recursive <c>DeleteNode</c> then took the protected edit with it.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task RetiringAnImportedParent_NeverDeletesAPolicyProtectedChildEdit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Two-way, so the Space is not system-owned and a person may edit its content.
+        var space = await SetUpSpace(ct, direction: SyncDirection.Bidirectional);
+        var child = $"{space}/Other/Local";
+
+        repoClient.Serve(FirstSha, complete: true, "Api.md", "Other.md", "Other/Local.md");
+        var first = await Sync.ReimportAtCommit(space, FirstSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        first.WrittenPaths.Should().Contain($"{space}/Other", "precondition: the sync imported the parent");
+        first.WrittenPaths.Should().Contain(child, "precondition: the sync imported the child");
+
+        // The baseline the conflict policy compares against is recorded by the first import; the
+        // edit must land after it to count as "changed on the server since the last sync".
+        var since = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Select(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)?.LastSyncedAt)
+            .Where(t => t is not null)
+            .Select(t => t!.Value)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        await Mesh.GetWorkspace().GetMeshNodeStream(child)
+            .Update(node => node with { Name = "Edited on the server" })
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        var edited = await Mesh.GetWorkspace().GetMeshNodeStream(child)
+            .Where(n => n is { Name: "Edited on the server" })
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        new ImportConflictPolicy(PreserveServerNewer: true, since, PreserveServerAdditions: true)
+            .PreservesFromPruneOf(edited)
+            .Should().BeTrue("precondition: the policy protects the server-side edit of the child");
+
+        await SetIgnore(space, ["Other*"], ct);
+
+        repoClient.Serve(SecondSha, complete: true, "Api.md", "Other.md", "Other/Local.md");
+        var second = await Sync.ReimportAtCommit(space, SecondSha, UserId)
+            .Timeout(TestTimeouts.Convergence * 2).Await(ct);
+        Output.WriteLine($"{space} import 2: outcome={second.Outcome} pruned=[{string.Join(", ", second.PrunedPaths)}]");
+
+        second.PrunedPaths.Should().NotContain($"{space}/Other",
+            "its recursive delete would take the policy-protected child edit with it");
+        (await ReadSurvivor(child, ct)).Name.Should().Be("Edited on the server",
+            "the server-side edit the policy protects is still there");
+    }
+
+    /// <summary>
     /// Review on #7641: a manifest entry with the refusal prefix records that the source's write was
     /// REFUSED — not that the source put the node there. So an Ignore pattern that later excludes the
     /// path must leave the node spared as never-mirrored (it may be one the mesh created), while a
@@ -278,7 +331,8 @@ public class AnIgnorePatternRetiresWhatTheSyncImportedTest(ITestOutputHelper out
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
-    private async Task<string> SetUpSpace(CancellationToken ct, Func<string, Task>? beforeConfig = null)
+    private async Task<string> SetUpSpace(CancellationToken ct, Func<string, Task>? beforeConfig = null,
+        SyncDirection direction = SyncDirection.ImportOnly)
     {
         var space = "Ig" + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
@@ -293,7 +347,7 @@ public class AnIgnorePatternRetiresWhatTheSyncImportedTest(ITestOutputHelper out
         var configNode = await Sync
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false,
-                direction: SyncDirection.ImportOnly)
+                direction: direction, twoWay: direction == SyncDirection.Bidirectional)
             .Timeout(TestTimeouts.Convergence).Await(ct);
         var credentials = Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
         foreach (var owner in new[] { configNode.CreatedBy, UserId }.Where(o => !string.IsNullOrEmpty(o)).Distinct())

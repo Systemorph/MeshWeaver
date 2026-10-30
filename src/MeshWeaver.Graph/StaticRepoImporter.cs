@@ -2227,6 +2227,14 @@ public static class StaticRepoImporter
                             logger?.LogInformation(
                                 "[StaticRepoImport] {Partition}: keeping server-added {Path} (not pruned).",
                                 source.Partition, kept.Path);
+                        // 🚨 A node the policy just kept is now a SURVIVOR, so the ancestor guard
+                        // runs again over the narrowed set (review on #7641): a retired parent of a
+                        // kept server edit would otherwise still be deleted, and DeleteNode is
+                        // recursive. Deterministic repro:
+                        // AnIgnorePatternRetiresWhatTheSyncImportedTest.RetiringAnImportedParent_NeverDeletesAPolicyProtectedChildEdit.
+                        if (keptFromPrune.Length > 0)
+                            toPrune = WithoutRetiredAncestorsOfSurvivors(
+                                toPrune, existing.Values.Concat(nodes), source.IsRetiredFromMirror);
                     }
 
                     // Collect the actually-pruned PATHS (not just a count): a pruned Source/Test
@@ -2260,7 +2268,11 @@ public static class StaticRepoImporter
                     return NodeTypeInstanceProbe.Probe(hub, toPrune, logger).SelectMany(heldTypes =>
                     {
                         var heldPaths = heldTypes.Select(h => h.NodeTypePath).ToImmutableList();
-                        var toPruneAfterHold = NodeTypeInstanceProbe.WithoutHeld(toPrune, heldPaths);
+                        // …and once more over the HELD types: a held NodeType (and its subtree) stays,
+                        // so a retired ancestor of it must stay too (review on #7641).
+                        var toPruneAfterHold = WithoutRetiredAncestorsOfSurvivors(
+                            NodeTypeInstanceProbe.WithoutHeld(toPrune, heldPaths),
+                            existing.Values.Concat(nodes), source.IsRetiredFromMirror);
                         // Says it on the process log at Warning AND yields the keyed activity line.
                         var heldReport = NodeTypeInstanceProbe.Report(heldTypes, logger);
                         var stamped = NodeTypeInstanceProbe.Hold(
