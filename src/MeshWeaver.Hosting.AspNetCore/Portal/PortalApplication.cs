@@ -2,7 +2,6 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
-using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -120,7 +119,7 @@ public class PortalApplication : IDisposable
 
     /// <summary>
     /// Applies the standard portal configuration to a hub configuration: error reporting, circuit-user
-    /// access-context stamping, markdown-export type registration, routing, content collections,
+    /// access-context stamping, routing, content collections,
     /// and a navigation handler.
     /// </summary>
     /// <param name="config">The base hub configuration to extend.</param>
@@ -174,12 +173,12 @@ public class PortalApplication : IDisposable
                     return next(user is null ? d : d.SetAccessContext(user));
                 }));
         // Every polymorphic UiControl subtype the portal may receive from a remote layout stream
-        // has to be visible to this hub's TypeRegistry so PolymorphicTypeInfoResolver can build
-        // the JsonDerivedType mapping for UiControl deserialization. Without this the sub-hub's
-        // own registry has only the base types and the stream decode throws:
-        //   "The JSON payload for polymorphic interface or abstract type 'UiControl' must
-        //    specify a type discriminator."
-        config.TypeRegistry.AddMarkdownExportTypes();
+        // has to be visible to this hub's TypeRegistry (its own, or a parent's up the chain) so
+        // PolymorphicTypeInfoResolver can build the JsonDerivedType mapping for UiControl
+        // deserialization. A module whose controls or messages reach the portal registers them
+        // itself, through the layout client's PortalConfiguration or WithPortalConfiguration —
+        // the document-export types are registered that way by MeshWeaver.Blazor, which owns
+        // their contract.
         return config.WithInitialization(hub =>
                 hub.RegisterForDisposal(routingService.RegisterStream(hub)))
             // Route kernel addresses to local hosted hubs — never delegate to grains.

@@ -254,11 +254,18 @@ public static class SecurityQueries
     /// half of <see cref="GrantRule"/> evaluation that says whether a rule's node type and content
     /// filter hold for this partition. A point read in the partition's own schema; opened only
     /// while at least one rule is declared.
+    ///
+    /// <para>🚨 <b>Read with <see cref="ParsedQuery.StoredContentQualifier"/></b>: the content filter
+    /// is matched against the root's STORED JSON, which is what the Postgres projection matches
+    /// (<c>content-&gt;&gt;field</c>). A re-typed root re-serialised by the current serializer is a
+    /// different input — a member absent from the stored JSON reads as its initializer, an explicit
+    /// CLR default is omitted — so the two evaluators disagreed on rows written by an older
+    /// serializer (MeshWeaver#7426).</para>
     /// </summary>
     /// <param name="partition">The partition (first path segment).</param>
     /// <returns>The query string.</returns>
     public static string PartitionRoot(string partition)
-        => Enumeration($"path:{partition} {ContentProjection}");
+        => Enumeration($"path:{partition} {ContentProjection} {ParsedQuery.StoredContentQualifier}");
 
     /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the partition-root read.</summary>
     public const string PartitionRootQueryIdPrefix = QueryIdPrefix + "root:";

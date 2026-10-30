@@ -4163,6 +4163,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         var (raw, signature) = GetQueryRaw(id, queries);
         if (options is null) return raw;
+        // 🚨 `content:stored` (ParsedQuery.StoredContent): the caller asked for content EXACTLY AS
+        // STORED, so the round-trip below — which deserialises into the registered type, and so
+        // loses "absent" vs "declared default" — must not run. The grant-rule check reads the
+        // partition root this way so it matches the same JSON the Postgres projection matches
+        // (MeshWeaver#7426). Raw is already the shared Replay(1) chain for (id, signature).
+        if (queries.Any(ParsedQuery.AsksForStoredContent)) return raw;
         // Round-trip each emitted MeshNode's Content through the caller's
         // JsonSerializerOptions so consumers see typed domain instances
         // (AccessAssignment, PartitionAccessPolicy, etc.) rather than the

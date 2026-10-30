@@ -582,6 +582,24 @@ namespace:ACME scope:descendants is:main   # All main nodes under ACME (recursiv
 is:main context:search                     # Main nodes visible in search
 ```
 
+### `content:stored` — content exactly as stored
+
+A FLAG, not a filter: each result's content comes back as the stored JSON (a `JsonElement`), never
+deserialised into its registered type and never re-typed by the node-stream cache.
+
+```
+path:acme select:path,nodeType,content content:stored   # the root's content, byte-for-byte as stored
+```
+
+Use it only when the content is MATCHED against something evaluated over the stored JSON elsewhere.
+The one reader today is the grant-rule check (`SecurityQueries.PartitionRoot`), which must see the
+same JSON the Postgres projection reads with `content->>'field'`. A typed round trip is lossy: a
+field absent from the JSON reads as the member's initializer, and an explicit CLR default is
+omitted on the way back ([Access Control → Cost, and the evaluators](/Doc/Architecture/AccessControl)).
+A provider that keeps node objects in memory returns the content it holds, unchanged. Only the exact
+term `content:stored` is the flag; `-content:stored` and any other `content:` value stay ordinary
+filters.
+
 ### `context`
 
 Filters by visibility context. Nodes (or their NodeType definitions) can declare contexts from which they should be excluded via the `ExcludeFromContext` property, enabling different views of the same data:
