@@ -536,6 +536,17 @@ public class TolerantYamlTest
     /// scalar: options without it keep System.Text.Json's own refusal of a number for a string.
     /// </summary>
     [Fact]
+    public void Binding_ANumericOnlyTarget_WithASourceGeneratedContextThatDeclaresNoString_StillBinds()
+    {
+        // Review of #7628: restoring a spelling must not ask the options for a STRING contract the caller
+        // never declared. A source-generated context with only `int` has none, and asking threw
+        // NotSupportedException for `00123` (a recorded spelling) while `123` (none) bound fine.
+        var options = IntOnlyYamlContext.Default.Options;
+        Assert.Equal(123, TolerantYaml.Deserialize<int>("123", options)); // NEGATIVE CONTROL: no spelling recorded
+        Assert.Equal(123, TolerantYaml.Deserialize<int>("00123", options));
+    }
+
+    [Fact]
     public void Binding_WithoutTheTolerantStringConverter_ANumberIntoAStringStillFails() =>
         Assert.Throws<JsonException>(() => TolerantYaml.Deserialize<Config>(
             "name: 00123\n", new JsonSerializerOptions { PropertyNameCaseInsensitive = true }));
@@ -1135,3 +1146,7 @@ public class TolerantYamlTest
         Assert.Equal(yaml, TolerantYaml.Serialize(TolerantYaml.Parse(yaml)));
     }
 }
+
+/// <summary>A source-generated context that declares <c>int</c> and nothing else — no string contract.</summary>
+[System.Text.Json.Serialization.JsonSerializable(typeof(int))]
+internal sealed partial class IntOnlyYamlContext : System.Text.Json.Serialization.JsonSerializerContext;

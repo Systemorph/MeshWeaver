@@ -107,7 +107,10 @@ public static class TolerantYaml
             // contract be read before that first use.
             if (!options.IsReadOnly)
                 options.MakeReadOnly(populateMissingResolver: true);
-            if (options.GetConverter(typeof(string)) is TolerantStringConverter)
+            // TryGetTypeInfo, never GetConverter: options whose resolver declares no string contract (a
+            // source-generated context for a numeric-only target) have no string to restore and must
+            // bind exactly as before, not throw NotSupportedException for the missing metadata.
+            if (options.TryGetTypeInfo(typeof(string), out var stringContract) && stringContract.Converter is TolerantStringConverter)
                 node = SourceSpelling.Restore(node, options.GetTypeInfo(typeof(T)), spellings);
         }
         return node.Deserialize<T>(options);
