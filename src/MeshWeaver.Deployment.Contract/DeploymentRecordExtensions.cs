@@ -321,6 +321,20 @@ public static class DeploymentRecordExtensions
             },
         };
 
+    /// <summary>
+    /// Keep <paramref name="replicas"/> spare slot(s) of <paramref name="cpu"/> / <paramref name="memory"/> on node pool
+    /// <paramref name="pool"/> (the control record only; <see cref="NodeHeadroomSlot"/>). A pool already declared is
+    /// REPLACED, never declared twice.
+    /// </summary>
+    public static DeploymentContent WithNodeHeadroom(
+        this DeploymentContent d, string pool, string cpu, string memory, int replicas = NodeHeadroomSlot.DefaultReplicas) =>
+        d with
+        {
+            NodeHeadroom = d.NodeHeadroom
+                .RemoveAll(s => string.Equals(s.Pool, pool, StringComparison.Ordinal))
+                .Add(new NodeHeadroomSlot { Pool = pool, Cpu = cpu, Memory = memory, Replicas = replicas }),
+        };
+
     // ── modules ─────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
