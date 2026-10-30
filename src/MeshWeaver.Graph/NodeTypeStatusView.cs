@@ -35,11 +35,6 @@ namespace MeshWeaver.Graph;
 /// <param name="CompileLabel">The compile button's label.</param>
 /// <param name="CompileDisabled">Whether the compile button is disabled (a compile is running).</param>
 /// <param name="LatestReleaseLink">Markdown link to the latest release, or empty.</param>
-/// <param name="HoldStyle">The delivery-hold block's style — hidden unless the record carries a
-/// <see cref="NodeTypeDefinition.DeliveryHoldReason"/>.</param>
-/// <param name="HoldHeadline">The delivery-hold block's headline, or empty.</param>
-/// <param name="HoldDetail">Markdown under it: what a hold means, then the recorded reason
-/// verbatim (it is data, written by the mesh), or empty.</param>
 public sealed record NodeTypeStatusView(
     string Title,
     string StatusBadge,
@@ -57,11 +52,23 @@ public sealed record NodeTypeStatusView(
     string PanelChipStyle,
     string CompileLabel,
     bool CompileDisabled,
-    string LatestReleaseLink,
-    string HoldStyle,
-    string HoldHeadline,
-    string HoldDetail)
+    string LatestReleaseLink)
 {
+    // 🚨 The delivery-hold members are init properties, NOT primary-constructor parameters: a record's
+    // constructor arity is binary surface (scripts/check-record-signatures.py), and widening it would
+    // break every assembly compiled against the 17-parameter signature.
+
+    /// <summary>The delivery-hold block's style — hidden unless the record carries a
+    /// <see cref="NodeTypeDefinition.DeliveryHoldReason"/>.</summary>
+    public string HoldStyle { get; init; } = Hidden;
+
+    /// <summary>The delivery-hold block's headline, or empty.</summary>
+    public string HoldHeadline { get; init; } = "";
+
+    /// <summary>Markdown under it: what a hold means, then the recorded reason verbatim (it is data,
+    /// written by the mesh), or empty.</summary>
+    public string HoldDetail { get; init; } = "";
+
     /// <summary>The id under the layout area's <c>/data</c> the projection is published at.</summary>
     public const string DataId = "nodeTypeStatus";
 
@@ -138,10 +145,12 @@ public sealed record NodeTypeStatusView(
             PanelChipStyle: chipStyle,
             CompileLabel: compileLabel,
             CompileDisabled: compileDisabled,
-            LatestReleaseLink: latestRelease,
-            HoldStyle: holdStyle,
-            HoldHeadline: holdHeadline,
-            HoldDetail: holdDetail);
+            LatestReleaseLink: latestRelease)
+        {
+            HoldStyle = holdStyle,
+            HoldHeadline = holdHeadline,
+            HoldDetail = holdDetail
+        };
     }
 
     /// <summary>
