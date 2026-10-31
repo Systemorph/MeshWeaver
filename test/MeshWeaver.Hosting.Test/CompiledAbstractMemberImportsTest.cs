@@ -40,6 +40,31 @@ public record CompiledNonProportionalCover(string Currency, decimal Retention, d
 public record CompiledProportionalCover(string Currency, decimal Share)
     : CompiledSectionCover(Currency);
 
+/// <summary>Content whose abstract member has two subtypes sharing ONE short name — the contested
+/// discriminator a compiled build can carry when two namespaces (here: two declaring classes) each
+/// define a record of the same name.</summary>
+public record CompiledContestedContent(string Name, CompiledContestedItem Item);
+
+/// <summary>The abstract member type of <see cref="CompiledContestedContent"/>.</summary>
+public abstract record CompiledContestedItem(string Code);
+
+/// <summary>A subtype whose short name nothing else in the build uses — the control.</summary>
+public record CompiledUniqueItem(string Code, int Rank) : CompiledContestedItem(Code);
+
+/// <summary>Declares one of the two same-named subtypes.</summary>
+public static class FirstContestedFamily
+{
+    /// <summary>Same short name as <see cref="SecondContestedFamily.CompiledSharedItem"/>.</summary>
+    public record CompiledSharedItem(string Code, decimal Amount) : CompiledContestedItem(Code);
+}
+
+/// <summary>Declares the other same-named subtype.</summary>
+public static class SecondContestedFamily
+{
+    /// <summary>Same short name as <see cref="FirstContestedFamily.CompiledSharedItem"/>.</summary>
+    public record CompiledSharedItem(string Code, string Label) : CompiledContestedItem(Code);
+}
+
 /// <summary>
 /// 🚨 <b>A GitSync import must read content whose member is declared as an abstract base of a
 /// runtime-compiled NodeType (#6639).</b> Measured on the public instance: a forced update of a
@@ -197,6 +222,50 @@ public class CompiledAbstractMemberImportsTest(ITestOutputHelper output) : Monol
         }
     }
 
+    /// <summary>A short name two subtypes of the same build share resolves to NEITHER: content
+    /// naming it stays raw JSON, never bound to whichever subtype the assembly enumerated first
+    /// (which would drop the other's members and materialise foreign defaults). A subtype whose
+    /// name is unique in the same build still binds — the contest costs only the contested name.</summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AContestedSubtypeName_StaysRaw_AndAUniqueSiblingStillBinds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var compiledNodeType = await DeclaredNodeType(ct);
+        var alc = LoadCompiledCopy(compiledNodeType, out var compiledSection);
+        try
+        {
+            var contested = compiledSection.Assembly
+                .GetType(typeof(CompiledContestedContent).FullName!, throwOnError: true)!;
+            Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>()
+                .Register(contested, compiledNodeType + "Contested");
+
+            var contestedJson = $$$"""
+                {"$type":"{{{nameof(CompiledContestedContent)}}}","name":"A","item":{"$type":"CompiledSharedItem","code":"X","label":"second family"}}
+                """;
+            var read = JsonSerializer.Deserialize<object>(contestedJson, Mesh.JsonSerializerOptions);
+            Output.WriteLine($"contested read: {read?.GetType().FullName}");
+            read.Should().BeOfType<JsonElement>(
+                "two subtypes in the build are named 'CompiledSharedItem'; binding either one would be "
+                + "a guess that silently loses the other's members, so the content stays raw JSON");
+            ((JsonElement)read!).GetProperty("item").GetProperty("label").GetString()
+                .Should().Be("second family", "the raw JSON is kept verbatim");
+
+            var uniqueJson = $$$"""
+                {"$type":"{{{nameof(CompiledContestedContent)}}}","name":"B","item":{"$type":"{{{nameof(CompiledUniqueItem)}}}","code":"Y","rank":3}}
+                """;
+            var typed = JsonSerializer.Deserialize<object>(uniqueJson, Mesh.JsonSerializerOptions);
+            typed.Should().NotBeNull();
+            typed!.GetType().Should().BeSameAs(contested, "the content type resolves mesh-wide");
+            var item = contested.GetProperty(nameof(CompiledContestedContent.Item))!.GetValue(typed);
+            item!.GetType().Name.Should().Be(nameof(CompiledUniqueItem),
+                "a name only one subtype in the build carries is unambiguous and still binds");
+        }
+        finally
+        {
+            alc.Unload();
+        }
+    }
+
     /// <summary>Loads this test assembly's bytes into a collectible context and registers the
     /// copy's content type on the mesh content-type map — what <c>MeshNodeHubFactory</c> does for a
     /// compiled NodeType. The mesh hub's own type registry is left untouched.</summary>
@@ -241,14 +310,10 @@ public class CompiledAbstractMemberImportsTest(ITestOutputHelper output) : Monol
 
     private async Task<JsonElement> CoverOf(string path, CancellationToken ct)
     {
-        // The STORED node, read through the index rather than a point read: the test's NodeType
-        // path has no NodeType node to activate a per-node hub from, and what matters here is what
-        // the import persisted.
-        var node = await Mesh.GetWorkspace()
-            .GetQuery($"compiled-abstract:{path}", $"path:{path} select:path,id,namespace,nodeType,content")
-            .Select(nodes => nodes?.FirstOrDefault(n =>
-                string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase) && n.Content is not null))
-            .Where(n => n is not null)
+        // The authoritative node: the import has completed, so the node exists, and its NodeType
+        // (DeclaredNodeType) activates a per-node hub through the default node configuration.
+        var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n?.Content is not null)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);

@@ -218,8 +218,19 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
     /// pins nothing the base type's own metadata does not already hold), and the discriminator is the
     /// one <see cref="TypeRegistry.FormatType"/> would write for the subtype on this hub — the short
     /// name the owning NodeType's hub writes as well. Generic subtypes are left out, because formatting
-    /// one would register its arguments. A discriminator already taken is skipped, never duplicated:
-    /// STJ refuses a duplicate for the WHOLE base, which would lose every subtype instead of one.</para>
+    /// one would register its arguments.</para>
+    ///
+    /// <para>🚨 <b>A short name is unique only by luck, so a contested one resolves to NEITHER.</b> Two
+    /// subtypes of one base in different namespaces (or nested in different classes) format to the
+    /// same discriminator. Keeping whichever the assembly enumerated first would bind the other's
+    /// content to the wrong record — STJ drops what that record does not declare and materialises its
+    /// defaults, silently, and which one won would depend on enumeration order. So a name two
+    /// discovered subtypes claim is added for neither, and their content stays raw JSON at every
+    /// degrade seam (<see cref="JsonElementNormalizer.KeepsRawJson"/>) — the same refusal the mesh
+    /// content-type map makes for an ambiguous content discriminator. A name the registry or a
+    /// <see cref="JsonDerivedTypeAttribute"/> already maps is explicit and keeps its mapping; a
+    /// discovered subtype never displaces it (STJ would also refuse a duplicate for the WHOLE base,
+    /// losing every subtype instead of one).</para>
     /// </summary>
     private void AddSameBuildSubtypes(Type baseType, List<JsonDerivedType> derivedTypes)
     {
@@ -229,6 +240,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
         foreach (var existing in derivedTypes)
             if (existing.TypeDiscriminator is string name)
                 taken.Add(name);
+        var discovered = new List<(Type Type, string Discriminator)>();
         foreach (var candidate in GetLoadableTypes(baseType.Assembly))
         {
             if (candidate == baseType || candidate.IsGenericType
@@ -247,9 +259,17 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
             var discriminator = typeRegistry is TypeRegistry concreteRegistry
                 ? concreteRegistry.FormatType(candidate)
                 : candidate.Name;
-            if (!taken.Add(discriminator))
+            if (taken.Contains(discriminator))
                 continue;
-            derivedTypes.Add(new JsonDerivedType(candidate, discriminator));
+            discovered.Add((candidate, discriminator));
+        }
+        foreach (var claim in discovered.GroupBy(d => d.Discriminator, StringComparer.Ordinal))
+        {
+            // Contested: neither subtype is added — see the summary.
+            if (claim.Count() > 1)
+                continue;
+            var (type, discriminator) = claim.First();
+            derivedTypes.Add(new JsonDerivedType(type, discriminator));
         }
     }
 

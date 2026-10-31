@@ -357,7 +357,10 @@ place:
   only in that registry, found none, and the serializer refused the abstract member — a forced
   update refused a whole Space over fourteen valid section files. `PolymorphicTypeInfoResolver` now
   reads the subtypes of a base from a collectible assembly out of that same assembly, under the
-  discriminator the owning hub writes (the short name), without registering anything.
+  discriminator the owning hub writes (the short name), without registering anything. A short name
+  two subtypes of the same build share is added for NEITHER — binding whichever the assembly
+  enumerated first would put one record's content into the other and silently drop members — so
+  that content stays raw JSON.
 - **A subtype nothing can resolve is kept verbatim.** When a `$type` under an abstract member names
   a type no build in this process defines, the content stays as its raw JSON and is imported
   byte for byte. Only a `JsonException` — an authored member this image would DROP — still refuses
