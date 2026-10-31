@@ -3,6 +3,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Messaging.Hub.Test;
@@ -251,5 +252,35 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
             .Should().Within(30.Seconds()).Emit();
 
         all.Should().Equal([901, 901, 901], "every stream delivers its 900 parts and its reply");
+    }
+
+    /// <summary>
+    /// A stream built under one identity and subscribed under another leaves the SUBSCRIBER's identity in
+    /// place once Subscribe returns — the builder's identity is applied in scopes only.
+    /// </summary>
+    [Fact]
+    public async Task Subscribing_under_another_identity_leaves_the_subscribers_identity_in_place()
+    {
+        var client = GetClient();
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+        var builder = new AccessContext { ObjectId = "user-a", Name = "user-a" };
+        var subscriber = new AccessContext { ObjectId = "user-b", Name = "user-b" };
+        var before = access.Context;
+        try
+        {
+            access.SetContext(builder);
+            var stream = client.ObserveStreamed(new CountRequest(3), o => o.WithTarget(CreateHostAddress()));
+            access.SetContext(subscriber);
+
+            var all = new System.Reactive.Subjects.ReplaySubject<IMessageDelivery>();
+            using var subscription = stream.Subscribe(all);
+
+            access.Context?.ObjectId.Should().Be("user-b", "the builder's identity must not leak onto the subscriber's flow");
+            (await all.ToList().Should().Within(10.Seconds()).Emit()).Should().HaveCount(4);
+        }
+        finally
+        {
+            access.SetContext(before);
+        }
     }
 }

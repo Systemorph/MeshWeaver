@@ -1461,8 +1461,10 @@ public sealed class MessageHub : IMessageHub
     /// <returns>The parts in order, then the terminal reply.</returns>
     public IObservable<IMessageDelivery> ObserveStreamed(object r, Func<PostOptions, PostOptions> options)
     {
-        // The identity of the CALLER that built the operation, not of whoever subscribes later:
-        // RestoreUserContextOnEmission re-seeds it around the post and every emission.
+        // The identity of the CALLER that built the operation, not of whoever subscribes later. It is
+        // applied in SCOPES only — around the post, and around each emission (CarryAccessContext) — and
+        // never left behind on the subscriber's flow: a stream built as A and subscribed under B must
+        // not leave B running as A once Subscribe returns.
         var capturedCtx = accessService.Context;
         return Observable.Defer(() =>
         {
@@ -1477,6 +1479,9 @@ public sealed class MessageHub : IMessageHub
                 // Subscribe to both halves BEFORE the post: a synchronously answered part or reply
                 // must find its observer.
                 var ordered = InSequence(parts, subject).Subscribe(observer);
+                var subscriberCtx = accessService.Context;
+                if (capturedCtx is not null)
+                    accessService.SetContext(capturedCtx);
                 try
                 {
                     Post(r, opts => options(opts).WithMessageId(messageId).AcceptingProgress().AcceptingResponseParts());
@@ -1486,14 +1491,18 @@ public sealed class MessageHub : IMessageHub
                     requestFates.Find(messageId)?.Add($"POST_THREW {postEx.GetType().Name}: {postEx.Message}", Address);
                     observer.OnError(postEx);
                 }
+                finally
+                {
+                    if (capturedCtx is not null)
+                        accessService.SetContext(subscriberCtx);
+                }
                 return ordered;
             });
             return ContinueOffBlockIfDeclared(
-                RestoreUserContextOnEmission(
-                    WrapWithCancelOnDispose(
+                WrapWithCancelOnDispose(
                         ApplyTimeout(posting, requestType, probeOptions.Target, messageId, perElement: true),
-                        messageId, subject),
-                    capturedCtx),
+                        messageId, subject)
+                    .CarryAccessContext(ServiceProvider, capturedCtx),
                 r);
         });
     }
