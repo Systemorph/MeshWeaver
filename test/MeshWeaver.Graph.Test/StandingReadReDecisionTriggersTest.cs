@@ -42,11 +42,18 @@ public class StandingReadReDecisionTriggersTest
         var overlapped = 0;
         var initialHeld = 0;
         var signalSent = 0;
+        // The signaller's attempt, announced immediately before it emits — and whether the held
+        // initial trigger saw that announcement WHILE it was held (review of #7747, thread
+        // 4431694602): a signal scheduled only after the window would otherwise pass the unserialized
+        // helper too, proving delivery but never competition.
+        var attempting = 0;
+        var attemptSeenWhileHeld = 0;
         var received = ImmutableList<bool>.Empty;
 
         var signaller = new Thread(() =>
         {
             SpinWait.SpinUntil(() => Volatile.Read(ref initialHeld) == 1, ThreadBudget);
+            Volatile.Write(ref attempting, 1);
             signals.OnNext(true);
             Volatile.Write(ref signalSent, 1);
         }) { IsBackground = true };
@@ -60,9 +67,12 @@ public class StandingReadReDecisionTriggersTest
             {
                 if (!bypassCache)
                 {
-                    // The initial re-check, on the subscribing thread: hold it until a signal entered
-                    // beside it, or the window passed.
+                    // The initial re-check, on the subscribing thread: held until the signaller is
+                    // emitting (the handshake — the negative window below only starts once a signal
+                    // is in flight), then until that signal entered beside it, or the window passed.
                     Volatile.Write(ref initialHeld, 1);
+                    if (SpinWait.SpinUntil(() => Volatile.Read(ref attempting) == 1, ThreadBudget))
+                        Volatile.Write(ref attemptSeenWhileHeld, 1);
                     SpinWait.SpinUntil(() => Volatile.Read(ref overlapped) == 1, OverlapWindow);
                 }
                 ImmutableInterlocked.Update(ref received, list => list.Add(bypassCache));
@@ -76,6 +86,8 @@ public class StandingReadReDecisionTriggersTest
         Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref signalSent) == 1, ThreadBudget),
             "the signalling thread delivered its signal");
         Assert.True(signaller.Join(ThreadBudget), "the signalling thread finished");
+        Assert.True(Volatile.Read(ref attemptSeenWhileHeld) == 1,
+            "PRECONDITION: the signal was being emitted while the initial re-check was held — otherwise nothing competed");
         Assert.Equal(0, Volatile.Read(ref overlapped));
         Assert.Equal([false, true], received);
     }
