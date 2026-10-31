@@ -1,7 +1,7 @@
 ---
 Name: Self-hosted CI runners on AKS
 Category: Architecture
-Description: Actions Runner Controller on the shared AKS cluster — the guardrails that keep CI from ever starving the portals, the headroom arithmetic behind the caps, and how to scale, verify and tear it down.
+Description: Actions Runner Controller on the shared AKS cluster — runner pods on dedicated CI pools, the CI infrastructure on silos above the headroom placeholders, the guardrails, and how to verify and tear it down.
 Icon: Server
 ---
 
@@ -17,10 +17,13 @@ Self-hosted minutes do not count against that budget, and the AKS cluster that h
 real spare capacity. This page is how runners live there **without ever becoming a risk to the
 portals**, which is the only hard constraint on the whole design.
 
-> **The portals and the runners share nodes.** Every decision below exists to make one sentence
-> true: *under pressure the scheduler removes a runner, never a portal.* If you change a cap, a
-> request, or the priority class, re-derive the arithmetic in
-> ["The arithmetic"](#the-arithmetic) first — the numbers are measurements, not preferences.
+> **The runner pods do NOT share nodes with the portals.** They are pinned to the dedicated CI pools
+> (`workload: ci-build`, tainted `ci=build`). Only the small CI control plane — the ARC controllers,
+> each scale set's listener, and the CI infrastructure CronJobs — runs on `silos` beside the portals,
+> under the PriorityClass `ci-infra` (`-9`, may preempt). See ["Where each piece runs"](#where-each-piece-runs).
+> The source of truth is the values files in Systemorph/Memex
+> [`deployments/aks/ci-runners/`](https://github.com/Systemorph/Memex/tree/main/deployments/aks/ci-runners);
+> this page explains them and does not restate their caps.
 
 ## What is deployed
 
@@ -29,9 +32,10 @@ portals**, which is the only hard constraint on the whole design.
 | Product | `gha-runner-scale-set-controller` — the **current** ARC, not the legacy `summerwind` operator |
 | Version | chart **0.14.2** (`ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller`) |
 | Controller namespace | `arc-systems` |
-| Runner namespace | `arc-runners` |
-| Node placement | `nodeSelector: workload=silos` — the user pool, never the 4-vCPU system pool |
-| Priority | `arc-runner-low` (value **-10**, `preemptionPolicy: Never`) |
+| Runner namespaces | `arc-runners` (`aks-silos`), `arc-runners-dind` (`aks-silos-dind`) |
+| Runner pods | `nodeSelector: workload: ci-build` plus a toleration for `ci=build` only — the dedicated CI pools, never `silos` or the system pool ([`arc-runner-scale-set-values.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/arc-runner-scale-set-values.yaml), [`arc-runner-scale-set-dind-values.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/arc-runner-scale-set-dind-values.yaml)) |
+| Runner priority | `arc-runner-low` (value **-10**, `preemptionPolicy: Never`) |
+| Controllers, listeners, CI CronJobs | `nodeSelector: workload: silos`, `priorityClassName: ci-infra` (value **-9**, `PreemptLowerPriority`) |
 | RBAC reach | `flags.watchSingleNamespace: arc-runners` — the controller takes **namespaced Roles only**, no ClusterRole, and cannot see the portal namespaces |
 
 Install (private cluster, so through the API-server-side runner):
@@ -49,24 +53,50 @@ plain manifest applied **before** the controller — they are the safety mechani
 before anything that could consume capacity does. Both files live in the private deploy repo beside
 the other environment material; nothing here is environment-specific.
 
-## Why the shared pool and not a dedicated one
+## Where each piece runs
 
-[Chart Ownership and the Runner Pool](/Doc/Architecture/ChartOwnershipAndRunnerPool) recorded the
-intended shape in 2026-09 as *"ARC on the existing cluster, on a dedicated node pool so CI cannot
-starve the portal"*, and named the honest trade: a dedicated pool converts a variable per-job cost
-into a **standing** one.
+| what | pool | PriorityClass | declared in |
+|---|---|---|---|
+| runner pods, both scale sets | CI pools (`workload: ci-build`, taint `ci=build`; spot preferred) | `arc-runner-low` (-10, `Never`) | [`arc-runner-scale-set-values.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/arc-runner-scale-set-values.yaml), [`arc-runner-scale-set-dind-values.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/arc-runner-scale-set-dind-values.yaml) |
+| each scale set's listener (`listenerTemplate`) | `silos` | `ci-infra` (-9, may preempt) | the same two files |
+| ARC controllers | `silos` | `ci-infra` | [`arc-controller-values.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/arc-controller-values.yaml), [`arc-controller-values-dind.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/arc-controller-values-dind.yaml) |
+| `ci-platform-refresh` CronJob | `silos` | `ci-infra` | [`ci-platform.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/ci-platform.yaml) |
+| NuGet-cache CronJobs | `silos` | `ci-infra` | [`ci-nuget-cache.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/ci-nuget-cache.yaml) |
+| artifact-store CronJob | `silos` | `ci-infra` | [`ci-artifact-store.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/ci-artifact-store.yaml) |
 
-What actually shipped uses the **existing silos pool**, for one reason that page could not yet
-weigh: the headroom was measured. The pool carries 20,703m of unrequested CPU and 120 GiB of
-unrequested memory, and its real utilisation is 2–14%. A dedicated pool would spend money to buy
-isolation that the priority class, the quota and the reserve already provide arithmetically — and
-it would spend it whether or not CI is running.
+Both classes are declared in [`arc-guardrails.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/arc-guardrails.yaml) and
+[`arc-guardrails-dind.yaml`](https://github.com/Systemorph/Memex/blob/main/deployments/aks/ci-runners/arc-guardrails-dind.yaml) (`ci-infra` identically in both, so
+either set's apply creates it before anything references it).
 
-That page's reasoning is not wrong, it is the **next** step, and it is written up as such under
-["How to scale it"](#how-to-scale-it). The trigger to take it is steady rather than bursty CI load,
-or a reserve calculation that stops closing. Everything else that page records for the lane — a
-persistent git mirror, a warm layer store, opt-in runner labels with hosted runners as the fallback
-— is unchanged by this and still outstanding.
+**Why the runners left `silos`.** The first version shared the pool and held the portals safe
+arithmetically — a reserve, a quota and a low priority (the historical sections below). Moving the
+runner pods to their own pools made that unnecessary: a runner cannot be scheduled on `silos` at all
+(no `workload: silos` selector, no toleration for anything there), so a portal roll or KEDA
+scale-out has nothing to collide with, and the CI pools scale from zero, so their cost follows CI
+load. That is the "dedicated node pool" that
+[Chart Ownership and the Runner Pool](/Doc/Architecture/ChartOwnershipAndRunnerPool) intended.
+
+**Why the rest stays on `silos`, and why under `ci-infra`.** The controllers, listeners and the
+CronJobs are small, long-lived or short and periodic, and must not depend on a CI pool that may be
+scaled to zero. But `silos` carries the node-headroom placeholders (`node-headroom`, -10,
+`preemptionPolicy: Never`), and a placeholder yields only to a pod in a class **strictly above -10
+that may preempt** — the invariant in [Deployment — AKS](../DeploymentAKS), "A spare slot per node
+pool". Under `arc-runner-low` (-10, `Never`) these pods could never take a placeholder's slot and, on
+a full pool, waited behind an idle `pause` container — which is how the `ci-platform-refresh`
+CronJob stalled. Systemorph/Memex [#921](https://github.com/Systemorph/Memex/pull/921) moved them to
+`ci-infra` (-9): above the placeholders, below every portal (priority 0), which still preempts them.
+The placeholder cannot go lower instead, because below the autoscaler's -10 cutoff it would never get
+a node back. `scripts/check-headroom-preemptable.py` in Memex's required `build` job holds the
+invariant over every declared pod spec, helm values and overlays included. The runner pods keep
+`arc-runner-low`: the CI pools carry no placeholder.
+
+A declared class is not yet a running one: per #921 each listener changes with its own set's
+governed `ApplyRunnerSet`, and no governed lane applies the controller values yet, so the running
+controllers can still be on `arc-runner-low`. Read the pod spec before relying on it.
+
+> 🗄️ **Historical — the shared-pool design.** Everything from here to "Where jobs run" describes the
+> first version, when runner pods ran on `silos` beside the portals. It is kept as the measured
+> record of why that version was safe; its caps, quotas and node counts are NOT the live ones.
 
 ## Three independent brakes, not one
 
@@ -82,7 +112,7 @@ The design therefore stacks three mechanisms that fail in different ways:
    4 CPU / 8Gi. An unbounded pod is the one shape that could starve a portal *regardless* of its
    priority, and this makes one unschedulable.
 
-## The priority class, and why -10 exactly
+## The priority class, and why -10 exactly (runner pods)
 
 Every production pod on this cluster runs at the **default priority 0 with no
 `priorityClassName`** — measured, both portal Deployments plus `portal-next`, the website and
@@ -392,6 +422,10 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl delete ns arc-runners arc-systems; \
   kubectl delete priorityclass arc-runner-low"
 ```
+
+This is the first version's single-set shape. Today there are two sets with their own namespaces
+(`arc-runners`, `arc-runners-dind`), and the `ci-infra` class is also used by the CI CronJobs on
+`silos`, so it goes only after they do.
 
 Uninstall the **scale set before the controller** — the controller is what finalizes the scale-set
 CRs, and removing it first leaves them stuck deleting. Nothing in the portal namespaces references
