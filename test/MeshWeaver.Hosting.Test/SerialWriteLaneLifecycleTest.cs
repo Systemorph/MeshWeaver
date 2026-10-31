@@ -220,8 +220,10 @@ public class SerialWriteLaneLifecycleTest
                 "🚨 the leaf's cancellation callbacks (a database cancel request) must not run on the thread giving up");
             await LaneReading(lane, r => r.InFlight == 0).Should().Within(Bound)
                 .Emit("the cancelled write still unwinds and releases the lane");
+            // Only "the cancel ran" is asserted here: once Dispose has returned, the disposing thread is
+            // a pool thread like any other and may legitimately be the one the scheduled cancel lands on.
+            // The off-thread property is the assertion made immediately after Dispose, above.
             Volatile.Read(ref cancelledOn).Should().NotBe(0, "the write was cancelled");
-            Volatile.Read(ref cancelledOn).Should().NotBe(disposingThread);
         }
         finally
         {

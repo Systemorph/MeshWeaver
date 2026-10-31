@@ -155,12 +155,13 @@ public static class IoPoolNames
     /// Prefix for per-Postgres-storage-<b>provider</b> pools (<c>pg:{providerName}</c>). Capped at
     /// ONE in-flight WRITE. See <see cref="IoPoolOptions.MaxConcurrencyFor"/>.
     ///
-    /// <para>The partitioned backend files its node writes on one such lane PER SCHEMA,
-    /// <c>pg:{providerName}:{schema}</c> — still capped at one, so writes to one partition stay
-    /// ordered — and bounds their total with <see cref="PostgresWriteBudgetPrefix"/>
-    /// (MeshWeaver#7464). The process-wide-serializer reading below describes the shape before that
-    /// split; it still holds for the stores that keep the provider-wide name (the event log, the
-    /// instance store).</para>
+    /// <para>The partitioned backend no longer files its node writes here: each partition schema
+    /// has its own write lane (one write at a time, so writes to one partition stay ordered — a
+    /// lightweight serial queue in MeshWeaver.Plugins, not a pool, because every pool parks a
+    /// canceller thread and an instance has hundreds of schemas), and every write takes a slot of
+    /// <see cref="PostgresWriteBudgetPrefix"/> (MeshWeaver#7464). The process-wide-serializer
+    /// reading below describes the shape before that split; it still holds for provisioning and the
+    /// stores that keep the provider-wide name (the event log, the instance store).</para>
     ///
     /// <para>🚨 <b>The cap is half a CONNECTION BUDGET, not a mirror of one connection</b>
     /// (measured 2026-09-15 while re-checking issue #1198's third item). This comment used to say
@@ -208,11 +209,10 @@ public static class IoPoolNames
     /// write of the process on ONE cap-1 <c>pg:{provider}</c> lane, so a write that waited on a
     /// database-wide lock (the grant-rule membership lock that a partition-root, grant-rule or
     /// membership row takes, or the global permission-rebuild lock) held back every other write of
-    /// the silo, in every partition, until their verdicts expired. Each schema now has its own cap-1
-    /// lane (<c>pg:{provider}:{schema}</c>, which this prefix's sibling <see cref="PostgresAdapterPrefix"/>
-    /// already caps at one), and a write takes a slot of this budget INSIDE its lane. Different
-    /// schemas therefore run in parallel, but never more of them than the budget, so the shared
-    /// connection pool is not exhausted by lanes that are waiting on a lock.</para>
+    /// the silo, in every partition, until their verdicts expired. Each schema now has its own
+    /// write lane (one write at a time), and each write takes a slot of this budget from inside its
+    /// lane. Different schemas therefore run in parallel, but never more of them than the budget,
+    /// so the shared connection pool is not exhausted by lanes that are waiting on a lock.</para>
     ///
     /// <para>🚨 Distinct from <see cref="PostgresAdapterPrefix"/> on purpose: <c>"pg-write:"</c>
     /// does not start with <c>"pg:"</c>, so it never falls into the cap-1 rule.</para>
