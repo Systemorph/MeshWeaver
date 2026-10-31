@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -36,10 +38,42 @@ namespace MeshWeaver.PluginCatalog;
 /// replica — no TTL, no verdict cache, nothing to invalidate. Design page:
 /// <c>Doc/Architecture/InstanceKeyResolution</c>.</para>
 ///
-/// <para>Registered as a mesh-scoped singleton; it holds no state of its own.</para>
+/// <para>🚨 <b>…and the mirrors it reads are HELD, so "hydrated once per process" is true
+/// (MeshWeaver#7354).</b> A read-cache entry with no live subscriber is released by the cache's
+/// idle sweep after <c>MeshNodeStreamCacheOptions.ReadStreamIdleExpiration</c> (ten minutes), and
+/// every leg here is a <c>Take(1)</c> — so the instance and grant mirrors were dropped between two
+/// requests further apart than that window. A consumer's registry safety net polls every thirty
+/// minutes, so EVERY poll found them cold and paid a fresh owner subscription — the per-request
+/// owner round-trip #3119 removed, back by way of the idle sweep, and bounded by the same ten-second
+/// budget (the 10.09 s <c>503</c> on the consumer side). The authenticator therefore keeps ONE
+/// standing subscription on each mirror it has found present (<see cref="Hold"/>): an instance
+/// field on this mesh-scoped singleton, released when the node goes away (the mirror completes),
+/// when the mirror faults (the next request re-opens and re-holds it), and when the mesh disposes
+/// this service. Its size is bounded by the registered instances that have authenticated — never
+/// by the keys presented, because an unknown key is refused by the listing before any mirror is
+/// opened.</para>
+///
+/// <para>Registered as a mesh-scoped singleton; the held mirrors are its only state.</para>
 /// </summary>
 public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<InstanceRegistryAuthenticator> logger)
+    : IDisposable
 {
+    // 🚨 One standing subscription per mirror this resolution reads (MeshWeaver#7354), so the
+    // cache's idle sweep never releases it between two polls. Instance state on a mesh-scoped
+    // singleton (NoStaticState); a slot is removed pair-exact when its mirror terminates.
+    private readonly ConcurrentDictionary<string, HoldSlot> holds = new(StringComparer.Ordinal);
+    private long holdSequence;
+    private int disposed;
+
+    /// <summary>One hold: its subscription, and the order in which it was STARTED — the order in
+    /// which it reached the cache, which is what decides whether it can be on an older mirror than a
+    /// hold already published.</summary>
+    private sealed class HoldSlot(long sequence)
+    {
+        public long Sequence { get; } = sequence;
+        public SingleAssignmentDisposable Subscription { get; } = new();
+    }
+
     /// <summary>Retry-After (seconds) an endpoint advertises when resolution was UNAVAILABLE.
     /// Matches the API-token leg's <c>ApiTokenAuthenticationHandler.RetryAfterSeconds</c>.</summary>
     public const int RetryAfterSeconds = 5;
@@ -701,8 +735,125 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             var listing = parent is null
                 ? null
                 : hub.GetQuery($"instance-key-listing:{parent}", $"path:{parent} scope:children select:path");
-            return FirstFrame(listing, () => hub.GetMeshNodeStream(path), path, ReadBudget);
+            return FirstFrame(listing, () => Held(path), path, ReadBudget);
         });
+    }
+
+    /// <summary>
+    /// The owner's mirror for <paramref name="path"/>, with a standing hold on it (see
+    /// <see cref="Hold"/>). Only ever called once the listing has shown the node exists, so nothing
+    /// is held for a path that is not there.
+    /// </summary>
+    private IObservable<MeshNode> Held(string path)
+    {
+        Hold(path);
+        return hub.GetMeshNodeStream(path);
+    }
+
+    /// <summary>
+    /// 🚨 Keeps the mirror of <paramref name="path"/> live in the process-wide cache
+    /// (MeshWeaver#7354): ONE subscription per path, as System, for as long as the node exists.
+    /// The cache never idle-releases an entry with a live subscriber, so every later resolution
+    /// reads the mirror from memory however long it has been since the last one, and the change
+    /// feed keeps it current — a disable or a grant change is still seen by the next request.
+    ///
+    /// <para>The hold ends by itself: the mirror COMPLETES when the node is deleted (a retired key's
+    /// index entry, a removed instance) and FAULTS when its owner fails — the cache evicts a faulted
+    /// entry, and the next resolution opens and holds a fresh one. Nothing re-subscribes on its own;
+    /// a hold is only ever (re)taken by a request that found the node present.</para>
+    /// </summary>
+    /// <param name="path">The node path the listing has shown to exist.</param>
+    internal void Hold(string path)
+    {
+        if (Volatile.Read(ref disposed) != 0)
+            return;
+        var source = HoldOverride is { } test
+            ? test(path)
+            : hub.ServiceProvider.GetService<AccessService>()
+                .RunAsSystem(() => (IObservable<MeshNode>)hub.GetMeshNodeStream(path));
+        // The sequence is taken immediately before the subscription reaches the cache: a hold that
+        // started LATER attached to the same or a NEWER mirror (the cache only ever replaces an entry
+        // it has evicted), so a higher sequence is never the staler hold.
+        var slot = new HoldSlot(Interlocked.Increment(ref holdSequence));
+        // Assigned AFTER Subscribe returns: a mirror that terminates synchronously releases the slot
+        // first, and assigning to a disposed SingleAssignmentDisposable disposes the subscription on
+        // the spot — so a terminated hold never lingers.
+        slot.Subscription.Disposable = source.Subscribe(
+            _ => { },
+            ex =>
+            {
+                logger.LogDebug(ex,
+                    "Instance key resolution: the held mirror of {Path} faulted — released; the next "
+                    + "request that finds the node present holds a fresh one", path);
+                Release(path, slot);
+            },
+            () => Release(path, slot));
+        BeforePublish?.Invoke(path);
+
+        // 🚨 RENEW, never skip — and never let an OLDER renewal win. This request's hold replaces the
+        // slot the path has only when it STARTED later than that slot, and the replaced one is disposed
+        // only after this one is subscribed, so the entry never drops to zero subscribers.
+        //   • Skipping when a slot existed lost the hold when that slot's mirror had already faulted
+        //     but its terminal had not been delivered: the request read a fresh entry, the late
+        //     terminal removed the old slot, and the fresh entry was left unheld for the idle sweep.
+        //   • Replacing unconditionally lost it the other way: a renewal that subscribed to the OLD
+        //     mirror and paused before publishing overwrote (and disposed) a later renewal on the
+        //     replacement, and its own terminal then left the path unheld.
+        // A superseded renewal disposes itself; a late terminal releases only its own slot
+        // (pair-exact). The renewal is an in-memory attach to a live cache entry, not a read.
+        while (true)
+        {
+            if (holds.TryGetValue(path, out var current))
+            {
+                if (current.Sequence > slot.Sequence)
+                {
+                    slot.Subscription.Dispose();
+                    return;
+                }
+                if (holds.TryUpdate(path, slot, current))
+                {
+                    current.Subscription.Dispose();
+                    break;
+                }
+            }
+            else if (holds.TryAdd(path, slot))
+                break;
+        }
+
+        // A terminal delivered before the slot was installed, or a Dispose that ran meanwhile, found
+        // nothing to remove — remove it now.
+        if (slot.Subscription.IsDisposed || Volatile.Read(ref disposed) != 0)
+            Release(path, slot);
+    }
+
+    /// <summary>
+    /// The stream a hold subscribes to, injectable so the renewal can be pinned against a mirror
+    /// whose terminal arrives late. Production holds the owner's mirror in the process-wide cache.
+    /// </summary>
+    internal Func<string, IObservable<MeshNode>>? HoldOverride { get; init; }
+
+    /// <summary>Runs between a hold's subscription and its publication. Test seam: it lets an
+    /// overlapping renewal finish while this one is paused before publishing.</summary>
+    internal Action<string>? BeforePublish { get; init; }
+
+    /// <summary>Drops <paramref name="slot"/> for <paramref name="path"/>, pair-exact so a newer
+    /// hold on the same path is never touched, and disposes its subscription.</summary>
+    private void Release(string path, HoldSlot slot)
+    {
+        holds.TryRemove(new KeyValuePair<string, HoldSlot>(path, slot));
+        slot.Subscription.Dispose();
+    }
+
+    /// <summary>The paths whose mirrors this authenticator currently holds. Test seam.</summary>
+    internal IReadOnlyCollection<string> HeldPaths => holds.Keys.ToArray();
+
+    /// <summary>Releases every held mirror. Called by the container when the mesh is disposed.</summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+            return;
+        foreach (var (path, slot) in holds)
+            Release(path, slot);
     }
 
     /// <summary>
