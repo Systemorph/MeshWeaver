@@ -113,7 +113,9 @@ run triggered by a seal is ahead of the volume by design, so `resolve-gate-platf
 for the set's `.complete`. When that wait runs out, the refusal now carries the refresh's OWN last
 verdict, read from `/opt/platform/retention.json` on the same share: the refresh writes that file
 at the end of every tick it completes (Memex#343), with the share's free space, its install floor
-and every refusal. Read the refusal by the file's AGE:
+and every refusal. The file says WHEN a tick last completed, never that the refresh is healthy now —
+the ticks after it may all be failing before they write — and it is evidence of a decline only when
+it records a refusal NAMING the set. Read the refusal by those two things:
 
 - **"THE REFRESH HAS NOT COMPLETED A TICK FOR Ns"** — the file is older than the Job's 2400 s
   deadline plus one period. The refresh is not declining the set: its pod is not created, not
@@ -121,8 +123,11 @@ and every refusal. Read the refusal by the file's AGE:
   namespace quota). That is a cluster-side failure, and every satellite goes red on it at once —
   measured 2026-10-31, when set `3.1.12262` never reached the volume and the satellites' gate
   shards timed out with nothing in any log naming why. Neither a re-run nor a digest bump helps.
-- **"The refresh IS completing ticks … read its refusals"** — the refresh runs and declined; the
-  verdict that follows names why (a full share is the refusal that does not clear on its own).
+- **"The refresh last COMPLETED a tick Ns ago"** — a recent completion only. Followed by **"It
+  DECLINED this set: …"** when the verdict carries a refusal naming the set (a full share is the
+  refusal that does not clear on its own); otherwise by **"records NO refusal naming this set"** —
+  the set may post-date that tick, or the ticks since are failing before they write, and nothing
+  on the volume tells those two apart.
 - **"NO retention.json"** — the refresh has never completed a tick on this share.
 
 **3. Until Plugins#1809 a freeze had to be a git REF.** The three image lanes handed

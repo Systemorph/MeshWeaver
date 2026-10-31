@@ -234,27 +234,48 @@ if [ "${1:-}" = "--self-test" ]; then
        --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"
   grep -q 'had not reached the platform volume' <<<"$o" || fail "the AHEAD refusal must name the cadence (got: $o)"
   grep -q 'Do NOT bump' <<<"$o" || fail "the AHEAD refusal must not send the reader to bump the digest (got: $o)"
-  # 5c'. The AHEAD timeout reads the refresh's OWN last verdict off the volume, so the shard log
-  #      tells "the refresh stopped completing ticks" from "it ran and refused". Three volumes, one
-  #      per reading; each assertion names a phrase only that reading prints (negative controls:
-  #      the other two must NOT print it).
+  # 5c'. The AHEAD timeout reads the refresh's OWN last verdict off the volume. Each reading below
+  #      is asserted by a phrase only it prints, and the others are asserted NOT to print it.
   grep -q 'NO retention.json' <<<"$o" || fail "an AHEAD timeout on a volume with no retention.json must say the refresh never completed a tick (got: $o)"
   stale_at="$(date -u -d '@1000000000' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r 1000000000 +%Y-%m-%dT%H:%M:%SZ)"
   fresh_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf '{\n  "written-at": "%s",\n  "space": {"refusals": []}\n}\n' "$stale_at" > "$ahead/retention.json"
-  o="$("$self" --volume-root "$ahead" --tester-digest "$D1" --portal-digest "$P1" \
-       --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"
+  verdict_for() {  # <retention.json body> → the AHEAD refusal over it
+    printf '%s\n' "$1" > "$ahead/retention.json"
+    "$self" --volume-root "$ahead" --tester-digest "$D1" --portal-digest "$P1" \
+      --set 3.0.0-ci.8547 --wait-seconds 0 2>&1
+  }
+  #   STALE: no tick has completed for longer than a tick may take.
+  o="$(verdict_for "{\"written-at\": \"$stale_at\", \"space\": {\"refusals\": []}}")"
   grep -q 'HAS NOT COMPLETED A TICK' <<<"$o" || fail "a STALE retention.json must be read as a refresh that stopped completing ticks (got: $o)"
   grep -q "written at $stale_at" <<<"$o" || fail "the stale reading must name when the last verdict was written (got: $o)"
-  grep -q 'IS completing ticks' <<<"$o" && fail "a stale verdict must not read as a live refresh (got: $o)"
-  printf '{\n  "written-at": "%s",\n  "space": {"refusals": [{"rule": "current", "set": "3.0.0-ci.8547", "reason": "share full"}]}\n}\n' "$fresh_at" > "$ahead/retention.json"
-  o="$("$self" --volume-root "$ahead" --tester-digest "$D1" --portal-digest "$P1" \
-       --set 3.0.0-ci.8547 --wait-seconds 0 2>&1)"
-  grep -q 'IS completing ticks' <<<"$o" || fail "a FRESH retention.json must be read as a live refresh that declined (got: $o)"
-  grep -q 'share full' <<<"$o" || fail "the fresh reading must carry the refresh's own refusal text (got: $o)"
+  grep -q 'last COMPLETED a tick' <<<"$o" && fail "a stale verdict must not read as a recent completion (got: $o)"
+  #   FRESH, with a refusal NAMING this set: a recent completion and a decline — and never a claim of
+  #   current health.
+  o="$(verdict_for "{\"written-at\": \"$fresh_at\", \"space\": {\"free-bytes\": 1073741824, \"total-bytes\": 68719476736, \"floor-bytes\": 4294967296, \"refusals\": [{\"rule\": \"current\", \"set\": \"3.0.0-ci.8547\", \"reason\": \"share full\"}]}}")"
+  grep -q 'last COMPLETED a tick' <<<"$o" || fail "a FRESH retention.json must be read as a recent completion (got: $o)"
+  grep -q 'DECLINED this set.*share full' <<<"$o" || fail "a refusal naming this set must be shown as the decline, in the refresh's words (got: $o)"
+  grep -q 'free=1.0GiB of 64.0GiB, install floor=4.0GiB' <<<"$o" || fail "the space reading must be shown (got: $o)"
+  grep -qi 'IS completing ticks' <<<"$o" && fail "a recent completion must not be reported as current health (got: $o)"
   grep -q 'HAS NOT COMPLETED A TICK' <<<"$o" && fail "a fresh verdict must not read as a stopped refresh (got: $o)"
   grep -q 'NO retention.json' <<<"$o" && fail "a present retention.json must not read as absent (got: $o)"
   grep -q '^mode=container$' <<<"$o" && fail "reading the verdict must not turn the refusal into a pull (got: $o)"
+  #   FRESH, with refusals for OTHER sets only: no decline is claimed for this one.
+  o="$(verdict_for "{\"written-at\": \"$fresh_at\", \"space\": {\"refusals\": [{\"rule\": \"main-passed\", \"set\": \"3.0.0-ci.8400\", \"reason\": \"other set\"}]}}")"
+  grep -q 'NO refusal naming this set' <<<"$o" || fail "a verdict with no refusal for this set must say so (got: $o)"
+  grep -q 'DECLINED this set' <<<"$o" && fail "a refusal for ANOTHER set must not be read as declining this one (got: $o)"
+  grep -q 'other set' <<<"$o" || fail "the other refusals must still be shown (got: $o)"
+  #   This set's refusal BEYOND byte 2,000: selected before anything is rendered, so it is shown.
+  filler="$(printf 'x%.0s' $(seq 1 600))"
+  o="$(verdict_for "{\"written-at\": \"$fresh_at\", \"defects\": [{\"repo\": \"o/a\", \"reason\": \"$filler\"}, {\"repo\": \"o/b\", \"reason\": \"$filler\"}, {\"repo\": \"o/c\", \"reason\": \"$filler\"}, {\"repo\": \"o/d\", \"reason\": \"$filler\"}], \"space\": {\"refusals\": [{\"rule\": \"current\", \"set\": \"3.0.0-ci.8547\", \"reason\": \"the late refusal\"}]}}")"
+  [ "$(wc -c < "$ahead/retention.json")" -gt 2000 ] || fail "the beyond-2,000-bytes case must actually be larger than 2,000 bytes"
+  grep -q 'DECLINED this set.*the late refusal' <<<"$o" || fail "a refusal for this set past byte 2,000 must still be shown as the decline (got: $o)"
+  #   EMPTY written-at: when a tick last completed is UNKNOWN — never a fabricated age.
+  o="$(verdict_for '{"written-at": "", "space": {"refusals": []}}')"
+  grep -q 'UNKNOWN' <<<"$o" || fail "an empty written-at must read as unknown (got: $o)"
+  grep -Eq 'HAS NOT COMPLETED A TICK|last COMPLETED a tick' <<<"$o" && fail "an empty written-at must not produce a tick age (got: $o)"
+  #   UNPARSABLE: printed whole.
+  o="$(verdict_for '{"written-at": "2026-10-31T11:00:00Z", truncated')"
+  grep -q 'could not be parsed.*truncated' <<<"$o" || fail "an unparsable verdict must be printed whole (got: $o)"
   rm -f "$ahead/retention.json"
 
   # 5d. OVERTAKEN inside the kept window: the volume holds #8400 and #8600, the caller wants #8547.
@@ -430,39 +451,85 @@ listing() {  # every set directory, in-flight ones NAMED as such rather than lis
 # one place everybody who meets this red can read. Without it the timeout said only "read that
 # CronJob's last runs", which needs the cluster, and every satellite went red at once on
 # 2026-10-31 with nothing in any log to tell "the refresh stopped running" from "the refresh ran
-# and refused". The two are told apart by the file's AGE:
-#   * older than REFRESH_STALE_SECONDS: no tick has completed since — the pod is not being
-#     created, not scheduled, or fails before the end of rule 1. A cluster-side failure, and the
-#     verdict below is the LAST one it managed to write;
-#   * fresh: the refresh IS completing ticks and still did not install this set — its refusals say
-#     why (a full share is the one that never clears on its own).
+# and refused". What the file can and cannot say:
+#   * its AGE says when a tick last COMPLETED — never that the refresh is healthy NOW: the ticks
+#     after it may all be failing before they write. Older than REFRESH_STALE_SECONDS means none
+#     has completed for longer than a tick may legally take — a cluster-side failure;
+#   * a DECLINE is claimed only when the verdict records a refusal NAMING THIS SET (by set name,
+#     tester digest or core-CD run). A rule-1 failure raises before the file is written, so a
+#     verdict without such a refusal proves nothing about this set, and the message says so.
+# The relevant fields are SELECTED before anything is rendered — this set's refusals first, then
+# the space reading, then the other refusals — and nothing is truncated, so no cap can cut the one
+# line that answers. A file that cannot be parsed is printed WHOLE. An absent or empty written-at
+# is "unknown", never parsed (GNU `date -d ""` answers today's midnight).
 # 2400 s is the Job's activeDeadlineSeconds (a tick under concurrencyPolicy Forbid can hold the
 # schedule that long), plus one 10-minute period.
 REFRESH_STALE_SECONDS=3000
-epoch_of() {  # <UTC ISO-8601 'YYYY-MM-DDTHH:MM:SSZ'> → epoch seconds, empty when unparsable
-  date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || true
-}
 refresh_verdict() {
-  local file="$VOLUME_ROOT/retention.json" written at age body
+  local file="$VOLUME_ROOT/retention.json"
   if [ ! -f "$file" ]; then
     printf '%s' " The volume carries NO retention.json, which the refresh writes at the end of every tick it completes — it has never completed one on this share."
     return 0
   fi
-  # One sed (first match, then quit) and head BEFORE tr: no pipe stage can be cut short, so
-  # nothing here needs its status or its stderr swallowed — a read that fails says so in the log.
-  written="$(sed -n '/"written-at"/{s/.*"written-at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;q;}' "$file")"
-  body="$(head -c 2000 "$file" | tr -s ' \n\t' ' ')"
-  at="$(epoch_of "${written:-}")"
-  if [ -z "$at" ]; then
-    printf '%s' " The refresh's last verdict ($file) carries no readable written-at ('${written:-}'): $body"
-    return 0
-  fi
-  age=$(( $(date -u +%s) - at ))
-  if [ "$age" -gt "$REFRESH_STALE_SECONDS" ]; then
-    printf '%s' " 🚨 THE REFRESH HAS NOT COMPLETED A TICK FOR ${age}s: its last verdict ($file) was written at $written. So it is not that the refresh ran and declined this set — its pod is not being created, not being scheduled, or fails before writing (a registry/GitHub credential, the resolver, the share, the namespace quota). That is a cluster-side failure: read the CronJob's Jobs, pods and events in namespace ci-platform. Its last verdict: $body"
-  else
-    printf '%s' " The refresh IS completing ticks (its verdict, $file, is ${age}s old, written at $written) and still did not install this set — read its refusals: $body"
-  fi
+  python3 -I - "$file" "${CALLER_SET:-}" "${CALLER_RUN:-}" "${resolved:-}" "$REFRESH_STALE_SECONDS" <<'PY'
+import calendar, json, sys, time
+path, want_set, want_run, want_digest, stale = sys.argv[1:6]
+raw = open(path, encoding="utf-8").read()
+try:
+    verdict = json.loads(raw)
+    if not isinstance(verdict, dict):
+        raise ValueError(f"its root is a {type(verdict).__name__}, not an object")
+except ValueError as error:
+    print(f" The refresh's last verdict ({path}) could not be parsed ({error}); it reads, whole: {' '.join(raw.split())}", end="")
+    sys.exit(0)
+written = verdict.get("written-at")
+age = None
+if isinstance(written, str) and written:
+    try:
+        age = int(time.time()) - calendar.timegm(time.strptime(written, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        age = None
+space = verdict.get("space") if isinstance(verdict.get("space"), dict) else {}
+def entries(value):
+    return [e for e in value if isinstance(e, dict)] if isinstance(value, list) else []
+refusals = [("space", e) for e in entries(space.get("refusals"))] \
+    + [("capability", e) for e in entries(verdict.get("capability-refusals"))] \
+    + [("defect", e) for e in entries(verdict.get("defects"))]
+def names_this_set(entry):
+    named = str(entry.get("set") or "")
+    if not named:
+        return False
+    if named in (want_set, want_digest):
+        return True
+    return bool(want_run) and named.rsplit(".", 1)[-1] == want_run
+def render(kind, entry):
+    return f"[{kind}] " + "; ".join(f"{key}={entry[key]}" for key in entry)
+mine = [render(kind, e) for kind, e in refusals if names_this_set(e)]
+others = [render(kind, e) for kind, e in refusals if not names_this_set(e)]
+def gib(value):
+    return f"{value / 1024 ** 3:.1f}GiB" if isinstance(value, int) and value >= 0 else "unknown"
+out = []
+if age is None:
+    out.append(f"The refresh's last verdict ({path}) carries no readable written-at ({written!r}), so when a tick last completed is UNKNOWN.")
+elif age > int(stale):
+    out.append(f"🚨 THE REFRESH HAS NOT COMPLETED A TICK FOR {age}s: its last verdict ({path}) was written at {written}. "
+               "Its pod is not being created, not being scheduled, or fails before writing (a registry/GitHub credential, "
+               "the resolver, the share, the namespace quota) — a cluster-side failure: read the CronJob's Jobs, pods and "
+               "events in namespace ci-platform.")
+else:
+    out.append(f"The refresh last COMPLETED a tick {age}s ago (its verdict, {path}, was written at {written}). That says "
+               "nothing about the ticks since, which may be failing before they write.")
+if mine:
+    out.append("It DECLINED this set: " + " | ".join(mine) + ".")
+else:
+    out.append("Its last verdict records NO refusal naming this set, so it is not shown to have declined it — the set may "
+               "post-date that tick, or a later tick failed before writing.")
+out.append(f"Space at that tick: free={gib(space.get('free-bytes'))} of {gib(space.get('total-bytes'))}, "
+           f"install floor={gib(space.get('floor-bytes'))}.")
+if others:
+    out.append("Other refusals in that verdict: " + " | ".join(others) + ".")
+print(" " + " ".join(out), end="")
+PY
 }
 
 # The core-CD run number a set name carries, in BOTH notations (policy `platform-semver-versioning`,
