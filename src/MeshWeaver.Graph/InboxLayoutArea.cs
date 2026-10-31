@@ -68,6 +68,15 @@ public static class InboxLayoutArea
     /// <summary>The data id of the notice naming the sources that could not be read; empty when all were.</summary>
     public const string UnreadId = "inboxUnread";
 
+    /// <summary>
+    /// The data id of the notice naming the sources that have not answered within <see cref="LegAnswerWait"/>; empty
+    /// when every source answered. The list shows what the others sent meanwhile — one silent source never holds it.
+    /// </summary>
+    public const string SlowId = "inboxSlow";
+
+    /// <summary>How long one source may take to answer before the list goes on without it and names it.</summary>
+    internal static readonly TimeSpan LegAnswerWait = TimeSpan.FromSeconds(10);
+
     /// <summary>The data id of the notice shown when a source answered as many rows as it was asked for; empty otherwise.</summary>
     public const string CappedId = "inboxCapped";
 
@@ -281,6 +290,7 @@ public static class InboxLayoutArea
             host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), []));
             EnsurePreferences(host, owner, sections);
             host.UpdateData(UnreadId, string.Empty);
+            host.UpdateData(SlowId, string.Empty);
             host.UpdateData(CappedId, string.Empty);
             host.UpdateData(HiddenId, string.Empty);
             host.UpdateData(DecideStyleId, HiddenStyle);
@@ -312,7 +322,10 @@ public static class InboxLayoutArea
         // lists is also handed to the toolbar, which shows an act only where it has something to act on.
         var shown = new BehaviorSubject<(ImmutableList<InboxRow> Rows, int? NeedsYou)>((ImmutableList<InboxRow>.Empty, null));
         host.RegisterForDisposal(shown);
-        var rows = Rows(host, sections, owner, zone, acts.Rereads, (list, needsYou) => shown.OnNext((list, needsYou)));
+        var rows = Rows(host, sections, owner, zone, acts.Rereads, (list, needsYou) => shown.OnNext((list, needsYou)), LegAnswerWait);
+        // What Delete and Decide re-read at the click: every source's REAL answer, never a slow source's stand-in — an
+        // action must not skip a ticked row because its source has not answered yet. Not shown: it reports nothing.
+        var actionRows = Rows(host, sections, owner, zone, acts.Rereads);
         // The framework owns the subscription: it is disposed with the area and a feed failure goes to the area-error boundary.
         host.SubscribeToDataStream(DecideStyleId, shown.CombineLatest(host.RowSelection(InboxRows.SelectionId),
                 (feed, selected) => ToolbarOf(feed.Rows, selected, owner, feed.NeedsYou))
@@ -412,15 +425,15 @@ public static class InboxLayoutArea
         var toolbar = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(4)
             .WithView(IconButton(host.Localize("inbox.delete"), FluentIcons.Delete(), Appearance.Stealth)
                 .WithShortcut(DeleteShortcut)
-                .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, rows)), "Delete")
+                .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, actionRows)), "Delete")
             .WithView(IconButton(host.Localize("inbox.undo"), FluentIcons.ArrowUndo(), Appearance.Stealth)
                 .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo")
             // Decide every ticked approval request — the approval's own type decides and authorizes,
             // as the clicker (InboxApprovals). Other ticked rows are left alone.
             .WithView((IconButton(host.Localize("inbox.approve"), FluentIcons.Checkmark(), Appearance.Stealth) with { Style = decideStyle })
-                .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Approve)), "Approve")
+                .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, actionRows, ApprovalDecisions.Approve)), "Approve")
             .WithView((IconButton(host.Localize("inbox.reject"), FluentIcons.Dismiss(), Appearance.Stealth) with { Style = decideStyle })
-                .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Reject)), "Reject");
+                .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, actionRows, ApprovalDecisions.Reject)), "Reject");
 
         // What the source filter hides, as ONE quiet line with the way back.
         var hiddenLine = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8)
@@ -432,6 +445,10 @@ public static class InboxLayoutArea
         var main = Controls.Stack.WithWidth("100%").WithVerticalGap(8)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
             .WithView(toolbar, "Toolbar")
+            // What packages put on the inbox (UiContribution, context Inbox): Mail's Accounts button and its notes.
+            .WithView(ContributedAreas(host, owner), "Contributed")
+            // Names the sources that have not answered yet — the list shows the others meanwhile.
+            .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(SlowId))), "Slow")
             // Says which sources could not be read — an unreadable source must never look like an
             // empty one. Bound: it appears and clears with the reads, with no re-render.
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(UnreadId))), "Unread")
@@ -546,15 +563,28 @@ public static class InboxLayoutArea
             c => c.Label + (counts.TryGetValue(c.Key, out var n) && (n.Unread > 0 ? n.Unread : n.Total) is > 0 and var shown ? $"  {shown}" : string.Empty),
             StringComparer.Ordinal);
 
-    /// <summary>The tag checkboxes: Important first, then each tag by use with its count; the ones in <paramref name="ticked"/> are ticked. Pure.</summary>
+    /// <summary>
+    /// The tag checkboxes: Important first, then each tag by use with its count; the ones in <paramref name="ticked"/> are
+    /// ticked. 🚨 While the rows are INCOMPLETE (<see cref="Incomplete"/>: a source stands in or could not be read), a ticked box whose tag
+    /// is absent from them is kept from <paramref name="held"/>, ticked: its tag may sit only in the source that has not
+    /// answered, and dropping it would untick it — silently widening the filter — by the time that source answers. Pure.
+    /// </summary>
+    /// <param name="counts">Each tag in the rows, with its count.</param>
+    /// <param name="importantLabel">The Important box's label.</param>
+    /// <param name="ticked">The keys the viewer ticked.</param>
+    /// <param name="held">The boxes shown before, whose ticked ones are kept while the rows are incomplete; null once every source has answered.</param>
     internal static ImmutableList<InboxTagItem> TagItems(IEnumerable<(string Key, string Tag, int Count)> counts,
-        string importantLabel, ImmutableHashSet<string> ticked)
-        => [.. counts.Select(c => new InboxTagItem
+        string importantLabel, ImmutableHashSet<string> ticked, IReadOnlyList<InboxTagItem>? held = null)
+    {
+        var items = counts.Select(c => new InboxTagItem
         {
             Key = c.Key,
             Label = (string.Equals(c.Key, InboxRows.ImportantKey, StringComparison.Ordinal) ? $"⭐ {importantLabel}" : "#" + c.Tag) + $"  {c.Count}",
             Checked = ticked.Contains(c.Key),
-        })];
+        }).ToImmutableList();
+        var present = items.Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
+        return items.AddRange((held ?? []).Where(item => item.Checked && ticked.Contains(item.Key) && !present.Contains(item.Key)));
+    }
 
     /// <summary>The data id of the Approve / Reject style: empty while they apply, hidden otherwise.</summary>
     public const string DecideStyleId = "inboxDecideStyle";
@@ -566,7 +596,7 @@ public static class InboxLayoutArea
     internal static ImmutableList<(string Key, string Label, string Icon)> CategoriesOf(LayoutAreaHost host, ImmutableArray<InboxSection> sections)
         => [.. sections.GroupBy(s => s.Category, StringComparer.Ordinal)
             .Select(c => (Key: c.Key, Label: Label(key => host.Localize(key), c.First().CategoryLabelKey, c.Key),
-                Icon: c.Select(s => s.SourceIcon).FirstOrDefault(i => i.Length > 0) ?? string.Empty))];
+                Icon: InboxSourceIcons.CategoryIcon(c.Key, c.Select(s => s.SourceIcon))))];
 
     /// <summary>
     /// The side menu's options: All (empty key), then each category with its symbol and count — the
@@ -646,12 +676,13 @@ public static class InboxLayoutArea
     /// <param name="source">The answers.</param>
     /// <param name="wait">How long the source may stay silent.</param>
     /// <param name="fallback">What a silent source reads as.</param>
-    internal static IObservable<T> FirstAnswerWithin<T>(IObservable<T> source, TimeSpan wait, T fallback)
+    /// <param name="scheduler">Timer seam for tests.</param>
+    internal static IObservable<T> FirstAnswerWithin<T>(IObservable<T> source, TimeSpan wait, T fallback, IScheduler? scheduler = null)
         => Observable.Create<T>(observer =>
         {
             var gate = new object();
             var answered = false;
-            var timer = Observable.Timer(wait).Subscribe(_ =>
+            var timer = Observable.Timer(wait, scheduler ?? DefaultScheduler.Instance).Subscribe(_ =>
                 {
                     lock (gate)
                     {
@@ -836,9 +867,17 @@ public static class InboxLayoutArea
     /// the sources switched on and put in the chosen order. A leg that cannot be read contributes no
     /// rows and is LOGGED — one provider's failure must not blank the list the others feed.
     /// </summary>
+    /// <param name="host">The inbox area's host.</param>
+    /// <param name="sections">The resolved legs.</param>
+    /// <param name="owner">The inbox's owner.</param>
+    /// <param name="zone">The viewer's time zone.</param>
+    /// <param name="rereads">Ticks that read every leg again.</param>
+    /// <param name="onShown">Told what the list shows, on every change.</param>
+    /// <param name="legBound">The bound on each leg's FIRST answer (<see cref="FanIn"/>) — the DISPLAY's; null for an
+    /// action's preflight, which must act on every source's real answer and never on a stand-in.</param>
     internal static IObservable<ImmutableList<InboxRow>> Rows(
         LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
-        IObservable<long>? rereads = null, Action<ImmutableList<InboxRow>, int?>? onShown = null)
+        IObservable<long>? rereads = null, Action<ImmutableList<InboxRow>, int?>? onShown = null, TimeSpan? legBound = null)
     {
         // Resolved ONCE, on the render turn — the connection reads answer on another thread.
         var allSources = host.Localize("inbox.only.all");
@@ -860,14 +899,14 @@ public static class InboxLayoutArea
                 host.UpdateData(SourceOptionsId, SourceOptions(allSources,
                     sourceOptions.Where(s => connected.Contains(s.Id)).Select(s => (s.Key, s.Label, s.Icon))));
             })
-            .Select(connected => RowsOf(host, [.. sections.Where(s => connected.Contains(s.Source))], owner, zone, viewer, rereads, onShown))
+            .Select(connected => RowsOf(host, [.. sections.Where(s => connected.Contains(s.Source))], owner, zone, viewer, rereads, onShown, legBound))
             .Switch();
     }
 
     /// <summary>The rows of <paramref name="sections"/> — the connected sources' legs.</summary>
     private static IObservable<ImmutableList<InboxRow>> RowsOf(
         LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone, AccessContext? viewerContext,
-        IObservable<long>? rereads, Action<ImmutableList<InboxRow>, int?>? onShown = null)
+        IObservable<long>? rereads, Action<ImmutableList<InboxRow>, int?>? onShown = null, TimeSpan? legBound = null)
     {
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
@@ -942,19 +981,21 @@ public static class InboxLayoutArea
                     return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source], 0));
                 });
 
-        IObservable<ImmutableList<InboxRow>> Merged(string term) => sections
-            .Select(section => Leg(section, term))
-            .CombineLatest()
+        // The merged rows, and whether they are incomplete (a source stands in or could not be read).
+        IObservable<(ImmutableList<InboxRow> Rows, bool Incomplete)> Merged(string term) => FanIn(
+                sections.Select(section => (labels[section.Source], Leg(section, term))), legBound)
             .Do(legs =>
             {
                 host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread)));
+                if (SlowSources(legs.Select(leg => leg.Slow), display: legBound is not null) is { } slow)
+                    host.UpdateData(SlowId, SlowNotice(host, slow));
                 // Each leg against ITS OWN bound — a provider may ask for fewer than the page's.
                 host.UpdateData(CappedId, Capped(sections.Zip(legs, (section, leg) => (section.Query, leg.Fetched)))
                     ? host.Localize("inbox.capped")
                     : string.Empty);
             })
-            .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)))
-            .Do(merged => host.UpdateData(KindLabelsId, KindLabels(categories, InboxRows.CategoryCounts(merged))));
+            .Select(legs => (Rows: InboxRows.Merge(legs.Select(leg => leg.Rows)), Incomplete: Incomplete(legs.Select(leg => (leg.Unread, leg.Slow)))))
+            .Do(merged => host.UpdateData(KindLabelsId, KindLabels(categories, InboxRows.CategoryCounts(merged.Rows))));
 
         // The date bounds (before:/after:) are applied to the rows by InboxRows.Apply; only the
         // remaining text goes to the sources.
@@ -969,8 +1010,9 @@ public static class InboxLayoutArea
             .CombineLatest(rereads ?? Observable.Return(0L), (term, _) => term)
             .Select(Merged)
             .Switch()
-            .CombineLatest(filter, tagItems, preferences, (rows, viewFilter, items, stored) =>
+            .CombineLatest(filter, tagItems, preferences, (merged, viewFilter, items, stored) =>
             {
+                var rows = merged.Rows;
                 // The view's filter (search, Only) with the person's persisted choices.
                 var asked = WithPreferences(viewFilter, stored ?? expected);
                 if (stored is not null)
@@ -979,7 +1021,8 @@ public static class InboxLayoutArea
                 host.UpdateData(StateStylesId, StateStyles(sections, asked.Kinds));
                 // The tag checkboxes follow the rows; a box the viewer ticked stays ticked while its tag exists.
                 var ticked = items.Where(item => item.Checked).Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
-                var wanted = TagItems(InboxRows.TagCounts(rows), importantLabel, ticked);
+                // While a source still stands in, a ticked tag absent from the rows may be that source's: it stays ticked.
+                var wanted = TagItems(InboxRows.TagCounts(rows), importantLabel, ticked, merged.Incomplete ? items : null);
                 if (!wanted.SequenceEqual(items))
                     host.UpdateData(TagItemsId, wanted);
                 asked = asked with { TagKeys = [.. wanted.Where(item => item.Checked).Select(item => item.Key)] };
@@ -1002,6 +1045,95 @@ public static class InboxLayoutArea
     /// <param name="legs">Each leg's query and how many nodes it fetched.</param>
     internal static bool Capped(IEnumerable<(string Query, int Fetched)> legs)
         => legs.Any(leg => leg.Fetched >= InboxQueries.EffectiveLimit(leg.Query));
+
+    /// <summary>
+    /// Every leg's answer, combined — with ONE bound per leg on its FIRST answer: a leg that has not answered within
+    /// <paramref name="bound"/> stands in as an empty answer naming its source (<c>Slow</c>), so the others are listed
+    /// at once, and its own answer replaces the stand-in whenever it arrives. Without the bound one source that never
+    /// answers holds every other one, and the list spins for all of them (2026-10-30). Emits once every leg has an
+    /// answer or a stand-in, then on every change.
+    /// </summary>
+    /// <param name="legs">Each leg with the label its notice names.</param>
+    /// <param name="bound">How long a leg's first answer may take; null waits for every leg's real answer (an action's preflight).</param>
+    /// <param name="scheduler">Timer seam for tests.</param>
+    internal static IObservable<ImmutableList<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched, string? Slow)>> FanIn(
+        IEnumerable<(string Label, IObservable<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched)> Leg)> legs,
+        TimeSpan? bound, IScheduler? scheduler = null)
+        // 🚨 The arbitration between a leg's first answer and its deadline is SERIALIZED (FirstAnswerWithin): the stand-in
+        // is emitted only while no real answer has been, so it can never land after — and replace — the real rows.
+        => legs.Select(leg =>
+            {
+                var answers = leg.Leg.Select(answer => (answer.Rows, answer.Unread, answer.Fetched, Slow: (string?)null));
+                return bound is { } wait
+                    ? FirstAnswerWithin(answers, wait, (ImmutableList<InboxRow>.Empty, (string?)null, 0, (string?)leg.Label), scheduler)
+                    : answers;
+            })
+            .CombineLatest()
+            .Select(answers => answers.ToImmutableList());
+
+    /// <summary>
+    /// The sources the slow notice names, once each — or null when this feed must not publish the notice at all. Only
+    /// the bounded DISPLAY feed knows which sources stand in: an action's preflight has no bound, so it never carries a
+    /// stand-in and would clear the notice while the grid still omits the silent source. Pure.
+    /// </summary>
+    /// <param name="slow">Each leg's stand-in label, or null when it answered.</param>
+    /// <param name="display">Whether this is the bounded display feed.</param>
+    internal static ImmutableList<string>? SlowSources(IEnumerable<string?> slow, bool display)
+        => display ? slow.OfType<string>().Distinct(StringComparer.Ordinal).ToImmutableList() : null;
+
+    /// <summary>
+    /// Whether the merged rows are INCOMPLETE: a leg still stands in (<c>Slow</c>) or could not be read (<c>Unread</c>) —
+    /// including a silent leg the query's stall terminal ended. Either way a source's rows are missing, so a ticked tag
+    /// absent from the rows may be that source's and must stay ticked. Pure.
+    /// </summary>
+    /// <param name="legs">Each leg's unread label and stand-in label.</param>
+    internal static bool Incomplete(IEnumerable<(string? Unread, string? Slow)> legs)
+        => legs.Any(leg => leg.Slow is not null || leg.Unread is not null);
+
+    /// <summary>The notice for the sources that have not answered: empty when none, else the sentence naming each once.</summary>
+    internal static string SlowNotice(LayoutAreaHost host, IEnumerable<string?> slow)
+    {
+        var names = slow.OfType<string>().Distinct(StringComparer.Ordinal).ToImmutableList();
+        return names.IsEmpty ? string.Empty : host.Localize("inbox.slow", string.Join(", ", names));
+    }
+
+    /// <summary>
+    /// The areas packages embed on the inbox (<see cref="UiContribution.InboxContext"/>), live from the catalog: one
+    /// row of embedded areas of the user node (or of the contribution's own partition), in their order. Nothing while
+    /// none is declared.
+    /// </summary>
+    private static IObservable<UiControl?> ContributedAreas(LayoutAreaHost host, string owner)
+        // A fault reaches the area's error boundary, which says so — never an empty lane that hides the entries.
+        => InboxContributions(host, owner)
+            .Select(areas =>
+            {
+                if (areas.Count == 0)
+                    return (UiControl?)null;
+                var row = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(12);
+                foreach (var entry in areas)
+                    row = row.WithView(Controls.LayoutArea(entry.Address is null ? host.Hub.Address : new Address(entry.Address), entry.Area)
+                        .WithShowProgress(false), "Contribution-" + entry.Id);
+                return (UiControl?)row;
+            });
+
+    /// <summary>
+    /// The inbox contributions this viewer sees, live: the catalog projected against the user node's SHAPE (read live,
+    /// so a shape gate is decided on the node, never on its absence) and filtered by the viewer's LIVE effective
+    /// permissions on it — the profile and settings lanes' rule. Data only.
+    /// </summary>
+    private static IObservable<IReadOnlyList<(string Id, string? Address, string Area, int Order, Permission RequiredPermission)>> InboxContributions(
+        LayoutAreaHost host, string owner)
+    {
+        if (host.Hub.ServiceProvider.GetService<UiContributionCatalog>() is not { } catalog)
+            return Observable.Return<IReadOnlyList<(string, string?, string, int, Permission)>>([]);
+        var userPath = host.Hub.Address.ToString();
+        var userNode = host.Workspace.GetMeshNodeStream().Select(node => (MeshNode?)node).StartWith((MeshNode?)null);
+        return catalog.Contributions
+            .CombineLatest(userNode, AdminAppNodeType.LiveAdminVerdict(host.Hub, owner), host.Hub.GetEffectivePermissions(userPath),
+                (contributions, node, isAdmin, permissions) => UiContributionProjection.FilterInboxAreas(
+                    UiContributionProjection.ProjectInboxAreas(contributions, userPath, node, isAdmin, owner), permissions))
+            .DistinctUntilChanged(areas => string.Join('\n', areas.Select(a => $"{a.Id}|{a.Address}|{a.Area}")), StringComparer.Ordinal);
+    }
 
     /// <summary>
     /// The notice for the sources that could not be read: empty when every leg answered, else the
