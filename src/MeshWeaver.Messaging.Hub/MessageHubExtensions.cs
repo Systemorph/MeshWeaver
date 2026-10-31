@@ -276,21 +276,30 @@ public static class MessageHubExtensions
 
 
     /// <summary>
-    /// Starts a long-running operation scope that keeps the Orleans grain alive.
-    /// Uses GrainLongRunningOperationCallback (RegisterGrainTimer + DelayDeactivation)
-    /// when running in Orleans, falls back to Observable.Interval heartbeat otherwise.
-    /// Dispose the returned IDisposable when the operation completes.
-    /// In monolith mode, returns a no-op disposable.
+    /// Starts a step of work this hub's activation owns, and holds it until the returned scope is
+    /// disposed. Dispose the scope in the step's finally (<c>Observable.Using</c> or <c>using</c>),
+    /// so a faulted step releases it too.
+    /// <para>On EVERY host it marks the <see cref="HubStepsInFlight"/> of the hub AND of every
+    /// ancestor up its parent chain, so a recycle that must not drop the step (a module swap's recycle
+    /// wave) waits for it to end (#7324). A step held on a hosted CHILD (a thread's execution hub, a
+    /// layout area) therefore keeps its owning per-node activation from being recycled under it: the
+    /// wave reads the owner's marker, and tearing the owner down tears the child down too. On Orleans it
+    /// also keeps the grain alive (GrainLongRunningOperationCallback: RegisterGrainTimer plus
+    /// DelayDeactivation). In-process there is no grain to keep alive, and the marker is the
+    /// whole hold.</para>
     /// </summary>
+    /// <param name="hub">The hub whose step this is.</param>
+    /// <returns>The step's hold. Disposing it more than once releases it once.</returns>
     public static IDisposable BeginAsyncOperation(this IMessageHub hub)
     {
+        var step = MarkStepOnChain(hub);
         // Walk parent chain to find the grain-level callback
         var current = hub;
         while (current != null)
         {
             var callback = current.Configuration.Get<GrainLongRunningOperationCallback>();
             if (callback != null)
-                return callback.BeginOperation();
+                return new CompositeDisposable(callback.BeginOperation(), step);
             var parent = current.Configuration.ParentHub;
             if (parent == current) break;
             current = parent;
@@ -298,7 +307,7 @@ public static class MessageHubExtensions
 
         // No grain callback anywhere in the parent chain ⇒ we're in monolith
         // mode (or in a hub kind that has no long-running-operation support).
-        // The XML doc above documents this returns a no-op disposable. The
+        // There is no grain hold to take here, never a heartbeat. The
         // previous shape posted HeartBeatEvent on a 25s Observable.Interval
         // intending to "stop on first DeliveryFailure when no handler is
         // registered" — but the heartbeat timer runs on a background thread
@@ -312,8 +321,26 @@ public static class MessageHubExtensions
         // "No handler found for HeartBeatEvent" + "DeliveryFailure posted
         // with no AccessContext" every 25 s until the runner kills the host.
         // In monolith there's nothing for the heartbeat to keep alive anyway
-        // (no grain to delay-deactivate), so a no-op is the correct shape.
-        return Disposable.Empty;
+        // (no grain to delay-deactivate), so no grain hold is the correct shape. The step's
+        // in-flight mark is all that is left (#7324).
+        return step;
+    }
+
+    /// <summary>Marks one step in flight on <paramref name="hub"/> and on every ancestor up its parent
+    /// chain; the returned scope releases every mark exactly once.</summary>
+    private static IDisposable MarkStepOnChain(IMessageHub hub)
+    {
+        var marks = new CompositeDisposable();
+        var current = hub;
+        while (current != null)
+        {
+            if (current.Get<HubStepsInFlight>() is { } steps)
+                marks.Add(steps.Begin());
+            var parent = current.Configuration.ParentHub;
+            if (parent == current) break;
+            current = parent;
+        }
+        return marks;
     }
 
     /// <summary>
