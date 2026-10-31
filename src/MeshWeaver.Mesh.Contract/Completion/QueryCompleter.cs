@@ -232,7 +232,13 @@ public sealed class QueryCompleter
             .Concat(Observable.Defer(() => registered.Merge(activate)))
             .Take(1)
             .Timeout(SourceBudget)
-            .Select(type => ContentSchemaFacts.FromType(type, hub.JsonSerializerOptions, MeshWeaver.Messaging.Serialization.XmlDocsExtensions.XmlDocs(hub)));
+            // The generator reads the XML-doc summary of every property it walks, so it runs on the
+            // mesh's documentation read edge, never on the completing turn (#7386).
+            .SelectMany(type => MeshWeaver.Messaging.Serialization.XmlDocsExtensions.OnXmlDocsReadEdge(hub, ct =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return ContentSchemaFacts.FromType(type, hub.JsonSerializerOptions, MeshWeaver.Messaging.Serialization.XmlDocsExtensions.XmlDocs(hub));
+            }));
     }
 
     private IObservable<IReadOnlyList<QueryNodeFact>> NodeTypes(string prefix)
