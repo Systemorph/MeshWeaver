@@ -576,14 +576,14 @@ public sealed class ModuleLiveUpdater : IDisposable
                 $"{p.Name} swapped live to {p.Plan.To}{(swapped.Count > 1 ? $" with {string.Join(", ", swapped.Skip(1))}" : "")}"
                 + (others.IsEmpty ? "" : $" in one swap with {string.Join(", ", others)}")
                 + $"; {hubs.Count} hub(s) recycled"
-                + (deferred.IsEmpty ? "" : $" ({deferred.Count} of them deferred until their in-flight step ends: {string.Join(", ", deferred)})")
+                + (deferredHubs.IsEmpty ? "" : $" ({deferredHubs.Count} of them deferred until their in-flight step ends: {string.Join(", ", deferred)})")
                 + (p.HandOverFault is { } fault ? $"; {fault}" : ""))
             {
                 FromLocation = p.Plan.From,
                 ToLocation = p.Plan.To,
                 Swapped = swapped,
                 Recycled = hubs.Count,
-                Deferred = deferred.Count,
+                Deferred = deferredHubs.Count,
             };
         }).ToImmutableList();
 
