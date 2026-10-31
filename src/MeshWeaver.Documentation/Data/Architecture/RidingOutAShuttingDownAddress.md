@@ -647,8 +647,15 @@ Pinned by `AParkedSubscribeOnALeavingSiloIsRefusedTest` (MeshWeaver.FaultInjecti
   (`FaultInjectionCluster.HubBuilds`). A subscribe from silo 0 is parked there, and the harness's
   `Parked` signal confirms it. Silo 1 is then told to stop and lingers. The subscriber must be served
   within 10 s by a new activation on silo 0 while silo 1's build is still held.
-- **Without the stop race.** The test is red at its 10 s bound. The parked subscribe waits on the
-  held build, and nothing answers it.
+- **Without the router exemption.** The test is red at its 10 s bound: the refusal is dropped at the
+  gate, so nothing answers the parked subscribe.
+- **The stop race on its own.** `AParkedRequestOnALeavingSiloWithNoHandOffIsRefusedTest` isolates it.
+  Every other silo is recorded as draining (`FaultInjectionCluster.LeaveNoHandOffTarget`), so the
+  lingering grain has no hand-off target and nothing migrates or deactivates it. Its build stays held
+  for the whole case: the long cold build. A request from silo 0 parked there must be refused
+  `ShuttingDown` within 10 s. Without the race it is red at that bound, because nothing ever answers
+  it. In the two-silo case above, the hand-off's deactivation settles the parked delivery even without
+  the race, which is why that case alone could not show the race was needed.
 - **Negative control.** `ASubscribeParkedOnASiloThatStaysUpIsAnsweredTest`: the same parked subscribe
   on a silo that stays up is answered by that silo once its build is released.
 - **The router half.** It is pinned in `OrleansRoutingShutdownClassificationTest`: a stamped refusal

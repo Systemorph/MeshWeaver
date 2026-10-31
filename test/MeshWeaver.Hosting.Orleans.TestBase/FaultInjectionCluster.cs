@@ -206,6 +206,22 @@ public class FaultInjectionCluster : IAsyncLifetime
     }
 
     /// <summary>
+    /// Leaves a grain on silo <paramref name="leaving"/> with NOWHERE to hand its address off to: every
+    /// other silo is recorded as draining in <paramref name="leaving"/>'s drain roster — the production
+    /// shape of every peer draining at once (#6865). A lingering grain there then keeps its activation:
+    /// no migration and no deactivation settle what it has parked, so whatever answers a parked delivery
+    /// is the grain's own reaction to the stop (#7470).
+    /// </summary>
+    /// <param name="leaving">The silo whose grains must find no hand-off target.</param>
+    public void LeaveNoHandOffTarget(int leaving)
+    {
+        var roster = Silo(leaving).GetRequiredService<ClusterDrainRoster>();
+        for (var i = 0; i < _silos.Count; i++)
+            if (i != leaving)
+                roster.MarkDraining(Silo(i).GetRequiredService<global::Orleans.Runtime.ILocalSiloDetails>().SiloAddress);
+    }
+
+    /// <summary>
     /// Replaces the silo's in-memory partition provider with one whose adapter is this silo's
     /// <see cref="FaultInjectingStorageAdapter"/> over the shared store. The provider registrations
     /// are factories, so each one is wrapped rather than removed: whatever it builds is kept, except

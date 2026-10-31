@@ -180,3 +180,74 @@ public class ASubscribeParkedOnASiloThatStaysUpIsAnsweredTest(ASubscribeParkedOn
     /// <summary>Its own cluster, so the stopping case cannot leave it changed.</summary>
     public class Cluster : FaultInjectionCluster;
 }
+
+/// <summary>
+/// The case that isolates the grain's own reaction to the stop (#7470): a request parked on a held
+/// build, on a silo that begins to stop with NOWHERE to hand off to
+/// (<see cref="FaultInjectionCluster.LeaveNoHandOffTarget"/>). Nothing migrates or deactivates the
+/// activation, and its build stays held for the whole case, so the only thing that can answer the parked
+/// request is the park's race with the host's stop (<c>MessageHubGrain.HubReadyUnlessTheHostLeaves</c>).
+/// The requester must get the transient <c>ShuttingDown</c> refusal promptly; without the race it waits
+/// out its own budget, as production's subscribers did.
+/// </summary>
+public class AParkedRequestOnALeavingSiloWithNoHandOffIsRefusedTest(AParkedRequestOnALeavingSiloWithNoHandOffIsRefusedTest.Cluster mesh)
+    : IClassFixture<AParkedRequestOnALeavingSiloWithNoHandOffIsRefusedTest.Cluster>
+{
+    private static readonly TimeSpan Prompt = TimeSpan.FromSeconds(10);
+
+    [Fact(Timeout = 180_000)]
+    public async Task ARequestParkedOnAStoppingSiloThatCannotHandOff_IsRefusedShuttingDown()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ns = $"nohandoff-{Guid.NewGuid():N}";
+        var path = $"{ns}/Doc";
+        using var hold = mesh.HubBuilds(1).Hold(path);
+        try
+        {
+            var ownerServices = mesh.Silo(1);
+            var ownerAccess = ownerServices.GetRequiredService<AccessService>();
+            await ownerAccess.RunAsSystem(() => ownerServices.GetRequiredService<IMeshService>().CreateNode(
+                    new MeshNode("Doc", ns) { Name = "v1", NodeType = "Markdown", State = MeshNodeState.Active }))
+                .Should().Within(TestTimeouts.Convergence).Emit("the node is created", ct);
+            using var activation = ownerAccess.RunAsSystem(() => mesh.Hub(1).NodeOperationIssuingHub()
+                    .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
+                .Subscribe(_ => { }, _ => { });
+            await hold.Arrivals.Should().Within(TestTimeouts.Convergence).Emit(
+                "the grain activates on silo 1 and its build reaches the hold", ct);
+
+            mesh.LeaveNoHandOffTarget(1);
+
+            // The request under test: from silo 0, parked on silo 1's held build.
+            var requester = mesh.Hub(0).NodeOperationIssuingHub();
+            var outcome = mesh.Silo(0).GetRequiredService<AccessService>()
+                .RunAsSystem(() => requester.Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
+                .Take(1)
+                .Materialize()
+                .Replay();
+            using var connected = outcome.Connect();
+            var requesterAddress = requester.Address.ToString();
+            await mesh.HubBuilds(1).Parked
+                .Where(p => p.Path == path && p.Delivery.Sender?.ToString() == requesterAddress)
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("silo 1's grain accepts the request from silo 0 and parks it on the held build", ct);
+
+            await using var lingering = mesh.Linger(1);
+            var answer = await outcome.Should().Within(Prompt).Emit(
+                "a request parked on a silo that begins to stop, with no hand-off to settle it, is refused "
+                + "by the grain itself — never left to wait out its budget (#7470)", ct);
+            answer.Kind.Should().Be(NotificationKind.OnError,
+                $"the parked request is refused, not served — got {answer.Kind}");
+            answer.Exception.Should().BeOfType<DeliveryFailureException>()
+                .Which.Failure.ErrorType.Should().Be(ErrorType.ShuttingDown,
+                    "the refusal is the transient one a requester rides out");
+            hold.IsClosed.Should().BeTrue("the build was held throughout, so nothing built answered it");
+        }
+        finally
+        {
+            hold.Release();
+        }
+    }
+
+    /// <summary>Its own cluster: the case stops a silo and rewrites its drain roster.</summary>
+    public class Cluster : FaultInjectionCluster;
+}
