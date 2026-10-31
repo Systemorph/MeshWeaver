@@ -618,6 +618,36 @@ def handover_problems(doc: dict) -> list[str]:
     if verdict.get("permissions") != {"actions": "read"}:
         problems.append("jobs.verdict needs exactly `permissions: {actions: read}` to list the "
                         "run's jobs.")
+    problems.extend(ledger_problems(doc))
+    return problems
+
+
+# The ledger pair's severity (#4413). Under policy `platform-rolls-independently-of-packages` the
+# combo verdict is ADVISORY: a Red is named on the roll and the platform still rolls, and an
+# unverified instance rolls UNVERIFIED. So an unverified fleet is never a primary path broken, and
+# its ledger must not carry a release-blocking severity. `node-repo-ci-failure.yml` defaults
+# `severity` to sev:H (a red MAIN build), so a caller that omits it files a release blocker.
+LEDGER_JOBS = ("combo-red", "combo-green")
+ADVISORY_SEVERITIES = ("sev:M", "sev:L")
+
+
+def ledger_problems(doc: dict) -> list[str]:
+    """Each ledger job passes an advisory severity, never the reporter's sev:H default (#4413)."""
+    problems: list[str] = []
+    jobs = doc.get("jobs", {})
+    for name in LEDGER_JOBS:
+        job = jobs.get(name)
+        if not isinstance(job, dict) or "node-repo-ci-failure.yml" not in str(job.get("uses", "")):
+            problems.append(f"jobs.{name} must call node-repo-ci-failure.yml — the ledger pair moved "
+                            "and this guard did not follow.")
+            continue
+        severity = (job.get("with") or {}).get("severity")
+        if severity not in ADVISORY_SEVERITIES:
+            problems.append(
+                f"jobs.{name} passes severity {severity!r}; it must pass one of "
+                f"{', '.join(ADVISORY_SEVERITIES)}. The combo verdict is advisory (policy "
+                "`platform-rolls-independently-of-packages`), and an omitted severity becomes the "
+                "reporter's sev:H default — a release blocker for a condition that holds no roll.")
     return problems
 
 
@@ -872,6 +902,12 @@ def self_test(root: Path) -> int:
         "the digest key different in the verify job":
             lambda jobs: [step["env"].update(MW_COMBO_DIGEST_KEY="${{ secrets.OTHER }}")
                           for step in jobs["verify"]["steps"] if "--slot" in str(step.get("run", ""))],
+        "the red ledger's severity dropped (reporter default sev:H)":
+            lambda jobs: jobs["combo-red"]["with"].pop("severity"),
+        "the red ledger filed as a release blocker":
+            lambda jobs: jobs["combo-red"]["with"].update(severity="sev:H"),
+        "the green ledger's severity dropped":
+            lambda jobs: jobs["combo-green"]["with"].pop("severity"),
         "the verdict no longer counting jobs":
             lambda jobs: jobs["verdict"].update(steps=[
                 step for step in jobs["verdict"]["steps"] if step.get("id") != "jobs"]),
