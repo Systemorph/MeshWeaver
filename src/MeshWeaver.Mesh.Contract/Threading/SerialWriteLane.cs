@@ -34,9 +34,14 @@ public sealed class SerialWriteLane : IDisposable
 
     private int _disposed;
     // Every write's ticket, in subscribe order, and the last ticket a DRAIN still runs (see
-    // DrainQueued): a write subscribed after the drain began is refused at its turn.
+    // CloseForDrain): a write subscribed after the drain began is refused at its turn.
     private long _enqueued;
     private long _closedAfter = long.MaxValue;
+    // The ticket of the last write whose turn is OVER — run to completion, refused, or skipped.
+    // Turns are taken strictly in ticket order (Concat), so this only grows, and "every write up to
+    // ticket N is done" is exactly `_finished >= N` — continuously, with no window between one
+    // write's dequeue and its admission (which the waiting/in-flight counters had).
+    private long _finished;
     private long _admitted;
     private int _waiting;
     private int _waitingDeletes;
@@ -124,18 +129,18 @@ public sealed class SerialWriteLane : IDisposable
     {
         // Given up while queued: it already left the counters, nothing runs, the lane moves on.
         if (!pending.TryLeaveQueue())
-            return Observable.Empty<Unit>();
+            return Observable.Empty<Unit>().Finally(() => Finish(pending.Ticket));
         LeaveQueue(pending.IsDelete);
 
         // The lane was disposed (its mesh is tearing down) before this write's turn: the write never
         // runs, and its caller is TOLD so instead of waiting for a verdict nobody sends.
         if (Volatile.Read(ref _disposed) != 0)
-            return Refuse(observer, context, new ObjectDisposedException(Name,
+            return Refuse(observer, context, pending.Ticket, new ObjectDisposedException(Name,
                 $"Write lane '{Name}' was disposed before this write's turn; the write did not run."));
         // Subscribed after a drain began (mesh teardown): refused like any call a draining pool
-        // will not admit; the writes queued BEFORE the drain still run (DrainQueued).
+        // will not admit; the writes queued BEFORE the drain still run (CloseForDrain).
         if (pending.Ticket > Interlocked.Read(ref _closedAfter))
-            return Refuse(observer, context, new OperationCanceledException(
+            return Refuse(observer, context, pending.Ticket, new OperationCanceledException(
                 $"Write lane '{Name}' is draining; a write subscribed after the drain began does not run."));
 
         Interlocked.Increment(ref _admitted);
@@ -160,6 +165,7 @@ public sealed class SerialWriteLane : IDisposable
                 linked?.Dispose();
                 Volatile.Write(ref _inFlight, 0);
                 Volatile.Write(ref _headIsDelete, 0);
+                Finish(pending.Ticket);
             });
     }
 
@@ -169,41 +175,39 @@ public sealed class SerialWriteLane : IDisposable
     /// teardown on its hub turn — the boundary <c>IoPool</c> keeps for its own refusals. The item
     /// completes after the delivery, so the lane moves on normally.
     /// </summary>
-    private IObservable<Unit> Refuse<T>(IObserver<T> observer, ExecutionContext? context, Exception refusal)
+    private IObservable<Unit> Refuse<T>(IObserver<T> observer, ExecutionContext? context, long ticket, Exception refusal)
         => Observable.Start(
-            () => Deliver(System.Reactive.Notification.CreateOnError<T>(refusal), observer, context),
-            TaskPoolScheduler.Default);
+                () => Deliver(System.Reactive.Notification.CreateOnError<T>(refusal), observer, context),
+                TaskPoolScheduler.Default)
+            .Finally(() => Finish(ticket));
+
+    private void Finish(long ticket) => Volatile.Write(ref _finished, ticket);
 
     /// <summary>
-    /// The lane's part of a mesh DRAIN (<see cref="IoPoolRegistry.DrainAll()"/>): closes it to writes
-    /// subscribed from now on, then lets every write queued before that run in turn, while the
-    /// budget pool still admits them — so a healthy backlog finishes instead of being refused when
-    /// the pool closes. Blocks, like the pool drain it precedes, under the same STALL bound: it waits
-    /// as long as the lane keeps advancing and gives up after <paramref name="grace"/> with no
-    /// progress.
+    /// Closes the lane to writes subscribed from now on — the first half of the lane's part in a
+    /// mesh DRAIN (<see cref="IoPoolRegistry.DrainAll()"/>). Writes already queued keep running in
+    /// turn; later ones are refused at theirs. Idempotent.
     /// </summary>
-    /// <param name="grace">How long the lane may stand still before the drain stops waiting.</param>
-    /// <returns><c>true</c> when the lane emptied; <c>false</c> when it stalled with work left.</returns>
-    internal bool DrainQueued(TimeSpan grace)
-    {
-        Interlocked.CompareExchange(ref _closedAfter, Interlocked.Read(ref _enqueued), long.MaxValue);
-        while (Busy())
-        {
-            var admitted = Interlocked.Read(ref _admitted);
-            var waiting = Volatile.Read(ref _waiting);
-            var progressed = SpinWait.SpinUntil(
-                () => !Busy() || Interlocked.Read(ref _admitted) != admitted || Volatile.Read(ref _waiting) != waiting,
-                grace);
-            if (!progressed)
-                return false;
-        }
-        return true;
-    }
+    internal void CloseForDrain()
+        => Interlocked.CompareExchange(ref _closedAfter, Interlocked.Read(ref _enqueued), long.MaxValue);
 
     /// <summary>Whether a drain has closed the lane to writes subscribed from now on.</summary>
     internal bool IsDraining => Interlocked.Read(ref _closedAfter) != long.MaxValue;
 
-    private bool Busy() => Volatile.Read(ref _inFlight) != 0 || Volatile.Read(ref _waiting) > 0;
+    /// <summary>
+    /// Whether every write the lane accepted before the drain closed it has had its turn. Late
+    /// arrivals do not count: they are refused, and they can neither keep a drain waiting nor make
+    /// one look finished early.
+    /// </summary>
+    internal bool IsDrained => Interlocked.Read(ref _finished) >= Interlocked.Read(ref _closedAfter);
+
+    /// <summary>
+    /// The lane's progress mark for a drain: it changes exactly when a write's turn starts or ends —
+    /// never because a late write arrived or was given up while queued behind a stuck head.
+    /// </summary>
+    internal (long Admitted, long Finished) DrainProgress
+        => (Interlocked.Read(ref _admitted), Interlocked.Read(ref _finished));
+
 
     private void LeaveQueue(bool isDelete)
     {

@@ -294,21 +294,35 @@ public sealed class IoPoolRegistry : IDisposable
 
         // 🚨 THE LANES FIRST, while the budget pools still admit (MeshWeaver#7464). A serial lane
         // has only its head admitted to a pool; draining the pool first would refuse every write
-        // queued behind it instead of giving that backlog the drain's grace. Each lane closes to new
-        // writes and runs what it already holds, under the same stall bound as a pool drain. A lane
-        // that stalls is REPORTED with what it still held — those writes are refused when the pools
-        // close below, and a report that said nothing about them would read as a clean drain.
-        foreach (var lane in _lanes.Values)
+        // queued behind it instead of giving that backlog the drain's grace. So every lane is CLOSED
+        // to new writes at once, and then all of them are watched TOGETHER under ONE stall bound: the
+        // wait goes on while any lane's writes advance and ends after one DrainGrace in which none
+        // did — never a fresh grace per lane, which would multiply the bound by the lane count.
+        var lanes = _lanes.Values.ToArray();
+        foreach (var lane in lanes)
+            lane.CloseForDrain();
+        while (lanes.Any(lane => !lane.IsDrained))
         {
-            if (lane.DrainQueued(_options.DrainGrace))
-                continue;
+            var marks = lanes.Select(lane => lane.DrainProgress).ToArray();
+            var progressed = SpinWait.SpinUntil(
+                () => lanes.All(lane => lane.IsDrained)
+                      || lanes.Where((lane, i) => lane.DrainProgress != marks[i]).Any(),
+                _options.DrainGrace);
+            if (!progressed)
+                break;
+        }
+        // A lane still holding accepted writes now is STALLED: its head is stuck, or waits on a
+        // budget that no other lane released. Named here, as a warning — not added to the cancelled
+        // set: those writes are not cancelled by this step (the pool drain below cancels a stuck head
+        // and counts it there once; the writes behind it are refused when their turn comes).
+        foreach (var lane in lanes.Where(lane => !lane.IsDrained))
+        {
             var reading = lane.Read();
-            var held = reading.InFlight + reading.Waiting;
-            cancelled.Add(new PoolResidual("lane:" + lane.Name, held));
             _logger?.LogWarning(
                 "IoPoolDrain: write lane '{Lane}' made no progress within the {Grace} drain grace with "
-                + "{Held} write(s) still held — they are refused when the pools close. Find why the lane "
-                + "stalled; do not widen the grace.", lane.Name, _options.DrainGrace, held);
+                + "{Held} accepted write(s) not yet run — the pool drain below cancels its head and the "
+                + "writes behind it are refused. Find why the lane stalled; do not widen the grace.",
+                lane.Name, _options.DrainGrace, reading.InFlight + reading.Waiting);
         }
 
         foreach (var kvp in _pools)

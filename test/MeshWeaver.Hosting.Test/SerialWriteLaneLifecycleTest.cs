@@ -289,4 +289,73 @@ public class SerialWriteLaneLifecycleTest
         foreach (var write in writes)
             write.Dispose();
     }
+    [Fact]
+    public async Task DrainAll_WithAStuckHead_EndsAfterOneGrace_HoweverManyLateWritesArrive()
+    {
+        var grace = TimeSpan.FromMilliseconds(400);
+        using var registry = new IoPoolRegistry(new IoPoolOptions { DrainGrace = grace });
+        var lane = registry.GetSerialLane("pg:Postgres:latearrivals", registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres"));
+        var writes = new System.Collections.Concurrent.ConcurrentQueue<IDisposable>();
+        var drained = new ReplaySubject<int>();
+        try
+        {
+            writes.Enqueue(lane.Run(ParkedLeaf).Subscribe(_ => { }, _ => { }));
+            await LaneReading(lane, r => r.InFlight == 1).Should().Within(Bound).Emit("the head is stuck");
+
+            writes.Enqueue(Observable.Start(() => registry.DrainAll(), System.Reactive.Concurrency.TaskPoolScheduler.Default)
+                .Subscribe(drained));
+            // A steady stream of late writes for as long as the drain runs.
+            writes.Enqueue(Observable.Interval(TimeSpan.FromMilliseconds(50))
+                .TakeUntil(drained)
+                .Subscribe(_ => writes.Enqueue(lane.Run(_ => Task.FromResult(0)).Subscribe(_ => { }, _ => { }))));
+
+            await drained.Should().Within(TimeSpan.FromSeconds(20)).Emit(
+                "🚨 late arrivals behind a stuck head are refused, not progress — they must not keep restarting the grace");
+        }
+        finally
+        {
+            Volatile.Write(ref _release, 1);
+            foreach (var write in writes.ToArray())
+                write.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task DrainAll_WithManyStalledLanes_SpendsOneGrace_NotOnePerLane()
+    {
+        const int laneCount = 20;
+        var grace = TimeSpan.FromMilliseconds(500);
+        using var registry = new IoPoolRegistry(new IoPoolOptions { DrainGrace = grace, PostgresWrite = laneCount });
+        var budget = registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres");
+        var writes = new List<IDisposable>();
+        try
+        {
+            for (var i = 0; i < laneCount; i++)
+            {
+                var lane = registry.GetSerialLane($"pg:Postgres:stalled{i}", budget);
+                writes.Add(lane.Run(ParkedLeaf).Subscribe(_ => { }, _ => { }));
+                writes.Add(lane.Run(_ => Task.FromResult(0)).Subscribe(_ => { }, _ => { }));
+            }
+            await Observable.Interval(TimeSpan.FromMilliseconds(10)).StartWith(0L)
+                .Where(_ => registry.SerialLaneSnapshot().Count(l => l.InFlight == 1) == laneCount)
+                .Should().Within(Bound).Emit("every lane's head is stuck");
+
+            var elapsed = await Observable.Start(() =>
+                {
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    registry.DrainAll();
+                    return clock.Elapsed;
+                }, System.Reactive.Concurrency.TaskPoolScheduler.Default)
+                .Should().Within(Bound).Emit("the drain completes");
+            elapsed.Should().BeLessThan(TimeSpan.FromTicks(grace.Ticks * laneCount / 2),
+                "🚨 stalled lanes are watched together under ONE grace — a grace per lane would take {0}",
+                TimeSpan.FromTicks(grace.Ticks * laneCount));
+        }
+        finally
+        {
+            Volatile.Write(ref _release, 1);
+            foreach (var write in writes)
+                write.Dispose();
+        }
+    }
 }
