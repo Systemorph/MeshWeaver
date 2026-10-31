@@ -76,6 +76,16 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
     /// <summary>The same cover shape without a denial — the control for <see cref="DeniedUnheldCover"/>.</summary>
     private const string PlainCover = CoverPartition + "/Plain";
 
+    /// <summary>A partition where Public holds Editor at the root, and each cover in it breaks inheritance.</summary>
+    private const string BrokenPartition = "SatPolicyBroken";
+
+    /// <summary>A cover that breaks inheritance and whose comment container denies Public the Editor
+    /// role — a role the break has already cleared, so Public no longer holds it there.</summary>
+    private const string BrokenDeniedCover = BrokenPartition + "/Denied";
+
+    /// <summary>The same broken cover without a denial — the control for <see cref="BrokenDeniedCover"/>.</summary>
+    private const string BrokenPlainCover = BrokenPartition + "/Plain";
+
     private static TimeSpan Budget => TestTimeouts.Quick;
 
     // ConfigureMeshBase: no blanket Public-admin grant, so each identity holds only its own grant.
@@ -106,7 +116,14 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
                 new MeshNode(CoverPartition) { Name = CoverPartition, NodeType = "Markdown" },
                 new MeshNode("Denied", CoverPartition) { Name = "Denied", NodeType = CoverType },
                 new MeshNode("Plain", CoverPartition) { Name = "Plain", NodeType = CoverType },
-                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Editor.Id, $"{DeniedUnheldCover}/_Comment", denied: true))
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Editor.Id, $"{DeniedUnheldCover}/_Comment", denied: true),
+                new MeshNode(BrokenPartition) { Name = BrokenPartition, NodeType = "Markdown" },
+                new MeshNode("Denied", BrokenPartition) { Name = "Denied", NodeType = CoverType },
+                new MeshNode("Plain", BrokenPartition) { Name = "Plain", NodeType = CoverType },
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Editor.Id, BrokenPartition),
+                AssignmentNodeFactory.Policy(BrokenDeniedCover, new PartitionAccessPolicy { BreaksInheritance = true }),
+                AssignmentNodeFactory.Policy(BrokenPlainCover, new PartitionAccessPolicy { BreaksInheritance = true }),
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Editor.Id, $"{BrokenDeniedCover}/_Comment", denied: true))
             .ConfigureNodeTypeAccess(access => access.WithGate(CoverType, NodeTypeGate.Self));
 
     private static AccessContext Person(string id) => new() { ObjectId = id, Name = id };
@@ -200,6 +217,27 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
 
         (await ReadVerdict(rule, Comment($"{DeniedUnheldCover}/_Comment", DeniedUnheldCover), ct, Nobody)).Should().BeTrue(
             "Public holds no Editor role anywhere here, so denying it on the comment container removes nothing");
+    }
+
+    /// <summary>
+    /// Whether a role is still HELD where a denial sits is the fold's answer, inheritance breaks
+    /// included. Public holds Editor on the partition, the cover breaks inheritance (clearing it), and
+    /// Editor is denied on the cover's <c>_Comment</c> container. The break sits AT the main node, so
+    /// it is outside the scopes in between and the policy check does not fire; the denial removes a
+    /// role that is no longer held, so it must not force the landing check either. The cover's gate
+    /// keeps its comments readable (review of #7723, thread 4431443570).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ADenialOfARoleClearedByABreakAtTheMainNode_LeavesTheCoversCommentsReadable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rule = NodeTypeAccessRuleGate.Find(Mesh, "Comment", NodeOperation.Read)!;
+
+        (await ReadVerdict(rule, Comment($"{BrokenPlainCover}/_Comment", BrokenPlainCover), ct, Nobody)).Should().BeTrue(
+            "the control: past the break only the cover's gate answers, and its comment follows it");
+
+        (await ReadVerdict(rule, Comment($"{BrokenDeniedCover}/_Comment", BrokenDeniedCover), ct, Nobody)).Should().BeTrue(
+            "the break at the cover cleared Public's Editor, so denying it on the comment container removes nothing");
     }
 
     /// <summary>

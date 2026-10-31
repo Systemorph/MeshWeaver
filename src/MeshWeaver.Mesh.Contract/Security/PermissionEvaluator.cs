@@ -572,7 +572,7 @@ internal static class PermissionEvaluator
     /// that role from everything the descendant inherits, so a delegation that decides the
     /// descendant by the ancestor's permissions alone would never see it; a denial of a role the
     /// subject does not hold there removes nothing and does not count
-    /// (<see cref="SubtractsAHeldRoleBetween"/>). Reads the same assignment, rule-grant and membership legs, and the
+    /// (<see cref="RemovesAHeldRole"/>). Reads the same assignment, rule-grant, policy and membership legs, and the
     /// same subject expansion, as the fold, so the two never disagree about which denial applies —
     /// including the fold's <see cref="WellKnownUsers.Public"/> leg: for a signed-in caller (neither
     /// Anonymous nor Public) a role denied to Public, or to a group Public belongs to, counts too.
@@ -592,19 +592,21 @@ internal static class PermissionEvaluator
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var options = hub.JsonSerializerOptions;
         var staticNodes = CollectStaticAccessAssignments(hub);
-        var betweenSet = between.ToImmutableHashSet(StringComparer.Ordinal);
+        var staticPolicies = CollectStaticPolicies(hub);
         return Observable.CombineLatest(
                 ObserveEffectiveAssignments(hub, cache, descendant, staticNodes),
                 ObserveAllMembershipNodes(cache, options),
                 ObserveRuleGrants(cache, options, descendant),
-                (nodes, memberships, ruleGrants) =>
+                ObserveScopePolicies(hub, cache, descendant, staticPolicies),
+                (nodes, memberships, ruleGrants, runtimePolicies) =>
                 {
                     bool DeniedBetween(string subject)
                     {
                         var subjects = ResolveUserGroups(subject, memberships, options).Add(subject);
                         var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, options);
                         granted = AddRuleGrants(granted, subjects, ruleGrants);
-                        return SubtractsAHeldRoleBetween(granted, denied, descendant, betweenSet, subject);
+                        return RemovesAHeldRole(
+                            granted, denied, descendant, between, subject, staticPolicies, runtimePolicies);
                     }
                     // The fold ORs a signed-in caller's own roles with the Public leg, and a denial to
                     // Public narrows that leg at the descendant — so it is an intervening denial for the
@@ -618,37 +620,29 @@ internal static class PermissionEvaluator
     }
 
     /// <summary>
-    /// Replays the ROLE half of <see cref="ComputeRoleState"/>'s walk down <paramref name="nodePath"/>
-    /// — a scope's grants join, then its denials subtract, then the self-scope Admin is added — and
-    /// answers whether a denial on one of <paramref name="between"/> removes a role the subject holds
-    /// at that point. A denial of a role the subject does not hold there subtracts nothing, so it must
-    /// not force the landing check: that check folds the landing alone and would lose the surfaces
-    /// the main node carries without any role (a type gate's public cover), refusing a satellite the
-    /// denial never touched (review of #7723). Inheritance breaks are not replayed: ignoring one can
-    /// only count MORE roles as held, never fewer, and a break between the two paths already forces
-    /// the landing check through <see cref="ObserveRestrictingPolicyBetween"/>.
+    /// Whether the denials on <paramref name="between"/> change the roles the subject holds at
+    /// <paramref name="nodePath"/>. Decided by the fold's OWN role computation,
+    /// <see cref="ComputeRoleState"/>, run twice over the same live grants and policies — once with
+    /// every denial, once without those on the scopes in between — so it cannot drift from what the
+    /// fold does: an inheritance break anywhere on the path (above the main node included) clears
+    /// what it clears, a grant deeper than a denial re-grants, and the self-scope Admin is added
+    /// where the fold adds it. A denial that removes nothing must not force the landing check: that
+    /// check folds the landing alone and would lose the surfaces the main node carries without any
+    /// role (a type gate's public cover), refusing a satellite the denial never touched (review of
+    /// #7723).
     /// </summary>
-    private static bool SubtractsAHeldRoleBetween(
+    private static bool RemovesAHeldRole(
         ImmutableDictionary<string, ImmutableHashSet<string>> granted,
         ImmutableDictionary<string, ImmutableHashSet<string>> denied,
-        string nodePath, ImmutableHashSet<string> between, string subject)
+        string nodePath, ImmutableList<string> between, string subject,
+        IReadOnlyDictionary<string, PartitionAccessPolicy> staticPolicies,
+        ImmutableDictionary<string, PartitionAccessPolicy> runtimePolicies)
     {
-        var held = ImmutableHashSet<string>.Empty;
-        var isSelfScopeOwner = subject != WellKnownUsers.Anonymous && subject != WellKnownUsers.Public;
-        foreach (var scope in GetScopeHierarchy(nodePath))
-        {
-            if (granted.TryGetValue(scope, out var roles))
-                held = held.Union(roles);
-            if (denied.TryGetValue(scope, out var deniedRoles))
-            {
-                if (between.Contains(scope) && held.Overlaps(deniedRoles))
-                    return true;
-                held = held.Except(deniedRoles);
-            }
-            if (isSelfScopeOwner && string.Equals(scope, subject, StringComparison.OrdinalIgnoreCase))
-                held = held.Add(Role.Admin.Id);
-        }
-        return false;
+        var withEveryDenial = ComputeRoleState(
+            granted, nodePath, subject, null, null, staticPolicies, denied, runtimePolicies).RoleIds;
+        var withoutTheDenialsBetween = ComputeRoleState(
+            granted, nodePath, subject, null, null, staticPolicies, denied.RemoveRange(between), runtimePolicies).RoleIds;
+        return !withEveryDenial.SetEquals(withoutTheDenialsBetween);
     }
 
     /// <summary>
