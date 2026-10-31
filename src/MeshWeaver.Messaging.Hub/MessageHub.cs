@@ -68,7 +68,11 @@ public sealed class MessageHub : IMessageHub
         long RegisteredAtVersion,
         // Opt-in sub-key from the request itself (IDiagnosticKeyed) — what makes N identical-looking
         // pending callbacks legible: N distinct keys is a fan-out, one key repeated is a retry loop.
-        string? DiagnosticKey = null);
+        string? DiagnosticKey = null,
+        // Non-null only for a STREAMED wait (ObserveStreamed): the response parts the handler sends
+        // before its terminal reply. Such an entry is NOT consumed by the reply — a part may still be
+        // in flight behind it — and is removed when the caller's stream ends.
+        Subject<IMessageDelivery>? Parts = null);
 
     /// <summary>
     /// Handler-side trail for the requests this hub TREE is awaiting (see
@@ -1441,6 +1445,128 @@ public sealed class MessageHub : IMessageHub
             r);
     }
 
+    /// <summary>
+    /// Posts <paramref name="r"/> and observes a STREAMED response: every response part the handler
+    /// sends (<see cref="PostOptions.ResponsePart"/>), in sequence order, then the terminal reply, then
+    /// completion. Cold — the request is posted on Subscribe, after the part and reply subjects are
+    /// registered, so nothing the handler sends can arrive before there is somewhere to put it.
+    ///
+    /// <para>The wait is bounded by <see cref="MessageHubConfiguration.RequestTimeout"/> of SILENCE:
+    /// every part (and every <see cref="RequestProgress"/>) restarts it, so a long answer that keeps
+    /// arriving is never cut, and one that stops is. A <see cref="DeliveryFailure"/> reply faults the
+    /// stream with a <see cref="DeliveryFailureException"/>.</para>
+    /// </summary>
+    /// <param name="r">The request.</param>
+    /// <param name="options">Addressing for the post (at least the target).</param>
+    /// <returns>The parts in order, then the terminal reply.</returns>
+    public IObservable<IMessageDelivery> ObserveStreamed(object r, Func<PostOptions, PostOptions> options)
+        => Observable.Defer(() =>
+        {
+            var capturedCtx = accessService.Context;
+            var messageId = Guid.NewGuid().AsString();
+            var probeOptions = options(new PostOptions(Address));
+            var requestType = r?.GetType().Name ?? "<null>";
+            var parts = new Subject<IMessageDelivery>();
+            var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target,
+                (r as IDiagnosticKeyed)?.DiagnosticKey, parts);
+            var posting = Observable.Create<IMessageDelivery>(observer =>
+            {
+                // Subscribe to both halves BEFORE the post: a synchronously answered part or reply
+                // must find its observer.
+                var ordered = InSequence(parts, subject).Subscribe(observer);
+                try
+                {
+                    Post(r, opts => options(opts).WithMessageId(messageId).AcceptingProgress().AcceptingResponseParts());
+                }
+                catch (Exception postEx)
+                {
+                    requestFates.Find(messageId)?.Add($"POST_THREW {postEx.GetType().Name}: {postEx.Message}", Address);
+                    observer.OnError(postEx);
+                }
+                return ordered;
+            });
+            return ContinueOffBlockIfDeclared(
+                RestoreUserContextOnEmission(
+                    WrapWithCancelOnDispose(
+                        ApplyTimeout(posting, requestType, probeOptions.Target, messageId, perElement: true),
+                        messageId, subject),
+                    capturedCtx),
+                r);
+        });
+
+    /// <summary>
+    /// Re-orders response parts by their <see cref="PostOptions.ResponsePart"/> number and emits the
+    /// terminal reply only once every part it counts (<see cref="PostOptions.ResponsePartCount"/>) has
+    /// been emitted. A part numbered below the next one expected (a duplicate) is dropped. A reply
+    /// without a count closes the stream after the parts already in order.
+    /// </summary>
+    private static IObservable<IMessageDelivery> InSequence(
+        IObservable<IMessageDelivery> parts, IObservable<IMessageDelivery> reply)
+        => Observable.Create<IMessageDelivery>(observer =>
+        {
+            var gate = new object();
+            var pending = ImmutableSortedDictionary<long, IMessageDelivery>.Empty;
+            var next = 0L;
+            IMessageDelivery? terminal = null;
+            var expected = long.MaxValue;
+            var done = false;
+
+            void Drain()
+            {
+                while (pending.TryGetValue(next, out var part))
+                {
+                    pending = pending.Remove(next);
+                    next++;
+                    observer.OnNext(part);
+                }
+                if (terminal is null || next < expected)
+                    return;
+                done = true;
+                observer.OnNext(terminal);
+                observer.OnCompleted();
+            }
+
+            void Fail(Exception error)
+            {
+                lock (gate)
+                {
+                    if (done) return;
+                    done = true;
+                    observer.OnError(error);
+                }
+            }
+
+            var partsSubscription = parts.Subscribe(part =>
+            {
+                lock (gate)
+                {
+                    if (done || ReadNumber(part, PostOptions.ResponsePart) is not { } sequence || sequence < next)
+                        return;
+                    pending = pending.SetItem(sequence, part);
+                    Drain();
+                }
+            }, Fail);
+            var replySubscription = reply.Subscribe(final =>
+            {
+                lock (gate)
+                {
+                    if (done) return;
+                    terminal = final;
+                    expected = ReadNumber(final, PostOptions.ResponsePartCount) ?? next;
+                    Drain();
+                }
+            }, Fail);
+            return new System.Reactive.Disposables.CompositeDisposable(partsSubscription, replySubscription);
+        });
+
+    private static long? ReadNumber(IMessageDelivery delivery, string key)
+        => delivery.Properties.TryGetValue(key, out var raw)
+           && long.TryParse(raw?.ToString(), System.Globalization.NumberStyles.Integer,
+               System.Globalization.CultureInfo.InvariantCulture, out var value)
+           && value >= 0
+            ? value
+            : null;
+
     private IObservable<IMessageDelivery> ObserveById(string messageId,
         string requestType = "<unknown>",
         Address? target = null)
@@ -1629,7 +1755,8 @@ public sealed class MessageHub : IMessageHub
         IObservable<IMessageDelivery> source,
         string requestType,
         Address? target,
-        string messageId)
+        string messageId,
+        bool perElement = false)
     {
         IObservable<Unit> progress;
         lock (responseSubjects)
@@ -1640,11 +1767,13 @@ public sealed class MessageHub : IMessageHub
         // Fires `timeout` after the LATEST of {the start of the wait, the last progress report}.
         var silence = progress
             .StartWith(Unit.Default)
-            .Select(_ => Observable.Timer(timeout))
+            .Select(_ => Observable.Timer(timeout).Select(_ => Unit.Default))
             .Switch();
+        // A single reply needs no bound after it arrives; a STREAM is bounded by the silence
+        // between its elements, so each element re-arms the same silence clock.
         return source.Timeout(
             silence,
-            _ => Observable.Never<long>(),
+            _ => perElement ? silence : Observable.Never<Unit>(),
             System.Reactive.Linq.Observable.Defer<IMessageDelivery>(() =>
                 System.Reactive.Linq.Observable.Throw<IMessageDelivery>(
                     new TimeoutException(BuildTimeoutMessage(requestType, target, messageId)))));
@@ -1783,7 +1912,8 @@ public sealed class MessageHub : IMessageHub
         string messageId,
         string requestType = "<unknown>",
         Address? target = null,
-        string? diagnosticKey = null)
+        string? diagnosticKey = null,
+        Subject<IMessageDelivery>? parts = null)
     {
         lock (responseSubjects)
         {
@@ -1803,7 +1933,8 @@ public sealed class MessageHub : IMessageHub
                     target,
                     Stopwatch.GetTimestamp(),
                     Version,
-                    diagnosticKey);
+                    diagnosticKey,
+                    parts);
                 responseSubjects[messageId] = entry;
                 // THE one place a hub starts awaiting a reply — so it is also the one place the
                 // handler-side trail starts. "Tracked" and "awaited" are the same set by
@@ -2000,10 +2131,36 @@ public sealed class MessageHub : IMessageHub
             return Observable.Return(delivery.Processed());
         }
 
+        // A part of a streamed response, not the reply: hand it to the stream, restart the deadline,
+        // and keep the callback open. A part for a wait that is not streamed (or no longer awaited)
+        // has nowhere to go and is consumed — a handler sends parts only to a request stamped
+        // AcceptsResponseParts, so that is a duplicate or a late arrival.
+        if (delivery.Properties.ContainsKey(PostOptions.ResponsePart))
+        {
+            Subject<IMessageDelivery>? parts = null;
+            Subject<Unit>? partProgress = null;
+            lock (responseSubjects)
+            {
+                if (responseSubjects.TryGetValue(requestIdString, out var pending))
+                {
+                    parts = pending.Parts;
+                    partProgress = pending.Progress;
+                }
+            }
+            partProgress?.OnNext(Unit.Default);
+            parts?.OnNext(delivery);
+            return Observable.Return(parts is null
+                ? delivery.Processed()
+                : delivery.Processed().SetProperty(PostOptions.CallbackDispatched, true));
+        }
+
         System.Reactive.Subjects.AsyncSubject<IMessageDelivery> subject;
         lock (responseSubjects)
         {
-            if (!responseSubjects.Remove(requestIdString, out var entry))
+            // A streamed wait keeps its entry past the reply: a part sent before the reply may still
+            // arrive after it. The caller's stream removes the entry when it ends.
+            if (!responseSubjects.TryGetValue(requestIdString, out var entry)
+                || (entry.Parts is null && !responseSubjects.Remove(requestIdString)))
             {
                 // No live callback for this correlation. Record it on the trail (if some OTHER hub
                 // is still awaiting the same id — the shape where a reply lands on the wrong hub)
