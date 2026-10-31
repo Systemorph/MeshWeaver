@@ -613,7 +613,7 @@ public sealed class ModuleLiveUpdater : IDisposable
                         names, unloaded ? "retired" : "KEPT loaded (still in use) — they leak until the next restart"),
                     ex => logger?.LogWarning(ex,
                         "[ModuleLiveUpdate] retiring the old generation(s) of {Modules} after their deferred activations faulted — they stay loaded",
-                        names)));
+                        names));
             return dead
                 .Timeout(RecycleBudget)
                 .Select(_ => live.Select(o => o with
