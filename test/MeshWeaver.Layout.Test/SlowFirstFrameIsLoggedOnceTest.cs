@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -34,6 +35,11 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
     /// <summary>Every log record. INSTANCE state, never static (NoStaticState).</summary>
     private readonly ConcurrentQueue<(LogLevel Level, string Message)> logRecords = new();
 
+    /// <summary>Every log record as a signal, raised AFTER it was enqueued: the line is written by the
+    /// stream's applied callback, which runs after the frame was already published, so seeing the frame
+    /// says nothing about the line. Tests wait on this instead.</summary>
+    private readonly ReplaySubject<(LogLevel Level, string Message)> logged = new();
+
     /// <inheritdoc />
     public SlowFirstFrameIsLoggedOnceTest(ITestOutputHelper output) : base(output)
     {
@@ -42,7 +48,7 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
         // before they reach it (TestLogLevel).
         Services.AddLogging(logging =>
         {
-            logging.Services.AddSingleton<ILoggerProvider>(new QueueLoggerProvider(logRecords));
+            logging.Services.AddSingleton<ILoggerProvider>(new QueueLoggerProvider(logRecords, Subject.Synchronize(logged)));
             logging.AddFilter<QueueLoggerProvider>(null, LogLevel.Trace);
         });
     }
@@ -61,7 +67,7 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
 
-    private async Task Render(string area, string text)
+    private async Task<ISynchronizationStream<JsonElement>> Render(string area, string text)
     {
         var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), new LayoutAreaReference(area));
@@ -69,16 +75,47 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
             raw => raw.Contains(text, StringComparison.Ordinal),
             $"the {area} area renders",
             cancellationToken: TestContext.Current.CancellationToken);
+        return stream;
     }
 
+    private static bool IsFirstFrameLine((LogLevel Level, string Message) r, string area)
+        => r.Message.Contains("FIRST FULL FRAME", StringComparison.Ordinal)
+           && r.Message.Contains($"'{area}'", StringComparison.Ordinal);
+
+    /// <summary>The first-full-frame line for <paramref name="area"/>, once the sink has it.</summary>
+    private Task<(LogLevel Level, string Message)> FirstFrameLine(string area)
+        => logged.Should().Within(20.Seconds()).Match(r => IsFirstFrameLine(r, area),
+            $"the first full frame of {area} is reported", TestContext.Current.CancellationToken);
+
     private (LogLevel Level, string Message)[] FirstFrameLines(string area)
-        => logRecords.Where(r => r.Message.Contains("FIRST FULL FRAME", StringComparison.Ordinal)
-                                 && r.Message.Contains($"'{area}'", StringComparison.Ordinal)).ToArray();
+        => logRecords.Where(r => IsFirstFrameLine(r, area)).ToArray();
+
+    /// <summary>
+    /// A round trip through the owner stream's hub AFTER everything it has queued: a click on an area
+    /// that has no control is answered (refused) by that hub, which handles updates serially — so once
+    /// the answer is back, every earlier update's applied callback, and so its log line, has run.
+    /// </summary>
+    private static async Task Settle(ISynchronizationStream<JsonElement> stream)
+    {
+        var answered = new AsyncSubject<bool>();
+        stream.SubmitUserAction(
+            new ClickedEvent("settle/NotRendered", stream.StreamId),
+            actingUser: null,
+            onRefused: _ => { answered.OnNext(true); answered.OnCompleted(); },
+            onAccepted: () => { answered.OnNext(true); answered.OnCompleted(); });
+        await answered.Should().Within(20.Seconds()).Emit(
+            "the owner stream's hub answers after every update queued before it",
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
 
     [HubFact]
     public async Task ASlowFirstFrame_LogsExactlyOneInformationLine_WithTheThreeHops()
     {
-        await Render(SlowArea, "slow-2");
+        var stream = await Render(SlowArea, "slow-2");
+        await FirstFrameLine(SlowArea);
+        // The re-render's update is published before its applied callback runs: settle the owner's
+        // queue past it before counting, so a duplicate line would already be in the sink.
+        await Settle(stream);
 
         var lines = FirstFrameLines(SlowArea);
         lines.Should().ContainSingle("one latch: the first full frame is reported once, the re-render is not");
@@ -93,7 +130,9 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
     [HubFact]
     public async Task NegativeControl_AFastFirstFrame_LogsNothingAtInformation()
     {
-        await Render(FastArea, "fast");
+        var stream = await Render(FastArea, "fast");
+        await FirstFrameLine(FastArea);
+        await Settle(stream);
 
         var lines = FirstFrameLines(FastArea);
         lines.Should().ContainSingle("the fast open is still reported, once, at Debug");
@@ -102,12 +141,14 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
     }
 
     /// <summary>Captures every record into the owning test's instance queue.</summary>
-    internal sealed class QueueLoggerProvider(ConcurrentQueue<(LogLevel, string)> sink) : ILoggerProvider
+    internal sealed class QueueLoggerProvider(
+        ConcurrentQueue<(LogLevel, string)> sink, IObserver<(LogLevel, string)> signal) : ILoggerProvider
     {
-        public ILogger CreateLogger(string categoryName) => new QueueLogger(sink);
+        public ILogger CreateLogger(string categoryName) => new QueueLogger(sink, signal);
         public void Dispose() { }
 
-        private sealed class QueueLogger(ConcurrentQueue<(LogLevel, string)> sink) : ILogger
+        private sealed class QueueLogger(
+            ConcurrentQueue<(LogLevel, string)> sink, IObserver<(LogLevel, string)> signal) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
             public bool IsEnabled(LogLevel logLevel) => true;
@@ -115,7 +156,11 @@ public class SlowFirstFrameIsLoggedOnceTest : HubTestBase
             public void Log<TState>(
                 LogLevel logLevel, EventId eventId, TState state, Exception? exception,
                 Func<TState, Exception?, string> formatter)
-                => sink.Enqueue((logLevel, formatter(state, exception)));
+            {
+                var record = (logLevel, formatter(state, exception));
+                sink.Enqueue(record);
+                signal.OnNext(record);
+            }
         }
     }
 }
