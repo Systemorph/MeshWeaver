@@ -16,7 +16,10 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private record CountRequest(int Parts, bool Reversed = false, bool GoSilent = false, bool OverCount = false) : IRequest<CountDone>;
+    private record CountRequest(int Parts, bool Reversed = false, bool GoSilent = false, bool OverCount = false, string? RawCount = null) : IRequest<CountDone>;
+
+    /// <summary>Parts paced in time: part i is sent at <c>Offsets[i]</c> ms, the reply at <c>ReplyAt</c> ms.</summary>
+    private record PacedRequest(int[] Offsets, int ReplyAt) : IRequest<CountDone>;
 
     private record CountPart(int Index);
 
@@ -24,7 +27,20 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) =>
         configuration
-            .WithTypes(typeof(CountRequest), typeof(CountPart), typeof(CountDone))
+            .WithTypes(typeof(CountRequest), typeof(PacedRequest), typeof(CountPart), typeof(CountDone))
+            .WithHandler<PacedRequest>((hub, request) =>
+            {
+                var ask = request.Message;
+                for (var i = 0; i < ask.Offsets.Length; i++)
+                {
+                    var n = i;
+                    Observable.Timer(TimeSpan.FromMilliseconds(ask.Offsets[n]))
+                        .Subscribe(_ => hub.PostResponsePart(request, new CountPart(n), n));
+                }
+                Observable.Timer(TimeSpan.FromMilliseconds(ask.ReplyAt))
+                    .Subscribe(_ => hub.PostFinalResponse(request, new CountDone("paced"), ask.Offsets.Length));
+                return request.Processed();
+            })
             .WithHandler<CountRequest>((hub, request) =>
             {
                 var ask = request.Message;
@@ -39,7 +55,9 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
                     order = order.Reverse();   // what an unordered transport may do
                 foreach (var i in order)
                     hub.PostResponsePart(request, new CountPart(i), i);
-                if (!ask.GoSilent)
+                if (ask.RawCount is { } raw)
+                    hub.Post(new CountDone("streamed"), o => o.ResponseFor(request).WithProperty(PostOptions.ResponsePartCount, raw));
+                else if (!ask.GoSilent)
                     // OverCount: the reply counts one part more than was sent — a part still in flight.
                     hub.PostFinalResponse(request, new CountDone("streamed"), ask.OverCount ? ask.Parts + 1 : ask.Parts);
                 return request.Processed();
@@ -47,7 +65,7 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
-            .WithTypes(typeof(CountRequest), typeof(CountPart), typeof(CountDone));
+            .WithTypes(typeof(CountRequest), typeof(PacedRequest), typeof(CountPart), typeof(CountDone));
 
     [Fact]
     public async Task Parts_arrive_in_order_then_the_reply_then_completion()
@@ -138,5 +156,61 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
             .Should().Within(10.Seconds()).Emit("disposal ends the stream long before its 60 s silence bound");
         end.Kind.Should().Be(System.Reactive.NotificationKind.OnError);
         end.Exception.Should().BeOfType<HubDisposedBeforeResponseException>();
+    }
+
+    private IMessageHub ClientWithSilenceBound(TimeSpan bound) => GetClient(c => ConfigureClient(c)
+        .WithPostingIdentity(PostingIdentity.System)
+        .WithRequestTimeout(bound));
+
+    /// <summary>
+    /// The bound is SILENCE, not duration: five parts 800 ms apart (3.2 s in all) against a 2 s bound
+    /// all arrive, then the reply, then completion.
+    /// </summary>
+    [Fact]
+    public async Task A_stream_longer_than_the_bound_survives_while_parts_keep_arriving()
+    {
+        var client = ClientWithSilenceBound(TimeSpan.FromSeconds(2));
+
+        var all = await client.ObserveStreamed(new PacedRequest([0, 800, 1600, 2400, 3200], 3600), o => o.WithTarget(CreateHostAddress()))
+            .ToList()
+            .Should().Within(15.Seconds()).Emit();
+
+        all.Where(d => d.IsResponsePart()).Select(d => ((CountPart)d.Message).Index).Should().Equal(0, 1, 2, 3, 4);
+        all.Last().Message.Should().BeOfType<CountDone>();
+    }
+
+    /// <summary>
+    /// Arrivals that emit NOTHING still restart the silence: part 0 at 0 s; part 2 (out of order) at 1.5 s and
+    /// the reply at 3.0 s are both buffered behind part 1, which arrives at 4.5 s. Every gap is 1.5 s under a
+    /// 2 s bound, while 4.5 s pass between ordered emissions — so the buffered arrivals (the reply included)
+    /// must restart the clock, and every part must precede the reply.
+    /// </summary>
+    [Fact]
+    public async Task Buffered_arrivals_and_a_buffered_reply_restart_the_silence_bound()
+    {
+        var client = ClientWithSilenceBound(TimeSpan.FromSeconds(2));
+
+        var all = await client.ObserveStreamed(new PacedRequest([0, 4500, 1500], 3000), o => o.WithTarget(CreateHostAddress()))
+            .ToList()
+            .Should().Within(20.Seconds()).Emit();
+
+        all.Take(3).Select(d => ((CountPart)d.Message).Index).Should().Equal(0, 1, 2);
+        all.Should().HaveCount(4);
+        all[3].Message.Should().BeOfType<CountDone>();
+    }
+
+    /// <summary>A reply whose part count is present but unreadable faults the stream — it is never read as "no parts".</summary>
+    [Fact]
+    public async Task An_invalid_part_count_faults_the_stream_instead_of_completing_it()
+    {
+        var client = GetClient();
+
+        var seen = await client.ObserveStreamed(new CountRequest(0, RawCount: "-1"), o => o.WithTarget(CreateHostAddress()))
+            .Materialize()
+            .ToList()
+            .Should().Within(10.Seconds()).Emit();
+
+        seen.Last().Kind.Should().Be(System.Reactive.NotificationKind.OnError);
+        seen.Last().Exception!.Message.Should().Contain(PostOptions.ResponsePartCount);
     }
 }

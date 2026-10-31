@@ -1555,6 +1555,17 @@ public sealed class MessageHub : IMessageHub
                 lock (gate)
                 {
                     if (done) return;
+                    // A count that is ABSENT means "the parts already in order" (a handler that streams
+                    // nothing); one that is present but unreadable is a broken reply, never a short one.
+                    if (final.Properties.ContainsKey(PostOptions.ResponsePartCount)
+                        && ReadNumber(final, PostOptions.ResponsePartCount) is null)
+                    {
+                        done = true;
+                        observer.OnError(new InvalidOperationException(
+                            $"The streamed reply carries an invalid {PostOptions.ResponsePartCount} "
+                            + $"'{final.Properties[PostOptions.ResponsePartCount]}'; parts may be missing."));
+                        return;
+                    }
                     terminal = final;
                     expected = ReadNumber(final, PostOptions.ResponsePartCount) ?? next;
                     Drain();
@@ -2160,6 +2171,7 @@ public sealed class MessageHub : IMessageHub
 
         System.Reactive.Subjects.AsyncSubject<IMessageDelivery> subject;
         Subject<IMessageDelivery>? streamedParts;
+        Subject<Unit>? streamedProgress;
         lock (responseSubjects)
         {
             // A streamed wait keeps its entry past the reply: a part sent before the reply may still
@@ -2179,6 +2191,7 @@ public sealed class MessageHub : IMessageHub
             }
             subject = entry.Subject;
             streamedParts = entry.Parts;
+            streamedProgress = entry.Parts is null ? null : entry.Progress;
             // The callback is resolving now — the trail has done its job.
             requestFates.Untrack(requestIdString);
         }
@@ -2186,6 +2199,10 @@ public sealed class MessageHub : IMessageHub
         if (debugEnabled)
             logger.LogDebug("Dispatching response to subject | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 messageTypeName, Address, delivery.Id);
+
+        // A streamed reply may wait behind a counted part that is still in flight; its arrival is a
+        // sign of life like a part's, so it restarts the silence deadline before it is buffered.
+        streamedProgress?.OnNext(Unit.Default);
 
         if (delivery.Message is DeliveryFailure failure)
         {
