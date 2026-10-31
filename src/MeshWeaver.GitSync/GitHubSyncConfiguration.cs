@@ -78,17 +78,6 @@ public static class GitHubSyncConfiguration
             sp.GetService<ILogger<GitSourceCredentials>>(),
             () => (sp.GetService<InstancePackageSourceCatalog>()?.WhenLoaded ?? Observable.Return(System.Reactive.Unit.Default))
                 .Zip(InstanceGitHubApp.WhenReadable(sp), (_, _) => System.Reactive.Unit.Default)));
-        // Azure Repos (MeshWeaver#5248/#6500, policy azure-repos-two-way): the client tenant's app
-        // registration is DECLARED in the instance's deployment record as AzureDevOps:TenantId /
-        // AzureDevOps:ClientId (identifiers, not secrets); the instance's workload identity is
-        // federated to it. Unset ⇒ every Azure Repos read and push is refused by name.
-        services.AddOptions<AzureDevOpsOptions>()
-            .Configure<IConfiguration>((options, configuration) =>
-                configuration.GetSection(AzureDevOpsOptions.ConfigSection).Bind(options));
-        services.AddSingleton(sp => new AzureReposTokenService(
-            sp.GetRequiredService<IoPoolRegistry>(),
-            sp.GetRequiredService<IOptions<AzureDevOpsOptions>>(),
-            sp.GetService<ILogger<AzureReposTokenService>>()));
         // Framework-release broadcaster (memex is the broadcast hub): fans a platform release out
         // to the node-repo satellites as repository_dispatch, authenticated with the App above.
         // The subscriber set is either INJECTED by the caller or read from the
@@ -117,19 +106,12 @@ public static class GitHubSyncConfiguration
         services.AddSingleton(sp => new OctokitGitHubRepoClient(
             sp.GetRequiredService<IoPoolRegistry>(),
             sp.GetService<ILogger<OctokitGitHubRepoClient>>()));
-        services.AddSingleton(sp => new AzureReposRepoClient(
-            sp.GetRequiredService<IoPoolRegistry>(),
-            httpClient: null,
-            sp.GetService<ILogger<AzureReposRepoClient>>()));
         // The git hosting providers (Doc/Architecture/GitHubSync → "Hosting providers"): every
-        // IGitHostingProvider a module registers (AddGitHostingProvider), plus the platform's
-        // built-in Azure Repos provider — TRANSITIONAL, replaced by a contributed provider of the
-        // same kind and then removed from the platform with Azure.Identity.
+        // IGitHostingProvider a module registers (AddGitHostingProvider) — Azure Repos is one, in
+        // MeshWeaver.Plugins (MeshWeaver.GitSync.AzureRepos). The platform ships none of its own.
         services.AddSingleton(sp => new GitHostingProviders(
             sp.GetServices<IGitHostingProvider>(),
-            [new AzureReposGitHostingProvider(
-                sp.GetRequiredService<AzureReposTokenService>(),
-                sp.GetRequiredService<AzureReposRepoClient>())],
+            builtIn: null,
             sp.GetService<ILogger<GitHostingProviders>>()));
         services.AddSingleton<IGitHubRepoClient>(sp => new GitProviderRepoClient(
             new GitProtocolRepoClient(
@@ -139,8 +121,6 @@ public static class GitHubSyncConfiguration
                 sp.GetService<ILogger<GitProtocolRepoClient>>()),
             sp.GetRequiredService<GitHostingProviders>()));
         services.AddSingleton<GitHubCredentialService>();
-        // Built explicitly: the obsolete constructor that takes an Azure DevOps identity must never
-        // be the one the container picks.
         services.AddSingleton(sp => new GitHubSyncService(
             sp.GetRequiredService<IMessageHub>(),
             sp.GetRequiredService<IMeshService>(),
