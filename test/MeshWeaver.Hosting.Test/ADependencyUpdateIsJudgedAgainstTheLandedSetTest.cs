@@ -12,6 +12,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
@@ -283,11 +284,47 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
         var outcome = await RegistryUpdateReconciler.AdoptChecked(Mesh,
                 new PluginBundleClient(Mesh, FakeRegistry.Url, "mwi_test"),
                 "Chat", "MeshWeaver.Blazor.Chat", $"{PackageInstaller.InstalledPartition}/Chat",
-                policyDecline: null, served: null, logger: null)
+                policyDecline: null, () => Observable.Return<PackageManifest?>(null), logger: null)
             .Should().Within(TestTimeouts.Convergence).Emit("the checked adopt answers once", ct);
         outcome.Should().NotBeNull("a non-landing plan is answered as decided, unguarded");
         outcome!.Verdict!.Action.Should().NotBe(ModuleUpdateAction.Land);
         registry.Downloads.Should().Be(0);
+    }
+
+    /// <summary>
+    /// The BROADCAST lane end to end (<see cref="RegistryUpdateReconciler.ReconcileModule"/>), against
+    /// a fake registry (review on #7736): the catalog listing is read only when the plan LANDS. With
+    /// no bundle served for Chat the plan does not land and the catalog is never asked; with one
+    /// served (a first landing) the listing is asked — it answers 500, so the requirements are
+    /// unjudged and nothing is downloaded.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task TheBroadcastLane_ReadsTheListingOnlyForALandingPlan()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // The install-records partition is System-owned, as the installer writes it.
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>().RunAsSystem(() => NodeFactory.CreateNode(
+            new MeshNode("Chat", PackageInstaller.InstalledPartition)
+        {
+            NodeType = PackageInstaller.PackageNodeType,
+            Name = "Chat",
+            State = MeshNodeState.Active,
+            Content = Chat180 with { Version = "1.7.95", ReleasedVersion = "1.7.95", Requires = [] },
+        })).Timeout(TestTimeouts.Convergence).Await(ct);
+        var reconciler = Mesh.ServiceProvider.GetRequiredService<RegistryUpdateReconciler>();
+        var reference = new PluginRegistryReference { Name = "fake", Url = FakeRegistry.Url, Token = "test-token" };
+
+        registry.Serve("SomethingElse", "1.0.0", "MeshWeaver.SomethingElse");
+        await reconciler.ReconcileModule(reference, "Chat").LastOrDefaultAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit("the broadcast pass completes", ct);
+        registry.Listings.Should().Be(0, "a plan that does not land never asks the catalog");
+        registry.Downloads.Should().Be(0);
+
+        registry.Serve("Chat", "1.8.0", "MeshWeaver.Blazor.Chat");
+        await reconciler.ReconcileModule(reference, "Chat").LastOrDefaultAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit("the broadcast pass completes", ct);
+        registry.Listings.Should().BeGreaterThan(0, "a landing plan reads the listing to judge its requirements");
+        registry.Downloads.Should().Be(0, "an unreadable listing never licenses a landing");
     }
 
     /// <summary>The checked adopt, through a fresh bundle client (a fresh index snapshot).</summary>
@@ -295,7 +332,7 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
         RegistryUpdateReconciler.AdoptChecked(Mesh,
                 new PluginBundleClient(Mesh, FakeRegistry.Url, "mwi_test"),
                 served.Id, served.Module!, $"{PackageInstaller.InstalledPartition}/{served.Id}",
-                policyDecline: null, served, logger: null)
+                policyDecline: null, () => Observable.Return<PackageManifest?>(served), logger: null)
             .Should().Within(TestTimeouts.Convergence).Emit("the checked adopt answers once", ct);
 
     /// <summary>
@@ -348,8 +385,12 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
         public const string Url = "https://registry.test";
         private string index = "{\"bundles\":[]}";
         private int downloads;
+        private int listings;
 
         public int Downloads => Volatile.Read(ref downloads);
+
+        /// <summary>Catalog listing requests (<c>/api/plugins</c>), answered 500.</summary>
+        public int Listings => Volatile.Read(ref listings);
 
         public void Serve(string plugin, string version, string module) =>
             index = "{\"bundles\":[{\"plugin\":\"" + plugin + "\",\"version\":\"" + version
@@ -363,6 +404,11 @@ public class ADependencyUpdateIsJudgedAgainstTheLandedSetTest(ITestOutputHelper 
                 {
                     Content = new StringContent(index, Encoding.UTF8, "application/json"),
                 });
+            if (string.Equals(request.RequestUri.AbsolutePath, RegistryPackageSource.RoutePrefix, StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref listings);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+            }
             Interlocked.Increment(ref downloads);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }

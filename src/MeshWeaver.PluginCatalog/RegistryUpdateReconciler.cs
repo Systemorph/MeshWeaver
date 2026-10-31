@@ -1201,7 +1201,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                         // Not installed here → somebody else's module; nothing to reconcile.
                         ? Observable.Return<LandedModule?>(null)
                         : AdoptOne(bundles, registryName, pkg.Id, pkg.Module!, recordPath,
-                            record.ContentAs<PackageManifest>(hub.JsonSerializerOptions), served: pkg));
+                            record.ContentAs<PackageManifest>(hub.JsonSerializerOptions),
+                            servedListing: () => Observable.Return<PackageManifest?>(pkg)));
             })
             .ToObservable()
             .Concat()
@@ -1261,11 +1262,13 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                             return Observable.Return<LandedModule?>(null);
                         }
                         // 🚨 MeshWeaver#6192 — the served listing carries the requirements the
-                        // module lane must judge before it lands a dependent's module. A listing
-                        // that cannot be read yields null, which DECLINES (DependencyDecline); the
-                        // next pass reads it again.
+                        // module lane must judge before it lands a dependent's module. It is a COLD
+                        // factory, read only when the adopt's plan LANDS (review on #7736): an
+                        // up-to-date or held module costs no catalog request. A listing that cannot
+                        // be read yields null, which DECLINES (DependencyDecline); the next pass
+                        // reads it again.
                         var source = new RegistryPackageSource(hub, registry.Url, token) { Bundles = bundles };
-                        return source.ListPackages(EffectiveRef(registry.Ref))
+                        IObservable<PackageManifest?> Listing() => source.ListPackages(EffectiveRef(registry.Ref))
                             .Take(1)
                             .Select(packages => packages.FirstOrDefault(p =>
                                 string.Equals(p.Id, packageId, StringComparison.Ordinal)))
@@ -1277,8 +1280,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                                     + "module is not landed on this pass (its requirements are unjudged). Cause: {Cause}",
                                     name, packageId, ex.Message);
                                 return Observable.Return<PackageManifest?>(null);
-                            })
-                            .SelectMany(served => AdoptOne(bundles, name, packageId, module, recordPath, manifest, served));
+                            });
+                        return AdoptOne(bundles, name, packageId, module, recordPath, manifest, Listing);
                     });
             })
             // The wave of one: ends the same way every wave ends (#3395) — set, then activation.
@@ -1428,7 +1431,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// <returns>The module and version that LANDED, or null when nothing did.</returns>
     private IObservable<LandedModule?> AdoptOne(
         PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
-        PackageManifest? record, PackageManifest? served) =>
+        PackageManifest? record, Func<IObservable<PackageManifest?>> servedListing) =>
         // 🚨 policy packages-auto-update — the module lands on TWO inputs only: a newer version was
         // published, and its declared platform floor is met (the floor is decided inside the adopt,
         // ModuleUpdateDecision). The package's own policy still speaks (an administrator's
@@ -1441,7 +1444,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         // code no longer waits for it.
         // 🚨 …and the dependency floor (MeshWeaver#6192), decided BEFORE the adopt and never
         // through its policy seam: see AdoptChecked.
-        AdoptChecked(hub, bundles, packageId, moduleName, recordPath, PolicyDecline(record), served, logger)
+        AdoptChecked(hub, bundles, packageId, moduleName, recordPath, PolicyDecline(record), servedListing, logger)
             // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
             // so a single adopt that never answers (a wedged record read, a download that stalls)
             // silently starves EVERY package after it — on memex.systemorph.com the Northwind
@@ -1482,13 +1485,14 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// <param name="moduleName">The module's entry-assembly name.</param>
     /// <param name="recordPath">The install record's path.</param>
     /// <param name="policyDecline">The package's own update policy's decline, or null.</param>
-    /// <param name="served">The registry's listing of the package, or null when unread.</param>
+    /// <param name="servedListing">A COLD read of the registry's listing of the package (null when
+    /// unread) — subscribed only when the plan lands, so a non-landing plan costs no catalog request.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <returns>Cold; the adopt's outcome, or null when a guard declined the landing. Faults
     /// propagate to the caller's catch.</returns>
     internal static IObservable<ModuleAdoptOutcome?> AdoptChecked(
         IMessageHub hub, PluginBundleClient bundles, string packageId, string moduleName, string recordPath,
-        string? policyDecline, PackageManifest? served, ILogger? logger)
+        string? policyDecline, Func<IObservable<PackageManifest?>> servedListing, ILogger? logger)
     {
         if (hub.ServiceProvider.GetService<ModuleLandingService>() is not { } landing)
             return bundles.AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: true,
@@ -1497,8 +1501,11 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         return bundles.PlanModuleAdoption(packageId, moduleName, unattended: true, policyDecline, landing)
             .SelectMany(plan => !plan.Lands
                 ? Observable.Return<ModuleAdoptOutcome?>(plan.Decided)
-                : DependencyDecline(hub, served, logger)
-                    .Select(declined => declined ?? BundleBindingDecline(plan.Bundle!, served!))
+                : servedListing()
+                    .Take(1)
+                    .DefaultIfEmpty(null)
+                    .SelectMany(served => DependencyDecline(hub, served, logger)
+                        .Select(declined => declined ?? BundleBindingDecline(plan.Bundle!, served!)))
                     .SelectMany(declined =>
                     {
                         if (declined is null)
