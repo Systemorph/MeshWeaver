@@ -822,6 +822,30 @@ public sealed class ModuleLandingService : IDisposable
             msg => logger?.LogError("{Message}", msg), platform, ct));
 
     /// <summary>
+    /// <see cref="GetActivation"/>, read WHOLE or not at all: a read that reported a corrupt or
+    /// unreadable record (and therefore DROPPED that module from the list it returns) FAULTS,
+    /// naming every diagnostic — the same rule <see cref="ProposeCheckedModuleSet"/> applies before
+    /// it proposes. For a caller that JUDGES the list (MeshWeaver#6192): a dropped dependency reads
+    /// as "absent", i.e. "not judged", which would admit an update the proposal then refuses.
+    /// </summary>
+    /// <returns>Cold; the whole list, or a fault naming why it is not whole.</returns>
+    public IObservable<ModuleActivationList> GetCheckedActivation()
+        => ReadPool.InvokeBlocking(ct =>
+        {
+            var faults = ImmutableList<string>.Empty;
+            var list = ModuleActivationSidecar.ReadFor(baseDirectory, msg =>
+            {
+                faults = faults.Add(msg);
+                logger?.LogError("{Message}", msg);
+            }, platform, ct);
+            if (!faults.IsEmpty)
+                throw new InvalidOperationException(
+                    $"the activation record could not be read whole ({faults.Count} fault(s): "
+                    + $"{string.Join(" | ", faults)})");
+            return list;
+        });
+
+    /// <summary>
     /// The pool <see cref="GetActivation"/> reads the volume on — the mesh's file-system pool in
     /// production (<c>PluginCatalogConfigurationExtensions</c>), so a read of a network volume
     /// stays inside the mesh's own IO budget and off every caller's thread. Deliberately a
