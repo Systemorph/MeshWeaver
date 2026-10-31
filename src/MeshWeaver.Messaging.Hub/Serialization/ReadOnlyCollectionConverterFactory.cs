@@ -14,6 +14,28 @@ internal static class JsonElementNormalizer
     private const string TypeDiscriminator = "$type";
 
     /// <summary>
+    /// Whether a failure to bind JSON to a RESOLVED type keeps the value as raw JSON rather than
+    /// failing the read — the ONE rule for every degrade seam (the object converter and the mesh
+    /// content-type recovery).
+    ///
+    /// <para>Lenient options keep the raw JSON for every binding failure: a throw faults the node
+    /// read and wedges its grain. Under the strict import options
+    /// (<see cref="JsonUnmappedMemberHandling.Disallow"/>, GitSync) a <see cref="JsonException"/> is
+    /// the LOSSY case the strictness exists for — an authored member this image would drop — and it
+    /// still propagates. A <see cref="NotSupportedException"/> is not lossy: it says this process
+    /// cannot instantiate a member (an abstract base whose <c>$type</c> names a subtype nothing here
+    /// knows), and keeping the raw JSON stores every authored byte verbatim (#6639). Refusing it
+    /// refused a whole repository snapshot over content the import never needed to type.</para>
+    /// </summary>
+    /// <param name="error">What the bind threw.</param>
+    /// <param name="options">The options the bind used.</param>
+    /// <returns><c>true</c> when the caller keeps the raw JSON; <c>false</c> when it rethrows.</returns>
+    public static bool KeepsRawJson(Exception error, JsonSerializerOptions options)
+        => error is NotSupportedException
+           || (options.UnmappedMemberHandling != JsonUnmappedMemberHandling.Disallow
+               && error is JsonException or InvalidOperationException or ArgumentException);
+
+    /// <summary>
     /// A sealed concrete type has no STJ polymorphism metadata, so its legitimate wire
     /// discriminator is otherwise an unmapped member under GitSync's strict import options.
     /// Remove only that metadata member; every authored content member remains subject to
