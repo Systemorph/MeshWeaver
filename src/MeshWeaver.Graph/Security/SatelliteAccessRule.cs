@@ -14,6 +14,8 @@ namespace MeshWeaver.Graph.Security;
 /// - Create: requires the operation's natural permission on MainNode (Comment
 ///   for Comment nodes, Thread for Thread/ThreadMessage nodes, Update otherwise)
 /// - Update/Delete: requires Update on MainNode
+/// A policy on the path between the MainNode and where the satellite lands still applies: while one
+/// restricts, the same permission must also hold at the landing path (stricter outcome wins).
 /// </summary>
 public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAccessRule
 {
@@ -97,7 +99,8 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
         }
 
         var permission = MainNodeDelegatedPermission(context);
-        var delegated = hub.CheckPermission(mainNodePath, userId, permission);
+        var delegated = WithInterveningPolicies(
+            context, userId, mainNodePath, permission, hub.CheckPermission(mainNodePath, userId, permission));
 
         // 🛡️ A main node the WRITER is choosing on a create (an update that changes it is refused
         // above) that is not the satellite's OWNER is not enough on its own (review of #7601).
@@ -122,6 +125,46 @@ public class SatelliteAccessRule(string nodeType, IMessageHub hub) : INodeTypeAc
             ? Observable.Return(true)
             : hub.CheckPermission(landingPath, userId, landingPermission);
         return delegated.CombineLatest(landing, (viaMainNode, atLanding) => viaMainNode && atLanding);
+    }
+
+    /// <summary>
+    /// 🛡️ Delegation to the main node never skips a policy on the path in between. When the main node
+    /// is an ANCESTOR of where the satellite lands (its parent on a create, its own path otherwise), a
+    /// policy on a scope between the two — an inheritance break on an intermediate segment, a cap on a
+    /// mapped container such as <c>Doc/_Comment</c> — would have restricted the satellite had it been
+    /// decided by its path, and the main node's permission alone never sees it. So while such a
+    /// policy exists, the same permission must ALSO hold where the satellite lands, and the stricter
+    /// outcome wins. Without one the landing check is not run: the landing inherits every grant of the
+    /// main node, and skipping it keeps additive surfaces that are declared on the main node alone (a
+    /// type gate's public cover) reaching the satellites they always reached.
+    /// </summary>
+    private IObservable<bool> WithInterveningPolicies(
+        NodeValidationContext context, string userId, string mainNodePath, Permission permission,
+        IObservable<bool> viaMainNode)
+    {
+        var landingPath = context.Operation == NodeOperation.Create
+            ? (context.Node.GetParentPath() ?? context.Node.Path)
+            : context.Node.Path;
+        // No row-level security on this mesh: every check answers All, so there is nothing to apply.
+        // Ancestry is decided by ObserveRestrictingPolicyBetween, never by a raw string comparison
+        // here: the evaluator accepts every spelling of the main node (`@/Space/Doc`, `/` for the
+        // root), so a raw check that did not would skip the policies in between for exactly those
+        // spellings while the main node's grant still answered (review of #7676). It answers false
+        // for the same path and for an unrelated one.
+        if (hub.Configuration.Get<EffectivePermissionsDelegate>() is null || string.IsNullOrEmpty(landingPath))
+            return viaMainNode;
+
+        // Composed HERE, on the caller's thread, beside the main-node check, and only SUBSCRIBED
+        // while a restriction exists: the fold snapshots the ambient AccessContext when it is
+        // composed (IsApiToken drives the API-token clamp, IsHub the hub-credential return), and a
+        // check composed inside the policy stream's selector would take whatever context the
+        // emitting thread carried. A token admitted at the main node would then pass an
+        // intervening `Api = false` (review of #7676).
+        var landingCheck = hub.CheckPermission(landingPath, userId, permission);
+        var atLanding = PermissionEvaluator.ObserveRestrictingPolicyBetween(hub, mainNodePath, landingPath)
+            .Select(restricted => restricted ? landingCheck : Observable.Return(true))
+            .Switch();
+        return viaMainNode.CombineLatest(atLanding, (main, landing) => main && landing);
     }
 
     /// <summary>

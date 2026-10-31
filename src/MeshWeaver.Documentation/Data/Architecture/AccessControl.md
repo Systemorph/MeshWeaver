@@ -1478,6 +1478,28 @@ satellite never borrows an owner above a scope that can break the inherited gran
 node still governs reads. The own-main-node shortcut trusts only an ancestor main node
 (`MainNodeTrust`).
 
+**Delegation never skips a policy between the main node and the satellite.** When the main node is an
+ANCESTOR of where the satellite lands (its parent on a create, its own path otherwise), the scopes in
+between were never consulted: a `_Policy` that breaks inheritance on an intermediate segment
+(`Space/_ledger`), or a static cap on a mapped container (`Space/Doc/_Comment`), did not stop a write
+or read the main node's grant allowed. Now, while any policy on a scope strictly below the main node
+and at or above the landing path RESTRICTS (`BreaksInheritance`, or a cap on any permission), the same
+permission must also hold at the landing path, and the stricter outcome wins
+(`PermissionEvaluator.ObserveRestrictingPolicyBetween`, read from the same runtime-then-static policy
+chain as the fold). With no such policy the landing check is not run: the landing inherits every grant
+of the main node, and additive surfaces declared on the main node alone (a type gate's public cover)
+keep reaching its satellites. A role DENIED on an intermediate scope is an assignment, not a policy,
+and is not consulted by this check. Ancestry is decided on the NORMALISED path, the same one the
+evaluator reads, so every spelling of the main node it accepts (`@/Space/Doc`, `/` for the root) meets
+the policies in between. The landing check is composed with the caller's context, beside the main-node
+check, and only subscribed while a restriction exists: the fold snapshots the ambient context when it is
+composed, and a check composed inside the policy stream would read the emitting thread's context, so an
+API token admitted at the main node would pass an intervening `Api = false`. Pinned by
+`SatelliteInterveningPolicyTest` (an inheritance break on an intermediate segment refuses a create, a
+cap on a mapped container refuses a read, a reference-spelled main node meets that cap, and a token
+verdict composed under the token and subscribed outside it meets an intervening `Api = false`; each
+with the same shape minus the policy as the control).
+
 **An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
 the satellite and where its grants project, so a write that changed it would let its writer decide
 access: move a comment or thread under a main node they cannot write to, or point it at one whose
