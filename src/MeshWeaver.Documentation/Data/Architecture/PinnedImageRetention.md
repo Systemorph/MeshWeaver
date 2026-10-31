@@ -946,7 +946,13 @@ things the fleet lanes read are private, and neither may reach that log in plain
   `namespace`, `helmRelease`, `database`, `keyVaultSecretPrefix`, `configPath`, `owner`, …)
   **withheld**. An installation an overlay declares that no fleet-owned record in the SAME
   repository names is withheld too, with its host. The match is per repository because an
-  installation's identity is `owner/name:id`. A record or overlay the scan could not read cannot
+  installation's identity is `owner/name:id`, and it is exact: the extra spellings a value is
+  redacted under never vouch for anything. Every overlay PATH is withheld whole unless it sits under
+  the `configPath` of a fleet record in its own repository and declares only fleet ids. This covers
+  an overlay that declares no installation at all, whose path still names its directory. An
+  overlay in a repository with no deployment records (a chart repository) therefore prints as
+  `***`. A failed read's `gh` error has the path taken out before it is cut, because a cut through
+  a long path leaves a fragment the whole-path value no longer matches. A record or overlay the scan could not read cannot
   say whose it is, so it is withheld as well: a record by its stem, an overlay by its whole path. Withheld means *not printed*, not masked. `main()` wraps stdout and stderr
   in `PublicLog`, which replaces each withheld value with `***` case-insensitively, a whole line
   at a time, before the runner sees it. The step summary goes through the same filter. The run

@@ -497,6 +497,33 @@ def record_identity(text: str, path: str) -> tuple[bool, frozenset[str]]:
     return is_fleet, frozenset(identifiers)
 
 
+def classify_record(scan: OverlayScan, text: str, path: str) -> None:
+    """The door every record read goes through: its classification, and — for a FLEET record —
+    the `configPath` its overlays live under."""
+    is_fleet, identifiers = record_identity(text, path)
+    scan.records.append((path, is_fleet, identifiers))
+    if not is_fleet:
+        return
+    try:
+        doc = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return
+    content = doc.get("content", doc) if isinstance(doc, dict) else None
+    config_path = content.get("configPath") if isinstance(content, dict) else None
+    if isinstance(config_path, str) and config_path.strip().strip("/"):
+        scan.fleet_config_paths.append(config_path.strip().strip("/"))
+
+
+def overlay_is_fleet(path: str, ids: set[str], config_paths: list[str],
+                     fleet_ids: set[str]) -> bool:
+    """An overlay may be printed only on a POSITIVE association with a fleet record of its OWN
+    repository: it sits under that record's `configPath`, and every installation it declares is
+    a fleet record's exact id. Anything else — no record directory, an id no fleet record carries,
+    a fleet id in a directory no fleet record owns — is withheld. Pure."""
+    under = any(path == root or path.startswith(root + "/") for root in config_paths)
+    return under and ids <= fleet_ids
+
+
 def withhold_unread_file(scan: OverlayScan, path: str) -> None:
     """A record or overlay this scan could NOT read is printed by the report (the unreadable line,
     and the `gh` error that quotes the path), and nothing in it could say whose it is — so it is
@@ -524,20 +551,30 @@ def withheld_identifiers(axis2: list[OverlayScan]) -> tuple[set[str], list[str]]
     # 🚨 KEYED BY REPOSITORY, like `build_instances` (#7724 review): installation identity is
     # `owner/name:id`, so a fleet record `memex` in one repository says nothing about an overlay
     # declaring `memex` in another — whose host would otherwise be printed on that record's word.
+    # 🚨 EXACT ids, not redaction spellings (#7724 review): `_identity_values` widens a value into
+    # every way it may be PRINTED; used for MATCHING it would let `memex-cloud` vouch for a
+    # `memexcloud` installation. `build_instances` matches the record stem exactly, so this does.
     fleet_ids: set[tuple[str, str]] = set()
     withheld: set[str] = set()
     for scan in axis2:
         withheld |= set(scan.withheld_paths)
         for path, is_fleet, identifiers in scan.records:
             if is_fleet:
-                fleet_ids |= {(scan.gh_repo, spelling) for spelling in
-                              _identity_values(path.rsplit("/", 1)[-1].removesuffix(".json"))}
+                fleet_ids.add((scan.gh_repo, path.rsplit("/", 1)[-1].removesuffix(".json")))
             else:
                 withheld |= identifiers
     for scan in axis2:
         for ident, host, _where in scan.instances:
             if (scan.gh_repo, ident) not in fleet_ids:
                 withheld |= _identity_values(ident) | _identity_values(host)
+        # 🚨 EVERY OVERLAY PATH, not only one declaring an installation (#7724 review): an overlay
+        # with no `Hosting__Deployment`, or one declaring an unrelated id, still prints its path —
+        # and its directory is the customer's. Withheld whole, unless positively the fleet's.
+        repo_ids = {ident for repo, ident in fleet_ids if repo == scan.gh_repo}
+        for overlay in scan.overlay_paths:
+            declared = {ident for ident, _host, where in scan.instances if where == overlay}
+            if not overlay_is_fleet(overlay, declared, scan.fleet_config_paths, repo_ids):
+                withheld.add(overlay)
     short = [value for value in withheld if len(value) < WITHHELD_MIN_LENGTH]
     problems = ([f"{len(short)} identifier(s) of a deployment that is not the fleet's own are "
                  f"shorter than {WITHHELD_MIN_LENGTH} characters, so this lane cannot withhold "
@@ -845,6 +882,10 @@ class OverlayScan:
     records: list[tuple[str, bool, frozenset[str]]] = field(default_factory=list)
     # Overlay paths that could not be read, so could not be classified: withheld whole (#7724 review).
     withheld_paths: list[str] = field(default_factory=list)
+    # Every overlay path read, and the `configPath` of every FLEET-owned record read: an overlay is
+    # printed only when it sits under one of those in its own repository (#7724 review).
+    overlay_paths: list[str] = field(default_factory=list)
+    fleet_config_paths: list[str] = field(default_factory=list)
     unreadable: str | None = None
 
 
@@ -885,7 +926,10 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
         rc, body, err = consistency.gh_api(f"repos/{gh_repo}/contents/{path}")
         if rc != 0:
             withhold_unread_file(scan, path)
-            scan.unreadable = f"could not read {path}: {err.strip()[:200]}"
+            # 🚨 The path leaves the error BEFORE it is cut (#7724 review): `gh` quotes the URL, and
+            # a cut through the path leaves a fragment the whole-path value no longer matches.
+            detail = err.strip().replace(path, "<this file>")[:200]
+            scan.unreadable = f"could not read {path}: {detail}"
             return scan
         try:
             doc = json.loads(body)
@@ -898,7 +942,7 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
         pins, floating = extract_overlay_pins(text, registry)
         # The record's SPLIT pin, on top of whatever the `repo:tag` rules found in the same text.
         if is_deployment_record_path(path):
-            scan.records.append((path, *record_identity(text, path)))
+            classify_record(scan, text, path)
             record_pins, record_floating = extract_record_pins(text, registry)
             pins = pins + record_pins
             floating = floating + record_floating
@@ -909,6 +953,7 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
             else:
                 scan.sources.extend((name, url, path) for name, url in sources)
         else:
+            scan.overlay_paths.append(path)
             scan.overlay_operators.extend(
                 (repo, path) for repo in extract_overlay_operator_repositories(text, registry))
         scan.pins.extend((repo, tag, path) for repo, tag in pins)
@@ -942,7 +987,7 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
         text = path.read_text(encoding="utf-8", errors="replace")
         pins, floating = extract_overlay_pins(text, registry)
         if is_deployment_record_path(rel):
-            scan.records.append((rel, *record_identity(text, rel)))
+            classify_record(scan, text, rel)
             record_pins, record_floating = extract_record_pins(text, registry)
             pins = pins + record_pins
             floating = floating + record_floating
@@ -953,6 +998,7 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
             else:
                 scan.sources.extend((name, url, rel) for name, url in sources)
         else:
+            scan.overlay_paths.append(rel)
             scan.overlay_operators.extend(
                 (repo, rel) for repo in extract_overlay_operator_repositories(text, registry))
         scan.pins.extend((repo, tag, rel) for repo, tag in pins)
@@ -5640,6 +5686,7 @@ def _scan2(gh_repo: str, text: str, where: str = "deployments/aks/x/values.x.yam
     scan.pins = [(repo, tag, where) for repo, tag in pins]
     scan.floating = [(repo, tag, where) for repo, tag in floating]
     scan.instances = [(ident, host, where) for ident, host in extract_overlay_instances(text)]
+    scan.overlay_paths = [where] if is_overlay_path(where) else []
     # Mirrors both production scanners — ARM 29 compares the call lists, and an out-of-scope arm
     # driven over a harness that never extracts a foreign pin would be about nothing.
     scan.foreign = [(host, repo, tag, where)
@@ -9060,6 +9107,11 @@ env:
         ("a record whose body did not DECODE", _record, lambda _endpoint: (0, "{not json", "")),
         ("an overlay whose read FAILED", _overlay,
          lambda endpoint: (1, "", f"HTTP 502: Bad Gateway (https://api.github.com/{endpoint})")),
+        # The error is CUT at 200 characters, and a cut through a long path leaves a fragment the
+        # whole-path value no longer matches (#7724 review).
+        ("an overlay with a LONG path whose read FAILED",
+         "deployments/aks/fabrikam/" + "n" * 240 + "/values.yaml",
+         lambda endpoint: (1, "", f"HTTP 502: Bad Gateway (https://api.github.com/{endpoint})")),
     )
     _saved_gh = consistency.gh_api
     _saved_summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -9102,6 +9154,65 @@ env:
             os.environ.pop("GITHUB_STEP_SUMMARY", None)
         else:
             os.environ["GITHUB_STEP_SUMMARY"] = _saved_summary
+
+    # ── ARM 42d: a fleet record vouches for its EXACT id only (#7724 review) ────────────────────
+    # `memex-cloud` is redacted as `memexcloud` too; it must not MATCH a `memexcloud` installation.
+    _exact = OverlayScan(gh_repo="Systemorph/Memex",
+                         records=[("mesh/Deployments/memex-cloud.json", True, frozenset())],
+                         instances=[("memexcloud", "portal.fabrikam.example",
+                                     "deployments/aks/memex-cloud/values.yaml")])
+    _exact_withheld, _ = withheld_identifiers([_exact])
+    check("portal.fabrikam.example" in _exact_withheld,
+          "ARM 42d: a fleet record vouched for an installation whose id is only a redaction "
+          "spelling of its own, so that installation's host was printed")
+    _exact_control = OverlayScan(gh_repo="Systemorph/Memex",
+                                 records=[("mesh/Deployments/memex-cloud.json", True, frozenset())],
+                                 instances=[("memex-cloud", "memex.example.cloud",
+                                             "deployments/aks/memex-cloud/values.yaml")])
+    check("memex.example.cloud" not in withheld_identifiers([_exact_control])[0],
+          "ARM 42d (control): the fleet record's own exact id no longer vouches for it")
+
+    # ── ARM 42e: EVERY overlay path needs a positive fleet association (#7724 review) ───────────
+    # Two overlays in a customer directory of the fleet's own repository: one declaring an id no
+    # record carries, one declaring none. Both print their path in pin-source and FLOATING lines.
+    _unrelated = (FIXTURE_OVERLAY_INSTANCE
+                  .replace('Hosting__Deployment: "memex"', 'Hosting__Deployment: "portal-prod"')
+                  .replace("memex.example.cloud", "portal-prod.example.cloud"))
+    _no_id = ('portal:\n  image: "meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.7926"\n'
+              'operator:\n  image: "meshweaver.azurecr.io/hosting-operator:main"\n')
+    with tempfile.TemporaryDirectory() as _tmp:
+        _files = {"mesh/Deployments/memex.json": _fleet_record,
+                  "deployments/aks/memex/values.memex.public.yaml": FIXTURE_OVERLAY_INSTANCE,
+                  "deployments/aks/fabrikam/values.public.yaml": _unrelated,
+                  "deployments/aks/fabrikam/extra/values.yaml": _no_id}
+        for _rel, _body in _files.items():
+            (Path(_tmp) / _rel).parent.mkdir(parents=True, exist_ok=True)
+            (Path(_tmp) / _rel).write_text(_body, encoding="utf-8")
+        _dir_scan = scan_overlays_local(_tmp, "Systemorph/Memex", REGISTRY_DEFAULT)
+    _dir_withheld, _ = withheld_identifiers([_dir_scan])
+    plan, _, _ = _drive(clean1, [_dir_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), apply=False)
+
+    def _render_dirs(log) -> str:
+        with contextlib.redirect_stdout(log):
+            report(plan, clean1, [_dir_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=HERE_ROOT)
+        log.flush()
+        return (log._stream if isinstance(log, PublicLog) else log).getvalue()
+
+    check("deployments/aks/fabrikam/values.public.yaml" in _render_dirs(io.StringIO())
+          and "deployments/aks/fabrikam/extra/values.yaml" in _render_dirs(io.StringIO()),
+          "ARM 42e (falsification): unfiltered, the customer-directory overlays never reached the "
+          "report, so the arm below would pass about nothing")
+    _dir_store = Withheld()
+    _dir_store.add(_dir_withheld)
+    _dir_public = _render_dirs(PublicLog(io.StringIO(), _dir_store))
+    check("fabrikam" not in _dir_public.lower(),
+          "ARM 42e: an overlay in a customer directory — declaring an unrelated id, or none — "
+          "printed its path into the public log")
+    check("deployments/aks/memex/values.memex.public.yaml" in _dir_public,
+          "ARM 42e (negative control): the fleet's own overlay, under its record's configPath, "
+          "was withheld")
 
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no
