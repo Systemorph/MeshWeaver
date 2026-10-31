@@ -300,7 +300,7 @@ jobs:
       # a source the generated nuget.config maps but no machine has (NU1301), a pin the feed does
       # not hold, a dependency outside the plan — each is invisible until a restore. So the lane
       # does what a user does: installs the template PACKAGE from the feed at this set's version,
-      # instantiates it under a new name, and restores it against the feed alone, with an EMPTY
+      # instantiates it under a name other than Memex, and restores it against the feed alone, with an EMPTY
       # package cache; then restores the GUI shape the same way. Its credential is this job's own
       # token, the one the user's PAT stands in for. Runs whatever the visibility check said, so a
       # red names every defect at once.
@@ -324,15 +324,33 @@ jobs:
             "<add key=\"github\" value=\"$FEED\" protocolVersion=\"3\" />" \
             '</packageSources></configuration>' > "$install/nuget.config"
           (cd "$install" && dotnet new install "MeshWeaver.MemexTemplate::$VERSION")
-          # -n Memex: the template's sourceName is `Memex`, and today any other name also rewrites
-          # identifiers that come FROM packages (MeshWeaver.Aspire.Hosting.Memex, AddMemex, …), so
-          # a renamed solution cannot restore. That is a template defect tracked on its own
-          # (MeshWeaver.Plugins#4467 thread); this step proves the feed, at the one name that works.
-          dotnet new meshweaver-memex -n Memex -o "$portal"
-          slnx=$(find "$portal" -maxdepth 1 -name '*.slnx' | head -1)
-          [ -n "$slnx" ] || { echo "::error::the template installed from the feed produced no solution"; exit 1; }
-          grep -q "Version=\"$VERSION\"" "$portal/Directory.Packages.props" \
-            || { echo "::error::the template installed from the feed does not pin set $VERSION"; exit 1; }
+          # -n Zephyr, deliberately NOT the template's own name: `-n` must rename only the solution
+          # and the host projects, never a package id or a package API (`MeshWeaver.Aspire.Hosting.Memex`,
+          # `AddMemex`). Under the old `sourceName: Memex` a renamed instance asked for
+          # MeshWeaver.Aspire.Hosting.<Name> (NU1101), so only a foreign name proves it.
+          # --skipRestore: the restore below is the verdict, run once and explicitly.
+          dotnet new meshweaver-memex -n Zephyr -o "$portal" --skipRestore
+          slnx="$portal/Zephyr.slnx"
+          [ -f "$slnx" ] || { echo "::error::the template installed from the feed produced no Zephyr.slnx — -n did not rename the solution"; exit 1; }
+          # The instance must pin EXACTLY what the template generated for this set pins — every
+          # MeshWeaver id at the same version (own-line ids at their own) — not merely mention
+          # $VERSION once while other pins still name an older set that also sits on the feed.
+          python3 - "$RUNNER_TEMP/template/Directory.Packages.props" "$portal/Directory.Packages.props" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          def pins(p):
+              return {e.get("Include"): e.get("Version") for e in ET.parse(p).getroot().iter()
+                      if e.tag.split("}")[-1] == "PackageVersion" and (e.get("Include") or "").startswith("MeshWeaver.")}
+          want, got = pins(sys.argv[1]), pins(sys.argv[2])
+          if not want:
+              sys.exit("::error::the generated template pins no MeshWeaver package — nothing to compare")
+          diff = sorted(set(want.items()) ^ set(got.items()))
+          if diff:
+              print("::error::the template installed from the feed does not pin the set it was published with:")
+              for pid, ver in diff:
+                  print(f"  {pid} {ver} ({'expected' if want.get(pid) == ver else 'installed'})")
+              sys.exit(1)
+          print(f"the installed template pins the same {len(want)} MeshWeaver packages as the set's generated template")
+          PY
           dotnet restore "$slnx" --nologo
           dotnet restore "$RUNNER_TEMP/template-gui/Memex.slnx" --nologo
           echo "a template installed from the feed at $VERSION restores against the feed, and so does the GUI shape"

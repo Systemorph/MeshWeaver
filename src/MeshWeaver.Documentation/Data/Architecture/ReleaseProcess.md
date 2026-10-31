@@ -465,7 +465,8 @@ release) and, when that run SEALED a set — `Promote`, `Verify every image ship
 7. reads every package's visibility back and is RED unless each is `private`; and
 8. **proves a user can restore**: with an empty package cache and the job's own token as the
    credential, it installs `MeshWeaver.MemexTemplate` from the feed at the set's version,
-   instantiates it under a new name, checks it pins that set, and restores it against the feed;
+   instantiates it under a name other than `Memex`, checks that it pins exactly what the set's
+   generated template pins, and restores it against the feed;
    then restores the `--with-gui` shape the same way. Steps 7 and 8 both run after a successful
    push, so one red names every defect at once.
 
@@ -524,6 +525,11 @@ The template itself comes from the same feed. From a directory whose `nuget.conf
 dotnet new install MeshWeaver.MemexTemplate::3.1.<run>
 dotnet new meshweaver-memex -n MyPortal
 ```
+
+`-n` renames the solution and the host projects (`MyPortal.slnx`, `MyPortal.Portal.Monolith`,
+`aspire/MyPortal.AppHost`, …) and nothing else: package ids and package APIs
+(`MeshWeaver.Aspire.Hosting.Memex`, `AddMemex`) and `Memex.Portal.Shared` keep their names. A
+template from before that fix renamed every occurrence of `Memex`; with one of those, keep `-n Memex`.
 
 ---
 
