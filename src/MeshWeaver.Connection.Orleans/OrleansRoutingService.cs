@@ -284,12 +284,24 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// <c>OrleansRoutingShutdownClassificationTest.HostRunning_StillReachesGrainPlacement</c> probes.
     /// Callers that legitimately run without a grain transport check for it themselves.</para>
     /// </summary>
+    ///
+    /// <para><b>The one exemption also passes through this door</b> (#7470): a leaving host's refusal
+    /// (<see cref="LeavingHostRefusalProperty"/>) may still reach the routing grain while the host
+    /// stops, but only while membership reports this silo <c>Active</c>
+    /// (<see cref="LocalSiloMayStillPlace"/>), which is exactly the window in which Orleans can still
+    /// place it. Keeping the exemption inside the seam keeps this class at ONE gated grain call
+    /// (<c>GrainActivationSiteRatchetGuard</c>).</para>
+    /// </summary>
     /// <typeparam name="TGrain">The grain interface to resolve.</typeparam>
     /// <param name="key">The grain's string key.</param>
+    /// <param name="leavingHostRefusal">True for a leaving host's stamped refusal, the one delivery
+    /// this gate lets through while this silo may still place.</param>
     /// <returns>The grain reference, or <c>null</c> once the host has begun stopping.</returns>
-    private TGrain? GrainWhileRunning<TGrain>(string key)
+    private TGrain? GrainWhileRunning<TGrain>(string key, bool leavingHostRefusal = false)
         where TGrain : class, IGrainWithStringKey
-        => IsHostStopping ? null : grainFactory.GetGrain<TGrain>(key);
+        => IsHostStopping && !(leavingHostRefusal && LocalSiloMayStillPlace())
+            ? null
+            : grainFactory.GetGrain<TGrain>(key);
 
     // Stream-teardown is bounded by Default (ProcessorCount); the op is a quick Orleans
     // UnsubscribeAsync, never a sustained fan-out.
@@ -699,9 +711,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // left the active set while the refusal waited on the sender's attach or claim.
         if (leavingHostRefusal && !LocalSiloMayStillPlace())
             return Observable.Throw<IMessageDelivery>(LeftTheActiveSet(addressPath));
-        var grain = leavingHostRefusal
-            ? grainFactory.GetGrain<IRoutingGrain>("default")
-            : GrainWhileRunning<IRoutingGrain>("default");
+        var grain = GrainWhileRunning<IRoutingGrain>("default", leavingHostRefusal);
         if (grain is null)
             return Observable.Throw<IMessageDelivery>(
                 new OperationCanceledException($"Host is shutting down, cannot route to {addressPath}"));
