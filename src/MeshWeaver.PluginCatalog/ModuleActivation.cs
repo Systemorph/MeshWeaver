@@ -2475,22 +2475,63 @@ public static class ModuleActivationSidecar
     /// the directory entry, never the file this handle holds, so the time always belongs to the
     /// bytes read. Opened with the most permissive sharing, so this read never refuses another
     /// replica's replace.
+    ///
+    /// <para>🚨 <b>A failure names its STEP and its error number (MeshWeaver#7689).</b> On Linux, .NET
+    /// renders errno 11 (<c>EAGAIN</c> = <c>EWOULDBLOCK</c>) from ANY step as "being used by another
+    /// process". That covers a <c>flock</c> refused by a node-local exclusive holder, and also the SMB
+    /// client's mapping of a throttled or timed-out request (<c>STATUS_INSUFFICIENT_RESOURCES</c>,
+    /// <c>STATUS_IO_TIMEOUT</c>, <c>STATUS_RETRY</c>). The bare message cannot tell a lock from the
+    /// storage, so the fault is re-raised as an <see cref="IOException"/> whose message keeps the
+    /// original text and adds the step (OPEN, which includes the advisory lock, or READ) and the
+    /// number. Error 11 at READ can only be the transport. The level is the caller's, unchanged.</para>
     /// </summary>
     private static (string Text, DateTime WrittenAtUtc)? TryReadWithWriteTime(string path)
     {
+        FileStream stream;
         try
         {
-            using var stream = new FileStream(
+            stream = new FileStream(
                 path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            var writtenAt = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-            return (reader.ReadToEnd(), writtenAt);
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
         {
             return null;
         }
+        catch (IOException e)
+        {
+            throw RecordReadFault("OPEN (open, stat and the advisory shared lock)", path, e);
+        }
+
+        using (stream)
+        {
+            try
+            {
+                var writtenAt = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+                using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+                return (reader.ReadToEnd(), writtenAt);
+            }
+            // Absence after the open (the modules GC retired the record between the open and the
+            // stat on a share that reports it so) is still absence, never corruption — exactly as
+            // before the step was named (review of #7733).
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return null;
+            }
+            catch (IOException e)
+            {
+                throw RecordReadFault("READ (the file was already open)", path, e);
+            }
+        }
     }
+
+    /// <summary>The diagnostic form of a record-read fault (MeshWeaver#7689): the original message
+    /// first, so every existing search for it still matches, then the step, the path and the error
+    /// number. The original exception rides as the inner one.</summary>
+    internal static IOException RecordReadFault(string step, string path, IOException fault) =>
+        new($"{fault.Message} [step: {step}; path: '{path}'; error number (HResult): {fault.HResult} "
+            + $"(0x{fault.HResult:X8}). On Linux, 11 at OPEN is either a node-local exclusive flock or "
+            + "a transient SMB status mapped to EAGAIN; 11 at READ can only be the SMB transport "
+            + "(MeshWeaver#7689).]", fault);
 
     /// <summary>Reads a file, answering null for "not there" — including the ENOENT a concurrent
     /// rename produces on SMB, which is genuinely absence and never corruption.</summary>
