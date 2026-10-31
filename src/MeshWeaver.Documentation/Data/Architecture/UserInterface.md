@@ -162,7 +162,7 @@ base frame at 31 ms, first control composed at 990 ms, then the owner's update q
 - **Reading it.**
   - A large gap between the base frame and "composed" is time spent producing the rendered store: the view's inputs, or the scheduling and rendering around them. Narrow it further by timing the view's inputs directly; the line alone does not say which.
   - A large gap between "composed" and the total means the owner's update queue or the publication is slow. The delivery mark is taken once the update has committed, so a failed update never reports.
-  - Whatever the subscriber measured beyond the total is transport.
+  - The clock starts when the owner CONSTRUCTS the host, not when the subscriber asks for the area. Whatever a subscriber measures beyond the total is therefore not transport alone. It also holds the subscribe request's routing, the owner hub's activation, the work before the host was built, the patch's return trip, and the subscriber's own processing. The line does not split these. Measure them separately before calling the remainder transport.
   - An area composed inside its own update (`UpdateArea`) marks compose inside the update and delivery once it committed, so the two are close together.
 
 The code is `FirstFrameTiming` (MeshWeaver.Layout). Systemorph/MeshWeaver.Plugins#4399, a Store row that arrived about a second after its base frame on production and in no test rig, is the reason it exists.
