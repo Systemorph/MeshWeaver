@@ -58,7 +58,7 @@ the bug:
 
 | How the test dies | Transcript of the hung test | Usable as evidence |
 |---|---|---|
-| xUnit `methodTimeout` (30 s) | **written in full** | yes |
+| the per-test bound (`methodTimeout`, applied by the execution host) | **written in full**, plus a dump of the stuck thread | yes |
 | host wall-clock cap (`exit=124` / `HOST_CRASHED`) | **destroyed** — no trx entry, no captured stdout | no |
 
 The family's defining artefact is destroyed by the family's own failure mode. An investigation that
@@ -72,6 +72,11 @@ Two consequences worth acting on:
    shards. Those instances carry the evidence and are routinely discarded as ordinary flakes.
 2. **`methodTimeout` reaching the test host is a diagnosability dependency**, which is why the next
    section is about MSBuild rather than about the mesh.
+
+🚨 **For a long time the top row did not exist for a plain `[Fact]`.** xunit.v3 ignores the
+`methodTimeout` key, so only a test declaring `[Fact(Timeout = …)]` ever died that way, and every other
+wedge took the bottom row (MeshWeaver.Plugins#4424). The execution host now applies the key; see
+[Writing Tests](../WritingTests), "The per-test bound".
 
 ## The guard that could not reach the fleet
 
