@@ -598,6 +598,20 @@ def withheld_identifiers(axis2: list[OverlayScan]) -> tuple[set[str], list[str]]
         for host, _repo, _tag, where in scan.foreign:
             if (scan.gh_repo, where) in not_fleet_files and host not in fleet_hosts:
                 withheld |= _identity_values(host)
+    # 🚨 AND THE IMAGE REPOSITORIES (#7724 review): `fabrikam-portal` in OUR registry, or
+    # `fabrikam/portal` in another, names the customer as plainly as the host does. Same rule: a
+    # repository ONLY files that are not the fleet's reference is withheld — as the exact string,
+    # never its leaf, which is a shared word (`portal`) — and one a fleet file also pins stays.
+    def repositories(scan: OverlayScan) -> list[tuple[str, str]]:
+        return ([(repo, where) for repo, _tag, where in scan.pins + scan.floating]
+                + [(repo, where) for _host, repo, _tag, where in scan.foreign])
+
+    fleet_repositories = {repo for scan in axis2 for repo, where in repositories(scan)
+                          if (scan.gh_repo, where) not in not_fleet_files}
+    for scan in axis2:
+        for repo, where in repositories(scan):
+            if (scan.gh_repo, where) in not_fleet_files and repo not in fleet_repositories:
+                withheld.add(repo)
     problems: list[str] = []
     short = [value for value in withheld if len(value) < WITHHELD_MIN_LENGTH]
     if short:
@@ -9369,6 +9383,49 @@ env:
                          overlay_paths=["deployments/aks/fabrikam/values.yaml"])
     check(not withheld_identifiers([_plain])[1],
           "ARM 42i (control): a withheld path with no line break was refused")
+
+    # ── ARM 42j: an image repository only non-fleet files reference is withheld (#7724 review) ──
+    # `fabrikam-portal` in OUR registry and `fabrikam/portal` in another name the customer as
+    # plainly as a host does. The record ALSO pins `memex-portal-ai`, which the fleet pins too: the
+    # shared-image control that must stay printed.
+    _repo_record = json.dumps({
+        "id": "prod", "nodeType": "Hosting/Deployment",
+        "content": {"owner": "Contoso Holdings",
+                    "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+                    "pinnedImageTag": "3.0.0-ci.7926",
+                    "operator": {"image": "meshweaver.azurecr.io/fabrikam-portal:3.0.0"},
+                    "gates": [{"image": "ghcr.io/fabrikam/portal:main"}]}})
+    with tempfile.TemporaryDirectory() as _tmp:
+        _files = {"mesh/Deployments/prod.json": _repo_record,
+                  "mesh/Deployments/memex.json": _fleet_record,
+                  "deployments/aks/memex/values.memex.public.yaml": FIXTURE_OVERLAY_INSTANCE}
+        for _rel, _body in _files.items():
+            (Path(_tmp) / _rel).parent.mkdir(parents=True, exist_ok=True)
+            (Path(_tmp) / _rel).write_text(_body, encoding="utf-8")
+        _repo_scan = scan_overlays_local(_tmp, "Systemorph/Memex", REGISTRY_DEFAULT)
+    plan, _, _ = _drive(clean1, [_repo_scan], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), apply=False)
+
+    def _render_repos(log) -> str:
+        with contextlib.redirect_stdout(log):
+            report(plan, clean1, [_repo_scan], REGISTRY_DEFAULT, _inventory(),
+                   apply=False, release_enabled=False, root=HERE_ROOT)
+            for _blocker in plan.blockers:
+                print(f"::error::{_blocker}")
+        log.flush()
+        return (log._stream if isinstance(log, PublicLog) else log).getvalue()
+
+    _repo_raw = _render_repos(io.StringIO())
+    check("fabrikam-portal" in _repo_raw and "fabrikam/portal" in _repo_raw,
+          "ARM 42j (falsification): unfiltered, the non-fleet record's image repositories never "
+          "reached the report, so the arm below would pass about nothing")
+    _repo_store = Withheld()
+    _repo_store.add(withheld_identifiers([_repo_scan])[0])
+    _repo_public = _render_repos(PublicLog(io.StringIO(), _repo_store))
+    check("fabrikam" not in _repo_public.lower(),
+          "ARM 42j: an image repository only a non-fleet record references reached the public log")
+    check("memex-portal-ai" in _repo_public,
+          "ARM 42j (negative control): an image the fleet's own files also pin was withheld")
 
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no

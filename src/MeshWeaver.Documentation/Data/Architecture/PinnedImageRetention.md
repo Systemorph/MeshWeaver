@@ -955,7 +955,9 @@ things the fleet lanes read are private, and neither may reach that log in plain
   prints it. A non-fleet record is withheld by its whole path too, since a parent directory can
   name the client. A registry host that only non-fleet files pin in is withheld, because a
   customer's own registry is named after the customer. A host that any fleet file also pins stays
-  printed. One cost follows: a host pinned only by a chart repository's overlays prints as `***`
+  printed. Image repositories follow the same rule. One that only non-fleet files reference is
+  withheld as its exact string, never by its last segment, which is often a shared word. One
+  that a fleet file also pins stays printed. One cost follows: a host pinned only by a chart repository's overlays prints as `***`
   too. An identifier containing a line break makes the run red, because the filter replaces values
   within one line. A failed read's `gh` error is URL-decoded and has the path taken out before it
   is cut, because a cut through
