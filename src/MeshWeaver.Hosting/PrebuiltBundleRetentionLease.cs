@@ -69,6 +69,20 @@ public sealed record PrebuiltBundleRetentionLeaseState(long Claim, string? Repli
     [JsonIgnore]
     public int Holder => Claim <= 0 ? 0 : (int)(Claim & PrebuiltBundleRetentionLease.NonceMask & ~PrebuiltBundleRetentionLease.StampedFlag);
 
+    /// <summary>
+    /// The replica holding the CURRENT claim, or <c>null</c> while that claim is not stamped yet (#7459).
+    ///
+    /// <para>🚨 <see cref="Replica"/> and <see cref="TakenAt"/> belong to the last STAMPED claim. A take
+    /// writes only the claim and its generation, and the holder stamps its name in a second write, so
+    /// between the two the lease carries the new claim beside the PREVIOUS holder's name and time. Read as
+    /// the holder, that named a replica which had released long before (measured on a live portal: a skip
+    /// line named a replica that had released 24 minutes earlier, while the claim was another replica's
+    /// take one write ahead of its stamp). Only a stamped claim (<see cref="PrebuiltBundleRetentionLease.StampedFlag"/>)
+    /// was written together with its replica, so only then is <see cref="Replica"/> the holder's.</para>
+    /// </summary>
+    [JsonIgnore]
+    public string? HolderReplica => Claim > 0 && (Claim & PrebuiltBundleRetentionLease.StampedFlag) != 0 ? Replica : null;
+
     /// <summary>The instant the hold ends; a lease whose hold has ended is free.</summary>
     [JsonIgnore]
     public DateTimeOffset Until => Claim <= 0
@@ -117,6 +131,23 @@ public sealed record PrebuiltBundleRetentionLeaseVerdict(bool Held, PrebuiltBund
 /// </summary>
 public static class PrebuiltBundleRetentionLease
 {
+    /// <summary>
+    /// Who holds <paramref name="lease"/>, for the line a replica that skipped its pass logs (#7459): the
+    /// holding pass, its replica only once that replica has stamped the claim
+    /// (<see cref="PrebuiltBundleRetentionLeaseState.HolderReplica"/>), and the hold's end. Pure.
+    /// </summary>
+    /// <param name="lease">The lease as the owner settled it.</param>
+    public static string DescribeHolder(PrebuiltBundleRetentionLeaseState lease)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        var replica = lease.HolderReplica is { } named
+            ? "on " + named
+            : "on a replica that has not stamped its claim yet";
+        return $"pass {lease.Holder.ToString(invariant)} {replica} at generation {lease.Generation.ToString(invariant)} "
+            + $"until {lease.Until.ToString("O", invariant)}";
+    }
+
     /// <summary>The lease's node type.</summary>
     public const string LeaseNodeType = "PrebuiltBundleRetentionLease";
 
