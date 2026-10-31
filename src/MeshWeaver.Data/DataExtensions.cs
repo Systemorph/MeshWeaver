@@ -14,6 +14,7 @@ using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -3426,8 +3427,12 @@ public static class DataExtensions
 
     private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request)
     {
-        var types = GetDomainTypes(hub);
-        hub.Post(new DomainTypesResponse(types), o => o.ResponseFor(request));
+        // The descriptions are XML-doc summaries: the answer is posted once their documentation
+        // files are in memory, read on the mesh's I/O edge — never on this handler's turn (#7386).
+        hub.SubscribeHeldUntilTerminal(ObserveDomainTypes(hub), types => types
+            .Subscribe(
+                list => hub.Post(new DomainTypesResponse(list), o => o.ResponseFor(request)),
+                ex => hub.Post(DeliveryFailure.FromException(request, ex), o => o.ResponseFor(request))));
         return request.Processed();
     }
 
@@ -4047,7 +4052,8 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Observable for SchemaReference — synchronous schema generation.
+    /// Observable for SchemaReference — the schema is generated on the mesh's XML-doc read edge
+    /// (<see cref="ObserveSchema"/>).
     /// </summary>
     private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
@@ -4058,20 +4064,19 @@ public static class DataExtensions
         if (typeName is null)
             return Observable.Return(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version));
 
-        var schema = GenerateJsonSchema(hub, typeName);
-        return Observable.Return(new GetDataResponse(new SchemaInfo(typeName, schema), hub.Version));
+        return ObserveSchema(hub, typeName).Select(schema => new GetDataResponse(schema, hub.Version));
     }
 
     /// <summary>
-    /// Observable for DataModelReference — synchronous list of registered types.
+    /// Observable for DataModelReference — the registered types, once their descriptions are in
+    /// memory (<see cref="ObserveDomainTypes"/>).
     /// </summary>
     private static IObservable<GetDataResponse> GetDataResponseObservable(
         IMessageHub hub,
         DataModelReference _,
         GetDataRequest __)
     {
-        var types = GetDomainTypes(hub).ToList();
-        return Observable.Return(new GetDataResponse(types, hub.Version));
+        return ObserveDomainTypes(hub).Select(types => new GetDataResponse(types, hub.Version));
     }
 
     /// <summary>
@@ -4532,6 +4537,33 @@ public static class DataExtensions
 
         return ContentJsonSchema.Generate(typeDefinition!.Type, hub.JsonSerializerOptions, MeshWeaver.Messaging.Serialization.XmlDocsExtensions.XmlDocs(hub)).ToJsonString();
     }
+
+    /// <summary>
+    /// The JSON schema of <paramref name="typeName"/>, generated on the mesh's XML-doc read edge
+    /// (<see cref="MeshWeaver.Messaging.Serialization.XmlDocsExtensions.OnXmlDocsReadEdge{T}"/>). The
+    /// generator reads the summary of every property it walks — documentation files of assemblies
+    /// nobody can name in advance — so it never runs on a handler's or a reducer's turn (#7386).
+    /// </summary>
+    internal static IObservable<SchemaInfo> ObserveSchema(IMessageHub hub, string typeName)
+        => hub.OnXmlDocsReadEdge(ct =>
+        {
+            // A drained edge never starts a generation; once started it is ONE call into the
+            // schema exporter, whose property walk offers no step boundary to check between.
+            ct.ThrowIfCancellationRequested();
+            return new SchemaInfo(typeName, GenerateJsonSchema(hub, typeName));
+        });
+
+    /// <summary>
+    /// <see cref="GetDomainTypes"/>, emitted once every listed type's XML-doc summary is in memory:
+    /// at once when it already is, otherwise after the cold reads have run on the mesh's I/O edge
+    /// (<see cref="MeshWeaver.Messaging.Serialization.XmlDocsExtensions.WhenXmlDocsLoaded(ITypeDefinition, IMessageHub, IEnumerable{System.Reflection.MemberInfo})"/>).
+    /// </summary>
+    internal static IObservable<IReadOnlyList<TypeDescription>> ObserveDomainTypes(IMessageHub hub)
+        => Observable.Defer(() => hub.GetWorkspace().DataContext.TypeSources.Values
+            .Select(ts => ts.TypeDefinition.WhenXmlDocsLoaded(hub, [ts.TypeDefinition.Type]))
+            .Concat()
+            .ToList()
+            .Select(_ => (IReadOnlyList<TypeDescription>)GetDomainTypes(hub).ToImmutableList()));
 
     internal static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)
     {

@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Json;
 using MeshWeaver.Data.Serialization;
@@ -37,16 +38,19 @@ public static class StandardReducers
             .AddWorkspaceReference<FileReference, object>(ReduceEntityStoreTo)
             .AddWorkspaceReference<UnifiedReference, object>((ci, r, initial) => ReduceEntityStoreTo(ci, r, initial, typeRegistry))
             .AddWorkspaceReference<DataPathReference, object>((ci, r, initial) => ReduceEntityStoreTo(ci, r, initial, typeRegistry))
-            .AddWorkspaceReference<SchemaReference, object>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub))
-            .AddWorkspaceReference<DataModelReference, object>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub))
             .AddWorkspaceReference<NodeTypeReference, object>((ci, _, _) => new ChangeItem<object>(null, ci.StreamId, ci.Version))
+            // 🚨 Schema and data model are NOT reducers over the store: neither depends on the data,
+            // and both read XML-doc summaries — a cold read parses a documentation file. A reducer
+            // runs synchronously on the turn that reduces, so each is a stream fed from the mesh's
+            // I/O edge instead (#7386, Doc/Architecture/XmlDocumentationReader).
+            .AddWorkspaceReferenceStream<object>((workspace, reference, _) =>
+                reference is SchemaReference or DataModelReference
+                    ? CreateDocumentedReferenceStream(workspace, (WorkspaceReference<object>)reference)
+                    : null)
             .AddWorkspaceReferenceStream<object>(
                 (workspace, reference, configuration) =>
                 {
-                    if (reference is not SchemaReference
-                        and not DataModelReference
-                        and not NodeTypeReference
-                        )
+                    if (reference is not NodeTypeReference)
                         return null;
                     var dataSource = workspace.DataContext.DataSources.FirstOrDefault();
                     var parentStream = dataSource?.GetStreamForPartition(null);
@@ -549,20 +553,44 @@ public static class StandardReducers
         return (collection, string.IsNullOrEmpty(entityId) ? null : entityId);
     }
 
-    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, SchemaReference reference, IMessageHub hub)
+    /// <summary>
+    /// The stream behind a <see cref="SchemaReference"/> or <see cref="DataModelReference"/>: one value,
+    /// produced on the mesh's XML-doc read edge (<see cref="DataExtensions.ObserveSchema"/>,
+    /// <see cref="DataExtensions.ObserveDomainTypes"/>) and pushed into the stream — so neither the
+    /// subscribing turn nor a store change ever reads a documentation file. A workspace with no data
+    /// source has neither, as before.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateDocumentedReferenceStream(IWorkspace workspace, WorkspaceReference<object> reference)
     {
-        var typeName = string.IsNullOrWhiteSpace(reference.Type) ? DataExtensions.DefaultSchemaTypeName(hub) : reference.Type;
-        if (typeName is null)
-            return new ChangeItem<object>(new SchemaInfo("", "{}"), current.StreamId, current.Version);
+        if (!workspace.DataContext.DataSources.Any())
+            return null;
+        var hub = workspace.Hub;
+        var stream = new SynchronizationStream<object>(
+            new StreamIdentity(hub.Address, reference.ToString()),
+            hub,
+            reference,
+            workspace.ReduceManager.ReduceTo<object>(),
+            c => c);
 
-        var schema = DataExtensions.GenerateJsonSchema(hub, typeName);
-        return new ChangeItem<object>(new SchemaInfo(typeName, schema), current.StreamId, current.Version);
-    }
+        var value = reference switch
+        {
+            SchemaReference schema => Observable.Defer(() =>
+                (string.IsNullOrWhiteSpace(schema.Type) ? DataExtensions.DefaultSchemaTypeName(hub) : schema.Type) is { } typeName
+                    ? DataExtensions.ObserveSchema(hub, typeName).Select(info => (object)info)
+                    : Observable.Return<object>(new SchemaInfo("", "{}"))),
+            _ => DataExtensions.ObserveDomainTypes(hub).Select(types => (object)types),
+        };
 
-    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, DataModelReference reference, IMessageHub hub)
-    {
-        var types = DataExtensions.GetDomainTypes(hub).ToList();
-        return new ChangeItem<object>(types, current.StreamId, current.Version);
+        stream.RegisterForDisposal(
+            value
+                .Select(v => new ChangeItem<object>(v, stream.StreamId, hub.Version))
+                // The value is final, but the stream is not: completing it would complete the store
+                // while the value's own post to the hub is still in flight. It lives until disposed,
+                // as the reduced stream it replaces did.
+                .Concat(Observable.Never<ChangeItem<object>>())
+                .Synchronize()
+                .Subscribe(stream));
+        return stream;
     }
 
     private static ChangeItem<object> ReduceContentPath(ChangeItem<EntityStore> current, string? remainingPath)
