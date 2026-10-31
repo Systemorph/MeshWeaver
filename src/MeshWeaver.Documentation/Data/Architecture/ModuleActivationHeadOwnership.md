@@ -146,6 +146,32 @@ proposed that as the mesh's module set. Now:
   derived from a partial read — its record is on the volume, and the next whole read derives it;
 - `WriteVerdict` refuses to supersede a verdict it could not read.
 
+**"The next read restores it" must hold for every memo, too (#7690).** `PendingModuleActivations`
+keeps its reading behind a fingerprint of what the module directories LIST. A record that could not
+be read changes nothing that is listed, so a reading that faulted used to answer every later probe
+until something unrelated landed. Only a WHOLE reading is now kept behind the fingerprint. A faulted
+reading is taken again on the next refresh, on the IO pool and off the probe path, for as long as the
+volume keeps faulting.
+
+**What "being used by another process" means here (#7689).** On Linux, .NET renders errno 11
+(`EAGAIN` = `EWOULDBLOCK`) from any step of an open or a read with that sentence. Two different
+things produce it:
+
+- a `flock` refused because another process on the same node holds the file exclusively (the share
+  is mounted `nobrl`, so a `flock` never leaves the node);
+- the SMB client's mapping of a throttled or timed-out request: `STATUS_INSUFFICIENT_RESOURCES`,
+  `STATUS_IO_TIMEOUT` and `STATUS_RETRY` all become `-EAGAIN`.
+
+A genuine server-side sharing violation maps to `EBUSY` and reads differently. Every record read
+therefore adds to the original message the step that failed, the path and the error number:
+
+- 11 at **OPEN**, which includes the advisory shared lock, is either a lock or the transport;
+- 11 at **READ** can only be the transport.
+
+The current image takes no exclusive lock on any activation record. Writers publish by one no-replace
+rename ([Atomic File Publication](../AtomicFilePublication)), and readers open with
+`FileShare.ReadWrite | FileShare.Delete`.
+
 ### 🚨 What an image that predates the records sees when the two disagree
 
 It reads `<Name>.json` alone, and that file is **last-writer-wins, as it always was** — no ordering
