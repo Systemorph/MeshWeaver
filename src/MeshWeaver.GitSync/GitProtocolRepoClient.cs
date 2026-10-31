@@ -54,9 +54,9 @@ public sealed class GitProtocolRepoClient(
     {
         var branch = string.IsNullOrWhiteSpace(request.Branch) ? "main" : request.Branch.Trim();
         var prefix = NormalizePrefix(request.Subdirectory);
-        // Provider-aware credential (MeshWeaver#5248): Azure Repos takes the Entra token as a
-        // bearer header, every other remote the existing credential helper.
-        var auth = GitCredentials.ForRemote(request.RepositoryUrl, request.AccessToken);
+        // A URL a git hosting provider claims never reaches this client (GitProviderRepoClient routes
+        // it to the provider's own), so every remote here takes the $GW_TOKEN credential helper.
+        (IReadOnlyList<string> Args, IReadOnlyDictionary<string, string>? Env) auth = (GitCredentials.AuthArgs(request.AccessToken), GitCredentials.AuthEnv(request.AccessToken));
         return EnsureRepo(request)
             .SelectMany(repoCreated => WithTempDir(tmp =>
                 Clone(request.RepositoryUrl, auth, tmp)
@@ -490,12 +490,10 @@ public sealed class GitProtocolRepoClient(
     // ── push internals ───────────────────────────────────────────────────────
 
     /// <summary>Repo existence/creation is REST-only (git cannot create a GitHub repo) — and only
-    /// meaningful for a GitHub remote; a local/file remote (tests) is taken as existing. An Azure
-    /// Repos remote (MeshWeaver#5248) is taken as existing too: the GitHub REST surface does not
-    /// apply to it, and creating an Azure Repos repository is out of scope — a missing one fails
-    /// the clone with git's own message.</summary>
+    /// meaningful for a github.com remote; any other remote (a local/file one in tests, a non-GitHub
+    /// host) is taken as existing, and a missing one fails the clone with git's own message.</summary>
     private IObservable<bool> EnsureRepo(GitHubPushRequest request)
-        => IsGitHubUrl(request.RepositoryUrl) && !GitRepositoryProvider.IsAzureRepos(request.RepositoryUrl)
+        => RunsGitHubRepoPreflight(request.RepositoryUrl)
             ? octokit.EnsureRepoExists(
                 request.RepositoryUrl, request.AccessToken, request.CreatePrivateIfMissing)
             : Observable.Return(false);
@@ -678,10 +676,12 @@ public sealed class GitProtocolRepoClient(
             : Observable.Throw<GitCommandResult>(new InvalidOperationException(
                 $"git failed (exit {r.ExitCode}): {r.Message}")));
 
-    /// <summary>True for a GitHub http(s) remote — where the REST surface (repo create) applies.</summary>
-    private static bool IsGitHubUrl(string url)
-        => url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-           || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+    /// <summary>True for a <c>github.com</c> remote — the only one the GitHub REST surface (repo
+    /// existence / create) applies to. Any other http(s) remote (an Azure Repos URL no provider
+    /// claimed, a GitHub Enterprise or other host) goes straight to git: read as a GitHub
+    /// owner/repo, its path would make the preflight fail the push or create an unrelated repo.</summary>
+    internal static bool RunsGitHubRepoPreflight(string url)
+        => GitRepositoryProvider.Classify(url) == GitRepositoryProvider.GitHub;
 
     /// <summary>An abbreviated commit SHA (7–39 hex chars) — resolvable via REST only; the wire
     /// protocol fetches refs and FULL 40-char SHAs.</summary>
