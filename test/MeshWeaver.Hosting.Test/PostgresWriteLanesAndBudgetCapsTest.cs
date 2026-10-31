@@ -4,18 +4,16 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// MeshWeaver#7464 — the caps the partitioned Postgres backend's write path relies on: one write
-/// lane PER SCHEMA, each capped at one (writes to a partition stay ordered), under a provider-wide
-/// write BUDGET that keeps the lanes' total below the shared connection pool.
+/// MeshWeaver#7464 — the caps the partitioned Postgres backend's write path relies on: the
+/// provider-wide write BUDGET its per-schema write lanes take slots of, which keeps their total
+/// below the shared connection pool, and the unchanged cap-1 <c>pg:</c> rule.
 /// </summary>
 public class PostgresWriteLanesAndBudgetCapsTest
 {
     [Fact]
-    public void APerSchemaWriteLane_IsCappedAtOne()
+    public void TheProviderWideWriteLane_IsUnchanged()
     {
         var options = new IoPoolOptions();
-        options.MaxConcurrencyFor($"{IoPoolNames.PostgresAdapterPrefix}Postgres:reinsurancedemo")
-            .Should().Be(1, "writes to ONE partition must stay ordered");
         options.MaxConcurrencyFor($"{IoPoolNames.PostgresAdapterPrefix}Postgres")
             .Should().Be(1, "the provider-wide lane the event log and the instance store keep is unchanged");
     }
