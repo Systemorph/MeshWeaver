@@ -16,7 +16,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private record CountRequest(int Parts, bool Reversed = false, bool GoSilent = false) : IRequest<CountDone>;
+    private record CountRequest(int Parts, bool Reversed = false, bool GoSilent = false, bool OverCount = false) : IRequest<CountDone>;
 
     private record CountPart(int Index);
 
@@ -40,7 +40,8 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
                 foreach (var i in order)
                     hub.PostResponsePart(request, new CountPart(i), i);
                 if (!ask.GoSilent)
-                    hub.PostFinalResponse(request, new CountDone("streamed"), ask.Parts);
+                    // OverCount: the reply counts one part more than was sent — a part still in flight.
+                    hub.PostFinalResponse(request, new CountDone("streamed"), ask.OverCount ? ask.Parts + 1 : ask.Parts);
                 return request.Processed();
             });
 
@@ -108,5 +109,34 @@ public class StreamedResponseTest(ITestOutputHelper output) : HubTestBase(output
         seen.Where(n => n.Kind == System.Reactive.NotificationKind.OnNext).Should().HaveCount(2);
         seen.Last().Kind.Should().Be(System.Reactive.NotificationKind.OnError);
         seen.Last().Exception.Should().BeOfType<TimeoutException>();
+    }
+
+    /// <summary>
+    /// The reply arrived but a part it counts did not: the stream stays open — and when the awaiting
+    /// hub is disposed then, the stream ends with that disposal, not with a later, misleading timeout
+    /// (the reply subject is already complete, so the error must travel on the parts).
+    /// </summary>
+    [Fact]
+    public async Task Disposal_after_the_reply_but_before_a_counted_part_ends_the_stream_with_the_disposal()
+    {
+        var client = GetClient(c => ConfigureClient(c)
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithRequestTimeout(TimeSpan.FromSeconds(60)));
+        var seen = new System.Reactive.Subjects.ReplaySubject<System.Reactive.Notification<IMessageDelivery>>();
+        using var subscription = client.ObserveStreamed(new CountRequest(1, OverCount: true), o => o.WithTarget(CreateHostAddress()))
+            .Materialize()
+            .Subscribe(seen);
+
+        await seen.Where(n => n.Kind == System.Reactive.NotificationKind.OnNext)
+            .Should().Within(10.Seconds()).Emit("the one part that was sent arrives");
+        await seen.Where(n => n.Kind != System.Reactive.NotificationKind.OnNext)
+            .Should().NotEmit(1.Seconds(), "the reply counts a part that never came, so the stream stays open");
+
+        client.Dispose();
+
+        var end = await seen.Where(n => n.Kind != System.Reactive.NotificationKind.OnNext)
+            .Should().Within(10.Seconds()).Emit("disposal ends the stream long before its 60 s silence bound");
+        end.Kind.Should().Be(System.Reactive.NotificationKind.OnError);
+        end.Exception.Should().BeOfType<HubDisposedBeforeResponseException>();
     }
 }

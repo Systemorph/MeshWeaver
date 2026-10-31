@@ -1460,9 +1460,12 @@ public sealed class MessageHub : IMessageHub
     /// <param name="options">Addressing for the post (at least the target).</param>
     /// <returns>The parts in order, then the terminal reply.</returns>
     public IObservable<IMessageDelivery> ObserveStreamed(object r, Func<PostOptions, PostOptions> options)
-        => Observable.Defer(() =>
+    {
+        // The identity of the CALLER that built the operation, not of whoever subscribes later:
+        // RestoreUserContextOnEmission re-seeds it around the post and every emission.
+        var capturedCtx = accessService.Context;
+        return Observable.Defer(() =>
         {
-            var capturedCtx = accessService.Context;
             var messageId = Guid.NewGuid().AsString();
             var probeOptions = options(new PostOptions(Address));
             var requestType = r?.GetType().Name ?? "<null>";
@@ -1493,6 +1496,7 @@ public sealed class MessageHub : IMessageHub
                     capturedCtx),
                 r);
         });
+    }
 
     /// <summary>
     /// Re-orders response parts by their <see cref="PostOptions.ResponsePart"/> number and emits the
@@ -2155,6 +2159,7 @@ public sealed class MessageHub : IMessageHub
         }
 
         System.Reactive.Subjects.AsyncSubject<IMessageDelivery> subject;
+        Subject<IMessageDelivery>? streamedParts;
         lock (responseSubjects)
         {
             // A streamed wait keeps its entry past the reply: a part sent before the reply may still
@@ -2173,6 +2178,7 @@ public sealed class MessageHub : IMessageHub
                 return Observable.Return(delivery.Processed());
             }
             subject = entry.Subject;
+            streamedParts = entry.Parts;
             // The callback is resolving now — the trail has done its job.
             requestFates.Untrack(requestIdString);
         }
@@ -2183,7 +2189,12 @@ public sealed class MessageHub : IMessageHub
 
         if (delivery.Message is DeliveryFailure failure)
         {
-            subject.OnError(new DeliveryFailureException(failure));
+            var failureError = new DeliveryFailureException(failure);
+            subject.OnError(failureError);
+            // A streamed wait stays open past its reply while a counted part is missing; a failure
+            // correlated to it after the reply must still end it, and the completed reply subject
+            // ignores it — so it travels on the parts.
+            streamedParts?.OnError(failureError);
         }
         else
         {
@@ -4699,8 +4710,13 @@ public sealed class MessageHub : IMessageHub
                 // work that hit it, and until it had a type the only way to tell the two apart was
                 // to match this message. The message itself is unchanged on purpose; see
                 // HubDisposedBeforeResponseException.
-                entry.Subject.OnError(new HubDisposedBeforeResponseException(
-                    nameof(MessageHub), Address, entry.RequestType, entry.Target?.ToString()));
+                var disposedError = new HubDisposedBeforeResponseException(
+                    nameof(MessageHub), Address, entry.RequestType, entry.Target?.ToString());
+                entry.Subject.OnError(disposedError);
+                // A streamed wait whose reply already arrived is still open while a counted part is
+                // missing; its reply subject is complete and ignores the error, so the stream hears
+                // it through its parts.
+                entry.Parts?.OnError(disposedError);
             }
             catch
             {
