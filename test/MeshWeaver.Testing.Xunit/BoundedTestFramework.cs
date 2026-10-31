@@ -71,6 +71,8 @@ public class BoundedTestFrameworkExecutor(IXunitTestAssembly testAssembly)
     {
         var bound = MethodBound.Resolve(assembly);
         MethodBound.Apply(testCases, bound);
-        return bound > 0 ? new TimeoutWitness(sink, bound) : sink;
+        // The witness is installed whether or not the assembly declares a bound: a test's own
+        // [Fact(Timeout = …)] (or a theory row's) times out just the same in an unbounded assembly.
+        return new TimeoutWitness(sink, bound);
     }
 }

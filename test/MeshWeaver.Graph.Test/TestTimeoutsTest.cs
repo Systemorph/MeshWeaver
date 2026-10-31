@@ -406,6 +406,10 @@ public class TestTimeoutsTest
         Assert.Contains(lines, l => l.Contains(
             $"[{nameof(MethodBoundProbe)}] {TimeoutWitness.Phase} {nameof(MethodBoundProbe.HoldsItsThreadSynchronously)} bound={ProbeBoundMilliseconds}ms dump={run.Dumps.FullName}",
             StringComparison.Ordinal));
+        var dumpLines = File.ReadAllLines(run.Trace)
+            .Where(l => l.Contains($"] {TimeoutWitness.DumpPhase} ", StringComparison.Ordinal)).ToArray();
+        Assert.True(dumpLines.Length == 2 && dumpLines.All(l => l.Contains($" dump={run.Dumps.FullName}", StringComparison.Ordinal)),
+            $"each timed-out probe must report its dump as written on a {TimeoutWitness.DumpPhase} line.\n{string.Join('\n', dumpLines)}\n{transcript}");
         var written = run.Dumps.GetFiles("test-timeout-*.dmp");
         Assert.True(written.Length == 2 && written.All(f => f.Length > 0),
             $"each timed-out probe must leave a non-empty dump in {run.Dumps.FullName}; found {written.Length}.\n{string.Join('\n', lines)}");

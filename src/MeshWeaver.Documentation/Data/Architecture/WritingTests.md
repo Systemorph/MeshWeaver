@@ -934,7 +934,11 @@ the process (stacks and modules, no heap; at most three per process) while the t
 frame. The dump goes to `MESHWEAVER_TEST_DUMP_DIR`, else the directory of `DOTNET_DbgMiniDumpName`
 (`/tmp/coredumps` on every CI test lane, which upload it with a red leg's evidence), else the temp
 directory. It also writes a `TEST_TIMEOUT` line naming the test, the bound and the dump to the phase
-trace and to standard error.
+trace and to standard error — BEFORE the failure is forwarded to the reporter and before the dump is
+taken, so a dump that stalls never hides the verdict. The dump runs on its own thread, bounded at 30 s,
+and its outcome (written, failed with the reason, or not finished in time) is a second line,
+`TEST_TIMEOUT_DUMP`. The witness is installed in every assembly, bounded or not: a declared
+`[Fact(Timeout = …)]` times out in an unbounded assembly too.
 
 **How every assembly gets it.** `test/Directory.Build.props` references the host and declares
 `[assembly: Xunit.TestFramework(typeof($(MeshWeaverTestFramework)))]`, which is `BoundedTestFramework`
