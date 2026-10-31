@@ -951,7 +951,10 @@ things the fleet lanes read are private, and neither may reach that log in plain
   the `configPath` of a fleet record in its own repository and declares only fleet ids. This covers
   an overlay that declares no installation at all, whose path still names its directory. An
   overlay in a repository with no deployment records (a chart repository) therefore prints as
-  `***`. A failed read's `gh` error has the path taken out before it is cut, because a cut through
+  `***`. An installation's HOST is exempt only under the same association, because a failed probe
+  prints it. A non-fleet record is withheld by its whole path too, since a parent directory can
+  name the client. A failed read's `gh` error is URL-decoded and has the path taken out before it
+  is cut, because a cut through
   a long path leaves a fragment the whole-path value no longer matches. A record or overlay the scan could not read cannot
   say whose it is, so it is withheld as well: a record by its stem, an overlay by its whole path. Withheld means *not printed*, not masked. `main()` wraps stdout and stderr
   in `PublicLog`, which replaces each withheld value with `***` case-insensitively, a whole line
