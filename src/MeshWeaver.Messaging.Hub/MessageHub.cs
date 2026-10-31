@@ -606,6 +606,9 @@ public sealed class MessageHub : IMessageHub
         hostedHubs.OwnerDisposalCause = () => DisposalOriginForChildren;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
+        // #7324: the hub's ONE in-flight marker, created with it so every reader finds the same
+        // instance (BeginAsyncOperation marks it, a module swap's recycle wave defers on it).
+        Set(new HubStepsInFlight());
         unhandledNack = configuration.Get<UnhandledMessageNack>();
         parentAddress = parentHub?.Address;
         accessService = serviceProvider.GetRequiredService<AccessService>();
