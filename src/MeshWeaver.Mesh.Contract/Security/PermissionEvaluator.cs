@@ -567,9 +567,12 @@ internal static class PermissionEvaluator
     /// 🛡️ The assignment twin of <see cref="ObserveRestrictingPolicyBetween"/>: whether a role is
     /// DENIED to <paramref name="userId"/> — directly or through any group they belong to,
     /// transitively — on a scope strictly beneath <paramref name="ancestorPath"/> and at or above
-    /// <paramref name="descendantPath"/>. A denial there subtracts that role from everything the
-    /// descendant inherits, so a delegation that decides the descendant by the ancestor's
-    /// permissions alone would never see it. Reads the same assignment and membership legs, and the
+    /// <paramref name="descendantPath"/>, where it removes a role the subject HOLDS at that scope
+    /// (granted at or above it, by an assignment or a declared GrantRule). Such a denial subtracts
+    /// that role from everything the descendant inherits, so a delegation that decides the
+    /// descendant by the ancestor's permissions alone would never see it; a denial of a role the
+    /// subject does not hold there removes nothing and does not count
+    /// (<see cref="SubtractsAHeldRoleBetween"/>). Reads the same assignment, rule-grant and membership legs, and the
     /// same subject expansion, as the fold, so the two never disagree about which denial applies —
     /// including the fold's <see cref="WellKnownUsers.Public"/> leg: for a signed-in caller (neither
     /// Anonymous nor Public) a role denied to Public, or to a group Public belongs to, counts too.
@@ -589,24 +592,63 @@ internal static class PermissionEvaluator
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var options = hub.JsonSerializerOptions;
         var staticNodes = CollectStaticAccessAssignments(hub);
-        return ObserveEffectiveAssignments(hub, cache, descendant, staticNodes)
-            .CombineLatest(ObserveAllMembershipNodes(cache, options), (nodes, memberships) =>
-            {
-                bool DeniedBetween(string subject)
+        var betweenSet = between.ToImmutableHashSet(StringComparer.Ordinal);
+        return Observable.CombineLatest(
+                ObserveEffectiveAssignments(hub, cache, descendant, staticNodes),
+                ObserveAllMembershipNodes(cache, options),
+                ObserveRuleGrants(cache, options, descendant),
+                (nodes, memberships, ruleGrants) =>
                 {
-                    var subjects = ResolveUserGroups(subject, memberships, options).Add(subject);
-                    var (_, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, options);
-                    return between.Any(scope => denied.TryGetValue(scope, out var roles) && !roles.IsEmpty);
-                }
-                // The fold ORs a signed-in caller's own roles with the Public leg, and a denial to
-                // Public narrows that leg at the descendant — so it is an intervening denial for the
-                // caller too. Over-inclusive by design: a true only asks for the landing check, which
-                // folds the descendant exactly.
-                return DeniedBetween(userId)
-                       || (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public
-                           && DeniedBetween(WellKnownUsers.Public));
-            })
+                    bool DeniedBetween(string subject)
+                    {
+                        var subjects = ResolveUserGroups(subject, memberships, options).Add(subject);
+                        var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, options);
+                        granted = AddRuleGrants(granted, subjects, ruleGrants);
+                        return SubtractsAHeldRoleBetween(granted, denied, descendant, betweenSet, subject);
+                    }
+                    // The fold ORs a signed-in caller's own roles with the Public leg, and a denial to
+                    // Public narrows that leg at the descendant — so it is an intervening denial for the
+                    // caller too. A true only asks for the landing check, which folds the descendant
+                    // exactly.
+                    return DeniedBetween(userId)
+                           || (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public
+                               && DeniedBetween(WellKnownUsers.Public));
+                })
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// Replays the ROLE half of <see cref="ComputeRoleState"/>'s walk down <paramref name="nodePath"/>
+    /// — a scope's grants join, then its denials subtract, then the self-scope Admin is added — and
+    /// answers whether a denial on one of <paramref name="between"/> removes a role the subject holds
+    /// at that point. A denial of a role the subject does not hold there subtracts nothing, so it must
+    /// not force the landing check: that check folds the landing alone and would lose the surfaces
+    /// the main node carries without any role (a type gate's public cover), refusing a satellite the
+    /// denial never touched (review of #7723). Inheritance breaks are not replayed: ignoring one can
+    /// only count MORE roles as held, never fewer, and a break between the two paths already forces
+    /// the landing check through <see cref="ObserveRestrictingPolicyBetween"/>.
+    /// </summary>
+    private static bool SubtractsAHeldRoleBetween(
+        ImmutableDictionary<string, ImmutableHashSet<string>> granted,
+        ImmutableDictionary<string, ImmutableHashSet<string>> denied,
+        string nodePath, ImmutableHashSet<string> between, string subject)
+    {
+        var held = ImmutableHashSet<string>.Empty;
+        var isSelfScopeOwner = subject != WellKnownUsers.Anonymous && subject != WellKnownUsers.Public;
+        foreach (var scope in GetScopeHierarchy(nodePath))
+        {
+            if (granted.TryGetValue(scope, out var roles))
+                held = held.Union(roles);
+            if (denied.TryGetValue(scope, out var deniedRoles))
+            {
+                if (between.Contains(scope) && held.Overlaps(deniedRoles))
+                    return true;
+                held = held.Except(deniedRoles);
+            }
+            if (isSelfScopeOwner && string.Equals(scope, subject, StringComparison.OrdinalIgnoreCase))
+                held = held.Add(Role.Admin.Id);
+        }
+        return false;
     }
 
     /// <summary>

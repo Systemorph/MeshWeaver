@@ -64,6 +64,18 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
     /// <summary>A signed-in identity with no grant of its own: everything it holds comes from Public.</summary>
     private const string Nobody = "sat-policy-nobody";
 
+    /// <summary>A partition with NO role grant at all: its only public surface is a type gate's cover.</summary>
+    private const string CoverPartition = "SatPolicyCover";
+
+    /// <summary>A node type whose gate opens exactly the gated node itself (<see cref="NodeTypeGate.Self"/>).</summary>
+    private const string CoverType = "SatPolicyCoverType";
+
+    /// <summary>A cover whose comment container denies Public the Editor role — a role Public holds nowhere.</summary>
+    private const string DeniedUnheldCover = CoverPartition + "/Denied";
+
+    /// <summary>The same cover shape without a denial — the control for <see cref="DeniedUnheldCover"/>.</summary>
+    private const string PlainCover = CoverPartition + "/Plain";
+
     private static TimeSpan Budget => TestTimeouts.Quick;
 
     // ConfigureMeshBase: no blanket Public-admin grant, so each identity holds only its own grant.
@@ -90,7 +102,12 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
                 new MeshNode("Sealed", PublicPartition) { Name = "Sealed", NodeType = "Markdown" },
                 new MeshNode("Unsealed", PublicPartition) { Name = "Unsealed", NodeType = "Markdown" },
                 AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Commenter.Id, PublicPartition),
-                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Commenter.Id, $"{PublicSealed}/_Comment", denied: true));
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Commenter.Id, $"{PublicSealed}/_Comment", denied: true),
+                new MeshNode(CoverPartition) { Name = CoverPartition, NodeType = "Markdown" },
+                new MeshNode("Denied", CoverPartition) { Name = "Denied", NodeType = CoverType },
+                new MeshNode("Plain", CoverPartition) { Name = "Plain", NodeType = CoverType },
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Public, Role.Editor.Id, $"{DeniedUnheldCover}/_Comment", denied: true))
+            .ConfigureNodeTypeAccess(access => access.WithGate(CoverType, NodeTypeGate.Self));
 
     private static AccessContext Person(string id) => new() { ObjectId = id, Name = id };
 
@@ -162,6 +179,27 @@ public class SatelliteInterveningPolicyTest(ITestOutputHelper output) : Monolith
 
         (await ReadVerdict(rule, Comment($"{Doc}/_Comment", Doc), ct, SidewaysDeniedCommenter)).Should().BeFalse(
             "the positive check on the same identity: its denial on Doc/_Comment does refuse a comment stored there");
+    }
+
+    /// <summary>
+    /// A denial removes only roles the subject HOLDS where it sits. Here nobody holds any role in the
+    /// partition: the cover's Read comes from its type gate (<see cref="NodeTypeGate.Self"/>), which
+    /// opens the gated node alone and reaches its comments by delegation. Denying Public the Editor
+    /// role on the cover's <c>_Comment</c> container removes nothing, so it must not force the landing
+    /// check — which folds the comment's own path, where the cover does not apply, and would refuse a
+    /// read the denial never touched (review of #7723).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ADenialOfAnUnheldRole_LeavesTheCoversCommentsReadable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rule = NodeTypeAccessRuleGate.Find(Mesh, "Comment", NodeOperation.Read)!;
+
+        (await ReadVerdict(rule, Comment($"{PlainCover}/_Comment", PlainCover), ct, Nobody)).Should().BeTrue(
+            "the control: the cover's gate grants Read on the main node, and its comment follows it");
+
+        (await ReadVerdict(rule, Comment($"{DeniedUnheldCover}/_Comment", DeniedUnheldCover), ct, Nobody)).Should().BeTrue(
+            "Public holds no Editor role anywhere here, so denying it on the comment container removes nothing");
     }
 
     /// <summary>

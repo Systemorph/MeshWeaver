@@ -1494,8 +1494,12 @@ is denied to the caller (directly, or through any group they belong to) on a sco
 landing check runs too (`PermissionEvaluator.ObserveDeniedRoleBetween`, read from the same assignment
 and membership legs, and the same subject expansion, as the fold — including the `Public` leg a
 signed-in caller's fold ORs in, so a role denied to `Public` in between counts for that caller too).
-A denial OUTSIDE that range (on a sibling satellite, or on another main node's container) changes
-nothing. Ancestry is decided on the NORMALISED path, split into segments exactly as the fold splits
+Only a denial that removes a role the subject HOLDS at that scope counts: the detector replays the
+fold's role walk (grants and declared GrantRules join, denials subtract, the self-scope Admin is added)
+and asks whether a denial in between subtracts anything. A denial of a role nobody holds there removes
+nothing, and forcing the landing check for it would refuse what the main node grants without any role
+(a type gate's `NodeTypeGate.Self` cover reaching its comments). A denial OUTSIDE that range (on a
+sibling satellite, or on another main node's container) changes nothing. Ancestry is decided on the NORMALISED path, split into segments exactly as the fold splits
 them (empty segments dropped), so every spelling of the main node it accepts (`@/Space/Doc`, `/` for
 the root, `Space//Doc`, a trailing `/`) meets the policies and denials in between. The landing check is
 composed with the caller's context, beside the main-node check, and only subscribed while a
@@ -1506,7 +1510,8 @@ inheritance break on an intermediate segment refuses a create, a cap on a mapped
 read, a reference-spelled main node meets that cap, a token verdict composed under the token and
 subscribed outside it meets an intervening `Api = false`, a Commenter denied on the main node's
 `_Comment` container — to the caller or to `Public` — is refused both, a doubled-slash main node meets
-that denial, and a denial outside the range leaves the create and the read allowed; each with the same
+that denial, a denial of an unheld role leaves a cover's comments readable, and a denial outside the range
+leaves the create and the read allowed; each with the same
 shape minus the policy or the denial as the control).
 
 🚨 **This governs the exact read and every write — not the SQL LISTING.** On PostgreSQL the search
