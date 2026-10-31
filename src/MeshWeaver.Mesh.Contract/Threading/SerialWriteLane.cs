@@ -33,6 +33,10 @@ public sealed class SerialWriteLane : IDisposable
     private readonly ILogger? _logger;
 
     private int _disposed;
+    // Every write's ticket, in subscribe order, and the last ticket a DRAIN still runs (see
+    // DrainQueued): a write subscribed after the drain began is refused at its turn.
+    private long _enqueued;
+    private long _closedAfter = long.MaxValue;
     private long _admitted;
     private int _waiting;
     private int _waitingDeletes;
@@ -82,7 +86,7 @@ public sealed class SerialWriteLane : IDisposable
             // under whichever AccessContext that flow carried (none, or another caller's). The
             // AccessContext lives in AsyncLocals, which the ExecutionContext carries.
             var context = ExecutionContext.Capture();
-            var pending = new PendingWrite(isDelete);
+            var pending = new PendingWrite(isDelete, Interlocked.Increment(ref _enqueued));
             var cancel = new CancellationTokenSource();
             Interlocked.Increment(ref _waiting);
             if (isDelete)
@@ -126,11 +130,13 @@ public sealed class SerialWriteLane : IDisposable
         // The lane was disposed (its mesh is tearing down) before this write's turn: the write never
         // runs, and its caller is TOLD so instead of waiting for a verdict nobody sends.
         if (Volatile.Read(ref _disposed) != 0)
-        {
-            Deliver(System.Reactive.Notification.CreateOnError<T>(new ObjectDisposedException(Name,
-                $"Write lane '{Name}' was disposed before this write's turn; the write did not run.")), observer, context);
-            return Observable.Empty<Unit>();
-        }
+            return Refuse(observer, context, new ObjectDisposedException(Name,
+                $"Write lane '{Name}' was disposed before this write's turn; the write did not run."));
+        // Subscribed after a drain began (mesh teardown): refused like any call a draining pool
+        // will not admit; the writes queued BEFORE the drain still run (DrainQueued).
+        if (pending.Ticket > Interlocked.Read(ref _closedAfter))
+            return Refuse(observer, context, new OperationCanceledException(
+                $"Write lane '{Name}' is draining; a write subscribed after the drain began does not run."));
 
         Interlocked.Increment(ref _admitted);
         Volatile.Write(ref _headIsDelete, pending.IsDelete ? 1 : 0);
@@ -157,6 +163,48 @@ public sealed class SerialWriteLane : IDisposable
             });
     }
 
+    /// <summary>
+    /// Answers a write the lane will not run, OFF the subscribing thread: on an idle lane the turn
+    /// comes inside the caller's own Subscribe, and delivering the fault there would run the caller's
+    /// teardown on its hub turn — the boundary <c>IoPool</c> keeps for its own refusals. The item
+    /// completes after the delivery, so the lane moves on normally.
+    /// </summary>
+    private IObservable<Unit> Refuse<T>(IObserver<T> observer, ExecutionContext? context, Exception refusal)
+        => Observable.Start(
+            () => Deliver(System.Reactive.Notification.CreateOnError<T>(refusal), observer, context),
+            TaskPoolScheduler.Default);
+
+    /// <summary>
+    /// The lane's part of a mesh DRAIN (<see cref="IoPoolRegistry.DrainAll()"/>): closes it to writes
+    /// subscribed from now on, then lets every write queued before that run in turn, while the
+    /// budget pool still admits them — so a healthy backlog finishes instead of being refused when
+    /// the pool closes. Blocks, like the pool drain it precedes, under the same STALL bound: it waits
+    /// as long as the lane keeps advancing and gives up after <paramref name="grace"/> with no
+    /// progress.
+    /// </summary>
+    /// <param name="grace">How long the lane may stand still before the drain stops waiting.</param>
+    /// <returns><c>true</c> when the lane emptied; <c>false</c> when it stalled with work left.</returns>
+    internal bool DrainQueued(TimeSpan grace)
+    {
+        Interlocked.CompareExchange(ref _closedAfter, Interlocked.Read(ref _enqueued), long.MaxValue);
+        while (Busy())
+        {
+            var admitted = Interlocked.Read(ref _admitted);
+            var waiting = Volatile.Read(ref _waiting);
+            var progressed = SpinWait.SpinUntil(
+                () => !Busy() || Interlocked.Read(ref _admitted) != admitted || Volatile.Read(ref _waiting) != waiting,
+                grace);
+            if (!progressed)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>Whether a drain has closed the lane to writes subscribed from now on.</summary>
+    internal bool IsDraining => Interlocked.Read(ref _closedAfter) != long.MaxValue;
+
+    private bool Busy() => Volatile.Read(ref _inFlight) != 0 || Volatile.Read(ref _waiting) > 0;
+
     private void LeaveQueue(bool isDelete)
     {
         Interlocked.Decrement(ref _waiting);
@@ -173,11 +221,14 @@ public sealed class SerialWriteLane : IDisposable
     }
 
     /// <summary>One write's single transition out of the queue — by its turn or by its caller giving up.</summary>
-    private sealed class PendingWrite(bool isDelete)
+    private sealed class PendingWrite(bool isDelete, long ticket)
     {
         private int _left;
 
         public bool IsDelete { get; } = isDelete;
+
+        /// <summary>The write's position in subscribe order.</summary>
+        public long Ticket { get; } = ticket;
 
         /// <summary><c>true</c> exactly once: for whichever of dequeue and give-up comes first.</summary>
         public bool TryLeaveQueue() => Interlocked.Exchange(ref _left, 1) == 0;

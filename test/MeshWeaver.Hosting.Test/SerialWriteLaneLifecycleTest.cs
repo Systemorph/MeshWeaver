@@ -90,7 +90,9 @@ public class SerialWriteLaneLifecycleTest
     [Fact]
     public async Task MeshTeardown_WithSeveralQueuedWritesOnOneLane_TerminatesEveryCaller()
     {
-        var registry = new IoPoolRegistry();
+        // `using` as well as the explicit Dispose below: a failing precondition must still dispose
+        // the registry (its budget pool owns a canceller thread). Dispose is idempotent.
+        using var registry = new IoPoolRegistry();
         var lane = registry.GetSerialLane("pg:Postgres:teardown", registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres"));
         var outcomes = Enumerable.Range(0, 4).Select(_ => new ReplaySubject<int>()).ToArray();
         var writes = new List<IDisposable>();
@@ -120,7 +122,7 @@ public class SerialWriteLaneLifecycleTest
             write.Dispose();
     }
     [Fact]
-    public void ALaneAskedForAfterTheRegistryIsDisposed_RefusesWork_AndIsNotKept()
+    public async Task ALaneAskedForAfterTheRegistryIsDisposed_RefusesWork_AndIsNotKept()
     {
         var registry = new IoPoolRegistry();
         var budget = registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres");
@@ -129,9 +131,10 @@ public class SerialWriteLaneLifecycleTest
         var lane = registry.GetSerialLane("pg:Postgres:late", budget);
         registry.SerialLaneSnapshot().Should().BeEmpty("🚨 a closed registry must not be repopulated by a lane nobody will dispose");
 
-        Exception? refusal = null;
-        using var write = lane.Run(_ => Task.FromResult(1)).Subscribe(_ => { }, ex => refusal = ex);
-        refusal.Should().BeOfType<ObjectDisposedException>("a refused lane answers every write instead of running it");
+        var outcome = new ReplaySubject<int>();
+        using var write = lane.Run(_ => Task.FromResult(1)).Subscribe(outcome);
+        (await Fault(outcome).Should().Within(Bound).Emit("a refused lane answers every write instead of running it"))
+            .Should().BeOfType<ObjectDisposedException>();
     }
 
     [Fact]
@@ -204,16 +207,23 @@ public class SerialWriteLaneLifecycleTest
         using var registry = new IoPoolRegistry();
         var lane = registry.GetSerialLane("pg:Postgres:offthread", registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres"));
         var cancelledOn = 0;
+        var registered = 0;
         var outcome = new ReplaySubject<int>();
         var write = lane.Run(ct =>
             {
                 ct.Register(() => Volatile.Write(ref cancelledOn, Environment.CurrentManagedThreadId));
+                // Signalled only AFTER the callback is installed, so the dispose below cancels an
+                // installed callback — never one registered after an early cancel, which would run
+                // inline on the leaf's thread and pass for the wrong reason.
+                Volatile.Write(ref registered, 1);
                 return ParkedLeaf(ct);
             })
             .Subscribe(outcome);
         try
         {
-            await LaneReading(lane, r => r.InFlight == 1).Should().Within(Bound).Emit("the write is running");
+            await Observable.Interval(TimeSpan.FromMilliseconds(5)).StartWith(0L)
+                .Where(_ => Volatile.Read(ref registered) == 1)
+                .Should().Within(Bound).Emit("the leaf has installed its cancellation callback");
             var disposingThread = Environment.CurrentManagedThreadId;
             write.Dispose();
             Volatile.Read(ref cancelledOn).Should().NotBe(disposingThread,
@@ -229,5 +239,54 @@ public class SerialWriteLaneLifecycleTest
         {
             Volatile.Write(ref _release, 1);
         }
+    }
+    [Fact]
+    public async Task DrainAll_LetsHealthyQueuedWritesFinish_AndRefusesLaterOnes()
+    {
+        using var registry = new IoPoolRegistry();
+        var lane = registry.GetSerialLane("pg:Postgres:drain", registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres"));
+        var outcomes = Enumerable.Range(0, 4).Select(_ => new ReplaySubject<int>()).ToArray();
+        var writes = new List<IDisposable>();
+        var drained = new ReplaySubject<(int Leaked, int CancelledLanes)>();
+        var late = new ReplaySubject<int>();
+        try
+        {
+            writes.Add(lane.Run(ParkedLeaf).Subscribe(outcomes[0]));
+            for (var i = 1; i < outcomes.Length; i++)
+            {
+                var value = i;
+                writes.Add(lane.Run(_ => Task.FromResult(value)).Subscribe(outcomes[i]));
+            }
+            await LaneReading(lane, r => r.InFlight == 1 && r.Waiting == outcomes.Length - 1)
+                .Should().Within(Bound).Emit("one write runs and three wait on the same lane");
+
+            // DrainAll blocks (it joins), so it runs off the test thread while the head is released.
+            writes.Add(Observable.Start(() =>
+                {
+                    var leaked = registry.DrainAll(out _, out var cancelled);
+                    return (leaked, cancelled.Count(c => c.Pool.StartsWith("lane:", StringComparison.Ordinal)));
+                }, System.Reactive.Concurrency.TaskPoolScheduler.Default)
+                .Subscribe(drained));
+            await Observable.Interval(TimeSpan.FromMilliseconds(5)).StartWith(0L)
+                .Where(_ => lane.IsDraining)
+                .Should().Within(Bound).Emit("the drain has closed the lane while the head is still parked");
+            writes.Add(lane.Run(_ => Task.FromResult(9)).Subscribe(late));
+        }
+        finally
+        {
+            Volatile.Write(ref _release, 1);
+        }
+
+        var result = await drained.Should().Within(Bound).Emit("the drain completes once the lane empties");
+        result.CancelledLanes.Should().Be(0, "a lane that kept advancing is not reported as cancelled");
+        result.Leaked.Should().Be(0);
+        for (var i = 0; i < outcomes.Length; i++)
+            (await outcomes[i].Should().Within(Bound)
+                .Emit($"🚨 write {i}, queued before the drain, must FINISH — not be refused when the pool closes"))
+                .Should().Be(i == 0 ? 1 : i);
+        (await Fault(late).Should().Within(Bound).Emit("a write subscribed after the drain began is refused, not run"))
+            .Should().BeOfType<OperationCanceledException>();
+        foreach (var write in writes)
+            write.Dispose();
     }
 }

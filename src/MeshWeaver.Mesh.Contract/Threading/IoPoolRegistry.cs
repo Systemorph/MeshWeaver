@@ -291,6 +291,26 @@ public sealed class IoPoolRegistry : IDisposable
         var leaked = 0;
         var residuals = new List<PoolResidual>();
         var cancelled = new List<PoolResidual>();
+
+        // 🚨 THE LANES FIRST, while the budget pools still admit (MeshWeaver#7464). A serial lane
+        // has only its head admitted to a pool; draining the pool first would refuse every write
+        // queued behind it instead of giving that backlog the drain's grace. Each lane closes to new
+        // writes and runs what it already holds, under the same stall bound as a pool drain. A lane
+        // that stalls is REPORTED with what it still held — those writes are refused when the pools
+        // close below, and a report that said nothing about them would read as a clean drain.
+        foreach (var lane in _lanes.Values)
+        {
+            if (lane.DrainQueued(_options.DrainGrace))
+                continue;
+            var reading = lane.Read();
+            var held = reading.InFlight + reading.Waiting;
+            cancelled.Add(new PoolResidual("lane:" + lane.Name, held));
+            _logger?.LogWarning(
+                "IoPoolDrain: write lane '{Lane}' made no progress within the {Grace} drain grace with "
+                + "{Held} write(s) still held — they are refused when the pools close. Find why the lane "
+                + "stalled; do not widen the grace.", lane.Name, _options.DrainGrace, held);
+        }
+
         foreach (var kvp in _pools)
         {
             // Read the sites BEFORE the drain returns nothing to name: Drain() joins, so by the
