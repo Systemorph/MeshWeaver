@@ -1378,6 +1378,35 @@ public class MessageService : IMessageService
             // each wedged every read of the mid-recycle NodeType.
             fate?.Add($"DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
 
+            // 🚨 A RELEASE ADDRESSED TO THIS HUB IS FULFILLED BY THIS HUB'S OWN TEARDOWN — the
+            // intake-gate twin of the deferred-discard rule (#6890, ProcessDeferredOnDispose). An
+            // IReleasesRemoteState message (UnsubscribeRequest) asks its RECEIVER to let go of state
+            // the receiver holds; this hub IS the receiver and it is going away, so everything it
+            // held — the owner-side per-subscriber stream, its sync/{id} sub-hub — is released by
+            // the very teardown that refuses the message. And a release is fire-and-forget: there is
+            // no requester to NACK. The ShuttingDown NACK this path used to post landed at the
+            // subscriber as an UN-awaited DeliveryFailure answering no question, and the portal's
+            // error sink raised it as a blocking "Something went wrong" modal — "Hub sync/… is
+            // shutting down (RunLevel=Dead, …) — cannot process UnsubscribeRequest", which then
+            // intercepted the learner's next click (Education#414, journey run 41168294738).
+            //
+            // Only when the release is FOR this hub. A release in TRANSIT through a dying router is
+            // still owed to a live receiver elsewhere, and keeps the historical answer. The target is
+            // compared WITHOUT its Host: routing (RouteConfiguration.RouteAddressToHub) resolves a
+            // host-qualified address by its inner address and forwards the delivery unchanged, so the
+            // receiver sees `{host}~{this}` — the same rule NotifyAsync applies to its own targets.
+            if (delivery.Message is IReleasesRemoteState
+                && (delivery.Target is null || (delivery.Target with { Host = null }).Equals(Address)))
+            {
+                logger.LogDebug(
+                    "Hub {Address} is shutting down (RunLevel={RunLevel}) and received the release {MessageType} "
+                    + "(id={MessageId}, from {Sender}). This teardown releases everything the hub holds, and a "
+                    + "release is fire-and-forget, so no answer is posted to its sender. Teardown-normal.",
+                    Address, hub.RunLevel, typeName, delivery.Id, delivery.Sender);
+                fate?.Add("NACK_DECLINED reason=release-to-disposing-hub", Address);
+                return delivery.Ignored();
+            }
+
             // 🚨 A REFUSED REPLY IS REPORTED TO THE REQUESTER, NEVER TO delivery.Sender (#4170).
             //
             // Everything below answers the SENDER, which is right for a REQUEST and meaningless
