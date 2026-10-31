@@ -336,6 +336,16 @@ public record MeshSearchControl()
     public object? ItemArea { get; init; }
 
     /// <summary>
+    /// When set, each result renders as the DEFAULT card painted at once from the result row (name,
+    /// description, icon) with this area — loaded from the result's OWN hub — beneath it. Use it when
+    /// a result needs something only its own hub can decide (an install or purchase button) while
+    /// the card itself is already in the row: <see cref="ItemArea"/> instead hands the WHOLE card to
+    /// the result's hub, so nothing paints until one hub per result has activated. Ignored when
+    /// <see cref="ItemArea"/> is set.
+    /// </summary>
+    public object? ItemActionArea { get; init; }
+
+    /// <summary>
     /// When true, clicking a card does not navigate to /{path}.
     /// Use this when the card content has interactive elements (buttons, etc.).
     /// </summary>
@@ -532,6 +542,12 @@ public record MeshSearchControl()
     /// <summary>Returns a copy where each result card is rendered via a LayoutAreaView pointing to <paramref name="area"/>.</summary>
     /// <param name="area">The area name used to render each result item (e.g. <c>"Thumbnail"</c>).</param>
     public MeshSearchControl WithItemArea(string area) => this with { ItemArea = area };
+
+    // Item action area (row card at once + an area from the item's own hub)
+    /// <summary>Returns a copy where each result is the default card painted from its row, followed by
+    /// <paramref name="area"/> loaded from the result's own hub. See <see cref="ItemActionArea"/>.</summary>
+    /// <param name="area">The area each result's own hub renders beneath its card (e.g. <c>"CoverCta"</c>).</param>
+    public MeshSearchControl WithItemActionArea(string area) => this with { ItemActionArea = area };
 
     // Disable navigation on card click
     /// <summary>Returns a copy with card-click navigation disabled or enabled.</summary>
