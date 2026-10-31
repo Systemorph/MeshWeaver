@@ -1391,9 +1391,12 @@ public class MessageService : IMessageService
             // intercepted the learner's next click (Education#414, journey run 41168294738).
             //
             // Only when the release is FOR this hub. A release in TRANSIT through a dying router is
-            // still owed to a live receiver elsewhere, and keeps the historical answer.
+            // still owed to a live receiver elsewhere, and keeps the historical answer. The target is
+            // compared WITHOUT its Host: routing (RouteConfiguration.RouteAddressToHub) resolves a
+            // host-qualified address by its inner address and forwards the delivery unchanged, so the
+            // receiver sees `{host}~{this}` — the same rule NotifyAsync applies to its own targets.
             if (delivery.Message is IReleasesRemoteState
-                && (delivery.Target is null || delivery.Target.Equals(Address)))
+                && (delivery.Target is null || (delivery.Target with { Host = null }).Equals(Address)))
             {
                 logger.LogDebug(
                     "Hub {Address} is shutting down (RunLevel={RunLevel}) and received the release {MessageType} "

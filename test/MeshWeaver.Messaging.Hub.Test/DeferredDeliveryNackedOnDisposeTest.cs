@@ -603,6 +603,33 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "ShuttingDown NACK to a fire-and-forget sender answers no question (Education#414)");
     }
 
+    private static readonly Address DeadHostQualifiedReceiverAddress = new("dead-hosted-release-receiver", "1");
+
+    /// <summary>
+    /// The same release, but addressed HOST-QUALIFIED (<c>{host}~{receiver}</c>) — the shape routing
+    /// forwards unchanged after resolving the inner address (<c>RouteConfiguration.RouteAddressToHub</c>).
+    /// It is still FOR this hub, so it must not be mistaken for transit and NACKed (review on #7738).
+    /// </summary>
+    [Fact]
+    public async Task AHostQualifiedReleaseReachingADeadHub_IsNotNackedToItsSender()
+    {
+        var host = GetHost();
+        var dead = await DeadHostedHub(host, DeadHostQualifiedReceiverAddress, typeof(ReleaseNotice));
+
+        dead.DeliverMessage(new MessageDelivery<ReleaseNotice>(new ReleaseNotice(),
+            new PostOptions(host.Address).WithTarget(DeadHostQualifiedReceiverAddress with { Host = host.Address }),
+            host.JsonSerializerOptions));
+
+        await host.Observe<GatedResponse>(new OutboundRead(), o => o.WithTarget(host.Address))
+            .FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        strayFailuresAtHost.Should().NotContain(
+            f => f.Message != null && f.Message.Contains(nameof(ReleaseNotice), StringComparison.Ordinal),
+            "a host-qualified target names the same receiver once the Host is stripped, exactly as "
+            + "NotifyAsync compares it; the release is not in transit");
+    }
+
     /// <summary>
     /// NEGATIVE CONTROL for the case above: the same dead hub, a message that does NOT declare
     /// itself a release — its sender is still NACKed ShuttingDown, exactly as before.
