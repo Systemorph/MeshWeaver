@@ -173,8 +173,16 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// state in which <c>IRoutingGrain</c> placement fails (#1107). True for a silo still Active, and
     /// for a process whose membership cannot be read (a cluster client, a bare test host): there the
     /// placement the gate guards against is not this process's to refuse.
+    ///
+    /// <para>Asked at admission AND again immediately before every <c>RouteMessage</c> attempt, retries
+    /// included, because a stamped refusal can wait on the sender's attach or claim and the silo may
+    /// leave the active set meanwhile. Settable as a test seam, like <see cref="CanHostGrains"/>:
+    /// instance state, never static.</para>
     /// </summary>
-    private bool LocalSiloMayStillPlace()
+    internal Func<bool> LocalSiloMayStillPlace { get; set; }
+
+    /// <summary>The production answer of <see cref="LocalSiloMayStillPlace"/>: this silo's membership status.</summary>
+    private bool MembershipReportsLocalSiloActive()
     {
         var local = serviceProvider.GetService<ILocalSiloDetails>()?.SiloAddress;
         var membership = serviceProvider.GetService<IClusterMembershipService>();
@@ -322,6 +330,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // under this process, so a single assertion is the whole correct behaviour and the claim
         // behaves exactly as it did before this existed.
         membershipFeed = serviceProvider.GetService<IClusterMembershipFeed>();
+        LocalSiloMayStillPlace = MembershipReportsLocalSiloActive;
 
         // Issue #2885 — the bound the RouteMessage leg measures against.
         //
@@ -487,10 +496,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 // SubscribeAck this is, a caller whose response this is — would wait out its budget.
                 // Answering it ShuttingDown, correlated to its own request, sends it to the next
                 // activation at once. A refusal is never converted again (no loop).
-                if (!IsLeavingHostRefusal(delivery)
-                    && delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
-                    && requestId is not null)
-                    RefuseUndeliverableReply(delivery, requestId, address);
+                RefuseUndeliverableReply(delivery, address);
 
                 var shutdownMessage = $"Host is shutting down, cannot route to {address}";
                 OrleansRouteTrace.Write($"OrleansRoutingService.Deliver SHUTTING_DOWN addr={address} id={delivery.Id}");
@@ -627,6 +633,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         if (delivery.MayAnswer())
                             SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}",
                                 shuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
+                        // The same requester-directed answer the stop gate gives (#7470): a reply
+                        // admitted before the stop and refused here after it would otherwise tell
+                        // only the replying hub, and its requester would wait out its budget.
+                        if (shuttingDown)
+                            RefuseUndeliverableReply(delivery, address);
                         return Observable.Empty<IMessageDelivery>();
                     })
                     .Finally(() =>
@@ -684,6 +695,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // ShuttingDown out and tear down on a terminal verdict.
         // A leaving host's refusal is the one dispatch the stop gate lets through, and only while this
         // silo may still place the routing grain — see LeavingHostRefusalProperty.
+        // The membership verdict is re-read here and before every attempt below: the silo may have
+        // left the active set while the refusal waited on the sender's attach or claim.
+        if (leavingHostRefusal && !LocalSiloMayStillPlace())
+            return Observable.Throw<IMessageDelivery>(LeftTheActiveSet(addressPath));
         var grain = leavingHostRefusal
             ? grainFactory.GetGrain<IRoutingGrain>("default")
             : GrainWhileRunning<IRoutingGrain>("default");
@@ -693,7 +708,9 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
         // The grain RPC runs on the Orleans scheduler — bridge its Task reactively (Defer keeps
         // it cold so each RetryWhen re-subscribe re-invokes RouteMessage), never Observable.FromAsync.
-        return Observable.Defer(() => grain.RouteMessage(delivery).ToObservable())
+        return Observable.Defer(() => leavingHostRefusal && !LocalSiloMayStillPlace()
+                ? Observable.Throw<IMessageDelivery>(LeftTheActiveSet(addressPath))
+                : grain.RouteMessage(delivery).ToObservable())
             .RetryWhen(errors => errors
                 .Select((ex, i) => (Exception: ex, Attempt: i))
                 .SelectMany(t =>
@@ -788,6 +805,15 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     }
 
     /// <summary>
+    /// Why a stamped refusal is not dispatched after all: this silo left the active set while it
+    /// waited, so placing the routing grain would fail (#1107). Lands in the dispatch's shutdown
+    /// <c>Catch</c>, like the stop gate's own late refusal.
+    /// </summary>
+    /// <param name="addressPath">The refusal's target, for the message.</param>
+    private static OperationCanceledException LeftTheActiveSet(string addressPath)
+        => new($"Host is shutting down and has left the active set, cannot route to {addressPath}");
+
+    /// <summary>
     /// Answers the REQUESTER of a reply this stopping host can no longer deliver (#7470): a
     /// <see cref="DeliveryFailure"/> classified <see cref="ErrorType.ShuttingDown"/>, correlated to the
     /// requester's own request id and stamped <see cref="LeavingHostRefusalProperty"/>, so it leaves
@@ -796,11 +822,19 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// just before the stop and answered just after it — a <c>SubscribeAck</c>, a response — still
     /// gets an answer.
     /// </summary>
-    /// <param name="reply">The refused reply; its target is the requester.</param>
-    /// <param name="requestId">The id of the request the reply answers.</param>
+    /// <param name="reply">The refused delivery; converted only when it is an answerable reply.</param>
     /// <param name="address">The reply's host address, for the trace.</param>
-    private void RefuseUndeliverableReply(IMessageDelivery reply, object requestId, Address address)
+    private void RefuseUndeliverableReply(IMessageDelivery reply, Address address)
     {
+        // Only a reply (it carries its requester's RequestId), never a refusal already (no loop), and
+        // never what must not be answered: a DeliveryFailure is itself a verdict — converting a
+        // terminal NotFound/Rejected into a retryable ShuttingDown would change its meaning — and a
+        // [CanBeIgnored] message has nobody waiting (AnswerPolicy).
+        if (IsLeavingHostRefusal(reply)
+            || !reply.MayAnswer()
+            || !reply.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
+            || requestId is null)
+            return;
         var meshHub = serviceProvider.GetService<IMessageHub>();
         if (meshHub is null || reply.Target is null)
             return;

@@ -202,4 +202,46 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         Assert.Equal(MessageDeliveryState.Failed, result.State);
         await Assert.ThrowsAsync<TimeoutException>(() => nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(2)));
     }
+
+    /// <summary>
+    /// Review of #7734: a refused reply that is itself a <see cref="DeliveryFailure"/> is a VERDICT,
+    /// often a terminal one. Converting it into a retryable ShuttingDown would change its meaning, so
+    /// it is not converted (the answer-once rule, <c>MayAnswer</c>).
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_ARefusedVerdict_IsNotConvertedIntoARetryableOne()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        var verdict = new MessageDelivery<DeliveryFailure>(TargetAddress, SenderAddress,
+                new DeliveryFailure(NewDelivery()) { ErrorType = ErrorType.NotFound, Message = "no such node" },
+                JsonSerializerOptions.Default)
+            .WithProperty(PostOptions.RequestId, "the-requesters-request");
+
+        await routing.DeliverMessage(verdict).FirstAsync().Await();
+
+        await Assert.ThrowsAsync<TimeoutException>(() => nackDelivery.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    /// <summary>
+    /// Review of #7734: the exemption's membership verdict is re-read immediately before the routing
+    /// RPC, not carried from admission. Here the silo may still place at admission and has left the
+    /// active set by the dispatch, so placement must NOT be reached (the null probe does not throw).
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_ARefusalWhoseSiloLeftTheActiveSetBeforeDispatch_DoesNotReachPlacement()
+    {
+        var routing = CreateRouter();
+        var asked = 0;
+        routing.LocalSiloMayStillPlace = () => System.Threading.Interlocked.Increment(ref asked) == 1;
+        lifetime.StopApplication();
+
+        var refusal = NewDelivery().WithProperty(OrleansRoutingService.LeavingHostRefusalProperty, true);
+
+        var result = await routing.DeliverMessage(refusal).FirstAsync().Await();
+
+        Assert.Equal(MessageDeliveryState.Forwarded, result.State);
+        Assert.True(asked >= 2, $"the verdict must be re-read before the RPC (asked {asked} time(s))");
+    }
 }
