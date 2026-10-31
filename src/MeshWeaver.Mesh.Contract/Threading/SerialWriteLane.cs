@@ -28,7 +28,12 @@ namespace MeshWeaver.Mesh.Threading;
 /// </summary>
 public sealed class SerialWriteLane : IDisposable
 {
-    private readonly ISubject<IObservable<Unit>> _queue = Subject.Synchronize(new Subject<IObservable<Unit>>());
+    private readonly Subject<IObservable<Unit>> _queue = new();
+    // 🚨 Ticket assignment, publication into the queue and the drain cutoff happen under ONE lock,
+    // so the queue's order IS ticket order: without it two subscribers could take tickets 1 and 2
+    // and publish 2 first, and a drain closing at 2 would read "done" with 1 outstanding. Held only
+    // for those few synchronous steps — never across a leaf or an await.
+    private readonly object _publish = new();
     private readonly IIoPool _budget;
     private readonly ILogger? _logger;
 
@@ -91,7 +96,7 @@ public sealed class SerialWriteLane : IDisposable
             // under whichever AccessContext that flow carried (none, or another caller's). The
             // AccessContext lives in AsyncLocals, which the ExecutionContext carries.
             var context = ExecutionContext.Capture();
-            var pending = new PendingWrite(isDelete, Interlocked.Increment(ref _enqueued));
+            var pending = new PendingWrite(isDelete);
             var cancel = new CancellationTokenSource();
             Interlocked.Increment(ref _waiting);
             if (isDelete)
@@ -103,7 +108,11 @@ public sealed class SerialWriteLane : IDisposable
                 RunIn(context, () => started = Start(io, observer, pending, cancel, context).Subscribe(laneObserver));
                 return started;
             });
-            _queue.OnNext(item);
+            lock (_publish)
+            {
+                pending.Ticket = Interlocked.Increment(ref _enqueued);
+                _queue.OnNext(item);
+            }
 
             return Disposable.Create(() =>
             {
@@ -181,7 +190,18 @@ public sealed class SerialWriteLane : IDisposable
                 TaskPoolScheduler.Default)
             .Finally(() => Finish(ticket));
 
-    private void Finish(long ticket) => Volatile.Write(ref _finished, ticket);
+    // Monotonic: turns end in ticket order, and this keeps the mark from ever moving backwards.
+    private void Finish(long ticket)
+    {
+        var seen = Interlocked.Read(ref _finished);
+        while (ticket > seen)
+        {
+            var raced = Interlocked.CompareExchange(ref _finished, ticket, seen);
+            if (raced == seen)
+                return;
+            seen = raced;
+        }
+    }
 
     /// <summary>
     /// Closes the lane to writes subscribed from now on — the first half of the lane's part in a
@@ -189,7 +209,11 @@ public sealed class SerialWriteLane : IDisposable
     /// turn; later ones are refused at theirs. Idempotent.
     /// </summary>
     internal void CloseForDrain()
-        => Interlocked.CompareExchange(ref _closedAfter, Interlocked.Read(ref _enqueued), long.MaxValue);
+    {
+        // Under the publication lock, so the cutoff is the ticket of the last write PUBLISHED.
+        lock (_publish)
+            Interlocked.CompareExchange(ref _closedAfter, Interlocked.Read(ref _enqueued), long.MaxValue);
+    }
 
     /// <summary>Whether a drain has closed the lane to writes subscribed from now on.</summary>
     internal bool IsDraining => Interlocked.Read(ref _closedAfter) != long.MaxValue;
@@ -206,7 +230,8 @@ public sealed class SerialWriteLane : IDisposable
     /// never because a late write arrived or was given up while queued behind a stuck head.
     /// </summary>
     internal (long Admitted, long Finished) DrainProgress
-        => (Interlocked.Read(ref _admitted), Interlocked.Read(ref _finished));
+        => (Interlocked.Read(ref _admitted),
+            Math.Min(Interlocked.Read(ref _finished), Interlocked.Read(ref _closedAfter)));
 
 
     private void LeaveQueue(bool isDelete)
@@ -225,14 +250,14 @@ public sealed class SerialWriteLane : IDisposable
     }
 
     /// <summary>One write's single transition out of the queue — by its turn or by its caller giving up.</summary>
-    private sealed class PendingWrite(bool isDelete, long ticket)
+    private sealed class PendingWrite(bool isDelete)
     {
         private int _left;
 
         public bool IsDelete { get; } = isDelete;
 
-        /// <summary>The write's position in subscribe order.</summary>
-        public long Ticket { get; } = ticket;
+        /// <summary>The write's position in queue order, assigned under the publication lock.</summary>
+        public long Ticket { get; set; }
 
         /// <summary><c>true</c> exactly once: for whichever of dequeue and give-up comes first.</summary>
         public bool TryLeaveQueue() => Interlocked.Exchange(ref _left, 1) == 0;

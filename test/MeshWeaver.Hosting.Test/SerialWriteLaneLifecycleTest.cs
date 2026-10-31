@@ -358,4 +358,36 @@ public class SerialWriteLaneLifecycleTest
                 write.Dispose();
         }
     }
+    [Fact]
+    public async Task DrainAll_ADrainedLanesLateRefusals_DoNotKeepAStuckLaneWaiting()
+    {
+        var grace = TimeSpan.FromMilliseconds(400);
+        using var registry = new IoPoolRegistry(new IoPoolOptions { DrainGrace = grace });
+        var budget = registry.Get(IoPoolNames.PostgresWriteBudgetPrefix + "Postgres");
+        var stuck = registry.GetSerialLane("pg:Postgres:stuck", budget);
+        var idle = registry.GetSerialLane("pg:Postgres:idle", budget);
+        var writes = new System.Collections.Concurrent.ConcurrentQueue<IDisposable>();
+        var drained = new ReplaySubject<int>();
+        try
+        {
+            writes.Enqueue(stuck.Run(ParkedLeaf).Subscribe(_ => { }, _ => { }));
+            await LaneReading(stuck, r => r.InFlight == 1).Should().Within(Bound).Emit("lane A's head is stuck");
+
+            writes.Enqueue(Observable.Start(() => registry.DrainAll(), System.Reactive.Concurrency.TaskPoolScheduler.Default)
+                .Subscribe(drained));
+            // Late writes on the drained lane B, each refused — and each refusal ends a turn on B.
+            writes.Enqueue(Observable.Interval(TimeSpan.FromMilliseconds(20))
+                .TakeUntil(drained)
+                .Subscribe(_ => writes.Enqueue(idle.Run(_ => Task.FromResult(0)).Subscribe(_ => { }, _ => { }))));
+
+            await drained.Should().Within(TimeSpan.FromSeconds(20)).Emit(
+                "🚨 refusals on an already-drained lane are not progress — they must not restart the grace for the stuck lane");
+        }
+        finally
+        {
+            Volatile.Write(ref _release, 1);
+            foreach (var write in writes.ToArray())
+                write.Dispose();
+        }
+    }
 }

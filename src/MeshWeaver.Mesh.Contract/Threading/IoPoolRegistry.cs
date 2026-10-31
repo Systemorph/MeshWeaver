@@ -301,12 +301,13 @@ public sealed class IoPoolRegistry : IDisposable
         var lanes = _lanes.Values.ToArray();
         foreach (var lane in lanes)
             lane.CloseForDrain();
-        while (lanes.Any(lane => !lane.IsDrained))
+        while (lanes.Where(lane => !lane.IsDrained).ToArray() is { Length: > 0 } pending)
         {
-            var marks = lanes.Select(lane => lane.DrainProgress).ToArray();
+            // Only lanes that still hold pre-drain work are watched: a drained lane's late refusals
+            // are not progress, and must not restart the grace for a lane that is stuck.
+            var marks = pending.Select(lane => lane.DrainProgress).ToArray();
             var progressed = SpinWait.SpinUntil(
-                () => lanes.All(lane => lane.IsDrained)
-                      || lanes.Where((lane, i) => lane.DrainProgress != marks[i]).Any(),
+                () => pending.Where((lane, i) => lane.IsDrained || lane.DrainProgress != marks[i]).Any(),
                 _options.DrainGrace);
             if (!progressed)
                 break;
