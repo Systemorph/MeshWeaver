@@ -610,6 +610,11 @@ public sealed class MessageHub : IMessageHub
         hostedHubs.OwnerDisposalCause = () => DisposalOriginForChildren;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
+        // #7324: the hub's ONE in-flight marker, created with it so every reader finds the same
+        // instance (BeginAsyncOperation marks it, a module swap's recycle wave defers on it).
+        Set(new HubStepsInFlight());
+        // …and the activation's own identity, unique per instance (DisposeRequest.ForActivation).
+        Set(new HubActivationId(Guid.NewGuid().AsString()));
         unhandledNack = configuration.Get<UnhandledMessageNack>();
         parentAddress = parentHub?.Address;
         accessService = serviceProvider.GetRequiredService<AccessService>();
@@ -5058,6 +5063,18 @@ public sealed class MessageHub : IMessageHub
                 "Refused a message-routed DisposeRequest targeting the root mesh hub {Address} (sender={Sender}). " +
                 "The mesh hub's lifecycle is owned by host teardown, not the message bus.",
                 Address, request.Sender);
+            return request.Ignored();
+        }
+
+        // A request for ONE activation (#7324: a swap's deferred recycle, delivered when a step
+        // ended) that reaches a DIFFERENT one is stale: the activation it was for is already gone,
+        // and this one is its successor. Ignoring it is the whole point of carrying the identity.
+        if (request.Message.ForActivation is { } forActivation
+            && !string.Equals(forActivation, HubActivationId.Of(this), StringComparison.Ordinal))
+        {
+            logger.LogInformation(
+                "Ignored a DisposeRequest for activation {For} at {Address}: this is activation {This}, its successor ({Reason})",
+                forActivation, Address, HubActivationId.Of(this), request.Message.Reason ?? DisposeRequest.ReasonNotStated);
             return request.Ignored();
         }
 

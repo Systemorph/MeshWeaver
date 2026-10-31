@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """The packages the Memex `dotnet new` template restores, derived FROM the template — and checked.
 
-    python3 .github/scripts/template-feed.py plan   --template DIR --core CORE --plugins PLUGINS \
+    python3 .github/scripts/template-feed.py plan   --template DIR [--template DIR …] \
+                                                     --template-package CSPROJ \
+                                                     --core CORE --plugins PLUGINS \
                                                      --version 3.1.<run> --out plan.json
     python3 .github/scripts/template-feed.py slnx   --plan plan.json --line platform --out pack.slnx
     python3 .github/scripts/template-feed.py verify --plan plan.json --nupkgs DIR
@@ -27,6 +29,15 @@ project name — in core `src/` or in Plugins `src/`; an id that resolves to non
 is a RED naming it. The plan then adds the transitive closure of each project's ProjectReferences:
 `dotnet pack` turns a ProjectReference into a package DEPENDENCY, so packing the 23 pinned ids
 alone would publish 23 packages whose dependencies exist nowhere, and restore would still fail.
+
+EVERY SHAPE, AND THE TEMPLATE ITSELF
+------------------------------------
+The generator has two shapes: the headless default (what the template PACKAGE ships) and
+`--with-gui`, which copies the private GUI and pins more ids. `plan` takes one `--template` per shape
+and publishes the UNION of their pins, so neither shape pins an id the feed lacks; two shapes that
+pin one id at different versions are a RED. `--template-package` adds the `dotnet new` template
+package itself (MeshWeaver.MemexTemplate), packed at the set's version, so a template installed from
+the feed pins exactly the set it was published with (MeshWeaver#7660).
 
 TWO VERSION LINES
 -----------------
@@ -145,12 +156,26 @@ def project_refs(csproj: Path, core: Path) -> list[Path]:
     return out
 
 
-def build_plan(template_dir: Path, core: Path, plugins: Path, version: str,
-               own_versions: dict[str, str] | None = None) -> dict:
+def union_pins(template_dirs: list[Path]) -> dict[str, str]:
+    """The pins of every template shape, merged; one id pinned at two versions is a RED."""
+    if not template_dirs:
+        raise Red("no template given — there is nothing to derive the package list from")
+    pins: dict[str, str] = {}
+    for d in template_dirs:
+        for pid, ver in template_pins(d).items():
+            if pins.setdefault(pid, ver) != ver:
+                raise Red(f"the template shapes disagree on {pid}: {pins[pid]} and {ver} ({d}) — one "
+                          "set cannot satisfy both pins")
+    return pins
+
+
+def build_plan(template_dir: Path | list[Path], core: Path, plugins: Path, version: str,
+               own_versions: dict[str, str] | None = None,
+               template_package: Path | None = None) -> dict:
     """The full plan: every package to pack, its project, origin, version line, and why."""
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise Red(f"'{version}' is not a platform set version (<major>.<minor>.<run>)")
-    pins = template_pins(template_dir)
+    pins = union_pins(template_dir if isinstance(template_dir, list) else [template_dir])
     roots = {"core": core.resolve(), "plugins": plugins.resolve()}
     idx = index_projects(roots)
     by_path = {p: (pid, origin) for pid, rows in idx.items() for origin, p in rows}
@@ -200,6 +225,21 @@ def build_plan(template_dir: Path, core: Path, plugins: Path, version: str,
                 raise Red(f"{pid} references {ref}, which is outside core src/ and Plugins src/ — "
                           "it has no package this lane could publish")
             queue.append((hit[0], f"dependency of {pid}"))
+
+    # The `dotnet new` template package itself rides the set's version: installed from the feed,
+    # it then pins exactly the set it was published with (MeshWeaver#7660).
+    if template_package is not None:
+        tp = template_package.resolve()
+        if not tp.is_file():
+            raise Red(f"{template_package} does not exist — the template package cannot be packed")
+        tid = _csproj_props(tp).get("PackageId")
+        if not tid:
+            raise Red(f"{tp.name} declares no <PackageId> — the template package needs its published id")
+        if tid in plan:
+            raise Red(f"{tid} is both the template package and a package the template restores")
+        plan[tid] = {"id": tid, "origin": "plugins", "project": str(tp), "line": "platform",
+                     "version": version, "pinned": False, "pin": None,
+                     "reason": "the dotnet-new template package itself"}
 
     # A pin above the version packed can never resolve (a NuGet pin is a MINIMUM).
     for pid, pin in pins.items():
@@ -473,6 +513,34 @@ def self_test() -> int:
         if n != 3 or "Memex.Aspire.Hosting" in text:
             failures.append(f"platform slnx wrong ({n} projects): {text}")
 
+        # 9. Every shape is published: the union of two templates' pins, and the template package
+        #    itself at the set's version; two shapes pinning one id differently are RED.
+        _proj(plugins / "src/MeshWeaver.Blazor.Portal/MeshWeaver.Blazor.Portal.csproj",
+              ["$(MeshWeaverRoot)/src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj"])
+        _template(root / "t-gui", {**good_pins, "MeshWeaver.Blazor.Portal": "3.1.500"})
+        _proj(plugins / "tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj",
+              package_id="MeshWeaver.MemexTemplate")
+        tpkg = plugins / "tools/MeshWeaver.MemexTemplate.Pack/MeshWeaver.MemexTemplate.Pack.csproj"
+        both = build_plan([root / "t-good", root / "t-gui"], core, plugins, "3.1.500",
+                          template_package=tpkg)
+        both_ids = {p["id"]: p for p in both["packages"]}
+        if "MeshWeaver.Blazor.Portal" not in both["pinned"]:
+            failures.append(f"the second shape's pins were dropped: {both['pinned']}")
+        tmpl = both_ids.get("MeshWeaver.MemexTemplate")
+        if not tmpl or (tmpl["line"], tmpl["version"], tmpl["pinned"]) != ("platform", "3.1.500", False):
+            failures.append(f"the template package is not planned at the set's version: {tmpl}")
+        headless = build_plan(root / "t-good", core, plugins, "3.1.500")
+        if "MeshWeaver.Blazor.Portal" in {p["id"] for p in headless["packages"]}:
+            failures.append("the negative control is meaningless: one shape already pins the GUI id")
+        _template(root / "t-gui-skew", {**good_pins, "MeshWeaver.Graph": "3.1.499"})
+        expect_red("two shapes pin one id differently",
+                   lambda: build_plan([root / "t-good", root / "t-gui-skew"], core, plugins, "3.1.500"),
+                   "disagree on MeshWeaver.Graph")
+        expect_red("template package missing",
+                   lambda: build_plan(root / "t-good", core, plugins, "3.1.500",
+                                      template_package=root / "nope.csproj"),
+                   "cannot be packed")
+
     # 8. The workflow decides 'sealed' from job results, never from the run's conclusion. Every
     #    fixture starts from the CORRECT lane shape, so each control is red only for its own rule.
     lane_ok = ("      FEED_TOOL: lane/.github/scripts/template-feed.py\n"
@@ -510,8 +578,9 @@ def self_test() -> int:
         for f in failures:
             print(f"  ✗ {f}")
         return 1
-    print("template-feed self-test: 8 scenarios, all held (derive, unknown id RED, own-line pin RED, "
-          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results, lane tool from the lane's commit)")
+    print("template-feed self-test: 9 scenarios, all held (derive, unknown id RED, own-line pin RED, "
+          "empty/odd version RED, verify both ways, push guard, slnx, sealed-by-job-results, lane tool from the lane's commit, "
+          "every shape + the template package)")
     return 0
 
 
@@ -523,7 +592,8 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("plan")
-    p.add_argument("--template", required=True, type=Path)
+    p.add_argument("--template", required=True, type=Path, action="append")
+    p.add_argument("--template-package", type=Path)
     p.add_argument("--core", required=True, type=Path)
     p.add_argument("--plugins", required=True, type=Path)
     p.add_argument("--version", required=True)
@@ -540,7 +610,8 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     try:
         if a.cmd == "plan":
-            plan = build_plan(a.template, a.core, a.plugins, a.version)
+            plan = build_plan(a.template, a.core, a.plugins, a.version,
+                              template_package=a.template_package)
             a.out.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
             own = [p for p in plan["packages"] if p["line"] == "own"]
             print(f"plan: {len(plan['pinned'])} ids pinned by the template, "
