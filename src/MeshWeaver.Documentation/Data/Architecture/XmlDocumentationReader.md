@@ -144,17 +144,34 @@ the served description is the view method's summary. `XmlDocsTest.TheReactiveLoo
 proves the reader half: nothing is read on subscribe, the read happens when the edge runs, and a
 warm lookup emits synchronously without asking the edge.
 
-**Still synchronous, and known.** These callers still call `Summary` directly:
+- **Type listings and JSON schemas.** `GetDomainTypesRequest` and a `GetDataRequest` for
+  `DataModelReference` answer once every listed type's summary is in memory
+  (`DataExtensions.ObserveDomainTypes`). A `SchemaReference` — by request or as a workspace stream —
+  is generated on the edge (`DataExtensions.ObserveSchema`, through `hub.OnXmlDocsReadEdge(...)`),
+  because the exporter walks the whole property graph. The schema and data model are no longer
+  reducers over the store: neither depends on the data, and a reducer runs on the turn that reduces,
+  so each is a stream fed from the edge that lives until it is disposed. Query completion's
+  `ContentSchemaFacts.FromType` runs on the edge the same way.
+  Two consequences of answering later than the turn, both pinned:
+  - The stream applies the caller's stream configuration. A remote subscriber's client id arrives
+    through it, and a stream built without it emits to nobody.
+  - `GetDomainTypesRequest` answers once (a CAS'd claim), and a hub disposed while the read is still
+    queued answers `ErrorType.ShuttingDown` rather than leaving the caller to its timeout. That is the
+    same contract `GetDataRequest` keeps.
 
-- the editor form's field descriptions (`EditorExtensions.MapToSkinnedControl`). These are built
-  into the skin of a synchronous public `Edit` API, and binding them needs the client renderer to
-  bind a skin's `Description`.
-- the request and reducer paths that build type listings and JSON schemas:
-  `DataExtensions.GetDomainTypes` (through `TypeDisplayMetadata.Description`),
-  `DataExtensions.GenerateJsonSchema`, the `SchemaReference` reducer, and
-  `ContentSchemaFacts.FromType` in query completion.
+  `XmlDocsOffTheRequestPathTest` (Layout.Test) covers these paths:
+  - For each of the four paths, it holds the edge and checks that no snapshot was loaded before the
+    release. Before the change none of them reached the edge at all.
+  - It subscribes to both streams remotely.
+  - It disposes the owner while a type listing is still being read.
 
-Each of these reads a cold assembly once per mesh. Move one to `WhenLoaded` when you touch it.
+**Still synchronous, and known.** The editor form's field descriptions
+(`EditorExtensions.MapToSkinnedControl`) still call `Summary` directly. They are built into the skin
+of a synchronous public `Edit` API, and binding them needs the client renderer to bind a skin's
+`Description`, which is a change in the client repository as well. A read there loads a cold
+assembly once per mesh. `NodeTypeDataModelAreas.SnapshotModel` also generates the content type's
+schema synchronously, but only after the probe's schema stream has emitted from the edge, so the
+documentation files it needs are already in memory.
 
 **Rendering** matches what the platform has always shown (Namotion's formatting-free mode):
 `<see>`/`<seealso>` render as their text, else the `langword`, else the cref's last name segment
