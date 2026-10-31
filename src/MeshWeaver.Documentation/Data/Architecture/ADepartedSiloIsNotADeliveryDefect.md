@@ -121,6 +121,39 @@ lost delivery. Orleans owns that line and its level. Whether a burst of it is a 
 the log watcher's decision (MeshWeaver.Plugins `RollChurnClassifier`), and that decision is made from
 what this test establishes.
 
+### A silo that died and came back: the stale address of the OLD incarnation (#7707)
+
+[#7707](https://github.com/Systemorph/MeshWeaver/issues/7707) is the connection-refused row above,
+seen after a restart instead of a roll. The directory lookup is addressed to a silo incarnation that
+has died, and Orleans logs `100071 Failed to address message … IMessageHubGrain.DeliverMessage`
+carrying `OrleansMessageRejectionException: Exception while sending message:
+…ConnectionFailedException: Unable to connect to S…, will retry after …ms`.
+
+**Read the generation in the address before reading the line.** A `SiloAddress` ends in its
+generation, which counts seconds since 2022-01-01 UTC. In the 2026-10-30 bursts, the unreachable
+targets had started about seven hours earlier. One of them shared its IP with the reporting silo's own
+new incarnation, so the pod's container had restarted in place. No shutdown line came before either
+burst. So these were silos that died without leaving. Membership learns of such a death only from
+missed probes or from the new incarnation's join. For the length of that window, every lookup whose
+directory partition the dead incarnation owned is refused.
+
+**What the sender sees is unchanged by the restart.** The rejection is an
+`OrleansMessageRejectionException`, so `DeliverToGrainObservable` re-sends it through a fresh placement.
+If the refusal outlasts the ladder, `IsDepartedSiloRejection` answers `ShuttingDown`. Nothing was
+added for #7707. `ARestartedSiloIsReachedPastItsStaleAddressTest` pins it on a real cluster: B is
+killed and a new silo is started. The first two attempts are refused with this exact rejection, and
+the next attempt is placed for real. The test asserts no NACK and the target's `PingResponse` to that
+very ping. Then the restarted silo pings the target through the production router with no switch. The
+controls are the same as the test above: with no re-send budget the delivery is NACK'd, and with a
+refusal that never lifts the answer is `ShuttingDown`.
+
+**What is left is not a routing defect.** The `fail:` lines are Orleans reporting each attempt. The
+condition behind them is a portal process that died ungracefully, and the log watcher deliberately
+keeps filing it when no shutdown line accounts for it. Find out why that process died (exit code,
+OOM, liveness kill; see the `sigsegv` and `storm` skills). Widening the router's ladder to outlast
+death detection would be the band-aid. Shortening death detection reverses a deliberate trade-off
+(the portal host's `ClusterMembershipOptions`, which stops busy silos from being voted dead).
+
 ## Why the cure is the CLASSIFIER, not a retry
 
 This is the fourth instance of one shape in this codebase, and naming it is the point: **the machinery
