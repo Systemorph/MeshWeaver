@@ -169,6 +169,24 @@ Controls.Catalog("Partners",
 - **Places a reader sees as different are different catalogs.** Clients, partners and suppliers are
   three catalogs over three filters, not one list with a type column.
 
+### The row card plus an action from the hit's own hub
+
+An `itemArea` hands the WHOLE card to the hit's own hub, so a row paints nothing until that hub has
+activated and rendered: one hub per hit, before the reader sees a single name. When the card itself is
+already in the row (name, description, icon) and only ONE part needs the hit's hub, such as an install
+or purchase button decided per viewer, declare that part as an **item action area** instead:
+
+```csharp
+Controls.MeshSearch
+    .WithHiddenQuery("nodeType:Store/Plugin content.hostedIn:\"AI/AiThreads\" is:main partitions:all sort:name")
+    .WithItemActionArea("CoverCta")
+```
+
+Each hit renders the default card painted from its row at once, with the named area beneath it,
+loaded from the hit's own hub (`MeshNodeCardControl.ActionArea`). The area sits outside the card's
+navigation link, because it holds buttons. An `itemArea`, when one is set too, wins: it already owns
+the whole card.
+
 Refine with any `With…` of the control (`WithCreateNodeType`/`WithCreateNamespace` for the "+",
 `WithMaxColumns` for a grid). A view that has to COMPUTE something across the set (a total, a KPI)
 computes it beside the catalog, never instead of it.
