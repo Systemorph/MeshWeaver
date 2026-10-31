@@ -4,6 +4,9 @@ using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.GitSync;
 using MeshWeaver.Fixture;
+using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
@@ -103,6 +106,24 @@ public class GitHostingProvidersTest
         provider.CommitAuthorName.Should().Be("MeshWeaver");
         provider.CommitAuthorEmail.Should().Be("noreply@meshweaver.cloud");
         provider.DisplayNameKey.Should().Be("ui.gitSync.provider.Example");
+    }
+
+    [Fact]
+    public void ThePlatform_ShipsNoHostingProviderOfItsOwn()
+    {
+        // Azure Repos left with Azure.Identity: it is a module's contribution now. What the platform
+        // registers by itself claims nothing, so every URL stays on the GitHub / git path.
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        services.AddSingleton(new IoPoolRegistry(new IoPoolOptions()));
+        services.AddGitHubSyncServices();
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<GitHostingProviders>();
+        registry.All.Should().BeEmpty();
+        registry.Classify("https://dev.azure.com/acme/Content/_git/content").Should().Be(GitRepositoryProvider.Git,
+            "without the module an Azure Repos URL is a plain git remote");
+        typeof(GitHostingProviders).Assembly.GetReferencedAssemblies()
+            .Select(a => a.Name).Should().NotContain("Azure.Identity");
     }
 
     [Fact]

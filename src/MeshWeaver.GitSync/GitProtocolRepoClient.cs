@@ -54,9 +54,9 @@ public sealed class GitProtocolRepoClient(
     {
         var branch = string.IsNullOrWhiteSpace(request.Branch) ? "main" : request.Branch.Trim();
         var prefix = NormalizePrefix(request.Subdirectory);
-        // Provider-aware credential (MeshWeaver#5248): Azure Repos takes the Entra token as a
-        // bearer header, every other remote the existing credential helper.
-        var auth = GitCredentials.ForRemote(request.RepositoryUrl, request.AccessToken);
+        // A URL a git hosting provider claims never reaches this client (GitProviderRepoClient routes
+        // it to the provider's own), so every remote here takes the $GW_TOKEN credential helper.
+        (IReadOnlyList<string> Args, IReadOnlyDictionary<string, string>? Env) auth = (GitCredentials.AuthArgs(request.AccessToken), GitCredentials.AuthEnv(request.AccessToken));
         return EnsureRepo(request)
             .SelectMany(repoCreated => WithTempDir(tmp =>
                 Clone(request.RepositoryUrl, auth, tmp)
@@ -490,12 +490,9 @@ public sealed class GitProtocolRepoClient(
     // ── push internals ───────────────────────────────────────────────────────
 
     /// <summary>Repo existence/creation is REST-only (git cannot create a GitHub repo) — and only
-    /// meaningful for a GitHub remote; a local/file remote (tests) is taken as existing. An Azure
-    /// Repos remote (MeshWeaver#5248) is taken as existing too: the GitHub REST surface does not
-    /// apply to it, and creating an Azure Repos repository is out of scope — a missing one fails
-    /// the clone with git's own message.</summary>
+    /// meaningful for a GitHub remote; a local/file remote (tests) is taken as existing.</summary>
     private IObservable<bool> EnsureRepo(GitHubPushRequest request)
-        => IsGitHubUrl(request.RepositoryUrl) && !GitRepositoryProvider.IsAzureRepos(request.RepositoryUrl)
+        => IsGitHubUrl(request.RepositoryUrl)
             ? octokit.EnsureRepoExists(
                 request.RepositoryUrl, request.AccessToken, request.CreatePrivateIfMissing)
             : Observable.Return(false);

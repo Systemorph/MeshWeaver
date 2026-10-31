@@ -89,34 +89,6 @@ public sealed class GitHubSyncService
         strictImportParsers = new FileFormatParserRegistry(strictImportOptions, contributedParsers);
     }
 
-    /// <summary>Initializes a new instance of the <c>GitHubSyncService</c> class, with the declared
-    /// Azure DevOps identity (MeshWeaver#5248).</summary>
-    /// <param name="hub">The message hub used for node create/update and workspace access.</param>
-    /// <param name="meshService">Mesh service used for node creation and descendant queries.</param>
-    /// <param name="repoClient">The GitHub repo client that performs the actual push/fetch operations.</param>
-    /// <param name="credentials">Per-user GitHub credential store providing the OAuth access token.</param>
-    /// <param name="logger">Optional logger.</param>
-    /// <param name="appTokens">The GitHub App identity, when configured.</param>
-    /// <param name="azureRepos">The declared Azure DevOps identity an Azure Repos push authenticates
-    /// with, when registered.</param>
-    [Obsolete("Azure Repos is a git hosting provider now: register it with AddGitHostingProvider and use the six-parameter constructor.")]
-    public GitHubSyncService(
-        IMessageHub hub,
-        IMeshService meshService,
-        IGitHubRepoClient repoClient,
-        GitHubCredentialService credentials,
-        ILogger<GitHubSyncService>? logger,
-        GitHubAppTokenService? appTokens,
-        AzureReposTokenService? azureRepos)
-        : this(hub, meshService, repoClient, credentials, logger, appTokens)
-    {
-        // An explicitly passed identity takes the Azure Repos kind over from the registered one.
-        if (azureRepos is not null)
-            providers = new GitHostingProviders(
-                [new AzureReposGitHostingProvider(azureRepos, hub.ServiceProvider.GetRequiredService<AzureReposRepoClient>())],
-                providers.All);
-    }
-
     private static JsonSerializerOptions StrictImportOptions(JsonSerializerOptions hubOptions)
     {
         var strictOptions = new JsonSerializerOptions(hubOptions)
