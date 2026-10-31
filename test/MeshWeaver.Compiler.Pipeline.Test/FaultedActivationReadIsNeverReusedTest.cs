@@ -80,6 +80,37 @@ public class FaultedActivationReadIsNeverReusedTest : IDisposable
             $"the record is readable again, so the module must read whole: {healed.UndeterminedReason}");
     }
 
+    /// <summary>
+    /// The same rule for the SET records (review of #7733): a proposal that could not be read is
+    /// reported through the set store's loud channel, and a reading taken while it was unreadable is
+    /// not whole — so it is taken again once the record reads, with the fingerprint unchanged.
+    /// </summary>
+    [Fact]
+    public void AReadingWhoseSetRecordFaulted_IsTakenAgain()
+    {
+        var proposed = ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), proposedBy: "test");
+        Assert.NotNull(proposed);
+        var setRecord = Assert.Single(Directory.GetFiles(ModuleSetStore.SetsDirectory(root), "*.json"));
+        var reader = new PendingModuleActivations(root);
+
+        using (new FileStream(setRecord, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            // The precondition: the set store itself reports this record as unreadable right now.
+            var faults = new List<string>();
+            ModuleSetStore.Read(root, faults.Add, onNotice: null);
+            Assert.NotEmpty(faults);
+            reader.Read(NothingLoaded);
+        }
+        Assert.Equal(1, reader.DiskReads);
+
+        reader.Read(NothingLoaded);
+        Assert.Equal(2, reader.DiskReads);
+
+        // And once whole, it is kept: nothing changed on the volume.
+        reader.Read(NothingLoaded);
+        Assert.Equal(2, reader.DiskReads);
+    }
+
     /// <summary>The negative control: a WHOLE reading is still kept behind the fingerprint, so the
     /// fix did not buy the healing by giving up the memo that keeps probes off the volume.</summary>
     [Fact]

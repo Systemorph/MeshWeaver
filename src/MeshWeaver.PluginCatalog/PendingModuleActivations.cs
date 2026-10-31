@@ -829,11 +829,14 @@ public sealed class PendingModuleActivations(string moduleRoot)
         ImmutableList<string> SetNotes,
         Func<ModuleActivationEntry, bool> LandedDllExists,
         ImmutableList<string> Corruptions,
-        Func<string, bool> ModuleFileResolves)
+        Func<string, bool> ModuleFileResolves,
+        int SetFaults = 0)
     {
         /// <summary>True when nothing in this reading faulted — the only reading the fingerprint
-        /// may stand in for (MeshWeaver#7690).</summary>
-        public bool IsWhole => OpenFailure is null && Corrupt is null && Corruptions.IsEmpty;
+        /// may stand in for (MeshWeaver#7690). A set record that could not be read is a fault
+        /// (<see cref="SetFaults"/>); a duplicate-proposal NOTICE in <see cref="SetNotes"/> is a
+        /// decided outcome and is not.</summary>
+        public bool IsWhole => OpenFailure is null && Corrupt is null && Corruptions.IsEmpty && SetFaults == 0;
     }
 
     /// <summary>
@@ -984,8 +987,16 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // drain that has already waited out the first must not be made to wait out this one too.
         token.ThrowIfCancellationRequested();
         var setNotes = ImmutableList.CreateBuilder<string>();
+        // The loud channel is counted apart from the notices (MeshWeaver#7690, review of #7733): an
+        // unreadable proposal or adoption record makes this reading not whole, while a
+        // duplicate-proposal notice does not. Both still reach SetNotes, as they always did.
+        var setFaults = 0;
         var sets = openFailure is null && corrupt is null
-            ? ModuleSetStore.ReadObservingToken(ModuleRootPath, setNotes.Add, setNotes.Add, token)
+            ? ModuleSetStore.ReadObservingToken(ModuleRootPath, fault =>
+            {
+                setFaults++;
+                setNotes.Add(fault);
+            }, setNotes.Add, token)
             : ModuleSetIndex.Empty;
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the
@@ -1024,7 +1035,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 entry, e => new Lazy<bool>(() => File.Exists(Mesh.MeshBuilder.ResolveModulePath(e)))).Value;
         var fresh = new DiskSnapshot(
             fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists,
-            corruptions.ToImmutable(), ModuleFileResolves);
+            corruptions.ToImmutable(), ModuleFileResolves, setFaults);
         snapshot = fresh;
         return fresh;
     }

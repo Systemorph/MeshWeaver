@@ -2510,7 +2510,14 @@ public static class ModuleActivationSidecar
                 using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
                 return (reader.ReadToEnd(), writtenAt);
             }
-            catch (IOException e) when (e is not (FileNotFoundException or DirectoryNotFoundException))
+            // Absence after the open (the modules GC retired the record between the open and the
+            // stat on a share that reports it so) is still absence, never corruption — exactly as
+            // before the step was named (review of #7733).
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return null;
+            }
+            catch (IOException e)
             {
                 throw RecordReadFault("READ (the file was already open)", path, e);
             }
