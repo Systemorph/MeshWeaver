@@ -169,7 +169,7 @@ warm lookup emits synchronously without asking the edge.
   field without a declared `[Description]` by its property's summary, and asks only `TrySummary`
   while the form is built. A summary already in memory is written into the field's `PropertySkin`
   as text, as before. A cold one makes the skin's `Description` a data-bound pointer into the area's
-  `/data` (one key per documented member, `xmlDoc:{documentation id}`): rendering the field seeds
+  `/data` (one key per documented member of one build, `xmlDoc:{module MVID}:{documentation id}`, because a documentation id is unique only within an assembly): rendering the field seeds
   it empty and feeds `hub.ObserveXmlDocsSummary(property)` into it, so the form renders at once and
   the line binds once the edge has read the file. Both clients already bind a skin `Description`
   (Blazor `PropertyView` through `DataBind`, React `PropertySkin` through `useResolve`), so no client

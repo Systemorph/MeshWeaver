@@ -711,10 +711,15 @@ public static class EditorExtensions
     /// <summary>
     /// The <c>/data</c> key a form field's data-bound XML-doc description is fed under: one per
     /// documented member, so re-building the form re-binds the same entry instead of minting another.
+    /// A documentation ID is unique only WITHIN an assembly: two assemblies — or two collectible builds
+    /// of one NodeType — can declare the same <c>P:Ns.Type.Prop</c> with different summaries, and one
+    /// area may show forms over both. The defining module's build identity (its MVID) keeps their
+    /// entries apart; the same build always maps to the same key.
     /// </summary>
     private static string XmlDocDescriptionDataId(PropertyInfo propertyInfo)
-        => "xmlDoc:" + (XmlDocs.DocumentationId(propertyInfo)
-                        ?? $"{propertyInfo.DeclaringType?.FullName}.{propertyInfo.Name}");
+        => $"xmlDoc:{propertyInfo.Module.ModuleVersionId:N}:"
+           + (XmlDocs.DocumentationId(propertyInfo)
+              ?? $"{propertyInfo.DeclaringType?.FullName}.{propertyInfo.Name}");
 
     private static IObservable<IReadOnlyCollection<Option>> GetStream(LayoutAreaHost host, DimensionAttribute dimensionAttribute)
     {
