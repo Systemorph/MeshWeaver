@@ -497,6 +497,20 @@ def record_identity(text: str, path: str) -> tuple[bool, frozenset[str]]:
     return is_fleet, frozenset(identifiers)
 
 
+def withhold_unread_file(scan: OverlayScan, path: str) -> None:
+    """A record or overlay this scan could NOT read is printed by the report (the unreadable line,
+    and the `gh` error that quotes the path), and nothing in it could say whose it is — so it is
+    NOT the fleet's (#7724 review). A record is withheld as a non-fleet record: its stem and every
+    spelling of it, and the path. An overlay is withheld as its whole path, which is what the
+    message and the error quote: its directory leaf alone may be a shared word (`helm`), and
+    withholding that would shred every line rather than name nobody."""
+    if is_deployment_record_path(path):
+        stem = _identity_values(path.rsplit("/", 1)[-1].removesuffix(".json"))
+        scan.records.append((path, False, frozenset(stem | {path})))
+    else:
+        scan.withheld_paths.append(path)
+
+
 def withheld_identifiers(axis2: list[OverlayScan]) -> tuple[set[str], list[str]]:
     """(every identifier the public log must not carry, problems). Pure.
 
@@ -507,17 +521,22 @@ def withheld_identifiers(axis2: list[OverlayScan]) -> tuple[set[str], list[str]]
 
     A value a fleet record ALSO carries is still withheld: a client record sharing a word with a
     fleet record costs the fleet's line its clarity, never the client its name."""
-    fleet_ids: set[str] = set()
+    # 🚨 KEYED BY REPOSITORY, like `build_instances` (#7724 review): installation identity is
+    # `owner/name:id`, so a fleet record `memex` in one repository says nothing about an overlay
+    # declaring `memex` in another — whose host would otherwise be printed on that record's word.
+    fleet_ids: set[tuple[str, str]] = set()
     withheld: set[str] = set()
     for scan in axis2:
+        withheld |= set(scan.withheld_paths)
         for path, is_fleet, identifiers in scan.records:
             if is_fleet:
-                fleet_ids |= _identity_values(path.rsplit("/", 1)[-1].removesuffix(".json"))
+                fleet_ids |= {(scan.gh_repo, spelling) for spelling in
+                              _identity_values(path.rsplit("/", 1)[-1].removesuffix(".json"))}
             else:
                 withheld |= identifiers
     for scan in axis2:
         for ident, host, _where in scan.instances:
-            if ident not in fleet_ids:
+            if (scan.gh_repo, ident) not in fleet_ids:
                 withheld |= _identity_values(ident) | _identity_values(host)
     short = [value for value in withheld if len(value) < WITHHELD_MIN_LENGTH]
     problems = ([f"{len(short)} identifier(s) of a deployment that is not the fleet's own are "
@@ -824,6 +843,8 @@ class OverlayScan:
     # classified at the door it is read through (`record_identity`). A record that is NOT the
     # fleet's has every identifier withheld from the public log (Plugins#4364).
     records: list[tuple[str, bool, frozenset[str]]] = field(default_factory=list)
+    # Overlay paths that could not be read, so could not be classified: withheld whole (#7724 review).
+    withheld_paths: list[str] = field(default_factory=list)
     unreadable: str | None = None
 
 
@@ -863,12 +884,14 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
     for path in sorted(paths):
         rc, body, err = consistency.gh_api(f"repos/{gh_repo}/contents/{path}")
         if rc != 0:
+            withhold_unread_file(scan, path)
             scan.unreadable = f"could not read {path}: {err.strip()[:200]}"
             return scan
         try:
             doc = json.loads(body)
             text = base64.b64decode(doc["content"]).decode("utf-8", "replace")
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            withhold_unread_file(scan, path)
             scan.unreadable = f"could not decode {path}: {exc}"
             return scan
         scan.files += 1
@@ -9006,6 +9029,79 @@ env:
         check(False, "ARM 42: identifiers were accepted for withholding with no PublicLog installed")
     except SystemExit:
         pass
+
+    # ── ARM 42b: a fleet record exempts only ITS OWN repository's overlay (#7724 review) ────────
+    _other_repo = _scan2("Systemorph/Elsewhere",
+                         FIXTURE_OVERLAY_INSTANCE.replace("memex.example.cloud",
+                                                          "portal.fabrikam.example"),
+                         "deployments/aks/memex/values.memex.public.yaml")
+    _cross, _ = withheld_identifiers([_client_scan, _other_repo])
+    check("portal.fabrikam.example" in _cross,
+          "ARM 42b: a fleet record in one repository authorized printing the host of a same-id "
+          "overlay in ANOTHER repository that no fleet record names")
+    check("memex" not in _cross or "memex.example.cloud" not in _cross,
+          "ARM 42b (control): the fleet's own same-repository installation was withheld")
+
+    # ── ARM 42c: a file the scan could NOT read is withheld, not printed (#7724 review) ─────────
+    # Both failure paths of `scan_overlays_remote`, through the real report and the step summary.
+    _record = "mesh/Deployments/fabrikam.json"
+    _overlay = "deployments/aks/fabrikam/values.fabrikam.public.yaml"
+
+    def _fake_gh(tree_path: str, contents):
+        def gh_api(endpoint: str, *_args, **_kwargs):
+            if "/git/trees/" in endpoint:
+                return 0, json.dumps({"tree": [{"type": "blob", "path": tree_path}]}), ""
+            return contents(endpoint)
+        return gh_api
+
+    _cases = (
+        ("a record whose read FAILED", _record,
+         lambda endpoint: (1, "", f"HTTP 502: Bad Gateway (https://api.github.com/{endpoint})")),
+        ("a record whose body did not DECODE", _record, lambda _endpoint: (0, "{not json", "")),
+        ("an overlay whose read FAILED", _overlay,
+         lambda endpoint: (1, "", f"HTTP 502: Bad Gateway (https://api.github.com/{endpoint})")),
+    )
+    _saved_gh = consistency.gh_api
+    _saved_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    try:
+        for _label, _tree_path, _contents in _cases:
+            consistency.gh_api = _fake_gh(_tree_path, _contents)
+            _unread = scan_overlays_remote("Systemorph/Memex", REGISTRY_DEFAULT)
+            check(bool(_unread.unreadable), f"ARM 42c: {_label} did not read as unreadable")
+            _unread_withheld, _ = withheld_identifiers([_unread])
+            plan, _, _ = _drive(clean1, [_unread], FakeRegistry(_inventory(), FAKE_TAGS),
+                                probe=_answers(), apply=False)
+
+            def _render_unread(log) -> str:
+                with contextlib.redirect_stdout(log):
+                    report(plan, clean1, [_unread], REGISTRY_DEFAULT, _inventory(),
+                           apply=False, release_enabled=False, root=HERE_ROOT)
+                log.flush()
+                return (log._stream if isinstance(log, PublicLog) else log).getvalue()
+
+            with tempfile.TemporaryDirectory() as _summary_dir:
+                _summary = Path(_summary_dir) / "summary.md"
+                os.environ["GITHUB_STEP_SUMMARY"] = str(_summary)
+                check("fabrikam" in _render_unread(io.StringIO()).lower(),
+                      f"ARM 42c (falsification): unfiltered, {_label} never reached the report, "
+                      "so the arm below would pass about nothing")
+                _summary.write_text("", encoding="utf-8")
+                _unread_store = Withheld()
+                _unread_store.add(_unread_withheld)
+                _unread_public = _render_unread(PublicLog(io.StringIO(), _unread_store))
+                _summary_text = _summary.read_text(encoding="utf-8")
+            check("fabrikam" not in _unread_public.lower(),
+                  f"ARM 42c: {_label} printed the customer's identifier into the public log")
+            check("fabrikam" not in _summary_text.lower(),
+                  f"ARM 42c: {_label} printed the customer's identifier into the step summary")
+            check("Systemorph/Memex" in _unread_public,
+                  f"ARM 42c (negative control): {_label} withheld the fleet repository's name too")
+    finally:
+        consistency.gh_api = _saved_gh
+        if _saved_summary is None:
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        else:
+            os.environ["GITHUB_STEP_SUMMARY"] = _saved_summary
 
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no

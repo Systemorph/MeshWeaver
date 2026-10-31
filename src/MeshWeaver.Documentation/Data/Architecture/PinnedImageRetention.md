@@ -944,8 +944,10 @@ things the fleet lanes read are private, and neither may reach that log in plain
   by its own `owner`: only an owner in `FLEET_RECORD_OWNERS` makes it the fleet's. Any other record,
   including one with no owner or one that does not parse, has its identity fields (`id`, `host`,
   `namespace`, `helmRelease`, `database`, `keyVaultSecretPrefix`, `configPath`, `owner`, …)
-  **withheld**. An installation an overlay declares that no fleet-owned record names is withheld
-  too, with its host. Withheld means *not printed*, not masked. `main()` wraps stdout and stderr
+  **withheld**. An installation an overlay declares that no fleet-owned record in the SAME
+  repository names is withheld too, with its host. The match is per repository because an
+  installation's identity is `owner/name:id`. A record or overlay the scan could not read cannot
+  say whose it is, so it is withheld as well: a record by its stem, an overlay by its whole path. Withheld means *not printed*, not masked. `main()` wraps stdout and stderr
   in `PublicLog`, which replaces each withheld value with `***` case-insensitively, a whole line
   at a time, before the runner sees it. The step summary goes through the same filter. The run
   prints only the count (*deployment records: N read, K not the fleet's own; M identifier(s) …
