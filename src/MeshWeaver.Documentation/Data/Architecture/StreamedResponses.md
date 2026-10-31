@@ -66,6 +66,12 @@ hub.ObserveStreamed(new MyRequest(…), o => o.WithTarget(address))
   of SILENCE between elements. A long answer that keeps arriving is never cut; one that stops ends in
   a `TimeoutException` naming the request. It is not a raised bound: a stream that goes quiet is cut
   exactly as early as a single reply that never comes.
+- **A broken part is a failure.** A part whose number cannot be read, or a reply whose part count
+  cannot be read, faults the stream at once — it is never placed by guess or read as "no parts".
+- **Batch the parts.** The storm breaker counts parts per REQUEST, so many streams at once between
+  two hubs are fine; one stream above its threshold (2,000 within a second) is a storm and is cut. A
+  producer sends parts of a useful size (the model relay's device sends up to 16 KB of the response
+  per part), never one per byte.
 - **A failure is a reply.** A `DeliveryFailure` answer faults the stream with
   `DeliveryFailureException`, after the parts that arrived before it.
 - **The callback lives as long as the stream.** A streamed wait is not consumed by its reply (a part
