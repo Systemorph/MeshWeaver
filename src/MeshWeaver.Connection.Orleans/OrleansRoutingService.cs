@@ -283,7 +283,6 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// stay observable as its throw, which is what
     /// <c>OrleansRoutingShutdownClassificationTest.HostRunning_StillReachesGrainPlacement</c> probes.
     /// Callers that legitimately run without a grain transport check for it themselves.</para>
-    /// </summary>
     ///
     /// <para><b>The one exemption also passes through this door</b> (#7470): a leaving host's refusal
     /// (<see cref="LeavingHostRefusalProperty"/>) may still reach the routing grain while the host
