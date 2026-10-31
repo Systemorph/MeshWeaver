@@ -316,6 +316,15 @@ checkbox on the sync source) to change the conflict rule to **newest-writer-wins
 regardless — use it to deliberately discard local changes back to the repository state. Via MCP:
 `git_hub_sync(space, op:"update", force:true)`.
 
+A routine update cannot see **drift**: a node that something other than the sync (an installer, a
+runtime writer) changed after the last import, while its repository file stayed the same. The
+per-node import manifest records the token of what the import last *wrote*, not of what the node
+holds now, so an unchanged file is skipped — by design, since re-writing every node on every push
+would re-materialise the partition. A force update re-applies every repository node regardless of
+that token, which is what puts a drifted node back
+([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639): before the fix the forced pass also
+took the token skip, reported `Imported`, and left two drifted Markdown rows untouched).
+
 > **Take-over edits survive.** A node you've edited and marked to exclude from sync is
 > not overwritten or pruned by a re-import — that's how you "claim" content locally.
 > Two-way generalizes this to *every* server-side edit (no explicit claim needed) as long as it
