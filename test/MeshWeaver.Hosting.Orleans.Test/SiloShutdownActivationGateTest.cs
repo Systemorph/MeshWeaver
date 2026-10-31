@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -254,6 +254,48 @@ public class SiloShutdownActivationGateTest : TestBase
         // error per attempt — that log exists because WE asked for an unplaceable grain.
         factory.Requests.Should().NotContain(r => r.Interface == typeof(IRoutingGrain),
             "the seam must refuse before placement, never discover the refusal as an exception");
+    }
+
+    /// <summary>
+    /// Review of #7734 (#7470): a REPLY admitted before the stop and refused at the dispatch seam after
+    /// it must answer its REQUESTER, not only the replying hub — the same requester-directed refusal
+    /// the stop gate gives. The window is opened exactly as in the case above.
+    /// </summary>
+    [Fact]
+    public async Task AReplyRefusedAfterTheGate_AnswersItsRequesterShuttingDown()
+    {
+        var requesterAddress = new Address("portal", "silo-shutdown-requester");
+        using var refusal = new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>();
+        var meshHub = ServiceProvider.GetRequiredService<IMessageHub>();
+        meshHub.GetHostedHub(requesterAddress, conf => conf
+                .WithHandler<DeliveryFailure>((_, d) =>
+                {
+                    if (d.Properties.ContainsKey(OrleansRoutingService.LeavingHostRefusalProperty))
+                    {
+                        refusal.OnNext(d);
+                        refusal.OnCompleted();
+                    }
+                    return d.Processed();
+                }), HostedHubCreation.Always)
+            .Should().NotBeNull("the requester hub must exist to hear its refusal");
+
+        var factory = new RecordingGrainFactory();
+        var routing = CreateRouter(factory);
+        using var registration = routing.RegisterStream(SenderAddress, Ignore);
+
+        var reply = new MessageDelivery<string>(SenderAddress, requesterAddress, "ack", JsonSerializerOptions.Default)
+            .WithProperty(PostOptions.RequestId, "the-requesters-request");
+        await routing.DeliverMessage(reply).FirstAsync().Await();
+
+        lifetime.StopApplication();
+        await ((ILifecycleObserver)readiness).OnStart(CancellationToken.None);
+
+        var refused = await refusal.Should().Within(TimeSpan.FromSeconds(30)).Emit(
+            "the requester of a reply refused after the gate is answered with a stamped ShuttingDown refusal",
+            TestContext.Current.CancellationToken);
+        var failure = refused.Message.Should().BeOfType<DeliveryFailure>().Subject;
+        failure.ErrorType.Should().Be(ErrorType.ShuttingDown);
+        refused.Properties[PostOptions.RequestId]?.ToString().Should().Be("the-requesters-request");
     }
 
     /// <summary>

@@ -34,6 +34,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <list type="bullet">
 ///   <item><see cref="Kill"/> — the SIGKILL / SIGSEGV shape: no graceful stop, no deactivation.</item>
 ///   <item><see cref="Drain"/> — the rolling-restart shape: SIGTERM, then a graceful stop.</item>
+///   <item><see cref="HubBuilds"/> — a per-node grain's hub BUILD held on one silo, so every delivery
+///     it accepts is parked on the unbuilt hub (#7470).</item>
 ///   <item><see cref="Linger"/> — the roll at its worst moment: the silo has been told to stop
 ///     (every grain on it now refuses deliveries as <c>ShuttingDown</c> and hands its address off)
 ///     and STAYS in the cluster until the returned handle is disposed.</item>
@@ -87,6 +89,9 @@ public class FaultInjectionCluster : IAsyncLifetime
                         {
                             _backingStore.Register(services);
                             WrapTheStore(services, siloName);
+                            // The hub-build hold (#7470): the grain reads it as its IHubBuildSeam.
+                            services.AddSingleton(new HubBuildHold(siloName));
+                            services.AddSingleton<IHubBuildSeam>(sp => sp.GetRequiredService<HubBuildHold>());
                             // The relay IS the LISTEN/NOTIFY model, so this cluster has what a
                             // multi-silo host must declare (#4802).
                             services.DeclareCrossProcessChangeDelivery(
@@ -133,6 +138,10 @@ public class FaultInjectionCluster : IAsyncLifetime
     /// <summary>Silo <paramref name="index"/>'s storage injector.</summary>
     /// <param name="index">The silo's index at deploy time.</param>
     public FaultInjectingStorageAdapter Storage(int index) => Silo(index).GetRequiredService<FaultInjectingStorageAdapter>();
+
+    /// <summary>Silo <paramref name="index"/>'s hub-build hold — see <see cref="HubBuildHold"/>.</summary>
+    /// <param name="index">The silo's index at deploy time.</param>
+    public HubBuildHold HubBuilds(int index) => Silo(index).GetRequiredService<HubBuildHold>();
 
     /// <summary>What the shared store of record holds for <paramref name="path"/>, bypassing every silo.</summary>
     /// <param name="path">The node path.</param>
@@ -194,6 +203,22 @@ public class FaultInjectionCluster : IAsyncLifetime
                      ?? throw new InvalidOperationException(
                          $"no silo for '{path}' to be handed off to from silo {leaving}");
         return candidates.Single(c => c.Address.Equals(target)).Index;
+    }
+
+    /// <summary>
+    /// Leaves a grain on silo <paramref name="leaving"/> with NOWHERE to hand its address off to: every
+    /// other silo is recorded as draining in <paramref name="leaving"/>'s drain roster — the production
+    /// shape of every peer draining at once (#6865). A lingering grain there then keeps its activation:
+    /// no migration and no deactivation settle what it has parked, so whatever answers a parked delivery
+    /// is the grain's own reaction to the stop (#7470).
+    /// </summary>
+    /// <param name="leaving">The silo whose grains must find no hand-off target.</param>
+    public void LeaveNoHandOffTarget(int leaving)
+    {
+        var roster = Silo(leaving).GetRequiredService<ClusterDrainRoster>();
+        for (var i = 0; i < _silos.Count; i++)
+            if (i != leaving)
+                roster.MarkDraining(Silo(i).GetRequiredService<global::Orleans.Runtime.ILocalSiloDetails>().SiloAddress);
     }
 
     /// <summary>

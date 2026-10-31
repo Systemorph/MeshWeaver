@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
@@ -50,6 +50,9 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
     // OrleansCrossSiloStreamProbeTest.cs:53.
     private readonly TaskCompletionSource<DeliveryFailure> nack =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // The leaving host's refusals the hub received — an AsyncSubject the handler completes, awaited
+    // through the reactive assertions (never a TaskCompletionSource: a hand-woven gate).
+    private readonly System.Reactive.Subjects.AsyncSubject<IMessageDelivery> refusals = new();
     private readonly IHostApplicationLifetime lifetime;
 
     public OrleansRoutingShutdownClassificationTest(ITestOutputHelper output) : base(output)
@@ -63,7 +66,18 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         // The hub sits AT the sender address, so the DeliveryFailure the router posts back to
         // delivery.Sender lands on this handler — the real NACK, not a stand-in.
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(SenderAddress, conf => conf
-            .WithHandler<DeliveryFailure>((_, d) => { nack.TrySetResult(d.Message); return d.Processed(); })
+            .WithHandler<DeliveryFailure>((_, d) =>
+            {
+                nack.TrySetResult(d.Message);
+                // Only a leaving host's refusal: the router's ordinary local-sender NACK in these
+                // cases is addressed elsewhere and must not be mistaken for the conversion.
+                if (d.Properties.ContainsKey(OrleansRoutingService.LeavingHostRefusalProperty))
+                {
+                    refusals.OnNext(d);
+                    refusals.OnCompleted();
+                }
+                return d.Processed();
+            })
             .WithPostingIdentity(PostingIdentity.System)));
     }
 
@@ -128,5 +142,138 @@ public class OrleansRoutingShutdownClassificationTest : TestBase
         // the probe that proves placement was reached.
         await Assert.ThrowsAsync<NullReferenceException>(
             () => routing.DeliverMessage(NewDelivery()).FirstAsync().Await());
+    }
+
+    /// <summary>
+    /// #7470: a LEAVING HOST'S REFUSAL is the one delivery the stop gate lets through — it is what
+    /// sends a remote sender to the next activation. Off a silo (no membership to read) nothing says
+    /// placement cannot work, so it must REACH grain placement, observable as the null probe's throw.
+    /// The guard above still holds for everything else; this is the counterpart that proves the
+    /// exemption is real rather than a stamp the gate never reads.
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_ALeavingHostRefusal_StillReachesGrainPlacement()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        var refusal = NewDelivery().WithProperty(OrleansRoutingService.LeavingHostRefusalProperty, true);
+
+        await Assert.ThrowsAsync<NullReferenceException>(
+            () => routing.DeliverMessage(refusal).FirstAsync().Await());
+    }
+
+    /// <summary>
+    /// #7470: a REPLY a stopping host can no longer deliver — a SubscribeAck, a response to a request
+    /// accepted just before the stop — is turned into the refusal it CAN deliver: a ShuttingDown
+    /// <see cref="DeliveryFailure"/> to the reply's TARGET (the requester), correlated to the
+    /// requester's own request id and stamped so the gate lets it out. Here the requester is the real
+    /// hub at <c>SenderAddress</c>, so the failure asserted is the one the router actually posted.
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_AnUndeliverableReply_AnswersItsRequesterShuttingDown()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        var reply = new MessageDelivery<string>(TargetAddress, SenderAddress, "ack", JsonSerializerOptions.Default)
+            .WithProperty(PostOptions.RequestId, "the-requesters-request");
+
+        await routing.DeliverMessage(reply).FirstAsync().Await();
+
+        var refused = await refusals.Should().Within(TimeSpan.FromSeconds(10)).Emit(
+            "the requester is answered with a stamped ShuttingDown refusal", TestContext.Current.CancellationToken);
+        var failure = Assert.IsType<DeliveryFailure>(refused.Message);
+        Assert.Equal(ErrorType.ShuttingDown, failure.ErrorType);
+        Assert.Equal("the-requesters-request", refused.Properties[PostOptions.RequestId]?.ToString());
+        Assert.True(refused.Properties.ContainsKey(OrleansRoutingService.LeavingHostRefusalProperty));
+    }
+
+    /// <summary>
+    /// The control for the conversion above: a delivery that is NOT a reply (no request id) gets no
+    /// such refusal — its local sender is NACKed exactly as before, and nothing is posted to its target.
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_ADeliveryThatIsNotAReply_IsNotConverted()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        // Addressed TO the hub, from elsewhere, with no request id: a conversion would land on the hub.
+        var notAReply = new MessageDelivery<string>(TargetAddress, SenderAddress, "event", JsonSerializerOptions.Default);
+
+        var result = await routing.DeliverMessage(notAReply).FirstAsync().Await();
+
+        Assert.Equal(MessageDeliveryState.Failed, result.State);
+        await refusals.Should().NotEmit(TimeSpan.FromSeconds(2), "nothing is converted into a leaving host's refusal",
+            TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// Review of #7734: a refused reply that is itself a <see cref="DeliveryFailure"/> is a VERDICT,
+    /// often a terminal one. Converting it into a retryable ShuttingDown would change its meaning, so
+    /// it is not converted (the answer-once rule, <c>MayAnswer</c>).
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_ARefusedVerdict_IsNotConvertedIntoARetryableOne()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        var verdict = new MessageDelivery<DeliveryFailure>(TargetAddress, SenderAddress,
+                new DeliveryFailure(NewDelivery()) { ErrorType = ErrorType.NotFound, Message = "no such node" },
+                JsonSerializerOptions.Default)
+            .WithProperty(PostOptions.RequestId, "the-requesters-request");
+
+        await routing.DeliverMessage(verdict).FirstAsync().Await();
+
+        await refusals.Should().NotEmit(TimeSpan.FromSeconds(2), "nothing is converted into a leaving host's refusal",
+            TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// Review of #7734: the exemption's membership verdict is re-read immediately before the routing
+    /// RPC, not carried from admission. Here the silo may still place at admission and has left the
+    /// active set by the dispatch, so placement must NOT be reached (the null probe does not throw).
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_ARefusalWhoseSiloLeftTheActiveSetBeforeDispatch_DoesNotReachPlacement()
+    {
+        var routing = CreateRouter();
+        var asked = 0;
+        routing.LocalSiloMayStillPlace = () => System.Threading.Interlocked.Increment(ref asked) == 1;
+        lifetime.StopApplication();
+
+        var refusal = NewDelivery().WithProperty(OrleansRoutingService.LeavingHostRefusalProperty, true);
+
+        var result = await routing.DeliverMessage(refusal).FirstAsync().Await();
+
+        Assert.Equal(MessageDeliveryState.Forwarded, result.State);
+        Assert.True(asked >= 2, $"the verdict must be re-read before the RPC (asked {asked} time(s))");
+    }
+
+    /// <summary>
+    /// Review of #7734: the refusal's banner names the REPLYING owner by its host-independent path, so
+    /// a requester recognises it as that owner's shutdown (<c>ShutdownNack.IsAnsweredByOwner</c>) even
+    /// when the owner is a hosted hub, whose string form carries a <c>~host</c> suffix.
+    /// </summary>
+    [Fact]
+    public async Task HostStopping_TheReplyRefusalNamesItsHostedOwnerByPath()
+    {
+        var routing = CreateRouter();
+        lifetime.StopApplication();
+
+        var hostedOwner = new Address("acme", "Doc") { Host = new Address("mesh", "test") };
+        Assert.NotEqual(hostedOwner.Path, hostedOwner.ToString());
+        var reply = new MessageDelivery<string>(hostedOwner, SenderAddress, "ack", JsonSerializerOptions.Default)
+            .WithProperty(PostOptions.RequestId, "the-requesters-request");
+
+        await routing.DeliverMessage(reply).FirstAsync().Await();
+
+        var refused = await refusals.Should().Within(TimeSpan.FromSeconds(10)).Emit(
+            "the requester is answered with a stamped ShuttingDown refusal", TestContext.Current.CancellationToken);
+        var failure = Assert.IsType<DeliveryFailure>(refused.Message);
+        Assert.True(ShutdownNack.IsAnsweredByOwner(failure.Message, new Address("acme", "Doc")),
+            $"the requester must read this as its owner's shutdown — got: {failure.Message}");
     }
 }
