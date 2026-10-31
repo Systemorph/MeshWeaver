@@ -1488,17 +1488,42 @@ permission must also hold at the landing path, and the stricter outcome wins
 (`PermissionEvaluator.ObserveRestrictingPolicyBetween`, read from the same runtime-then-static policy
 chain as the fold). With no such policy the landing check is not run: the landing inherits every grant
 of the main node, and additive surfaces declared on the main node alone (a type gate's public cover)
-keep reaching its satellites. A role DENIED on an intermediate scope is an assignment, not a policy,
-and is not consulted by this check. Ancestry is decided on the NORMALISED path, the same one the
-evaluator reads, so every spelling of the main node it accepts (`@/Space/Doc`, `/` for the root) meets
-the policies in between. The landing check is composed with the caller's context, beside the main-node
-check, and only subscribed while a restriction exists: the fold snapshots the ambient context when it is
-composed, and a check composed inside the policy stream would read the emitting thread's context, so an
-API token admitted at the main node would pass an intervening `Api = false`. Pinned by
-`SatelliteInterveningPolicyTest` (an inheritance break on an intermediate segment refuses a create, a
-cap on a mapped container refuses a read, a reference-spelled main node meets that cap, and a token
-verdict composed under the token and subscribed outside it meets an intervening `Api = false`; each
-with the same shape minus the policy as the control).
+keep reaching its satellites. A role DENIED on an intermediate scope counts the same way: it is an
+assignment rather than a policy, but it subtracts that role from everything beneath it, so while one
+is denied to the caller (directly, or through any group they belong to) on a scope in between, the
+landing check runs too (`PermissionEvaluator.ObserveDeniedRoleBetween`, read from the same assignment
+and membership legs, and the same subject expansion, as the fold — including the `Public` leg a
+signed-in caller's fold ORs in, so a role denied to `Public` in between counts for that caller too).
+Only a denial that removes a role the subject HOLDS counts, and the fold itself decides that: the
+detector runs the fold's own role computation (`ComputeRoleState`) at the landing twice, over the same
+live grants, declared GrantRules and policies, once with every denial and once without those in
+between, and counts the denials only when the two role sets differ. So an inheritance break anywhere on
+the path, the main node's own included, clears exactly what the fold clears, and a deeper re-grant
+counts as the fold counts it. A denial of a role nobody holds there removes
+nothing, and forcing the landing check for it would refuse what the main node grants without any role
+(a type gate's `NodeTypeGate.Self` cover reaching its comments). A denial OUTSIDE that range (on a
+sibling satellite, or on another main node's container) changes nothing. Ancestry is decided on the NORMALISED path, split into segments exactly as the fold splits
+them (empty segments dropped), so every spelling of the main node it accepts (`@/Space/Doc`, `/` for
+the root, `Space//Doc`, a trailing `/`) meets the policies and denials in between. The landing check is
+composed with the caller's context, beside the main-node check, and only subscribed while a
+restriction exists: the fold snapshots the ambient context when it is composed, and a check composed
+inside the policy stream would read the emitting thread's context, so an API token admitted at the
+main node would pass an intervening `Api = false`. Pinned by `SatelliteInterveningPolicyTest` (an
+inheritance break on an intermediate segment refuses a create, a cap on a mapped container refuses a
+read, a reference-spelled main node meets that cap, a token verdict composed under the token and
+subscribed outside it meets an intervening `Api = false`, a Commenter denied on the main node's
+`_Comment` container — to the caller or to `Public` — is refused both, a doubled-slash main node meets
+that denial, a denial of an unheld role, or of a role a break at the main node already cleared, leaves a cover's comments readable, and a denial outside the range
+leaves the create and the read allowed; each with the same
+shape minus the policy or the denial as the control).
+
+🚨 **This governs the exact read and every write — not the SQL LISTING.** On PostgreSQL the search
+listing gates a satellite row by the caller's longest-prefix `user_effective_permissions` row matching
+its `main_node` (`PostgreSqlSqlGenerator`, MeshWeaver.Plugins), so a role denied on a scope between the
+main node and the satellite is not seen there either: such a satellite can still be LISTED (its row
+returned by a query) while a direct read of it is refused. That is the SQL half of the same gap
+(MeshWeaver#7687), and it sits beside the per-role folding defect in the same projection
+(MeshWeaver.Plugins#4555).
 
 **An update never repoints a satellite's main node.** The stored pointer decides who reads and writes
 the satellite and where its grants project, so a write that changed it would let its writer decide
