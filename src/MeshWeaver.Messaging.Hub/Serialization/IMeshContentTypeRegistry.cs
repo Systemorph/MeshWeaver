@@ -704,8 +704,8 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
                 : content.Deserialize(contentType, options);
         }
         catch (Exception ex) when (
-            options.UnmappedMemberHandling != JsonUnmappedMemberHandling.Disallow
-            && (ex is JsonException or NotSupportedException or InvalidOperationException))
+            MeshWeaver.Messaging.Serialization.JsonElementNormalizer.KeepsRawJson(ex, options)
+            && ex is not ArgumentException)
         {
             return null;
         }
