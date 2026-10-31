@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -48,7 +49,7 @@ public class AForcedImportRewritesADriftedNodeTest(ITestOutputHelper output) : M
     {
         public string Partition => partition;
         public bool Versioned => false;
-        public List<MeshNode> Nodes { get; init; } = [];
+        public ImmutableList<MeshNode> Nodes { get; init; } = [];
         public MeshNode? Root { get; init; }
 
         public IReadOnlyList<MeshNode> EnumerateSourceNodes() => Nodes;
