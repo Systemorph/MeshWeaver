@@ -196,8 +196,125 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry, string? own
             }
         }
 
+        if (baseType.Assembly.IsCollectible)
+            AddSameBuildSubtypes(baseType, derivedTypes);
+
         WarnMissingDerivedRegistrations(baseType, derivedTypes);
         return derivedTypes;
+    }
+
+    /// <summary>
+    /// 🚨 The subtypes of a base type from a COLLECTIBLE assembly — a runtime-compiled NodeType build
+    /// — are read from that same build (#6639). No long-lived hub can hold them in its registry: the
+    /// guard in <see cref="ComputeDerivedTypes"/> refuses to adopt a per-compile identity, so the
+    /// registry route above finds nothing on every hub but the NodeType's own. A NodeType's content
+    /// whose member is declared as an abstract base (<c>SectionCover Cover</c>) was then unreadable
+    /// anywhere else: STJ refused the abstract member outright, so the content type resolved through
+    /// the mesh content-type map and still failed to bind — a strict GitSync import refused the
+    /// whole snapshot over it, and an ordinary read degraded the node to an untyped element.
+    ///
+    /// <para>Reading the build is sound where adopting it is not: nothing is written to the
+    /// registry, the subtypes come from the very assembly whose base type is being resolved (so this
+    /// pins nothing the base type's own metadata does not already hold), and the discriminator is the
+    /// one <see cref="TypeRegistry.FormatType"/> would write for the subtype on this hub — the short
+    /// name the owning NodeType's hub writes as well. Generic subtypes are left out, because formatting
+    /// one would register its arguments.</para>
+    ///
+    /// <para>🚨 <b>A short name is unique only by luck, so a contested one resolves to NEITHER.</b> Two
+    /// subtypes of one base in different namespaces (or nested in different classes) format to the
+    /// same discriminator. Keeping whichever the assembly enumerated first would bind the other's
+    /// content to the wrong record — STJ drops what that record does not declare and materialises its
+    /// defaults, silently, and which one won would depend on enumeration order. So a name two
+    /// discovered subtypes claim is added for neither, and their content stays raw JSON at every
+    /// degrade seam (<see cref="JsonElementNormalizer.KeepsRawJson"/>) — the same refusal the mesh
+    /// content-type map makes for an ambiguous content discriminator. A name the registry or a
+    /// <see cref="JsonDerivedTypeAttribute"/> already maps is explicit and keeps its mapping; a
+    /// discovered subtype never displaces it (STJ would also refuse a duplicate for the WHOLE base,
+    /// losing every subtype instead of one).</para>
+    /// </summary>
+    /// <summary>
+    /// The <see cref="JsonDerivedTypeAttribute"/>s of a base that carries NO
+    /// <see cref="JsonPolymorphicAttribute"/>. System.Text.Json honours those on their own, so the
+    /// default resolver already maps each such subtype under its declared discriminator — and the
+    /// options this resolver assigns REPLACE that mapping. Before same-build discovery, a compiled
+    /// base with only these attributes found no subtypes here and kept STJ's mapping; discovery would
+    /// otherwise replace an alias like <c>"cover-alias"</c> with the subtype's short name, so stored
+    /// JSON stopped binding and writes changed discriminator. They are therefore carried over first,
+    /// exactly as declared (a string, an integer, or none), and discovery never displaces them. Nothing
+    /// is registered: the base is collectible. (A base WITH <see cref="JsonPolymorphicAttribute"/> is
+    /// handled by <see cref="ComputeDerivedTypes"/> already.)
+    /// </summary>
+    private static void AddAttributeOnlyDerivedTypes(Type baseType, List<JsonDerivedType> derivedTypes)
+    {
+        if (baseType.IsDefined(typeof(JsonPolymorphicAttribute), inherit: false))
+            return;
+        foreach (var attr in baseType.GetCustomAttributes(typeof(JsonDerivedTypeAttribute), false)
+                     .Cast<JsonDerivedTypeAttribute>())
+        {
+            if (attr.DerivedType == baseType || !IsValidDerivedTypeForBase(baseType, attr.DerivedType))
+                continue;
+            var present = false;
+            for (var i = 0; i < derivedTypes.Count; i++)
+            {
+                if (derivedTypes[i].DerivedType != attr.DerivedType)
+                    continue;
+                present = true;
+                break;
+            }
+            if (present)
+                continue;
+            derivedTypes.Add(attr.TypeDiscriminator switch
+            {
+                string name => new JsonDerivedType(attr.DerivedType, name),
+                int id => new JsonDerivedType(attr.DerivedType, id),
+                _ => new JsonDerivedType(attr.DerivedType),
+            });
+        }
+    }
+
+    private void AddSameBuildSubtypes(Type baseType, List<JsonDerivedType> derivedTypes)
+    {
+        if (baseType.IsSealed)
+            return;
+        AddAttributeOnlyDerivedTypes(baseType, derivedTypes);
+        var taken = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var existing in derivedTypes)
+            if (existing.TypeDiscriminator is string name)
+                taken.Add(name);
+        var discovered = new List<(Type Type, string Discriminator)>();
+        foreach (var candidate in GetLoadableTypes(baseType.Assembly))
+        {
+            if (candidate == baseType || candidate.IsGenericType
+                || !IsValidDerivedTypeForBase(baseType, candidate))
+                continue;
+            // 🚨 An ALREADY-MAPPED subtype still claims its formatted name and is counted: a type
+            // mapped under an alias through the base is written under its OWN name wherever it is
+            // serialised by runtime type (a read-only collection's elements), so a same-named
+            // sibling must not be handed that name — reading it back would pick the wrong subtype.
+            var discriminator = typeRegistry is TypeRegistry concreteRegistry
+                ? concreteRegistry.FormatType(candidate)
+                : candidate.Name;
+            discovered.Add((candidate, discriminator));
+        }
+        foreach (var claim in discovered.GroupBy(d => d.Discriminator, StringComparer.Ordinal))
+        {
+            // Contested: neither subtype is added — see the summary.
+            if (claim.Count() > 1)
+                continue;
+            var (type, discriminator) = claim.First();
+            if (taken.Contains(discriminator))
+                continue;
+            var alreadyAdded = false;
+            for (var i = 0; i < derivedTypes.Count; i++)
+            {
+                if (derivedTypes[i].DerivedType != type)
+                    continue;
+                alreadyAdded = true;
+                break;
+            }
+            if (!alreadyAdded)
+                derivedTypes.Add(new JsonDerivedType(type, discriminator));
+        }
     }
 
     // (A) Polymorphic subtypes of baseType that EXIST in its assembly but are NOT registered in THIS hub
